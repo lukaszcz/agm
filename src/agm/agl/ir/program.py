@@ -115,6 +115,8 @@ class NominalDescriptor:
     ``fields``       — declared field names in declaration order (names only;
                        used for RECORD and EXCEPTION; ``()`` for ENUM which
                        stores fields per-variant in ``variants``).
+    ``field_mutability`` — per-field mutability flags aligned with ``fields``
+                       for RECORD declarations; ``()`` for ENUM and EXCEPTION.
     ``variants``     — for ENUM: ordered tuple of ``VariantDescriptor`` objects
                        (one per variant, in declaration order).  ``()`` for
                        RECORD and EXCEPTION.
@@ -144,6 +146,7 @@ class NominalDescriptor:
     kind: NominalKind
     fields: tuple[str, ...] = ()
     variants: tuple[VariantDescriptor, ...] = ()
+    field_mutability: tuple[bool, ...] = ()
     bears_name_path: bool = field(default=True, compare=False)
 
     @property

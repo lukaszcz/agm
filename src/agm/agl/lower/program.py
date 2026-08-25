@@ -164,6 +164,7 @@ def lower_program(
                 declared_name=typedef.name,
                 kind=NominalKind.RECORD,
                 fields=tuple(name for name, _ in typedef.fields),
+                field_mutability=typedef.field_mutability,
                 variants=(),
                 bears_name_path=bears_name_path,
             )
@@ -229,6 +230,7 @@ def lower_program(
                     declared_name=typ.name,
                     kind=NominalKind.RECORD,
                     fields=tuple(fname for fname, _ in generic_typedef.fields),
+                    field_mutability=generic_typedef.field_mutability,
                     bears_name_path=bears_name_path,
                 )
             else:

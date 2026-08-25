@@ -1,0 +1,4 @@
+exception MutableProblem extends Exception
+  var code: int
+
+program def main() -> unit = ()

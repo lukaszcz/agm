@@ -1,0 +1,20 @@
+# Mutable fields are declaration metadata; construction remains unchanged.
+record Standalone(var value: int, label: text)
+record Referenced(var value: int)
+
+enum Members
+  | Inline(var value: int)
+  | ::Referenced
+
+enum Generic[T]
+  | Box(var value: T)
+
+program def main() -> unit =
+  let standalone = Standalone(value = 1, label = "one")
+  let inline = Inline(value = 2)
+  let referenced: Members = Referenced(value = 3)
+  let generic: Generic[int] = Box(value = 4)
+  print standalone
+  print inline
+  print referenced
+  print generic

@@ -1209,6 +1209,15 @@ class TestNominalsEmpty:
         assert prog.nominals[nominal_id_for(prog, "ParsePolicy")].kind is NominalKind.ENUM
         assert prog.nominals[nominal_id_for(prog, "Abort")].kind is NominalKind.EXCEPTION
 
+    def test_mutable_record_nominal_carries_field_mutability(self) -> None:
+        from tests.agl.ir_harness import nominal_id_for
+
+        program = _lower("record Point(var x: int, y: int)\nPoint(x = 1, y = 2)")
+        descriptor = program.nominals[nominal_id_for(program, "Point")]
+
+        assert descriptor.fields == ("x", "y")
+        assert descriptor.field_mutability == (True, False)
+
     def test_user_exception_nominal_stamped_with_declaring_module_id(self) -> None:
         """A user-declared exception's nominal is stamped with its real module_id.
 

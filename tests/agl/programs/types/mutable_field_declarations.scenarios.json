@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "constructs_mutable_standalone_and_enum_member_records",
+      "expect": {
+        "stdout": "Standalone(value = 1, label = \"one\")\nMembers::Inline(value = 2)\nReferenced(value = 3)\nGeneric::Box(value = 4)\n"
+      }
+    }
+  ]
+}

@@ -296,6 +296,7 @@ def _add_builtin_nominals(
                 declared_name=name,
                 kind=NominalKind.RECORD,
                 fields=tuple(type_table.record_fields(typ).keys()),
+                field_mutability=type_table.record_field_mutability(typ),
                 variants=(),
             )
             continue

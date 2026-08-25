@@ -48,6 +48,7 @@ class BuiltinMemberContract:
     name: str
     type_args: tuple[Type, ...]
     fields: tuple[tuple[str, Type], ...]
+    field_mutability: tuple[bool, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +59,7 @@ class BuiltinTypeContract:
     name: str
     type_params: tuple[str, ...]
     fields: tuple[tuple[str, Type], ...]
+    field_mutability: tuple[bool, ...]
     members: tuple[BuiltinMemberContract, ...]
     abstract: bool
     base: ExceptionType | None
@@ -109,6 +111,7 @@ def contract_for_typedef(
                 (name, normalize(field_type))
                 for name, field_type in table.record_fields(member).items()
             ),
+            table.record_field_mutability(member),
         )
         for member in typedef.members
     )
@@ -119,6 +122,7 @@ def contract_for_typedef(
         name=typedef.name,
         type_params=typedef.type_params,
         fields=fields,
+        field_mutability=typedef.field_mutability,
         members=members,
         abstract=typedef.abstract,
         base=normalized_base,

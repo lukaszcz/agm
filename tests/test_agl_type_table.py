@@ -9,6 +9,7 @@ REPL session accumulation (``TypeEnvironment.seed_from``).
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -87,9 +88,9 @@ _CAPS = HostCapabilities(
 _LIB_ID = ModuleId.from_path("lib")
 
 
-def _check(src: str) -> CheckedModule:
+def _check(src: str, *, default_stdlib: bool = True) -> CheckedModule:
     """Resolve + check *src* as the entry of a real module graph."""
-    return resolve_and_check_inline_entry(src, _CAPS)
+    return resolve_and_check_inline_entry(src, _CAPS, default_stdlib=default_stdlib)
 
 
 def test_builtin_member_identity_falls_back_for_non_enum_prelude_types() -> None:
@@ -1401,6 +1402,136 @@ class TestGenericSubstitution:
             "None": {},
             "Just": {"value": IntType()},
         }
+
+
+# ---------------------------------------------------------------------------
+# Record field mutability
+# ---------------------------------------------------------------------------
+
+
+class TestRecordFieldMutability:
+    def test_accessor_preserves_declaration_flags_across_generic_instantiations(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Pair",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(("mutable", TypeVarType("T")), ("fixed", IntType())),
+                field_mutability=(True, False),
+                decl_node_id=700020,
+            )
+        )
+        handle = RecordType(
+            name="Pair", type_args=(TextType(),), module_id=ENTRY_ID, decl_id=700020
+        )
+
+        first = table.record_field_mutability(handle)
+        second = table.record_field_mutability(handle)
+
+        assert first is second
+        assert first == (True, False)
+        assert table.record_field_mutability(
+            RecordType(name="Pair", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700020)
+        ) == (True, False)
+        assert dict(table.record_fields(handle)) == {"mutable": TextType(), "fixed": IntType()}
+
+    def test_accessor_rejects_missing_and_non_record_definitions(self) -> None:
+        table = TypeTable()
+        with pytest.raises(KeyError):
+            table.record_field_mutability(RecordType(name="Missing", module_id=ENTRY_ID))
+
+        table.register(TypeDef(kind="enum", name="Kind", module_id=ENTRY_ID, decl_node_id=700023))
+        with pytest.raises(AssertionError):
+            table.record_field_mutability(
+                RecordType(name="Kind", module_id=ENTRY_ID, decl_id=700023)
+            )
+
+    def test_builder_registers_standalone_and_enum_member_mutability(self) -> None:
+        checked = _check(
+            "record Standalone(var value: int, label: text)\n"
+            "record Referenced(var value: int)\n"
+            "enum Members\n"
+            "  | Inline(var value: int)\n"
+            "  | ::Referenced\n"
+            "enum Generic[T] | Box(var value: T)\n"
+            "()"
+        )
+        table = checked.type_env.type_table
+        standalone = checked.type_env.get_type("Standalone")
+        referenced = checked.type_env.get_type("Referenced")
+        generic = checked.type_env.get_generic_type("Generic")
+
+        assert isinstance(standalone, RecordType)
+        assert isinstance(referenced, RecordType)
+        assert generic is not None
+        assert table.record_field_mutability(standalone) == (True, False)
+        assert table.record_field_mutability(referenced) == (True,)
+        box = table.enum_member_names(generic.template)["Box"]
+        assert table.record_field_mutability(box) == (True,)
+
+    def test_seeded_builtin_records_are_immutable(self) -> None:
+        table = create_seeded_type_table()
+        handle = BUILTIN_PRELUDE_TYPES["ExecResult"]
+
+        assert isinstance(handle, RecordType)
+        assert table.record_field_mutability(handle) == (False, False, False, False)
+
+    def test_merge_invalidates_cached_record_field_mutability(self) -> None:
+        target = TypeTable()
+        handle = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700021)
+        target.register(
+            TypeDef(
+                kind="record",
+                name="Point",
+                module_id=ENTRY_ID,
+                fields=(("value", IntType()),),
+                field_mutability=(False,),
+                decl_node_id=700021,
+            )
+        )
+        assert target.record_field_mutability(handle) == (False,)
+
+        source = TypeTable()
+        source.register(
+            TypeDef(
+                kind="record",
+                name="Point",
+                module_id=ENTRY_ID,
+                fields=(("value", IntType()),),
+                field_mutability=(True,),
+                decl_node_id=700021,
+            )
+        )
+        target.merge_from(source)
+
+        assert target.record_field_mutability(handle) == (True,)
+
+    def test_mutability_participates_in_builtin_shape_validation(self) -> None:
+        with pytest.raises(AglTypeError):
+            _check(
+                "builtin record ExecResult\n"
+                "  var stdout: text\n"
+                "  exit_code: int\n"
+                "  stderr: text\n"
+                "  timed_out: bool\n"
+                "()",
+                default_stdlib=False,
+            )
+
+    def test_mutability_participates_in_typedef_shape(self) -> None:
+        fixed = TypeDef(
+            kind="record",
+            name="Point",
+            module_id=ENTRY_ID,
+            fields=(("value", IntType()),),
+            field_mutability=(False,),
+            decl_node_id=700022,
+        )
+        mutable = replace(fixed, field_mutability=(True,))
+
+        assert fixed != mutable
 
 
 # ---------------------------------------------------------------------------

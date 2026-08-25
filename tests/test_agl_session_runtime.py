@@ -195,6 +195,25 @@ def test_dispatcher_session_host_snapshots_its_default_and_preserves_requests() 
             operation()
 
 
+def test_dispatcher_retry_replays_complete_one_shot_request_context() -> None:
+    requests: list[AgentRequest] = []
+
+    def dispatch(request: AgentRequest) -> AgentResponse:
+        requests.append(request)
+        return AgentResponse(["not a number", "7"][len(requests) - 1])
+
+    result = PipelineDriver(agent_dispatcher=dispatch).run(
+        "program def main() -> unit =\n"
+        '  let number: int = ask("count", on_parse_error = Retry(n = 1))\n'
+    )
+
+    assert result.ok
+    assert requests[0].prompt.startswith("count")
+    assert requests[1].prompt.startswith("count")
+    assert "Return only valid JSON matching the schema." in requests[1].prompt
+    assert "not a number" in requests[1].prompt
+
+
 def _run(source: str, host: _Host) -> RunResult:
     return PipelineDriver(session_host=host).run(source)
 

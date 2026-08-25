@@ -35,6 +35,7 @@ from agm.agl.runtime.request import (
     AgentCallHostError,
     AgentCancelled,
     AgentRequest,
+    compose_agent_prompt,
     compose_initial_agent_prompt,
     compose_session_corrective_follow_up,
 )
@@ -42,6 +43,7 @@ from agm.agl.runtime.request import (
     ValidationError as ReqValidationError,
 )
 from agm.agl.runtime.sessions import (
+    AgentDispatcherSessionHost,
     SessionAgentError,
     SessionAskError,
     SessionHost,
@@ -490,11 +492,7 @@ class EffectHandlers:
                 max_attempts=max_attempts,
                 node=node,
                 output_contract=output_contract,
-                compose_prompt=lambda request: (
-                    compose_initial_agent_prompt(request)
-                    if request.attempt == 0
-                    else compose_session_corrective_follow_up(request)
-                ),
+                compose_prompt=self._compose_session_prompt,
                 dispatch=lambda request: self._dispatch_session_agent(
                     handle,
                     request,
@@ -548,11 +546,7 @@ class EffectHandlers:
             max_attempts=node.max_attempts,
             node=node,
             output_contract=output_contract,
-            compose_prompt=lambda request: (
-                compose_initial_agent_prompt(request)
-                if request.attempt == 0
-                else compose_session_corrective_follow_up(request)
-            ),
+            compose_prompt=self._compose_session_prompt,
             dispatch=lambda request: self._dispatch_session_agent(
                 handle,
                 request,
@@ -564,6 +558,13 @@ class EffectHandlers:
                 json_schema=json_schema,
             ),
         )
+
+    def _compose_session_prompt(self, request: AgentRequest) -> str:
+        if isinstance(self._ctx._session_host, AgentDispatcherSessionHost):
+            return compose_agent_prompt(request)
+        if request.attempt == 0:
+            return compose_initial_agent_prompt(request)
+        return compose_session_corrective_follow_up(request)
 
     def _eval_session_ask_attempts(
         self,

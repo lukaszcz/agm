@@ -897,11 +897,9 @@ class ConstructorChecker:
     def _reject_session_constructor(
         self, owner: RecordType | ExceptionType, span: SourceSpan
     ) -> None:
-        session = self._ctx._env.type_table.standard_builtin_declaration("Session")
         if (
             isinstance(owner, RecordType)
-            and session is not None
-            and owner.decl_id == session.decl_node_id
+            and owner.decl_id in self._ctx._env.type_table.host_minted_declaration_ids()
         ):
             raise AglTypeError(
                 "'Session' values are created by the host and cannot be constructed in source.",

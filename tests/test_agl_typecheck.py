@@ -12526,9 +12526,12 @@ class TestSessionPreludeTypes:
             'make("session", AgentCommand(command = "agent"), SessionTransport::Cli)',
         ],
     )
-    def test_session_cannot_be_constructed_by_user_code(self, source: str) -> None:
+    @pytest.mark.parametrize("default_stdlib", [True, False])
+    def test_session_cannot_be_constructed_by_user_code(
+        self, source: str, default_stdlib: bool
+    ) -> None:
         with pytest.raises((AglScopeError, AglTypeError)) as exc_info:
-            parse_resolve_check(source)
+            parse_resolve_check(source, default_stdlib=default_stdlib)
         assert "session" in str(exc_info.value).lower()
 
 

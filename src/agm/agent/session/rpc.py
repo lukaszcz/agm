@@ -6,6 +6,7 @@ import json
 import os
 import queue
 import select
+import signal
 import subprocess
 import threading
 import time
@@ -62,6 +63,7 @@ class _RpcChild:
     """The process and bounded asynchronously drained streams for one Pi session."""
 
     process: subprocess.Popen[bytes]
+    process_group: int | None = None
     stdout: queue.Queue[bytes | None] = field(
         default_factory=lambda: queue.Queue(maxsize=_MAX_STDOUT_CHUNKS)
     )
@@ -211,13 +213,15 @@ class PiRpcSessionBackend:
                 stderr=subprocess.PIPE,
                 text=False,
                 bufsize=0,
+                start_new_session=True,
             )
         except (OSError, ValueError) as exc:
             raise SessionHostError(f"could not start Pi RPC session: {exc}", operation) from exc
+        process_group = getattr(process, "pid", None)
         if process.stdin is None or process.stdout is None or process.stderr is None:
-            _terminate(_RpcChild(process))
+            _terminate(_RpcChild(process, process_group))
             raise SessionHostError("could not create Pi RPC pipes", operation)
-        child = _RpcChild(process)
+        child = _RpcChild(process, process_group)
         child.readers.extend(
             (
                 _start_reader(
@@ -528,7 +532,9 @@ def _terminate(child: _RpcChild) -> None:
             stdin.close()
         except OSError:
             pass
-    if process.poll() is None:
+    if child.process_group is not None:
+        _terminate_process_group(process, child.process_group)
+    elif process.poll() is None:
         try:
             process.terminate()
         except ProcessLookupError:
@@ -543,6 +549,23 @@ def _terminate(child: _RpcChild) -> None:
             process.wait()
     for reader in child.readers:
         reader.join(timeout=1)
+
+
+def _terminate_process_group(process: subprocess.Popen[bytes], process_group: int) -> None:
+    try:
+        os.killpg(process_group, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(process_group, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    if process.poll() is None:
+        process.wait()
 
 
 def _json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:

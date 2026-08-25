@@ -505,6 +505,44 @@ def test_close_and_close_all_terminate_children(
         service.ask(handle, SessionAskRequest("no"))
 
 
+def test_close_terminates_rpc_process_descendants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descendant_file = tmp_path / "descendant"
+    pi = tmp_path / "pi"
+    pi.write_text(
+        f"#!{sys.executable}\n"
+        "import os, subprocess, sys, time\n"
+        f"path = {str(descendant_file)!r}\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+        "open(path, 'w').write(str(child.pid))\n"
+        "while True: time.sleep(1)\n"
+    )
+    pi.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    backend = open_backend()
+    deadline = monotonic() + 5
+    while not descendant_file.exists() and monotonic() < deadline:
+        sleep(0.01)
+    descendant_pid = int(descendant_file.read_text())
+
+    backend.close()
+
+    deadline = monotonic() + 5
+    while monotonic() < deadline:
+        try:
+            os.kill(descendant_pid, 0)
+        except ProcessLookupError:
+            break
+        status = Path(f"/proc/{descendant_pid}/stat")
+        if status.exists() and status.read_text().split()[2] == "Z":
+            break
+        sleep(0.01)
+    else:
+        os.kill(descendant_pid, 9)
+        raise AssertionError("RPC descendant survived backend close")
+
+
 def test_stats_accepts_unavailable_context_and_rejects_invalid_values(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

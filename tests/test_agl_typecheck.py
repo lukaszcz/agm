@@ -12494,6 +12494,19 @@ class TestSessionPreludeTypes:
         assert "session" in str(err).lower()
         assert "json" in str(err).lower()
 
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "record Box(session: Session)\n"
+            "let box = Box(session = Session::default())\n"
+            "box as json",
+            "record Box(session: Session)\n"
+            "Box(session = Session::default()) == Box(session = Session::default())",
+        ),
+    )
+    def test_session_remains_opaque_inside_nominal_records(self, source: str) -> None:
+        reject_type(source)
+
     def test_session_transport_and_stats_remain_json_serializable(self) -> None:
         checked = accept_type(
             "param transport: SessionTransport\n"

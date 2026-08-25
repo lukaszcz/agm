@@ -353,8 +353,8 @@ def compute_non_data_reachability(table: TypeTable) -> NonDataReachability:
     # exceptions. ``non_data`` additionally includes affected descendants,
     # which should poison ancestor catch/base types but must not flow back
     # down to siblings.
-    field_non_data: set[DeclId] = set()
-    non_data: set[DeclId] = set()
+    field_non_data = set(table.host_minted_declaration_ids())
+    non_data = set(field_non_data)
     relevant: dict[DeclId, set[str]] = {decl_id: set() for decl_id in defs}
     changed = True
     while changed:

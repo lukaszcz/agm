@@ -67,6 +67,7 @@ from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import (
     HOST_MINTED_PRELUDE_TYPE_IDS,
+    HOST_MINTED_PRELUDE_TYPE_NAMES,
     ArrayType,
     BoolType,
     BottomType,
@@ -942,6 +943,15 @@ class TypeTable:
                 target[typedef.name] = typedef
         return {**standard, **overrides}
 
+    def host_minted_declaration_ids(self) -> frozenset[DeclId]:
+        """Return reserved and loaded-source identities for host-owned resources."""
+        identities = set(HOST_MINTED_PRELUDE_TYPE_IDS)
+        for name in HOST_MINTED_PRELUDE_TYPE_NAMES:
+            declaration = self.standard_builtin_declaration(name)
+            if declaration is not None:
+                identities.add(declaration.decl_node_id)
+        return frozenset(identities)
+
     def nominal_reaches_non_data(self, handle: RecordType | EnumType | ExceptionType) -> bool:
         """Return ``True`` if a non-data type is reachable from *handle* (cycle-safe).
 
@@ -955,9 +965,6 @@ class TypeTable:
         Exceptions carry no ``type_args``, so only the declaration flag
         applies to them.
         """
-        session = self.standard_builtin_declaration("Session")
-        if session is not None and handle.decl_id == session.decl_node_id:
-            return True
         caps = self._non_data_reachability()
         decl_id = handle.decl_id
         if decl_id in caps.reaches_non_data:
@@ -982,9 +989,6 @@ class TypeTable:
         non-data leaf somewhere inside — exactly
         :meth:`nominal_reaches_non_data`, negated.
         """
-        session = self.standard_builtin_declaration("Session")
-        if session is not None and handle.decl_id == session.decl_node_id:
-            return False
         return not self.nominal_reaches_non_data(handle)
 
     def _non_data_reachability(self) -> "NonDataReachability":

@@ -3127,6 +3127,27 @@ class _Resolver:
             candidates=self._regional_constructor_candidates(node.name),
         )
 
+    def _qualifier_denotes_builtin_static_owner(self, node: VarRef) -> bool:
+        """Return whether the resolved qualifier is a host static's nominal owner."""
+        if node.qualifier is None:
+            return False
+        owner_atom = _bare_atom(tuple(segment.name for segment in node.qualifier.segments))
+        candidates = self._regional_constructor_candidates(owner_atom) or set()
+        if any(
+            is_builtin_type_static_owner(
+                candidate.owner_module_id, (*candidate.owner_path, candidate.owner_name)
+            )
+            for candidate in candidates
+        ):
+            return True
+        chain = node.qualifier
+        relative_path = tuple(segment.name for segment in chain.segments)
+        if self._validate_local_scope_chain(chain) is not None:
+            return False
+        if qualifier_candidates(self._import_env, relative_path, anchored=chain.anchored):
+            return False
+        return relative_path == ("Session",) and bool(self._builtin_static_decl_node_ids)
+
     def _builtin_static_kind(self, ref: BindingRef | None) -> BuiltinStaticKind | None:
         """Return the static kind attached to its resolved prelude owner."""
         if ref is None or not ref.is_builtin:
@@ -4156,20 +4177,18 @@ class _Resolver:
         name denotes.
         """
         callee = node.callee
-        if (
-            isinstance(callee, VarRef)
-            and callee.qualifier is not None
-            and tuple(segment.name for segment in callee.qualifier.segments) == ("Session",)
-            and callee.name not in {"open", "default"}
-            and self._builtin_static_decl_node_ids
-        ):
-            raise AglScopeError(
-                f"Unknown static '{callee.qualifier.render()}::{callee.name}' on prelude type "
-                f"'{callee.qualifier.render()}'.",
-                span=callee.span,
-            )
         if isinstance(callee, VarRef):
-            self._resolve_varref(callee, is_call_target=True)
+            try:
+                self._resolve_varref(callee, is_call_target=True)
+            except AglScopeError:
+                if not self._qualifier_denotes_builtin_static_owner(callee):
+                    raise
+                assert callee.qualifier is not None
+                raise AglScopeError(
+                    f"Unknown static '{callee.qualifier.render()}::{callee.name}' on prelude "
+                    f"type '{callee.qualifier.render()}'.",
+                    span=callee.span,
+                ) from None
             ref = self._resolution.get(callee.node_id)
             static_kind = self._builtin_static_kind(ref)
             if static_kind is not None:

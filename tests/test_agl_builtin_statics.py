@@ -87,6 +87,13 @@ def test_session_unknown_static_reports_a_static_diagnostic() -> None:
     assert "session" in message.lower()
 
 
+@pytest.mark.parametrize("call", ["Session::ping()", "::Session::ping()"])
+def test_user_scope_named_session_can_call_its_own_members(call: str) -> None:
+    checked = _check("scope Session\ndef ping() -> int = 1\nend Session\n" + call)
+
+    assert checked.node_types[checked.resolved.program.body.items[-1].node_id].kind == "int"
+
+
 def test_non_prelude_type_cannot_use_builtin_static_syntax() -> None:
     _reject("record SomeUserType\n  name: text\nSomeUserType::open()")
 

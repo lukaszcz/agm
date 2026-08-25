@@ -3,7 +3,7 @@
 param body
 
 program def main() -> unit =
-  let critic = AgentCommand("critic")
+  let critic: Agent = AgentCommand("critic")
   if true =>
     let block = critic.ask("""
     Header line:

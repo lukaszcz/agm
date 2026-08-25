@@ -4,7 +4,9 @@ AGM runs real coding agents (claude, codex, and configurable runners) as subproc
 
 ## Agent Runner
 
-The runner parses configured commands, interpolates prompt and context values, chooses prompt delivery, and executes with captured output and an idle timeout. Stateful configurable runners receive a generated id through `%{SESSION_ID}`; Claude, Codex, and Pi use their backend-specific CLI protocols. Prompt preparation and completion detection live beside the runner, while typed AgL `Agent` values decode to immutable argv-building host specs. See [loop.md](../commands/loop.md#prompt-file-path) and [agents.md](../commands/agents.md#runner-command-interpolation) for user-facing interpolation and prompt rules.
+An agent invocation is a subprocess that receives a prompt and produces output. The runner module parses a configured runner command, validates the executable exists, attaches the prompt (via an interpolated placeholder or by appending a prompt-file reference), and runs it with output capture. Both prompt content and runner command arguments interpolate `%{name}` holes from environment and workflow context under one consistent set of rules; see [loop.md](../commands/loop.md#prompt-file-path) and [agents.md](../commands/agents.md#runner-command-interpolation) for the interpolation and escaping rules. It tracks an *idle timeout* — if the process produces no output for a configured duration the current agent process is terminated and that invocation fails; workflow control remains with the caller. Structured results carry return code, captured streams, elapsed time, and timeout/spawn-error status.
+
+Prompts are resolved from inline text or a file and preprocessed to expand environment variables, writing a temporary prompt file when substitution changes the content. Normal runs clean these files up; dry runs retain them so the printed prompt path can be inspected. Completion is detected by inspecting the agent's final output for a completion marker. An AgL value typed `Agent` is its selected member `RecordValue`, not an enum wrapper; it decodes into an immutable host spec. Pure per-kind builders produce argv for Claude, Codex, Pi, or a verbatim custom command. The prepared-prompt seam accepts those argv directly, retaining the shared prompt-file and process-result behavior. Most specs attach the prompt as a placeholder or an appended `@<path>` argument; a spec can instead declare stdin delivery (as `AgentCodex` does, since `codex exec` reads `-` as "prompt on stdin" rather than expanding an `@<path>` argument), in which case the runner pipes the prompt file's contents in and never appends a target.
 
 ## Runner Resolution
 
@@ -26,9 +28,7 @@ These share prompt-preprocessing that merges scope, aspects, and other context i
 
 ## Code Entry Points
 
-- `src/agm/agent/spec.py` — host agent specs, each building its own backend argv, plus `AGENT_SPECS`, the variant-to-spec catalog used by AgL decoding. A pure data leaf; the generic decoder lives on the AgL side, in `agl/runtime/agents.py`.
-- `src/agm/agent/transport.py` — host-neutral agent-call diagnostics used by runner-backed session adapters.
-- `src/agm/agent/session/` — the backend-neutral session protocol and host lifecycle service, CLI continuation adapters, and Pi's persistent RPC adapter. Claude and Pi share generated-session-id lifecycle state while retaining backend-specific argv and fork behavior; Pi cancels extension dialog requests because AGM has no interactive RPC UI; Codex captures its created thread before resuming it. See `protocol.py`, `service.py`, `cli_adapters.py`, and `rpc.py` for the respective boundaries.
+- `src/agm/agent/spec.py` — host agent specs, each building its own backend argv, plus `AGENT_SPECS`, the member-to-spec catalog used by AgL decoding. A pure data leaf; the generic decoder lives on the AgL side, in `agl/runtime/agents.py`.
 - `src/agm/agent/defaults.py` — the built-in runner floor (`DEFAULT_AGENT_RUNNER`) shared by loop, review, and revise.
 - `src/agm/agent/runner.py` — runner command parsing, prompt attachment, prepared argv handling, subprocess execution with idle timeout, the run-result structure.
 - `src/agm/agent/prompt.py`, `prompt_source.py`, `response.py`, `output.py` — prompt preparation, source resolution, completion detection, and output formatting.

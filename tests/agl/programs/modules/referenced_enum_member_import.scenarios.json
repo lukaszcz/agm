@@ -1,0 +1,1 @@
+{"scenarios": [{"name": "injected_referenced_member", "module_roots": ["program_modules/referenced_members"], "expect": {"stdout": "2\n"}}]}

@@ -11,22 +11,22 @@ enum Plan
 param spec
 
 program def main() -> unit =
-  let impl = AgentCommand("impl")
-  let reviewer = AgentCommand("reviewer")
-  let planner = AgentCommand("planner")
-  var artifact: text = impl.ask("Implement %{spec}")
+  let impl: Agent = AgentCommand("impl")
+  let reviewer: Agent = AgentCommand("reviewer")
+  let planner: Agent = AgentCommand("planner")
+  var artifact: text = ask("Implement %{spec}", agent = impl)
   var status: text = "working"
 
   do[3]
-    let review: Review = reviewer.ask("Review:\n%{artifact}")
+    let review: Review = ask("Review:\n%{artifact}", agent = reviewer)
     case review of
       | Pass() =>
           status := "accepted"
       | Fail(issues) =>
-          let plan: Plan = planner.ask("Plan for:\n%{issues}")
+          let plan: Plan = ask("Plan for:\n%{issues}", agent = planner)
           case plan of
             | Retry() =>
-                artifact := impl.ask("Fix %{issues} in %{artifact}")
+                artifact := ask("Fix %{issues} in %{artifact}", agent = impl)
             | GiveUp(why) =>
                 if why == "hopeless" =>
                   status := "abandoned"

@@ -2,7 +2,7 @@
 # Also exercises on_parse_error: Retry and the RecursionError depth limit
 # (caught with try/catch).
 param topic: text
-let reviewer = AgentCommand("reviewer")
+let reviewer: Agent = AgentCommand("reviewer")
 
 enum Verdict
   | Pass

@@ -208,7 +208,7 @@ class EnumType:
     whose identity is the declaration it names (``decl_id``), plus
     ``type_args`` for a generic instantiation. Variant shapes are looked up
     by handle in the shared ``TypeTable``
-    (``semantics.type_table.TypeTable.enum_variants``).  ``type_args`` holds
+    (``semantics.type_table.TypeTable.enum_members``). ``type_args`` holds
     the resolved type arguments for a generic instantiation (empty tuple for
     non-generic enums).  ``module_id`` is the owning module (defaults to
     ``ENTRY_ID``).
@@ -1071,6 +1071,15 @@ BUILTIN_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset(BUILTIN_PRELUDE_TYPES)
 _BUILTIN_HOST_NAMES: frozenset[str] = BUILTIN_EXCEPTION_NAMES | BUILTIN_PRELUDE_TYPE_NAMES
 
 
+def terminal_name(display_name: str) -> str:
+    """Return the last segment of a ``::``-qualified nominal display name.
+
+    Display names carry the module route and scope path a reader would write;
+    a host that keys on the declaration alone wants only that final segment.
+    """
+    return display_name.rsplit("::", maxsplit=1)[-1]
+
+
 def spells_bare(module_id: ModuleId, name: str) -> bool:
     """Return whether a nominal owned by *module_id* named *name* spells bare.
 
@@ -1096,11 +1105,6 @@ COMPATIBILITY_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset(
 )
 
 
-# ---------------------------------------------------------------------------
-# Cast classification
-# ---------------------------------------------------------------------------
-
-
 class CastKind(_enum.Enum):
     """Classification of a cast operation.
 
@@ -1112,6 +1116,8 @@ class CastKind(_enum.Enum):
     TOTAL_NOOP = "TOTAL_NOOP"  # source already assignable to target (no-op/widen)
     TOTAL_RENDER = "TOTAL_RENDER"  # render data value to text; a cyclic walk can fail
     TOTAL_JSON = "TOTAL_JSON"  # convert to json; a cyclic walk can fail
+    IDENTITY_UPCAST = "IDENTITY_UPCAST"  # member record → containing enum
+    NOMINAL_DOWNCAST = "NOMINAL_DOWNCAST"  # enum → one of its member records
     FALLIBLE = "FALLIBLE"  # runtime-fallible conversion
     STATIC_ERROR = "STATIC_ERROR"  # statically impossible — raise AglTypeError
 

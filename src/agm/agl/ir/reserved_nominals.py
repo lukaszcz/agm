@@ -41,6 +41,8 @@ __all__ = [
     "NO_DECL_ID",
     "RESERVED_NOMINAL_NAMES",
     "RESERVED_NOMINAL_IDS",
+    "RESERVED_ENUM_MEMBER_IDS",
+    "require_reserved_enum_member_id",
     "require_reserved_nominal_id",
     "reserved_nominal_id",
 ]
@@ -100,6 +102,25 @@ RESERVED_NOMINAL_IDS: Mapping[str, int] = types.MappingProxyType(
     {name: NO_DECL_ID - (index + 1) for index, name in enumerate(RESERVED_NOMINAL_NAMES)}
 )
 
+#: Stable fallback identities for members of host-known enums. This range is
+#: disjoint from parser node ids and the top-level reserved identities.
+RESERVED_ENUM_MEMBER_IDS: Mapping[tuple[str, str], int] = types.MappingProxyType(
+    {
+        ("ParsePolicy", "Abort"): -1000,
+        ("ParsePolicy", "Retry"): -1001,
+        ("Agent", "AgentCommand"): -1010,
+        ("Agent", "AgentClaude"): -1011,
+        ("Agent", "AgentCodex"): -1012,
+        ("Agent", "AgentPi"): -1013,
+        ("OutputContractOption", "None"): -1020,
+        ("OutputContractOption", "Some"): -1021,
+        ("Option", "None"): -1030,
+        ("Option", "Some"): -1031,
+        ("SessionTransport", "Cli"): -1040,
+        ("SessionTransport", "Rpc"): -1041,
+    }
+)
+
 
 def reserved_nominal_id(name: str) -> int | None:
     """Return *name*'s reserved identity, or ``None`` if *name* is not reserved."""
@@ -115,3 +136,12 @@ def require_reserved_nominal_id(name: str) -> int:
     reserved_id = RESERVED_NOMINAL_IDS.get(name)
     assert reserved_id is not None, f"compiler bug: {name!r} is not a reserved nominal name"
     return reserved_id
+
+
+def require_reserved_enum_member_id(enum_name: str, member_name: str) -> int:
+    """Return the stable fallback identity for a host-known enum member."""
+    member_id = RESERVED_ENUM_MEMBER_IDS.get((enum_name, member_name))
+    assert member_id is not None, (
+        f"compiler bug: {enum_name!r}::{member_name!r} is not a reserved enum member"
+    )
+    return member_id

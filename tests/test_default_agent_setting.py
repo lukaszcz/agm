@@ -10,7 +10,7 @@ import pytest
 
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver, RunResult
-from agm.agl.semantics.values import EnumValue, TextValue, Value
+from agm.agl.semantics.values import RecordValue, TextValue, Value
 from agm.cli_support.args import ExecArgs
 from agm.commands import exec as exec_command
 from agm.commands import exec_program as exec_engine
@@ -48,6 +48,12 @@ def _run(
     return result
 
 
+def _assert_agent_shape(actual: Value, expected: RecordValue) -> None:
+    assert isinstance(actual, RecordValue)
+    assert actual.display_name == expected.display_name
+    assert actual.fields == expected.fields
+
+
 def test_engine_key_uses_the_agent_nominal_type() -> None:
     from agm.agl.semantics.engine_keys import get_engine_key_type
 
@@ -81,10 +87,11 @@ def test_default_agent_initializer_and_qualified_write_are_visible() -> None:
     )
 
     assert result.ok
-    assert result.bindings["initial"] == agent_value(
-        "AgentClaude", model="sonnet", thinking="medium"
+    _assert_agent_shape(
+        result.bindings["initial"],
+        agent_value("AgentClaude", model="sonnet", thinking="medium"),
     )
-    assert result.bindings["updated"] == agent_value("AgentCommand", command="command")
+    _assert_agent_shape(result.bindings["updated"], agent_value("AgentCommand", command="command"))
 
 
 @pytest.mark.parametrize(
@@ -166,9 +173,12 @@ def test_host_seed_overrides_initializer_until_source_write() -> None:
     )
 
     assert result.ok
-    assert result.bindings["seeded"] == agent_value("AgentCodex", model="o3", thinking="medium")
-    assert result.bindings["written"] == agent_value(
-        "AgentPi", provider="openai", model="gpt", thinking="high"
+    _assert_agent_shape(
+        result.bindings["seeded"], agent_value("AgentCodex", model="o3", thinking="medium")
+    )
+    _assert_agent_shape(
+        result.bindings["written"],
+        agent_value("AgentPi", provider="openai", model="gpt", thinking="high"),
     )
 
 
@@ -202,7 +212,7 @@ def test_exec_agent_source_cli_and_config_precedence(
     config_literal: str,
     cli_literal: str | None,
     source_literal: str | None,
-    expected: EnumValue,
+    expected: RecordValue,
 ) -> None:
     home = tmp_path / "home"
     config_dir = home / ".agm"
@@ -239,7 +249,7 @@ def test_exec_agent_source_cli_and_config_precedence(
     # ``run`` retains top-level bindings only internally; the observable output
     # confirms the selected constructor and each expected field.
     rendered = capsys.readouterr().out
-    assert expected.variant in rendered
+    assert expected.display_name.rsplit("::", maxsplit=1)[-1] in rendered
     for field in expected.fields.values():
         assert isinstance(field, TextValue)
         assert field.value in rendered
@@ -261,7 +271,17 @@ def test_exec_runner_config_seeds_default_agent_as_agent_command(
     config_dir.mkdir(parents=True)
     (config_dir / "config.toml").write_text('[exec]\nrunner = "claude"\n')
     program = tmp_path / "program.agl"
-    program.write_text(_file_program("import std/config\nprint std/config::default-agent\n"))
+    program.write_text(
+        "import std/config\n"
+        "program def main() -> unit =\n"
+        "  let agent = std/config::default-agent\n"
+        "  let command = case agent of\n"
+        "    | AgentCommand(command) => command\n"
+        '    | _ => "unexpected"\n'
+        "  let encoded = agent as json\n"
+        "  print command\n"
+        "  print encoded\n"
+    )
     monkeypatch.setattr(
         exec_engine,
         "current_config_context",
@@ -295,7 +315,7 @@ def test_exec_default_agent_beats_runner_precedence(
     capsys: pytest.CaptureFixture[str],
     default_agent_literal: str | None,
     runner: str,
-    expected: EnumValue,
+    expected: RecordValue,
 ) -> None:
     home = tmp_path / "home"
     config_dir = home / ".agm"
@@ -318,7 +338,7 @@ def test_exec_default_agent_beats_runner_precedence(
     )
 
     rendered = capsys.readouterr().out
-    assert expected.variant in rendered
+    assert expected.display_name.rsplit("::", maxsplit=1)[-1] in rendered
     for field in expected.fields.values():
         assert isinstance(field, TextValue)
         assert field.value in rendered

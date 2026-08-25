@@ -51,7 +51,9 @@ from typing import TYPE_CHECKING, TypeVar, cast
 from agm.agl.diagnostics import static_root_message
 from agm.agl.modules.ids import STD_CONFIG_ID, STD_CORE_ID, ModuleId, spell_declaration
 from agm.agl.scope.imports import (
+    EMPTY_IMPORT_ENV,
     BareRoute,
+    ImportEnv,
     NameAtom,
     QName,
     QualResolution,
@@ -96,12 +98,17 @@ from agm.agl.scope.symbols import (
 from agm.agl.scope.symbols import import_item_path as _item_path
 from agm.agl.scope.symbols import to_bare_atom as _bare_atom
 from agm.agl.scope.symbols import to_bare_path as _bare_path
-from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS
+from agm.agl.semantics.type_table import (
+    BUILTIN_PRELUDE_MEMBER_TYPE_DEFS,
+    BUILTIN_PRELUDE_TYPE_DEFS,
+)
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
     COMPATIBILITY_PRELUDE_TYPE_NAMES,
     EnumType,
+    ExceptionType,
+    RecordType,
 )
 from agm.agl.syntax.advisories import SpacedQualifier
 
@@ -168,6 +175,8 @@ from agm.agl.syntax.nodes import (
     UnitLit,
     UseDecl,
     VarDecl,
+    VariantDef,
+    VariantRef,
     VarPattern,
     VarRef,
     WildcardPattern,
@@ -265,11 +274,6 @@ class _UseTargetResolution:
 # Sourced from ``symbols.BUILTIN_CALL_NAMES`` (the single source of truth).
 _BUILTIN_CALL_NAMES = BUILTIN_CALL_NAMES
 
-# Sentinel ``owner_decl_node_id`` for built-in constructor candidates (exceptions
-# and prelude types), which have no source-level declaration node.  User
-# declarations may shadow bindings carrying this sentinel.
-_BUILTIN_CONSTRUCTOR_NODE_ID = -1
-
 # The set of names that may NOT be used as any kind of binding.
 _RESERVED_NAMES: frozenset[str] = frozenset(_BUILTIN_CALL_NAMES)
 
@@ -298,17 +302,14 @@ def _supersedes(candidate: ConstructorRef, cref: ConstructorRef) -> bool:
     path, and owner name) identifies the same owner; two distinct owners
     never share one, so genuine constructor overloading — two types' same
     named variant, or one name declared in different modules — is untouched.
-    A built-in seeded without a declaration node carries no identity to
-    supersede or be superseded by, and the same declaration contributed
-    twice (over two overlapping import routes) is not a later one.
+    The same declaration contributed twice (over overlapping import routes)
+    is not a later declaration and is deduplicated before this rule runs.
     """
-    return (
-        candidate.owner_decl_node_id != cref.owner_decl_node_id
-        and _BUILTIN_CONSTRUCTOR_NODE_ID
-        not in (candidate.owner_decl_node_id, cref.owner_decl_node_id)
-        and (candidate.owner_module_id, candidate.owner_path, candidate.owner_name)
-        == (cref.owner_module_id, cref.owner_path, cref.owner_name)
-    )
+    return candidate.owner_decl_node_id != cref.owner_decl_node_id and (
+        candidate.owner_module_id,
+        candidate.owner_path,
+        candidate.owner_name,
+    ) == (cref.owner_module_id, cref.owner_path, cref.owner_name)
 
 
 # ---------------------------------------------------------------------------
@@ -336,8 +337,13 @@ class _Resolver:
         cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef]
         | None = None,
         builtin_static_decl_node_ids: frozenset[int] = frozenset(),
+        referenced_member_constructor_refs: Mapping[
+            tuple[ModuleId, int], tuple[ConstructorRef, ...]
+        ]
+        | None = None,
         cross_module_constructible_types: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
         cross_module_type_scopes: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
+        program_import_envs: Mapping[ModuleId, ImportEnv] | None = None,
         allow_root_statements: bool = False,
         repl_session_scope: ScopeNode | None = None,
         repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
@@ -352,6 +358,9 @@ class _Resolver:
         # ImportEnv/dict for a module with no imports or no public types).
         self._module_id: ModuleId = module_id
         self._import_env: ImportEnv = import_env
+        self._program_import_envs = (
+            {module_id: import_env} if program_import_envs is None else program_import_envs
+        )
         # Maps (module_id, name) → (node_id, span, kind, is_builtin) for
         # cross-module refs.
         self._decl_info: dict[
@@ -361,6 +370,35 @@ class _Resolver:
             cross_module_constructor_refs if cross_module_constructor_refs is not None else {}
         )
         self._builtin_static_decl_node_ids = builtin_static_decl_node_ids
+        self._referenced_member_constructor_refs = (
+            referenced_member_constructor_refs
+            if referenced_member_constructor_refs is not None
+            else {}
+        )
+        # One canonical metadata object represents each member-record
+        # declaration. Import routes, local candidates, and retained REPL
+        # candidates all reuse it by declaration id.
+        self._constructor_metadata_by_decl_id: dict[tuple[ModuleId, int], ConstructorRef] = {
+            (ref.owner_module_id, ref.owner_decl_node_id): ref
+            for ref in self._cross_module_constructor_refs.values()
+        }
+        for (declaration_module_id, atom), declaration in all_public_types.items():
+            if isinstance(declaration, (RecordDef, ExceptionDef)):
+                constructor = self._cross_module_constructor_refs[(declaration_module_id, atom)]
+                self._constructor_metadata_by_decl_id[
+                    (declaration_module_id, declaration.node_id)
+                ] = constructor
+            elif isinstance(declaration, EnumDef):
+                path = (atom,) if isinstance(atom, str) else atom
+                for member in declaration.members:
+                    if not isinstance(member, VariantDef):
+                        continue
+                    constructor = self._cross_module_constructor_refs[
+                        (declaration_module_id, _bare_atom((*path, member.name)))
+                    ]
+                    self._constructor_metadata_by_decl_id[
+                        (declaration_module_id, member.node_id)
+                    ] = constructor
         self._cross_module_constructible_types = cross_module_constructible_types
         # Public type declarations establish scope paths even when they have
         # no separately public child members.
@@ -371,6 +409,9 @@ class _Resolver:
         self._all_public_types: dict[
             tuple[ModuleId, NameAtom], RecordDef | EnumDef | ExceptionDef | TypeAlias
         ] = all_public_types
+        self._public_type_qnames_by_node_id = {
+            declaration.node_id: qname for qname, declaration in all_public_types.items()
+        }
         # The REPL is an incremental host and intentionally retains root
         # statements. File and inline exec entries use static roots.
         self._allow_root_statements = allow_root_statements
@@ -476,6 +517,10 @@ class _Resolver:
         self._scoped_constructor_candidates: dict[tuple[ScopePath, str], list[ConstructorRef]] = {}
         # Constructor candidates: name -> ordered list of ConstructorRef.
         self._constructor_candidates: dict[str, list[ConstructorRef]] = {}
+        # Every prefix of every registered candidate's ``owner_path``, so
+        # "does any candidate live under this type scope?" is a set lookup
+        # rather than a scan of both candidate tables.
+        self._constructor_owner_scopes: set[ScopePath] = set()
         # Nominal aliases whose chain provably ends at an enum: they occupy
         # their name (so a bare reference resolves instead of raising "not
         # defined") but have no constructor candidate, since an enum's variants
@@ -530,6 +575,7 @@ class _Resolver:
         parent_scope: ScopeNode | None = None,
         ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
         ambient_type_names: frozenset[str] = frozenset(),
+        ambient_bare_constructor_keys: frozenset[tuple[str, ModuleId, int]] = frozenset(),
     ) -> ModuleResolution:
         """Execute the resolution pass over *program*.
 
@@ -545,29 +591,47 @@ class _Resolver:
         *ambient_type_names* carries type names from prior entries so that
         qualified constructor access (``Owner::variant``) resolves for types
         declared in earlier REPL entries.
+
+        *ambient_bare_constructor_keys* carries the ``(name, owner_module_id,
+        owner_decl_node_id)`` identity of every candidate that was bare-visible
+        (as opposed to only qualifier-visible) at the end of a prior REPL
+        entry.  For a same-module candidate whose owner path is a retained
+        named scope, this decides whether it stays bare here too: it replays
+        the prior entry's own bare/qualified split instead of re-deriving it
+        from the owner path's shape, which cannot distinguish a plain
+        declaration nested in a named scope from a root enum's reference to
+        one.
         """
         # Seed ambient constructor candidates (from prior REPL entries) before
         # running the local pre-passes so local declarations can shadow them.
         if ambient_constructor_candidates:
             for cname, crefs in ambient_constructor_candidates.items():
                 for cref in crefs:
-                    # A candidate from another module was selected by an import
-                    # and is exposed here under *cname* alone; its owner path
-                    # describes its declaring module, not a scope of this one.
-                    # Only a retained same-module member belongs to a named
-                    # scope here and must stay out of the bare table.
-                    if cref.owner_path and cref.owner_module_id == self._module_id:
-                        owner_scope = cref.owner_path + (
-                            (cref.owner_name,) if cref.variant is not None else ()
-                        )
+                    # Retained metadata names the member record's owning
+                    # scope. Whether the candidate is also bare here mirrors
+                    # whichever it was in the entry that declared it, not the
+                    # shape of its owner path.
+                    if (
+                        cref.owner_module_id == self._module_id
+                        and cref.owner_path in self._repl_session_scope_nodes
+                    ):
                         self._add_constructor_candidate(
-                            cname, cref, scope_path=owner_scope, inject_bare=False
+                            cname,
+                            cref,
+                            scope_path=cref.owner_path,
+                            inject_bare=(
+                                cname,
+                                cref.owner_module_id,
+                                cref.owner_decl_node_id,
+                            )
+                            in ambient_bare_constructor_keys,
                         )
                     else:
                         self._add_constructor_candidate(cname, cref)
         # Seed ambient type names (from prior REPL entries).
         if ambient_type_names:
             self._declared_type_names.update(ambient_type_names)
+            self._type_paths.update((name,) for name in ambient_type_names)
 
         self._declares_program_entry = declares_source_entry(program.body.items)
 
@@ -759,23 +823,30 @@ class _Resolver:
         self._scope_node_ids.setdefault(type_scope, item.node_id)
         self._type_paths.add(type_scope)
         if isinstance(item, EnumDef):
-            for variant in item.variants:
-                variant_key = (self._module_id, type_scope, variant.name)
-                if self._scope_entity_kinds.get(variant_key) is not None:
+            for member in item.members:
+                if not isinstance(member, VariantDef):
+                    continue
+                variant_key = (self._module_id, type_scope, member.name)
+                existing_variant = self._scope_entity_kinds.get(variant_key)
+                if existing_variant in {"ordinary", "type"}:
                     raise AglScopeError(
-                        f"Name '{variant.name}' is already declared in this scope.",
-                        span=variant.span,
+                        f"Name '{member.name}' is already declared in this scope.",
+                        span=member.span,
                     )
-                self._scope_entity_kinds[variant_key] = "ordinary"
+                self._scope_entity_kinds[variant_key] = "type"
                 self._declarations[variant_key] = BindingRef(
-                    name=variant.name,
+                    name=member.name,
                     mutable=False,
-                    decl_span=variant.span,
-                    decl_node_id=variant.node_id,
+                    decl_span=member.span,
+                    decl_node_id=member.node_id,
                     kind=BinderKind.constructor_binding,
                     module_id=self._module_id,
                     scope_path=type_scope,
                 )
+                member_scope = type_scope + (member.name,)
+                self._scope_paths.add(member_scope)
+                self._scope_node_ids.setdefault(member_scope, member.node_id)
+                self._type_paths.add(member_scope)
 
     def _classify_method_declarations(self) -> None:
         """Classify receiver parameters after every declaration path is complete.
@@ -819,7 +890,12 @@ class _Resolver:
                     f"which targets '{target_text}'.",
                     span=receiver.span,
                 )
-            if owner_path in self._type_paths:
+            if owner_path in self._type_paths and (
+                (self._module_id, owner_path[:-1], owner_path[-1]) in self._declaration_items
+                or self._scope_entity_kinds.get((self._module_id, owner_path[:-1], owner_path[-1]))
+                == "type"
+                or owner_path in self._repl_session_type_paths
+            ):
                 if receiver.default is not None:
                     raise AglScopeError(
                         f"Receiver 'self' for method '{declaration.name}' "
@@ -1086,6 +1162,11 @@ class _Resolver:
                 )
             seen.add(tp)
 
+    def _canonical_constructor_ref(self, ref: ConstructorRef) -> ConstructorRef:
+        """Intern *ref* as its member declaration's canonical metadata."""
+        key = (ref.owner_module_id, ref.owner_decl_node_id)
+        return self._constructor_metadata_by_decl_id.setdefault(key, ref)
+
     def _seed_builtin_constructor_candidates(self) -> None:
         """Seed constructor candidates for built-in types (exceptions and prelude types).
 
@@ -1100,20 +1181,24 @@ class _Resolver:
         Conflicting variants (like ``ParsePolicy::Abort``) must be accessed via
         qualified syntax (e.g. ``ParsePolicy::Abort``).
 
-        The ``owner_decl_node_id`` is set to -1 (a sentinel) because these types have
-        no AST declaration node.
+        Seeded handles and member ``TypeDef`` values provide the same stable
+        declaration identities as source member records.
         """
         exception_names: frozenset[str] = frozenset(BUILTIN_EXCEPTIONS)
 
-        for exc_name in BUILTIN_EXCEPTIONS:
-            cref = ConstructorRef(
-                owner_name=exc_name,
-                variant=None,
-                owner_decl_node_id=_BUILTIN_CONSTRUCTOR_NODE_ID,
-                type_params=(),
-                owner_module_id=STD_CORE_ID,
+        for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
+            self._add_constructor_candidate(
+                exc_name,
+                self._canonical_constructor_ref(
+                    ConstructorRef(
+                        owner_name=exc_name,
+                        owner_decl_node_id=exc_type.decl_id,
+                        type_params=(),
+                        owner_module_id=STD_CORE_ID,
+                        is_builtin=True,
+                    )
+                ),
             )
-            self._add_constructor_candidate(exc_name, cref)
 
         for type_name, type_val in BUILTIN_PRELUDE_TYPES.items():
             if type_name in COMPATIBILITY_PRELUDE_TYPE_NAMES:
@@ -1125,26 +1210,96 @@ class _Resolver:
                 # shared prelude TypeDef literal — the handle itself carries
                 # no shape data.
                 typedef = BUILTIN_PRELUDE_TYPE_DEFS[type_name]
-                for variant_name, _vfields in typedef.variants:
+                for member in typedef.members:
+                    member_def = BUILTIN_PRELUDE_MEMBER_TYPE_DEFS[member.decl_id]
+                    variant_name = member.name
                     if variant_name not in exception_names:
-                        cref = ConstructorRef(
+                        self._add_constructor_candidate(
+                            variant_name,
+                            self._canonical_constructor_ref(
+                                ConstructorRef(
+                                    owner_name=variant_name,
+                                    owner_decl_node_id=member.decl_id,
+                                    type_params=member_def.type_params,
+                                    owner_module_id=STD_CORE_ID,
+                                    can_match_bare_pattern=not member_def.fields,
+                                    owner_path=(type_name,),
+                                    is_builtin=True,
+                                )
+                            ),
+                        )
+            else:
+                assert isinstance(type_val, (RecordType, ExceptionType))
+                self._add_constructor_candidate(
+                    type_name,
+                    self._canonical_constructor_ref(
+                        ConstructorRef(
                             owner_name=type_name,
-                            variant=variant_name,
-                            owner_decl_node_id=_BUILTIN_CONSTRUCTOR_NODE_ID,
+                            owner_decl_node_id=type_val.decl_id,
                             type_params=(),
                             owner_module_id=STD_CORE_ID,
-                            can_match_bare_pattern=not _vfields,
+                            is_builtin=True,
                         )
-                        self._add_constructor_candidate(variant_name, cref)
-            else:
-                cref = ConstructorRef(
-                    owner_name=type_name,
-                    variant=None,
-                    owner_decl_node_id=_BUILTIN_CONSTRUCTOR_NODE_ID,
-                    type_params=(),
-                    owner_module_id=STD_CORE_ID,
+                    ),
                 )
-                self._add_constructor_candidate(type_name, cref)
+
+    def _remove_seeded_builtin_candidate(self, name: str, scope_path: ScopePath) -> None:
+        """Let a source builtin declaration replace the seeded host constructor."""
+        self._constructor_candidates[name] = [
+            ref
+            for ref in self._constructor_candidates.get(name, [])
+            if ref.owner_module_id != STD_CORE_ID
+        ]
+        key = (scope_path, name)
+        self._scoped_constructor_candidates[key] = [
+            ref
+            for ref in self._scoped_constructor_candidates.get(key, [])
+            if ref.owner_module_id != STD_CORE_ID
+        ]
+
+    def _remove_constructor_candidates_in_type_scope(self, type_scope: ScopePath) -> None:
+        """Remove retained member constructors of a redeclared local enum.
+
+        A first declaration registers nothing under its own scope, so the
+        common case leaves both tables untouched without inspecting them.
+        """
+        if type_scope not in self._constructor_owner_scopes:
+            return
+
+        candidates = (
+            candidate
+            for refs in (
+                *self._constructor_candidates.values(),
+                *self._scoped_constructor_candidates.values(),
+            )
+            for candidate in refs
+        )
+        member_scopes = {
+            (*candidate.owner_path, candidate.owner_name)
+            for candidate in candidates
+            if candidate.owner_module_id == self._module_id
+            and candidate.owner_path == type_scope
+            and candidate.inline_enum_owner_decl_node_id is not None
+        }
+        if not member_scopes:
+            return
+
+        def keep(candidate: ConstructorRef) -> bool:
+            owner = (*candidate.owner_path, candidate.owner_name)
+            return candidate.owner_module_id != self._module_id or not any(
+                owner[: len(member_scope)] == member_scope for member_scope in member_scopes
+            )
+
+        self._constructor_candidates = {
+            name: kept
+            for name, candidates in self._constructor_candidates.items()
+            if (kept := [candidate for candidate in candidates if keep(candidate)])
+        }
+        self._scoped_constructor_candidates = {
+            key: kept
+            for key, candidates in self._scoped_constructor_candidates.items()
+            if (kept := [candidate for candidate in candidates if keep(candidate)])
+        }
 
     def _add_constructor_candidate(
         self,
@@ -1166,43 +1321,25 @@ class _Resolver:
         owner at the same path in the scoped table, and, in the bare table,
         by a host-seeded built-in of the same name.
         """
+        cref = self._canonical_constructor_ref(cref)
+        if cref.owner_module_id == self._module_id:
+            owner_path = cref.owner_path
+            self._constructor_owner_scopes.update(
+                owner_path[:index] for index in range(len(owner_path) + 1)
+            )
         scoped_key = (scope_path, ctor_key)
         self._scoped_constructor_candidates[scoped_key] = self._place_candidate(
-            self._scoped_constructor_candidates.get(scoped_key, []),
-            cref,
-            claims_spelling=lambda candidate: (
-                (
-                    candidate.owner_module_id,
-                    candidate.owner_path,
-                    candidate.owner_name,
-                )
-                == (cref.owner_module_id, cref.owner_path, cref.owner_name)
-            ),
+            self._scoped_constructor_candidates.get(scoped_key, []), cref
         )
         if not inject_bare:
             return
         self._constructor_candidates[ctor_key] = self._place_candidate(
-            self._constructor_candidates.get(ctor_key, []),
-            cref,
-            claims_spelling=lambda candidate: (
-                (candidate.owner_module_id, candidate.owner_name)
-                == (cref.owner_module_id, cref.owner_name)
-                or (
-                    (
-                        candidate.owner_decl_node_id == _BUILTIN_CONSTRUCTOR_NODE_ID
-                        or cref.owner_decl_node_id == _BUILTIN_CONSTRUCTOR_NODE_ID
-                    )
-                    and candidate.owner_name == cref.owner_name
-                )
-            ),
+            self._constructor_candidates.get(ctor_key, []), cref
         )
 
     @staticmethod
     def _place_candidate(
-        existing: list[ConstructorRef],
-        cref: ConstructorRef,
-        *,
-        claims_spelling: Callable[[ConstructorRef], bool],
+        existing: list[ConstructorRef], cref: ConstructorRef
     ) -> list[ConstructorRef]:
         """Return *existing* with *cref* superseding, yielding to, or joining it.
 
@@ -1210,11 +1347,22 @@ class _Resolver:
         representative binding and the reported one on an ambiguity — does
         not depend on when a declaration was superseded.
         """
+        if any(
+            candidate.owner_module_id == cref.owner_module_id
+            and candidate.owner_decl_node_id == cref.owner_decl_node_id
+            for candidate in existing
+        ):
+            return existing
+        if cref.is_builtin:
+            for index, candidate in enumerate(existing):
+                if candidate.is_builtin and candidate.owner_path == cref.owner_path:
+                    if cref.owner_module_id == STD_CORE_ID:
+                        return existing
+                    if candidate.owner_module_id == STD_CORE_ID:
+                        return [*existing[:index], cref, *existing[index + 1 :]]
         for index, candidate in enumerate(existing):
             if _supersedes(candidate, cref):
                 return [*existing[:index], cref, *existing[index + 1 :]]
-        if any(claims_spelling(candidate) for candidate in existing):
-            return existing
         return [*existing, cref]
 
     def _alias_target_lookup(
@@ -1249,44 +1397,30 @@ class _Resolver:
         self._seed_builtin_constructor_candidates()
         for item, path in self._type_declarations:
             if isinstance(item, RecordDef):
-                cref = ConstructorRef(
-                    owner_name=item.name,
-                    variant=None,
-                    owner_decl_node_id=item.node_id,
-                    type_params=item.type_params,
-                    owner_module_id=self._module_id,
-                    owner_path=path,
-                )
+                cref = self._constructor_metadata_by_decl_id[(self._module_id, item.node_id)]
+                if item.is_builtin and not path:
+                    self._remove_seeded_builtin_candidate(item.name, path)
                 self._add_constructor_candidate(
                     item.name, cref, scope_path=path, inject_bare=not path
                 )
             elif isinstance(item, EnumDef):
                 type_scope = path + (item.name,)
-                for variant in item.variants:
-                    cref = ConstructorRef(
-                        owner_name=item.name,
-                        variant=variant.name,
-                        owner_decl_node_id=item.node_id,
-                        type_params=item.type_params,
-                        owner_module_id=self._module_id,
-                        can_match_bare_pattern=not variant.fields,
-                        owner_path=path,
-                    )
-                    self._add_constructor_candidate(
-                        variant.name,
-                        cref,
-                        scope_path=type_scope,
-                        inject_bare=not path,
-                    )
+                self._remove_constructor_candidates_in_type_scope(type_scope)
+                for member in item.members:
+                    if isinstance(member, VariantDef):
+                        cref = self._constructor_metadata_by_decl_id[
+                            (self._module_id, member.node_id)
+                        ]
+                        self._add_constructor_candidate(
+                            member.name, cref, scope_path=type_scope, inject_bare=not path
+                        )
+                        continue
+                    assert isinstance(member, VariantRef)
+                    if not path:
+                        for cref in self._referenced_member_constructor_candidates(member):
+                            self._add_constructor_candidate(cref.owner_name, cref)
             elif isinstance(item, ExceptionDef):
-                cref = ConstructorRef(
-                    owner_name=item.name,
-                    variant=None,
-                    owner_decl_node_id=item.node_id,
-                    type_params=(),
-                    owner_module_id=self._module_id,
-                    owner_path=path,
-                )
+                cref = self._constructor_metadata_by_decl_id[(self._module_id, item.node_id)]
                 self._add_constructor_candidate(
                     item.name, cref, scope_path=path, inject_bare=not path
                 )
@@ -1296,7 +1430,6 @@ class _Resolver:
                 ):
                     cref = ConstructorRef(
                         owner_name=item.name,
-                        variant=None,
                         owner_decl_node_id=item.node_id,
                         type_params=item.type_params,
                         owner_module_id=self._module_id,
@@ -1320,7 +1453,7 @@ class _Resolver:
         return tuple(
             cref
             for cref in self._constructor_candidates.get(name, ())
-            if cref.variant is None and cref.owner_module_id == self._module_id
+            if not cref.owner_path and cref.owner_module_id == self._module_id
         )
 
     def _root_declaring_span(self, cref: ConstructorRef) -> SourceSpan:
@@ -1743,6 +1876,19 @@ class _Resolver:
         """
         module, source = qname
         constructor = self._cross_module_constructor_refs.get(qname)
+        declaration = self._all_public_types.get(qname)
+        if (
+            constructor is None
+            and isinstance(declaration, TypeAlias)
+            and isinstance(declaration.type_expr, (NameT, AppliedT))
+        ):
+            constructor = ConstructorRef(
+                owner_name=declaration.name,
+                owner_decl_node_id=declaration.node_id,
+                type_params=declaration.type_params,
+                owner_module_id=module,
+                owner_path=_bare_path(source)[:-1],
+            )
         ref = self._make_cross_module_ref(module, _bare_path(atom)[-1], source, span)
         if constructor is not None:
             ref = replace(
@@ -1798,25 +1944,41 @@ class _Resolver:
         module, source = qname
         owner_path = _bare_path(source)
         scope = self._current_scope()
-        for variant in declaration.variants:
-            # A same-named exception beside the enum already owns the bare
-            # name; the exception's own bare contribution stands alone.
-            exception_qname = sibling_qname(qname, variant.name)
+        for member in declaration.members:
+            if isinstance(member, VariantRef):
+                constructors = self._referenced_member_constructor_refs.get(
+                    (module, member.node_id), ()
+                )
+                for referenced_constructor in constructors:
+                    ref = BindingRef(
+                        name=referenced_constructor.owner_name,
+                        mutable=False,
+                        decl_span=span,
+                        decl_node_id=referenced_constructor.owner_decl_node_id,
+                        kind=BinderKind.constructor_binding,
+                        module_id=referenced_constructor.owner_module_id,
+                        scope_path=referenced_constructor.owner_path,
+                    )
+                    scope.contribute_bare(referenced_constructor.owner_name, ref)
+                    scope.contribute_bare_constructor(
+                        referenced_constructor.owner_name, referenced_constructor
+                    )
+                continue
+            # A same-named top-level exception already owns the bare name
+            # (checked by its own plain atom, not the variant's owner-path
+            # key); the exception's own bare contribution stands alone.
+            exception_qname = sibling_qname(qname, member.name)
             if exception_qname in selected_qnames and isinstance(
                 self._all_public_types.get(exception_qname), ExceptionDef
             ):
                 continue
-            variant_qname = (module, _bare_atom((*owner_path, variant.name)))
+            variant_qname = (module, _bare_atom((*owner_path, member.name)))
             if variant_qname not in selected_qnames:
                 continue
-            ref, constructor = self._cross_module_member_ref(variant.name, variant_qname, span)
-            scope.contribute_bare(variant.name, ref)
-            # Every enum variant has a constructor: `_cross_module_constructor_refs`
-            # is built from the same `_all_public_types` table by iterating this
-            # same declaration's variants unconditionally (see
-            # `_cross_module_constructor_refs` in scope/program.py).
+            ref, constructor = self._cross_module_member_ref(member.name, variant_qname, span)
+            scope.contribute_bare(member.name, ref)
             assert constructor is not None
-            scope.contribute_bare_constructor(variant.name, constructor)
+            scope.contribute_bare_constructor(member.name, constructor)
 
     def _validate_retained_imported_use_routes(self) -> None:
         """Reject a retained imported use whose current import replacement hides its route."""
@@ -2944,17 +3106,7 @@ class _Resolver:
             and not ref.is_builtin
         ):
             ref = None
-        # Only a missing or constructor binding can consume regional candidates:
-        # any other kind leaves *ref* untouched below and returns from
-        # ``_record_varref_binding`` before the candidates are read.
-        regional_candidates = (
-            self._regional_constructor_candidates(node.name)
-            if ref is None or ref.kind is BinderKind.constructor_binding
-            else None
-        )
-        if ref is None or (
-            ref.kind is BinderKind.constructor_binding and regional_candidates is not None
-        ):
+        if ref is None:
             contributed = self._lookup_bare_contribution(node.name, node.span)
             if contributed is not None:
                 ref = contributed
@@ -2969,7 +3121,11 @@ class _Resolver:
                     span=node.span,
                 )
         self._reject_builtin_value_ref(node, ref, is_call_target=is_call_target)
-        self._record_varref_binding(node, ref, candidates=regional_candidates)
+        self._record_varref_binding(
+            node,
+            ref,
+            candidates=self._regional_constructor_candidates(node.name),
+        )
 
     def _builtin_static_kind(self, ref: BindingRef | None) -> BuiltinStaticKind | None:
         """Return the static kind attached to its resolved prelude owner."""
@@ -3047,12 +3203,21 @@ class _Resolver:
         )
         if len(resolved_candidates) >= 2:
             owner_names = ", ".join(
-                f"'{candidate.owner_name}'" for candidate in resolved_candidates
+                "'"
+                + spell_declaration(
+                    candidate.owner_module_id,
+                    (*candidate.owner_path, candidate.owner_name),
+                    local_to=self._module_id,
+                )
+                + "'"
+                for candidate in resolved_candidates
             )
+            first = resolved_candidates[0]
+            qualifier = "::".join((*first.owner_path, node.name))
             raise AglScopeError(
                 f"'{node.name}' is ambiguous: it is declared as a constructor "
                 f"in multiple types ({owner_names}). "
-                f"Qualify the reference, e.g. '{resolved_candidates[0].owner_name}::{node.name}'.",
+                f"Qualify the reference, e.g. '{qualifier}'.",
                 span=node.span,
             )
         if len(resolved_candidates) == 1:
@@ -3077,17 +3242,14 @@ class _Resolver:
         identity; only a module-root binding uses the root-only candidate map.
         """
         if ref.scope_path and ref.module_id == self._module_id:
-            scoped = tuple(self._scoped_constructor_candidates.get((ref.scope_path, name), ()))
-            if scoped:
-                return scoped
-            return tuple(
-                candidate
-                for candidate in self._constructor_candidates.get(name, ())
-                if candidate.owner_module_id == ref.module_id
-                and candidate.owner_path == ref.scope_path[:-1]
-                and candidate.owner_name == ref.scope_path[-1]
-            )
-        return tuple(self._constructor_candidates.get(name, ()))
+            return tuple(self._scoped_constructor_candidates.get((ref.scope_path, name), ()))
+        candidates = self._constructor_candidates.get(name, ())
+        root_candidates = tuple(
+            candidate
+            for candidate in candidates
+            if candidate.owner_module_id == ref.module_id and not candidate.owner_path
+        )
+        return root_candidates or tuple(candidates)
 
     def _validate_qualifier_chains(self, program: object) -> None:
         """Validate qualifier syntax in the current lexical scope layer."""
@@ -3214,19 +3376,19 @@ class _Resolver:
                 is not None
             )
             known_segment = any(relative_path[0] in scope_path for scope_path in self._scope_nodes)
+            is_prelude_session_static = relative_path == ("Session",) and bool(
+                self._builtin_static_decl_node_ids
+            )
             if (chain.anchor is QualifierAnchor.CURRENT_MODULE and len(chain.segments) > 1) or (
                 known_segment
                 and not has_module_route
                 and not has_leading_route
                 and not has_opened_member
+                and not is_prelude_session_static
             ):
-                try:
-                    self._resolve_qualified_chain(node)
-                except AglScopeError:
-                    raise AglScopeError(
-                        f"Unknown scope path '{'::'.join(relative_path)}'.", span=chain.span
-                    ) from None
-                return True
+                raise AglScopeError(
+                    f"Unknown scope path '{'::'.join(relative_path)}'.", span=chain.span
+                )
             return False
 
         ref = self._scope_nodes[path].members.get(node.name)
@@ -3412,12 +3574,11 @@ class _Resolver:
             and chain.segments[0].name in self._declared_type_names
         ):
             type_name = chain.segments[0].name
-            candidate = next(
+            member = next(
                 (
                     candidate
-                    for candidates in self._constructor_candidates.values()
-                    for candidate in candidates
-                    if candidate.owner_name == type_name
+                    for candidate in self._constructor_candidates.get(variant, ())
+                    if candidate.owner_path == (type_name,)
                     and (
                         chain.anchor is not QualifierAnchor.CURRENT_MODULE
                         or candidate.owner_module_id == self._module_id
@@ -3425,8 +3586,8 @@ class _Resolver:
                 ),
                 None,
             )
-            if candidate is not None:
-                self._constructor_refs[node_id] = replace(candidate, variant=variant)
+            if member is not None:
+                self._constructor_refs[node_id] = member
                 return True
         return False
 
@@ -3488,35 +3649,30 @@ class _Resolver:
             return candidates[0]
         declaration = self._declaration_items.get((self._module_id, path[:-1], path[-1]))
         if declaration is None:
-            retained = next(
-                (
-                    candidate
-                    for candidate in self._constructor_candidates.get(variant, ())
-                    if candidate.owner_module_id == self._module_id
-                    and candidate.owner_path == path[:-1]
-                    and candidate.owner_name == path[-1]
-                ),
-                None,
-            )
-            if retained is None:
-                # A retained type path can go stale across REPL entries when a
-                # later entry's own declaration (not itself a type) claims the
-                # same path a prior entry's type left behind — the path is
-                # still in ``_type_paths``, but no constructor backs it any
-                # more. A clean diagnostic beats a crash for a condition
-                # reachable from ordinary REPL input.
-                raise AglScopeError(
-                    f"'{variant}' is not a member of '{'::'.join(path)}'.", span=span
-                )
-            return retained
+            raise AglScopeError(f"'{variant}' is not a member of '{'::'.join(path)}'.", span=span)
         assert isinstance(declaration, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
-        return ConstructorRef(
-            owner_name=path[-1],
-            variant=variant,
-            owner_decl_node_id=declaration.node_id,
-            type_params=declaration.type_params,
-            owner_module_id=self._module_id,
-            owner_path=path[:-1],
+        if isinstance(declaration, (RecordDef, ExceptionDef)) and variant == declaration.name:
+            return self._constructor_metadata_by_decl_id[(self._module_id, declaration.node_id)]
+        if isinstance(declaration, TypeAlias) and isinstance(
+            declaration.type_expr, (NameT, AppliedT)
+        ):
+            target = declaration.type_expr
+            target_path = (
+                (*(segment.name for segment in target.qualifier.segments), target.name)
+                if target.qualifier is not None
+                else (target.name,)
+            )
+            target_declaration = self._declaration_items.get(
+                (self._module_id, target_path[:-1], target_path[-1])
+            )
+            target_variant = (
+                target.name
+                if isinstance(target_declaration, (RecordDef, ExceptionDef))
+                else variant
+            )
+            return self._constructor_for_type_path(target_path, target_variant, span)
+        raise AglScopeError(
+            f"Variant '{variant}' does not exist in enum or record '{'::'.join(path)}'.", span=span
         )
 
     def _type_declaration_for_owner(
@@ -3527,27 +3683,48 @@ class _Resolver:
         return self._all_public_types.get((owner_ref.module_id, atom))
 
     def _constructor_for_owner_ref(self, owner_ref: BindingRef, variant: str) -> ConstructorRef:
-        """Return a constructor-shaped result owned by a resolved type binding."""
-        candidate = next(
-            (
-                candidate
-                for candidates in self._constructor_candidates.values()
-                for candidate in candidates
-                if candidate.owner_module_id == owner_ref.module_id
-                and candidate.owner_path == owner_ref.scope_path
-                and candidate.owner_name == owner_ref.name
-            ),
-            None,
+        """Return the member-record constructor selected through a type binding."""
+        declaration_module_id = owner_ref.module_id
+        member_path = (*owner_ref.scope_path, owner_ref.name)
+        declaration = self._all_public_types.get((declaration_module_id, _bare_atom(member_path)))
+        while isinstance(declaration, TypeAlias) and isinstance(
+            declaration.type_expr, (NameT, AppliedT)
+        ):
+            target = declaration.type_expr
+            if target.qualifier is None:
+                member_path = (*owner_ref.scope_path, target.name)
+                declaration = self._all_public_types.get(
+                    (declaration_module_id, _bare_atom(member_path))
+                )
+                continue
+            declaration = resolve_alias_target(
+                target.name,
+                target.qualifier,
+                self_module_id=declaration_module_id,
+                import_env=self._program_import_envs.get(declaration_module_id, EMPTY_IMPORT_ENV),
+                all_public_types=self._all_public_types,
+                scope_path=member_path[:-1],
+            )
+            assert declaration is not None
+            declaration_module_id, atom = self._public_type_qnames_by_node_id[declaration.node_id]
+            member_path = (atom,) if isinstance(atom, str) else atom
+        direct = self._cross_module_constructor_refs.get(
+            (declaration_module_id, _bare_atom((*member_path, variant)))
         )
-        if candidate is not None:
-            return replace(candidate, variant=variant)
-        return ConstructorRef(
-            owner_name=owner_ref.name,
-            variant=variant,
-            owner_decl_node_id=owner_ref.decl_node_id,
-            type_params=(),
-            owner_module_id=owner_ref.module_id,
-            owner_path=owner_ref.scope_path,
+        if direct is not None:
+            return direct
+        if isinstance(declaration, EnumDef):
+            for member in declaration.members:
+                if not isinstance(member, VariantRef) or member.chain.member != variant:
+                    continue
+                candidates = self._referenced_member_constructor_refs.get(
+                    (declaration_module_id, member.node_id), ()
+                )
+                if len(candidates) == 1:
+                    return candidates[0]
+        raise AglScopeError(
+            f"'{variant}' is not a member of '{'::'.join(member_path)}'.",
+            span=owner_ref.decl_span,
         )
 
     def _imported_chain_owner(self, chain: QualifierChain, variant: str) -> ConstructorRef | None:
@@ -3588,7 +3765,18 @@ class _Resolver:
                 raise AglScopeError(f"'{rendered}' is not a constructible type.", span=chain.span)
         if owner_ref is None:
             return None
-        return self._constructor_for_owner_ref(owner_ref, variant)
+        member_path = (*owner_ref.scope_path, owner_ref.name)
+        declaration = self._all_public_types.get((owner_ref.module_id, _bare_atom(member_path)))
+        while isinstance(declaration, TypeAlias) and isinstance(
+            declaration.type_expr, (NameT, AppliedT)
+        ):
+            target = declaration.type_expr
+            if target.qualifier is not None:
+                break
+            member_path = (*owner_ref.scope_path, target.name)
+            declaration = self._all_public_types.get((owner_ref.module_id, _bare_atom(member_path)))
+        member_atom = _bare_atom((*member_path, variant))
+        return self._cross_module_constructor_refs.get((owner_ref.module_id, member_atom))
 
     def _nearest_bare_contribution_layer(
         self,
@@ -3791,7 +3979,7 @@ class _Resolver:
         """Resolve an imported qualified VarRef."""
         qname = self._resolve_qualified_qname(module_qualifier, node.name, node.span)
         constructor = self._cross_module_constructor_refs.get(qname)
-        if constructor is not None and (constructor.owner_path or constructor.variant is not None):
+        if constructor is not None:
             self._constructor_refs[node.node_id] = constructor
             return
         self._resolution[node.node_id] = self._make_cross_module_ref(
@@ -3968,6 +4156,18 @@ class _Resolver:
         name denotes.
         """
         callee = node.callee
+        if (
+            isinstance(callee, VarRef)
+            and callee.qualifier is not None
+            and tuple(segment.name for segment in callee.qualifier.segments) == ("Session",)
+            and callee.name not in {"open", "default"}
+            and self._builtin_static_decl_node_ids
+        ):
+            raise AglScopeError(
+                f"Unknown static '{callee.qualifier.render()}::{callee.name}' on prelude type "
+                f"'{callee.qualifier.render()}'.",
+                span=callee.span,
+            )
         if isinstance(callee, VarRef):
             self._resolve_varref(callee, is_call_target=True)
             ref = self._resolution.get(callee.node_id)
@@ -4174,8 +4374,14 @@ class _Resolver:
     # Pattern variable binding
     # ------------------------------------------------------------------
 
+    def _referenced_member_constructor_candidates(
+        self, member: VariantRef
+    ) -> tuple[ConstructorRef, ...]:
+        """Find metadata for a member reference during declaration collection."""
+        return self._referenced_member_constructor_refs.get((self._module_id, member.node_id), ())
+
     def _qualified_pattern_constructor_candidates(
-        self, node: ConstructorPattern
+        self, node: ConstructorPattern | VarRef
     ) -> tuple[ConstructorRef, ...]:
         """Select the constructors a qualified pattern spelling can match.
 
@@ -4208,7 +4414,10 @@ class _Resolver:
         local_path = self._validate_local_scope_chain(chain)
         if local_path is not None:
             if local_path in self._type_paths:
-                return (self._constructor_for_type_path(local_path, node.name, chain.span),)
+                try:
+                    return (self._constructor_for_type_path(local_path, node.name, node.span),)
+                except AglScopeError:
+                    return ()
             scoped = self._scoped_constructor_candidates.get((local_path, node.name), ())
             if scoped:
                 return tuple(scoped)
@@ -4218,6 +4427,24 @@ class _Resolver:
                 imported = self._cross_module_constructor_refs.get(qname)
                 if imported is not None:
                     return (imported,)
+                # A root record, exception, or alias constructor is reached as an
+                # ordinary imported member; its declaration kind is what makes it
+                # a constructor spelling.
+                atom_path = _bare_path(qname[1])
+                decl_node_id, _decl_span, kind, _is_builtin = self._decl_info.get(
+                    qname, (-1, node.span, BinderKind.let_binding, False)
+                )
+                if kind is BinderKind.constructor_binding:
+                    return (
+                        ConstructorRef(
+                            owner_name=atom_path[-1],
+                            owner_decl_node_id=decl_node_id,
+                            type_params=(),
+                            owner_module_id=qname[0],
+                            owner_path=atom_path[:-1],
+                            is_builtin=_is_builtin,
+                        ),
+                    )
         if self._resolve_constructor_chain(
             node.node_id, chain, node.name, defer_route_diagnostics=True
         ):

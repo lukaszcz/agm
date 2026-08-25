@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from agm.agl.capabilities import HostCapabilities
-    from agm.agl.ir.contracts import ContractPayload
+    from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode
     from agm.agl.ir.ids import NominalId, SymbolId
     from agm.agl.ir.program import ExecutableProgram, NominalDescriptor
     from agm.agl.matchcompile import MatchCompiledProgram
@@ -197,8 +197,7 @@ class RunError:
 
     ``type_name`` is the exception's declared type name (e.g. ``"AgentParseError"``).
     ``fields`` is a mapping from field names to JSON-shaped Python values.
-    ``line`` is the 1-based source line of the raise site when known (design
-    : source location is part of runtime error reporting); ``None`` when
+    ``line`` is the 1-based source line of the raise site when known; ``None`` when
     the span was not threaded through (e.g. arithmetic errors inside expressions).
     ``col`` is the 1-based source column of the raise site; ``None`` when unknown.
     """
@@ -524,7 +523,11 @@ class PipelineDriver:
             # ONLY the AgL exception carrier is caught here: an unexpected Python
             # exception is an interpreter bug and must propagate (crash loudly)
             # rather than masquerade as a user-facing pre-execution diagnostic.
-            error = exception_value_to_run_error(exc.exc, span=exc.span)
+            error = exception_value_to_run_error(
+                exc.exc,
+                span=exc.span,
+                exception_field_encodes=executable.exception_field_encodes,
+            )
             # Record the uncaught exception in the trace.
             trace.exception(
                 type_name=error.type_name,
@@ -1923,11 +1926,13 @@ def exception_value_to_run_error(
     exc: "ExceptionValue",
     *,
     span: "object" = None,  # SourceSpan | None — avoids import cycle
+    exception_field_encodes: "Mapping[NominalId, tuple[ExceptionFieldEncode, ...]] | None" = None,
 ) -> RunError:
     """Convert an ``ExceptionValue`` to a ``RunError`` for ``RunResult``.
 
-    Field values are converted via the shared serializer, which preserves
-    ``Decimal`` exactness (never routed through binary ``float``; design ).
+    Field values are converted via the exception nominal's static encode plans,
+    when present, or the shared value-directed serializer otherwise. Both preserve
+    ``Decimal`` exactness (never routed through binary ``float``).
     This runs while reporting an error already in flight, so a field that is
     itself a cyclic array/dict (e.g. a user exception's own data payload), or
     a field of a kind with no JSON representation (``unit``, ``agent``,
@@ -1941,14 +1946,26 @@ def exception_value_to_run_error(
     so the CLI can include the source location in its exit-2 error output.
     """
     from agm.agl.ir.ids import Location
-    from agm.agl.runtime.serialize import AglNonDataValue, degraded_marker, value_to_json_obj
+    from agm.agl.runtime.serialize import (
+        AglNonDataValue,
+        degraded_marker,
+        encode_value,
+        value_to_json_obj,
+    )
     from agm.agl.semantics.cycles import AglCyclicValue
     from agm.agl.syntax.spans import SourceSpan
 
+    encodes = {
+        encode.field_name: encode.plan
+        for encode in (
+            () if exception_field_encodes is None else exception_field_encodes.get(exc.nominal, ())
+        )
+    }
     fields: dict[str, object] = {}
     for k, v in exc.fields.items():
         try:
-            fields[k] = value_to_json_obj(v)
+            plan = encodes.get(k)
+            fields[k] = encode_value(plan, v) if plan is not None else value_to_json_obj(v)
         except (AglCyclicValue, AglNonDataValue) as field_exc:
             fields[k] = degraded_marker(field_exc)
     line: int | None = None

@@ -38,7 +38,7 @@ program def main() -> unit =
           | Option::none => print("none")
           | Option::some(_ as n) => print(n)
         let make_failed = Status::failed(reason = ?)
-        let status = make_failed("bad")
+        let status: Status = make_failed("bad")
         case status of
           | ok(_ as n) => print(n)
           | failed(reason) => print(reason)

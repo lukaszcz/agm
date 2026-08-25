@@ -1,0 +1,1 @@
+{"scenarios": [{"name": "cross_module_generic_alias_injection", "module_roots": ["program_modules/referenced_member_aliases"], "expect": {"stdout": "Shared(value = 4)\n"}}]}

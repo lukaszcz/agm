@@ -3,7 +3,7 @@
 param payload: json
 
 program def main() -> unit =
-  let source = AgentCommand("source")
+  let source: Agent = AgentCommand("source")
   let empty_array: array[text] = []
   let empty_map: dict[text, json] = {}
   print empty_array

@@ -1,10 +1,10 @@
-"""Compile-time JSON Schema and decode-schema derivation.
+"""Compile-time JSON Schema, decode-schema, and encode-plan derivation.
 
 :func:`derive_schema` produces a JSON Schema ``dict[str, object]`` from a
-semantic :class:`~agm.agl.semantics.types.Type`.  Every entry point in this
+semantic :class:`~agm.agl.semantics.types.Type`. Every entry point in this
 module takes an explicit :class:`~agm.agl.semantics.type_table.TypeTable` and
-resolves record/enum field and variant shapes through it
-(``table.record_fields``/``table.enum_variants``) rather than through the
+resolves record fields and enum member sets through it
+(``table.record_fields``/``table.enum_members``) rather than through the
 ``RecordType``/``EnumType`` handle's own embedded maps — the handle carries
 only its declaration identity.  The derived schema is used:
 
@@ -70,16 +70,28 @@ from typing import assert_never
 
 from agm.agl.ir.contracts import (
     ArrayDecode,
+    ArrayEncode,
     DecodePlan,
     DecodeSchema,
     DictDecode,
+    DictEncode,
+    EncodeDefinition,
+    EncodePlan,
+    EncodeSchema,
     EnumDecode,
+    EnumEncode,
+    ExceptionEncode,
     ParamDecoder,
     RecordDecode,
+    RecordEncode,
     RefDecode,
+    RefEncode,
     ScalarDecode,
+    ScalarEncode,
     ScalarKind,
+    TypeParameterEncode,
     VariantDecode,
+    VariantEncode,
 )
 from agm.agl.ir.ids import NominalId
 from agm.agl.semantics.type_table import TypeTable
@@ -196,7 +208,7 @@ def derive_schema_and_decode(
 def _emit(typ: Type, type_table: TypeTable, plan: _SchemaPlan) -> dict[str, object]:
     """Emit *typ*'s schema, ``$ref``-ing it out if it is itself a recursive instantiation."""
     schema_type = type_table.canonical_schema_type(typ)
-    if isinstance(schema_type, (RecordType, EnumType)) and schema_type in plan.recursive:
+    if isinstance(schema_type, (RecordType, EnumType)) and schema_type in plan.hoisted:
         return {"$ref": f"#/$defs/{plan.keys[schema_type]}"}
     return _emit_body(schema_type, type_table, plan)
 
@@ -268,7 +280,8 @@ def _enum_schema(typ: EnumType, type_table: TypeTable, plan: _SchemaPlan) -> dic
     follow alongside it.
     """
     variant_schemas: list[object] = []
-    for variant_name, variant_fields in type_table.enum_variants(typ).items():
+    for variant_name, member in type_table.enum_member_names(typ).items():
+        variant_fields = type_table.record_fields(member)
         required: list[str] = ["$case"]
         properties: dict[str, object] = {
             "$case": {"const": variant_name},
@@ -295,17 +308,23 @@ def _enum_schema(typ: EnumType, type_table: TypeTable, plan: _SchemaPlan) -> dic
 
 @dataclass(frozen=True, slots=True)
 class _SchemaPlan:
-    """Which concrete instantiations reachable from one root are recursive, and their keys.
+    """Which concrete instantiations reachable from one root get their own ``$defs`` entry.
 
-    ``recursive`` — every instantiation that is recursive FOR THIS ROOT (in a
+    ``hoisted`` — every instantiation emitted once into ``$defs`` and referenced
+    by ``$ref``/``RefDecode``/``RefEncode`` everywhere it occurs.  An
+    instantiation is hoisted when it is recursive FOR THIS ROOT (in a
     non-trivial strongly-connected component of the root's own instantiation
-    graph, or with a self-loop).  ``order`` — those same instantiations in
-    first-encounter (breadth-first) order, the order ``$defs`` entries are
-    built in and the order key collisions are resolved in.  ``keys`` — each
-    recursive instantiation's ``$defs`` key (see :func:`_assign_defs_keys`).
+    graph, or with a self-loop) — where a reference is the only way to emit it
+    at all — or when it occurs more than once, where sharing one body keeps the
+    emitted document proportional to the number of distinct instantiations
+    instead of the number of paths that reach them.  ``order`` — those same
+    instantiations in first-encounter (breadth-first) order, the order ``$defs``
+    entries are built in and the order key collisions are resolved in.
+    ``keys`` — each hoisted instantiation's ``$defs`` key (see
+    :func:`_assign_defs_keys`).
     """
 
-    recursive: frozenset[Instantiation]
+    hoisted: frozenset[Instantiation]
     order: tuple[Instantiation, ...]
     keys: dict[Instantiation, str] = field(default_factory=dict)
 
@@ -323,27 +342,31 @@ def _plan_types(types: Iterable[Type], type_table: TypeTable) -> _SchemaPlan:
     a recursive instantiation shared across them is assigned a single
     ``$defs``/``defs`` key (and one shared body) rather than one per occurrence.
     """
-    order, adjacency = _build_instantiation_plan(types, type_table)
+    order, adjacency, occurrences = _build_instantiation_plan(types, type_table)
     if not adjacency:
-        return _SchemaPlan(recursive=frozenset(), order=())
+        return _SchemaPlan(hoisted=frozenset(), order=())
     components = sccs(adjacency, key=_instantiation_sort_key)
-    recursive: set[Instantiation] = set()
+    hoisted: set[Instantiation] = {handle for handle, count in occurrences.items() if count > 1}
     for component in components:
         if len(component) > 1:
-            recursive.update(component)
+            hoisted.update(component)
         elif component[0] in adjacency[component[0]]:
-            recursive.add(component[0])
-    recursive_order = tuple(handle for handle in order if handle in recursive)
+            hoisted.add(component[0])
+    hoisted_order = tuple(handle for handle in order if handle in hoisted)
     return _SchemaPlan(
-        recursive=frozenset(recursive),
-        order=recursive_order,
-        keys=_assign_defs_keys(recursive_order, type_table),
+        hoisted=frozenset(hoisted),
+        order=hoisted_order,
+        keys=_assign_defs_keys(hoisted_order, type_table),
     )
 
 
 def _build_instantiation_plan(
     roots: Iterable[Type], type_table: TypeTable
-) -> tuple[tuple[Instantiation, ...], dict[Instantiation, frozenset[Instantiation]]]:
+) -> tuple[
+    tuple[Instantiation, ...],
+    dict[Instantiation, frozenset[Instantiation]],
+    dict[Instantiation, int],
+]:
     """Breadth-first expand the concrete record/enum instantiation graph reachable from *roots*.
 
     Nodes are concrete ``RecordType``/``EnumType``/``ExceptionType`` handles (memoized on handle
@@ -351,28 +374,39 @@ def _build_instantiation_plan(
     anywhere in the node's OWN substituted fields/variants (including nested
     under ``array``/``dict``, or in another reference's own type arguments —
     :func:`~agm.agl.semantics.analyses.nominal_references` finds both).
-    Returns ``(order, adjacency)``: *order* is first-encounter (BFS) order,
-    used for deterministic ``$defs`` key assignment; *adjacency* maps each
-    reached handle to its direct neighbours, ready for
-    :func:`~agm.util.graph.sccs`.  Seeding from several *roots* in order keeps
-    the first-encounter order deterministic across the whole set.
+    Returns ``(order, adjacency, occurrences)``: *order* is first-encounter
+    (BFS) order, used for deterministic ``$defs`` key assignment; *adjacency*
+    maps each reached handle to its direct neighbours, ready for
+    :func:`~agm.util.graph.sccs`; *occurrences* counts how many times each
+    handle is referenced across the roots and every expanded node's own
+    fields, WITH multiplicity — two fields of the same type are two
+    occurrences, which ``adjacency`` deliberately collapses into one edge.
+    Seeding from several *roots* in order keeps the first-encounter order
+    deterministic across the whole set.
     """
     order: list[Instantiation] = []
     adjacency: dict[Instantiation, frozenset[Instantiation]] = {}
+    occurrences: dict[Instantiation, int] = {}
     seen: set[Instantiation] = set()
-    queue: deque[Instantiation] = deque(
+    root_refs = [
         ref
         for root in roots
         for ref in type_table.schema_relevant_nominal_references(root)
         if isinstance(ref, (RecordType, EnumType, ExceptionType))
-    )
+    ]
+    for ref in root_refs:
+        occurrences[ref] = occurrences.get(ref, 0) + 1
+    queue: deque[Instantiation] = deque(root_refs)
     while queue:
         handle = queue.popleft()
         if handle in seen:
             continue
         seen.add(handle)
         order.append(handle)
-        neighbours = _direct_neighbours(handle, type_table)
+        references = _direct_references(handle, type_table)
+        for ref in references:
+            occurrences[ref] = occurrences.get(ref, 0) + 1
+        neighbours = frozenset(references)
         adjacency[handle] = neighbours
         # Sorted, never frozenset-iteration order: the frozenset's iteration
         # order depends on Python's per-process string-hash randomization, and
@@ -381,22 +415,26 @@ def _build_instantiation_plan(
         # deterministic (mirrors the sorted-extension discipline
         # TypeTable.first_infinite_declaration already uses).
         queue.extend(sorted((n for n in neighbours if n not in seen), key=_instantiation_sort_key))
-    return tuple(order), adjacency
+    return tuple(order), adjacency, occurrences
 
 
-def _direct_neighbours(handle: Instantiation, type_table: TypeTable) -> frozenset[Instantiation]:
-    """Return every concrete instantiation named anywhere in *handle*'s own fields/variants."""
+def _direct_references(handle: Instantiation, type_table: TypeTable) -> tuple[Instantiation, ...]:
+    """Return every concrete instantiation named in *handle*'s own fields/variants, with repeats.
+
+    Multiplicity is preserved: the caller collapses these into an edge set for
+    the SCC pass and counts them for the occurrence tally.
+    """
     if isinstance(handle, RecordType):
         field_types: list[Type] = list(type_table.record_fields(handle).values())
     elif isinstance(handle, EnumType):
         field_types = [
             ftype
-            for vfields in type_table.enum_variants(handle).values()
-            for ftype in vfields.values()
+            for member in type_table.enum_members(handle)
+            for ftype in type_table.record_fields(member).values()
         ]
     else:
         field_types = list(type_table.exception_fields(handle).values())
-    return frozenset(
+    return tuple(
         ref
         for ftype in field_types
         for ref in type_table.schema_relevant_nominal_references(ftype)
@@ -511,22 +549,37 @@ def build_decode_schema(typ: Type, type_table: TypeTable) -> DecodePlan:
 
 def _build_decode_plan(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> DecodePlan:
     """Build *typ*'s ``DecodePlan`` (root + ``$defs`` entries) from an already-built plan."""
-    root = _emit_decode(typ, type_table, plan)
+    # One memo per plan, as in :func:`build_encode_plan`: a type reachable by
+    # several paths is emitted once and shared, keeping the plan proportional to
+    # the number of distinct instantiations rather than to the number of paths.
+    memo: dict[Type, DecodeSchema] = {}
+    root = _emit_decode(typ, type_table, plan, memo)
     defs = tuple(
-        (plan.keys[handle], _emit_decode_body(handle, type_table, plan)) for handle in plan.order
+        (plan.keys[handle], _emit_decode_body(handle, type_table, plan, memo))
+        for handle in plan.order
     )
     return DecodePlan(root=root, defs=defs)
 
 
-def _emit_decode(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> DecodeSchema:
+def _emit_decode(
+    typ: Type, type_table: TypeTable, plan: "_SchemaPlan", memo: dict[Type, DecodeSchema]
+) -> DecodeSchema:
     """Emit *typ*'s decode schema, ``RefDecode``-ing it out if it is a recursive instantiation."""
     schema_type = type_table.canonical_schema_type(typ)
-    if isinstance(schema_type, (RecordType, EnumType)) and schema_type in plan.recursive:
-        return RefDecode(plan.keys[schema_type])
-    return _emit_decode_body(schema_type, type_table, plan)
+    cached = memo.get(schema_type)
+    if cached is not None:
+        return cached
+    if isinstance(schema_type, (RecordType, EnumType)) and schema_type in plan.hoisted:
+        emitted: DecodeSchema = RefDecode(plan.keys[schema_type])
+    else:
+        emitted = _emit_decode_body(schema_type, type_table, plan, memo)
+    memo[schema_type] = emitted
+    return emitted
 
 
-def _emit_decode_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> DecodeSchema:
+def _emit_decode_body(
+    typ: Type, type_table: TypeTable, plan: "_SchemaPlan", memo: dict[Type, DecodeSchema]
+) -> DecodeSchema:
     """Emit *typ*'s own decode schema body, never ``RefDecode``-ing *typ* itself.
 
     Used both for an ordinary (non-recursive) type and for a recursive
@@ -545,32 +598,36 @@ def _emit_decode_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> 
     if isinstance(typ, JsonType):
         return ScalarDecode(ScalarKind.JSON)
     if isinstance(typ, ArrayType):
-        return ArrayDecode(_emit_decode(typ.elem, type_table, plan))
+        return ArrayDecode(_emit_decode(typ.elem, type_table, plan, memo))
     if isinstance(typ, DictType):
-        return DictDecode(_emit_decode(typ.value, type_table, plan))
+        return DictDecode(_emit_decode(typ.value, type_table, plan, memo))
     if isinstance(typ, RecordType):
         fields = type_table.record_fields(typ)
         return RecordDecode(
             nominal=NominalId(typ.decl_id),
             display_name="::".join((*typ.scope_path, typ.name)),
             fields=tuple(
-                (fname, _emit_decode(ftype, type_table, plan)) for fname, ftype in fields.items()
+                (fname, _emit_decode(ftype, type_table, plan, memo))
+                for fname, ftype in fields.items()
             ),
         )
     if isinstance(typ, EnumType):
-        variants = type_table.enum_variants(typ)
+        members = type_table.enum_member_names(typ)
         return EnumDecode(
             nominal=NominalId(typ.decl_id),
             display_name="::".join((*typ.scope_path, typ.name)),
             variants=tuple(
                 VariantDecode(
                     name=vname,
+                    nominal=NominalId(member.decl_id),
+                    display_name="::".join((*member.scope_path, member.name)),
                     fields=tuple(
-                        (fname, _emit_decode(ftype, type_table, plan))
+                        (fname, _emit_decode(ftype, type_table, plan, memo))
                         for fname, ftype in vfields.items()
                     ),
                 )
-                for vname, vfields in variants.items()
+                for vname, member in members.items()
+                for vfields in (type_table.record_fields(member),)
             ),
         )
     # Non-data targets (unit/function/exception/bottom/typevar) are not
@@ -578,6 +635,201 @@ def _emit_decode_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> 
     raise AssertionError(  # pragma: no cover
         f"build_decode_schema: undecodable type {typ!r}"
     )
+
+
+def build_encode_plan(typ: Type, type_table: TypeTable) -> EncodePlan:
+    """Compile a checker ``Type`` into the typeless JSON encode plan for it.
+
+    Both plan shapes are the same closed node family; only how their
+    definitions are keyed and parameterized differs, so the choice between
+    them is made here rather than by every caller.
+    """
+    if type_table.has_finite_schema(typ):
+        return _build_finite_encode_plan(typ, type_table)
+    return _build_template_encode_plan(typ, type_table)
+
+
+def _build_finite_encode_plan(typ: Type, type_table: TypeTable) -> EncodePlan:
+    """Compile a plan over the concrete instantiations a finite source reaches.
+
+    The plan follows the same concrete-instantiation recursion graph as decode
+    planning, but is independent of JSON Schema emission. It deliberately
+    accepts exceptions because ``as json`` may serialize their fields even
+    though exceptions are not JSON decode targets.
+    """
+    _require_finite_schema(typ, type_table, "build a JSON encode plan")
+    plan = _plan_schema(typ, type_table)
+    # One memo per plan: a type reachable by several paths is emitted once and
+    # its encoder shared, so plan size follows the number of distinct
+    # instantiations rather than the number of paths through the type graph.
+    memo: dict[Type, EncodeSchema] = {}
+    return EncodePlan(
+        root=_emit_encode(typ, type_table, plan, memo),
+        definitions=tuple(
+            EncodeDefinition(
+                plan.keys[handle], 0, _emit_encode_body(handle, type_table, plan, memo)
+            )
+            for handle in plan.order
+        ),
+    )
+
+
+def _template_key(nominal: NominalId) -> str:
+    """Key a declaration template's definition in a growing plan.
+
+    A growing plan has no JSON Schema counterpart, so — unlike the ``$defs``
+    keys of a finite plan (:func:`_assign_defs_keys`) — this key is internal
+    and need only be deterministic and collision-free per declaration, which
+    the declaration identity already is.
+    """
+    return f"n{nominal.value}"
+
+
+def _build_template_encode_plan(typ: Type, type_table: TypeTable) -> EncodePlan:
+    """Compile a finite declaration-template plan for a growing JSON source.
+
+    Concrete instantiations such as ``Perfect[Pair[T, T]]`` grow without a
+    finite closure, but their declaration templates are finite. Every
+    definition is one declaration's template, keyed by its identity and taking
+    one parameter per declared type parameter; each reference retains its
+    static slot choices and binds those parameters at the point of use, so the
+    runtime never guesses enum membership from a record's nominal identity.
+    """
+    definitions: dict[NominalId, EncodeDefinition] = {}
+
+    def emit(current: Type, parameters: dict[str, int]) -> EncodeSchema:
+        if isinstance(current, (TextType, IntType, DecimalType, BoolType, JsonType)):
+            return ScalarEncode()
+        if isinstance(current, ArrayType):
+            return ArrayEncode(emit(current.elem, parameters))
+        if isinstance(current, DictType):
+            return DictEncode(emit(current.value, parameters))
+        if isinstance(current, TypeVarType):
+            index = parameters.get(current.name)
+            if index is None:
+                raise AssertionError(f"unbound encode type parameter {current.name!r}")
+            return TypeParameterEncode(index)
+        if isinstance(current, (RecordType, EnumType, ExceptionType)):
+            nominal = NominalId(current.decl_id)
+            ensure_definition(current)
+            args = current.type_args if isinstance(current, (RecordType, EnumType)) else ()
+            return RefEncode(_template_key(nominal), tuple(emit(arg, parameters) for arg in args))
+        raise AssertionError(f"build a dynamic JSON encode plan: unencodable type {current!r}")
+
+    def ensure_definition(handle: RecordType | EnumType | ExceptionType) -> None:
+        nominal = NominalId(handle.decl_id)
+        if nominal in definitions:
+            return
+        typedef = type_table.get_by_id(handle.decl_id)
+        if typedef is None:
+            raise AssertionError(f"dynamic encode plan references unknown nominal {nominal!r}")
+        if typedef.kind == "exception":
+            template: RecordType | EnumType | ExceptionType = typedef.handle()
+        else:
+            template = typedef.handle(tuple(TypeVarType(name) for name in typedef.type_params))
+        parameters = {name: index for index, name in enumerate(typedef.type_params)}
+        key = _template_key(nominal)
+        # Register first so a recursive template can refer to itself while its
+        # body is being compiled; replace the temporary once complete.
+        definitions[nominal] = EncodeDefinition(key, len(parameters), ScalarEncode())
+        if isinstance(template, RecordType):
+            body: EncodeSchema = RecordEncode(
+                nominal,
+                tuple(
+                    (name, emit(field_type, parameters))
+                    for name, field_type in type_table.record_fields(template).items()
+                ),
+            )
+        elif isinstance(template, ExceptionType):
+            body = ExceptionEncode(
+                nominal,
+                tuple(
+                    (name, emit(field_type, parameters))
+                    for name, field_type in type_table.exception_fields(template).items()
+                ),
+            )
+        else:
+            body = EnumEncode(
+                nominal,
+                tuple(
+                    VariantEncode(
+                        name=member_name,
+                        nominal=NominalId(member.decl_id),
+                        fields=tuple(
+                            (field_name, emit(field_type, parameters))
+                            for field_name, field_type in type_table.record_fields(member).items()
+                        ),
+                    )
+                    for member_name, member in type_table.enum_member_names(template).items()
+                ),
+            )
+        definitions[nominal] = EncodeDefinition(key, len(parameters), body)
+
+    root = emit(typ, {})
+    return EncodePlan(root=root, definitions=tuple(definitions.values()))
+
+
+def _emit_encode(
+    typ: Type, type_table: TypeTable, plan: _SchemaPlan, memo: dict[Type, EncodeSchema]
+) -> EncodeSchema:
+    """Emit *typ*'s encoder, referencing recursive bodies through ``defs``."""
+    schema_type = type_table.canonical_schema_type(typ)
+    cached = memo.get(schema_type)
+    if cached is not None:
+        return cached
+    if (
+        isinstance(schema_type, (RecordType, EnumType, ExceptionType))
+        and schema_type in plan.hoisted
+    ):
+        emitted: EncodeSchema = RefEncode(plan.keys[schema_type])
+    else:
+        emitted = _emit_encode_body(schema_type, type_table, plan, memo)
+    memo[schema_type] = emitted
+    return emitted
+
+
+def _emit_encode_body(
+    typ: Type, type_table: TypeTable, plan: _SchemaPlan, memo: dict[Type, EncodeSchema]
+) -> EncodeSchema:
+    """Emit a non-reference encoder body for one static type."""
+    if isinstance(typ, (TextType, IntType, DecimalType, BoolType, JsonType)):
+        return ScalarEncode()
+    if isinstance(typ, ArrayType):
+        return ArrayEncode(_emit_encode(typ.elem, type_table, plan, memo))
+    if isinstance(typ, DictType):
+        return DictEncode(_emit_encode(typ.value, type_table, plan, memo))
+    if isinstance(typ, RecordType):
+        return RecordEncode(
+            nominal=NominalId(typ.decl_id),
+            fields=tuple(
+                (name, _emit_encode(field_type, type_table, plan, memo))
+                for name, field_type in type_table.record_fields(typ).items()
+            ),
+        )
+    if isinstance(typ, ExceptionType):
+        return ExceptionEncode(
+            nominal=NominalId(typ.decl_id),
+            fields=tuple(
+                (name, _emit_encode(field_type, type_table, plan, memo))
+                for name, field_type in type_table.exception_fields(typ).items()
+            ),
+        )
+    if isinstance(typ, EnumType):
+        return EnumEncode(
+            nominal=NominalId(typ.decl_id),
+            variants=tuple(
+                VariantEncode(
+                    name=name,
+                    nominal=NominalId(member.decl_id),
+                    fields=tuple(
+                        (field_name, _emit_encode(field_type, type_table, plan, memo))
+                        for field_name, field_type in type_table.record_fields(member).items()
+                    ),
+                )
+                for name, member in type_table.enum_member_names(typ).items()
+            ),
+        )
+    raise AssertionError(f"build_encode_plan: unencodable type {typ!r}")
 
 
 def build_param_decoder(typ: Type, type_table: TypeTable) -> ParamDecoder:

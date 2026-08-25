@@ -3,9 +3,10 @@
 Every node is a frozen dataclass with a ``location: Location`` field.
 Child collections are ``tuple`` (never ``list``).
 
-``IrExpr`` is the closed union of expression nodes currently supported by
-the evaluator. Session operations are dedicated host-effect nodes, preserving their
-lifecycle boundaries through lowering and evaluation.
+``IrExpr`` is the closed union of all expression node types defined here.
+The evaluator and lowerer dispatch over it with a structural ``match`` whose
+final arm is ``assert_never(node)``, so mypy exhaustiveness makes a
+missing case a compile-time error.
 
 Invariant: ``IrSequence`` and ``IrBlock``
 must be non-empty (``len(items) >= 1``).  The validator checks this; do not
@@ -47,7 +48,12 @@ __all__ = [
     "IrArith",
     "IrAsk",
     "IrAskRequest",
+    "IrSessionAsk",
+    "IrSessionDefault",
+    "IrSessionOp",
+    "IrSessionOpen",
     "IrAssign",
+    "IrExec",
     "IrBind",
     "IrBlock",
     "IrBreak",
@@ -65,14 +71,16 @@ __all__ = [
     "IrConstInt",
     "IrConstJsonNull",
     "IrConstText",
+    "IrResource",
     "IrConstUnit",
     "IrContains",
     "IrContinue",
     "IrConvert",
     "IrCopyValue",
+    "IrIterHasNext",
+    "IrIterInit",
+    "IrIterNext",
     "IrDirectCall",
-    "IrEnumCaseKey",
-    "IrExec",
     "IrExpr",
     "IrField",
     "IrFieldMode",
@@ -82,20 +90,18 @@ __all__ = [
     "IrIndex",
     "IrIndexSet",
     "IrIndirectCall",
-    "IrIterHasNext",
-    "IrIterInit",
-    "IrIterNext",
+    "IrNominalCaseKey",
     "IrLiteralCaseKey",
     "IrLiteralKind",
     "IrLiteralScalar",
     "IrLoad",
     "IrLoop",
-    "IrMakeArray",
-    "IrMakeClosure",
     "IrMakeConstructor",
+    "IrMakeClosure",
     "IrMakeDict",
     "IrMakeEnum",
     "IrMakeException",
+    "IrMakeArray",
     "IrMakeJsonArray",
     "IrMakeJsonObject",
     "IrMakeRecord",
@@ -103,22 +109,18 @@ __all__ = [
     "IrParseJson",
     "IrPrint",
     "IrRaise",
-    "IrRenderTemplate",
-    "IrRenderValue",
-    "IrResource",
     "IrReturn",
+    "IrRenderValue",
+    "IrRenderTemplate",
     "IrSequence",
-    "IrSessionAsk",
-    "IrSessionDefault",
-    "IrSessionOp",
-    "IrSessionOpen",
     "IrTemplateSegment",
     "IrTemplateText",
     "IrTemplateValue",
     "IrTry",
     "IrUnary",
     "IrUpdateRecord",
-    "IrVariantIs",
+    "IrNominalCast",
+    "IrNominalIs",
     "UseDefault",
     "is_canonical_literal_scalar",
 ]
@@ -548,22 +550,9 @@ class IrMakeRecord:
     fields: "tuple[tuple[str, IrExpr], ...]"
 
 
-@dataclass(frozen=True, slots=True)
-class IrMakeEnum:
-    """IR enum-variant construction: ``EnumName::Variant(field = expr, ...)``.
-
-    ``nominal`` — the ``NominalId`` of the owning enum type.
-    ``display_name`` — user-facing enum type name.
-    ``variant`` — the variant name.
-    ``fields`` — declaration-order tuple of ``(field_name, expr)`` pairs;
-        each ``expr`` is already coerced by the lowerer.
-    """
-
-    location: Location
-    nominal: NominalId
-    display_name: str
-    variant: str
-    fields: "tuple[tuple[str, IrExpr], ...]"
+# Compatibility spelling for enum-member record construction. Enum members are
+# records, so the two names intentionally denote the same node type.
+IrMakeEnum = IrMakeRecord
 
 
 @dataclass(frozen=True, slots=True)
@@ -590,18 +579,14 @@ class IrMakeException:
 class IrMakeConstructor:
     """IR first-class constructor reference.
 
-    Evaluates to a ``ConstructorValue(nominal, display_name, variant)`` without
-    constructing the record/enum.  Used when a constructor is referenced as a
-    value (non-call position).
-
-    ``variant`` is ``None`` for a record constructor; non-``None`` for an enum
-    variant constructor.
+    Evaluates to a ``ConstructorValue(nominal, display_name)`` without
+    constructing the record. Used when a constructor is referenced as a value
+    (non-call position).
     """
 
     location: Location
     nominal: NominalId
     display_name: str
-    variant: "str | None"
 
 
 @dataclass(frozen=True, slots=True)
@@ -611,9 +596,7 @@ class IrConvert:
     Evaluates ``value`` once, then runs ``recipe`` (a typeless
     ``ConversionRecipe``).  ``failure_mode`` selects behavior on a fallible
     failure: ``RAISE_CAST_ERROR`` raises a ``CastError`` (the ``as`` operator);
-    ``RETURN_BOOL`` yields ``False`` (the fallible ``as?`` operator).  Total
-    ``as?`` is lowered to ``IrSequence((source, IrConstBool(True)))`` and never
-    reaches this node.
+    ``RETURN_BOOL`` makes ``as?`` evaluate to whether the conversion succeeded.
     """
 
     location: Location
@@ -623,18 +606,28 @@ class IrConvert:
 
 
 @dataclass(frozen=True, slots=True)
-class IrVariantIs:
-    """IR enum-variant membership test (``is`` / ``is not``).
+class IrNominalCast:
+    """Identity cast from an enum value to one of its member records.
 
-    Evaluates ``value`` (always an ``EnumValue`` in well-lowered IR) and yields
-    ``BoolValue((value.variant == variant) != negated)``. The boolean depends
-    only on the variant string and ``negated`` because the checker guarantees
-    the operand's enum type. ``nominal`` records the tested enum for validation.
+    ``test_only`` makes a nominal mismatch evaluate to ``false`` instead of
+    raising ``CastError``. The labels are statically selected source type names
+    for a failed ordinary cast.
     """
 
     location: Location
     nominal: NominalId
-    variant: str
+    value: "IrExpr"
+    test_only: bool
+    source_label: str
+    target_label: str
+
+
+@dataclass(frozen=True, slots=True)
+class IrNominalIs:
+    """IR nominal-member test (``is`` / ``is not``)."""
+
+    location: Location
+    nominal: NominalId
     value: "IrExpr"
     negated: bool
 
@@ -778,11 +771,10 @@ def is_canonical_literal_scalar(kind: IrLiteralKind, value: IrLiteralScalar) -> 
 
 
 @dataclass(frozen=True, slots=True)
-class IrEnumCaseKey:
-    """One enum discriminant identified by nominal owner and variant."""
+class IrNominalCaseKey:
+    """One record-member discriminant identified by nominal declaration."""
 
     nominal: NominalId
-    variant: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -810,7 +802,7 @@ class IrLiteralCaseKey:
             raise ValueError(f"invalid scalar {value!r} for literal case kind {self.kind.name!r}")
 
 
-IrCaseKey: TypeAlias = IrEnumCaseKey | IrLiteralCaseKey
+IrCaseKey: TypeAlias = IrNominalCaseKey | IrLiteralCaseKey
 
 
 @dataclass(frozen=True, slots=True)
@@ -1058,9 +1050,13 @@ class IrCopyValue:
 
 @dataclass(frozen=True, slots=True)
 class IrAsk:
-    """IR host-op: ``Agent::ask`` on a short-lived session.
+    """IR host-op: ask(prompt, agent:, on_parse_error:) builtin call.
 
-    ``max_attempts`` is 1 for Abort/absent and 1+n for Retry(n).
+    Evaluates ``agent`` (an ``Agent`` enum value), ``prompt`` (text), dispatches
+    through the value-driven agent runtime, parses the response via the contract,
+    and returns the typed Value.
+
+    ``max_attempts``  — 1 for Abort/absent, 1+n for Retry(n).
     """
 
     location: Location
@@ -1139,6 +1135,7 @@ class IrAskRequest:
     """
 
     location: Location
+    agent: "IrExpr"
     prompt: "IrExpr"
 
 
@@ -1223,10 +1220,10 @@ IrExpr = (
     | IrIndexSet
     | IrRenderTemplate
     | IrMakeRecord
-    | IrMakeEnum
     | IrMakeException
     | IrMakeConstructor
-    | IrVariantIs
+    | IrNominalCast
+    | IrNominalIs
     | IrConvert
     | IrIf
     | IrRaise

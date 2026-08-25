@@ -45,10 +45,12 @@ def test_session_methods_typecheck_with_declared_result_types() -> None:
     session_stats = checked.resolved.program.body.items[4]
     assert isinstance(forked, LetDecl)
     assert isinstance(session_stats, LetDecl)
-    assert checked.node_types[forked.value.node_id] == checked.type_env.get_type("Session")
-    assert checked.node_types[session_stats.value.node_id] == checked.type_env.get_type(
-        "SessionStats"
-    )
+    session = checked.type_env.type_table.builtin_declaration("Session")
+    session_stats_type = checked.type_env.type_table.builtin_declaration("SessionStats")
+    assert session is not None
+    assert session_stats_type is not None
+    assert checked.node_types[forked.value.node_id] == session.handle()
+    assert checked.node_types[session_stats.value.node_id] == session_stats_type.handle()
 
 
 def test_session_ask_infers_targets_like_agent_ask() -> None:

@@ -77,7 +77,7 @@ class TestOperatorProgramsRunEndToEnd:
             PipelineDriver(),
             "enum Left\n  | Same\n"
             "enum Right\n  | Same\n"
-            "let value = Left::Same()\n"
+            "let value: Left = Left::Same()\n"
             "print(value is Same)\n",
         )
 
@@ -325,7 +325,7 @@ class TestAgentRequest:
 
         rt = PipelineDriver(agent_dispatcher=agent)
         run_inline_command(rt, 'ask "Hi"')
-        assert received[0].agent.variant == "AgentClaude"
+        assert received[0].agent.display_name.rsplit("::", maxsplit=1)[-1] == "AgentClaude"
 
     def test_request_agent_value_for_named(self) -> None:
         received: list[AgentRequest] = []
@@ -338,7 +338,7 @@ class TestAgentRequest:
         run_inline_command(
             rt, 'let reviewer = AgentCommand("reviewer")\nreviewer.ask("Review this")'
         )
-        assert received[0].agent.variant == "AgentCommand"
+        assert received[0].agent.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert received[0].agent.fields["command"] == TextValue("reviewer")
 
 
@@ -399,7 +399,7 @@ class TestUncaughtAgentCallErrorSpan:
         assert result.ok is False
         assert result.error is not None
         assert result.error.type_name == "AgentCallError"
-        assert result.error.line == 2
+        assert result.error.line == 1
 
     def test_uncaught_agent_call_error_surfaces_at_line_in_message(
         self,
@@ -436,7 +436,7 @@ class TestUncaughtAgentCallErrorSpan:
             exec_run(args)
         assert exc_info.value.code == 2
         err = capsys.readouterr().err
-        assert "at line 3" in err
+        assert "at line 2" in err
 
 
 class TestDiagnosticType:
@@ -1297,12 +1297,14 @@ class TestRenderValue:
         assert render_value(v) == 'Issue(title = "Missing tests", severity = 3)'
 
     def test_record_empty(self) -> None:
-        """A record with no fields renders as ``TypeName()``."""
+        """A record with no fields renders bare, as ``TypeName`` (no parens):
+        a nullary constructor is an auto-value, so its bare spelling
+        round-trips as written."""
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import RecordValue
 
         v = RecordValue(nominal=NominalId(1), display_name="Empty", fields={})
-        assert render_value(v) == "Empty()"
+        assert render_value(v) == "Empty"
 
     def test_record_nested_record(self) -> None:
         """Nested records render inline."""
@@ -1346,38 +1348,47 @@ class TestRenderValue:
     def test_enum_with_payload(self) -> None:
         "Enum with payload renders as ``TypeName::Variant(field = value)``."
         from agm.agl.runtime.render import render_value
-        from agm.agl.semantics.values import EnumValue, IntValue
+        from agm.agl.semantics.values import IntValue, RecordValue
 
-        v = EnumValue(
+        v = RecordValue(
             nominal=NominalId(1),
-            display_name="Outcome",
-            variant="Partial",
+            display_name=f"{'Outcome'}::{'Partial'}",
             fields={"left": IntValue(2)},
         )
         assert render_value(v) == "Outcome::Partial(left = 2)"
 
     def test_enum_nullary_variant(self) -> None:
-        "Nullary enum variant renders as ``TypeName::Variant`` (no parens)."
+        """Nullary enum variant renders as ``TypeName::Variant`` (no parens),
+        the same bare rule applied to every fieldless record regardless of
+        its display name."""
         from agm.agl.runtime.render import render_value
-        from agm.agl.semantics.values import EnumValue
+        from agm.agl.semantics.values import RecordValue
 
-        v = EnumValue(
-            nominal=NominalId(1),
-            display_name="Outcome",
-            variant="Done",
-            fields={},
-        )
+        v = RecordValue(nominal=NominalId(1), display_name=f"{'Outcome'}::{'Done'}", fields={})
         assert render_value(v) == "Outcome::Done"
+        empty = RecordValue(nominal=NominalId(2), display_name="Empty", fields={})
+        assert render_value(empty) == "Empty"
+
+    def test_fieldless_record_bare_but_fieldless_exception_parenthesized(self) -> None:
+        """A fieldless record and a fieldless exception spell differently:
+        the record's nullary constructor is an auto-value so it renders bare,
+        while an exception has no nullary auto-value form and keeps ``()``."""
+        from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import ExceptionValue, RecordValue
+
+        record = RecordValue(nominal=NominalId(1), display_name="Empty", fields={})
+        exception = ExceptionValue(nominal=NominalId(2), display_name="Empty", fields={})
+        assert render_value(record) == "Empty"
+        assert render_value(exception) == "Empty()"
 
     def test_enum_multi_field_payload(self) -> None:
         """Enum with multiple payload fields renders them in stored order."""
         from agm.agl.runtime.render import render_value
-        from agm.agl.semantics.values import EnumValue, IntValue
+        from agm.agl.semantics.values import IntValue, RecordValue
 
-        v = EnumValue(
+        v = RecordValue(
             nominal=NominalId(1),
-            display_name="E",
-            variant="V",
+            display_name=f"{'E'}::{'V'}",
             fields={"a": IntValue(1), "b": IntValue(2), "c": IntValue(3)},
         )
         assert render_value(v) == "E::V(a = 1, b = 2, c = 3)"
@@ -1391,6 +1402,7 @@ class TestRenderValue:
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import ExceptionValue, TextValue
 
+        assert render_value(ExceptionValue(NominalId(2), "EmptyError", {})) == "EmptyError()"
         v = ExceptionValue(
             nominal=NominalId(1),
             display_name="CastError",
@@ -1625,17 +1637,14 @@ class TestSerialize:
 
     def test_enum_value_serialized(self) -> None:
         from agm.agl.runtime.serialize import value_to_json_obj
-        from agm.agl.semantics.values import EnumValue, TextValue
+        from agm.agl.semantics.values import RecordValue, TextValue
 
         result = value_to_json_obj(
-            EnumValue(
-                nominal=NominalId(1),
-                display_name="E",
-                variant="A",
-                fields={"msg": TextValue("hi")},
+            RecordValue(
+                nominal=NominalId(1), display_name=f"{'E'}::{'A'}", fields={"msg": TextValue("hi")}
             )
         )
-        assert result == {"$case": "A", "msg": "hi"}
+        assert result == {"msg": "hi"}
 
     def test_pretty_array_serialized(self) -> None:
         from agm.agl.runtime.serialize import dumps_exact
@@ -1644,12 +1653,12 @@ class TestSerialize:
 
     def test_enum_nullary_value_serialized(self) -> None:
         from agm.agl.runtime.serialize import value_to_json_obj
-        from agm.agl.semantics.values import EnumValue
+        from agm.agl.semantics.values import RecordValue
 
         result = value_to_json_obj(
-            EnumValue(nominal=NominalId(1), display_name="E", variant="Done", fields={})
+            RecordValue(nominal=NominalId(1), display_name=f"{'E'}::{'Done'}", fields={})
         )
-        assert result == {"$case": "Done"}
+        assert result == {}
 
     def test_exception_value_serialized(self) -> None:
         from agm.agl.runtime.serialize import value_to_json_obj
@@ -1945,7 +1954,6 @@ class TestRuntimeErrorPaths:
             BoolValue,
             DecimalValue,
             DictValue,
-            EnumValue,
             ExceptionValue,
             IntValue,
             JsonValue,
@@ -1972,8 +1980,8 @@ class TestRuntimeErrorPaths:
                     display_name="R",
                     fields={"f": TextValue("v")},
                 ),
-                "enum_val": EnumValue(
-                    nominal=NominalId(3), display_name="E", variant="V", fields={}
+                "enum_val": RecordValue(
+                    nominal=NominalId(3), display_name=f"{'E'}::{'V'}", fields={}
                 ),
                 "exc_val": ExceptionValue(nominal=NominalId(4), display_name="Inner", fields={}),
                 "none_val": JsonValue(None),
@@ -1991,7 +1999,7 @@ class TestRuntimeErrorPaths:
         assert error.fields["list_val"] == [1]
         assert error.fields["dict_val"] == {"x": 2}
         assert error.fields["rec_val"] == {"f": "v"}
-        assert error.fields["enum_val"] == {"$case": "V"}
+        assert error.fields["enum_val"] == {}
         assert isinstance(error.fields["exc_val"], dict)
 
     def test_convert_param_value_json_type_accepts_any(self) -> None:
@@ -2667,7 +2675,7 @@ class TestSerializeV2OpaqueValues:
         from agm.agl.runtime.serialize import AglNonDataValue, value_to_json_obj
         from agm.agl.semantics.values import ConstructorValue
 
-        ctor = ConstructorValue(nominal=NominalId(1), display_name="Box", variant=None)
+        ctor = ConstructorValue(nominal=NominalId(1), display_name="Box")
         with pytest.raises(AglNonDataValue) as exc_info:
             value_to_json_obj(ctor)
         assert exc_info.value.kind == "constructor"
@@ -3534,7 +3542,7 @@ print(B::bot.ask("second"))
         assert capsys.readouterr().out == "from A\nfrom B\n"
 
     def test_scoped_agent_values_publish_distinct_full_path_names(self) -> None:
-        from agm.agl.semantics.values import EnumValue
+        from agm.agl.semantics.values import RecordValue
 
         source = """\
 scope A
@@ -3547,12 +3555,12 @@ end B
         result = run_inline_command(PipelineDriver(), source)
 
         assert result.ok, result.diagnostics
-        assert isinstance(result.bindings["A::bot"], EnumValue)
-        assert isinstance(result.bindings["B::bot"], EnumValue)
+        assert isinstance(result.bindings["A::bot"], RecordValue)
+        assert isinstance(result.bindings["B::bot"], RecordValue)
         assert result.bindings["A::bot"] != result.bindings["B::bot"]
 
     def test_scoped_agent_value_does_not_mask_a_same_named_root_binding(self) -> None:
-        from agm.agl.semantics.values import EnumValue, IntValue
+        from agm.agl.semantics.values import IntValue, RecordValue
 
         source = """\
 let bot = 42
@@ -3567,7 +3575,7 @@ print(A::bot.ask("hi"))
 
         assert result.ok, result.diagnostics
         assert result.bindings["bot"] == IntValue(42)
-        assert isinstance(result.bindings["A::bot"], EnumValue)
+        assert isinstance(result.bindings["A::bot"], RecordValue)
 
 
 class TestScopedBindingPublicName:

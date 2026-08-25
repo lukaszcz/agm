@@ -1,0 +1,1 @@
+{"scenarios": [{"name": "regional_reference_injection", "module_roots": ["program_modules/referenced_members"], "expect": {"stdout": "Shared(value = 5)\n"}}]}

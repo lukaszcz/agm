@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.ir.contracts import ConversionFailureMode, ConversionStrategy
+from agm.agl.ir.contracts import ConversionFailureMode, ConversionStrategy, RecordEncode
 from agm.agl.ir.ids import NominalId, SymbolId
 from agm.agl.ir.nodes import (
     IrArith,
@@ -42,7 +42,6 @@ from agm.agl.ir.nodes import (
     IrContains,
     IrConvert,
     IrDirectCall,
-    IrEnumCaseKey,
     IrField,
     IrFieldMode,
     IrIf,
@@ -60,6 +59,7 @@ from agm.agl.ir.nodes import (
     IrMakeJsonArray,
     IrMakeJsonObject,
     IrMakeRecord,
+    IrNominalCaseKey,
     IrRaise,
     IrRenderTemplate,
     IrSequence,
@@ -1290,18 +1290,17 @@ class TestNominalsEmpty:
 class TestBuiltinNominalsTable:
     """``ExecutableProgram.builtin_nominals`` — the host's per-program nominal table."""
 
-    def test_answers_for_every_builtin_name_with_the_shipped_identity(self) -> None:
-        """A program that declares no ``builtin`` types still answers for every name.
+    def test_answers_with_loaded_standard_library_source_identities(self) -> None:
+        """Loaded ``std/core`` declarations drive the host's nominal table.
 
-        A trivial program declares no ``builtin`` types of its own, so every
-        built-in prelude/exception name resolves to the shipped standard
-        library's own identity.
+        Reserved identities remain the fallback only for a program that does
+        not load a source declaration.
         """
-        from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+        from tests.agl.ir_harness import nominal_id_for
 
         prog = _lower("()")
         for name in ("ExecResult", "AgentRequest", "RangeError", "MaxIterationsExceeded"):
-            assert prog.builtin_nominals.nominal(name) == NO_BUILTIN_DECLARATIONS.nominal(name)
+            assert prog.builtin_nominals.nominal(name) == nominal_id_for(prog, name)
 
     def test_declared_builtin_type_resolves_to_the_declaration_identity(self) -> None:
         """A program's own ``builtin`` declaration is reflected in its table.
@@ -1320,6 +1319,13 @@ class TestBuiltinNominalsTable:
         assert typedef is not None
         prog = _lower(source, default_stdlib=False)
         assert prog.builtin_nominals.nominal("RangeError") == NominalId(typedef.decl_node_id)
+
+    def test_standard_option_member_uses_its_loaded_source_identity(self) -> None:
+        from tests.agl.ir_harness import nominal_id_for
+
+        prog = _lower("()")
+        some = prog.builtin_nominals.resolve_standard_member("Option", "Some")
+        assert some.nominal == nominal_id_for(prog, "Option::Some")
 
     def test_scoped_declared_builtin_type_resolves_to_its_own_declared_path(self) -> None:
         """A SCOPED ``builtin`` declaration's own path drives the table's answer.
@@ -1344,12 +1350,13 @@ class TestBuiltinNominalsTable:
         Uses a variable (not a literal) step: a literal non-positive step is
         rejected statically, before this runtime guard is ever reached.
         """
-        from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
         from tests.agl.ir_harness import evaluate_ir_raises
 
-        exc = evaluate_ir_raises("let step = 0\nfor i in 1 to 5 by step do\n  ()\ndone\n")
+        source = "let step = 0\nfor i in 1 to 5 by step do\n  ()\ndone\n"
+        program = _lower(source)
+        exc = evaluate_ir_raises(source)
         assert exc.display_name == "RangeError"
-        assert exc.nominal == NO_BUILTIN_DECLARATIONS.nominal("RangeError")
+        assert exc.nominal == program.builtin_nominals.nominal("RangeError")
 
     def test_scoped_range_error_raised_at_runtime_carries_the_scoped_nominal(self) -> None:
         """A host-raised exception now carries its declaring region's own path.
@@ -1385,12 +1392,13 @@ class TestBuiltinNominalsTable:
 
     def test_max_iterations_exceeded_raised_at_runtime_carries_the_table_nominal(self) -> None:
         """A ``do[n]`` loop exhausted at its bound carries the table's nominal."""
-        from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
         from tests.agl.ir_harness import evaluate_ir_raises
 
-        exc = evaluate_ir_raises("var dummy = 0\ndo[3]\n  dummy := 1\nuntil false\n")
+        source = "var dummy = 0\ndo[3]\n  dummy := 1\nuntil false\n"
+        program = _lower(source)
+        exc = evaluate_ir_raises(source)
         assert exc.display_name == "MaxIterationsExceeded"
-        assert exc.nominal == NO_BUILTIN_DECLARATIONS.nominal("MaxIterationsExceeded")
+        assert exc.nominal == program.builtin_nominals.nominal("MaxIterationsExceeded")
 
     @pytest.mark.parametrize(
         ("source", "default_stdlib"),
@@ -1471,13 +1479,13 @@ class TestUnsupportedNodes:
         assert isinstance(indirect.value.callee, IrMakeClosure)
 
     def test_qualified_enum_constructor_lowers_correctly(self) -> None:
-        """Qualified constructor (e.g. Color::Red) lowers to IrMakeEnum/IrMakeConstructor.
+        """Qualified constructor (e.g. Color::Red) lowers to IrMakeRecord/IrMakeConstructor.
 
         Qualified constructor lowering supports a nullary variant (no fields)
-        lowers to IrMakeEnum (eagerly constructed).  A variant with fields lowers to
-        IrMakeConstructor.  Here Red is nullary, so the binding value must be IrMakeEnum.
+        lowers to IrMakeRecord (eagerly constructed).  A variant with fields lowers to
+        IrMakeConstructor.  Here Red is nullary, so the binding value must be IrMakeRecord.
         """
-        from agm.agl.ir.nodes import IrMakeEnum
+        from agm.agl.ir.nodes import IrMakeRecord
 
         source = """\
 enum Color
@@ -1490,8 +1498,8 @@ let c = Color::Red
         prog = _lower(source)
         entry = prog.modules[prog.entry_module]
         root_capture = _let_root_capture(entry.initializers[0])
-        assert isinstance(root_capture.value, IrMakeEnum)
-        assert root_capture.value.variant == "Red"
+        assert isinstance(root_capture.value, IrMakeRecord)
+        assert root_capture.value.display_name == "Color::Red"
 
     def test_lambda_lowers_to_make_closure_in_unsupported_class(self) -> None:
         """Lambda expressions now lower to IrMakeClosure."""
@@ -2034,7 +2042,7 @@ class TestBuiltinMethodLowering:
 
     def test_agent_method_call_lowers_to_ask_with_receiver_operand(self) -> None:
         source = """\
-let agents = [AgentCommand("worker")]
+let agents: array[Agent] = [AgentCommand("worker")]
 let result: text = agents[0].ask("Summarize")
 ()\
 """
@@ -2680,7 +2688,7 @@ class TestHostOpLowering:
         """ask() now lowers to IrAsk."""
         from agm.agl.ir.nodes import IrAsk
 
-        source = 'let impl = AgentCommand("impl")\nlet r: text = impl.ask("prompt")\n()'
+        source = 'let impl = AgentCommand("impl")\nlet r: text = ask("prompt", agent = impl)\n()'
         prog = _lower(source)
         # The let site's private root captures the IrAsk result.
         inits = prog.modules[prog.entry_module].initializers
@@ -2720,7 +2728,10 @@ class TestHostOpLowering:
         """ask-request lowers to IrAskRequest and allocates nothing in program.contracts."""
         from agm.agl.ir.nodes import IrAskRequest
 
-        source = 'let req = ask-request("my prompt")\n()'
+        source = (
+            'let worker = AgentCommand("worker")\n'
+            'let req = ask-request("my prompt", agent = worker)\n()'
+        )
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
         # The let site's private root captures the IrAskRequest result.
@@ -2739,12 +2750,32 @@ class TestHostOpLowering:
         # parses nothing, so lowering it must allocate no ContractRequest at all.
         assert prog.contracts == {}, f"Expected no allocated contracts, got {prog.contracts!r}"
 
-    def test_ask_request_does_not_shift_the_contracts_of_other_host_calls(self) -> None:
-        """Mixing ask-request with ask/exec leaves every allocated contract resolvable."""
-        from agm.agl.ir.nodes import IrAskRequest, IrExec, IrSessionAsk
+    def test_ask_request_method_form_allocates_no_contract(self) -> None:
+        """Agent::ask-request(...) goes through the same contract-free lowering path."""
+        from agm.agl.ir.nodes import IrAskRequest
 
         source = (
-            'let req = ask-request("my prompt")\nlet answer: text = ask("question")\nexec("ls")\n()'
+            'let worker: Agent = AgentCommand("worker")\n'
+            'let req = worker.ask-request("my prompt")\n()'
+        )
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        assert any(
+            isinstance(n, (IrSequence, IrBind))
+            and isinstance(_let_root_capture(n).value, IrAskRequest)
+            for n in inits
+        ), "Expected the method form to lower to an IrAskRequest"
+        assert prog.contracts == {}, f"Expected no allocated contracts, got {prog.contracts!r}"
+
+    def test_ask_request_does_not_shift_the_contracts_of_other_host_calls(self) -> None:
+        """Mixing ask-request with ask/exec leaves every allocated contract resolvable."""
+        from agm.agl.ir.nodes import IrAsk, IrAskRequest, IrExec
+
+        source = (
+            'let worker = AgentCommand("worker")\n'
+            'let req = ask-request("my prompt", agent = worker)\n'
+            'let answer: text = ask("question", agent = worker)\n'
+            'exec("ls")\n()'
         )
         prog = _lower(source)
         nodes = [
@@ -2752,10 +2783,8 @@ class TestHostOpLowering:
             for n in prog.modules[prog.entry_module].initializers
         ]
         assert any(isinstance(n, IrAskRequest) for n in nodes)
-        parsing_nodes = [n for n in nodes if isinstance(n, (IrSessionAsk, IrExec))]
-        assert len(parsing_nodes) == 2, (
-            f"Expected one IrSessionAsk and one IrExec, got {parsing_nodes!r}"
-        )
+        parsing_nodes = [n for n in nodes if isinstance(n, (IrAsk, IrExec))]
+        assert len(parsing_nodes) == 2, f"Expected one IrAsk and one IrExec, got {parsing_nodes!r}"
         # Only the dispatching host ops allocate, and each still resolves.
         assert len(prog.contracts) == 2, f"Expected exactly 2 contracts, got {prog.contracts!r}"
         for node in parsing_nodes:
@@ -3001,7 +3030,7 @@ class TestOneLevelCaseLowering:
             "  | Active\n"
             "  | Inactive\n"
             "\n"
-            "let s = Status::Active\n"
+            "let s: Status = Status::Active\n"
             "let r = case s of\n"
             "  | Active => 1\n"
             "  | _ => 0\n"
@@ -3015,8 +3044,14 @@ class TestOneLevelCaseLowering:
         assert prog.symbols[sequence.items[0].symbol].public_name is None
         switch = sequence.items[1]
         assert isinstance(switch, IrCase)
-        assert isinstance(switch.arms[0].key, IrEnumCaseKey)
-        assert switch.arms[0].key.variant == "Active"
+        assert isinstance(switch.arms[0].key, IrNominalCaseKey)
+        enum = next(
+            descriptor
+            for descriptor in prog.nominals.values()
+            if descriptor.declared_name == "Status"
+        )
+        active = next(variant for variant in enum.variants if variant.name == "Active")
+        assert switch.arms[0].key.nominal == active.member
 
     def test_binder_pattern_lowers_in_default_leaf(self) -> None:
         source = (
@@ -3024,7 +3059,7 @@ class TestOneLevelCaseLowering:
             "  | Active\n"
             "  | Inactive\n"
             "\n"
-            "let s = Status::Active\n"
+            "let s: Status = Status::Active\n"
             "let r = case s of\n"
             "  | Active => 1\n"
             "  | _ as x => 0\n"
@@ -3047,7 +3082,7 @@ class TestOneLevelCaseLowering:
             "  | Active\n"
             "  | Inactive\n"
             "\n"
-            "let s = Status::Inactive\n"
+            "let s: Status = Status::Inactive\n"
             "let r = case s of\n"
             "  | Active => 1\n"
             "  | _ as x => 2\n"
@@ -3058,22 +3093,20 @@ class TestOneLevelCaseLowering:
         assert isinstance(case_bind.value, IrSequence)
         switch = case_bind.value.items[1]
         assert isinstance(switch, IrCase)
-        assert isinstance(switch.arms[0].key, IrEnumCaseKey)
+        assert isinstance(switch.arms[0].key, IrNominalCaseKey)
         assert switch.default is not None
 
 
 # ---------------------------------------------------------------------------
-# Structural lowering: IrConvert / total-cast as? failure modes
+# Structural lowering: IrConvert boolean `as?` failure modes
 # ---------------------------------------------------------------------------
 
 
 class TestIrConvertLowering:
-    """Structural tests for Cast lowering: IrConvert node and recipe selection.
+    """Structural tests for cast lowering and conversion recipe selection.
 
-    The lowerer emits IrConvert for 'as' (always) and fallible 'as?'; for
-    total 'as?' it emits IrSequence instead.  These tests pin the
-    decision-bearing fields so a wrong failure_mode or strategy selection
-    fails the test.
+    Ordinary casts and boolean ``as?`` convertibility tests share an ``IrConvert``
+    recipe while selecting their respective failure modes.
     """
 
     def test_total_as_lowers_to_ir_convert_raise_cast_error(self) -> None:
@@ -3090,11 +3123,6 @@ class TestIrConvertLowering:
         assert conv.recipe.strategy is ConversionStrategy.WIDEN_INT_TO_DECIMAL
 
     def test_fallible_as_test_lowers_to_ir_convert_return_bool(self) -> None:
-        """Fallible 'as?' emits IrConvert with failure_mode=RETURN_BOOL.
-
-        decimal as? int: fallible cast → strategy=NARROW_DECIMAL_TO_INT,
-        failure_mode=RETURN_BOOL.
-        """
         prog = _lower("let r = 1.5 as? int\n()")
         bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         conv = bind.value
@@ -3102,22 +3130,13 @@ class TestIrConvertLowering:
         assert conv.failure_mode is ConversionFailureMode.RETURN_BOOL
         assert conv.recipe.strategy is ConversionStrategy.NARROW_DECIMAL_TO_INT
 
-    def test_total_as_test_lowers_to_ir_sequence_not_ir_convert(self) -> None:
-        """Total 'as?' emits IrSequence((source, IrConstBool(True))), NOT IrConvert.
-
-        int as? decimal is a total noop; the lowerer sequences the source
-        expression for side-effects and then yields True — no IrConvert.
-        """
+    def test_total_as_test_lowers_to_ir_convert_return_bool(self) -> None:
         prog = _lower("let r = 1 as? decimal\n()")
         bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
-        seq = bind.value
-        assert isinstance(seq, IrSequence), (
-            f"Total 'as?' must emit IrSequence, not {type(seq).__name__}"
-        )
-        assert len(seq.items) == 2
-        last = seq.items[1]
-        assert isinstance(last, IrConstBool)
-        assert last.value is True
+        conv = bind.value
+        assert isinstance(conv, IrConvert)
+        assert conv.failure_mode is ConversionFailureMode.RETURN_BOOL
+        assert conv.recipe.strategy is ConversionStrategy.WIDEN_INT_TO_DECIMAL
 
     def test_render_to_text_as_lowers_to_ir_convert_render_strategy(self) -> None:
         """'as text' (total render cast) → IrConvert with strategy=RENDER_TO_TEXT."""
@@ -3128,12 +3147,8 @@ class TestIrConvertLowering:
         assert conv.failure_mode is ConversionFailureMode.RAISE_CAST_ERROR
         assert conv.recipe.strategy is ConversionStrategy.RENDER_TO_TEXT
 
-    def test_render_as_test_lowers_to_ir_convert_return_bool_not_sequence(self) -> None:
-        """'as? text' (TOTAL_RENDER) emits IrConvert(RETURN_BOOL), NOT IrSequence.
-
-        Rendering can raise CyclicValueError on a cyclic value, so `as?` must
-        trial-convert rather than short-circuit to True (unlike TOTAL_NOOP).
-        """
+    def test_render_as_test_lowers_to_ir_convert_return_bool(self) -> None:
+        """`as? text` returns whether its conversion trial succeeds."""
         prog = _lower("let r = 42 as? text\n()")
         bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         conv = bind.value
@@ -3143,12 +3158,16 @@ class TestIrConvertLowering:
         assert conv.failure_mode is ConversionFailureMode.RETURN_BOOL
         assert conv.recipe.strategy is ConversionStrategy.RENDER_TO_TEXT
 
-    def test_json_as_test_lowers_to_ir_convert_return_bool_not_sequence(self) -> None:
-        """'as? json' (TOTAL_JSON) emits IrConvert(RETURN_BOOL), NOT IrSequence.
+    def test_member_record_json_cast_uses_its_exact_record_encode_plan(self) -> None:
+        """A member-record value serializes as its record, not its enum owner."""
+        prog = _lower("enum Color | Red | Blue\nlet r = Red() as json\n()")
+        bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
+        conv = bind.value
+        assert isinstance(conv, IrConvert)
+        assert isinstance(conv.recipe.encode, RecordEncode)
 
-        JSON serialization can raise CyclicValueError on a cyclic value, so
-        `as?` must trial-convert rather than short-circuit to True.
-        """
+    def test_json_as_test_lowers_to_ir_convert_return_bool(self) -> None:
+        """`as? json` returns whether its conversion trial succeeds."""
         prog = _lower("let r = 42 as? json\n()")
         bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         conv = bind.value

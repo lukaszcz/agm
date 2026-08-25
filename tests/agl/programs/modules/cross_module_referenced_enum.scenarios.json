@@ -1,0 +1,1 @@
+{"scenarios": [{"name": "cross_module_reference", "module_roots": ["program_modules/referenced_members"], "expect": {"stdout": "3\n"}}]}

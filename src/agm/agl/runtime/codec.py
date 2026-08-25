@@ -325,7 +325,7 @@ def _scan_bare_scalar(text: str) -> str | None | object:
 def _extract_json_text(raw: str) -> str | None | object:
     """Extract a single JSON text from potentially chatty agent output.
 
-    Strategy (lenient mode — design ):
+    Strategy (lenient mode):
     0. Try direct stdlib ``json.loads`` on the stripped input — if it succeeds
        (bare valid JSON, possibly with surrounding whitespace), return the
        stripped text verbatim.  This preserves full decimal precision since
@@ -770,7 +770,7 @@ class JsonCodec:
     ) -> ParseResult:
         """Parse *raw* agent output into the typed ``Value`` described by *schema*/*decode*.
 
-        Lenient mode (``strict_json=False``, the default per design ):
+        Lenient mode (``strict_json=False``, the default):
           1. Attempt to extract/repair exactly one JSON text from *raw*.
           2. Re-parse the repaired text with ``json.loads(parse_float=Decimal)``.
           3. Validate against *schema*.

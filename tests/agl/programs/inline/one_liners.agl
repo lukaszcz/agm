@@ -5,7 +5,7 @@ enum Status
   | More
 
 program def main() -> unit =
-  let stepper = AgentCommand("stepper")
+  let stepper: Agent = AgentCommand("stepper")
   let a = "x"; let b = "y"; print(a + b)
   var n: int = 0
   var s: Status = More

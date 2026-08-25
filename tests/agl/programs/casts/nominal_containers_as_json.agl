@@ -45,7 +45,7 @@ program def main() -> unit =
   else =>
     print "round trip mismatch"
 
-  # `as?` reports the same answer without raising.
+  # `as?` reports success for the same conversions.
   print(rs as? json)
   print(by_name as? json)
   print(opts as? json)

@@ -81,6 +81,7 @@ from agm.agl.semantics.type_table import (
     TypeTable,
     cast_classification,
     comparable_types,
+    is_assignable_in,
     json_cast_hint,
 )
 from agm.agl.semantics.types import (
@@ -108,7 +109,6 @@ from agm.agl.semantics.types import (
     UnitType,
     contains_inference_var,
     free_type_vars,
-    is_assignable,
     reroot_type,
     substitute,
 )
@@ -239,16 +239,6 @@ _BuiltinMethodReceiver = NominalId
 
 _AGENT_PRELUDE_TYPE = cast(EnumType, BUILTIN_PRELUDE_TYPES["Agent"])
 _SESSION_PRELUDE_TYPE = cast(RecordType, BUILTIN_PRELUDE_TYPES["Session"])
-_BUILTIN_STATIC_KIND_BY_OWNER: dict[tuple[BuiltinStaticKind, NominalId], BuiltinStaticKind] = {
-    (
-        BuiltinStaticKind.SESSION_OPEN,
-        NominalId(_SESSION_PRELUDE_TYPE.decl_id),
-    ): BuiltinStaticKind.SESSION_OPEN,
-    (
-        BuiltinStaticKind.SESSION_DEFAULT,
-        NominalId(_SESSION_PRELUDE_TYPE.decl_id),
-    ): BuiltinStaticKind.SESSION_DEFAULT,
-}
 
 
 class _BuiltinMethodChecker(Protocol):
@@ -401,7 +391,8 @@ def _builtin_static_kind(
     if owner_path not in resolved.declared_type_paths:
         return None
     owner = cast(TypeDef, type_table.get(module_id, owner_path[-1], owner_path[:-1]))
-    return _BUILTIN_STATIC_KIND_BY_OWNER.get((kind, NominalId(owner.decl_node_id)))
+    standard = type_table.standard_builtin_declaration("Session")
+    return kind if standard is not None and owner.decl_node_id == standard.decl_node_id else None
 
 
 def _session_static_signature(kind: BuiltinStaticKind) -> FunctionSignature:
@@ -436,7 +427,7 @@ def _builtin_function_signature(
     if static_kind is not None:
         return _session_static_signature(static_kind)
     if is_method:
-        if method_receiver_name == "Agent" and name == "ask":
+        if method_receiver_name == "Agent" and name in {"ask", "ask-request"}:
             root = _builtin_function_signature(name)
             assert root is not None
             return _as_builtin_method(root, _AGENT_PRELUDE_TYPE)
@@ -663,8 +654,8 @@ def _contains_function_type(
             seen = _seen | {t}
             return any(_contains_function_type(ta, type_table, seen) for ta in t.type_args) or any(
                 _contains_function_type(ft, type_table, seen)
-                for vfields in type_table.enum_variants(t).values()
-                for ft in vfields.values()
+                for member in type_table.enum_members(t)
+                for ft in type_table.record_fields(member).values()
             )
         case ExceptionType():
             if t in _seen:
@@ -799,20 +790,26 @@ class _Checker:
         # only on the canonical prelude nominal below.
         self._agent_builtin_method_checkers: dict[str, _BuiltinMethodChecker] = {
             "ask": self._builtins.check_ask,
+            "ask-request": self._builtins.check_agent_ask_request,
         }
+        session_method_checkers: dict[str, _BuiltinMethodChecker] = {
+            "ask": self._builtins.check_session_ask,
+            "compact": self._builtins.check_session_compact,
+            "reset": self._builtins.check_session_reset,
+            "fork": self._builtins.check_session_fork,
+            "stats": self._builtins.check_session_stats,
+            "set-name": self._builtins.check_session_set_name,
+            "close": self._builtins.check_session_close,
+        }
+        session_owner = self._env.type_table.standard_builtin_declaration("Session")
+        session_owner_id = (
+            NominalId(session_owner.decl_node_id)
+            if session_owner is not None
+            else NominalId(_SESSION_PRELUDE_TYPE.decl_id)
+        )
         self._builtin_method_checkers: dict[
             _BuiltinMethodReceiver, dict[str, _BuiltinMethodChecker]
-        ] = {
-            NominalId(_SESSION_PRELUDE_TYPE.decl_id): {
-                "ask": self._builtins.check_session_ask,
-                "compact": self._builtins.check_session_compact,
-                "reset": self._builtins.check_session_reset,
-                "fork": self._builtins.check_session_fork,
-                "stats": self._builtins.check_session_stats,
-                "set-name": self._builtins.check_session_set_name,
-                "close": self._builtins.check_session_close,
-            },
-        }
+        ] = {session_owner_id: session_method_checkers}
         self._constructors = ConstructorChecker(self)
         # Function return contexts. The top entry is either an annotated expected
         # result type or None for inference; the return collector records operand
@@ -1308,24 +1305,48 @@ class _Checker:
 
     def _type_is_wire_serializable(self, typ: Type) -> bool:
         """Return whether *typ* can be decoded from a JSON/schema boundary."""
-        return self._wire_type_is_serializable(typ, seen=frozenset())
+        return self._wire_type_is_serializable(typ, seen=frozenset(), memo={})
 
-    def _wire_type_is_serializable(self, typ: Type, *, seen: frozenset[Type]) -> bool:
+    def _wire_type_is_serializable(
+        self, typ: Type, *, seen: frozenset[Type], memo: dict[tuple[Type, frozenset[Type]], bool]
+    ) -> bool:
         schema_type = self._env.type_table.canonical_schema_type(typ)
+        memo_key = (schema_type, seen)
+        cached = memo.get(memo_key)
+        if cached is not None:
+            return cached
+        result = self._wire_type_is_serializable_uncached(schema_type, seen=seen, memo=memo)
+        memo[memo_key] = result
+        return result
+
+    def _wire_type_is_serializable_uncached(
+        self,
+        schema_type: Type,
+        *,
+        seen: frozenset[Type],
+        memo: dict[tuple[Type, frozenset[Type]], bool],
+    ) -> bool:
+        """Answer for one already-canonicalized type.
+
+        :meth:`_wire_type_is_serializable` memoizes around this.
+        """
         if isinstance(schema_type, (TextType, JsonType, BoolType, IntType, DecimalType)):
             return True
         if isinstance(schema_type, ArrayType):
-            return self._wire_type_is_serializable(schema_type.elem, seen=seen)
+            return self._wire_type_is_serializable(schema_type.elem, seen=seen, memo=memo)
         if isinstance(schema_type, DictType):
-            return self._wire_type_is_serializable(schema_type.value, seen=seen)
+            return self._wire_type_is_serializable(schema_type.value, seen=seen, memo=memo)
         if isinstance(schema_type, RecordType):
-            if schema_type.decl_id in HOST_MINTED_PRELUDE_TYPE_IDS:
+            session = self._env.type_table.standard_builtin_declaration("Session")
+            if schema_type.decl_id in HOST_MINTED_PRELUDE_TYPE_IDS or (
+                session is not None and schema_type.decl_id == session.decl_node_id
+            ):
                 return False
             if schema_type in seen:
                 return True
             next_seen = seen | {schema_type}
             return all(
-                self._wire_type_is_serializable(field_type, seen=next_seen)
+                self._wire_type_is_serializable(field_type, seen=next_seen, memo=memo)
                 for field_type in self._env.type_table.record_fields(schema_type).values()
             )
         if isinstance(schema_type, EnumType):
@@ -1333,9 +1354,9 @@ class _Checker:
                 return True
             next_seen = seen | {schema_type}
             return all(
-                self._wire_type_is_serializable(field_type, seen=next_seen)
-                for variant_fields in self._env.type_table.enum_variants(schema_type).values()
-                for field_type in variant_fields.values()
+                self._wire_type_is_serializable(field_type, seen=next_seen, memo=memo)
+                for member in self._env.type_table.enum_members(schema_type)
+                for field_type in self._env.type_table.record_fields(member).values()
             )
         if isinstance(
             schema_type,
@@ -1356,17 +1377,28 @@ class _Checker:
 
         The name whitelist that gates every builtin declaration applies here: a
         ``builtin var`` must name a known engine key, and its declared type must
-        match the key's canonical type.  The canonical engine-key type is
-        recorded as the binding type.
+        match the key's source-selected type. The program pre-pass replaces a
+        canonical fallback nominal with the loaded ``builtin`` declaration;
+        standalone checking falls back to the registry type.
         """
         from agm.agl.semantics.engine_keys import get_engine_key_type
 
-        key_type = get_engine_key_type(node.name)
-        if key_type is None:
+        canonical_key_type = get_engine_key_type(node.name)
+        if canonical_key_type is None:
             raise AglTypeError(
                 f"Unknown builtin var '{node.name}'.",
                 span=node.span,
             )
+        key_type = canonical_key_type
+        if isinstance(canonical_key_type, (RecordType, EnumType, ExceptionType)):
+            standard = self._env.type_table.standard_builtin_declaration(canonical_key_type.name)
+            if standard is not None:
+                type_args = (
+                    canonical_key_type.type_args
+                    if isinstance(canonical_key_type, (RecordType, EnumType))
+                    else ()
+                )
+                key_type = standard.handle(type_args=type_args)
         declared = self._env.resolve_type_expr(node.type_ann, span=node.span, type_vars=frozenset())
         if declared != key_type:
             raise AglTypeError(
@@ -1593,7 +1625,7 @@ class _Checker:
         region = _InferenceRegion(
             self._candidate_session.engine
             if self._candidate_session is not None
-            else InferenceEngine(),
+            else InferenceEngine(self._env.type_table),
             {},
             {},
             [],
@@ -1738,7 +1770,7 @@ class _Checker:
         if isinstance(expr, VarRef):
             return self._check_varref(expr, expected=expected)
         if isinstance(expr, TypeApply):
-            return self._check_type_apply(expr)
+            return self._check_type_apply(expr, expected=expected)
         if isinstance(expr, Call):
             return self._check_call(expr, expected=expected)
         if isinstance(expr, Placeholder):
@@ -1818,20 +1850,25 @@ class _Checker:
         )
         return None if ref is None else self._constructors.normalize_constructor_ref(ref)
 
-    @staticmethod
-    def _constructor_type_args(node: VarRef) -> tuple[TypeExpr, ...] | None:
-        """Return type arguments attached to the type-owning chain segment."""
-        if node.qualifier is None or not node.qualifier.segments:
+    def _owner_applied_member_type(
+        self, node: VarRef, ctor_ref: ConstructorRef
+    ) -> RecordType | None:
+        """Return a member record specialized by an explicitly applied enum owner."""
+        if node.qualifier is None:
             return None
-        return node.qualifier.segments[-1].type_args
+        return self._env.resolve_owner_applied_inline_member_type(
+            node.qualifier,
+            ctor_ref.owner_name,
+            type_vars=self._current_type_vars,
+            span=node.span,
+        )
 
     def _check_varref(self, node: VarRef, *, expected: Type | None = None) -> Type:
         # Constructor references, qualified or bare, share one scope result.
         if (ctor_ref := self._constructor_ref_for(node.node_id)) is not None:
-            type_args = self._constructor_type_args(node)
-            if type_args is not None:
-                return self._constructors.check_constructor_type_apply(
-                    ctor_ref=ctor_ref, type_args=type_args, span=node.span
+            if (member_type := self._owner_applied_member_type(node, ctor_ref)) is not None:
+                return self._constructors.check_constructor_as_value(
+                    owner=member_type, span=node.span, expected=expected
                 )
             if ctor_ref.type_params:
                 return self._constructors.check_generic_constructor_as_value(
@@ -1839,12 +1876,9 @@ class _Checker:
                 )
             owner = self._constructors.resolve_constructor_owner(ctor_ref, node.span)
             return self._constructors.check_constructor_as_value(
-                owner=owner, variant=ctor_ref.variant, span=node.span
+                owner=owner, span=node.span, expected=expected
             )
         ref = self._binding_for(node.node_id)
-        # A constructor_binding resolves to a type declaration, not a value.
-        # Catch bare type name references (e.g. ``mylib::Color``) and raise a
-        # user-facing error instead of an internal assertion failure.
         if ref.kind is BinderKind.constructor_binding:
             if not ref.module_id.is_entry:
                 return self._constructors.check_cross_module_constructor_as_value(
@@ -1967,8 +2001,8 @@ class _Checker:
             engine = self._active_inference_engine()
             try:
                 engine.unify(
-                    slot_type,
                     argument_type,
+                    slot_type,
                     engine.origin(arg_expr.span, role=role, subject=subject),
                 )
             except InferenceError as exc:
@@ -2074,7 +2108,7 @@ class _Checker:
             for p, ta in zip(type_params, type_args)
         }
 
-    def _check_type_apply(self, node: TypeApply) -> Type:
+    def _check_type_apply(self, node: TypeApply, *, expected: Type | None) -> Type:
         # A constructor used as a value with explicit type arguments
         # (e.g. ``some::[int]``; qualified refs use ``Option[int]::none``): delegate to the
         # constructor checker, which instantiates the constructor with the
@@ -2087,31 +2121,12 @@ class _Checker:
         if (
             isinstance(node.expr, VarRef)
             and (ctor_ref := self._constructor_ref_for(node.expr.node_id)) is not None
-            and node.expr.qualifier is not None
-            and ctor_ref.variant is not None
-        ):
-            raise self._qualified_constructor_typed_call_error(node.span)
-        if (
-            isinstance(node.expr, VarRef)
-            and (ctor_ref := self._constructor_ref_for(node.expr.node_id)) is not None
         ):
             typ = self._constructors.check_constructor_type_apply(
-                ctor_ref=ctor_ref, type_args=node.type_args, span=node.span
+                ctor_ref=ctor_ref, type_args=node.type_args, span=node.span, expected=expected
             )
             self._record_node_type(node.expr.node_id, typ)
             return typ
-        if isinstance(node.expr, VarRef):
-            constructor_ref = self._binding_for(node.expr.node_id)
-            if (
-                constructor_ref.kind is BinderKind.constructor_binding
-                and not constructor_ref.module_id.is_entry
-            ):
-                typ = self._constructors.check_cross_module_constructor_type_apply(
-                    constructor_ref, type_args=node.type_args, span=node.span
-                )
-                self._record_node_type(node.expr.node_id, typ)
-                return typ
-
         if isinstance(node.expr, FieldAccess):
             return self._require_field_access_type(
                 node.expr,
@@ -2498,18 +2513,16 @@ class _Checker:
             return self._inferred_return_provenance_for_exprs((obj,))
         return set()
 
-    def _constructor_field_depends_on_owner_type(
-        self, owner_type: RecordType | EnumType, variant: str | None, field: str
-    ) -> bool:
+    def _constructor_field_depends_on_owner_type(self, owner_type: RecordType, field: str) -> bool:
         """Whether a constructor field's static type depends on its owner arguments."""
         if not owner_type.type_args:
             return False
         signature = self._env.get_ctor_sig_from_module(
-            owner_type.module_id, owner_type.name, variant, scope_path=owner_type.scope_path
+            owner_type.module_id, owner_type.name, scope_path=owner_type.scope_path
         )
         if signature is None:
             signature = self._env.get_constructor_signature(
-                owner_type.name, variant, scope_path=owner_type.scope_path
+                owner_type.name, scope_path=owner_type.scope_path
             )
         assert signature is not None
         assert field in signature.field_names
@@ -2520,7 +2533,7 @@ class _Checker:
         self, owner_type: RecordType, field: str, obj: Expr
     ) -> set[int]:
         """Carry evidence only through a field selected by owner type arguments."""
-        if not self._constructor_field_depends_on_owner_type(owner_type, None, field):
+        if not self._constructor_field_depends_on_owner_type(owner_type, field):
             return set()
         return self._inferred_return_provenance_for_exprs((obj,))
 
@@ -2874,31 +2887,24 @@ class _Checker:
             isinstance(node.callee, VarRef)
             and (ctor_ref := self._constructor_ref_for(node.callee.node_id)) is not None
         ):
-            if (
-                node.type_args
-                and node.callee.qualifier is not None
-                and ctor_ref.variant is not None
-            ):
-                raise self._qualified_constructor_typed_call_error(node.span)
-            constructor_type_args = self._constructor_type_args(node.callee)
-            if constructor_type_args is None:
-                constructor_type_args = node.type_args
+            if (member_type := self._owner_applied_member_type(node.callee, ctor_ref)) is not None:
+                if node.type_args:
+                    raise self._qualified_constructor_typed_call_error(node.span)
+                return self._constructors.check_concrete_constructor_callee_call(
+                    node, owner=member_type, hole_indices=hole_indices
+                )
             return self._constructors.check_constructor_callee_call(
                 node,
                 ctor_ref=ctor_ref,
-                constructor_type_args=constructor_type_args,
+                constructor_type_args=node.type_args,
                 expected=expected,
                 hole_indices=hole_indices,
             )
 
-        # Declared function or cross-module constructor by name?
-        # Take the declared-name (named/default) path ONLY when the callee is a
-        # bare VarRef that resolves to a top-level function_binding (a ``def``).
-        # A let/var-bound function value, a param, or a field access must all
-        # take the value-call path — they are not declared names and do not
-        # support named/defaulted arguments.
-        # Exception: a cross-module constructor_binding (module_qualifier present)
-        # is handled as a constructor call.
+        # Declared functions take the named/default-argument path only when
+        # the callee is a bare VarRef that resolves to a top-level ``def``.
+        # Let/var-bound function values, parameters, and field accesses use
+        # the value-call path, which does not support named/defaulted arguments.
         if isinstance(node.callee, VarRef):
             callee_ref = self._binding_for(node.callee.node_id)
             if callee_ref.kind is BinderKind.function_binding:
@@ -2916,7 +2922,6 @@ class _Checker:
                 return self._constructors.check_cross_module_constructor_call(
                     node, callee_ref, expected=expected, hole_indices=hole_indices
                 )
-
         # Member call (``p.f(...)``)? A non-partial call whose callee resolves to
         # a method takes the declared-name path so named arguments and defaults
         # work exactly as they do for the qualified ``Type::f(p, ...)`` spelling.
@@ -3467,7 +3472,10 @@ class _Checker:
             bt = self._check_expr(branch.body, expected=body_expected)
             if not has_else:
                 self._assert_assignable_from(bt, UnitType(), branch.body.span, branch.body)
-            branch_types.append(bt)
+            if has_else:
+                branch_types.append(self._branch_result(bt, body_expected, branch.body))
+            else:
+                branch_types.append(bt)
 
         if not has_else:
             return UnitType()
@@ -3505,7 +3513,7 @@ class _Checker:
             except AglTypeError as exc:
                 raise self._frame_inferred_return_error(exc, exprs=(node.subject,)) from exc
             bt = self._check_expr(branch.body, expected=expected)
-            branch_types.append(bt)
+            branch_types.append(self._branch_result(bt, expected, branch.body))
         try:
             result = self._unify_branch_types(branch_types, node.span, "Case expression")
         except AglTypeError as exc:
@@ -3609,12 +3617,14 @@ class _Checker:
     # --- try ---
 
     def _check_try(self, node: Try, *, expected: Type | None) -> Type:
-        body_type = self._check_expr(node.body, expected=expected)
+        body_type = self._branch_result(
+            self._check_expr(node.body, expected=expected), expected, node.body
+        )
         handler_types: list[Type] = [body_type]
         handler_bodies: list[Expr] = []
         for clause in node.handlers:
             ht = self._check_catch_clause(clause, expected=expected)
-            handler_types.append(ht)
+            handler_types.append(self._branch_result(ht, expected, clause.body))
             handler_bodies.append(clause.body)
         try:
             result = self._unify_branch_types(handler_types, node.span, "Try expression")
@@ -3635,7 +3645,10 @@ class _Checker:
         if clause.exc_type is None or clause.exc_type == "_":
             from agm.agl.semantics.types import EXCEPTION_BASE
 
-            exc_type: ExceptionType = EXCEPTION_BASE
+            standard = self._env.type_table.standard_builtin_declaration("Exception")
+            selected = EXCEPTION_BASE if standard is None else standard.handle()
+            assert isinstance(selected, ExceptionType)
+            exc_type: ExceptionType = selected
         else:
             # resolve_named_type is used instead of get_type so exception types exposed
             # by import tails (in cross-module program context) are found as well.
@@ -4076,7 +4089,7 @@ class _Checker:
         ):
             return BoolType()
         if isinstance(right_type, ArrayType):
-            if not is_assignable(left_type, right_type.elem):
+            if not is_assignable_in(self._env.type_table, left_type, right_type.elem):
                 raise AglTypeError(
                     f"'in' element type mismatch: '{left_type!r}' in 'array[{right_type.elem!r}]'."
                     f"{json_cast_hint(left_type, right_type.elem, self._env.type_table)}",
@@ -4134,63 +4147,54 @@ class _Checker:
                     f"'is' / 'is not' requires an enum-typed left-hand side; got '{expr_type!r}'.",
                     span=node.span,
                 )
+            enum_type = expr_type
             constructor = self._constructor_ref_for(node.node_id)
-            selected_from_candidates = False
-            if constructor is None and node.qualifier is None:
-                candidates = self._resolved.is_test_constructor_candidates.get(node.node_id, ())
+            if node.qualifier is None:
                 matching = tuple(
                     candidate
-                    for candidate in candidates
-                    if candidate.matches(
-                        expr_type,
-                        candidate.variant if candidate.variant is not None else node.variant,
+                    for candidate in self._resolved.is_test_constructor_candidates.get(
+                        node.node_id, ()
                     )
+                    if self._enum_member_for_constructor_candidate(enum_type, candidate) is not None
                 )
                 constructor = self._unique_constructor_candidate(
                     node.variant,
                     node.span,
-                    expr_type,
+                    enum_type,
                     matching,
-                    subject="'is' variant",
+                    subject="'is' member",
                 )
+                if constructor is None:
+                    direct_member = self._env.type_table.enum_member_names(enum_type).get(
+                        node.variant
+                    )
+                    if direct_member is not None:
+                        constructor = ConstructorRef.for_member(direct_member)
                 if constructor is not None:
-                    constructor = self._constructors.normalize_constructor_ref(constructor)
                     self._record_is_test_constructor_ref(node.node_id, constructor)
-                    selected_from_candidates = True
-            variant = (
-                constructor.variant
-                if constructor is not None and constructor.variant is not None
-                else node.variant
-            )
             if constructor is None:
                 self._check_variant_qualification(
                     qualifier=node.qualifier,
                     variant=node.variant,
-                    enum_type=expr_type,
+                    enum_type=enum_type,
                     span=node.span,
                 )
-            elif not selected_from_candidates:
-                # Resolving the owner's source template is the expensive half,
-                # so let the cheap direct match short-circuit it.
-                if not constructor.matches(expr_type, variant) and (
-                    self._env.match_source_type_qname(
-                        constructor.owner_module_id,
-                        constructor.owner_name,
-                        expr_type,
-                        scope_path=constructor.owner_path,
-                    )
-                    is None
-                ):
-                    if node.qualifier is None:
-                        raise _variant_not_in_enum(variant, expr_type, node.span)
-                    self._check_variant_qualification(
-                        qualifier=node.qualifier,
-                        variant=node.variant,
-                        enum_type=expr_type,
-                        span=node.span,
-                    )
-            if variant not in self._env.type_table.enum_variants(expr_type):
-                raise _variant_not_in_enum(variant, expr_type, node.span)
+                if node.variant not in self._env.type_table.enum_member_names(enum_type):
+                    raise _variant_not_in_enum(node.variant, enum_type, node.span)
+                return BoolType()
+
+            member = self._enum_member_for_constructor_candidate(enum_type, constructor)
+            if member is None:
+                raise _variant_not_in_enum(node.variant, enum_type, node.span)
+
+            self._validate_enum_constructor_qualification(
+                qualifier=node.qualifier,
+                variant=node.variant,
+                enum_type=enum_type,
+                constructor=constructor,
+                member=member,
+                span=node.span,
+            )
             return BoolType()
 
     def _qualified_constructor_typed_call_error(self, span: SourceSpan) -> AglTypeError:
@@ -4211,36 +4215,33 @@ class _Checker:
         """Validate the optional enum-type qualifier on a variant reference."""
         if qualifier is None:
             return
-        if qualifier.anchor is not QualifierAnchor.MODULE:
-            local_owner = "::".join(segment.name for segment in qualifier.segments)
-            local_enum = self._env.resolve_named_type(local_owner, span=span)
-            if local_enum is not None:
-                if qualifier.anchor is None and self._env.has_qualified_import_member(
-                    qualifier, variant
-                ):
-                    raise AglTypeError(
-                        f"Qualifier '{local_owner}' is both a type name and a module route for "
-                        f"'{variant}'. {qualification_repair_guidance()}",
-                        span=span,
-                    )
-                if not isinstance(local_enum, EnumType):
-                    raise AglTypeError(f"'{local_owner}' is not a known enum type.", span=span)
-                # A generic enum's bare name denotes its uninstantiated
-                # template, which legitimately qualifies any instantiation of
-                # the SAME declaration. Identity is the declaration, never the
-                # name: two declarations sharing one name path (a REPL
-                # redeclaration) are unrelated enums, so the qualifier must
-                # not reach across them.
-                same_generic_owner = local_enum.decl_id == enum_type.decl_id and all(
-                    isinstance(arg, TypeVarType) for arg in local_enum.type_args
+        local_match = self._local_qualified_enum(qualifier, span)
+        if local_match is not None:
+            local_owner, resolved_enum = local_match
+            if qualifier.anchor is None and self._env.has_qualified_import_member(
+                qualifier, variant
+            ):
+                raise AglTypeError(
+                    f"Qualifier '{local_owner}' is both a type name and a module route for "
+                    f"'{variant}'. {qualification_repair_guidance()}",
+                    span=span,
                 )
-                if local_enum != enum_type and not same_generic_owner:
-                    raise AglTypeError(
-                        f"Qualifier '{local_owner}' resolves to enum '{local_enum.name}', "
-                        f"but the value has enum type '{enum_type.name}'.",
-                        span=span,
-                    )
-                return
+            # A generic enum's bare name denotes its uninstantiated
+            # template, which legitimately qualifies any instantiation of
+            # the SAME declaration. Identity is the declaration, never the
+            # name: two declarations sharing one name path (a REPL
+            # redeclaration) are unrelated enums, so the qualifier must
+            # not reach across them.
+            same_generic_owner = resolved_enum.decl_id == enum_type.decl_id and bool(
+                free_type_vars(resolved_enum)
+            )
+            if resolved_enum != enum_type and not same_generic_owner:
+                raise AglTypeError(
+                    f"Qualifier '{local_owner}' resolves to enum '{resolved_enum.name}', "
+                    f"but the value has enum type '{enum_type.name}'.",
+                    span=span,
+                )
+            return
         if len(qualifier.segments) == 2:
             module_qualifier = QualifierChain(
                 anchor=qualifier.anchor,
@@ -4268,6 +4269,29 @@ class _Checker:
             )
         else:
             self._check_module_qualified_variant(qualifier, enum_type.name, enum_type, span)
+
+    def _local_qualified_enum(
+        self, qualifier: QualifierChain, span: SourceSpan
+    ) -> tuple[str, EnumType] | None:
+        """Resolve a non-module enum qualifier, applying any explicit arguments."""
+        if qualifier.anchor is QualifierAnchor.MODULE:
+            return None
+        local_owner = "::".join(segment.name for segment in qualifier.segments)
+        local_enum = self._env.resolve_named_type(local_owner, span=span)
+        if not isinstance(local_enum, EnumType):
+            return None
+        type_args = qualifier.segments[-1].type_args
+        if type_args is not None:
+            local_enum = EnumType(
+                name=local_enum.name,
+                type_args=tuple(
+                    self._env.resolve_type_expr(type_arg, span=span) for type_arg in type_args
+                ),
+                module_id=local_enum.module_id,
+                scope_path=local_enum.scope_path,
+                decl_id=local_enum.decl_id,
+            )
+        return local_owner, local_enum
 
     def _require_enum_owner_match(
         self,
@@ -4507,6 +4531,17 @@ class _Checker:
                             ),
                         )
                     return bound
+                builtin_agent = self._env.type_table.builtin_declaration("Agent")
+                if (
+                    node.field in {"ask", "ask-request"}
+                    and isinstance(obj_type, RecordType)
+                    and builtin_agent is not None
+                    and any(
+                        owner.decl_id == builtin_agent.decl_node_id
+                        for owner in self._env.type_table.enum_owners_for_member(obj_type)
+                    )
+                ):
+                    return _SelectedBuiltinMethod(name=node.field, receiver_type=obj_type)
                 raise AglTypeError(
                     f"{obj_type.kind.capitalize()} '{obj_type.name}' has no field or method "
                     f"'{node.field}'.",
@@ -4543,7 +4578,11 @@ class _Checker:
                 fields = self._env.type_table.exception_fields(obj_type)
                 kind_label = "Exception type"
             elif isinstance(obj_type, RecordType):
-                if obj_type.decl_id in HOST_MINTED_PRELUDE_TYPE_IDS:
+                standard_session = self._env.type_table.standard_builtin_declaration("Session")
+                if obj_type.decl_id in HOST_MINTED_PRELUDE_TYPE_IDS or (
+                    standard_session is not None
+                    and obj_type.decl_id == standard_session.decl_node_id
+                ):
                     raise AglTypeError(
                         f"'{obj_type.name}' values are created by the host and cannot be "
                         "updated in source.",
@@ -4766,33 +4805,23 @@ class _Checker:
         )
         return DictType(value=unified)
 
+    def _enum_annotation_hint(self, *types: Type, noun: str = "literal") -> str:
+        """Prompt an explicit enum slot for compatible sibling member records."""
+        records = tuple(typ for typ in types if isinstance(typ, RecordType))
+        if len(records) != len(types) or not self._env.type_table.records_share_enum_membership(
+            records
+        ):
+            return ""
+        return f" Annotate the {noun} with its enum type."
+
     def _unify_elements(self, elements: Sequence[Expr], *, kind: str, span: SourceSpan) -> Type:
         """Find a literal's common element type without coercing flexible variables."""
         types = [self._check_expr(e, expected=None) for e in elements]
         subject = f"{kind} literal elements"
-        if self._candidate_session is not None:
-            return self._common_types(types, span, subject)
-        unified = types[0]
-        for typ in types[1:]:
-            provisional = self._unify_provisional_common_types(
-                unified, typ, span=span, subject=subject
-            )
-            if provisional is not None:
-                unified = provisional
-            elif is_assignable(unified, typ):
-                unified = typ
-            elif not is_assignable(typ, unified):
-                table = self._env.type_table
-                hint = json_cast_hint(unified, typ, table) or json_cast_hint(typ, unified, table)
-                raise AglTypeError(
-                    f"{subject} have inconsistent types: '{unified!r}' and '{typ!r}'.{hint}",
-                    span=span,
-                )
-        return unified
+        return self._common_types(types, span, subject)
 
-    @staticmethod
-    def _widen_pair(left: Type, right: Type) -> Type | None:
-        """Return the equality/int-decimal widening of two concrete types, or None."""
+    def _widen_pair(self, left: Type, right: Type) -> Type | None:
+        """Return the common concrete type of two branch results, when one exists."""
         if left == right:
             return left
         if isinstance(left, IntType) and isinstance(right, DecimalType):
@@ -4802,13 +4831,17 @@ class _Checker:
         return None
 
     def _common_concrete_types(self, types: Sequence[Type], span: SourceSpan, subject: str) -> Type:
-        """Apply the ordinary equality/widening rules to already-concrete evidence."""
+        """Apply ordinary equality and numeric widening to concrete evidence."""
         result = types[0]
         for typ in types[1:]:
             widened = self._widen_pair(result, typ)
             if widened is None:
+                table = self._env.type_table
+                hint = json_cast_hint(result, typ, table) or json_cast_hint(typ, result, table)
+                enum_hint = self._enum_annotation_hint(result, typ)
                 raise AglTypeError(
-                    f"{subject} have incompatible types: '{result!r}' and '{typ!r}'.",
+                    f"{subject} have inconsistent types: '{result!r}' and '{typ!r}'."
+                    f"{hint}{enum_hint}",
                     span=span,
                 )
             result = widened
@@ -4857,11 +4890,9 @@ class _Checker:
         *,
         span: SourceSpan,
         subject: str,
-        engine: InferenceEngine | None = None,
+        engine: InferenceEngine,
     ) -> Type | None:
         """Exactly unify provisional common-type candidates, if either has flexibles."""
-        if engine is None:
-            engine = self._active_inference_engine()
         left = engine.zonk(left)
         right = engine.zonk(right)
         if not (contains_inference_var(left) or contains_inference_var(right)):
@@ -4939,15 +4970,13 @@ class _Checker:
         assert isinstance(pattern, ConstructorPattern), (
             f"Unexpected pattern kind: {type(pattern).__name__}"
         )
-        owner_type, variant_name, fields, context_desc, constructor_ref = (
+        owner_type, fields, context_desc, constructor_ref = (
             self._resolve_nominal_pattern_constructor(pattern, subj_type)
         )
         self._record_pattern_constructor_ref(
             pattern.node_id, constructor_ref, owner_type=owner_type
         )
-        field_kinds = self._env.get_constructor_field_kinds_for_type(
-            owner_type, owner_type.name, variant_name
-        )
+        field_kinds = self._env.get_constructor_field_kinds_for_type(owner_type, owner_type.name)
         assert field_kinds is not None, f"field kinds not registered for {context_desc}"
         binding = bind_pattern_args(
             field_kinds,
@@ -4969,9 +4998,7 @@ class _Checker:
                     field_names=constructor_field_names,
                     candidate_provenance=(
                         candidate_provenance
-                        if self._constructor_field_depends_on_owner_type(
-                            owner_type, variant_name, name
-                        )
+                        if self._constructor_field_depends_on_owner_type(owner_type, name)
                         else set()
                     ),
                 )
@@ -4993,7 +5020,7 @@ class _Checker:
 
     def _resolve_nominal_pattern_constructor(
         self, pattern: ConstructorPattern, subj_type: Type
-    ) -> tuple[RecordType | EnumType, str | None, Mapping[str, Type], str, ConstructorRef]:
+    ) -> tuple[RecordType, Mapping[str, Type], str, ConstructorRef]:
         """Resolve one applied pattern to its exact record or enum constructor shape.
 
         Scope supplies the source-spelling candidates. Their source type templates
@@ -5002,99 +5029,153 @@ class _Checker:
         arguments retain exact identity. Enum qualification remains validated by
         the enum-specific owner-form metadata used by match compilation.
         """
-        owner_type: RecordType | EnumType
-        variant_name: str | None
+        owner_type: RecordType
         fields: Mapping[str, Type]
         context_desc: str
-        if not isinstance(subj_type, (RecordType, EnumType)):
+        if isinstance(subj_type, EnumType):
+            constructor_ref = self._constructor_pattern_ref(pattern, subj_type)
+            if (
+                constructor_ref is not None
+                and pattern.qualifier is not None
+                and pattern.qualifier.anchor is None
+            ):
+                local_owner = "::".join(segment.name for segment in pattern.qualifier.segments)
+                if self._env.resolve_named_type(
+                    local_owner, span=pattern.span
+                ) is not None and self._env.has_qualified_import_member(
+                    pattern.qualifier, pattern.name
+                ):
+                    raise AglTypeError(
+                        f"Qualifier '{local_owner}' is both a type name and a module route for "
+                        f"'{pattern.name}'. {qualification_repair_guidance()}",
+                        span=pattern.span,
+                    )
+            members = self._env.type_table.enum_member_names(subj_type)
+            if constructor_ref is None:
+                self._check_variant_qualification(
+                    qualifier=pattern.qualifier,
+                    variant=pattern.name,
+                    enum_type=subj_type,
+                    span=pattern.span,
+                )
+                selected_member = members.get(pattern.name)
+                if selected_member is None:
+                    raise _variant_not_in_enum(pattern.name, subj_type, pattern.span)
+            else:
+                selected_member = self._enum_member_for_constructor_candidate(
+                    subj_type, constructor_ref
+                )
+                assert selected_member is not None
+                self._validate_enum_constructor_qualification(
+                    qualifier=pattern.qualifier,
+                    variant=pattern.name,
+                    enum_type=subj_type,
+                    constructor=constructor_ref,
+                    member=selected_member,
+                    span=pattern.span,
+                )
+            owner_type = selected_member
+            fields = self._env.type_table.record_fields(owner_type)
+            context_desc = f"member '{subj_type.name}.{owner_type.name}'"
+        elif isinstance(subj_type, RecordType):
+            constructor_ref = self._constructor_pattern_ref(pattern, subj_type)
+            enum_owners = self._env.type_table.enum_owners_for_member(subj_type)
+            if pattern.qualifier is not None:
+                local_enum = self._local_qualified_enum(pattern.qualifier, pattern.span)
+                if local_enum is not None:
+                    _local_owner, enum_type = local_enum
+                    if not self._env.type_table.record_matches_enum_member(
+                        enum_type, pattern.name, subj_type
+                    ):
+                        raise _variant_not_in_enum(pattern.name, enum_type, pattern.span)
+                elif enum_owners:
+                    qualification_error: AglTypeError | None = None
+                    for enum_owner in enum_owners:
+                        try:
+                            self._check_variant_qualification(
+                                qualifier=pattern.qualifier,
+                                variant=pattern.name,
+                                enum_type=enum_owner,
+                                span=pattern.span,
+                            )
+                        except AglTypeError as exc:
+                            if qualification_error is None:
+                                qualification_error = exc
+                        else:
+                            break
+                    else:
+                        assert qualification_error is not None
+                        raise qualification_error
+                elif constructor_ref is None:
+                    raise AglTypeError(
+                        f"Qualified constructor pattern '{pattern.name}' does not belong to "
+                        f"'{subj_type!r}'.",
+                        span=pattern.span,
+                    )
+            owner_type = subj_type
+            fields = self._env.type_table.record_fields(owner_type)
+            context_desc = f"constructor '{owner_type.name}'"
+        else:
             raise AglTypeError(
                 f"Cannot match constructor pattern '{pattern.name}' against non-record or non-enum "
                 f"type '{subj_type!r}'.",
                 span=pattern.span,
             )
-        owner_type = subj_type
-        constructor_ref = self._constructor_pattern_ref(pattern, owner_type)
-        if isinstance(owner_type, EnumType):
-            variant_name = (
-                constructor_ref.variant
-                if constructor_ref is not None and constructor_ref.variant is not None
-                else pattern.name
+        if constructor_ref is None:
+            enum_member = (
+                self._env.type_table.enum_member_names(subj_type)[pattern.name]
+                if isinstance(subj_type, EnumType) and pattern.qualifier
+                else owner_type
+                if pattern.name == owner_type.name
+                and self._env.type_table.is_enum_member(owner_type)
+                else None
             )
-            qualifier = pattern.qualifier
-            if constructor_ref is None or (
-                qualifier is not None
-                and (
-                    qualifier.anchor is not None
-                    or self._env.resolve_named_type(
-                        "::".join(segment.name for segment in qualifier.segments),
-                        span=pattern.span,
-                    )
-                    is not None
-                    or self._env.has_qualified_import_member(qualifier, pattern.name)
-                )
-            ):
-                self._check_variant_qualification(
-                    qualifier=qualifier,
-                    variant=pattern.name,
-                    enum_type=owner_type,
-                    span=pattern.span,
-                )
-            variants = self._env.type_table.enum_variants(owner_type)
-            if variant_name not in variants:
-                raise _variant_not_in_enum(variant_name, owner_type, pattern.span)
-            fields = variants[variant_name]
-            context_desc = f"variant '{owner_type.name}.{variant_name}'"
-        else:
-            variant_name = None
-            fields = self._env.type_table.record_fields(owner_type)
-            context_desc = f"constructor '{owner_type.name}'"
-        if constructor_ref is None and isinstance(owner_type, EnumType) and pattern.qualifier:
-            typedef = self._env.type_table.get(
-                owner_type.module_id, owner_type.name, owner_type.scope_path
-            )
-            assert typedef is not None
-            constructor_ref = ConstructorRef(
-                owner_name=owner_type.name,
-                variant=variant_name,
-                owner_decl_node_id=-1,
-                type_params=typedef.type_params,
-                owner_module_id=owner_type.module_id,
-                owner_path=owner_type.scope_path,
-            )
+            if enum_member is not None:
+                constructor_ref = ConstructorRef.for_member(enum_member)
         if constructor_ref is None:
             raise AglTypeError(
                 f"Constructor pattern '{pattern.name}' does not belong to '{owner_type!r}'.",
                 span=pattern.span,
             )
-        return owner_type, variant_name, fields, context_desc, constructor_ref
+        return owner_type, fields, context_desc, constructor_ref
 
     def _constructor_pattern_ref(
         self,
-        pattern: ConstructorPattern,
+        pattern: ConstructorPattern | VarPattern,
         owner_type: RecordType | EnumType,
     ) -> ConstructorRef | None:
         """Select the unique scope-published constructor for this exact nominal owner.
 
-        Candidate owner names retain the spelling written by the user, including
-        aliases. ``match_source_type_qname`` resolves that spelling transparently
-        and matches its full nominal template against the concrete scrutinee.
-        Owner matching disambiguates same-spelled constructors from different
-        enums, but distinct variants of that owner cannot share one pattern alias.
+        Enum candidates match any member-record declaration of the concrete
+        scrutinee. Record candidates match that exact declaration, with source
+        aliases resolved transparently. Distinct members of one enum therefore
+        remain ambiguous when they share a pattern spelling.
         """
-        candidates = self._resolved.pattern_constructor_candidates.get(
-            pattern.node_id, self._resolved.constructor_candidates.get(pattern.name, ())
-        )
-        matching = tuple(
-            candidate
-            for candidate in candidates
-            if self._env.match_source_type_qname(
-                candidate.owner_module_id,
-                candidate.owner_name,
-                owner_type,
-                scope_path=candidate.owner_path,
+        recorded_spelling = self._resolved.pattern_constructor_spellings.get(pattern.node_id)
+        if recorded_spelling is not None and recorded_spelling != pattern.name:
+            return None
+        candidates = self._resolved.pattern_constructor_candidates.get(pattern.node_id, ())
+        if isinstance(owner_type, EnumType):
+            matching = tuple(
+                candidate
+                for candidate in candidates
+                if self._enum_member_for_constructor_candidate(owner_type, candidate) is not None
             )
-            is not None
-        )
+        else:
+            matching = tuple(
+                candidate
+                for candidate in candidates
+                if candidate.owner_decl_node_id == owner_type.decl_id
+                or (
+                    self._env.match_source_type_qname(
+                        candidate.owner_module_id,
+                        candidate.owner_name,
+                        owner_type,
+                        scope_path=candidate.owner_path,
+                    )
+                    is not None
+                )
+            )
         return self._unique_constructor_candidate(
             pattern.name,
             pattern.span,
@@ -5102,6 +5183,67 @@ class _Checker:
             matching,
             subject="Constructor pattern",
         )
+
+    def _enum_member_for_constructor_candidate(
+        self, enum_type: EnumType, candidate: ConstructorRef
+    ) -> RecordType | None:
+        """Return the enum member denoted by a source constructor candidate.
+
+        A source alias has its own declaration identity but transparently
+        denotes its target record.  Membership is therefore first checked by
+        the record declaration id and then by alias-transparent matching of
+        the candidate's checked source template against the enum members.
+        """
+        direct = self._env.type_table.enum_member_by_decl(enum_type, candidate.owner_decl_node_id)
+        if direct is not None:
+            return direct
+        source_template = self._env.source_type_template_qname(
+            candidate.owner_module_id,
+            candidate.owner_name,
+            scope_path=candidate.owner_path,
+        )
+        assert source_template is not None
+        canonical_record = source_template.template
+        assert isinstance(canonical_record, RecordType)
+        if canonical_record.decl_id == candidate.owner_decl_node_id:
+            return None
+        return next(
+            (
+                member
+                for member in self._env.type_table.enum_members(enum_type)
+                if canonical_record.decl_id == member.decl_id
+                and self._env.match_source_type_qname(
+                    candidate.owner_module_id,
+                    candidate.owner_name,
+                    member,
+                    scope_path=candidate.owner_path,
+                )
+                is not None
+            ),
+            None,
+        )
+
+    def _validate_enum_constructor_qualification(
+        self,
+        *,
+        qualifier: QualifierChain | None,
+        variant: str,
+        enum_type: EnumType,
+        constructor: ConstructorRef,
+        member: RecordType,
+        span: SourceSpan,
+    ) -> None:
+        """Validate an explicit enum owner and its applied member spelling."""
+        if qualifier is None or qualifier.segments[-1].type_args is None:
+            return
+        qualified_member = self._env.resolve_owner_applied_inline_member_type(
+            qualifier,
+            constructor.owner_name,
+            type_vars=self._current_type_vars,
+            span=span,
+        )
+        if qualified_member not in (None, member):
+            raise _variant_not_in_enum(variant, enum_type, span)
 
     @staticmethod
     def _unique_constructor_candidate(
@@ -5112,13 +5254,14 @@ class _Checker:
         *,
         subject: str,
     ) -> ConstructorRef | None:
-        """Return one owner-matched candidate unless distinct variants remain."""
-        if len({candidate.variant for candidate in candidates}) > 1:
+        """Return one owner-matched candidate unless distinct records remain."""
+        by_declaration = {candidate.owner_decl_node_id: candidate for candidate in candidates}
+        if len(by_declaration) > 1:
             raise AglTypeError(
                 f"{subject} '{name}' is ambiguous for '{owner_type!r}'.",
                 span=span,
             )
-        return candidates[0] if candidates else None
+        return next(iter(by_declaration.values())) if by_declaration else None
 
     def _candidate_for_field_type(
         self, pattern: VarPattern, field_type: Type
@@ -5126,26 +5269,26 @@ class _Checker:
         """Return the unique candidate spelling that belongs to this enum field, if any."""
         if not isinstance(field_type, EnumType):
             return None
-        if self._resolved.pattern_constructor_spellings.get(pattern.node_id) != pattern.name:
-            return None
-        matching = tuple(
-            candidate
-            for candidate in self._resolved.pattern_constructor_candidates.get(pattern.node_id, ())
-            if candidate.matches(
-                field_type,
-                candidate.variant if candidate.variant is not None else pattern.name,
-            )
-        )
-        return self._unique_constructor_candidate(
-            pattern.name,
-            pattern.span,
-            field_type,
-            matching,
-            subject="Constructor pattern",
-        )
+        return self._constructor_pattern_ref(pattern, field_type)
 
     def _check_top_level_bare_constructor(self, pattern: VarPattern, subj_type: Type) -> None:
-        """Finalize a top-level bare pattern as a nullary enum constructor."""
+        """Finalize a top-level bare pattern as a nullary constructor."""
+        if isinstance(subj_type, RecordType):
+            candidates = self._resolved.pattern_constructor_candidates.get(pattern.node_id, ())
+            candidate = next(
+                (item for item in candidates if item.owner_decl_node_id == subj_type.decl_id), None
+            )
+            if candidate is None:
+                raise AglTypeError(
+                    f"Constructor pattern '{pattern.name}' does not belong to '{subj_type!r}'.",
+                    span=pattern.span,
+                )
+            if self._env.type_table.record_fields(subj_type):
+                raise AglTypeError(
+                    f"Constructor '{subj_type.name}' requires fields.", span=pattern.span
+                )
+            self._record_pattern_classification(pattern.node_id, candidate)
+            return
         enum_type = self._require_enum_scrutinee(pattern.name, subj_type, pattern.span)
         candidate = self._candidate_for_field_type(pattern, enum_type)
         if candidate is None:
@@ -5200,9 +5343,9 @@ class _Checker:
     ) -> None:
         """Require a bare constructor spelling to be a nullary matched enum variant."""
         assert isinstance(enum_type, EnumType)
-        variant = candidate.variant if candidate.variant is not None else pattern.name
-        fields = self._env.type_table.enum_variants(enum_type)[variant]
-        if fields:
+        member = self._enum_member_for_constructor_candidate(enum_type, candidate)
+        assert member is not None
+        if self._env.type_table.record_fields(member):
             raise AglTypeError(
                 f"'{pattern.name}' has fields; write '{pattern.name}(...)' to match it.",
                 span=pattern.span,
@@ -5337,6 +5480,17 @@ class _Checker:
     # Branch unification
     # ------------------------------------------------------------------
 
+    def _branch_result(self, actual: Type, expected: Type | None, body: Expr) -> Type:
+        """Fold one branch's checked type into the unification input.
+
+        An explicit expectation is what an assignable branch contributes, so
+        unification never sees an incidentally narrower branch type.
+        """
+        if expected is None:
+            return actual
+        self._assert_assignable_from(actual, expected, body.span, body)
+        return expected
+
     def _unify_branch_types(
         self,
         branch_types: list[Type],
@@ -5373,9 +5527,10 @@ class _Checker:
                 continue
             widened = self._widen_pair(result_type, branch_type)
             if widened is None:
+                hint = self._enum_annotation_hint(result_type, branch_type, noun="expression")
                 raise AglTypeError(
                     f"{construct} branches have incompatible types: "
-                    f"'{result_type!r}' and '{branch_type!r}'.",
+                    f"'{result_type!r}' and '{branch_type!r}'.{hint}",
                     span=span,
                 )
             result_type = widened
@@ -5407,7 +5562,7 @@ class _Checker:
             # ``decimal`` and make later evidence conflict, so defer to the
             # authoritative pass, which validates once the result is concrete.
             return
-        if is_assignable(value_type, target_type):
+        if is_assignable_in(self._env.type_table, value_type, target_type):
             return
         raise AglTypeError(
             f"Type mismatch: expected '{target_type!r}', got '{value_type!r}'."

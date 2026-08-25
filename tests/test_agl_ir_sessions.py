@@ -21,8 +21,16 @@ from agm.agl.ir.nodes import (
 )
 from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
 from agm.agl.ir.validate import InvalidIrError, validate_ir
+from agm.agl.lower.lowerer import _Lowerer
 from agm.agl.modules.ids import ENTRY_ID
-from agm.agl.semantics.types import IntType
+from agm.agl.semantics.type_table import MethodDef
+from agm.agl.semantics.types import (
+    BUILTIN_PRELUDE_TYPES,
+    FunctionType,
+    IntType,
+    RecordType,
+    UnitType,
+)
 from tests.agl.ir_harness import inline_main_items, lower_inline_ir
 
 _SRC_ID = SourceId(0)
@@ -198,6 +206,24 @@ def test_session_methods_lower_to_session_nodes() -> None:
     assert values["forked"].op == "fork"
     assert isinstance(values["stats"], IrSessionOp)
     assert values["stats"].op == "stats"
+
+
+def test_canonical_prelude_session_method_is_recognized() -> None:
+    """Host-minted Session methods use their canonical nominal identity."""
+    session = BUILTIN_PRELUDE_TYPES["Session"]
+    assert isinstance(session, RecordType)
+    method = MethodDef(
+        module_id=ENTRY_ID,
+        scope_path=("Unrelated",),
+        name="compact",
+        decl_node_id=0,
+        signature=FunctionType(params=(session,), result=UnitType()),
+        receiver_type_param_arity=0,
+        is_builtin=True,
+    )
+    lowerer: _Lowerer = object.__new__(_Lowerer)
+
+    assert lowerer._is_session_builtin_method(method)
 
 
 def test_session_op_defaults_its_optional_argument_to_none() -> None:

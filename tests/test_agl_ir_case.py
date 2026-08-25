@@ -14,7 +14,7 @@ def test_is_test_lowers_renamed_use_variant() -> None:
         "scope S\n"
         "enum E | A | B\n"
         "end S\n"
-        "let value = X\n"
+        "let value: S::E = X\n"
         "let matches = value is X\n"
         "matches\n"
     )
@@ -28,7 +28,7 @@ def test_case_lowers_renamed_nullary_use_variant() -> None:
         "scope S\n"
         "enum E | A | B\n"
         "end S\n"
-        "let value = X\n"
+        "let value: S::E = X\n"
         "let result = case value of | X => 1 | _ => 0\n"
         "result\n"
     )
@@ -42,7 +42,7 @@ def test_case_lowers_variant_renamed_to_another_canonical_spelling() -> None:
         "scope S\n"
         "enum E | A | B\n"
         "end S\n"
-        "let value = S::E::B\n"
+        "let value: S::E = S::E::B\n"
         "let result = case value of | A => 1 | _ => 0\n"
         "result\n"
     )
@@ -56,7 +56,7 @@ def test_case_lowers_renamed_applied_use_variant() -> None:
         "scope S\n"
         "enum E | A(value: int) | B\n"
         "end S\n"
-        "let value = X(4)\n"
+        "let value: S::E = X(4)\n"
         "let result = case value of | X(value = _ as n) => n | _ => 0\n"
         "result\n"
     )
@@ -226,7 +226,7 @@ def test_case_nullary_variant_match() -> None:
     # Bare names are classified by the checker after scope records candidates.
     src = """\
 enum Flag | On | Off
-let f = Flag::On()
+let f: Flag = Flag::On()
 let r = case f of
   | Off => 0
   | On => 1
@@ -239,7 +239,7 @@ def test_case_nullary_variant_no_binding() -> None:
     """Nullary bare-variant match does not bind anything."""
     src = """\
 enum Flag | On | Off
-let f = Flag::Off()
+let f: Flag = Flag::Off()
 let r = case f of
   | On => "on"
   | Off => "off"
@@ -252,7 +252,7 @@ def test_case_nullary_constructor_pattern() -> None:
     """ConstructorPattern with no fields (Red()) matches the variant."""
     src = """\
 enum Color | Red | Blue
-let c = Color::Red()
+let c: Color = Color::Red()
 let r = case c of
   | Blue() => "blue"
   | Red() => "red"
@@ -270,7 +270,7 @@ def test_case_constructor_field_destructure() -> None:
     """ConstructorPattern destructures enum variant fields."""
     src = """\
 enum Shape | Circle(radius: int) | Square(side: int)
-let s = Shape::Circle(radius = 5)
+let s: Shape = Shape::Circle(radius = 5)
 let r = case s of
   | Circle(radius = _ as n) => n
   | Square(side = _ as m) => m
@@ -283,7 +283,7 @@ def test_case_constructor_field_no_match_fallback() -> None:
     """Constructor pattern on wrong variant falls through to next arm."""
     src = """\
 enum Shape | Circle(radius: int) | Square(side: int)
-let s = Shape::Square(side = 10)
+let s: Shape = Shape::Square(side = 10)
 let r = case s of
   | Circle(radius = _ as n) => n
   | Square(side = _ as m) => m
@@ -296,7 +296,7 @@ def test_case_constructor_nested_literal() -> None:
     """Constructor pattern with nested literal sub-pattern."""
     src = """\
 enum Shape | Circle(radius: int) | Square(side: int)
-let s = Shape::Circle(radius = 3)
+let s: Shape = Shape::Circle(radius = 3)
 let r = case s of
   | Circle(radius = 3) => "three"
   | Circle(radius = _ as n) => "other"
@@ -310,7 +310,7 @@ def test_case_constructor_nested_binder() -> None:
     """Constructor pattern with nested binder sub-pattern captures field."""
     src = """\
 enum Shape | Circle(radius: int) | Square(side: int)
-let s = Shape::Circle(radius = 7)
+let s: Shape = Shape::Circle(radius = 7)
 let r = case s of
   | Square(side = _ as x) => x
   | Circle(radius = _ as n) => n
@@ -323,7 +323,7 @@ def test_case_constructor_nested_wildcard() -> None:
     """Constructor pattern with nested wildcard sub-pattern."""
     src = """\
 enum Shape | Circle(radius: int) | Square(side: int)
-let s = Shape::Square(side = 99)
+let s: Shape = Shape::Square(side = 99)
 let r = case s of
   | Circle(radius = _) => "circle"
   | Square(side = _) => "square"
@@ -337,7 +337,7 @@ def test_case_constructor_nested_constructor() -> None:
     src = """\
 enum Color | Red | Blue
 enum Shape | Colored(size: int)
-let s = Shape::Colored(size = 10)
+let s: Shape = Shape::Colored(size = 10)
 let r = case s of
   | Colored(size = _ as n) => n
 r"""
@@ -473,7 +473,7 @@ def test_case_first_match_constructor_then_wildcard() -> None:
     """Constructor arm first, then wildcard catches all others."""
     src = """\
 enum Shape | Circle(radius: int) | Square(side: int)
-let s = Shape::Square(side = 3)
+let s: Shape = Shape::Square(side = 3)
 let r = case s of
   | Circle(radius = _) => "circle"
   | _ => "other"
@@ -491,7 +491,7 @@ def test_case_constructor_nested_literal_no_match_fallback() -> None:
     # arm 1 uses an explicit catch-all binder.
     src = """\
 enum Shape | Circle(radius: int) | Square(side: int)
-let s = Shape::Circle(radius = 7)
+let s: Shape = Shape::Circle(radius = 7)
 let r = case s of
   | Circle(radius = 3) => "three"
   | Circle(radius = _ as n) => "other"

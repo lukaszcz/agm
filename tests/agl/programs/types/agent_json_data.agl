@@ -8,9 +8,13 @@ record Deployment
   primary: Team
   teams: array[Team]
 
+# A direct member-record slot serializes as an ordinary object, without an enum case tag.
+record DirectCommand
+  command: Agent::AgentCommand
+
 program def main() -> unit =
-  let agent = AgentCommand("primary")
-  let backup = AgentClaude("sonnet", "medium")
+  let agent: Agent = AgentCommand("primary")
+  let backup: Agent = AgentClaude("sonnet", "medium")
   let direct_json: json = agent as json
   let direct_round_trip: Agent = direct_json as Agent
   print(direct_round_trip == agent)
@@ -26,3 +30,8 @@ program def main() -> unit =
   let deployment_round_trip: Deployment = deployment_json as Deployment
   print(deployment_round_trip == deployment)
   print(deployment_round_trip.primary.agent == agent)
+
+  let direct = DirectCommand(command = AgentCommand("direct"))
+  let direct_slot_json: json = direct as json
+  let direct_slot_round_trip: DirectCommand = direct_slot_json as DirectCommand
+  print(direct_slot_round_trip == direct)

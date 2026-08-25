@@ -32,7 +32,6 @@ from agm.agl.semantics.values import (
     ConstructorValue,
     DecimalValue,
     DictValue,
-    EnumValue,
     ExceptionValue,
     IntValue,
     JsonValue,
@@ -87,9 +86,9 @@ class TestValueDirectedBoundary:
         companion = "def relay(a): return a\n"
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
         agent = result["result"]
-        assert isinstance(agent, EnumValue)
-        assert agent.display_name == "Agent"
-        assert agent.variant == "AgentCommand"
+        assert isinstance(agent, RecordValue)
+        assert agent.display_name == "Agent::AgentCommand"
+        assert agent.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert agent.fields == {"command": TextValue("runner")}
 
     def test_bare_python_container_is_not_an_agl_value(self, tmp_path: Path) -> None:
@@ -544,15 +543,23 @@ def _synthesize_box_class() -> tuple[NominalId, type[object]]:
 def _synthesize_choice_classes() -> tuple[NominalId, type[object]]:
     """Build a fresh synthesized ``Choice`` enum class for one test's isolated use."""
     nominal = _fresh_nominal()
+    some = _fresh_nominal()
+    none = _fresh_nominal()
     descriptor = NominalDescriptor(
         nominal=nominal,
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Choice",
         kind=NominalKind.ENUM,
-        variants=(VariantDescriptor("Some", ("value",)), VariantDescriptor("None", ())),
+        variants=(VariantDescriptor("Some", ("value",), some), VariantDescriptor("None", (), none)),
     )
-    return nominal, synthesize_nominal_classes((descriptor,))[nominal]
+    return nominal, synthesize_nominal_classes(
+        (
+            descriptor,
+            NominalDescriptor(some, ENTRY_ID, ("Choice",), "Some", NominalKind.RECORD, ("value",)),
+            NominalDescriptor(none, ENTRY_ID, ("Choice",), "None", NominalKind.RECORD),
+        )
+    )[nominal]
 
 
 def _synthesize_problem_class() -> tuple[NominalId, type[object]]:
@@ -638,7 +645,7 @@ def test_encode_boundary_value_rejects_an_unregistered_nominal() -> None:
 
 def test_encode_boundary_value_rejects_a_constructor_value() -> None:
     with pytest.raises(BoundaryViolation):
-        encode_boundary_value(ConstructorValue(_fresh_nominal(), "Choice", "Some"))
+        encode_boundary_value(ConstructorValue(_fresh_nominal(), "Choice"))
 
 
 def test_decode_boundary_value_rejects_an_unsupported_python_object() -> None:
@@ -702,27 +709,43 @@ def test_synthesized_record_repr_identifies_the_type_without_the_field_values() 
     assert repr(box_cls(value=1)) == "Box(...)"
 
 
-def test_synthesized_enum_variant_instance_is_an_instance_of_the_enum_class() -> None:
+def test_synthesized_enum_variant_class_is_not_a_subclass_of_the_enum_class() -> None:
+    """The enum class is a pure namespace over its members' own record classes:
+
+    a member's runtime shape does not depend on how it was declared, so a
+    variant is never a subclass of its enum -- matching a bare record
+    referenced by a qualified name, which also never subclasses the enums
+    that list it as a member.
+    """
     _, choice_cls = _synthesize_choice_classes()
 
     some = choice_cls.Some(value=2)
 
-    assert isinstance(some, choice_cls)
+    assert not issubclass(choice_cls.Some, choice_cls)
+    assert not isinstance(some, choice_cls)
 
 
 def test_synthesized_enum_variant_round_trips_through_decode() -> None:
-    nominal, choice_cls = _synthesize_choice_classes()
+    _, choice_cls = _synthesize_choice_classes()
     some = choice_cls.Some(value=2)
 
-    assert decode_boundary_value(some) == EnumValue(
-        nominal, "Choice", "Some", {"value": IntValue(2)}
+    assert decode_boundary_value(some) == RecordValue(
+        nominal=getattr(choice_cls.Some, "_agl_nominal"),
+        display_name="Choice::Some",
+        fields={"value": IntValue(2)},
     )
 
 
 def test_encoding_an_enum_value_produces_the_matching_variant_class() -> None:
-    nominal, choice_cls = _synthesize_choice_classes()
+    _, choice_cls = _synthesize_choice_classes()
 
-    encoded = encode_boundary_value(EnumValue(nominal, "Choice", "None", {}))
+    encoded = encode_boundary_value(
+        RecordValue(
+            nominal=getattr(getattr(choice_cls, "None"), "_agl_nominal"),
+            display_name="Choice::None",
+            fields={},
+        )
+    )
 
     assert isinstance(encoded, getattr(choice_cls, "None"))
 
@@ -828,13 +851,15 @@ def test_synthesizing_an_already_present_identity_reuses_its_class_unchanged() -
     claims.
     """
     nominal = _fresh_nominal()
+    some = _fresh_nominal()
+    gone = _fresh_nominal()
     first = NominalDescriptor(
         nominal=nominal,
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Choice",
         kind=NominalKind.ENUM,
-        variants=(VariantDescriptor("Some", ("value",)), VariantDescriptor("Gone", ())),
+        variants=(VariantDescriptor("Some", ("value",), some), VariantDescriptor("Gone", (), gone)),
     )
     classes = synthesize_nominal_classes((first,))
     enum_cls = classes[nominal]
@@ -846,7 +871,7 @@ def test_synthesizing_an_already_present_identity_reuses_its_class_unchanged() -
         scope_path=(),
         declared_name="Choice",
         kind=NominalKind.ENUM,
-        variants=(VariantDescriptor("Some", ("value", "extra")),),
+        variants=(VariantDescriptor("Some", ("value", "extra"), some),),
     )
     reused = synthesize_nominal_classes((second,), classes)
 
@@ -854,6 +879,88 @@ def test_synthesizing_an_already_present_identity_reuses_its_class_unchanged() -
     assert enum_cls.Some is some_cls
     assert some_cls._agl_fields == ("value",)
     assert hasattr(enum_cls, "Gone")
+
+
+def test_referenced_record_keeps_one_class_across_multiple_enums() -> None:
+    record = _fresh_nominal()
+    left = _fresh_nominal()
+    right = _fresh_nominal()
+    descriptors = (
+        NominalDescriptor(record, ENTRY_ID, (), "Shared", NominalKind.RECORD, ("value",)),
+        NominalDescriptor(
+            left,
+            ENTRY_ID,
+            (),
+            "Left",
+            NominalKind.ENUM,
+            variants=(VariantDescriptor("Shared", ("value",), record),),
+        ),
+        NominalDescriptor(
+            right,
+            ENTRY_ID,
+            (),
+            "Right",
+            NominalKind.ENUM,
+            variants=(VariantDescriptor("Shared", ("value",), record),),
+        ),
+    )
+
+    classes = synthesize_nominal_classes(descriptors)
+
+    assert classes[record] is classes[left].Shared
+    assert classes[record] is classes[right].Shared
+
+
+def test_referenced_member_decodes_with_its_own_scope_and_display_name() -> None:
+    """A referenced member decodes through its own descriptor, not the enum's:
+
+    its ``NominalId`` and display name come from where it was declared, even
+    though an enum also lists it as a member.
+    """
+    record = _fresh_nominal()
+    enum = _fresh_nominal()
+    descriptors = (
+        NominalDescriptor(record, ENTRY_ID, ("M",), "Go", NominalKind.RECORD, ("amount",)),
+        NominalDescriptor(
+            enum,
+            ENTRY_ID,
+            (),
+            "Step",
+            NominalKind.ENUM,
+            variants=(VariantDescriptor("Go", ("amount",), record),),
+        ),
+    )
+    classes = synthesize_nominal_classes(descriptors)
+    instance = classes[enum].Go(amount=5)
+
+    assert classes[record] is classes[enum].Go
+    assert not issubclass(classes[enum].Go, classes[enum])
+    assert decode_boundary_value(instance) == RecordValue(record, "M::Go", {"amount": IntValue(5)})
+
+
+def test_enum_variant_built_without_its_own_descriptor_gets_a_scoped_display_name() -> None:
+    """The fallback path :func:`synthesize_nominal_classes` takes when a
+    member's own descriptor is reachable in neither the current synthesis
+    batch nor the existing class table (an inline member whose descriptor was
+    never separately supplied) derives one that names the member below its
+    enum's scope, matching what a real lowering would have produced for it.
+    """
+    nominal = _fresh_nominal()
+    some = _fresh_nominal()
+    descriptor = NominalDescriptor(
+        nominal=nominal,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Choice",
+        kind=NominalKind.ENUM,
+        variants=(VariantDescriptor("Some", ("value",), some),),
+    )
+    classes = synthesize_nominal_classes((descriptor,))
+    instance = classes[nominal].Some(value=1)
+
+    assert decode_boundary_value(instance) == RecordValue(
+        some, "Choice::Some", {"value": IntValue(1)}
+    )
 
 
 def test_companion_namespace_keeps_same_named_nominals_distinct() -> None:

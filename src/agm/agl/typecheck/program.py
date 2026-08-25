@@ -224,15 +224,21 @@ def _collect_shells_only(builder: _TypeBuilder, program: object) -> None:
 def _sync_program_env_extensions(
     mid: ModuleId,
     env: TypeEnvironment,
+    program_type_table: dict[DeclKey, Type],
     program_generic_table: dict[DeclKey, GenericTypeDef],
-    program_ctor_sig_table: dict[tuple[DeclKey, str | None], ConstructorSignature],
-    program_ctor_field_kinds_table: dict[
-        tuple[DeclKey, str | None], tuple[tuple[str, ParamKind], ...]
-    ],
+    program_ctor_sig_table: dict[DeclKey, ConstructorSignature],
+    program_ctor_field_kinds_table: dict[DeclKey, tuple[tuple[str, ParamKind], ...]],
 ) -> None:
-    """Copy generic type and constructor metadata built for one module into program tables."""
+    """Copy reconciled type and constructor metadata into the program tables."""
+    for _type_name, typ in env.non_builtin_type_items():
+        assert isinstance(typ, (RecordType, EnumType, ExceptionType))
+        key = (mid, typ.scope_path, typ.name)
+        program_type_table[key] = typ
+        program_generic_table.pop(key, None)
     for _generic_name, gdef in env.all_generic_types().items():
-        program_generic_table[(mid, gdef.template.scope_path, gdef.template.name)] = gdef
+        key = (mid, gdef.template.scope_path, gdef.template.name)
+        program_generic_table[key] = gdef
+        program_type_table.pop(key, None)
     for key, sig in env.all_constructor_sigs():
         program_ctor_sig_table[key] = sig
     for key, kinds in env.all_constructor_field_kinds():
@@ -246,10 +252,8 @@ def _resolve_body_for_one(
     program_type_table: dict[DeclKey, Type],
     program_generic_table: dict[DeclKey, GenericTypeDef],
     program_alias_table: dict[DeclKey, GenericAliasDef],
-    program_ctor_sig_table: dict[tuple[DeclKey, str | None], ConstructorSignature],
-    program_ctor_field_kinds_table: dict[
-        tuple[DeclKey, str | None], tuple[tuple[str, ParamKind], ...]
-    ],
+    program_ctor_sig_table: dict[DeclKey, ConstructorSignature],
+    program_ctor_field_kinds_table: dict[DeclKey, tuple[tuple[str, ParamKind], ...]],
     resolved: ResolvedProgram,
     cross_envs: dict[ModuleId, TypeEnvironment],
 ) -> None:
@@ -318,6 +322,7 @@ def _resolve_body_for_one(
     _sync_program_env_extensions(
         mid,
         cross_env,
+        program_type_table,
         program_generic_table,
         program_ctor_sig_table,
         program_ctor_field_kinds_table,
@@ -402,8 +407,8 @@ def _build_program_type_table(
     dict[DeclKey, Type],
     dict[DeclKey, GenericTypeDef],
     dict[DeclKey, GenericAliasDef],
-    dict[tuple[DeclKey, str | None], ConstructorSignature],
-    dict[tuple[DeclKey, str | None], tuple[tuple[str, ParamKind], ...]],
+    dict[DeclKey, ConstructorSignature],
+    dict[DeclKey, tuple[tuple[str, ParamKind], ...]],
 ]:
     """Phase 1: collect and resolve all public type declarations across all modules.
 
@@ -417,7 +422,9 @@ def _build_program_type_table(
             enums, and exceptions get their handle entered into
             ``program_type_table`` directly (a handle carries no field/variant
             data, so there is nothing left to fill in later — forward
-            references within or across modules are valid immediately).
+            references within or across modules are valid immediately). Inline
+            member arity is provisional until its resolved fields reveal which
+            owner parameters survive transparent aliases.
             Type aliases are registered as lazy program alias keys (their target
             type is not known until the alias body is resolved, so they have
             no handle entry yet).
@@ -480,17 +487,19 @@ def _build_program_type_table(
             assert isinstance(t, (RecordType, EnumType, ExceptionType))
             program_type_table[(mid, t.scope_path, t.name)] = t
 
-    # Cross-module generic type definitions carry no shape (a GenericTypeDef is
-    # just a type-parameter count plus a TypeVarType-stamped template — the
+    # Cross-module generic type definitions carry no field shape (a GenericTypeDef
+    # is just a type-parameter count plus a TypeVarType-stamped template — the
     # same "shell" data a non-generic handle carries), so — like
     # program_type_table above — they are collected here in Step A rather than
     # gated on that module's own body-resolution order in Step C: a qualified
     # generic application (e.g. ``lib::Box[int]``) inside a field of a type
     # declared in a module that sorts before ``lib`` in the fixed body-resolution
-    # order must still resolve.  Aliases need resolved targets rather than
-    # shells, so program environments resolve them lazily; constructor signatures
-    # and constructor field kinds genuinely need a resolved body (field/target
-    # types), so those remain filled as each type body is resolved in Step C.
+    # order must still resolve. Inline enum-member entries are reconciled after
+    # their resolved fields determine their true captured parameters. Aliases
+    # need resolved targets rather than shells, so program environments resolve
+    # them lazily; constructor signatures and constructor field kinds genuinely
+    # need a resolved body (field/target types), so those remain filled as each
+    # type body is resolved in Step C.
     program_generic_table: dict[DeclKey, GenericTypeDef] = {}
     for mid, env in per_module_envs.items():
         for _name, gdef in env.all_generic_types().items():
@@ -504,10 +513,8 @@ def _build_program_type_table(
             if isinstance(item, TypeAlias):
                 alias_decls[_decl_key(mid, item)] = item
     program_alias_keys = frozenset(alias_decls)
-    program_ctor_sig_table: dict[tuple[DeclKey, str | None], ConstructorSignature] = {}
-    program_ctor_field_kinds_table: dict[
-        tuple[DeclKey, str | None], tuple[tuple[str, ParamKind], ...]
-    ] = {}
+    program_ctor_sig_table: dict[DeclKey, ConstructorSignature] = {}
+    program_ctor_field_kinds_table: dict[DeclKey, tuple[tuple[str, ParamKind], ...]] = {}
 
     # Build per-module cross-module-aware environments and builders for
     # body resolution.  Each env knows the full program_type_table and its own
@@ -575,6 +582,20 @@ def _build_program_type_table(
         _collect_shells_only(builder, rmod.resolved.program)
         cross_builders[mid] = builder
 
+    # Transparent aliases can erase enum-owner parameters from inline member
+    # records. Finalize every member shell before resolving any declaration
+    # body, so a forward reference observes the same arity as a backward one.
+    for mid, builder in cross_builders.items():
+        builder.reconcile_inline_member_arities()
+        _sync_program_env_extensions(
+            mid,
+            cross_envs[mid],
+            program_type_table,
+            program_generic_table,
+            program_ctor_sig_table,
+            program_ctor_field_kinds_table,
+        )
+
     # Use the COMPLETE set of declared type keys (including aliases), NOT just
     # the record/enum handles in program_type_table, as the fixed resolution
     # order for Step B below.
@@ -605,6 +626,12 @@ def _build_program_type_table(
 
     for key in body_order:
         _resolve_one(key)
+
+    # Builtin contracts may inspect referenced enum-member record fields, so
+    # validate only after every type body has been resolved.  This preserves
+    # the order-free handle phase while making contract validation structural.
+    for builder in cross_builders.values():
+        builder.validate_builtin_contracts()
 
     # Step C: every body is now resolved, so the inhabitation fixpoint can
     # run over the whole shared table (this program's declarations plus the
@@ -720,16 +747,16 @@ def _build_program_func_sig_table(
 
 def _build_program_builtin_var_table(
     resolved: ResolvedProgram,
+    type_table: TypeTable,
 ) -> dict[int, Type]:
     """Compute binding types for every ``builtin var`` across all modules.
 
-    A ``builtin var`` names a fixed engine key whose type is canonical (from the
-    engine-key registry), so no type-expression resolution or per-module env is
-    needed.  The table is keyed by the declaration node id (globally unique), so
-    seeding it into every module's env makes each engine setting readable and
-    assignable from any module that imports its owner (e.g. ``std/config``).
-    Unknown-key declarations are omitted; the owning module's own check rejects
-    them with a clear error.
+    The engine-key registry supplies a canonical fallback type. If the program
+    loaded a source ``builtin`` declaration for that nominal, select the source
+    identity instead, matching host-value minting. The table is keyed by the
+    declaration node id (globally unique), so seeding it into every module's
+    env makes each engine setting readable and assignable from any importer.
+    Unknown-key declarations are omitted; the owning module rejects them.
     """
     from agm.agl.semantics.engine_keys import get_engine_key_type
 
@@ -739,6 +766,15 @@ def _build_program_builtin_var_table(
             if isinstance(item, BuiltinVarDecl):
                 key_type = get_engine_key_type(item.name)
                 if key_type is not None:
+                    if isinstance(key_type, (RecordType, EnumType, ExceptionType)):
+                        declared = type_table.standard_builtin_declaration(key_type.name)
+                        if declared is not None:
+                            type_args = (
+                                key_type.type_args
+                                if isinstance(key_type, (RecordType, EnumType))
+                                else ()
+                            )
+                            key_type = declared.handle(type_args=type_args)
                     result[item.node_id] = key_type
     return result
 
@@ -776,10 +812,8 @@ def _prepare_module_environment(
     program_builtin_var_table: dict[int, Type],
     program_generic_table: dict[DeclKey, GenericTypeDef],
     program_alias_table: dict[DeclKey, GenericAliasDef],
-    program_ctor_sig_table: dict[tuple[DeclKey, str | None], ConstructorSignature],
-    program_ctor_field_kinds_table: dict[
-        tuple[DeclKey, str | None], tuple[tuple[str, ParamKind], ...]
-    ],
+    program_ctor_sig_table: dict[DeclKey, ConstructorSignature],
+    program_ctor_field_kinds_table: dict[DeclKey, tuple[tuple[str, ParamKind], ...]],
     type_table: TypeTable,
     entry_seed_env: TypeEnvironment | None = None,
 ) -> TypeEnvironment:
@@ -935,9 +969,9 @@ def check_program(
         entry_seed_env=entry_seed_env,
     )
 
-    # Phase 2b: canonical binding types for every ``builtin var`` (engine
-    # settings), keyed by decl node id, seeded into every module's env below.
-    program_builtin_var_table = _build_program_builtin_var_table(resolved)
+    # Phase 2b: source-selected binding types for every ``builtin var``
+    # (engine settings), keyed by decl node id and seeded into every module.
+    program_builtin_var_table = _build_program_builtin_var_table(resolved, shared_type_table)
 
     # Collect import envs for per-module checking.
     import_env_map: dict[ModuleId, object] = {

@@ -2,11 +2,11 @@ program def main() -> unit =
   # Lenient JSON recovery (extract from fences/prose, repair trivially malformed
   # JSON, then validate strictly) is the portable default; `strict_json: true` is
   # a per-call opt-in to strict parsing.
-  let counter = AgentCommand("counter")
-  let fetcher = AgentCommand("fetcher")
-  let n: int = counter.ask("Count the items.")
+  let counter: Agent = AgentCommand("counter")
+  let fetcher: Agent = AgentCommand("fetcher")
+  let n: int = ask("Count the items.", agent = counter)
   print n
-  let exact: int = counter.ask("Count again.", strict_json = true)
+  let exact: int = ask("Count again.", agent = counter, strict_json = true)
   print exact
-  let data: json = fetcher.ask("Fetch the data.")
+  let data: json = ask("Fetch the data.", agent = fetcher)
   print data

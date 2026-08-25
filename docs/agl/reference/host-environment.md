@@ -29,58 +29,19 @@ prevent execution.
 
 ## Agents
 
-Free `ask` uses the snapshot default session, whose agent comes from
-`std/config::default-agent`; `Agent::ask` receives its agent as a method
-receiver. `AgentCommand` carries a command string; the provider variants carry
-their provider-specific fields. The host dispatches the selected value and does
-not contribute agent names or reconcile a registry.
+Each `ask` evaluates an `Agent` member `RecordValue` that selects the backend command; an `Agent`-typed value is that member record, not an enum wrapper. The record may be passed explicitly or supplied by the `std/config::default-agent` setting. `AgentCommand` carries a command string; the provider member records carry their provider-specific fields. The host dispatches the selected member record and does not contribute agent names or reconcile a registry.
 
 Per dispatch, an agent receives the rendered prompt, the output contract
 (format instructions plus derived JSON Schema, so schema-capable backends
-can use native structured output), and the attempt number. Corrective retries
-include only a category-based validation summary and a format reminder
-([Agent calls](agent-calls.md)). The summary excludes response-derived
-validation paths, keys, and values. The agent returns raw text.
-Hosts must pass the rendered prompt through verbatim, with no second template
-or environment-variable expansion.
+can use native structured output), the attempt number, and — on corrective
+retries — the previous invalid output with its validation errors
+([Agent calls](agent-calls.md)). The agent returns raw text. Hosts must pass
+the rendered prompt through verbatim, with no second template or
+environment-variable expansion.
 
 Transport failures (spawn failure, nonzero exit, timeout) surface as the
 catchable `AgentCallError` with an enumerated `cause`; exit 0 with empty
 output is a valid empty response ([Exceptions](exceptions.md)).
-
-### Session host seam
-
-The evaluator addresses a host-owned `SessionHost` through opaque session ids.
-The host opens/defaults a session, sends prompts, exposes lifecycle operations,
-and closes all live sessions when an `agm exec` run or `agm repl` ends. Free
-`ask` asks the host for its one lazy default session; `Agent::ask` opens an
-ephemeral session that survives its full retry loop; `Session::ask` uses the
-handle carried by its receiver. The host snapshots the agent and transport when
-the default session first opens.
-
-AGM dispatches `Cli` sessions by agent variant: `AgentCommand`, Claude, Codex,
-and Pi each use their CLI continuation adapter. `AgentPi` also supports `Rpc`,
-its default transport; no other variant does. All CLI calls use the configured
-agent idle timeout. Command sessions need an unescaped `%{SESSION_ID}` command
-placeholder when a continuing session is opened; AGM substitutes the generated
-id in argv only and does not export it to the child environment.
-
-An RPC session starts `pi --mode rpc` once and communicates over UTF-8 JSONL:
-requests have a generated `id`, a command `type`, and command payload; responses
-must acknowledge the same id and command. A prompt request carries `message`;
-its text is assembled from `message_update` text deltas and completes only after
-both its response and an `agent_settled` event. The same process handles
-`compact`, `new_session` (reset), `clone` (fork), `set_session_name`, and
-`get_session_stats` requests. The protocol is strict: malformed, oversized,
-non-UTF-8, or unexpected records terminate the child and fail the operation.
-
-For an RPC **prompt**, process death, protocol failure, or an idle timeout kills
-and discards the child and raises `AgentCallError` (`timeout` for inactivity,
-otherwise `nonzero_exit`). For an RPC lifecycle operation, the same failures
-raise `SessionError`. A discarded child cannot be reused, so a later operation
-other than the idempotent `close` also raises `SessionError`. CLI prompt process
-failures likewise raise `AgentCallError`; unsupported lifecycle capabilities
-raise `SessionError`.
 
 ## Codecs
 
@@ -152,9 +113,7 @@ key:
 
 Import `std/config` and read or write a setting through a qualified target
 (`std/config::max-iters`); writing zero disables that safety valve.
-`default-agent` is the typed `Agent` value snapshotted when free `ask` first
-opens its default session; free `ask` has no `agent` option. The `Option[text]`
-settings (`log-file`, `timeout`) take a
+`default-agent` is a typed `Agent` value — its selected member `RecordValue` at runtime — used by `ask` when its `agent` option is omitted. The `Option[text]` settings (`log-file`, `timeout`) take a
 `Some("…")` or `None` value.
 
 ### Precedence
@@ -214,9 +173,8 @@ of the run without rolling back the assigned `log` or `log-file` value.
   ([Exceptions](exceptions.md#typeerror)), terminating the run (exit 2) when
   uncaught.
 - A CLI, qualified program table, or `[exec]` timeout initially seeds both shell execution
-  and agent idle timeout, including CLI and Pi RPC sessions. A source write to
-  the `timeout` setting changes only the **shell-exec** timeout; agent idle
-  timeout cannot be changed mid-program.
+  and agent idle timeout. A source write to the `timeout` setting changes only
+  the **shell-exec** timeout; agent idle timeout cannot be changed mid-program.
 - Reading `timeout` returns the exact `Option[text]` value assigned or supplied
   initially; duration parsing does not normalize its text.
 

@@ -12,7 +12,8 @@ from agm.agl.runtime.request import (
     AgentRequest,
     AgentResponse,
 )
-from agm.agl.semantics.values import EnumValue, TextValue
+from agm.agl.semantics.types import terminal_name
+from agm.agl.semantics.values import RecordValue, TextValue
 from agm.core.env import clone_env
 
 if TYPE_CHECKING:
@@ -95,17 +96,18 @@ def _run_request(
     )
 
 
-def decode_agent_value(value: EnumValue) -> "AgentSpec":
-    """Decode a runtime ``Agent`` enum value into its host-side specification."""
+def decode_agent_value(value: RecordValue) -> "AgentSpec":
+    """Decode an ``Agent`` member record into its host-side specification."""
     from agm.agent.spec import AGENT_SPECS
 
-    spec_cls = AGENT_SPECS.get(value.variant)
+    member_name = terminal_name(value.display_name)
+    spec_cls = AGENT_SPECS.get(member_name)
     if spec_cls is None:
-        raise ValueError(f"unsupported Agent variant: {value.variant}")
+        raise ValueError(f"unsupported Agent member: {member_name}")
     return spec_cls(*(_text_field(value, name) for name in spec_cls.PAYLOAD_FIELDS))
 
 
-def _text_field(value: EnumValue, name: str) -> str:
+def _text_field(value: RecordValue, name: str) -> str:
     field = value.fields[name]
     if not isinstance(field, TextValue):
         raise ValueError(f"Agent field {name!r} must be text")

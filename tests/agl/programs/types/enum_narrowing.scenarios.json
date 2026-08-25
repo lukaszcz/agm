@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "nominal_tests_and_identity_casts",
+      "expect": {
+        "stdout": "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n8\n16\n9\nfalse\ncast failed\nupcast leaf\n"
+      }
+    }
+  ]
+}

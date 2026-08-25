@@ -3,7 +3,7 @@
 [← Index](index.md)
 
 AgL is statically typed with nominal user types, a small set of built-ins,
-and two implicit coercions. The full program is scope-resolved and
+and directed implicit coercions. The full program is scope-resolved and
 type-checked before any expression executes; checking stops at the first
 error, and a program with a static error never runs.
 
@@ -62,6 +62,11 @@ the complete type name before its brackets, as in `mylib::Box[int]` or
 `mylib::Point` or `Geometry::Point`. The built-in `array[T]` and `dict[text, V]`
 are the same applied-type form. See [Named scopes](scopes.md) for scope-path
 resolution.
+
+An inline enum member may also be selected from an applied enum owner:
+`Source[text]::Member` specializes every owner parameter captured by
+`Member`. That selection is already concrete, so it cannot take another type
+application; use `Source::Member[T]` when applying the member directly.
 
 `dict[text, T]` keys are always `text`, and the key position must be spelled
 literally as `text`. There are no union types, no string-literal types, and no
@@ -182,7 +187,7 @@ and `as json` walk a value's containers and therefore raise the catchable
 re-enters a container already on its own path. An `extern def` call can pass a
 cyclic array or dict as a live view; rendering that view in its companion
 raises `CyclicValueError`. `as?` never
-raises: it predicts whether the corresponding `as` would succeed, so `as?
+raises: it returns `false` when the corresponding conversion fails, so `as?
 text` and `as? json` on a cyclic value evaluate to `false` instead. `copy` is
 the exception: it is the one deep, structure-rebuilding walk that traverses a
 cyclic value to completion instead of raising — see [Copying
@@ -345,21 +350,22 @@ corrective retries after the initial attempt.
 
 ### `Agent`
 
-`Agent` is a built-in enum describing an agent backend. Its variants are
-`AgentCommand(command)`, `AgentClaude(model, thinking)`,
+`Agent` is a built-in enum describing an agent backend. Its members are the
+record types `AgentCommand(command)`, `AgentClaude(model, thinking)`,
 `AgentCodex(model, thinking)`, and `AgentPi(provider, model, thinking)`.
-Like every enum, `Agent` values have fields, equality, rendering, and JSON
-casts. Its standard-core `ask` member is a call-only builtin method, so
-`agent.ask(...)` selects that agent for the operation; see [Agent
-calls](agent-calls.md) for dispatch behavior.
+Like every enum, `Agent` values have equality, rendering, and JSON casts; a
+member record exposes its fields when used at its record type. Its standard-core `ask` and `ask-request` members are call-only builtin
+methods, so `agent.ask(...)` and `agent.ask-request(...)` select that agent
+for the operation; see [Agent calls](agent-calls.md) for dispatch behavior.
 
 ### `AgentRequest`
 
-`AgentRequest` is the agent-independent, first-attempt text request that
-`ask-request` builds without dispatching (see [Agent calls](agent-calls.md)):
+`AgentRequest` is the first-attempt text request that `ask-request` builds
+without dispatching an agent (see [Agent calls](agent-calls.md)):
 
 ```text
 record AgentRequest
+  agent:               Agent
   prompt:              text
   target_type:         Option[text]
   format_instructions: Option[text]
@@ -374,91 +380,6 @@ record AgentRequest
 `previous_error` is `None` because it constructs only the first-attempt
 request.
 
-### `SessionTransport`
-
-A plain enum that identifies the host transport for a session:
-
-```text
-enum SessionTransport
-  | Cli
-  | Rpc
-```
-
-`Cli` uses a backend CLI continuation adapter. `Rpc` is available only to
-`AgentPi` and keeps a Pi RPC child process. `Session::open` defaults to `Rpc`
-for `AgentPi` and `Cli` for every other agent.
-
-### `Session`
-
-`Session` is a host-minted capability record:
-
-```text
-record Session
-  id:        text
-  agent:     Agent
-  transport: SessionTransport
-```
-
-The fields identify the host handle, selected agent, and transport and can be
-read, but source cannot construct a `Session`. A session has no JSON wire
-representation: it cannot be an agent-output or program-parameter type and
-cannot be cast `as json`. It can be stored and passed to functions during the
-same run or REPL session.
-
-`copy(session)` and `shallow_copy(session)` produce record copies that retain
-the same opaque `id`; they alias the same host conversation. Closing, resetting,
-or otherwise changing one is therefore observed through every copy.
-
-### Session calls
-
-The canonical `std/core::Session` owns these call-only members:
-
-```text
-Session::open(agent: Agent,
-              transport: Option[SessionTransport] = Option[SessionTransport]::None,
-              name: text = "") -> Session
-Session::default() -> Session
-
-Session::ask[T](self, prompt: text, format: text = "",
-                strict_json: bool = false,
-                on_parse_error: ParsePolicy = ParsePolicy::Abort) -> T
-Session::compact(self, instructions: text = "") -> unit
-Session::reset(self) -> unit
-Session::fork(self) -> Session
-Session::stats(self) -> SessionStats
-Session::set-name(self, name: text) -> unit
-Session::close(self) -> unit
-```
-
-`Session::ask` has the same target-type and output-contract rules as `ask`,
-but its receiver supplies the agent and it accepts no `agent` argument. The
-operations and backend support are described in [Agent calls](agent-calls.md#sessions).
-Only the canonical `std/core::Session` nominal declaration owns these special
-members; another type named `Session` has only ordinary members.
-
-### `SessionStats`
-
-A plain data record returned by backends that report usage:
-
-```text
-record SessionStats
-  input-tokens:    int
-  output-tokens:   int
-  cost:            decimal
-  context-percent: decimal
-```
-
-`stats()` raises `SessionError` when its backend does not support statistics.
-For Pi RPC, absent context-usage data is represented by `context-percent = 0`.
-
-### `SessionError`
-
-`SessionError` has the standard `message: text` field and an `operation: text`
-field. It reports session lifecycle/capability failures, such as an unsupported
-transport or operation, or a closed or unknown handle. A failed prompt transport
-is `AgentCallError`; invalid output after a
-prompt arrives is `AgentParseError` (see [Agent calls](agent-calls.md#transport-and-session-failures)).
-
 ## Members of nominal types
 
 A method is a member of a record, enum, or exception's nominal type. It is
@@ -469,8 +390,7 @@ does not require an import of the module that declared the type. See
 In the REPL, redeclaring a record, enum, or exception starts a new
 declaration rather than changing the existing one: a name always resolves to
 its most recently declared owner, but a value built before the redeclaration
-keeps working against the declaration it was built from — its fields or
-variants, its methods, and equality with other values of that same
+keeps working against the declaration it was built from — its fields or enum members, its methods, and equality with other values of that same
 declaration are all unaffected. The new declaration starts with no methods of
 its own; declare them again to use them on values of the new declaration.
 
@@ -480,12 +400,14 @@ is expected, and comparing values across them is a type error. Every spelling
 that names the type — a constructor call, a type annotation, a `catch`
 clause, a type-qualified constructor pattern — means the declaration in
 effect where it is written, so one written after the redeclaration does not
-apply to an earlier value. A bare variant pattern is directed by the value
-being matched instead, so an earlier value can still be destructured.
+apply to an earlier value. A bare member pattern is directed by the value being matched instead, so an
+earlier value can still be destructured.
 
 A failed entry that would have redeclared the type changes nothing — the
 previous declaration, its methods, and every binding built from it remain in
-effect.
+effect. Redeclaring a record referenced by an existing enum does not change
+that enum's member set; redeclaring an enum creates new identities for its
+inline member records.
 
 ## Record types
 
@@ -499,8 +421,11 @@ record Issue
   description: text
 ```
 
-All fields are required. By default, record fields are **standard**: they may be
-supplied positionally or as `field = value`:
+All fields are required. A fieldless record uses an empty parenthesized field
+list (`record R1()`). Its constructor reference in value position constructs an
+`R1` value; see [Expressions](expressions.md#fieldless-constructor-references).
+By default, record fields are **standard**: they may be supplied positionally
+or as `field = value`:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -557,9 +482,10 @@ at the same path (see [Built-in functions](functions.md#built-in-functions)).
 
 ## Enum types
 
-An `enum` declares a tagged union (algebraic data type). Variants are
-introduced by `|`; each variant is either nullary or carries named, typed
-fields:
+An `enum` declares a closed nominal union of record types. A value of an enum
+is one of its member-record values; constructing a member does not wrap or
+retag the record. A bare member name declares a new record in the enum's
+scope; it is either fieldless or carries named, typed fields:
 
 ```agl
 enum FixResult
@@ -568,10 +494,40 @@ enum FixResult
   | Blocked(reason: text, recoverable: bool)
 ```
 
-Enums are the intended model for agent outcomes. An enum also establishes a
-same-named scope; its variants are members of that scope, so `Review::Pass` is
-a qualified member access. The unqualified variant spelling remains available
-under the ordinary constructor rules.
+A qualified member spelling instead references an existing record. The
+reference may apply the enum's type parameters, and aliases are transparent:
+
+```agl
+record Saved(id: int)
+record Box[T](value: T)
+
+enum Result[T] = ::Saved | ::Box[T] | Fresh(value: T)
+```
+
+A reference must name a record, including through a transparent type alias.
+An enum may not name the same member declaration twice, even with different
+type arguments, and its members must have distinct terminal names. The enum's
+scope contains only its inline declarations: `Result::Fresh` is available,
+while `Result::Saved` is not; `Saved` remains reachable at its original
+declaration path. Referencing a record does not re-export it. Every member's
+terminal name is also an injected constructor and pattern candidate wherever
+the enum is visible.
+
+Each member is a record type. An inline member may appear in field, parameter,
+return, and generic-argument positions such as `array[Result::Fresh]`; a
+referenced member retains its own record type and declaration path. Member
+records support record construction, field access, methods, `with`, casts, and
+standalone JSON decoding exactly like other records. `with` applies while a
+value has its member-record type, not after it has widened to the enum. A
+member value widens to an enum only in a known enum-typed slot, so its inferred
+type remains the member record type. An inline member captures exactly the enum type parameters
+used by its fields, in enum declaration order. Thus `Tree[T]::Leaf` is
+fieldless and non-generic, while `Tree[T]::Node(value: T)` captures `T`.
+
+Enums are the intended model for agent outcomes. An enum establishes a
+same-named scope for its declared members, so `Review::Pass` is a qualified
+member access. The unqualified member spelling remains available under the ordinary
+constructor rules.
 
 ```agl
 enum Review
@@ -579,8 +535,8 @@ enum Review
   | Fail(issues: array[text])
 ```
 
-**Variant field zones.** Payload fields are standard by default, regardless of
-payload arity. Common single-value variants and multi-field variants may both be
+**Member field zones.** Member-record fields are standard by default,
+regardless of arity. Single-value and multi-field members may both be
 constructed positionally or by name:
 
 ```agl
@@ -594,7 +550,7 @@ let err = Err("bad", false)
 let named_err = Err(reason = "bad", fatal = false)
 ```
 
-Zone markers are also available on variant payloads:
+Zone markers are also available on inline member fields:
 
 ```agl
 enum Triple
@@ -607,7 +563,7 @@ Construction, qualification, and ambiguity rules are covered in
 tag) in [Agent calls](agent-calls.md).
 
 `builtin enum` similarly declares a host-recognized nominal enum type. Its
-variant names and payload fields must match the built-in shape exactly.
+member names and fields must match the built-in shape exactly.
 
 The `builtin` modifier behaves like a decorator on a type declaration: it may
 sit on the same line as the `record`, `enum`, or `exception` keyword or on the
@@ -629,24 +585,26 @@ The host fills the fields of such a value itself, always with standard
 values, so any field of one whose type is itself a nominal type must keep the
 standard identity for that name — including a nominal nested inside a type
 argument, such as the `Option` in `AgentRequest`'s `target_type:
-Option[text]`. The fields subject to this are `AgentRequest`'s `Option`-typed
-fields and the `agent: Agent` field of the built-in exceptions `AgentCallError`
-and `AgentParseError`; `ExecResult` has no nominal field. So a program may
-declare its own `builtin enum Agent`, or — without the standard library — its
-own `Option`, and it may separately declare a `builtin record AgentRequest`
-or a `builtin exception AgentCallError`; but writing both so that the
-redeclaration is what the contract's own field resolves to makes the pair
-unusable together. That is reported where the contract is used: at an
-`ask-request` call for `AgentRequest`, and at a `catch` clause naming the
-exception.
+Option[text]`. The fields subject to this are `AgentRequest`'s `agent: Agent`
+and its `Option`-typed fields, and the `agent: Agent` field of the built-in
+exceptions `AgentCallError` and `AgentParseError`; `ExecResult` has no
+nominal field. So a program may declare its own `builtin enum Agent`, or —
+without the standard library — its own `Option`, and it may separately
+declare a `builtin record AgentRequest` or a `builtin exception
+AgentCallError`; but writing both so that the redeclaration is what the
+contract's own field resolves to makes the pair unusable together. That is
+reported where the contract is used: at an `ask`/`ask-request` call for
+`AgentRequest`, and at a `catch` clause naming the exception.
 
-An `Agent::ask(...)` receiver must be a standard `Agent`. A value of a
-program's own differently-scoped `Agent` is an ordinary type mismatch there.
+The agent an `ask`/`ask-request` dispatches to must likewise be a standard
+`Agent`, whether it is supplied as the `agent` argument or as the receiver of
+`agent.ask(...)` / `agent.ask-request(...)`. A value of a program's own
+differently-scoped `Agent` is an ordinary type mismatch there.
 
 ## Recursive types
 
 A record, enum, or exception may reference its own type, directly or through
-another declaration, in its own field or variant definitions:
+another declaration, in its own fields or enum-member fields:
 
 ```agl
 enum Tree
@@ -672,26 +630,26 @@ Recursion is legal only when it is possible to build a finite value — the
 type must be **inhabited**. Recursion is well-founded when at least one of
 the following breaks the chain:
 
-- an enum variant that does not need another value of the same (or a
+- an enum member that does not need another value of the same (or a
   mutually recursive) type — a **base case**, such as `Leaf` above;
 - an `array[T]`/`dict[text, T]` field whose element type is the recursive
   type — the empty array or dict is always a value, regardless of `T`, as
   with `Category.subcategories` above.
 
 A record or exception whose every required field, or an enum whose every
-variant, needs another value of the same or a mutually recursive
-declaration with no such escape has no finite value and is rejected:
+member, needs another value of the same or a mutually recursive declaration
+with no such escape has no finite value and is rejected:
 
 <!-- agl-check: error -->
 ```agl
 record Node
   next: Node
 # Record type 'Node' is uninhabitable: every value of 'Node' would be
-# infinite. Recursion must be guarded by an enum base-case variant or an
+# infinite. Recursion must be guarded by an enum base-case member or an
 # `array`/`dict` field.
 ```
 
-The same rule rejects an enum whose only variant carries itself, an exception
+The same rule rejects an enum whose only member carries itself, an exception
 whose required fields contain an unguarded cycle, and a mutually recursive
 pair with no base case or guard anywhere in the cycle (for example
 `record A { b: B }` / `record B { a: A }`, with no array/dict field and no enum
@@ -811,7 +769,7 @@ type Metadata = dict[text, json]
 
 Aliases never create a new nominal type: a value of type `Status` *is* a
 value of type `Review`. Aliases are transparent everywhere, including
-qualified variant access. Alias chains resolve transitively.
+qualified member access. Alias chains resolve transitively.
 
 ## Type parameters and applied types
 
@@ -857,8 +815,8 @@ The following are static errors:
 
 1. A user type whose name duplicates another user type, a built-in type name,
    or a built-in exception name ([Exceptions](exceptions.md)).
-2. Duplicate record fields, duplicate enum variants, or duplicate fields
-   within one variant.
+2. Duplicate record fields, duplicate enum member declarations or terminal
+   names, or duplicate fields within one inline member.
 3. References to unknown types in records, enums, aliases, or `param`
    declarations.
 4. Cyclic aliases.
@@ -870,7 +828,7 @@ regions](scopes.md), but not in ordinary expression blocks.
 
 ## Assignability and coercion
 
-Typing is exact nominal matching with **two** implicit coercions:
+Typing is exact nominal matching with these implicit coercions:
 
 1. **`int` widens to `decimal`.** An `int` value is accepted wherever a
    `decimal` is expected. Mixed arithmetic yields `decimal`, and `1 == 1.0`
@@ -878,16 +836,19 @@ Typing is exact nominal matching with **two** implicit coercions:
 2. **A `json` target accepts any *scalar* JSON-shaped value** — `null`,
    `bool`, `int`, `decimal`, or `text` — storing it in canonical `json`
    representation.
-3. There are no other implicit conversions. In particular, an `array` or
+3. **An enum member record widens to an enum that declares it.** This applies only
+   when checking against a known enum slot; it never finds a common enum while
+   inferring a mixed expression.
+4. There are no other implicit conversions. In particular, an `array` or
    `dict` value — even one that is JSON-shaped — is never implicitly absorbed
    into `json`: an implicit conversion never copies a data structure, and
    converting a container to `json` builds one. Use an explicit `as json`
    cast (see [Casts and convertibility](#casts-and-convertibility) below).
-4. Equality (`==`, `!=`) and ordering comparisons require both operands to
+5. Equality (`==`, `!=`) and ordering comparisons require both operands to
    have the *same* type after rule 1. Operands whose type is, or transitively
    contains, a function or `unit` value are a static error — see
    [Values and equality](#values-and-equality) below.
-5. All branches of a `case` expression must have the same type after rule 1.
+6. All branches of a `case` expression must have the same type after rule 1.
 
 For explicit, user-requested conversions between types, see
 [Casts and convertibility](#casts-and-convertibility) below.
@@ -899,9 +860,15 @@ AgL provides two cast operators:
 - **`EXPR as T`** — converts the value of `EXPR` to type `T`. If the
   conversion cannot succeed at runtime it raises `CastError`
   ([Exceptions](exceptions.md)).
-- **`EXPR as? T`** — tests whether the value of `EXPR` is convertible to `T`
-  without actually performing the conversion. Always yields `bool`; never
-  raises. Equivalent to asking whether `EXPR as T` would succeed.
+- **`EXPR as? T`** — tests whether the same conversion would succeed without
+  raising. It yields `bool`: `true` on success and `false` on failure.
+
+For an enum member record, these operators are identity casts rather than
+parsing conversions. A member value may be cast up to an enum that declares
+it only when that enum declares the member record; this upcast is a
+compile-time-checked no-op. An enum value may be cast down only to one of that
+enum's declared member records; this downcast checks the runtime nominal
+identity and returns the same record value on success.
 
 The target type `T` is a type expression written the same way as any other
 type annotation (`int`, `array[text]`, `MyRecord`, etc.).
@@ -938,7 +905,9 @@ may raise `CastError`.
 | record `R` | same record `R` | total (no-op) |
 | record `R` | `text`, `json` | fallible — strict JSON parse then field validation |
 | enum `E` | same enum `E` | total (no-op) |
-| enum `E` | `text`, `json` | fallible — strict JSON parse then variant validation |
+| member record `R` of enum `E` | `E` | total compile-time-checked identity upcast (no-op) |
+| enum `E` | declared member record `R` | fallible identity downcast — checks that the runtime member is `R` |
+| enum `E` | `text`, `json` | fallible — strict JSON parse then member validation |
 | any type | `unit`, function type | **static cast error** |
 | `unit`, function type | any type | **static cast error** |
 
@@ -985,12 +954,12 @@ independent snapshot (see [`array[T]` and `dict[text, T]`](#arrayt-and-dicttext-
 above).
 
 A **fallible** cast may raise `CastError` if the value does not conform to
-the target type. The `as?` form lets you probe convertibility without
-handling an exception:
+the target type. The `as?` form instead returns whether that cast would
+succeed, without handling an exception:
 
 <!-- agl-check: fragment -->
 ```agl
-let ok: bool = some_json as? int   # true if the value is an integral number
+let parses_as_int: bool = some_json as? int
 ```
 
 ### Strict parsing in text and json casts
@@ -1014,8 +983,9 @@ json`, and so can any `array`/`dict` built from them. This is a structural
 conversion:
 
 - **record** → a JSON object with one key per field, in declaration order.
-- **enum** → a JSON object with a `"$case"` key holding the variant name, plus
-  one key per variant field.
+- **enum** → a JSON object with a `"$case"` key holding the terminal member
+  name, plus one key per member-record field. The same record in a
+  record-typed slot has no `"$case"` key.
 - **exception** → a JSON object with all fields in declaration order.
 - **`array[E]`/`dict[text, V]`** → the JSON array/object obtained by
   converting each element/value the same way — so `array[R] as json` is a
@@ -1044,7 +1014,11 @@ program def main() -> unit =
 A record (or exception) with a field of type `unit` or a function type cannot
 be converted — see [Convertibility to
 `json`](#convertibility-to-json) above for the static error this produces and
-how it names the offending field.
+how it names the offending field. A JSON-convertible recursive value can be
+converted to `json` when its runtime value is finite, including a growing
+polymorphic-recursive value such as `Perfect[int]`. This does not make that
+type eligible for a JSON-schema boundary; those positions require a finite
+schema as described in [Generics](generics.md#the-finite-schema-boundary).
 
 ### `text as json` — embedding, not parsing
 
@@ -1064,7 +1038,8 @@ Every **data** type has full value equality (`==` / `!=`):
 - Scalars compare by value; `int` and `decimal` compare numerically.
 - Arrays compare element-wise; dictionaries compare by key set and per-key
   values.
-- Records and enums compare by type, variant (for enums), and field values.
+- Records compare by nominal type and field values; enum values compare by
+  their member-record nominal type and field values.
 - `json` values compare structurally.
 
 Function types and `unit` have **no equality**. A comparison involving one of
@@ -1074,4 +1049,4 @@ these types is a static error. This rule is **transitive**: an `array`, `dict`,
 example, comparing two `array[int -> int]` values with `==` is a static error.
 
 See [Expressions](expressions.md) for the operator rules and
-[Pattern matching](pattern-matching.md) for variant tests with `is`.
+[Pattern matching](pattern-matching.md) for enum-member tests with `is`.

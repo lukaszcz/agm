@@ -17,8 +17,8 @@ enum Wrapped
   | Holds(shape: Shape)
 
 program def main() -> unit =
-  let picker = AgentCommand("picker")
-  let wrapped: Wrapped = picker.ask("Pick a wrapped shape.")
+  let picker: Agent = AgentCommand("picker")
+  let wrapped: Wrapped = ask("Pick a wrapped shape.", agent = picker)
 
   # Nested constructor patterns with '=' on the enum-typed field 'shape'; the
   # record-typed field 'at' is matched full-form ('at = _ as p'), where 'as' captures

@@ -13,7 +13,7 @@ from agm.agl.runtime.request import (
     AgentRequest,
     AgentResponse,
 )
-from agm.agl.semantics.values import EnumValue
+from agm.agl.semantics.values import RecordValue
 from agm.core.cleanup import preserve_primary_error
 
 if TYPE_CHECKING:
@@ -47,7 +47,7 @@ class SessionTransport:
 class SessionSnapshot:
     """The opening identity the host associates with an opaque handle."""
 
-    agent: EnumValue
+    agent: RecordValue
     transport: str
 
 
@@ -112,7 +112,7 @@ class EphemeralSessionHost(Protocol):
 
     def with_ephemeral(
         self,
-        agent: EnumValue,
+        agent: RecordValue,
         transport: str,
         action: Callable[[str], _T],
         *,
@@ -123,13 +123,13 @@ class EphemeralSessionHost(Protocol):
 class SessionHost(Protocol):
     """Host-owned lifecycle service addressed by opaque AgL session ids."""
 
-    def open(self, agent: EnumValue, transport: str, *, name: str = "") -> str: ...
+    def open(self, agent: RecordValue, transport: str, *, name: str = "") -> str: ...
 
     def open_ephemeral(
-        self, agent: EnumValue, transport: str, *, one_shot: bool = False
+        self, agent: RecordValue, transport: str, *, one_shot: bool = False
     ) -> str: ...
 
-    def default(self, agent: EnumValue, transport: str, *, name: str = "") -> str: ...
+    def default(self, agent: RecordValue, transport: str, *, name: str = "") -> str: ...
 
     def ask(self, handle: str, prompt: str) -> str: ...
 
@@ -152,7 +152,7 @@ class SessionHost(Protocol):
 
 def with_ephemeral_session(
     host: SessionHost,
-    agent: EnumValue,
+    agent: RecordValue,
     transport: str,
     action: Callable[[str], _T],
     *,
@@ -192,17 +192,17 @@ class AgentDispatcherSessionHost(SessionHost):
         """Return the number of outstanding ephemeral sessions."""
         return len(self._sessions)
 
-    def open(self, _agent: EnumValue, _transport: str, *, name: str = "") -> str:
+    def open(self, _agent: RecordValue, _transport: str, *, name: str = "") -> str:
         del name
         self._unavailable("open")
 
-    def open_ephemeral(self, agent: EnumValue, transport: str, *, one_shot: bool = False) -> str:
+    def open_ephemeral(self, agent: RecordValue, transport: str, *, one_shot: bool = False) -> str:
         del one_shot
         handle = self._new_handle()
         self._sessions[handle] = SessionSnapshot(agent, transport)
         return handle
 
-    def default(self, agent: EnumValue, transport: str, *, name: str = "") -> str:
+    def default(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
         del name
         if self._default_handle is None:
             self._default_handle = self._new_handle()
@@ -269,7 +269,7 @@ class AgentDispatcherSessionHost(SessionHost):
         self._next_handle += 1
         return handle
 
-    def _agent_for(self, handle: str, operation: str) -> EnumValue:
+    def _agent_for(self, handle: str, operation: str) -> RecordValue:
         try:
             return self._sessions[handle].agent
         except KeyError:

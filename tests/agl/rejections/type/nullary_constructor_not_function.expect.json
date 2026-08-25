@@ -1,0 +1,6 @@
+{
+  "diagnostic": {
+    "line": 6,
+    "message_contains": ["R1"]
+  }
+}

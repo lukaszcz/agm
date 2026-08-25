@@ -72,7 +72,6 @@ from agm.agl.ir.nodes import (
     IrConvert,
     IrCopyValue,
     IrDirectCall,
-    IrEnumCaseKey,
     IrExec,
     IrExpr,
     IrField,
@@ -94,11 +93,13 @@ from agm.agl.ir.nodes import (
     IrMakeClosure,
     IrMakeConstructor,
     IrMakeDict,
-    IrMakeEnum,
     IrMakeException,
     IrMakeJsonArray,
     IrMakeJsonObject,
     IrMakeRecord,
+    IrNominalCaseKey,
+    IrNominalCast,
+    IrNominalIs,
     IrOr,
     IrParseJson,
     IrPrint,
@@ -117,7 +118,6 @@ from agm.agl.ir.nodes import (
     IrTry,
     IrUnary,
     IrUpdateRecord,
-    IrVariantIs,
     UseDefault,
 )
 from agm.agl.ir.operations import (
@@ -155,17 +155,16 @@ from agm.agl.matchcompile import (
     DecisionDecompose,
     DecisionLeaf,
     DecisionSwitch,
-    EnumConstructor,
     FieldOccurrenceProvenance,
     LetSite,
     LiteralKind,
+    NominalConstructor,
     Occurrence,
     OccurrenceId,
-    RecordConstructor,
 )
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId, spell_scope_path
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind, BuiltinStaticKind
-from agm.agl.semantics.type_table import MethodDef, TypeTable
+from agm.agl.semantics.type_table import MethodDef, TypeDef, TypeTable
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
@@ -290,6 +289,8 @@ def _add_builtin_nominals(
     is seeded into every table by ``create_seeded_type_table``).
     """
     for name, typ in BUILTIN_PRELUDE_TYPES.items():
+        if type_table.standard_builtin_declaration(name) is not None:
+            continue
         nominal = NominalId(require_reserved_nominal_id(name))
         if isinstance(typ, RecordType):
             nominals[nominal] = NominalDescriptor(
@@ -303,15 +304,6 @@ def _add_builtin_nominals(
             )
             continue
         if isinstance(typ, ExceptionType):
-            nominals[nominal] = NominalDescriptor(
-                nominal=nominal,
-                module_id=STD_CORE_ID,
-                scope_path=(),
-                declared_name=name,
-                kind=NominalKind.EXCEPTION,
-                fields=tuple(type_table.exception_fields(typ).keys()),
-                variants=(),
-            )
             continue
         enum_type = cast(EnumType, typ)
         nominals[nominal] = NominalDescriptor(
@@ -322,12 +314,16 @@ def _add_builtin_nominals(
             kind=NominalKind.ENUM,
             fields=(),
             variants=tuple(
-                VariantDescriptor(vname, tuple(vfields.keys()))
-                for vname, vfields in type_table.enum_variants(enum_type).items()
+                VariantDescriptor(
+                    vname, tuple(type_table.record_fields(member)), NominalId(member.decl_id)
+                )
+                for vname, member in type_table.enum_member_names(enum_type).items()
             ),
         )
 
     for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
+        if type_table.standard_builtin_declaration(exc_name) is not None:
+            continue
         nominal = NominalId(require_reserved_nominal_id(exc_name))
         nominals[nominal] = NominalDescriptor(
             nominal=nominal,
@@ -350,21 +346,40 @@ def builtin_nominals_from_declarations(type_table: TypeTable) -> BuiltinNominals
     same orphan skip) the checker itself queries
     (:meth:`~agm.agl.semantics.type_table.TypeTable.builtin_declaration`) to
     type a host call (e.g. ``exec``'s default result type) against a
-    program's own declaration, rather than an independent walk of the
-    modules' ASTs with its own separate tie-break -- so the two can never
-    disagree about which declaration a built-in name denotes. A name no
-    declaration claims is simply absent -- the resulting table then answers
-    it with the shipped standard library's own identity (see
+    program's selected declaration, rather than an independent walk of the
+    modules' ASTs. Enum members are derived from those same definitions, with
+    the loaded ``std/core`` members retained separately for nested standard
+    host representations. A name no declaration claims is absent and uses a
+    reserved fallback (see
     :meth:`~agm.agl.ir.builtin_nominals.BuiltinNominals.resolve`).
     """
+    declarations = type_table.builtin_declarations()
     declared = {
         name: DeclaredNominal(
             nominal=NominalId(typedef.decl_node_id),
             display_name=spell_scope_path((*typedef.scope_path, typedef.name)),
         )
-        for name, typedef in type_table.builtin_declarations().items()
+        for name, typedef in declarations.items()
     }
-    return BuiltinNominals(declared=declared)
+
+    def member_nominals(
+        definitions: Mapping[str, TypeDef],
+    ) -> dict[tuple[str, str], DeclaredNominal]:
+        return {
+            (name, member.name): DeclaredNominal(
+                nominal=NominalId(member.decl_id),
+                display_name=spell_scope_path((*typedef.scope_path, typedef.name, member.name)),
+            )
+            for name, typedef in definitions.items()
+            if typedef.kind == "enum"
+            for member in typedef.members
+        }
+
+    return BuiltinNominals(
+        declared=declared,
+        members=member_nominals(declarations),
+        standard_members=member_nominals(type_table.standard_builtin_declarations()),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1218,23 +1233,21 @@ class _Lowerer:
             # Variable reference — constructor ref or IrLoad
             # ----------------------------------------------------------
             case VarRef(node_id=nid, span=span):
-                # Check for constructor reference FIRST (mirrors legacy _eval_var_ref).
-                cref = self._checked.constructor_ref_for(nid)
-                if cref is not None:
+                # A constructor reference is a record or exception constructor.
+                if self._checked.constructor_ref_for(nid) is not None:
                     node_typ = self._node_type(nid)
                     if isinstance(node_typ, FunctionType):
                         # Constructor with fields used as a value → IrMakeConstructor.
-                        nominal, display = self._nominal_for_constructor_result(node_typ.result)
+                        nominal, display = self._nominal_for_constructor_result(
+                            self._constructor_result_type(nid)
+                        )
                         return IrMakeConstructor(
                             location=self._loc(span),
                             nominal=nominal,
                             display_name=display,
-                            variant=cref.variant,
                         )
-                    # Nullary constructor used as a value → construct immediately.
-                    # AgL grammar requires ≥1 field in a record, so a nullary
-                    # record VarRef is impossible under the current grammar.
-                    return self._lower_nullary_constructor(nid, cref.owner_name, cref.variant, span)
+                    # Fieldless constructor used as a value → construct immediately.
+                    return self._lower_nullary_constructor(nid, span)
 
                 ref = self._checked.binding_for(nid)
                 assert ref is not None, f"compiler bug: no binding for VarRef node_id={nid!r}"
@@ -1250,7 +1263,6 @@ class _Lowerer:
                         location=self._loc(span),
                         nominal=NominalId(node_typ.result.decl_id),
                         display_name="::".join((*node_typ.result.scope_path, node_typ.result.name)),
-                        variant=None,
                     )
                 sym = self._sym_for_decl(ref.decl_node_id)
                 return IrLoad(location=self._loc(span), symbol=sym)
@@ -1307,7 +1319,7 @@ class _Lowerer:
             # ----------------------------------------------------------
             case RecordUpdate(target=target_expr, updates=updates, span=span):
                 target_type = self._node_type(target_expr.node_id)
-                field_types = self._constructor_field_types(target_type, None)
+                field_types = self._constructor_field_types(target_type)
                 ir_updates = tuple(
                     (u.name, self.lower_coerced(u.value, field_types[u.name])) for u in updates
                 )
@@ -1356,51 +1368,37 @@ class _Lowerer:
             case Cast(expr=operand, test_only=test_only, span=span, node_id=nid):
                 spec = self._checked.cast_specs[nid]
                 source_type = self._node_type(operand.node_id)
-                recipe = compile_recipe(source_type, spec.target_type, spec.kind, self._type_table)
                 inner = self.lower_expr(operand)
-                if not test_only:
-                    return IrConvert(
+                if spec.kind is CastKind.IDENTITY_UPCAST and not test_only:
+                    return inner
+                if spec.kind is CastKind.NOMINAL_DOWNCAST:
+                    assert isinstance(spec.target_type, RecordType)
+                    return IrNominalCast(
                         location=self._loc(span),
+                        nominal=NominalId(spec.target_type.decl_id),
                         value=inner,
-                        recipe=recipe,
-                        failure_mode=ConversionFailureMode.RAISE_CAST_ERROR,
+                        test_only=test_only,
+                        source_label=repr(source_type),
+                        target_label=repr(spec.target_type),
                     )
-                # `as?`: a no-op conversion performs no walk and cannot fail, so it
-                # short-circuits to evaluating the (possibly effectful) source, then
-                # yielding True.  `TOTAL_RENDER`/`TOTAL_JSON` are NOT short-circuited
-                # here even though they always succeed on an acyclic value: rendering
-                # or JSON-serializing a cyclic value raises `CyclicValueError`, so
-                # `as?` must trial-convert them too and yield False on that failure
-                # (see `_on_cast_failure`'s `RETURN_BOOL` handling in the evaluator).
-                if spec.kind is CastKind.TOTAL_NOOP:
-                    return IrSequence(
-                        location=self._loc(span),
-                        items=(inner, IrConstBool(location=self._loc(span), value=True)),
-                    )
+                recipe = compile_recipe(source_type, spec.target_type, spec.kind, self._type_table)
                 return IrConvert(
                     location=self._loc(span),
                     value=inner,
                     recipe=recipe,
-                    failure_mode=ConversionFailureMode.RETURN_BOOL,
+                    failure_mode=(
+                        ConversionFailureMode.RETURN_BOOL
+                        if test_only
+                        else ConversionFailureMode.RAISE_CAST_ERROR
+                    ),
                 )
 
-            case IsTest(expr=operand, variant=variant, negated=negated, span=span, node_id=nid):
-                # The checker guarantees the operand is enum-typed (see
-                # _check_is_test); build the nominal from its checked EnumType.
-                operand_type = self._node_type(operand.node_id)
-                assert isinstance(operand_type, EnumType), (
-                    "is-test operand must be enum-typed (checker guarantees this)"
-                )
-                constructor = self._checked.constructor_ref_for(nid)
-                selected_variant = (
-                    constructor.variant
-                    if constructor is not None and constructor.variant is not None
-                    else variant
-                )
-                return IrVariantIs(
+            case IsTest(expr=operand, negated=negated, span=span, node_id=nid):
+                member = self._checked.constructor_ref_for(nid)
+                assert member is not None
+                return IrNominalIs(
                     location=self._loc(span),
-                    nominal=NominalId(operand_type.decl_id),
-                    variant=selected_variant,
+                    nominal=NominalId(member.owner_decl_node_id),
                     value=self.lower_expr(operand),
                     negated=negated,
                 )
@@ -2078,8 +2076,8 @@ class _Lowerer:
     # ------------------------------------------------------------------
 
     def _nominal_for_constructor_result(self, typ: Type) -> tuple[NominalId, str]:
-        """Return the runtime nominal represented by a constructor function result."""
-        if isinstance(typ, (RecordType, EnumType, ExceptionType)):
+        """Return the record or exception identity constructed by a callable."""
+        if isinstance(typ, (RecordType, ExceptionType)):
             return NominalId(typ.decl_id), "::".join((*typ.scope_path, typ.name))
         raise AssertionError(f"constructor function has non-nominal result {typ!r}")
 
@@ -2098,16 +2096,27 @@ class _Lowerer:
         )
         return nominal, display_name, mode
 
-    def _lower_nullary_constructor(
-        self,
-        ref_node_id: int,
-        owner_name: str,
-        variant: str | None,
-        span: "SourceSpan",
-    ) -> IrExpr:
+    def _constructor_result_type(self, ref_node_id: int) -> RecordType | ExceptionType:
+        """Return a constructor's declared result, before any contextual widening."""
+        constructor_ref = self._checked.constructor_ref_for(ref_node_id)
+        assert constructor_ref is not None, f"compiler bug: no constructor for {ref_node_id!r}"
+        result = self._node_type(ref_node_id)
+        if isinstance(result, FunctionType):
+            result = result.result
+        if isinstance(result, EnumType):
+            member = self._checked.type_env.type_table.enum_member_by_decl(
+                result, constructor_ref.owner_decl_node_id
+            )
+            assert member is not None
+            return member
+        assert isinstance(result, (RecordType, ExceptionType))
+        return result
+
+    def _lower_nullary_constructor(self, ref_node_id: int, span: "SourceSpan") -> IrExpr:
         """Lower a nullary constructor reference (value position) to an IrMake* node."""
-        typ = self._checked.node_types.get(ref_node_id)
-        return self._lower_constructor_from_type(typ, owner_name, variant, {}, span)
+        return self._lower_constructor_from_type(
+            self._constructor_result_type(ref_node_id), {}, span
+        )
 
     def _explicit_builtin_target_type(self, call_node: "Call") -> Type | None:
         """Look up ``print``/``render``'s optional explicit ``::[T]`` type argument.
@@ -2256,12 +2265,11 @@ class _Lowerer:
         """Report whether *method* belongs to the canonical ``Session`` receiver."""
         receiver = method.signature.params[0]
         session_type = BUILTIN_PRELUDE_TYPES["Session"]
-        return (
-            method.is_builtin
-            and isinstance(receiver, RecordType)
-            and isinstance(session_type, RecordType)
-            and receiver.decl_id == session_type.decl_id
-        )
+        if not method.is_builtin or not isinstance(receiver, RecordType):
+            return False
+        if isinstance(session_type, RecordType) and receiver.decl_id == session_type.decl_id:
+            return True
+        return method.module_id == STD_CORE_ID and method.scope_path == ("Session",)
 
     def _lower_session_method_call(
         self, call_node: Call, method: MethodDef, span: SourceSpan
@@ -2298,7 +2306,7 @@ class _Lowerer:
         """Lower a Call node.
 
         Constructor calls (VarRef callee resolving to a constructor) are lowered
-        to IrMakeRecord/IrMakeEnum/IrMakeException.  Direct user function
+        to IrMakeRecord/IrMakeException. Direct user function
         calls are lowered to IrDirectCall.  Lambda calls are lowered to IrMakeClosure,
         indirect calls to IrIndirectCall, and host builtins to
         IrPrint/IrRenderValue/IrParseJson/IrCopyValue/IrAsk/
@@ -2323,7 +2331,7 @@ class _Lowerer:
         if builtin_kind is not None:
             if isinstance(callee, FieldAccess):
                 method = self._checked.method_selection_for(callee.node_id)
-                if method is not None and method.is_builtin:
+                if method is None or method.is_builtin:
                     return self._lower_builtin_call(
                         builtin_kind,
                         call_node,
@@ -2346,22 +2354,9 @@ class _Lowerer:
         if isinstance(callee, VarRef):
             cref = self._checked.constructor_ref_for(callee.node_id)
             if cref is not None:
-                return self._lower_named_constructor_call(
-                    nid,
-                    cref.owner_name,
-                    cref.variant,
-                    span,
-                )
-            # (b) VarRef callee resolving via BinderKind.constructor_binding.
+                return self._lower_named_constructor_call(nid, span)
+            # (b) Direct user function call
             callee_ref = self._checked.binding_for(callee.node_id)
-            if callee_ref is not None and callee_ref.kind is BinderKind.constructor_binding:
-                return self._lower_named_constructor_call(
-                    nid,
-                    callee.name,
-                    None,
-                    span,
-                )
-            # (c) Direct user function call
             if callee_ref is not None and callee_ref.kind is BinderKind.function_binding:
                 return self._lower_direct_call(call_node, callee_ref, nid, span)
 
@@ -2504,8 +2499,6 @@ class _Lowerer:
     def _lower_named_constructor_call(
         self,
         result_node_id: int,
-        owner_name: str,
-        variant: str | None,
         span: "SourceSpan",
     ) -> IrExpr:
         """Lower a constructor call to an IrMake* node.
@@ -2513,53 +2506,36 @@ class _Lowerer:
         Reuses the field→expr binding the checker already computed (never re-binds),
         then builds the Ir node via ``_lower_constructor_from_type``.
         """
-        typ = self._checked.node_types.get(result_node_id)
+        typ = self._node_type(result_node_id)
         arg_exprs = self._checked.argument_bindings.constructor_calls[result_node_id]
-        return self._lower_constructor_from_type(typ, owner_name, variant, arg_exprs, span)
+        return self._lower_constructor_from_type(typ, arg_exprs, span)
 
     def _lower_constructor_from_type(
         self,
-        typ: "Type | None",
-        owner_name: str,
-        variant: str | None,
+        typ: Type,
         arg_exprs: "dict[str, Expr]",
         span: "SourceSpan",
     ) -> IrExpr:
         """Build the IrMake* node for a constructor given its resolved checker type."""
-        if typ is None:
-            owner_typ = self._checked.type_env.get_type(owner_name)  # pragma: no cover
-            if owner_typ is not None:  # pragma: no cover
-                return self._lower_constructor_from_type(  # pragma: no cover
-                    owner_typ, owner_name, variant, arg_exprs, span
-                )
         arg_slots = {
             fname: self.lower_coerced(expr, field_type)
-            for fname, field_type in self._constructor_field_types(typ, variant).items()
+            for fname, field_type in self._constructor_field_types(typ).items()
             if (expr := arg_exprs.get(fname)) is not None
         }
-        return self._lower_constructor_from_slots(typ, owner_name, variant, arg_slots, span)
+        return self._lower_constructor_from_slots(typ, arg_slots, span)
 
-    def _constructor_field_types(
-        self,
-        typ: Type | None,
-        variant: str | None,
-    ) -> dict[str, Type]:
+    def _constructor_field_types(self, typ: Type) -> dict[str, Type]:
         if isinstance(typ, RecordType):
             return dict(self._type_table.record_fields(typ))
         if isinstance(typ, ExceptionType):
             return dict(self._type_table.exception_fields(typ))
-        if isinstance(typ, EnumType):
-            assert variant is not None, "compiler bug: enum constructor must have variant"
-            return dict(self._type_table.enum_variants(typ).get(variant, {}))
         raise AssertionError(  # pragma: no cover
             "compiler bug: constructor field types require a constructor type"
         )
 
     def _lower_constructor_from_slots(
         self,
-        typ: "Type | None",
-        owner_name: str,
-        variant: str | None,
+        typ: Type,
         arg_slots: "dict[str, IrExpr]",
         span: "SourceSpan",
     ) -> IrExpr:
@@ -2592,22 +2568,7 @@ class _Lowerer:
                 fields=exc_fields,
             )
 
-        if isinstance(typ, EnumType):
-            assert variant is not None, "compiler bug: enum constructor must have variant"
-            nominal = NominalId(typ.decl_id)
-            variant_fields = self._type_table.enum_variants(typ).get(variant, {})
-            enum_fields = tuple((fname, arg_slots[fname]) for fname in variant_fields)
-            return IrMakeEnum(
-                location=loc,
-                nominal=nominal,
-                display_name="::".join((*typ.scope_path, typ.name)),
-                variant=variant,
-                fields=enum_fields,
-            )
-
-        raise AssertionError(  # pragma: no cover
-            f"compiler bug: cannot determine constructor type for {owner_name!r}"
-        )
+        raise AssertionError("compiler bug: cannot determine constructor type")  # pragma: no cover
 
     # ------------------------------------------------------------------
     # Partial call lowering
@@ -2717,11 +2678,20 @@ class _Lowerer:
         capture_symbols: dict[int, SymbolId],
         param_symbols: tuple[SymbolId, ...],
     ) -> IrExpr:
-        owner_name, variant = self._partial_constructor_owner(call_node)
         partial_type = self._node_type(call_node.node_id)
         assert isinstance(partial_type, FunctionType)
         result_type = partial_type.result
-        field_types = self._constructor_field_types(result_type, variant)
+        if isinstance(result_type, EnumType):
+            constructor_ref = self._checked.constructor_ref_for(call_node.callee.node_id)
+            assert constructor_ref is not None, (
+                "compiler bug: partial constructor lost its selection"
+            )
+            member = self._checked.type_env.type_table.enum_member_by_decl(
+                result_type, constructor_ref.owner_decl_node_id
+            )
+            assert member is not None
+            result_type = member
+        field_types = self._constructor_field_types(result_type)
         binding_by_name = self._checked.argument_bindings.constructor_calls[call_node.node_id]
         field_order = tuple(binding_by_name)
         binding = tuple(binding_by_name[field_name] for field_name in field_order)
@@ -2735,23 +2705,7 @@ class _Lowerer:
             span=span,
         )
         arg_slots = {field_name: cast(IrExpr, slot) for field_name, slot in zip(field_order, slots)}
-        return self._lower_constructor_from_slots(
-            result_type,
-            owner_name,
-            variant,
-            arg_slots,
-            span,
-        )
-
-    def _partial_constructor_owner(self, call_node: Call) -> tuple[str, str | None]:
-        callee = call_node.callee
-        assert isinstance(callee, VarRef)
-        cref = self._checked.constructor_ref_for(callee.node_id)
-        if cref is not None:
-            return cref.owner_name, cref.variant
-        callee_ref = self._checked.binding_for(callee.node_id)
-        assert callee_ref is not None
-        return callee_ref.name, None
+        return self._lower_constructor_from_slots(result_type, arg_slots, span)
 
     def _make_partial_closure(
         self,
@@ -3131,15 +3085,10 @@ class _Lowerer:
             return symbol
 
         def case_key(constructor: Constructor) -> IrCaseKey:
-            if isinstance(constructor, EnumConstructor):
-                return IrEnumCaseKey(
-                    NominalId(constructor.enum_type.decl_id),
-                    constructor.variant,
-                )
+            if isinstance(constructor, NominalConstructor):
+                return IrNominalCaseKey(NominalId(constructor.record_type.decl_id))
             if isinstance(constructor, BoolConstructor):
                 return IrLiteralCaseKey(IrLiteralKind.BOOL, constructor.value)
-            if isinstance(constructor, RecordConstructor):
-                raise AssertionError("compiler bug: records must lower through DecisionDecompose")
             if constructor.kind is LiteralKind.NUMERIC:
                 assert isinstance(constructor.value, decimal.Decimal)
                 return IrLiteralCaseKey(IrLiteralKind.NUMERIC, constructor.value)
@@ -3159,7 +3108,7 @@ class _Lowerer:
 
         def demanded_children(
             parent: OccurrenceId,
-            constructor: EnumConstructor | RecordConstructor,
+            constructor: NominalConstructor,
             demanded: tuple[OccurrenceId, ...],
         ) -> tuple[Occurrence, ...]:
             """Return demanded child occurrences in stable declaration order."""
@@ -3170,15 +3119,11 @@ class _Lowerer:
 
         def projection_bindings(
             parent: OccurrenceId,
-            constructor: EnumConstructor | RecordConstructor,
+            constructor: NominalConstructor,
             demanded: tuple[OccurrenceId, ...],
         ) -> tuple[IrBind, ...]:
             """Project demanded nominal fields into their occurrence symbols."""
-            nominal = (
-                NominalId(constructor.enum_type.decl_id)
-                if isinstance(constructor, EnumConstructor)
-                else NominalId(constructor.record_type.decl_id)
-            )
+            nominal = NominalId(constructor.record_type.decl_id)
             return tuple(
                 IrBind(
                     location,
@@ -3233,7 +3178,7 @@ class _Lowerer:
                 for decision_branch in decision.keyed_children:
                     constructor = decision_branch.constructor
                     branch_child = decision_branch.decision
-                    if isinstance(constructor, (EnumConstructor, RecordConstructor)):
+                    if isinstance(constructor, NominalConstructor):
                         field_bindings = tuple(
                             (occurrence.provenance.field_name, symbol_for_occurrence(occurrence.id))
                             for occurrence in demanded_children(
@@ -3292,14 +3237,27 @@ class _Lowerer:
         # 1. Evaluate the prompt (first positional arg).
         prompt_ir = self.lower_expr(call_node.args[0])
 
+        # A free call may select an explicit agent through its named argument.
+        # Preserve that one-shot route; only an agent-less free ``ask`` uses
+        # the persistent default session.
+        if agent is None:
+            named_agent = next(
+                (argument.value for argument in call_node.named_args if argument.name == "agent"),
+                None,
+            )
+            if named_agent is not None:
+                agent = self.lower_expr(named_agent)
+                session = None
+
         # ask-request neither dispatches nor parses output — it builds an
         # AgentRequest whose contract fields are fixed constants — so it needs
         # neither a retry count nor an output contract, and steps 3 and 4 below
         # apply to ``ask`` alone.
         if is_request:
             assert session is None, "compiler bug: Session ask cannot build an agent request"
-            assert agent is None, "compiler bug: Agent ask cannot build an agent request"
-            return IrAskRequest(location=loc, prompt=prompt_ir)
+            if agent is None:
+                agent = IrBuiltinLoad(location=loc, key="default-agent")
+            return IrAskRequest(location=loc, agent=agent, prompt=prompt_ir)
 
         # 3. Determine max_attempts from the on_parse_error named arg.
         max_attempts = self._extract_max_attempts(call_node)

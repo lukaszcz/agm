@@ -15,6 +15,13 @@ The resolver applies lexical visibility for bindings and resolves qualified
 chains through local scope paths and imported module routes. Ambiguous bare or
 qualified routes are static errors.
 
+Inline enum members are nominal record declarations beneath their owning enum
+scope. Scope resolution gives each local, imported, built-in, or REPL-retained
+constructor a canonical `ConstructorRef` for that record declaration. The
+reference carries module, scope path, terminal name, and declaration identity
+separately; display spellings are never used as identity. Patterns and `is`
+tests retain candidate sets when their matched enum type must select the member.
+
 ## Imports and `use`
 
 `scope/imports.py` builds contribution environments for import declarations.
@@ -38,6 +45,8 @@ trailing alias names that route or one of its ordinary members,
 including a scope route exposed by an earlier `use`; imported `use` surfaces retain every filtered
 member and scope-route candidate on the owning lexical region, so colliding renamed routes remain
 ambiguous when subsequently used and selective bare imports cannot expose unselected nested scopes.
+Type aliases follow targets through the import environment of the module that declared the alias, so
+consumers select the same constructor even when that target is module-qualified or a referenced enum member.
 The module's qualified route remains complete. Incremental replay falls back to that route only when
 the retained use target is no longer nameable through the current import spelling. `use` does not
 create a module-loading edge. Bare import-tail and `use` routes at the same region are
@@ -48,14 +57,10 @@ namespace it contributes, so a type-only use does not hide an outer value.
 Region-scoped bare contributions apply within that region and its nested regions,
 while imports still make their qualified routes available to the module.
 
-Scope resolution also classifies declarations, bindings, constructors,
-built-ins, and type-scoped statics for typecheck; the static candidates it
-records come from the canonical prelude path, so an unrelated same-named user
-scope neither shadows them nor loses its own qualified construction.
-Ambiguous bare constructor spellings in patterns and `is` tests remain
-candidate sets; typecheck selects them using the matched nominal type. It
-records each `use` target's semantic local path or imported routes so
-incremental hosts retain target identity without re-deriving it from syntax. It publishes resolved program artifacts rather than rewriting
+Scope resolution also classifies declarations, bindings, constructors, and
+built-ins for typecheck. It records each `use` target's semantic local path or
+imported routes so incremental hosts retain target identity without re-deriving
+it from syntax. It publishes resolved program artifacts rather than rewriting
 source nodes.
 
 ## Code Entry Points

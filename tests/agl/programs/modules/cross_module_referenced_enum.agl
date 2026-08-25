@@ -1,0 +1,9 @@
+import library
+
+enum Local = library::Shared
+
+program def main() -> unit =
+  let shared: Local = library::Shared(value = 3)
+  let result = case shared of
+    | Shared(value) => value
+  print result

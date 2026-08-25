@@ -18,6 +18,7 @@ from agm.agl.runtime.request import (
 )
 from agm.agl.runtime.sessions import (
     AgentDispatcherSessionHost,
+    SessionAgentError,
     SessionAskError,
     SessionHostError,
     SessionSnapshot,
@@ -196,6 +197,20 @@ def test_dispatcher_session_host_snapshots_its_default_and_preserves_requests() 
 
 def _run(source: str, host: _Host) -> RunResult:
     return PipelineDriver(session_host=host).run(source)
+
+
+def test_agent_method_maps_session_agent_errors_to_agent_call_errors() -> None:
+    class InvalidAgentHost(_Host):
+        def open(self, agent: EnumValue, transport: str, *, name: str = "") -> str:
+            raise SessionAgentError("invalid agent", "open")
+
+    result = _run(
+        'program def main() -> unit =\n  let r: text = AgentCommand("bad").ask("prompt")\n  ()',
+        InvalidAgentHost(),
+    )
+
+    assert result.error is not None
+    assert result.error.type_name == "AgentCallError"
 
 
 def test_open_ask_copy_and_lifecycle_operations_reach_their_session() -> None:

@@ -14,7 +14,7 @@ def sum_tree(t: Tree) -> int =
     | Node(value, left, right) => value + sum_tree(left) + sum_tree(right)
 
 program def main() -> unit =
-  let builder = AgentCommand("builder")
+  let builder: Agent = AgentCommand("builder")
   try
     let t: Tree = builder.ask("Build a tree.", on_parse_error = Retry(n = 1))
     print sum_tree(t)

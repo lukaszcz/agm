@@ -26,7 +26,6 @@ from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
     COMPATIBILITY_PRELUDE_TYPE_NAMES,
-    HOST_MINTED_PRELUDE_TYPE_NAMES,
     BoolType,
     BottomType,
     DecimalType,
@@ -84,6 +83,8 @@ def _literal_for_type(typ: Type) -> str:
         return "None"
     if isinstance(typ, EnumType) and typ.name == "Agent":
         return 'AgentCommand("x")'
+    if isinstance(typ, EnumType) and typ.name == "SessionTransport":
+        return "SessionTransport::Cli"
     raise AssertionError(f"no test literal for {typ!r}")
 
 
@@ -129,13 +130,27 @@ class TestPersistence:
     def test_builtin_agent_method_is_callable_across_entries(self) -> None:
         agent = CountingAgent("42")
         session = ReplSession(agent_dispatcher=agent)
-        assert session.eval_entry('let worker = AgentCommand("worker")').ok
+        assert session.eval_entry('let worker: Agent = AgentCommand("worker")').ok
 
         result = session.eval_entry('worker.ask::[int]("How many?")')
 
         assert result.ok, result.diagnostics
         assert result.value == IntValue(42)
         assert agent.calls == 1
+
+    def test_shell_timeout_seed_matches_loaded_option_members(self) -> None:
+        """A REPL timeout seed remains matchable after loading ``std/core``."""
+        session = ReplSession(shell_exec_timeout=2.0)
+
+        result = session.eval_entry(
+            "import std/config\n"
+            "case std/config::timeout of\n"
+            "  | Some(value) => value\n"
+            '  | None => "disabled"\n'
+        )
+
+        assert result.ok, result.diagnostics
+        assert result.value == TextValue("2.0s")
 
     def test_method_declared_after_its_type_is_callable_in_a_later_entry(self) -> None:
         session = ReplSession()
@@ -959,6 +974,91 @@ class TestCrossEntryScopeCollision:
         assert any("not a member of 'A::B'" in d.message for d in result.diagnostics)
 
 
+class TestBareConstructorVisibilityAcrossEntries:
+    """A declaration's bare-name reach must not depend on the entry boundary.
+
+    Whether a constructor spelling is usable unqualified is decided once, by
+    where and how it was declared -- never by whether the reference happens
+    to land in the same REPL entry as the declaration or a later one.
+    """
+
+    def test_record_in_a_named_scope_is_not_bare_across_entries(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope S\nrecord Inner(v: int)\nend S").ok
+
+        bare = s.eval_entry("Inner(v = 1)")
+        qualified = s.eval_entry("S::Inner(v = 1)")
+
+        assert not bare.ok
+        assert qualified.ok, qualified.diagnostics
+
+    def test_record_in_a_named_scope_is_not_bare_within_one_entry(self) -> None:
+        s = ReplSession()
+
+        result = s.eval_entry("scope S\nrecord Inner(v: int)\nend S\nInner(v = 1)")
+
+        assert not result.ok
+
+    def test_constructible_alias_in_a_named_scope_is_not_bare_across_entries(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope S\nrecord Inner(v: int)\ntype Wrap = Inner\nend S").ok
+
+        bare = s.eval_entry("Wrap(v = 1)")
+        qualified = s.eval_entry("S::Wrap(v = 1)")
+
+        assert not bare.ok
+        assert qualified.ok, qualified.diagnostics
+
+    def test_constructible_alias_in_a_named_scope_is_not_bare_within_one_entry(self) -> None:
+        s = ReplSession()
+
+        result = s.eval_entry(
+            "scope S\nrecord Inner(v: int)\ntype Wrap = Inner\nend S\nWrap(v = 1)"
+        )
+
+        assert not result.ok
+
+    def test_root_enum_inline_member_stays_bare_across_entries(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("enum E\n  | Foo(v: int)").ok
+
+        bare = s.eval_entry("Foo(v = 1)")
+
+        assert bare.ok, bare.diagnostics
+        assert isinstance(bare.value, RecordValue)
+        assert bare.value.fields["v"] == IntValue(1)
+
+    def test_root_enum_inline_member_stays_bare_within_one_entry(self) -> None:
+        s = ReplSession()
+
+        result = s.eval_entry("enum E\n  | Foo(v: int)\nFoo(v = 1)")
+
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value, RecordValue)
+        assert result.value.fields["v"] == IntValue(1)
+
+    def test_root_enum_reference_to_a_scoped_record_stays_bare_across_entries(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope M\nrecord Go(amount: int)\nend M\nenum Step\n  | M::Go").ok
+
+        bare = s.eval_entry("Go(amount = 1)")
+
+        assert bare.ok, bare.diagnostics
+        assert isinstance(bare.value, RecordValue)
+        assert bare.value.fields["amount"] == IntValue(1)
+
+    def test_root_enum_reference_to_a_scoped_record_stays_bare_within_one_entry(self) -> None:
+        s = ReplSession()
+
+        result = s.eval_entry(
+            "scope M\nrecord Go(amount: int)\nend M\nenum Step\n  | M::Go\nGo(amount = 1)"
+        )
+
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value, RecordValue)
+        assert result.value.fields["amount"] == IntValue(1)
+
+
 # ---------------------------------------------------------------------------
 # Standard library
 # ---------------------------------------------------------------------------
@@ -977,7 +1077,7 @@ class TestStdlib:
     def test_type_of_uses_implicit_core_import(self) -> None:
         s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
 
-        assert "Option[int]" in s.type_of("Some(value = 1)")
+        assert "Option::Some[int]" in s.type_of("Some(value = 1)")
 
     def test_retained_explicit_core_import_suppresses_later_preludes(self) -> None:
         s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
@@ -1031,9 +1131,10 @@ class TestStdlib:
 
     def test_all_public_builtin_prelude_constructors_are_available(self) -> None:
         s = ReplSession()
+        table = create_seeded_type_table()
 
         for name, typ in BUILTIN_PRELUDE_TYPES.items():
-            if name in COMPATIBILITY_PRELUDE_TYPE_NAMES | HOST_MINTED_PRELUDE_TYPE_NAMES:
+            if name in COMPATIBILITY_PRELUDE_TYPE_NAMES | {"Session"}:
                 continue
             typedef = BUILTIN_PRELUDE_TYPE_DEFS[name]
             if isinstance(typ, RecordType):
@@ -1042,13 +1143,14 @@ class TestStdlib:
                 assert result.value_type is not None
                 assert result.value_type.name == name
             elif isinstance(typ, EnumType):
-                for variant, fields in typedef.variants:
-                    args = _constructor_args(dict(fields))
+                for member in typedef.members:
+                    variant = member.name
+                    args = _constructor_args(dict(table.record_fields(member)))
                     call = f"{name}::{variant}({args})" if args else f"{name}::{variant}"
                     result = s.eval_entry(call)
                     assert result.ok, (name, variant, result.diagnostics)
                     assert result.value_type is not None
-                    assert result.value_type.name == name
+                    assert result.value_type.name == variant
 
     def test_all_concrete_builtin_exceptions_are_available(self) -> None:
         s = ReplSession()
@@ -1082,6 +1184,7 @@ _AGENT_VARIANTS = (
 )
 
 _AGENT_REQUEST_FIELDS = (
+    "  agent: Agent\n"
     "  prompt: text\n"
     "  target_type: Option[text]\n"
     "  format_instructions: Option[text]\n"
@@ -1517,8 +1620,8 @@ class TestBuiltinIdentityAcrossModules:
 
 # ---------------------------------------------------------------------------
 # Builtin identity for the other host-contract nominals: ``AgentRequest``
-# (``ask-request``'s result), ``Agent`` (the receiver of ``ask``), and
-# ``ParsePolicy`` (``on_parse_error``).
+# (``ask-request``'s result), ``Agent`` (the ``agent`` argument to
+# ``ask``/``ask-request``), and ``ParsePolicy`` (``on_parse_error``).
 #
 # Every one of these resolutions goes through a program's own ``builtin``
 # declaration of the name (``BuiltinCallChecker._builtin_contract_type``), so
@@ -1563,30 +1666,50 @@ class TestAgentRequestBuiltinIdentity:
         assert isinstance(result.value_type, RecordType)
         assert result.value_type.scope_path == ("A",)
 
-    def test_scoped_agent_does_not_affect_agent_request(self) -> None:
-        """An ``Agent`` redeclaration is irrelevant to agent-independent requests."""
+    def test_scoped_agent_and_agent_request_declared_together_with_agent_omitted_rejected(
+        self,
+    ) -> None:
+        """Both ``Agent`` and ``AgentRequest`` declared together at the same
+        scope, with the ``agent`` argument OMITTED entirely: the host still
+        fills the field from the canonical default agent regardless, into a
+        field statically typed as this scope's own ``Agent`` -- the contract
+        is incoherent whether or not a value is explicitly supplied for the
+        argument that field holds."""
         s = ReplSession()
-        declare = s.eval_entry(f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}end A\n")
-        assert declare.ok, declare.diagnostics
-
-        result = s.eval_entry('let q = ask-request("hi")')
-        assert result.ok, result.diagnostics
-        assert isinstance(result.value_type, RecordType)
-        assert result.value_type.scope_path == ()
-
-    def test_root_agent_request_with_custom_option_without_stdlib_is_rejected(self) -> None:
-        """A host request cannot populate a program-defined ``Option`` field."""
-        s = ReplSession(default_stdlib=False)
         declare = s.eval_entry(
-            f"{_OPTION_DECL}"
-            f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}"
-            "builtin def ask-request(prompt: text) -> AgentRequest\n"
+            f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}"
+            f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}end A\n"
         )
         assert declare.ok, declare.diagnostics
 
         result = s.eval_entry('let q = ask-request("hi")')
         assert not result.ok
-        assert any("target_type" in d.message for d in result.diagnostics)
+        assert any("AgentRequest" in d.message and "agent" in d.message for d in result.diagnostics)
+
+    def test_root_agent_request_declared_without_stdlib_rejected_as_incoherent(self) -> None:
+        """Without the standard library, a root ``AgentRequest`` whose own
+        ``agent`` field types to this program's own root ``Agent`` (the only
+        ``Agent`` there is here, since nothing seeds a canonical one without
+        the standard library) is an incoherent contract: the host always
+        fills that field with the standard ``Agent`` identity, never
+        whatever declaration the contract's own field type happens to name,
+        so the call is rejected rather than minting a value whose identity
+        disagrees with its static field type."""
+        s = ReplSession(default_stdlib=False)
+        declare = s.eval_entry(
+            f"{_OPTION_DECL}"
+            f"builtin\nenum Agent\n{_AGENT_VARIANTS}"
+            f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}"
+            "builtin def ask-request(prompt: text) -> AgentRequest\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        # No standard library, so ``std/config::default-agent`` -- the
+        # ``agent`` parameter's canonical default -- was never declared;
+        # supplying ``agent`` explicitly is unrelated to the fix under test.
+        result = s.eval_entry('let q = ask-request("hi", agent = AgentCommand(command = "noop"))')
+        assert not result.ok
+        assert any("AgentRequest" in d.message and "agent" in d.message for d in result.diagnostics)
 
     def test_ask_request_without_named_program_syntax_types_as_canonical_agent_request(
         self,
@@ -1624,20 +1747,41 @@ class TestAgentRequestBuiltinIdentity:
         assert field.value == TextValue("hi")
 
 
-class TestAgentBuiltinIdentity:
-    """The ``Agent`` receiver of ``Agent::ask`` and request independence."""
+class TestAgentArgumentBuiltinIdentity:
+    """The ``agent`` argument to ``ask``/``ask-request``
+    (``BuiltinCallChecker._validate_ask_like_arguments``)."""
 
-    def test_scoped_agent_value_does_not_affect_ask_request(self) -> None:
-        """A request does not read a program-defined ``Agent`` value."""
+    def test_scoped_agent_value_rejected_as_ask_request_agent_argument(self) -> None:
+        """A value of the program's own scoped ``Agent`` is rejected as the
+        ``agent`` argument to ``ask-request``.
+
+        Only ``Agent`` is redeclared here (matching the reported repro
+        exactly), not ``AgentRequest``, so ``AgentRequest``'s own ``agent``
+        field keeps its canonical (root) static field type: the value's
+        differently-scoped ``Agent`` is an ordinary static type mismatch
+        against it, restoring the clean, pre-existing diagnostic instead of
+        the internal crash that accepting the mismatched value used to lead
+        to at evaluation.
+        """
         s = ReplSession()
         declare = s.eval_entry(f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}end A\n")
         assert declare.ok, declare.diagnostics
 
-        result = s.eval_entry('let q = ask-request("hi")')
-        assert result.ok, result.diagnostics
+        g = s.eval_entry('let g = A::Agent::AgentCommand("echo")')
+        assert g.ok, g.diagnostics
 
-    def test_scoped_agent_and_agent_request_mint_consistently(self) -> None:
-        """A sibling ``Agent`` does not affect a request's canonical Option fields."""
+        result = s.eval_entry('let q = ask-request("hi", agent = g)')
+        assert not result.ok
+        assert any("A::Agent" in d.message for d in result.diagnostics)
+
+    def test_scoped_agent_and_agent_request_declared_together_rejected_as_incoherent(
+        self,
+    ) -> None:
+        """A program that redeclares BOTH ``Agent`` and ``AgentRequest`` at
+        the same scope gets an incoherent contract: ``AgentRequest.agent``
+        resolves to that same scoped ``Agent``, not the standard identity the
+        host actually fills the field with, so the call is rejected rather
+        than minting a field whose static type disagrees with its value."""
         s = ReplSession()
         declare = s.eval_entry(
             f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}"
@@ -1645,14 +1789,16 @@ class TestAgentBuiltinIdentity:
         )
         assert declare.ok, declare.diagnostics
 
-        result = s.eval_entry('let q = ask-request("hi")')
-        assert result.ok, result.diagnostics
-        assert isinstance(result.value_type, RecordType)
-        assert result.value_type.scope_path == ("A",)
+        g = s.eval_entry('let g = A::Agent::AgentCommand("echo")')
+        assert g.ok, g.diagnostics
 
-    def test_scoped_agent_value_rejected_as_agent_ask_receiver(self) -> None:
-        """``Agent::ask`` shares ``_validate_ask_like_arguments`` with
-        ``ask-request``, so it rejects the same scoped ``Agent`` value; checked
+        result = s.eval_entry('let q = ask-request("hi", agent = g)')
+        assert not result.ok
+        assert any("AgentRequest" in d.message and "agent" in d.message for d in result.diagnostics)
+
+    def test_scoped_agent_value_rejected_as_ask_agent_argument(self) -> None:
+        """``ask`` shares ``_validate_ask_like_arguments`` with ``ask-request``,
+        so it rejects the same scoped ``Agent`` value the same way; checked
         only (an actual agent dispatch is out of scope here)."""
         s = ReplSession()
         declare = s.eval_entry(f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}end A\n")
@@ -1661,11 +1807,15 @@ class TestAgentBuiltinIdentity:
         g = s.eval_entry('let g = A::Agent::AgentCommand("echo")')
         assert g.ok, g.diagnostics
 
-        result = s.eval_entry('g.ask("hi")', check_only=True)
+        result = s.eval_entry('ask("hi", agent = g)', check_only=True)
         assert not result.ok
-        assert result.diagnostics
+        assert any("A::Agent" in d.message for d in result.diagnostics)
 
-    def test_root_agent_value_without_stdlib_does_not_affect_ask_request(self) -> None:
+    def test_root_agent_value_without_stdlib_rejected_as_ask_request_agent_argument(self) -> None:
+        """Without the standard library, a root ``AgentRequest`` whose own
+        ``agent`` field types to this program's own root ``Agent`` is
+        incoherent regardless of which value is supplied for ``agent``: the
+        contract itself is rejected before its argument is even checked."""
         s = ReplSession(default_stdlib=False)
         declare = s.eval_entry(
             f"{_OPTION_DECL}"
@@ -1678,12 +1828,14 @@ class TestAgentBuiltinIdentity:
         g = s.eval_entry('let g = AgentClaude("sonnet", "medium")')
         assert g.ok, g.diagnostics
 
-        result = s.eval_entry('let q = ask-request("hi")')
+        result = s.eval_entry('let q = ask-request("hi", agent = g)')
         assert not result.ok
-        assert any("target_type" in diagnostic.message for diagnostic in result.diagnostics)
+        assert any("AgentRequest" in d.message and "agent" in d.message for d in result.diagnostics)
 
-    def test_ask_request_rejects_agent_argument(self) -> None:
-        """The free request builder accepts no agent-selection argument."""
+    def test_unrelated_value_is_still_rejected_as_the_agent_argument(self) -> None:
+        """Regression: passing a value of an unrelated type as ``agent`` is
+        still a static rejection -- the shape-mismatch direction of this fix,
+        confirmed with the program's own scoped ``Agent`` also live."""
         s = ReplSession()
         declare = s.eval_entry(f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}end A\n")
         assert declare.ok, declare.diagnostics
@@ -1693,12 +1845,17 @@ class TestAgentBuiltinIdentity:
 
         result = s.eval_entry('ask-request("hi", agent = NotAgent::X)', check_only=True)
         assert not result.ok
-        assert result.diagnostics
+        assert any("NotAgent" in d.message for d in result.diagnostics)
 
-    def test_agent_declared_in_an_imported_library_module_does_not_affect_ask_request(
+    def test_agent_declared_in_an_imported_library_module_rejected_as_agent_argument(
         self, tmp_path: Path
     ) -> None:
-        """A library's ``Agent`` declaration does not select a request agent."""
+        """Only ``Agent`` is declared by the library module here (not
+        ``AgentRequest``), so -- as in
+        ``test_scoped_agent_value_rejected_as_ask_request_agent_argument``
+        above -- the value's own (differently-scoped) ``Agent`` is an
+        ordinary static type mismatch against ``AgentRequest``'s canonical
+        field type."""
         (tmp_path / "lib.agl").write_text(
             f"scope Lib\nbuiltin enum Agent\n{_AGENT_VARIANTS}end Lib\n"
         )
@@ -1706,22 +1863,46 @@ class TestAgentBuiltinIdentity:
         declare = s.eval_entry("import lib")
         assert declare.ok, declare.diagnostics
 
-        result = s.eval_entry('let q = ask-request("hi")')
+        g = s.eval_entry('let g = lib::Lib::Agent::AgentCommand("echo")')
+        assert g.ok, g.diagnostics
+
+        result = s.eval_entry('let q = ask-request("hi", agent = g)')
+        assert not result.ok
+        assert any("Lib::Agent" in d.message for d in result.diagnostics)
+
+    def test_scoped_agent_receiver_rejected_as_ask_request_receiver(self) -> None:
+        """The receiver of ``x.ask-request(...)`` IS the agent the host stores
+        in ``AgentRequest.agent``, so it is held to the same identity
+        requirement as the ``agent`` named argument. Reaching evaluation with
+        a differently-scoped ``Agent`` receiver instead mints a request whose
+        ``agent`` field value disagrees with its static type, which an
+        exhaustive ``case q.agent of`` then cannot dispatch."""
+        s = ReplSession()
+        declare = s.eval_entry(
+            f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}"
+            "builtin def Agent::ask-request(self, prompt: text) -> AgentRequest\n"
+            "end A\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        g = s.eval_entry('let g: A::Agent = A::Agent::AgentCommand("echo")')
+        assert g.ok, g.diagnostics
+
+        result = s.eval_entry('let q = g.ask-request("hi")')
+        assert not result.ok
+        assert any("A::Agent" in d.message for d in result.diagnostics)
+
+    def test_canonical_agent_receiver_still_builds_a_request(self) -> None:
+        """Regression: the ordinary receiver form still works and still mints
+        a request whose ``agent`` field is readable."""
+        s = ReplSession()
+        result = s.eval_entry(
+            'let agent: Agent = AgentCommand("echo")\nlet q = agent.ask-request("hi")'
+        )
         assert result.ok, result.diagnostics
-
-    def test_agent_ask_request_receiver_is_rejected(self) -> None:
-        """``ask-request`` has no Agent receiver form."""
-        s = ReplSession()
-        result = s.eval_entry('let q = AgentCommand("echo").ask-request("hi")')
-        assert not result.ok
-        assert result.diagnostics
-
-    def test_agent_ask_request_member_value_is_rejected(self) -> None:
-        """The removed Agent method cannot be used as a first-class value."""
-        s = ReplSession()
-        result = s.eval_entry('let q = AgentCommand("echo").ask-request')
-        assert not result.ok
-        assert result.diagnostics
+        field = s.eval_entry("q.prompt")
+        assert field.ok, field.diagnostics
+        assert field.value == TextValue("hi")
 
 
 class TestHostRaisedExceptionContractIdentity:
@@ -1990,11 +2171,120 @@ enum Agent
         fresh = session.eval_entry('AgentCommand(command = "echo hello")')
 
         assert stale.ok, stale.diagnostics
-        assert isinstance(stale.value_type, EnumType)
-        assert stale.value_type.name == "Agent"
+        assert isinstance(stale.value_type, RecordType)
+        assert stale.value_type.name == "AgentClaude"
         assert fresh.ok, fresh.diagnostics
-        assert isinstance(fresh.value_type, EnumType)
-        assert fresh.value_type.name == "Agent"
+        assert isinstance(fresh.value_type, RecordType)
+        assert fresh.value_type.name == "AgentCommand"
+
+    def test_referenced_enum_keeps_its_original_record_member_after_record_supersession(
+        self,
+    ) -> None:
+        """A retained enum selects its member by handle, not its record's current name."""
+        session = ReplSession()
+        assert session.eval_entry("record R(old: int)").ok
+        assert session.eval_entry("type OldR = R").ok
+        assert session.eval_entry("enum E = ::R").ok
+        assert session.eval_entry("let old: E = R(old = 1)").ok
+        assert session.eval_entry("record R(fresh: text)").ok
+
+        matched = session.eval_entry("case old of\n  | R(old) => old")
+        tested = session.eval_entry("old is R")
+        narrowed = session.eval_entry("(old as OldR).old")
+        not_a_member = session.eval_entry('let fresh: E = R(fresh = "new")')
+
+        assert matched.ok, matched.diagnostics
+        assert matched.value == IntValue(1)
+        assert tested.ok, tested.diagnostics
+        assert tested.value == BoolValue(True)
+        assert narrowed.ok, narrowed.diagnostics
+        assert narrowed.value == IntValue(1)
+        assert not not_a_member.ok
+
+    def test_referenced_enum_does_not_match_a_redeclared_record_member(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("record R(old: int)").ok
+        assert session.eval_entry("enum E = ::R").ok
+        assert session.eval_entry("record R(fresh: text)").ok
+        assert session.eval_entry("enum F = ::R").ok
+        assert session.eval_entry('let fresh = R(fresh = "new")').ok
+
+        matched = session.eval_entry("case fresh of | E::R(fresh) => fresh")
+
+        assert not matched.ok
+
+    def test_referenced_generic_member_preserves_its_applied_field_for_json_casts(self) -> None:
+        """A referenced member applies the enum's arguments to its own fields."""
+        session = ReplSession()
+        assert session.eval_entry("record Box[A](value: A)").ok
+        assert session.eval_entry("enum Result[T] = ::Box[T]").ok
+        assert session.eval_entry("let box = Box(value = 1)").ok
+        assert session.eval_entry("let result: Result[int] = box").ok
+
+        encoded = session.eval_entry("let wire = result as json")
+        decoded = session.eval_entry("wire as Result[int]")
+
+        assert encoded.ok, encoded.diagnostics
+        assert decoded.ok, decoded.diagnostics
+        assert isinstance(decoded.value, RecordValue)
+        assert decoded.value.fields == {"value": IntValue(1)}
+
+    def test_enum_supersession_remints_inline_members_without_invalidating_old_ones(self) -> None:
+        """Old and new enum-member handles remain independently matchable and castable."""
+        session = ReplSession()
+        assert session.eval_entry("enum E\n  | A(old: int)").ok
+        assert session.eval_entry("type OldA = E::A").ok
+        assert session.eval_entry("let old: E = A(old = 1)").ok
+        assert session.eval_entry("enum E\n  | B(fresh: text)").ok
+        assert session.eval_entry('let new: E = B(fresh = "new")').ok
+
+        old_case = session.eval_entry("case old of\n  | A(old) => old")
+        old_is = session.eval_entry("old is A")
+        old_cast = session.eval_entry("(old as OldA).old")
+        new_case = session.eval_entry("case new of\n  | B(fresh) => fresh")
+        new_is = session.eval_entry("new is B")
+        new_cast = session.eval_entry("(new as E::B).fresh")
+        current_member_on_old_value = session.eval_entry("old as E::B")
+
+        assert old_case.ok, old_case.diagnostics
+        assert old_case.value == IntValue(1)
+        assert old_is.ok, old_is.diagnostics
+        assert old_is.value == BoolValue(True)
+        assert old_cast.ok, old_cast.diagnostics
+        assert old_cast.value == IntValue(1)
+        assert new_case.ok, new_case.diagnostics
+        assert new_case.value == TextValue("new")
+        assert new_is.ok, new_is.diagnostics
+        assert new_is.value == BoolValue(True)
+        assert new_cast.ok, new_cast.diagnostics
+        assert new_cast.value == TextValue("new")
+        assert not current_member_on_old_value.ok
+
+    def test_same_spelling_enum_member_supersession_keeps_old_and_new_identities_incompatible(
+        self,
+    ) -> None:
+        """A reused enum/member spelling never bridges its old and new identities."""
+        session = ReplSession()
+        assert session.eval_entry("enum E\n  | A(old: int)").ok
+        assert session.eval_entry("type OldE = E").ok
+        assert session.eval_entry("type OldA = E::A").ok
+        assert session.eval_entry("let old: OldE = E::A(old = 1)").ok
+        assert session.eval_entry("enum E\n  | A(fresh: text)").ok
+        assert session.eval_entry('let new: E = E::A(fresh = "new")').ok
+
+        old_to_new_cast = session.eval_entry("old as E::A")
+        new_to_old_cast = session.eval_entry("new as OldA")
+        old_to_new_assignment = session.eval_entry("let current: E = old")
+        new_to_old_assignment = session.eval_entry("let previous: OldE = new")
+        old_case_against_new_member = session.eval_entry("case old of\n  | E::A(fresh) => fresh")
+        new_case_against_old_member = session.eval_entry("case new of\n  | OldA(old) => old")
+
+        assert not old_to_new_cast.ok
+        assert not new_to_old_cast.ok
+        assert not old_to_new_assignment.ok
+        assert not new_to_old_assignment.ok
+        assert not old_case_against_new_member.ok
+        assert not new_case_against_old_member.ok
 
     def test_record_redefinition_clears_generic_metadata(self) -> None:
         s = ReplSession()
@@ -2087,6 +2377,18 @@ enum Agent
         assert nested.ok, nested.diagnostics
         assert isinstance(nested.value, RecordValue)
         assert nested.value.display_name == "Color::Meta"
+
+    def test_redeclaring_an_enum_retires_types_nested_under_an_old_member(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("enum Color | Old").ok
+        assert session.eval_entry("record Color::Old::Meta(value: int)").ok
+
+        assert session.eval_entry("enum Color | New").ok
+
+        retired = session.eval_entry("Color::Old::Meta(value = 1)")
+        fresh = session.eval_entry("Color::New")
+        assert not retired.ok
+        assert fresh.ok, fresh.diagnostics
 
     def test_redeclaring_a_used_enum_drops_its_stale_bare_variant(self) -> None:
         """A local use recorded before the enum is redeclared must not
@@ -2223,7 +2525,7 @@ class TestRecursiveTypesAcrossEntries:
         assert declare.ok
 
         build = s.eval_entry(
-            "let t = Node(value = 1, left = Leaf(), right = Node(value = 2, left = Leaf(), "
+            "let t: Tree = Node(value = 1, left = Leaf(), right = Node(value = 2, left = Leaf(), "
             "right = Leaf()))"
         )
         assert build.ok
@@ -2336,7 +2638,7 @@ class TestRecursiveTypesAcrossEntries:
     def test_enum_variant_on_an_old_typed_value_survives_redeclaration(self) -> None:
         s = ReplSession()
         assert s.eval_entry("enum Color\n  | Red(shade: int)\n  | Green").ok
-        assert s.eval_entry("let old = Color::Red(shade = 1)").ok
+        assert s.eval_entry("let old: Color = Color::Red(shade = 1)").ok
         assert s.eval_entry("enum Color\n  | Blue").ok
 
         old_match = s.eval_entry("case old of\n  | Red(shade) => shade\n  | Green() => 0")
@@ -2348,6 +2650,42 @@ class TestRecursiveTypesAcrossEntries:
         assert fresh.ok, fresh.diagnostics
         assert not cross_match.ok
 
+    def test_phantom_generic_member_on_a_retained_value_survives_enum_redeclaration(self) -> None:
+        """A fieldless member remains matchable without recovering its enum arguments."""
+        s = ReplSession()
+        assert s.eval_entry("enum E[T]\n  | A").ok
+        assert s.eval_entry("let old = A").ok
+        assert s.eval_entry("enum E[T]\n  | B").ok
+
+        matched = s.eval_entry("case old of\n  | A() => 1")
+
+        assert matched.ok, matched.diagnostics
+        assert matched.value == IntValue(1)
+
+    def test_superseded_enum_members_do_not_suggest_the_reused_enum_annotation(self) -> None:
+        """An old enum's members cannot be joined through its reused name."""
+        s = ReplSession()
+        assert s.eval_entry("enum Choice\n  | Yes\n  | No").ok
+
+        current = s.eval_entry("[Choice::Yes, Choice::No]", check_only=True)
+
+        assert not current.ok
+        assert any(
+            "annotate the literal with its enum type" in diagnostic.message.lower()
+            for diagnostic in current.diagnostics
+        )
+
+        assert s.eval_entry("let yes = Choice::Yes\nlet no = Choice::No").ok
+        assert s.eval_entry("enum Choice\n  | Maybe").ok
+
+        mismatch = s.eval_entry("[yes, no]", check_only=True)
+
+        assert not mismatch.ok
+        assert all(
+            "annotate the literal with its enum type" not in diagnostic.message.lower()
+            for diagnostic in mismatch.diagnostics
+        )
+
     def test_type_qualified_variant_pattern_names_the_newest_enum_declaration(self) -> None:
         """A qualifier is a type name, so it names the newest declaration.
 
@@ -2358,12 +2696,12 @@ class TestRecursiveTypesAcrossEntries:
         """
         s = ReplSession()
         assert s.eval_entry("enum E\n  | A(x: int)").ok
-        assert s.eval_entry("let old = E::A(x = 1)").ok
+        assert s.eval_entry("let old: E = E::A(x = 1)").ok
         assert s.eval_entry("enum E\n  | A(x: int)").ok
 
         bare = s.eval_entry("case old of\n  | A(x) => x")
         qualified = s.eval_entry("case old of\n  | E::A(x) => x")
-        fresh = s.eval_entry("case E::A(x = 2) of\n  | E::A(x) => x")
+        fresh = s.eval_entry("let fresh: E = E::A(x = 2)\ncase fresh of\n  | E::A(x) => x")
 
         assert bare.ok, bare.diagnostics
         assert bare.value == IntValue(1)
@@ -2431,6 +2769,35 @@ class TestEchoData:
         assert r.name is None
         assert r.value is not None and _int(r.value) == 12
         assert isinstance(r.value_type, IntType)
+
+    @pytest.mark.parametrize(
+        ("source", "rendered"),
+        (
+            ('Agent::AgentCommand("runner")', 'Agent::AgentCommand(\n  command = "runner"\n)'),
+            (
+                'Agent::AgentClaude("sonnet", "medium")',
+                'Agent::AgentClaude(\n  model = "sonnet",\n  thinking = "medium"\n)',
+            ),
+            (
+                'Agent::AgentCodex("o3", "high")',
+                'Agent::AgentCodex(\n  model = "o3",\n  thinking = "high"\n)',
+            ),
+            (
+                'Agent::AgentPi("openai", "gpt", "low")',
+                'Agent::AgentPi(\n  provider = "openai",\n  model = "gpt",\n  thinking = "low"\n)',
+            ),
+        ),
+    )
+    def test_qualified_builtin_agent_constructor_echoes_its_surface_form(
+        self, source: str, rendered: str
+    ) -> None:
+        """REPL echoes every qualified built-in Agent constructor unambiguously."""
+        from agm.agl.repl.render import render_entry_result
+
+        result = ReplSession().eval_entry(source)
+
+        assert result.ok, result.diagnostics
+        assert render_entry_result(result, echo=True) == rendered
 
     @pytest.mark.parametrize("binder", ("let", "var"))
     def test_trailing_binder_echoes_declared_value(self, binder: str) -> None:
@@ -2604,15 +2971,13 @@ class TestTypeOf:
         s.eval_entry("enum Result\n  | Ok(value: int)\n  | Err(message: text)\n  | Unknown")
         s.eval_entry("let r = Ok(value = 1)")
 
-        assert (
-            s.type_of("r") == "enum Result\n  | Ok(value: int)\n  | Err(message: text)\n  | Unknown"
-        )
+        assert s.type_of("r") == "record Result::Ok\n  value: int"
 
     def test_type_of_resolves_prior_entry_constructor(self) -> None:
         s = ReplSession()
         assert s.eval_entry("enum Result\n  | Ok(value: int)\n  | Err(message: text)").ok
 
-        expected = "enum Result\n  | Ok(value: int)\n  | Err(message: text)"
+        expected = "record Result::Ok\n  value: int"
         assert s.type_of("Ok(value = 1)") == expected
         assert s.type_of("Result::Ok(value = 1)") == expected
 
@@ -2972,6 +3337,44 @@ class TestFailureEffects:
         assert not s.eval_entry("After").ok
         assert not s.eval_entry("After(value = 3)").ok
 
+    def test_runtime_raise_does_not_promote_enum_without_its_later_referenced_member(
+        self,
+    ) -> None:
+        s = ReplSession()
+
+        failed = s.eval_entry("enum E = ::R\nlet z: decimal = 1 / 0\nrecord R()")
+
+        assert not failed.ok
+        assert "E" not in failed.installed
+        assert "E" not in s.type_names()
+        assert "R" not in s.type_names()
+
+    def test_runtime_raise_tracks_applied_referenced_member_dependencies(self) -> None:
+        s = ReplSession()
+
+        failed = s.eval_entry(
+            "enum E = ::R[Payload]\nlet z: decimal = 1 / 0\nrecord Payload()\nrecord R[T]()"
+        )
+
+        assert not failed.ok
+        assert "E" not in s.type_names()
+
+    def test_runtime_raise_does_not_promote_function_typed_with_later_inline_member(
+        self,
+    ) -> None:
+        s = ReplSession()
+
+        failed = s.eval_entry(
+            "def read(value: E::A) -> int = value.value\n"
+            "let z: decimal = 1 / 0\n"
+            "enum E\n"
+            "  | A(value: int)"
+        )
+
+        assert not failed.ok
+        assert "read" not in failed.installed
+        assert not s.eval_entry("read").ok
+
     def test_runtime_raise_retains_completed_function_initializer_metadata(self) -> None:
         s = ReplSession()
         failed = s.eval_entry("let z: decimal = 1 / 0\ndef later[T](x: T) -> T = x")
@@ -3120,7 +3523,8 @@ class TestExactlyOnce:
         named = CountingAgent("named-reply")
         s = ReplSession(agent_dispatcher=named)
         r = s.eval_entry(
-            'let reviewer = AgentCommand("reviewer")\nlet out = reviewer.ask("""review this""")'
+            'let reviewer = AgentCommand("reviewer")\n'
+            'let out = ask("""review this""", agent = reviewer)'
         )
         assert r.ok, r.diagnostics
         assert _text({name: value for name, _typ, value in s.bindings()}["out"]) == "named-reply"
@@ -3135,7 +3539,9 @@ class TestExactlyOnce:
 class TestAgentDeclarations:
     def test_agent_value_dispatches_without_a_declaration(self) -> None:
         s = ReplSession(agent_dispatcher=CountingAgent("ok"))
-        r = s.eval_entry('let reviewer = AgentCommand("reviewer")\nreviewer.ask("""look""")')
+        r = s.eval_entry(
+            'let reviewer = AgentCommand("reviewer")\nask("""look""", agent = reviewer)'
+        )
         assert r.ok
 
     def test_undeclared_unregistered_agent_call_errors(self) -> None:
@@ -3150,7 +3556,7 @@ class TestAgentDeclarations:
         s = ReplSession(agent_dispatcher=CountingAgent("done"))
         r1 = s.eval_entry('let helper = AgentCommand("helper")')
         assert r1.ok
-        r2 = s.eval_entry('let out = helper.ask("""go""")')
+        r2 = s.eval_entry('let out = ask("""go""", agent = helper)')
         assert r2.ok, r2.diagnostics
         assert _text({name: value for name, _typ, value in s.bindings()}["out"]) == "done"
 
@@ -3164,7 +3570,7 @@ class TestAgentDeclarations:
         handle = s._link_image.symbol_for_decl(ref.decl_node_id)
         assert handle is not None
 
-        called = s.eval_entry('let out = Tools::helper.ask("""go""")')
+        called = s.eval_entry('let out = ask("""go""", agent = Tools::helper)')
 
         assert called.ok, called.diagnostics
         assert s._link_image.symbol_for_decl(ref.decl_node_id) == handle
@@ -3186,7 +3592,7 @@ class TestAgentDeclarations:
     def test_type_of_allows_agent_value_call(self) -> None:
         s = ReplSession()
         s.eval_entry('let reviewer = AgentCommand("reviewer")')
-        assert s.type_of('reviewer.ask("""ask""")') == repr(TextType())
+        assert s.type_of('ask("""ask""", agent = reviewer)') == repr(TextType())
 
     def test_reset_clears_declared_agents(self) -> None:
         # After reset, a previously source-declared agent is gone: a call to it
@@ -5623,7 +6029,8 @@ class TestImports:
         # The custom-format ask produces a pre-lower contract materialization error.
         s.register_codec(BadCodec())
         r = s.eval_entry(
-            'import mylib\nlet helper = AgentCommand("helper")\nhelper.ask("hi", format = "bad")'
+            'import mylib\nlet helper = AgentCommand("helper")\n'
+            'ask("hi", agent = helper, format = "bad")'
         )
         assert not r.ok
         assert any("Contract error" in d.message for d in r.diagnostics)
@@ -5892,13 +6299,43 @@ class TestUnpromotedNominalDeclarationEffects:
         assert not failed.ok
 
         construct = s.eval_entry("Color::Red")
-        match = s.eval_entry("case Color::Green of\n  | Red => 0\n  | Green => 1")
+        match = s.eval_entry(
+            "let green: Color = Color::Green\ncase green of\n  | Red => 0\n  | Green => 1"
+        )
         stale_variant = s.eval_entry("Color::Blue")
 
         assert construct.ok, construct.diagnostics
         assert match.ok, match.diagnostics
         assert match.value == IntValue(1)
         assert not stale_variant.ok
+
+    def test_failed_enum_with_inline_members_leaves_no_scope_or_member_behind(self) -> None:
+        s = ReplSession()
+
+        failed = s.eval_entry("let z: decimal = 1 / 0\nenum Tree\n  | Node(value: int)")
+        assert not failed.ok
+
+        member = s.eval_entry("Tree::Node(value = 1)")
+        later = s.eval_entry("42")
+
+        assert not member.ok
+        assert later.ok, later.diagnostics
+        assert later.value == IntValue(42)
+
+    def test_failed_enum_with_inline_members_preserves_same_named_prior_state(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("enum Tree\n  | Leaf(value: int)").ok
+
+        failed = s.eval_entry("let z: decimal = 1 / 0\nenum Tree\n  | Node(value: int)")
+        assert not failed.ok
+
+        retained_type = s.eval_entry("def leaf_value(value: Tree::Leaf) -> int = value.value")
+        retained = s.eval_entry("Tree::Leaf(value = 1)")
+        unpromoted = s.eval_entry("Tree::Node(value = 1)")
+
+        assert retained_type.ok, retained_type.diagnostics
+        assert retained.ok, retained.diagnostics
+        assert not unpromoted.ok
 
     def test_runtime_failure_leaves_the_previous_exception_declaration_in_effect(self) -> None:
         s = ReplSession()
@@ -6978,7 +7415,7 @@ class TestSessionOpen:
         assert s._loaded_lib_modules == {}
 
     def test_open_applies_a_well_formed_override_before_the_first_entry(self) -> None:
-        from agm.agl.semantics.values import EnumValue, TextValue
+        from agm.agl.semantics.values import RecordValue, TextValue
         from agm.agl.setting_overrides import SettingOverride
 
         s = ReplSession(
@@ -6992,8 +7429,8 @@ class TestSessionOpen:
 
         result = s.eval_entry("import std/config\nstd/config::default-agent")
         assert result.ok
-        assert isinstance(result.value, EnumValue)
-        assert result.value.variant == "AgentCommand"
+        assert isinstance(result.value, RecordValue)
+        assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert result.value.fields["command"] == TextValue("preloaded")
 
     def test_open_rejects_an_unparseable_override_naming_its_origin(self) -> None:
@@ -7043,7 +7480,7 @@ class TestSessionOpen:
         assert any("--agent" in format_diagnostic(d) for d in diagnostics)
 
     def test_reset_leaves_the_override_in_force(self) -> None:
-        from agm.agl.semantics.values import EnumValue, TextValue
+        from agm.agl.semantics.values import RecordValue, TextValue
         from agm.agl.setting_overrides import SettingOverride
 
         s = ReplSession(
@@ -7060,8 +7497,8 @@ class TestSessionOpen:
 
         result = s.eval_entry("import std/config\nstd/config::default-agent")
         assert result.ok
-        assert isinstance(result.value, EnumValue)
-        assert result.value.variant == "AgentCommand"
+        assert isinstance(result.value, RecordValue)
+        assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert result.value.fields["command"] == TextValue("preloaded")
 
     def test_stdlib_is_loaded_exactly_once_across_open_and_two_entries(

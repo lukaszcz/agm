@@ -3,7 +3,7 @@
 # (`case`/`if`/`try`/nested loop) in loop bodies across the `do`, `for`, and
 # `while` spellings.
 param k: int
-let reviewer = AgentCommand("reviewer")
+let reviewer: Agent = AgentCommand("reviewer")
 
 enum Verdict
   | Pass

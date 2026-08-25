@@ -20,8 +20,8 @@ from __future__ import annotations
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.modules.ids import ModuleId
-from agm.agl.semantics.type_table import TypeTable, comparable_types
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.semantics.type_table import TypeDef, TypeTable, comparable_types, is_assignable_in
 from agm.agl.semantics.types import (
     ArrayType,
     BoolType,
@@ -57,6 +57,94 @@ from tests.agl.module_graph import resolve_and_check_inline_entry
 # operands, whose comparable_types arms never consult the TypeTable; an empty
 # table is a valid (unused) argument for those calls.
 _EMPTY_TABLE = TypeTable()
+
+# ---------------------------------------------------------------------------
+# Membership-aware assignability
+# ---------------------------------------------------------------------------
+
+
+def _member_assignability_table() -> tuple[TypeTable, RecordType, RecordType, RecordType, EnumType]:
+    table = TypeTable()
+    node = RecordType("Node", (TypeVarType("T"),), scope_path=("Tree",), decl_id=1)
+    leaf = RecordType("Leaf", scope_path=("Tree",), decl_id=2)
+    other = RecordType("Other", decl_id=3)
+    tree = EnumType("Tree", (TypeVarType("T"),), decl_id=4)
+    table.register(
+        TypeDef(
+            kind="record",
+            name="Node",
+            module_id=ENTRY_ID,
+            scope_path=("Tree",),
+            type_params=("T",),
+            fields=(("value", TypeVarType("T")),),
+            decl_node_id=node.decl_id,
+        )
+    )
+    table.register(
+        TypeDef(
+            kind="record",
+            name="Leaf",
+            module_id=ENTRY_ID,
+            scope_path=("Tree",),
+            decl_node_id=leaf.decl_id,
+        )
+    )
+    table.register(
+        TypeDef(kind="record", name="Other", module_id=ENTRY_ID, decl_node_id=other.decl_id)
+    )
+    table.register(
+        TypeDef(
+            kind="enum",
+            name="Tree",
+            module_id=ENTRY_ID,
+            type_params=("T",),
+            members=(node, leaf),
+            decl_node_id=tree.decl_id,
+        )
+    )
+    return table, node, leaf, other, tree
+
+
+class TestMembershipAssignable:
+    def test_accepts_substituted_and_non_generic_members(self) -> None:
+        table, _node, leaf, _other, _tree = _member_assignability_table()
+
+        node_int = RecordType("Node", (IntType(),), scope_path=("Tree",), decl_id=1)
+        tree_int = EnumType("Tree", (IntType(),), decl_id=4)
+        tree_text = EnumType("Tree", (TextType(),), decl_id=4)
+
+        assert is_assignable_in(table, IntType(), DecimalType())
+        assert is_assignable_in(table, node_int, tree_int)
+        assert is_assignable_in(table, leaf, tree_int)
+        assert is_assignable_in(table, leaf, tree_text)
+
+    def test_rejects_non_members_and_wrong_member_instantiations(self) -> None:
+        table, _node, _leaf, other, _tree = _member_assignability_table()
+
+        tree_int = EnumType("Tree", (IntType(),), decl_id=4)
+        node_text = RecordType("Node", (TextType(),), scope_path=("Tree",), decl_id=1)
+
+        assert not is_assignable_in(table, other, tree_int)
+        assert not is_assignable_in(table, node_text, tree_int)
+
+    def test_preserves_container_invariance_and_non_record_boundaries(self) -> None:
+        table, _node, leaf, _other, _tree = _member_assignability_table()
+        target = EnumType("Tree", (IntType(),), decl_id=4)
+
+        assert not is_assignable_in(table, ArrayType(leaf), ArrayType(target))
+        assert not is_assignable_in(table, target, EnumType("Other", decl_id=5))
+        assert not is_assignable_in(table, ExceptionType("Oops", decl_id=6), target)
+
+    def test_preserves_function_result_invariance(self) -> None:
+        table, _node, leaf, _other, _tree = _member_assignability_table()
+        target = EnumType("Tree", (IntType(),), decl_id=4)
+
+        assert not is_assignable_in(
+            table,
+            FunctionType(params=(), result=leaf),
+            FunctionType(params=(), result=target),
+        )
+
 
 # ---------------------------------------------------------------------------
 # UnitType
@@ -341,11 +429,11 @@ class TestTypeEnvironmentPrelude:
         env = TypeEnvironment()
         t = env.get_type("ParsePolicy")
         assert isinstance(t, EnumType)
-        variants = env.type_table.enum_variants(t)
+        members = env.type_table.enum_member_names(t)
         # Abort has no fields.
-        assert variants["Abort"] == {}
+        assert dict(env.type_table.record_fields(members["Abort"])) == {}
         # Retry has n: int.
-        assert variants["Retry"] == {"n": IntType()}
+        assert dict(env.type_table.record_fields(members["Retry"])) == {"n": IntType()}
 
     def test_recursion_error_resolves(self) -> None:
         env = TypeEnvironment()
@@ -859,7 +947,7 @@ class TestHelpers:
         r = RecordType("R")
         assert free_type_vars(r) == frozenset()
 
-    def test_free_type_vars_enum_variants(self) -> None:
+    def test_free_type_vars_enum_type_arguments(self) -> None:
         e = EnumType("Either", type_args=(TypeVarType("A"), TypeVarType("B")))
         assert free_type_vars(e) == frozenset({"A", "B"})
 

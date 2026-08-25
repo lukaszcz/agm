@@ -17,8 +17,8 @@ exception Broken extends Exception
   reason: text
 
 let corner = Point(1, 2)
-let flat = Flat
-let square = Square(3)
+let flat: Shape = Flat
+let square: Shape = Square(3)
 let broken = Broken(message = "the hinge broke", reason = "hinge")
 let tally = 20 + 22
 var visits = 0
@@ -47,7 +47,7 @@ def shadowed() -> int =
   let tally = 7
   tally
 
-let reviewer = AgentCommand("reviewer")
+let reviewer: Agent = AgentCommand("reviewer")
 
 print(describe())
 print(area() + sides())

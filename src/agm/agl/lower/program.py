@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from agm.agl.ir.contracts import ContractPayload
+from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode
 from agm.agl.ir.ids import NominalId, SourceId
 from agm.agl.ir.program import (
     DryRunEntry,
@@ -20,6 +20,7 @@ from agm.agl.ir.program import (
     SourceFile,
     VariantDescriptor,
 )
+from agm.agl.ir.reserved_nominals import RESERVED_ENUM_MEMBER_IDS, reserved_nominal_id
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.lowerer import (
     _add_builtin_nominals,
@@ -31,11 +32,35 @@ from agm.agl.lower.lowerer import (
 from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
-from agm.agl.semantics.types import ExceptionType, RecordType
+from agm.agl.semantics.type_table import TypeTable, is_json_convertible
+from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
 from agm.agl.syntax.nodes import BuiltinVarDecl, FuncDef, static_items
+from agm.agl.type_schema import build_encode_plan
 from agm.util.text import normalize_newlines
 
 __all__ = ["lower_program"]
+
+
+def _exception_field_encodes(
+    type_table: TypeTable,
+) -> dict[NominalId, tuple[ExceptionFieldEncode, ...]]:
+    """Compile reporting provenance for every JSON-representable exception slot."""
+    result: dict[NominalId, tuple[ExceptionFieldEncode, ...]] = {}
+    for typedef in type_table.entries():
+        if typedef.kind != "exception":
+            continue
+        if type_table.standard_builtin_declaration(
+            typedef.name
+        ) is not None and typedef.decl_node_id == reserved_nominal_id(typedef.name):
+            continue
+        handle = typedef.handle()
+        assert isinstance(handle, ExceptionType)
+        result[NominalId(typedef.decl_node_id)] = tuple(
+            ExceptionFieldEncode(field_name, build_encode_plan(field_type, type_table))
+            for field_name, field_type in type_table.exception_fields(handle).items()
+            if is_json_convertible(field_type, type_table)
+        )
+    return result
 
 
 def lower_program(
@@ -91,6 +116,20 @@ def lower_program(
         )
         module_source_ids[mid] = source_id
 
+    # An INLINE member record (one declared bare inside its enum body, whose
+    # scope path is the enum's own) is a semantic implementation detail of
+    # that enum: it receives a descriptor only so runtime identity remains
+    # complete, but must not be exposed as a companion namespace leaf of its
+    # own (where e.g. ``Step::Continue`` would overwrite ``Step.Continue``).
+    # A REFERENCED member (a qualified name naming a record declared
+    # elsewhere, e.g. ``M::Go``) keeps its own independent name path -- it
+    # may be a companion namespace leaf in its own right, and other enums may
+    # reference the same record, so listing it as one enum's member must not
+    # suppress it.
+    inline_member_ids = {
+        typedef.decl_node_id for typedef in type_table.entries() if typedef.is_inline_enum_member
+    }
+
     # Step 2: Build nominals from the authoritative TypeTable declarations.
     # Aliases do not have a TypeDef, so this also excludes their transparent
     # source spellings without comparing concatenated scope names. ``entries()``
@@ -102,8 +141,21 @@ def lower_program(
     # that the extern boundary later uses to resolve a companion's bare/dotted
     # nominal lookup.
     for typedef in type_table.entries():
+        standard = type_table.standard_builtin_declaration(typedef.name)
+        if standard is not None and typedef.decl_node_id == reserved_nominal_id(typedef.name):
+            continue
+        if typedef.scope_path:
+            enum_name = typedef.scope_path[-1]
+            fallback_member_id = RESERVED_ENUM_MEMBER_IDS.get((enum_name, typedef.name))
+            if (
+                fallback_member_id == typedef.decl_node_id
+                and type_table.standard_builtin_declaration(enum_name) is not None
+            ):
+                continue
         nominal = NominalId(typedef.decl_node_id)
-        bears_name_path = type_table.is_current(typedef)
+        bears_name_path = (
+            type_table.is_current(typedef) and typedef.decl_node_id not in inline_member_ids
+        )
         if typedef.kind == "record":
             link.nominals[nominal] = NominalDescriptor(
                 nominal=nominal,
@@ -116,6 +168,8 @@ def lower_program(
                 bears_name_path=bears_name_path,
             )
         elif typedef.kind == "enum":
+            handle = typedef.handle()
+            assert isinstance(handle, EnumType)
             link.nominals[nominal] = NominalDescriptor(
                 nominal=nominal,
                 module_id=typedef.module_id,
@@ -124,8 +178,10 @@ def lower_program(
                 kind=NominalKind.ENUM,
                 fields=(),
                 variants=tuple(
-                    VariantDescriptor(name, tuple(field for field, _ in fields))
-                    for name, fields in typedef.variants
+                    VariantDescriptor(
+                        name, tuple(type_table.record_fields(member)), NominalId(member.decl_id)
+                    )
+                    for name, member in type_table.enum_member_names(handle).items()
                 ),
                 bears_name_path=bears_name_path,
             )
@@ -152,7 +208,8 @@ def lower_program(
     # ``bears_name_path`` compares the identity being registered against the
     # one ``generic_typedef``'s NAME lookup landed on, which is exactly the
     # name-index answer ``TypeTable.is_current`` gives for a non-generic
-    # declaration above.
+    # declaration above. Inline members remain excluded just as they are in
+    # that pass, because a generic member also appears in this template loop.
     for cm in checked.modules.values():
         for name, generic in cm.type_env.all_generic_types().items():
             typ = generic.template
@@ -161,7 +218,9 @@ def lower_program(
             assert generic_typedef is not None, (
                 f"compiler bug: generic type {name!r} has no TypeDef registered"
             )
-            bears_name_path = generic_typedef.decl_node_id == typ.decl_id
+            bears_name_path = (
+                generic_typedef.decl_node_id == typ.decl_id and typ.decl_id not in inline_member_ids
+            )
             if isinstance(typ, RecordType):
                 link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,
@@ -180,8 +239,12 @@ def lower_program(
                     declared_name=typ.name,
                     kind=NominalKind.ENUM,
                     variants=tuple(
-                        VariantDescriptor(vname, tuple(fname for fname, _ in vfields))
-                        for vname, vfields in generic_typedef.variants
+                        VariantDescriptor(
+                            vname,
+                            tuple(type_table.record_fields(member)),
+                            NominalId(member.decl_id),
+                        )
+                        for vname, member in type_table.enum_member_names(typ).items()
                     ),
                     bears_name_path=bears_name_path,
                 )
@@ -267,6 +330,7 @@ def lower_program(
                 )
             )
     dry_run_inventory = tuple(dry_run_entries)
+    exception_field_encodes = _exception_field_encodes(type_table)
     program = ExecutableProgram(
         entry_module=checked.entry_id,
         modules=executable_modules,
@@ -300,6 +364,7 @@ def lower_program(
         contracts=dict(link.contracts),
         dry_run_inventory=dry_run_inventory,
         builtin_nominals=link.builtin_nominals,
+        exception_field_encodes=exception_field_encodes,
         builtin_setting_defaults=builtin_setting_defaults,
     )
     if self_validation_enabled():

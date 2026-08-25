@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from agm.agl.repl.agentmode import AgentMode
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.request import AgentResponse
-    from agm.agl.semantics.values import EnumValue
+    from agm.agl.semantics.values import RecordValue
 
 
 # The injected confirmation callback: given the callee name and the rendered
@@ -79,7 +79,7 @@ class ConfirmingAgent:
         self.confirm_session(request)
         return self._dispatch(request)
 
-    def confirm_session_values(self, agent: "EnumValue", prompt: str) -> None:
+    def confirm_session_values(self, agent: "RecordValue", prompt: str) -> None:
         """Confirm a session ask expressed as its host-provided values."""
         self.confirm_session(AgentRequest(agent=agent, prompt=prompt))
 

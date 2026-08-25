@@ -52,14 +52,25 @@ from typing import TypeVar, assert_never
 
 from agm.agl.ir.contracts import (
     ArrayDecode,
+    ArrayEncode,
     ContractRequest,
     ConversionStrategy,
     DecodeSchema,
     DictDecode,
+    DictEncode,
+    EncodeDefinition,
+    EncodeSchema,
     EnumDecode,
+    EnumEncode,
+    ExceptionEncode,
     RecordDecode,
+    RecordEncode,
     RefDecode,
+    RefEncode,
     ScalarDecode,
+    ScalarEncode,
+    TypeParameterEncode,
+    forwarded_encode_key,
 )
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
@@ -89,7 +100,6 @@ from agm.agl.ir.nodes import (
     IrConvert,
     IrCopyValue,
     IrDirectCall,
-    IrEnumCaseKey,
     IrExec,
     IrExpr,
     IrField,
@@ -110,11 +120,13 @@ from agm.agl.ir.nodes import (
     IrMakeClosure,
     IrMakeConstructor,
     IrMakeDict,
-    IrMakeEnum,
     IrMakeException,
     IrMakeJsonArray,
     IrMakeJsonObject,
     IrMakeRecord,
+    IrNominalCaseKey,
+    IrNominalCast,
+    IrNominalIs,
     IrOr,
     IrParseJson,
     IrPrint,
@@ -133,7 +145,6 @@ from agm.agl.ir.nodes import (
     IrTry,
     IrUnary,
     IrUpdateRecord,
-    IrVariantIs,
     UseDefault,
     is_canonical_literal_scalar,
 )
@@ -298,19 +309,11 @@ def _check_nominal_field(nominal: NominalId, field: str, mode: IrFieldMode, ctx:
         raise InvalidIrError(f"IrField references unknown field {field!r} of nominal {nominal!r}")
 
 
-def _check_enum_variant(nominal: NominalId, variant: str, ctx: _Context) -> None:
-    """Raise ``InvalidIrError`` if *variant* is not declared in the nominal's descriptor."""
-    desc = ctx.program.nominals.get(nominal)
-    if desc is None:  # pragma: no cover
-        return  # already caught by _check_nominal_in_table
-    if desc.kind is not NominalKind.ENUM:
-        return  # not an enum; variant check not applicable
-    known = {v.name for v in desc.variants}
-    if variant not in known:
-        raise InvalidIrError(
-            f"IR node references variant {variant!r} of {nominal!r}"
-            f" which is not in the descriptor's variants {sorted(known)!r}"
-        )
+def _check_record_nominal(nominal: NominalId, ctx: _Context, node_name: str) -> None:
+    """Require a nominal-dispatch target to be a member-record identity."""
+    _check_nominal_in_table(nominal, ctx)
+    if ctx.program.nominals[nominal].kind is not NominalKind.RECORD:
+        raise InvalidIrError(f"{node_name} references non-record nominal {nominal!r}")
 
 
 _DECODE_STRATEGIES = frozenset(
@@ -327,8 +330,10 @@ def _check_recipe_consistency(
     json_schema: str | None,
     decode: DecodeSchema | None,
     defs: "tuple[tuple[str, DecodeSchema], ...]",
+    encode: EncodeSchema | None,
+    encode_definitions: "tuple[EncodeDefinition, ...]",
 ) -> None:
-    """Enforce that decode strategies carry schema+decode and total strategies do not."""
+    """Require only the conversion metadata selected by each strategy."""
     needs_decode = strategy in _DECODE_STRATEGIES
     has_decode = json_schema is not None and decode is not None
     if needs_decode and not has_decode:
@@ -338,6 +343,13 @@ def _check_recipe_consistency(
     if not needs_decode and (json_schema is not None or decode is not None or defs):
         raise InvalidIrError(
             f"ConversionRecipe strategy {strategy.value!r} must not carry json_schema/decode/defs"
+        )
+    needs_encode = strategy is ConversionStrategy.TO_JSON
+    if needs_encode and encode is None:
+        raise InvalidIrError("ConversionRecipe strategy 'to_json' requires encode")
+    if not needs_encode and (encode is not None or encode_definitions):
+        raise InvalidIrError(
+            f"ConversionRecipe strategy {strategy.value!r} must not carry encode/encode_definitions"
         )
 
 
@@ -364,6 +376,130 @@ def _check_decode_nominals(
         _walk_decode_schema(entry, defs_map, ctx)
 
 
+class _EncodeWalk:
+    """The definition table one encode-plan walk resolves against, and what it reached.
+
+    Reachability is accumulated across the whole plan rather than per body: a
+    definition is legitimate only if some reference — from the root or from
+    another reached definition — names it.
+    """
+
+    __slots__ = ("ctx", "definitions", "reached")
+
+    def __init__(self, definitions: "Mapping[str, EncodeDefinition]", ctx: _Context) -> None:
+        self.definitions = definitions
+        self.ctx = ctx
+        self.reached: set[str] = set()
+
+
+def _check_encode_nominals(
+    encode: EncodeSchema, definitions: "tuple[EncodeDefinition, ...]", ctx: _Context
+) -> None:
+    """Validate the root and every reachable definition body of one encode plan.
+
+    Each definition is walked under its own arity, so a
+    ``TypeParameterEncode`` inside it is checked against the parameters it can
+    actually bind; the root binds none. A definition no reference reaches is
+    rejected rather than validated in isolation.
+    """
+    by_key: dict[str, EncodeDefinition] = {}
+    for definition in definitions:
+        if definition.key in by_key:
+            raise InvalidIrError(f"EncodeSchema has duplicate $defs key {definition.key!r}")
+        if definition.parameter_count < 0:
+            raise InvalidIrError(
+                f"EncodeDefinition {definition.key!r} has a negative parameter count"
+            )
+        by_key[definition.key] = definition
+    walk = _EncodeWalk(by_key, ctx)
+    _walk_encode_schema(encode, walk, 0)
+    pending = list(walk.reached)
+    while pending:
+        definition = by_key[pending.pop()]
+        before = set(walk.reached)
+        _walk_encode_schema(definition.body, walk, definition.parameter_count)
+        pending.extend(walk.reached - before)
+    if walk.reached != set(by_key):
+        raise InvalidIrError("EncodePlan has unreachable definitions")
+
+
+def _walk_encode_schema(encode: EncodeSchema, walk: _EncodeWalk, parameter_count: int) -> None:
+    """Walk one encode-schema node without expanding the definitions it references."""
+    ctx = walk.ctx
+    match encode:
+        case ScalarEncode():
+            return
+        case TypeParameterEncode(index=index):
+            if index < 0 or index >= parameter_count:
+                raise InvalidIrError(
+                    f"TypeParameterEncode index {index} is outside its definition arity"
+                )
+        case RefEncode(key=key, arguments=arguments):
+            target = _check_ref_chain(
+                key,
+                walk.definitions,
+                forwarded_encode_key,
+                ref_kind="EncodeSchema RefEncode",
+                key_noun="$defs key",
+            )
+            if len(arguments) != target.parameter_count:
+                raise InvalidIrError(
+                    f"RefEncode supplies {len(arguments)} arguments for the"
+                    f" {target.parameter_count} parameters of $defs key {key!r}"
+                )
+            walk.reached.add(key)
+            for argument in arguments:
+                _walk_encode_schema(argument, walk, parameter_count)
+        case ArrayEncode(elem=elem):
+            _walk_encode_schema(elem, walk, parameter_count)
+        case DictEncode(value=value_schema):
+            _walk_encode_schema(value_schema, walk, parameter_count)
+        case RecordEncode(nominal=nominal, fields=fields):
+            _check_nominal_in_table(nominal, ctx)
+            desc = ctx.program.nominals[nominal]
+            if desc.kind is not NominalKind.RECORD:
+                raise InvalidIrError(f"RecordEncode references non-record nominal {nominal!r}")
+            _check_nominal_fields(fields, desc.fields, "RecordEncode")
+            for _fname, fschema in fields:
+                _walk_encode_schema(fschema, walk, parameter_count)
+        case ExceptionEncode(nominal=nominal, fields=fields):
+            _check_nominal_in_table(nominal, ctx)
+            desc = ctx.program.nominals[nominal]
+            if desc.kind is not NominalKind.EXCEPTION:
+                raise InvalidIrError(
+                    f"ExceptionEncode references non-exception nominal {nominal!r}"
+                )
+            _check_nominal_fields(fields, desc.fields, "ExceptionEncode")
+            for _fname, fschema in fields:
+                _walk_encode_schema(fschema, walk, parameter_count)
+        case EnumEncode(nominal=nominal, variants=variants):
+            _check_nominal_in_table(nominal, ctx)
+            desc = ctx.program.nominals[nominal]
+            if desc.kind is not NominalKind.ENUM:
+                raise InvalidIrError(f"EnumEncode references non-enum nominal {nominal!r}")
+            if len(variants) != len(desc.variants):
+                raise InvalidIrError(f"EnumEncode variants disagree with enum nominal {nominal!r}")
+            for variant, expected in zip(variants, desc.variants, strict=True):
+                if variant.name != expected.name or variant.nominal != expected.member:
+                    raise InvalidIrError(
+                        f"EnumEncode variant {variant.name!r} disagrees with"
+                        f" enum nominal {nominal!r}"
+                    )
+                _check_nominal_fields(variant.fields, expected.fields, "EnumEncode variant")
+                for _fname, fschema in variant.fields:
+                    _walk_encode_schema(fschema, walk, parameter_count)
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
+
+
+def _check_nominal_fields(
+    fields: "tuple[tuple[str, object], ...]", expected: tuple[str, ...], owner: str
+) -> None:
+    """Require an encoder or decoder to select exactly its linked declaration's fields."""
+    if tuple(name for name, _schema in fields) != expected:
+        raise InvalidIrError(f"{owner} fields disagree with its nominal descriptor")
+
+
 def _walk_decode_schema(
     decode: DecodeSchema, defs: "Mapping[str, DecodeSchema]", ctx: _Context
 ) -> None:
@@ -383,13 +519,39 @@ def _walk_decode_schema(
             _walk_decode_schema(elem, defs, ctx)
         case DictDecode(value=value_schema):
             _walk_decode_schema(value_schema, defs, ctx)
-        case RecordDecode(nominal=nominal, fields=fields):
+        case RecordDecode(nominal=nominal, display_name=display_name, fields=fields):
             _check_nominal_in_table(nominal, ctx)
+            record = ctx.program.nominals[nominal]
+            if record.kind is not NominalKind.RECORD:
+                raise InvalidIrError(f"RecordDecode references non-record nominal {nominal!r}")
+            if display_name != record.display_name:
+                raise InvalidIrError(
+                    f"RecordDecode display name disagrees with nominal {nominal!r}"
+                )
+            _check_nominal_fields(fields, record.fields, "RecordDecode")
             for _fname, fschema in fields:
                 _walk_decode_schema(fschema, defs, ctx)
-        case EnumDecode(nominal=nominal, variants=variants):
+        case EnumDecode(nominal=nominal, display_name=display_name, variants=variants):
             _check_nominal_in_table(nominal, ctx)
-            for variant in variants:
+            enum = ctx.program.nominals[nominal]
+            if enum.kind is not NominalKind.ENUM:
+                raise InvalidIrError(f"EnumDecode references non-enum nominal {nominal!r}")
+            if display_name != enum.display_name or len(variants) != len(enum.variants):
+                raise InvalidIrError(f"EnumDecode disagrees with enum nominal {nominal!r}")
+            for variant, expected in zip(variants, enum.variants, strict=True):
+                if variant.name != expected.name or variant.nominal != expected.member:
+                    raise InvalidIrError(
+                        f"EnumDecode variant {variant.name!r} disagrees with"
+                        f" enum nominal {nominal!r}"
+                    )
+                _check_nominal_in_table(variant.nominal, ctx)
+                member = ctx.program.nominals[variant.nominal]
+                if variant.display_name != member.display_name:
+                    raise InvalidIrError(
+                        f"EnumDecode variant {variant.name!r} display name disagrees with"
+                        f" member nominal {variant.nominal!r}"
+                    )
+                _check_nominal_fields(variant.fields, expected.fields, "EnumDecode variant")
                 for _fname, fschema in variant.fields:
                     _walk_decode_schema(fschema, defs, ctx)
         case _ as unreachable:  # pragma: no cover
@@ -406,14 +568,15 @@ def _check_ref_chain(
     *,
     ref_kind: str,
     key_noun: str,
-) -> None:
-    """Ensure a chain of ``$defs`` refs reaches a non-ref body without cycling.
+) -> "_RefT":
+    """Resolve a chain of ``$defs`` refs to the non-ref body it must reach.
 
     *follow* returns the next key when its argument is itself a ref node
     (``RefDecode``), or ``None`` at a concrete body where the
     chain terminates.  A key absent from *defs* or revisited (a cycle) is an
     IR invariant violation; *ref_kind* and *key_noun* name the schema flavour
-    and its defs-key wording in the message.
+    and its defs-key wording in the message.  The resolved entry is returned
+    for callers that must also check it against the reference itself.
     """
     seen: set[str] = set()
     current = key
@@ -426,7 +589,7 @@ def _check_ref_chain(
             raise InvalidIrError(f"{ref_kind} references unknown {key_noun} {current!r}")
         next_key = follow(target)
         if next_key is None:
-            return
+            return target
         current = next_key
 
 
@@ -482,32 +645,17 @@ def _is_payload_candidate(symbol: SymbolId, ctx: _Context) -> bool:
 
 
 def _case_family(arm: IrCaseArm) -> tuple[str, object]:
-    if isinstance(arm.key, IrEnumCaseKey):
-        return "enum", arm.key.nominal
+    if isinstance(arm.key, IrNominalCaseKey):
+        return "nominal", None
     return "literal", arm.key.kind
 
 
 def _validate_case_arm(arm: IrCaseArm, ctx: _Context) -> None:
     match arm.key:
-        case IrEnumCaseKey(nominal=nominal, variant=variant):
+        case IrNominalCaseKey(nominal=nominal):
             if ctx.deep:
-                descriptor = ctx.program.nominals.get(nominal)
-                if descriptor is None:
-                    raise InvalidIrError(
-                        f"IrEnumCaseKey references nominal {nominal!r}"
-                        " which is not in program.nominals"
-                    )
-                if descriptor.kind is not NominalKind.ENUM:
-                    raise InvalidIrError(f"IrEnumCaseKey references non-enum nominal {nominal!r}")
-                variant_descriptor = next(
-                    (item for item in descriptor.variants if item.name == variant), None
-                )
-                if variant_descriptor is None:
-                    raise InvalidIrError(
-                        f"IrEnumCaseKey references unknown variant {variant!r}"
-                        f" of nominal {nominal!r}"
-                    )
-                valid_fields = set(variant_descriptor.fields)
+                _check_record_nominal(nominal, ctx, "IrNominalCaseKey")
+                valid_fields = set(ctx.program.nominals[nominal].fields)
             else:
                 valid_fields = None
         case IrLiteralCaseKey() as key:
@@ -584,13 +732,6 @@ def _validate_case(node: IrCase, ctx: _Context) -> None:
         }
         if bool_keys != {True, False}:
             raise InvalidIrError("IrCase has an incomplete boolean domain without a default")
-    elif family is not None and family[0] == "enum" and ctx.deep:
-        nominal = family[1]
-        assert isinstance(nominal, NominalId)
-        descriptor = ctx.program.nominals[nominal]
-        enum_keys = {arm.key.variant for arm in node.arms if isinstance(arm.key, IrEnumCaseKey)}
-        if enum_keys != {variant.name for variant in descriptor.variants}:
-            raise InvalidIrError("IrCase has an incomplete enum domain without a default")
     elif family is None or family[0] == "literal":
         raise InvalidIrError("IrCase over an open domain requires a default")
 
@@ -828,14 +969,6 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             for _fname, fexpr in fields:
                 _validate_expr(fexpr, ctx)
 
-        case IrMakeEnum(nominal=nominal, variant=variant, fields=fields):
-            _validate_location(node.location, ctx)
-            if ctx.deep:
-                _check_nominal_in_table(nominal, ctx)
-                _check_enum_variant(nominal, variant, ctx)
-            for _fname, fexpr in fields:
-                _validate_expr(fexpr, ctx)
-
         case IrMakeException(nominal=nominal, fields=fields):
             _validate_location(node.location, ctx)
             if ctx.deep:
@@ -843,27 +976,37 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             for _fname, field_expr in fields:
                 _validate_expr(field_expr, ctx)
 
-        case IrMakeConstructor(nominal=nominal, variant=variant):
+        case IrMakeConstructor(nominal=nominal):
             _validate_location(node.location, ctx)
             if ctx.deep:
-                _check_nominal_in_table(nominal, ctx)
-                if variant is not None:
-                    _check_enum_variant(nominal, variant, ctx)
+                _check_record_nominal(nominal, ctx, "IrMakeConstructor")
 
-        case IrVariantIs(nominal=nominal, variant=variant, value=val):
+        case IrNominalCast(nominal=nominal, value=val):
             _validate_location(node.location, ctx)
             if ctx.deep:
-                _check_nominal_in_table(nominal, ctx)
-                _check_enum_variant(nominal, variant, ctx)
+                _check_record_nominal(nominal, ctx, "IrNominalCast")
+            _validate_expr(val, ctx)
+
+        case IrNominalIs(nominal=nominal, value=val):
+            _validate_location(node.location, ctx)
+            if ctx.deep:
+                _check_record_nominal(nominal, ctx, "IrNominalIs")
             _validate_expr(val, ctx)
 
         case IrConvert(value=val, recipe=recipe):
             _validate_location(node.location, ctx)
             _check_recipe_consistency(
-                recipe.strategy, recipe.json_schema, recipe.decode, recipe.defs
+                recipe.strategy,
+                recipe.json_schema,
+                recipe.decode,
+                recipe.defs,
+                recipe.encode,
+                recipe.encode_definitions,
             )
             if ctx.deep and recipe.decode is not None:
                 _check_decode_nominals(recipe.decode, recipe.defs, ctx)
+            if ctx.deep and recipe.encode is not None:
+                _check_encode_nominals(recipe.encode, recipe.encode_definitions, ctx)
             _validate_expr(val, ctx)
 
         case IrIf(branches=branches):
@@ -1037,8 +1180,9 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             if arg_expr is not None:
                 _validate_expr(arg_expr, ctx)
 
-        case IrAskRequest(prompt=prompt_expr):
+        case IrAskRequest(agent=agent_expr, prompt=prompt_expr):
             _validate_location(node.location, ctx)
+            _validate_expr(agent_expr, ctx)
             _validate_expr(prompt_expr, ctx)
 
         case IrExec(command=command_expr, contract_id=contract_id):
@@ -1118,6 +1262,30 @@ def _validate_program_tables(ctx: _Context) -> None:
                 f"program.nominals entry keyed by {nom_key!r} has"
                 f" nominal={nom_desc.nominal!r} (mismatch)"
             )
+        if nom_desc.kind is NominalKind.ENUM:
+            variant_names: set[str] = set()
+            member_nominals: set[NominalId] = set()
+            for variant in nom_desc.variants:
+                if variant.name in variant_names:
+                    raise InvalidIrError(
+                        f"enum descriptor has duplicate variant name {variant.name!r}"
+                    )
+                variant_names.add(variant.name)
+                if variant.member in member_nominals:
+                    raise InvalidIrError(
+                        f"enum descriptor reuses member record nominal {variant.member!r}"
+                    )
+                member_nominals.add(variant.member)
+                member = program.nominals.get(variant.member)
+                if member is None or member.kind is not NominalKind.RECORD:
+                    raise InvalidIrError(
+                        f"enum variant {variant.name!r} links non-record member {variant.member!r}"
+                    )
+                if member.fields != variant.fields:
+                    raise InvalidIrError(
+                        f"enum variant {variant.name!r} fields disagree with member"
+                        f" {variant.member!r}"
+                    )
 
     # 4. functions table consistency
     for fn_key, fn_desc in program.functions.items():
@@ -1334,6 +1502,26 @@ def validate_ir(program: ExecutableProgram, *, deep: bool = True) -> None:
 
     if deep:
         _validate_program_tables(ctx)
+        for nominal, field_encodes in program.exception_field_encodes.items():
+            descriptor = program.nominals.get(nominal)
+            if descriptor is None or descriptor.kind is not NominalKind.EXCEPTION:
+                raise InvalidIrError(
+                    "exception field encodes reference an unregistered non-exception nominal "
+                    f"{nominal!r}"
+                )
+            field_names: set[str] = set()
+            for field_encode in field_encodes:
+                if field_encode.field_name in field_names:
+                    raise InvalidIrError(
+                        f"exception field encodes duplicate field {field_encode.field_name!r}"
+                    )
+                field_names.add(field_encode.field_name)
+                if field_encode.field_name not in descriptor.fields:
+                    raise InvalidIrError(
+                        "exception field encodes reference unknown field "
+                        f"{field_encode.field_name!r} of nominal {nominal!r}"
+                    )
+                _check_encode_nominals(field_encode.plan.root, field_encode.plan.definitions, ctx)
 
     for _module_id, em in program.modules.items():
         for node in em.initializers:

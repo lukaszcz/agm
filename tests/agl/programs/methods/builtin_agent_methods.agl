@@ -4,7 +4,7 @@
 param mode: text
 
 program def main() -> unit =
-  let agents = [AgentCommand("typed"), AgentCommand("request")]
+  let agents: array[Agent] = [AgentCommand("typed"), AgentCommand("request")]
 
   if
     | mode == "typed" =>

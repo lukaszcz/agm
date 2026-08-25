@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import TypeAlias, assert_never, cast
 
 from agm.agl.semantics.type_table import TypeTable
-from agm.agl.semantics.types import EnumOwnerForm, EnumOwnerFormKind
+from agm.agl.semantics.types import EnumOwnerForm, EnumOwnerFormKind, EnumType
 
 from .diagnostics import (
     BoolWitness,
@@ -51,7 +51,6 @@ from .model import (
     DecisionFail,
     DecisionLeaf,
     DecisionSwitch,
-    EnumConstructor,
     EnumConstructorSpelling,
     FieldOccurrenceProvenance,
     LetSite,
@@ -59,11 +58,11 @@ from .model import (
     MatchCaseContext,
     MatchSiteSource,
     MatrixRow,
+    NominalConstructor,
     NormalizedMatchSite,
     Occurrence,
     OccurrenceId,
     OpenSignature,
-    RecordConstructor,
     SourceAction,
     WildcardCell,
 )
@@ -278,9 +277,7 @@ class _CaseCompiler:
         heads = _ordered_heads(matrix, selection.index)
         signature = signature_for_type(selection.occurrence.type, matrix.type_table)
         if isinstance(signature, ClosedSignature) and len(signature.constructors) == 1:
-            singleton_constructor = cast(
-                EnumConstructor | RecordConstructor, signature.constructors[0]
-            )
+            singleton_constructor = cast(NominalConstructor, signature.constructors[0])
             specialized = specialize(matrix, selection.index, singleton_constructor, allocator)
             child, current_allocator = self.compile(specialized.matrix, specialized.allocator)
             children = specialized.matrix.occurrences[
@@ -458,8 +455,8 @@ def _witness_for_occurrence(
         return BoolWitness(constructor.value)
     if isinstance(constructor, LiteralConstructor):
         return LiteralWitness(constructor.kind, constructor.value)
-    spelling = _source_spelling(constructor, case_context)
-    if spelling.owner_name is None and not spelling.bare:
+    spelling = _source_spelling(constructor, occurrence.type, case_context)
+    if isinstance(occurrence.type, EnumType) and spelling.owner_name is None and not spelling.bare:
         return WildcardWitness()
     children_by_index = {
         child.provenance.field_index: child
@@ -479,23 +476,22 @@ def _witness_for_occurrence(
         )
         for index, field in enumerate(constructor.fields)
     )
-    if spelling.bare:
+    if spelling.bare or spelling.owner_name is None:
         qualification = None
     else:
-        assert spelling.owner_name is not None
         qualification = EnumWitnessQualification(
             owner_name=spelling.owner_name,
             module_qualifier=spelling.module_qualifier,
             qualifier_anchored=spelling.qualifier_anchored,
         )
-    if isinstance(constructor, RecordConstructor):
-        return RecordWitness(constructor.record_type, fields, qualification)
-    return EnumWitness(
-        constructor.enum_type,
-        constructor.variant,
-        fields,
-        qualification,
-    )
+    if isinstance(occurrence.type, EnumType):
+        return EnumWitness(
+            occurrence.type,
+            constructor.record_type.name,
+            fields,
+            qualification,
+        )
+    return RecordWitness(constructor.record_type, fields, qualification)
 
 
 def _short_spelling_blocked(
@@ -513,20 +509,13 @@ def _short_spelling_blocked(
 
 
 def _source_spelling(
-    constructor: EnumConstructor | RecordConstructor, case_context: MatchCaseContext
+    constructor: NominalConstructor, subject_type: object, case_context: MatchCaseContext
 ) -> EnumConstructorSpelling:
     """Select the shortest valid source owner for a concrete nominal constructor."""
-    nominal_type = (
-        constructor.enum_type
-        if isinstance(constructor, EnumConstructor)
-        else constructor.record_type
-    )
-    if isinstance(constructor, EnumConstructor):
-        declaration_identity = (
-            nominal_type.module_id,
-            nominal_type.name,
-            constructor.variant,
-        )
+    nominal_type = subject_type if isinstance(subject_type, EnumType) else constructor.record_type
+    variant = constructor.record_type.name
+    if isinstance(subject_type, EnumType):
+        declaration_identity = (subject_type.module_id, subject_type.name, variant)
         if declaration_identity in case_context.bare_enum_constructors:
             return EnumConstructorSpelling(None, None, bare=True)
 
@@ -535,8 +524,8 @@ def _source_spelling(
         for form in case_context.enum_owner_forms
         if form.match(nominal_type) is not None
         and (
-            not isinstance(constructor, EnumConstructor)
-            or not _short_spelling_blocked(form, constructor.variant, case_context)
+            not isinstance(subject_type, EnumType)
+            or not _short_spelling_blocked(form, variant, case_context)
         )
     )
     if not matches:
@@ -703,7 +692,7 @@ class _ReplayDecomposeRule:
     """The exact singleton-product rule expected for one refutable state."""
 
     occurrence: Occurrence
-    constructor: EnumConstructor | RecordConstructor
+    constructor: NominalConstructor
 
 
 _ReplayRule: TypeAlias = (
@@ -811,7 +800,7 @@ def _validate_occurrence_ledger(
             ),
             None,
         )
-        if not isinstance(canonical, (EnumConstructor, RecordConstructor)):
+        if not isinstance(canonical, NominalConstructor):
             raise MatchCompileInvariantError(
                 "field occurrence constructor does not match its parent's checked signature"
             )
@@ -832,7 +821,7 @@ def _validate_occurrence_ledger(
     complete_groups: dict[tuple[OccurrenceId, Constructor], tuple[Occurrence, ...]] = {}
     for key, indexed_children in groups.items():
         constructor = key[1]
-        assert isinstance(constructor, (EnumConstructor, RecordConstructor))
+        assert isinstance(constructor, NominalConstructor)
         expected_indices = set(range(constructor.arity))
         if set(indexed_children) != expected_indices:
             raise MatchCompileInvariantError(
@@ -847,7 +836,7 @@ def _canonical_switch_constructor(
     occurrence: Occurrence,
     type_table: TypeTable,
 ) -> Constructor:
-    if not constructor_inhabits_type(constructor, occurrence.type):
+    if not constructor_inhabits_type(constructor, occurrence.type, type_table):
         raise MatchCompileInvariantError(
             "decision switch key is incompatible with its tested occurrence"
         )
@@ -1012,7 +1001,7 @@ def _validate_compiled_decisions(
             if (
                 not isinstance(signature, ClosedSignature)
                 or signature.constructors != (canonical,)
-                or not isinstance(canonical, (EnumConstructor, RecordConstructor))
+                or not isinstance(canonical, NominalConstructor)
             ):
                 raise MatchCompileInvariantError(
                     "decision decomposition requires an exactly singleton nominal signature"
@@ -1076,7 +1065,7 @@ def _validate_compiled_decisions(
                 )
 
             for branch, canonical in zip(decision.keyed_children, canonical_keys, strict=True):
-                if isinstance(canonical, (EnumConstructor, RecordConstructor)) and canonical.arity:
+                if isinstance(canonical, NominalConstructor) and canonical.arity:
                     group_key = (decision.occurrence.id, canonical)
                     if group_key not in occurrence_groups:
                         raise MatchCompileInvariantError(
@@ -1182,9 +1171,7 @@ def _validate_semantic_replay(compiled: CompiledMatchSite) -> None:
         heads = _ordered_heads(matrix, selection.index)
         signature = signature_for_type(selection.occurrence.type, matrix.type_table)
         if isinstance(signature, ClosedSignature) and len(signature.constructors) == 1:
-            singleton_constructor = cast(
-                EnumConstructor | RecordConstructor, signature.constructors[0]
-            )
+            singleton_constructor = cast(NominalConstructor, signature.constructors[0])
             rule = _ReplayDecomposeRule(selection.occurrence, singleton_constructor)
             remember_rule(decision, rule)
             if not isinstance(decision, DecisionDecompose):

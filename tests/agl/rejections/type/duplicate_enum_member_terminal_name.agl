@@ -1,0 +1,5 @@
+record R()
+
+enum Both = R | ::R
+
+program def main() -> unit = ()

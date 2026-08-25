@@ -6,21 +6,21 @@ enum Review
 param spec
 
 program def main() -> unit =
-  let impl = AgentCommand("impl")
-  let reviewer = AgentCommand("reviewer")
-  let critic = AgentCommand("critic")
-  var artifact: text = impl.ask("Implement %{spec}")
+  let impl: Agent = AgentCommand("impl")
+  let reviewer: Agent = AgentCommand("reviewer")
+  let critic: Agent = AgentCommand("critic")
+  var artifact: text = ask("Implement %{spec}", agent = impl)
 
   # code and design declared as vars outside the loop so the until condition can see them.
   var code: Review = Pass
   var design: Review = Pass
 
   do[5]
-    code := reviewer.ask("Review correctness:\n%{artifact}", on_parse_error = Retry(n = 2))
-    design := critic.ask("Review design:\n%{artifact}", on_parse_error = Retry(n = 2))
+    code := ask("Review correctness:\n%{artifact}", agent = reviewer, on_parse_error = Retry(n = 2))
+    design := ask("Review design:\n%{artifact}", agent = critic, on_parse_error = Retry(n = 2))
 
     if code is Fail or design is Fail =>
-      artifact := impl.ask("""
+      artifact := ask("""
       Fix valid issues.
 
       Correctness review:
@@ -31,7 +31,7 @@ program def main() -> unit =
 
       Current artifact:
       %{artifact}
-      """)
+      """, agent = impl)
     else =>
       ()
   until code is Pass and design is Pass

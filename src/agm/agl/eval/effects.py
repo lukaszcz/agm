@@ -54,11 +54,11 @@ from agm.agl.runtime.trace import TraceStore
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.exceptions import make_builtin_exception as _make_exc_value
+from agm.agl.semantics.types import terminal_name
 from agm.agl.semantics.values import (
     VOID_VALUE,
     BoolValue,
     DecimalValue,
-    EnumValue,
     ExceptionValue,
     IntValue,
     JsonValue,
@@ -149,17 +149,17 @@ class EffectHandlers:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _agent_trace_value(agent: EnumValue) -> dict[str, object]:
+    def _agent_trace_value(agent: RecordValue) -> dict[str, object]:
         """Return the agent variant and payload without re-decoding it."""
         return {
-            "variant": agent.variant,
+            "variant": terminal_name(agent.display_name),
             "payload": {
                 name: value.value if isinstance(value, TextValue) else render_value(value)
                 for name, value in agent.fields.items()
             },
         }
 
-    def _raise_agent_call_error(self, agent: EnumValue, error: AgentCallHostError) -> NoReturn:
+    def _raise_agent_call_error(self, agent: RecordValue, error: AgentCallHostError) -> NoReturn:
         """Convert a transport failure after it was recorded in the trace."""
         declared = self._ctx._program.builtin_nominals.resolve("AgentCallError")
         agent_label = render_value(agent)
@@ -244,9 +244,10 @@ class EffectHandlers:
     ) -> Value:
         """Handle IrAsk: dispatch an Agent enum value and parse output."""
         agent_val = self._ctx._eval(agent_expr)
-        if not isinstance(agent_val, EnumValue):
+        if not isinstance(agent_val, RecordValue):
             raise TypeError(
-                f"IrAsk agent must evaluate to an Agent enum value, got {type(agent_val).__name__}"
+                "IrAsk agent must evaluate to an Agent member record, "
+                f"got {type(agent_val).__name__}"
             )
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
 
@@ -297,7 +298,7 @@ class EffectHandlers:
             )
         ) from error
 
-    def _invalid_agent_error(self, agent: EnumValue, error: SessionAgentError) -> NoReturn:
+    def _invalid_agent_error(self, agent: RecordValue, error: SessionAgentError) -> NoReturn:
         """Preserve agent-value failures across the session-opening boundary."""
         self._raise_agent_call_error(
             agent,
@@ -312,44 +313,55 @@ class EffectHandlers:
     def _require_session_host(self, operation: str) -> SessionHost:
         return self._ctx._session_host
 
-    def _session_value(self, handle: str, agent: EnumValue, transport: str) -> RecordValue:
+    def _session_value(self, handle: str, agent: RecordValue, transport: str) -> RecordValue:
         declared = self._ctx._program.builtin_nominals.resolve("Session")
-        transport_declared = self._ctx._program.builtin_nominals.resolve("SessionTransport")
         return RecordValue(
             nominal=declared.nominal,
             display_name=declared.display_name,
             fields={
                 "id": TextValue(handle),
                 "agent": agent,
-                "transport": EnumValue(
-                    nominal=transport_declared.nominal,
-                    display_name=transport_declared.display_name,
-                    variant=transport,
+                "transport": RecordValue(
+                    nominal=(
+                        transport_member
+                        := self._ctx._program.builtin_nominals.resolve_standard_member(
+                            "SessionTransport", transport
+                        )
+                    ).nominal,
+                    display_name=transport_member.display_name,
                     fields={},
                 ),
             },
         )
 
-    def _session_parts(self, value: Value, _operation: str) -> tuple[str, EnumValue, str]:
+    def _session_parts(self, value: Value, _operation: str) -> tuple[str, RecordValue, str]:
         """Extract the statically guaranteed fields from a ``Session`` record."""
         session = cast(RecordValue, value)
         return (
             cast(TextValue, session.fields["id"]).value,
-            cast(EnumValue, session.fields["agent"]),
-            cast(EnumValue, session.fields["transport"]).variant,
+            cast(RecordValue, session.fields["agent"]),
+            terminal_name(cast(RecordValue, session.fields["transport"]).display_name),
         )
 
-    def _resolve_session_transport(self, agent: EnumValue, transport: Value | None) -> str:
+    def _resolve_session_transport(self, agent: RecordValue, transport: Value | None) -> str:
         if transport is None:
-            return SessionTransport.RPC if agent.variant == "AgentPi" else SessionTransport.CLI
-        selected_transport = cast(EnumValue, transport)
-        if selected_transport.variant == "None":
-            return SessionTransport.RPC if agent.variant == "AgentPi" else SessionTransport.CLI
-        return cast(EnumValue, selected_transport.fields["value"]).variant
+            return (
+                SessionTransport.RPC
+                if terminal_name(agent.display_name) == "AgentPi"
+                else SessionTransport.CLI
+            )
+        selected_transport = cast(RecordValue, transport)
+        if terminal_name(selected_transport.display_name) == "None":
+            return (
+                SessionTransport.RPC
+                if terminal_name(agent.display_name) == "AgentPi"
+                else SessionTransport.CLI
+            )
+        return terminal_name(cast(RecordValue, selected_transport.fields["value"]).display_name)
 
     def eval_ir_session_open(self, node: IrSessionOpen) -> Value:
         """Open a host-backed session and mint its opaque AgL record."""
-        agent = cast(EnumValue, self._ctx._eval(node.agent))
+        agent = cast(RecordValue, self._ctx._eval(node.agent))
         transport = self._resolve_session_transport(
             agent, None if node.transport is None else self._ctx._eval(node.transport)
         )
@@ -362,7 +374,7 @@ class EffectHandlers:
 
     def eval_ir_session_default(self, _node: IrSessionDefault, default_agent: Value) -> Value:
         """Lazily obtain the session whose agent is current at first use."""
-        agent = cast(EnumValue, default_agent)
+        agent = cast(RecordValue, default_agent)
         transport = self._resolve_session_transport(agent, None)
         try:
             host = self._require_session_host("default")
@@ -451,7 +463,7 @@ class EffectHandlers:
     def _eval_agent_method_ask(
         self,
         *,
-        agent: EnumValue,
+        agent: RecordValue,
         prompt: str,
         contract_id: ContractId,
         max_attempts: int,
@@ -509,8 +521,22 @@ class EffectHandlers:
         handle, agent, _transport = self._session_parts(self._ctx._eval(node.session), "ask")
         prompt = self._text_of(self._ctx._eval(node.prompt))
         contract = self._ctx._program.contracts[node.contract_id]
-        output_contract: OutputContract | None = (
-            None if contract.is_unit else self._ctx._host_contracts[node.contract_id]
+        output_contract: OutputContract | TypelessOutputContract | None = (
+            None
+            if contract.is_unit
+            else self._ctx._host_contracts.get(node.contract_id)
+            or TypelessOutputContract(
+                target_type=contract.target_type_label,
+                codec_name=contract.codec_name,
+                strict_json=contract.strict_json,
+                format_instructions=contract.format_instructions,
+                json_schema=(
+                    None
+                    if contract.json_schema is None
+                    else cast(object, json.loads(contract.json_schema))
+                ),
+                structured_exec=contract.structured_exec,
+            )
         )
         json_schema = (
             None if contract.json_schema is None else cast(object, json.loads(contract.json_schema))
@@ -542,7 +568,7 @@ class EffectHandlers:
     def _eval_session_ask_attempts(
         self,
         *,
-        agent: EnumValue,
+        agent: RecordValue,
         prompt: str,
         contract_id: ContractId,
         max_attempts: int,
@@ -644,22 +670,31 @@ class EffectHandlers:
     def eval_ir_ask_request(
         self,
         _node: IrAskRequest,
+        agent_expr: IrExpr,
         prompt_expr: IrExpr,
     ) -> Value:
         """Handle IrAskRequest: build AgentRequest record without dispatching."""
+        agent_value = self._ctx._eval(agent_expr)
+        if not isinstance(agent_value, RecordValue):
+            raise TypeError(
+                "IrAskRequest agent must evaluate to an Agent member record, "
+                f"got {type(agent_value).__name__}"
+            )
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
 
         agent_request = self._ctx._program.builtin_nominals.resolve("AgentRequest")
+        nominals = self._ctx._program.builtin_nominals
         return RecordValue(
             nominal=agent_request.nominal,
             display_name=agent_request.display_name,
             fields={
+                "agent": agent_value,
                 "prompt": TextValue(prompt_text),
-                "target_type": some_value(TextValue("text")),
-                "format_instructions": none_value(),
-                "json_schema": none_value(),
+                "target_type": some_value(TextValue("text"), nominals=nominals),
+                "format_instructions": none_value(nominals=nominals),
+                "json_schema": none_value(nominals=nominals),
                 "attempt": IntValue(0),
-                "previous_error": none_value(),
+                "previous_error": none_value(nominals=nominals),
                 "metadata": JsonValue(
                     {
                         "codec_name": "text",

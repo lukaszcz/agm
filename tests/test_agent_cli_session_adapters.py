@@ -24,7 +24,7 @@ from agm.agent.session.cli_adapters import (
     PiCliSessionBackend,
 )
 from agm.agent.spec import AGENT_SPECS, AgentClaude, AgentCodex, AgentCommand, AgentPi, AgentSpec
-from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS
+from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, create_seeded_type_table
 from agm.core.process import ProcessCaptureResult
 
 
@@ -105,7 +105,11 @@ def test_agent_variant_spec_backend_catalogs_are_in_lockstep() -> None:
         "AgentCodex": (("model", "thinking"), AgentCodex, CodexCliSessionBackend),
         "AgentPi": (("provider", "model", "thinking"), AgentPi, PiCliSessionBackend),
     }
-    declared = dict(BUILTIN_PRELUDE_TYPE_DEFS["Agent"].variants)
+    table = create_seeded_type_table()
+    declared = {
+        member.name: tuple(table.record_fields(member).items())
+        for member in BUILTIN_PRELUDE_TYPE_DEFS["Agent"].members
+    }
 
     assert set(declared) == set(expected) == set(AGENT_SPECS) == set(CLI_SESSION_BACKENDS)
     for variant, (fields, spec, backend) in expected.items():

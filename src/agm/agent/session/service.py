@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.request import AgentRequest, AgentResponse
     from agm.agl.runtime.sessions import SessionSnapshot
     from agm.agl.runtime.sessions import SessionStats as AglSessionStats
-    from agm.agl.semantics.values import EnumValue
+    from agm.agl.semantics.values import RecordValue
 
 from agm.agent.session.protocol import (
     SessionAgentError as AgentSessionAgentError,
@@ -29,7 +29,7 @@ from agm.agent.session.protocol import (
 from agm.core.cleanup import preserve_primary_error
 
 _T = TypeVar("_T")
-SessionConfirmation = Callable[["EnumValue", str], None]
+SessionConfirmation = Callable[["RecordValue", str], None]
 
 SessionBackendFactory = Callable[[object, str], SessionBackend]
 
@@ -46,15 +46,15 @@ class AglSessionHost:
     ) -> None:
         self._service = service
         self._confirm_session = confirm_session
-        self._agents: dict[str, tuple[EnumValue, str]] = {}
+        self._agents: dict[str, tuple[RecordValue, str]] = {}
         self._ephemeral_handles: set[str] = set()
 
-    def open(self, agent: EnumValue, transport: str, *, name: str = "") -> str:
+    def open(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
         handle = self._open(agent, transport, name=name)
         self._agents[handle] = (agent, transport)
         return handle
 
-    def open_ephemeral(self, agent: EnumValue, transport: str, *, one_shot: bool = False) -> str:
+    def open_ephemeral(self, agent: RecordValue, transport: str, *, one_shot: bool = False) -> str:
         """Open one short-lived session for an AgL ask lifecycle."""
         handle = self._open(agent, transport, ephemeral=True, one_shot=one_shot)
         self._agents[handle] = (agent, transport)
@@ -63,7 +63,7 @@ class AglSessionHost:
 
     def with_ephemeral(
         self,
-        agent: EnumValue,
+        agent: RecordValue,
         transport: str,
         action: Callable[[str], _T],
         *,
@@ -95,7 +95,7 @@ class AglSessionHost:
 
     def _open(
         self,
-        agent: EnumValue,
+        agent: RecordValue,
         transport: str,
         *,
         name: str = "",
@@ -115,7 +115,7 @@ class AglSessionHost:
             )
         return self._call_host(lambda: self._service.open(spec, transport.lower(), name=name))
 
-    def default(self, agent: EnumValue, transport: str, *, name: str = "") -> str:
+    def default(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
         handle = self._call_host(
             lambda: self._service.default(self._agent_spec(agent), transport.lower(), name=name)
         )
@@ -218,10 +218,10 @@ class AglSessionHost:
     @staticmethod
     def _agent_spec(agent: object) -> object:
         from agm.agl.runtime.agents import decode_agent_value
-        from agm.agl.semantics.values import EnumValue
+        from agm.agl.semantics.values import RecordValue
 
-        if not isinstance(agent, EnumValue):
-            raise TypeError(f"session agent must be an EnumValue, got {type(agent).__name__}")
+        if not isinstance(agent, RecordValue):
+            raise TypeError(f"session agent must be an RecordValue, got {type(agent).__name__}")
         try:
             return decode_agent_value(agent)
         except ValueError as error:

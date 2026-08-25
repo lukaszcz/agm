@@ -13,8 +13,8 @@ param code: int
 param who
 
 program def main() -> unit =
-  let picker = AgentCommand("picker")
-  let shape: Shape = picker.ask("Pick a shape.")
+  let picker: Agent = AgentCommand("picker")
+  let shape: Shape = ask("Pick a shape.", agent = picker)
 
   case shape of
     | Shape::Dot() => print "dot"

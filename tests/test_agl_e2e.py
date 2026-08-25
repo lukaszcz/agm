@@ -7,7 +7,7 @@ tests/agl/rejections/**/*.agl file is an invalid program that the static
 pipeline must reject before executing anything. The data format is documented
 in tests/agl/README.md.
 
-Public contract exercised here (AgL implementation requirements , the AgL DSL design ):
+Public contract exercised here:
 
     from agm.agl import PipelineDriver
 

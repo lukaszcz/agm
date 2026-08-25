@@ -5,7 +5,7 @@ record Review
 param subject: text
 
 program def main() -> unit =
-  let ag = AgentCommand("raw")
+  let ag: Agent = AgentCommand("raw")
 
   print ag.ask! Summarize %{subject}.
 
@@ -13,6 +13,6 @@ program def main() -> unit =
     Review %{subject} and identify the key change.
   print block.summary
 
-  let agents = [AgentCommand("chain")]
+  let agents: array[Agent] = [AgentCommand("chain")]
   let chained: text = agents[0].ask! Continue %{subject}.
   print chained

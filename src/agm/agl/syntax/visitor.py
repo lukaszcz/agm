@@ -96,6 +96,7 @@ from agm.agl.syntax.nodes import (
     UseDecl,
     VarDecl,
     VariantDef,
+    VariantRef,
     VarPattern,
     VarRef,
     WildcardPattern,
@@ -179,6 +180,7 @@ class Visitor:
     # Declaration nodes
     def visit_RecordDef(self, node: RecordDef) -> None: ...
     def visit_VariantDef(self, node: VariantDef) -> None: ...
+    def visit_VariantRef(self, node: VariantRef) -> None: ...
     def visit_EnumDef(self, node: EnumDef) -> None: ...
     def visit_ExceptionDef(self, node: ExceptionDef) -> None: ...
     def visit_TypeAlias(self, node: TypeAlias) -> None: ...
@@ -286,6 +288,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         # declaration nodes
         RecordDef,
         VariantDef,
+        VariantRef,
         EnumDef,
         ExceptionDef,
         TypeAlias,
@@ -457,11 +460,16 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         for f in node.fields:
             walk(f, callback)
 
+    elif isinstance(node, VariantRef):
+        walk(node.chain, callback)
+        for type_arg in node.type_args:
+            walk(type_arg, callback)
+
     elif isinstance(node, EnumDef):
         for scope_segment in node.scope_path:
             walk(scope_segment, callback)
-        for v in node.variants:
-            walk(v, callback)
+        for member in node.members:
+            walk(member, callback)
 
     elif isinstance(node, ExceptionDef):
         for scope_segment in node.scope_path:

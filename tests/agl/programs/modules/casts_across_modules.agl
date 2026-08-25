@@ -9,10 +9,11 @@ import parsing::{to_int_or}
 param amount
 param point_json
 
-# Imported `as?`-guarded cast: succeeds or falls back, never raises.
+# Imported conversion guarded by a convertibility test: succeeds or falls back,
+# never raises.
 
 program def main() -> unit =
-  let source = AgentCommand("source")
+  let source: Agent = AgentCommand("source")
   print(to_int_or(amount, -1) as text)
 
   # Imported fallible cast across the module boundary; caught here on failure.

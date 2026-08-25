@@ -1,4 +1,5 @@
-"""Built-in call type-checking collaborator, including ``Session`` methods.
+"""Built-in call (print/render/copy/shallow_copy/parse_json/ask/ask-request/exec)
+type-checking collaborator.
 
 Driven by ``_Checker`` via the narrow ``BuiltinCheckCtx`` Protocol.  All logic
 lives here; the host checker instantiates ``BuiltinCallChecker(self)`` and
@@ -17,7 +18,7 @@ from agm.agl.ir.reserved_nominals import reserved_nominal_id
 from agm.agl.modules.ids import spell_declaration
 from agm.agl.scope.symbols import ConstructorRef
 from agm.agl.semantics.analyses import nominal_references
-from agm.agl.semantics.type_table import OPTION_TYPE_DEF, DeclId
+from agm.agl.semantics.type_table import DeclId
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     BoolType,
@@ -164,7 +165,9 @@ class BuiltinCallChecker:
     All built-in dispatch in ``_check_call`` is delegated here.
     """
 
-    _ASK_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset({"format", "strict_json", "on_parse_error"})
+    _ASK_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset(
+        {"agent", "format", "strict_json", "on_parse_error"}
+    )
 
     _EXEC_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset(
         {"format", "strict_json", "on_parse_error"}
@@ -251,8 +254,10 @@ class BuiltinCallChecker:
     def check_session_open(self, node: Call) -> Type:
         """Type-check ``Session::open(agent, transport?, name?)``."""
         session_transport = self._builtin_contract_type("SessionTransport")
+        option = self._ctx._env.type_table.builtin_declaration("Option")
         assert isinstance(session_transport, EnumType)
-        transport = OPTION_TYPE_DEF.handle((session_transport,))
+        assert option is not None
+        transport = option.handle((session_transport,))
         return self._check_static_call(
             node,
             "Session::open",
@@ -292,6 +297,8 @@ class BuiltinCallChecker:
 
     def check_session_ask(self, node: Call, *, expected: Type | None, receiver_type: Type) -> Type:
         """Type-check ``Session.ask`` with its receiver-owned agent selection."""
+        if any(argument.name == "agent" for argument in node.named_args):
+            raise AglTypeError("Session.ask does not accept an explicit agent.", span=node.span)
         return self.check_ask(node, expected=expected)
 
     def check_session_compact(
@@ -310,7 +317,7 @@ class BuiltinCallChecker:
         return self._check_session_nullary(node, "Session::reset")
 
     def check_session_fork(self, node: Call, *, expected: Type | None, receiver_type: Type) -> Type:
-        return self._check_session_nullary(node, "Session::fork", result="Session")
+        return self._check_static_call(node, "Session::fork", (), receiver_type)
 
     def check_session_stats(
         self, node: Call, *, expected: Type | None, receiver_type: Type
@@ -364,7 +371,22 @@ class BuiltinCallChecker:
             if argument is None:
                 continue
             argument_type = self._ctx._check_expr(argument, expected=param.type)
-            self._ctx._assert_assignable_from(argument_type, param.type, argument.span, argument)
+            if not (
+                name == "Session::open"
+                and param.name == "transport"
+                and isinstance(argument_type, RecordType)
+                and isinstance(param.type, EnumType)
+                and argument_type.name == "Some"
+                and param.type.name == "Option"
+                and len(argument_type.type_args) == len(param.type.type_args) == 1
+                and isinstance(argument_type.type_args[0], RecordType)
+                and isinstance(param.type.type_args[0], EnumType)
+                and argument_type.type_args[0]
+                in self._ctx._env.type_table.enum_members(param.type.type_args[0])
+            ):
+                self._ctx._assert_assignable_from(
+                    argument_type, param.type, argument.span, argument
+                )
         return result
 
     # --- resources ---
@@ -398,13 +420,9 @@ class BuiltinCallChecker:
     # --- ask ---
 
     def check_ask(
-        self,
-        node: Call,
-        *,
-        expected: Type | None,
-        receiver_type: Type | None = None,
+        self, node: Call, *, expected: Type | None, receiver_type: Type | None = None
     ) -> Type:
-        """Type-check ``ask``. *receiver_type* is set for an ``Agent`` receiver."""
+        """Type-check ``ask``. *receiver_type* is set only for ``x.ask(...)``."""
         # Target type: explicit type argument overrides context.
         explicit = self._resolve_explicit_target(node, "ask")
         target_type: Type = (
@@ -422,12 +440,13 @@ class BuiltinCallChecker:
 
     # --- ask-request ---
 
-    def check_ask_request(
-        self,
-        node: Call,
-        *,
-        expected: Type | None = None,
+    def check_agent_ask_request(
+        self, node: Call, *, expected: Type | None, receiver_type: Type
     ) -> Type:
+        """Type-check ``Agent.ask-request`` using its receiver as the agent."""
+        return self.check_ask_request(node, receiver_type=receiver_type)
+
+    def check_ask_request(self, node: Call, *, receiver_type: Type | None = None) -> Type:
         """Type-check the fixed-text, side-effect-free ``ask-request`` builder."""
         agent_request_type = self._resolve_host_record_contract("AgentRequest", span=node.span)
 
@@ -436,8 +455,8 @@ class BuiltinCallChecker:
                 "ask-request does not accept type arguments; it always builds a text request.",
                 span=node.span,
             )
-        # This reuses prompt validation without exposing ask's parse-shaping
-        # options. The obligation still records the fixed text
+        # This reuses prompt and Agent argument type validation, without exposing
+        # ask's parse-shaping options. The obligation still records the fixed text
         # target so the call site is reported like any other agent call site;
         # lowering builds the request record itself and allocates no contract.
         # The contract resolved above is threaded through so the coherence walk
@@ -445,7 +464,9 @@ class BuiltinCallChecker:
         self._validate_ask_like_arguments(
             node,
             "ask-request",
-            allowed_named=frozenset(),
+            allowed_named=frozenset() if receiver_type is not None else frozenset({"agent"}),
+            receiver_type=receiver_type,
+            agent_request_type=agent_request_type,
         )
         self._ctx._register_builtin_obligation(
             PendingBuiltinObligation(
@@ -476,7 +497,9 @@ class BuiltinCallChecker:
         named = self._validate_ask_like_arguments(
             node,
             callee,
-            allowed_named=self._ASK_ALLOWED_NAMED_ARGS,
+            allowed_named=self._ASK_ALLOWED_NAMED_ARGS
+            - ({"agent"} if receiver_type is not None else set()),
+            receiver_type=receiver_type,
         )
         format_name, strict_json, parse_policy = self._parse_options(named)
         self._ctx._register_builtin_obligation(
@@ -499,11 +522,34 @@ class BuiltinCallChecker:
         callee: str,
         *,
         allowed_named: frozenset[str],
+        receiver_type: Type | None = None,
+        agent_request_type: RecordType | None = None,
     ) -> dict[str, NamedArg]:
         """Check syntax and value arguments that do not need the target type.
 
         *allowed_named* is the caller's permitted named-argument set: ``ask``
-        offers its parse-shaping options and ``ask-request`` has none.
+        offers its parse-shaping options, ``ask-request`` only ``agent``, and a
+        receiver call drops ``agent`` because the receiver already supplies it.
+
+        Every ``ask``/``ask-request`` call resolves the ``AgentRequest``
+        contract unconditionally, whether or not ``agent`` is itself supplied:
+        the host builds an ``AgentRequest`` (directly for ``ask-request``, via
+        its retry machinery for ``ask``) either way, filling a missing
+        ``agent`` from the canonical default agent, so the contract must be
+        host-coherent (:meth:`_resolve_host_record_contract`) regardless.
+        *agent_request_type* lets a caller that already resolved the contract
+        itself (``check_ask_request``, which needs it before this method runs
+        anyway) pass the resolved handle through instead of paying the
+        coherence walk a second time; when omitted (``ask``'s path), this
+        method resolves it itself, at this same point in the check order.
+
+        The agent the request is built with is that resolved contract's own
+        ``agent`` FIELD type -- the type the value is actually stored as --
+        rather than an independently resolved ``Agent`` type, so the two can
+        never name different declarations of the same bare name. That single
+        expected type governs both ways of supplying the agent: the ``agent``
+        named argument, and *receiver_type* for a receiver call
+        (``x.ask(...)``), whose receiver IS the agent.
         """
         named = {na.name: na for na in node.named_args}
         for arg_name, na in named.items():
@@ -517,6 +563,27 @@ class BuiltinCallChecker:
             )
         prompt_type = self._ctx._check_expr(node.args[0], expected=TextType())
         self._ctx._assert_assignable_from(prompt_type, TextType(), node.args[0].span, node.args[0])
+        if agent_request_type is None:
+            agent_request_type = self._resolve_host_record_contract("AgentRequest", span=node.span)
+        expected_agent_type = self._ctx._env.type_table.record_fields(agent_request_type)["agent"]
+        if receiver_type is not None and callee == "ask-request":
+            is_agent_member = isinstance(receiver_type, RecordType) and any(
+                owner == expected_agent_type
+                for owner in self._ctx._env.type_table.enum_owners_for_member(receiver_type)
+            )
+            if not is_agent_member:
+                self._ctx._assert_assignable_from(
+                    receiver_type, expected_agent_type, node.span, node
+                )
+        if "agent" in named:
+            agent_na = named["agent"]
+            agent_type = self._ctx._check_expr(agent_na.value, expected=expected_agent_type)
+            self._ctx._assert_assignable_from(
+                agent_type,
+                expected_agent_type,
+                agent_na.value.span,
+                agent_na.value,
+            )
         return named
 
     def finalize(self, obligation: PendingBuiltinObligation) -> None:
@@ -706,11 +773,12 @@ class BuiltinCallChecker:
         """
         table = self._ctx._env.type_table
         typedef = table.get_by_id(exc_type.decl_id)
-        if typedef is not None and typedef.is_builtin:
-            self._check_host_contract_coherent(exc_type, span=span)
-        live_declaration = table.builtin_declaration(exc_type.name)
-        if live_declaration is None:
+        assert typedef is not None, "compiler bug: caught exception is not registered"
+        if not typedef.is_builtin:
             return
+        self._check_host_contract_coherent(exc_type, span=span)
+        live_declaration = table.builtin_declaration(exc_type.name)
+        assert live_declaration is not None, "compiler bug: builtin exception is not live"
         live_handle = live_declaration.handle()
         assert isinstance(live_handle, ExceptionType), (
             f"{exc_type.name!r} is registered as a builtin exception name but its live "
@@ -737,20 +805,10 @@ class BuiltinCallChecker:
     ) -> None:
         """Reject *contract_type* if the host cannot produce a value of its shape.
 
-        The host produces a value of *contract_type* itself — a record a
-        built-in call mints (``ask-request``, ``ask``, ``exec``) or an
-        exception it raises — filling every nominal-typed field with a value
-        that carries a fixed, host-known identity (the canonical ``Agent`` for
-        ``AgentCallError.agent``, the canonical
-        ``Option`` for ``AgentRequest``'s ``Option``-typed fields — see
-        ``eval/effects.py``, ``runtime/agents.py`` and ``runtime/option.py``)
-        — never whatever declaration *contract_type*'s own field type happens
-        to name. When a field's type does not itself carry that fixed
-        identity — checked recursively through type arguments, so
-        ``Option[text]``'s own ``Option`` is checked too — the checker would
-        type the field one way while the host produces another, so such a
-        contract is rejected here (an ordinary, user-facing static error)
-        rather than left to crash the evaluator.
+        Nominal fields filled by the host use the loaded ``std/core`` source
+        declaration, falling back to its reserved identity when the standard
+        library is absent. A contract field must name that same standard
+        declaration, checked recursively through type arguments.
         """
         if contract_type.decl_id in self._coherent_contracts:
             return
@@ -762,20 +820,20 @@ class BuiltinCallChecker:
         )
         for field_name, field_type in field_types.items():
             for nominal in nominal_references(field_type):
-                # A name with no reserved identity at all (``reserved_id is
-                # None``) is also incoherent: ``!=`` against ``None`` is
-                # always true, so it is rejected here exactly like a name
-                # that has one but whose declaration doesn't carry it.
-                reserved_id = reserved_nominal_id(nominal.name)
-                if nominal.decl_id != reserved_id:
+                selected = table.standard_builtin_declaration(nominal.name)
+                selected_id = (
+                    selected.decl_node_id
+                    if selected is not None
+                    else reserved_nominal_id(nominal.name)
+                )
+                if nominal.decl_id != selected_id:
                     raise AglTypeError(
                         f"{contract_type.name}'s field '{field_name}' is typed "
-                        f"'{field_type!r}', which names this program's own "
-                        f"'{nominal.name}' declaration rather than the standard one. "
+                        f"'{field_type!r}', which does not name the selected "
+                        f"'{nominal.name}' builtin declaration. "
                         f"{contract_type.name} is produced directly by the host, which "
-                        f"always fills '{field_name}' with the standard "
-                        f"'{nominal.name}' identity, so this contract cannot be used "
-                        "here.",
+                        f"fills '{field_name}' with the selected '{nominal.name}' identity, "
+                        "so this contract cannot be used here.",
                         span=span,
                     )
         self._coherent_contracts.add(contract_type.decl_id)

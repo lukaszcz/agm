@@ -1,0 +1,9 @@
+record Other()
+
+enum Result
+  | Ok
+  | Err
+
+program def main() -> unit =
+  let other = Other
+  let _ = other as Result

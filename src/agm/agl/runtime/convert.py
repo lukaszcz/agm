@@ -45,13 +45,13 @@ from agm.agl.ir.contracts import (
     RefDecode,
     ScalarDecode,
     ScalarKind,
+    resolve_schema_ref,
 )
 from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
     DecimalValue,
     DictValue,
-    EnumValue,
     IntValue,
     JsonValue,
     RecordValue,
@@ -258,7 +258,7 @@ def decode_value(
                     raise ValueError(f"Missing field {fname!r}")
                 record_fields[fname] = decode_value(fschema, obj[fname], defs)
             return RecordValue(nominal=nominal, display_name=display_name, fields=record_fields)
-        case EnumDecode(nominal=nominal, display_name=display_name, variants=variants):
+        case EnumDecode(display_name=display_name, variants=variants):
             if not isinstance(obj, dict):
                 raise ValueError(f"Expected object for enum, got {type(obj).__name__}")
             case_val = obj.get("$case")
@@ -275,10 +275,9 @@ def decode_value(
                 if fname not in obj:
                     raise ValueError(f"Enum variant {case_val!r} is missing field {fname!r}")
                 payload[fname] = decode_value(fschema, obj[fname], defs)
-            return EnumValue(
-                nominal=nominal,
-                display_name=display_name,
-                variant=case_val,
+            return RecordValue(
+                nominal=variant.nominal,
+                display_name=variant.display_name,
                 fields=payload,
             )
         case _ as unreachable:  # pragma: no cover
@@ -287,18 +286,12 @@ def decode_value(
 
 def _resolve_decode_ref(key: str, defs: Mapping[str, DecodeSchema]) -> DecodeSchema:
     """Resolve a ``RefDecode`` key to a non-ref body, rejecting malformed cycles."""
-    seen: set[str] = set()
-    current = key
-    while True:
-        if current in seen:
-            raise AssertionError(f"decode_value: RefDecode cycle at $defs key {current!r}")
-        seen.add(current)
-        resolved = defs.get(current)
-        if resolved is None:  # pragma: no cover — invariant: plan keys always resolve
-            raise AssertionError(f"decode_value: unknown $defs key {current!r}")
-        if not isinstance(resolved, RefDecode):
-            return resolved
-        current = resolved.key
+    return resolve_schema_ref(
+        key,
+        defs,
+        lambda schema: schema.key if isinstance(schema, RefDecode) else None,
+        subject="decode_value: RefDecode",
+    )
 
 
 def _decode_scalar(kind: ScalarKind, obj: object) -> Value:

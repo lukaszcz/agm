@@ -248,6 +248,20 @@ program def main() -> unit =
   let _ = print(box.size())
 ```
 
+An inline enum member likewise establishes a record type scope, including the
+captured generic parameters of its fields:
+
+```agl
+enum Tree[T]
+  | Leaf
+  | Node(value: T)
+
+def Tree::Node::extract[E](self) -> E = self.value
+```
+
+`Tree::Node::extract` is a method of `Tree::Node[E]`, not of `Tree[E]`. Methods
+of `Tree` instead require a receiver statically typed as `Tree[E]`.
+
 A method member used without a call is a **bound method**: a function value
 that has captured its receiver and has parameters only for the remaining
 method parameters. It can be stored, passed to another function, or partially

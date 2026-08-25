@@ -24,7 +24,7 @@ scope Tools
 record Token()
 enum Signal
   | ready
-let helper = AgentCommand("helper")
+let helper: Agent = AgentCommand("helper")
 def greeting() -> text = "hello"
 def retain(value: Tools::Token) -> Tools::Token = value
 end Tools
@@ -67,6 +67,6 @@ program def main() -> unit =
   print(Outer::Inner::nearest_flag(Outer::Inner::Flag::inner))
   print(Outer::outer_flag(Outer::Flag::outer))
   print(Tools::greeting())
-  print(Tools::helper.ask("Reply with scoped agent."))
-  let signal = Tools::Signal::ready
+  print(ask("Reply with scoped agent.", agent = Tools::helper))
+  let signal: Tools::Signal = Tools::Signal::ready
   print(signal is Tools::Signal::ready)

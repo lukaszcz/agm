@@ -27,7 +27,7 @@ program def main() -> unit =
   print t2
 
   # An array of records containing special characters.
-  let snips = [Raw(src = "${var} \%{var}"), Wrapped(prefix = ">>", src = "a\"b")]
+  let snips: array[Snippet] = [Raw(src = "${var} \%{var}"), Wrapped(prefix = ">>", src = "a\"b")]
   print snips
 
   # Interpolating a record into a template (top-level text -> verbatim;

@@ -10,7 +10,6 @@ from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.roots import RootSet
 from agm.agl.scope import AglScopeError
-from agm.agl.semantics.types import BUILTIN_PRELUDE_TYPES
 from agm.agl.syntax.nodes import Call, LetDecl
 from agm.agl.typecheck import AglTypeError, CheckedModule, check_program
 from tests.agl.module_graph import resolve_and_check_repl_entry
@@ -52,11 +51,9 @@ def test_session_statics_type_as_session_with_defaults_and_named_arguments() -> 
         for item in checked.resolved.program.body.items
         if isinstance(item, LetDecl) and isinstance(item.value, Call)
     ]
-    session_calls = [
-        call
-        for call in calls
-        if checked.node_types[call.node_id] == BUILTIN_PRELUDE_TYPES["Session"]
-    ]
+    session = checked.type_env.type_table.builtin_declaration("Session")
+    assert session is not None
+    session_calls = [call for call in calls if checked.node_types[call.node_id] == session.handle()]
     assert len(session_calls) == 4
 
 
@@ -104,9 +101,11 @@ def test_nested_user_session_does_not_shadow_prelude_session_static(
         for item in checked.resolved.program.body.items
         if isinstance(item, LetDecl) and isinstance(item.value, Call)
     ]
-    assert checked.node_types[calls[0].node_id] == BUILTIN_PRELUDE_TYPES["Session"]
+    session = checked.type_env.type_table.builtin_declaration("Session")
+    assert session is not None
+    assert checked.node_types[calls[0].node_id] == session.handle()
     result = checked.resolved.program.body.items[-1]
-    assert checked.node_types[result.node_id].kind == local_kind
+    assert checked.node_types[result.node_id].kind == "record"
 
 
 def test_non_prelude_session_static_header_is_not_a_builtin() -> None:
@@ -137,6 +136,29 @@ def test_replacement_std_core_scope_is_not_the_session_static_owner(tmp_path: Pa
         check_program(prepared.resolved, driver.host_environment().capabilities)
 
 
+def test_prelude_session_constructor_spelling_is_rejected_as_an_unknown_static(
+    tmp_path: Path,
+) -> None:
+    """A prelude static owner rejects constructor-like value references."""
+    (tmp_path / "std").mkdir()
+    (tmp_path / "std" / "core.agl").write_text(
+        "builtin record Session()\n"
+        "builtin def Session::default() -> Session\n"
+        "let value = Session::Session\n",
+        encoding="utf-8",
+    )
+
+    prepared = PipelineDriver().prepare_program(
+        "program def main() -> unit =\n  let session = Session::default()\n  ()\n",
+        roots=RootSet(roots=frozenset({tmp_path})),
+    )
+
+    assert prepared.resolved is None
+    assert any(
+        "unknown static" in diagnostic.message.lower() for diagnostic in prepared.diagnostics
+    )
+
+
 def test_builtin_static_cannot_be_partially_applied_or_used_as_a_value() -> None:
     partial = _reject("Session::open(?)")
     value = _reject("let open_session = Session::open\nopen_session")
@@ -153,4 +175,8 @@ def test_static_names_remain_ordinary_identifiers() -> None:
 def test_enum_constructor_resolution_remains_available() -> None:
     checked = _check("SessionTransport::Cli")
     result = checked.resolved.program.body.items[-1]
-    assert checked.node_types[result.node_id] == BUILTIN_PRELUDE_TYPES["SessionTransport"]
+    transport = checked.type_env.type_table.builtin_declaration("SessionTransport")
+    assert transport is not None
+    assert checked.node_types[result.node_id] in checked.type_env.type_table.enum_members(
+        transport.handle()
+    )

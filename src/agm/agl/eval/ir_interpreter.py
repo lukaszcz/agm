@@ -40,6 +40,7 @@ from agm.agl.eval.arith import (
 from agm.agl.eval.conversions import AglCastConversion, run_recipe
 from agm.agl.eval.effects import EffectHandlers
 from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, index_set
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
 from agm.agl.ir.contracts import (
     ContractRequest,
     ConversionFailureMode,
@@ -188,6 +189,26 @@ __all__ = [
 
 
 _SCALAR_ENCODE_PLAN = EncodePlan(ScalarEncode())
+
+
+def _rebind_host_enum_member(
+    value: RecordValue,
+    *,
+    enum_name: str,
+    member_names: tuple[str, ...],
+    nominals: BuiltinNominals,
+) -> RecordValue:
+    """Stamp a fallback host enum record with this executable's member identity."""
+    for member_name in member_names:
+        fallback = NO_BUILTIN_DECLARATIONS.resolve_standard_member(enum_name, member_name)
+        if value.nominal == fallback.nominal:
+            selected = nominals.resolve_standard_member(enum_name, member_name)
+            return RecordValue(
+                nominal=selected.nominal,
+                display_name=selected.display_name,
+                fields=value.fields,
+            )
+    return value
 
 
 class ParameterDefaultCycleError(Exception):
@@ -551,6 +572,12 @@ class IrInterpreter:
                 else defaults["timeout"]
             )
         assert isinstance(timeout_setting, RecordValue)
+        timeout_setting = _rebind_host_enum_member(
+            timeout_setting,
+            enum_name="Option",
+            member_names=("None", "Some"),
+            nominals=self._program.builtin_nominals,
+        )
         self._timeout_setting = timeout_setting
         self._apply_config_effect("timeout", timeout_setting)
 
@@ -564,6 +591,13 @@ class IrInterpreter:
         }
         default_agent = self._builtin_host_settings.get("default-agent")
         if isinstance(default_agent, RecordValue):
+            default_agent = _rebind_host_enum_member(
+                default_agent,
+                enum_name="Agent",
+                member_names=("AgentCommand", "AgentClaude", "AgentCodex", "AgentPi"),
+                nominals=self._program.builtin_nominals,
+            )
+            self._builtin_host_settings["default-agent"] = default_agent
             self._check_default_agent_dispatchable(default_agent)
         if self._host_reconfigurer is not None:
             self._reconfigure_host_service()

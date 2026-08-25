@@ -173,7 +173,9 @@ def test_host_seed_overrides_initializer_until_source_write() -> None:
     )
 
     assert result.ok
-    assert result.bindings["seeded"] == agent_value("AgentCodex", model="o3", thinking="medium")
+    _assert_agent_shape(
+        result.bindings["seeded"], agent_value("AgentCodex", model="o3", thinking="medium")
+    )
     _assert_agent_shape(
         result.bindings["written"],
         agent_value("AgentPi", provider="openai", model="gpt", thinking="high"),
@@ -269,7 +271,17 @@ def test_exec_runner_config_seeds_default_agent_as_agent_command(
     config_dir.mkdir(parents=True)
     (config_dir / "config.toml").write_text('[exec]\nrunner = "claude"\n')
     program = tmp_path / "program.agl"
-    program.write_text(_file_program("import std/config\nprint std/config::default-agent\n"))
+    program.write_text(
+        "import std/config\n"
+        "program def main() -> unit =\n"
+        "  let agent = std/config::default-agent\n"
+        "  let command = case agent of\n"
+        "    | AgentCommand(command) => command\n"
+        '    | _ => "unexpected"\n'
+        "  let encoded = agent as json\n"
+        "  print command\n"
+        "  print encoded\n"
+    )
     monkeypatch.setattr(
         exec_engine,
         "current_config_context",

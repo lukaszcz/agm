@@ -133,6 +133,20 @@ class TestPersistence:
         assert result.value == IntValue(42)
         assert agent.calls == 1
 
+    def test_shell_timeout_seed_matches_loaded_option_members(self) -> None:
+        """A REPL timeout seed remains matchable after loading ``std/core``."""
+        session = ReplSession(shell_exec_timeout=2.0)
+
+        result = session.eval_entry(
+            "import std/config\n"
+            "case std/config::timeout of\n"
+            "  | Some(value) => value\n"
+            '  | None => "disabled"\n'
+        )
+
+        assert result.ok, result.diagnostics
+        assert result.value == TextValue("2.0s")
+
     def test_method_declared_after_its_type_is_callable_in_a_later_entry(self) -> None:
         session = ReplSession()
         assert session.eval_entry("record Meter(value: int)").ok

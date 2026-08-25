@@ -78,6 +78,68 @@ def test_post_ack_terminal_failure_is_not_reported_as_success(
     backend.close()
 
 
+def test_retry_discards_failed_attempt_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    RpcStub(
+        tmp_path,
+        monkeypatch,
+        {
+            "prompt": [
+                {"id": "$id", "type": "response", "command": "prompt", "success": True},
+                {
+                    "type": "message_update",
+                    "assistantMessageEvent": {"type": "text_delta", "delta": "stale"},
+                },
+                {"type": "auto_retry_start", "willRetry": True},
+                {
+                    "type": "message_update",
+                    "assistantMessageEvent": {"type": "text_delta", "delta": "new"},
+                },
+                {"type": "agent_settled"},
+            ]
+        },
+    )
+    backend = open_backend()
+
+    assert backend.ask(SessionAskRequest("hello")).content == "new"
+    backend.close()
+
+
+def test_message_end_output_replaces_streaming_deltas(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    RpcStub(
+        tmp_path,
+        monkeypatch,
+        {
+            "prompt": [
+                {"id": "$id", "type": "response", "command": "prompt", "success": True},
+                {
+                    "type": "message_update",
+                    "assistantMessageEvent": {"type": "text_delta", "delta": "original"},
+                },
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "thinking", "thinking": "hidden"},
+                            {"type": "text", "text": "replacement"},
+                            {"type": "text", "text": " output"},
+                        ],
+                    },
+                },
+                {"type": "agent_settled"},
+            ]
+        },
+    )
+    backend = open_backend()
+
+    assert backend.ask(SessionAskRequest("hello")).content == "replacement output"
+    backend.close()
+
+
 def test_retrying_terminal_error_is_cleared_by_eventual_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

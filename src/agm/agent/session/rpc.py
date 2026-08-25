@@ -279,6 +279,7 @@ class PiRpcSessionBackend:
                 if ui_cancellation is not None:
                     _write_command(child, ui_cancellation, self._idle_timeout)
                 delta = _event_text_delta(event)
+                authoritative_text = _event_assistant_text(event)
                 if event["type"] == "response":
                     _validate_response(event)
                     if event.get("id") == state_request_id and event.get("command") == "get_state":
@@ -299,18 +300,6 @@ class PiRpcSessionBackend:
                 self._kill_dead_child(child)
                 self._raise_transport_or_host(operation, str(exc), started, exc, child)
 
-            if delta is not None and wait_for_settled:
-                text_length += len(delta)
-                if text_length > _MAX_PROMPT_CHARS:
-                    self._kill_dead_child(child)
-                    self._raise_transport_or_host(
-                        operation,
-                        "Pi RPC prompt output exceeded the protocol limit",
-                        started,
-                        None,
-                        child,
-                    )
-                text.append(delta)
             event_type = event["type"]
             if event_type == "response":
                 event_id = cast(str, event["id"])
@@ -349,9 +338,27 @@ class PiRpcSessionBackend:
                     )
             if wait_for_settled:
                 if event.get("willRetry") is True:
+                    text.clear()
+                    text_length = 0
                     terminal_error = None
-                elif failure is not None:
-                    terminal_error = failure
+                else:
+                    if authoritative_text is not None:
+                        text = [authoritative_text]
+                        text_length = len(authoritative_text)
+                    elif delta is not None:
+                        text.append(delta)
+                        text_length += len(delta)
+                    if text_length > _MAX_PROMPT_CHARS:
+                        self._kill_dead_child(child)
+                        self._raise_transport_or_host(
+                            operation,
+                            "Pi RPC prompt output exceeded the protocol limit",
+                            started,
+                            None,
+                            child,
+                        )
+                    if failure is not None:
+                        terminal_error = failure
                 settled = settled or event_type == "agent_settled"
         if terminal_error is not None:
             self._raise_ask_error("nonzero_exit", terminal_error, started, child)
@@ -628,6 +635,27 @@ def _validate_response(event: dict[str, object]) -> None:
         error = event.get("error")
         if not isinstance(error, str) or not error:
             raise _RpcProtocolError("Pi RPC failure response had no error")
+
+
+def _event_assistant_text(event: dict[str, object]) -> str | None:
+    if event["type"] != "message_end":
+        return None
+    message = event.get("message")
+    if not isinstance(message, dict) or message.get("role") != "assistant":
+        return None
+    content = message.get("content")
+    if not isinstance(content, list):
+        raise _RpcProtocolError("Pi RPC assistant message had malformed content")
+    text: list[str] = []
+    for block in content:
+        if not isinstance(block, dict):
+            raise _RpcProtocolError("Pi RPC assistant message had a malformed content block")
+        if block.get("type") == "text":
+            value = block.get("text")
+            if not isinstance(value, str):
+                raise _RpcProtocolError("Pi RPC assistant message text block was not text")
+            text.append(value)
+    return "".join(text)
 
 
 def _response_streaming_state(response: dict[str, object]) -> bool:

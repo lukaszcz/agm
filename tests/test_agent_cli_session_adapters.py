@@ -727,6 +727,32 @@ def test_claude_rejects_an_unsuccessful_compaction(monkeypatch: pytest.MonkeyPat
     assert raised.value.operation == "compact"
 
 
+@pytest.mark.parametrize(
+    ("backend", "agent", "name_flag"),
+    [
+        (ClaudeCliSessionBackend, AgentClaude("m", "t"), "-n"),
+        (PiCliSessionBackend, AgentPi("p", "m", "t"), "--name"),
+    ],
+)
+def test_spawn_failure_retries_cli_session_creation(
+    monkeypatch: pytest.MonkeyPatch,
+    backend: Callable[[], ClaudeCliSessionBackend | PiCliSessionBackend],
+    agent: AgentClaude | AgentPi,
+    name_flag: str,
+) -> None:
+    transport = CaptureTransport([CaptureOutcome(spawn_error="missing"), CaptureOutcome("answer")])
+    transport.install(monkeypatch)
+    session = backend()
+    _open(session, agent, name="named")
+
+    with pytest.raises(SessionAskError):
+        session.ask(SessionAskRequest("first"))
+    session.ask(SessionAskRequest("retry"))
+
+    assert name_flag in transport.calls[0][0]
+    assert name_flag in transport.calls[1][0]
+
+
 def test_pi_first_invocation_failure_does_not_repeat_creation_flags_until_reset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -807,6 +833,32 @@ def test_codex_rejects_a_name_when_opening() -> None:
         _open(CodexCliSessionBackend(), AgentCodex("", ""), name="named")
 
     assert raised.value.operation == "set-name"
+
+
+def test_codex_retries_thread_creation_after_spawn_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = CaptureTransport(
+        [
+            CaptureOutcome(spawn_error="missing"),
+            CaptureOutcome(
+                '{"type":"thread.started","thread_id":"created"}\n'
+                '{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}'
+            ),
+        ]
+    )
+    transport.install(monkeypatch)
+    backend = CodexCliSessionBackend()
+    _open(backend, AgentCodex("", ""))
+
+    with pytest.raises(SessionAskError):
+        backend.ask(SessionAskRequest("first"))
+
+    assert backend.ask(SessionAskRequest("retry")).content == "answer"
+    assert [argv for argv, _ in transport.calls] == [
+        ["codex", "exec", "--json", "-"],
+        ["codex", "exec", "--json", "-"],
+    ]
 
 
 def test_codex_does_not_retry_a_failed_first_invocation_as_a_new_thread(

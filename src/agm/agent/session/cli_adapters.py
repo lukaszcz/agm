@@ -69,6 +69,11 @@ class _CodexSession:
     started: bool = False
 
 
+def _creation_not_launched(error: SessionAskError) -> bool:
+    """Whether an initial ask failed before a transcript process could start."""
+    return error.cause in {"spawn_failure", "interpolation_failure"}
+
+
 def _cleanup_after_ask(temp_files: list[Path], primary_error: BaseException | None = None) -> None:
     """Clean up a prompt, retaining any error already raised by the ask."""
     try:
@@ -275,9 +280,14 @@ class _SessionIdCliBackend(_CliPromptBackend, Generic[_SessionAgentT], ABC):
         """Start or resume this backend's transcript for one prompt."""
         session = self._session_for(SessionOperation.ASK.value)
         command = self._prompt_command(session)
-        # A first attempt consumes creation state even when its transport fails.
+        was_started = session.started
         session.started = True
-        return self._run_prompt(request.prompt, command, delivery=PromptDelivery.FILE)
+        try:
+            return self._run_prompt(request.prompt, command, delivery=PromptDelivery.FILE)
+        except SessionAskError as error:
+            if not was_started and _creation_not_launched(error):
+                session.started = False
+            raise
 
     def reset(self) -> None:
         """Discard the transcript while retaining this backend instance."""
@@ -414,11 +424,16 @@ class CodexCliSessionBackend(_CliPromptBackend):
             )
         starting = session.session_id is None
         session.started = True
-        response = self._run_prompt(
-            request.prompt,
-            session.agent.session_argv(session.session_id),
-            delivery=PromptDelivery.STDIN,
-        )
+        try:
+            response = self._run_prompt(
+                request.prompt,
+                session.agent.session_argv(session.session_id),
+                delivery=PromptDelivery.STDIN,
+            )
+        except SessionAskError as error:
+            if starting and _creation_not_launched(error):
+                session.started = False
+            raise
         if not starting:
             return response
         try:

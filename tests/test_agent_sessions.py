@@ -304,6 +304,7 @@ def test_reset_all_discards_handles_and_starts_a_fresh_default_generation() -> N
     service, factory = _service()
     first_default = service.default(AgentCommand("first"), "cli")
     explicit = service.open(AgentCommand("other"), "cli")
+    service.close(explicit)
 
     service.reset_all()
 
@@ -420,6 +421,21 @@ def test_agl_host_ephemeral_lifecycle_retires_its_agent_mapping() -> None:
     assert host._ephemeral_handles == set()
     with pytest.raises(AglSessionHostError):
         host.close(handles[0])
+
+
+def test_agl_host_reset_all_retires_all_successfully_closed_mappings() -> None:
+    service, _factory = _service()
+    host = AglSessionHost(service)
+    agent = agent_value("AgentCommand", command="worker")
+    persistent = host.open(agent, "Cli")
+    ephemeral = host.open_ephemeral(agent, "Cli")
+
+    host.reset_all()
+
+    assert not service.is_known(persistent)
+    assert not service.is_known(ephemeral)
+    assert host._agents == {}
+    assert host._ephemeral_handles == set()
 
 
 def test_close_all_retires_closed_ephemeral_host_mappings() -> None:

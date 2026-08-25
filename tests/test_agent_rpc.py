@@ -215,6 +215,47 @@ def test_interrupting_prompt_kills_the_active_rpc_child(
     backend.close()
 
 
+@pytest.mark.parametrize(
+    ("command_type", "error"),
+    [
+        ("prompt", KeyboardInterrupt()),
+        ("get_state", KeyboardInterrupt()),
+        ("get_state", rpc._RpcIdleTimeout()),
+        ("get_state", OSError("closed")),
+    ],
+)
+def test_prompt_write_interruption_or_failure_kills_rpc_child(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command_type: str,
+    error: BaseException,
+) -> None:
+    stub = RpcStub(
+        tmp_path,
+        monkeypatch,
+        {"prompt": [{"id": "$id", "type": "response", "command": "prompt", "success": True}]},
+    )
+    backend = open_backend()
+    pid = cast(int, stub.wait_for("starts.jsonl")[0]["pid"])
+    write_command = rpc._write_command
+
+    def fail_selected_write(
+        child: rpc._RpcChild, command: dict[str, object], idle_timeout: float | None
+    ) -> None:
+        if command["type"] == command_type:
+            raise error
+        write_command(child, command, idle_timeout)
+
+    monkeypatch.setattr(rpc, "_write_command", fail_selected_write)
+    expected = KeyboardInterrupt if isinstance(error, KeyboardInterrupt) else SessionAskError
+
+    with pytest.raises(expected):
+        backend.ask(SessionAskRequest("interrupt"))
+
+    assert_exited(pid)
+    backend.close()
+
+
 def test_spawn_prompt_and_lifecycle_protocol(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

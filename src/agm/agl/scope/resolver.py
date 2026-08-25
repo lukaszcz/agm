@@ -3131,15 +3131,6 @@ class _Resolver:
         """Return whether the resolved qualifier is a host static's nominal owner."""
         if node.qualifier is None:
             return False
-        owner_atom = _bare_atom(tuple(segment.name for segment in node.qualifier.segments))
-        candidates = self._regional_constructor_candidates(owner_atom) or set()
-        if any(
-            is_builtin_type_static_owner(
-                candidate.owner_module_id, (*candidate.owner_path, candidate.owner_name)
-            )
-            for candidate in candidates
-        ):
-            return True
         chain = node.qualifier
         relative_path = tuple(segment.name for segment in chain.segments)
         if self._validate_local_scope_chain(chain) is not None:

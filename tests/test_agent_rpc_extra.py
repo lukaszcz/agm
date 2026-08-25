@@ -367,6 +367,23 @@ def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> Non
         rpc._event_text_delta({"type": "message_update", "assistantMessageEvent": {"type": "tool"}})
         is None
     )
+    assert rpc._event_assistant_text({"type": "message_end", "message": None}) is None
+    assert (
+        rpc._event_assistant_text(
+            {"type": "message_end", "message": {"role": "user", "content": []}}
+        )
+        is None
+    )
+    malformed_messages = (
+        {"role": "assistant", "content": None},
+        {"role": "assistant", "content": [None]},
+        {"role": "assistant", "content": [{"type": "text", "text": None}]},
+    )
+    for message in malformed_messages:
+        with pytest.raises(rpc._RpcProtocolError):
+            rpc._event_assistant_text({"type": "message_end", "message": message})
+    with pytest.raises(rpc._RpcProtocolError):
+        rpc._response_streaming_state({"data": {}})
     with pytest.raises(rpc._RpcProtocolError):
         rpc._terminal_prompt_failure({"type": "message_end", "message": None})
     assert (

@@ -1,0 +1,34 @@
+{
+  "scenarios": [
+    {
+      "name": "python_write_through_is_visible_to_agl",
+      "params": {"mode": "write_through"},
+      "expect": {"stdout": "Mutable(value = 2, fixed = \"fixed\")\n"}
+    },
+    {
+      "name": "python_rejects_non_var_record_field_writes",
+      "params": {"mode": "fixed_rejected"},
+      "expect": {"stdout": "true\n"}
+    },
+    {
+      "name": "returning_a_live_view_preserves_record_identity",
+      "params": {"mode": "round_trip_identity"},
+      "expect": {"stdout": "Mutable(value = 3, fixed = \"fixed\")\nMutable(value = 3, fixed = \"fixed\")\n"}
+    },
+    {
+      "name": "python_constructed_live_record_crosses_into_agl",
+      "params": {"mode": "python_constructed"},
+      "expect": {"stdout": "Mutable(value = 10, fixed = \"made\")\n"}
+    },
+    {
+      "name": "mutable_enum_member_writes_through",
+      "params": {"mode": "mutable_member"},
+      "expect": {"stdout": "Event::Changed(value = 2, fixed = \"fixed\")\n"}
+    },
+    {
+      "name": "immutable_record_snapshot_behavior_is_unchanged",
+      "params": {"mode": "immutable_snapshot"},
+      "expect": {"stdout": "true\n"}
+    }
+  ]
+}

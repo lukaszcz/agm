@@ -6,7 +6,7 @@ import operator
 from collections.abc import Callable, Iterable, Iterator, MutableMapping, MutableSequence
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Protocol, SupportsIndex, cast, overload
+from typing import Protocol, Self, SupportsIndex, cast, overload
 
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.program import NominalDescriptor, NominalKind
@@ -25,6 +25,7 @@ from agm.agl.semantics.values import (
     TextValue,
     UnitValue,
     Value,
+    values_equal,
 )
 
 
@@ -106,6 +107,65 @@ class _AglNominal:
         return f"{type(self).__name__}(...)"
 
 
+class _AglRecordView:
+    """Base implementation for synthesized live views of mutable record values."""
+
+    __slots__ = ("_agl_value",)
+    _agl_value: RecordValue
+    _agl_nominal: NominalId
+    _agl_kind: NominalKind
+    _agl_fields: tuple[str, ...]
+    _agl_descriptor: NominalDescriptor
+
+    def __init__(self, **fields: object) -> None:
+        expected = type(self)._agl_fields
+        if set(fields) != set(expected):
+            raise TypeError(f"expected fields {expected!r}")
+        descriptor = type(self)._agl_descriptor
+        object.__setattr__(
+            self,
+            "_agl_value",
+            RecordValue(
+                descriptor.nominal,
+                descriptor.display_name,
+                {name: decode_boundary_value(fields[name]) for name in expected},
+            ),
+        )
+
+    @classmethod
+    def _from_value(cls, value: RecordValue) -> Self:
+        view = object.__new__(cls)
+        object.__setattr__(view, "_agl_value", value)
+        return view
+
+    def __getattr__(self, name: str) -> object:
+        try:
+            return encode_boundary_value(self._agl_value.fields[name])
+        except KeyError:
+            raise AttributeError(name) from None
+
+    def __setattr__(self, name: str, value: object) -> None:
+        fields = type(self)._agl_fields
+        try:
+            field_index = fields.index(name)
+        except ValueError:
+            raise AttributeError("AgL nominal values are immutable") from None
+        if not type(self)._agl_descriptor.field_mutability[field_index]:
+            raise AttributeError("AgL nominal values are immutable")
+        try:
+            self._agl_value.fields[name] = decode_boundary_value(value)
+        except BoundaryViolation as exc:
+            raise BoundaryTypeError(str(exc)) from exc
+
+    def __eq__(self, other: object) -> bool:
+        if type(other) is not type(self):
+            return NotImplemented
+        return values_equal(self._agl_value, other._agl_value)
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}(...)"
+
+
 class _AglEnum:
     """Base class for one synthesized AgL enum: a pure namespace.
 
@@ -150,10 +210,11 @@ def _create_nominal(descriptor: NominalDescriptor, name: str) -> type[object]:
     reason to build a second class for the same ``NominalId``.
     """
     attrs = _nominal_attrs(descriptor)
-    return cast(
-        type[object],
-        type(name, (cast(type[object], _AglNominal),), _class_namespace(attrs)),
-    )
+    is_live_view = descriptor.kind is NominalKind.RECORD and any(descriptor.field_mutability)
+    base = _AglRecordView if is_live_view else _AglNominal
+    if is_live_view:
+        attrs["__hash__"] = None
+    return cast(type[object], type(name, (cast(type[object], base),), _class_namespace(attrs)))
 
 
 def _create_enum(
@@ -448,6 +509,8 @@ def encode_boundary_value(value: Value) -> object:
             cls = _NOMINAL_CLASSES[value.nominal]
         except KeyError as exc:
             raise BoundaryViolation(f"unknown AgL nominal {value.display_name!r}") from exc
+        if isinstance(value, RecordValue) and issubclass(cls, _AglRecordView):
+            return cls._from_value(value)
         fields = {name: encode_boundary_value(field) for name, field in value.fields.items()}
         return cls(**fields)
     raise BoundaryViolation(f"cannot encode {type(value).__name__}")
@@ -480,6 +543,8 @@ def decode_boundary_value(obj: object) -> Value:
         return obj._value
     descriptor = cast(object, getattr(type(obj), "_agl_descriptor", None))
     if isinstance(descriptor, NominalDescriptor):
+        if isinstance(obj, _AglRecordView):
+            return obj._agl_value
         nominal_obj = cast(_AglNominal, obj)
         fields = {
             name: decode_boundary_value(nominal_obj._agl_values[name])

@@ -438,6 +438,22 @@ def test_agl_host_reset_all_retires_all_successfully_closed_mappings() -> None:
     assert host._ephemeral_handles == set()
 
 
+def test_agl_host_reset_all_keeps_only_failed_close_mappings() -> None:
+    service, factory = _service()
+    host = AglSessionHost(service)
+    agent = agent_value("AgentCommand", command="worker")
+    failed = host.open(agent, "Cli")
+    closed = host.open(agent, "Cli")
+    factory.backends[0].close_error = RuntimeError("busy")
+
+    with pytest.raises(ExceptionGroup):
+        host.reset_all()
+
+    assert set(host._agents) == {failed}
+    assert service.is_known(failed)
+    assert not service.is_known(closed)
+
+
 def test_close_all_retires_closed_ephemeral_host_mappings() -> None:
     service, factory = _service()
     host = AglSessionHost(service)

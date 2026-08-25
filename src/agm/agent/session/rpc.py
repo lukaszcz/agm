@@ -653,16 +653,20 @@ def _validate_response(event: dict[str, object]) -> None:
 def _event_assistant_text(event: dict[str, object]) -> str | None:
     if event["type"] != "message_end":
         return None
-    message = event.get("message")
-    if not isinstance(message, dict) or message.get("role") != "assistant":
+    raw_message = event.get("message")
+    if not isinstance(raw_message, dict):
+        return None
+    message = cast(dict[str, object], raw_message)
+    if message.get("role") != "assistant":
         return None
     content = message.get("content")
     if not isinstance(content, list):
         raise _RpcProtocolError("Pi RPC assistant message had malformed content")
     text: list[str] = []
-    for block in content:
-        if not isinstance(block, dict):
+    for raw_block in content:
+        if not isinstance(raw_block, dict):
             raise _RpcProtocolError("Pi RPC assistant message had a malformed content block")
+        block = cast(dict[str, object], raw_block)
         if block.get("type") == "text":
             value = block.get("text")
             if not isinstance(value, str):

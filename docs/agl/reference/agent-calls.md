@@ -127,16 +127,17 @@ program def main() -> unit =
   let same_review: text = reviewer.ask("Review this artifact")
 ```
 
-Each member record builds its own argv at dispatch. `AgentCommand` accepts a
+Each member record selects its backend invocation. `AgentCommand` accepts a
 shell-like command string; the provider members carry their model and thinking
-settings:
+settings. An explicit `agent.ask(...)` uses an ephemeral session for the complete
+parse-retry loop, so its initial invocation is:
 
-| Member | Invocation |
+| Member | Initial invocation for an explicit ask |
 | --- | --- |
-| `AgentCommand(command)` | the supplied command, with the normal prompt-file handling |
-| `AgentClaude(model, thinking)` | `claude -p --model <model> --effort <thinking>` |
-| `AgentCodex(model, thinking)` | `codex exec --model <model> -c model_reasoning_effort=<thinking> -` (prompt on stdin) |
-| `AgentPi(provider, model, thinking)` | `pi -p --provider <provider> --model <model> --thinking <thinking>` |
+| `AgentCommand(command)` | the supplied command, with the normal prompt-file handling; retries require `%{SESSION_ID}` |
+| `AgentClaude(model, thinking)` | `claude -p --session-id <id> --model <model> --effort <thinking>` |
+| `AgentCodex(model, thinking)` | `codex exec --json --model <model> -c model_reasoning_effort=<thinking> -` (prompt on stdin) |
+| `AgentPi(provider, model, thinking)` | `pi --mode rpc --provider <provider> --model <model> --thinking <thinking>` |
 
 An empty provider, model, or thinking field omits its flag. `Agent` values are
 ordinary enum data: they can be stored, passed to functions, rendered,

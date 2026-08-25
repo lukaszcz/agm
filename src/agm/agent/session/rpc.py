@@ -265,9 +265,14 @@ class PiRpcSessionBackend:
         text: list[str] = []
         text_length = 0
         response: dict[str, object] | None = None
+        state_request_id: str | None = None
+        streaming: bool | None = None
         settled = False
         terminal_error: str | None = None
-        while response is None or (wait_for_settled and not settled):
+        while response is None or (
+            wait_for_settled and (streaming is None or (streaming and not settled))
+        ):
+            streaming_state: bool | None = None
             try:
                 event = self._next_event(child)
                 ui_cancellation = _extension_ui_cancellation(event)
@@ -276,6 +281,8 @@ class PiRpcSessionBackend:
                 delta = _event_text_delta(event)
                 if event["type"] == "response":
                     _validate_response(event)
+                    if event.get("id") == state_request_id and event.get("command") == "get_state":
+                        streaming_state = _response_streaming_state(event)
                 failure = _terminal_prompt_failure(event) if wait_for_settled else None
             except (BrokenPipeError, OSError) as exc:
                 self._kill_dead_child(child)
@@ -306,17 +313,40 @@ class PiRpcSessionBackend:
                 text.append(delta)
             event_type = event["type"]
             if event_type == "response":
-                if event["id"] != request_id or event["command"] != operation:
+                event_id = cast(str, event["id"])
+                event_command = cast(str, event["command"])
+                if event_id == request_id and event_command == operation:
+                    if event["success"] is not True:
+                        message = cast(str, event["error"])
+                        if operation == "prompt":
+                            self._raise_ask_error("nonzero_exit", message, started, child)
+                        raise SessionHostError(message, _operation_name(operation))
+                    response = event
+                    if wait_for_settled:
+                        state_request_id = str(uuid4())
+                        try:
+                            _write_command(
+                                child,
+                                {"id": state_request_id, "type": "get_state"},
+                                self._idle_timeout,
+                            )
+                        except _RpcIdleTimeout as exc:
+                            self._kill_dead_child(child)
+                            self._raise_transport_or_host(
+                                operation, "Pi RPC stdin write timed out", started, exc, child
+                            )
+                        except (BrokenPipeError, OSError) as exc:
+                            self._kill_dead_child(child)
+                            self._raise_transport_or_host(
+                                operation, "Pi RPC stdin closed", started, exc, child
+                            )
+                elif event_id == state_request_id and event_command == "get_state":
+                    streaming = cast(bool, streaming_state)
+                else:
                     self._kill_dead_child(child)
                     self._raise_transport_or_host(
                         operation, "Pi RPC returned an unexpected response", started, None, child
                     )
-                if event["success"] is not True:
-                    message = cast(str, event["error"])
-                    if operation == "prompt":
-                        self._raise_ask_error("nonzero_exit", message, started, child)
-                    raise SessionHostError(message, _operation_name(operation))
-                response = event
             if wait_for_settled:
                 if event.get("willRetry") is True:
                     terminal_error = None
@@ -598,6 +628,13 @@ def _validate_response(event: dict[str, object]) -> None:
         error = event.get("error")
         if not isinstance(error, str) or not error:
             raise _RpcProtocolError("Pi RPC failure response had no error")
+
+
+def _response_streaming_state(response: dict[str, object]) -> bool:
+    data = response.get("data")
+    if not isinstance(data, dict) or not isinstance(data.get("isStreaming"), bool):
+        raise _RpcProtocolError("Pi RPC returned malformed streaming state")
+    return cast(bool, data["isStreaming"])
 
 
 def _event_text_delta(event: dict[str, object]) -> str | None:

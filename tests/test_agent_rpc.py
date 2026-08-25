@@ -48,7 +48,8 @@ def expand(value, command):
     return value
 def response(command):
     result = {"id": command["id"], "type": "response", "command": command["type"], "success": True}
-    if command["type"] == "get_state": result["data"] = {"sessionId": session}
+    if command["type"] == "get_state":
+        result["data"] = {"sessionId": session, "isStreaming": False}
     if command["type"] == "new_session": result["data"] = {"cancelled": False}
     if command["type"] == "clone": result["data"] = {"cancelled": False}
     if command["type"] == "get_session_stats":
@@ -166,6 +167,34 @@ def assert_exited(pid: int) -> None:
         os.kill(pid, 0)
 
 
+def test_prompt_handled_without_agent_run_completes_and_keeps_session_usable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = RpcStub(
+        tmp_path,
+        monkeypatch,
+        {
+            "prompt": [{"id": "$id", "type": "response", "command": "prompt", "success": True}],
+            "get_state": [
+                {
+                    "id": "$id",
+                    "type": "response",
+                    "command": "get_state",
+                    "success": True,
+                    "data": {"sessionId": "root", "isStreaming": False},
+                }
+            ],
+        },
+    )
+    backend = open_backend(timeout=0.2)
+
+    assert backend.ask(SessionAskRequest("handled command")).content == ""
+    backend.compact("")
+
+    assert command_types(stub) == ["prompt", "get_state", "compact"]
+    backend.close()
+
+
 def test_spawn_prompt_and_lifecycle_protocol(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -209,10 +238,11 @@ def test_spawn_prompt_and_lifecycle_protocol(
     backend.set_name("new")
     assert backend.stats() == SessionStats(11, 7, Decimal("0.125"), Decimal("3.5"))
     commands = stub.records("commands.jsonl")
-    assert "customInstructions" not in commands[1]
-    assert commands[2]["customInstructions"] == "retain"
+    assert "customInstructions" not in commands[2]
+    assert commands[3]["customInstructions"] == "retain"
     assert command_types(stub) == [
         "prompt",
+        "get_state",
         "compact",
         "compact",
         "new_session",
@@ -245,7 +275,7 @@ def test_prompt_cancels_extension_ui_dialog_requests(
 
     assert backend.ask(SessionAskRequest("hello")).content == "answer"
 
-    assert stub.wait_for("commands.jsonl", 2)[1] == {
+    assert stub.wait_for("commands.jsonl", 3)[2] == {
         "id": "ui-1",
         "type": "extension_ui_response",
         "cancelled": True,
@@ -325,7 +355,14 @@ def test_clone_snapshots_current_branch_and_keeps_both_children_live(
     child_argv = starts[1]["argv"]
     assert isinstance(child_argv, list)
     assert child_argv[-2:] == ["--session-id", "root"]
-    assert command_types(stub) == ["prompt", "get_state", "get_state", "clone", "get_state"]
+    assert command_types(stub) == [
+        "prompt",
+        "get_state",
+        "get_state",
+        "get_state",
+        "clone",
+        "get_state",
+    ]
     assert child.ask(SessionAskRequest("child")).content == "answer"
     assert backend.ask(SessionAskRequest("parent")).content == "answer"
     backend.close()
@@ -356,7 +393,7 @@ def test_cancelled_session_operations_are_rejected_and_do_not_transfer_ownership
         backend.reset() if command == "new_session" else backend.fork()
     assert backend.ask(SessionAskRequest("still parent")).content == "answer"
     if command == "clone":
-        assert command_types(stub) == ["get_state", "get_state", "clone", "prompt"]
+        assert command_types(stub) == ["get_state", "get_state", "clone", "prompt", "get_state"]
     backend.close()
 
 

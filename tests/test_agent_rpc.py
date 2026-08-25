@@ -405,6 +405,22 @@ def test_clone_immediately_after_open_keeps_parent_and_child_live(
     child.close()
 
 
+def test_clone_does_not_reapply_the_startup_name_to_the_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = RpcStub(tmp_path, monkeypatch)
+    backend = open_backend()
+    backend.set_name("renamed")
+
+    child = backend.fork()
+
+    replacement_argv = stub.wait_for("starts.jsonl", 2)[1]["argv"]
+    assert "--name" not in replacement_argv
+    assert replacement_argv[-2:] == ["--session-id", "root"]
+    backend.close()
+    child.close()
+
+
 def test_clone_snapshots_current_branch_and_keeps_both_children_live(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

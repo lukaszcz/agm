@@ -132,7 +132,7 @@ class PiRpcSessionBackend:
         source = self._live_child("clone")
         source_command = self._command
         source_stdout_buffer = self._stdout_buffer
-        parent_command = [*source_command, "--session-id", parent_id]
+        parent_command = [*_without_option(source_command, "--name"), "--session-id", parent_id]
         replacement = self._spawn(parent_command, SessionOperation.FORK.value)
         replacement_backend = PiRpcSessionBackend(idle_timeout=self._idle_timeout)
         replacement_backend._child = replacement
@@ -628,6 +628,14 @@ def _terminate_process_group(process: subprocess.Popen[bytes], process_group: in
         os.killpg(process_group, signal.SIGKILL)
     except ProcessLookupError:
         pass
+
+
+def _without_option(command: list[str], option: str) -> list[str]:
+    try:
+        option_index = command.index(option)
+    except ValueError:
+        return command.copy()
+    return [*command[:option_index], *command[option_index + 2 :]]
 
 
 def _json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:

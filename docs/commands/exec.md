@@ -183,7 +183,7 @@ for `AgentCodex`, which pipes the prompt in on standard input instead of appendi
 target. Because an AgL text literal interpolates `%{…}` itself, spell the placeholder as
 `\%{PROMPT_FILE}` inside `AgentCommand("…")` so it reaches the host as literal text. An
 unresolvable hole fails the call with a catchable `AgentCallError` whose `cause` is
-`"spawn_failure"`.
+`"interpolation_failure"`.
 
 ### Configuration
 

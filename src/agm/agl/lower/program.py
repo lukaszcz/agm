@@ -213,7 +213,8 @@ def lower_program(
     # ``bears_name_path`` compares the identity being registered against the
     # one ``generic_typedef``'s NAME lookup landed on, which is exactly the
     # name-index answer ``TypeTable.is_current`` gives for a non-generic
-    # declaration above.
+    # declaration above. Inline members remain excluded just as they are in
+    # that pass, because a generic member also appears in this template loop.
     for cm in checked.modules.values():
         for name, generic in cm.type_env.all_generic_types().items():
             typ = generic.template
@@ -222,7 +223,9 @@ def lower_program(
             assert generic_typedef is not None, (
                 f"compiler bug: generic type {name!r} has no TypeDef registered"
             )
-            bears_name_path = generic_typedef.decl_node_id == typ.decl_id
+            bears_name_path = (
+                generic_typedef.decl_node_id == typ.decl_id and typ.decl_id not in inline_member_ids
+            )
             if isinstance(typ, RecordType):
                 link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,

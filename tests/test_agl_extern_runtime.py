@@ -137,6 +137,23 @@ def test_enum_member_classes_never_subclass_their_enum_class(tmp_path: Path) -> 
     assert result["ok"] == BoolValue(True)
 
 
+def test_generic_inline_enum_member_is_not_a_direct_companion_import(tmp_path: Path) -> None:
+    """A generic inline member remains private to its enum's namespace."""
+    source = (
+        "enum Box[T]\n"
+        "  | Item(value: T)\n"
+        "\n"
+        "extern def probe() -> bool\n"
+        "let visible = probe()\n"
+        "visible\n"
+    )
+    companion = "import agl\ndef probe(): return hasattr(agl, 'Box') and not hasattr(agl, 'Item')\n"
+
+    result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+
+    assert result["visible"] == BoolValue(True)
+
+
 def test_exception_values_cross_as_plain_nominal_objects(tmp_path: Path) -> None:
     source = (
         "exception Problem extends Exception\n  detail: text\n"

@@ -76,6 +76,7 @@ from agm.agl.ir.nodes import (
     IrExpr,
     IrField,
     IrFieldMode,
+    IrFieldSet,
     IrFunctionParam,
     IrIf,
     IrIfBranch,
@@ -204,6 +205,7 @@ from agm.agl.syntax.nodes import (
     ExportDecl,
     Expr,
     FieldAccess,
+    FieldTarget,
     FuncDef,
     If,
     IfBranch,
@@ -3445,8 +3447,21 @@ class _Lowerer:
         rhs: Expr,
         span: SourceSpan,
         assign_node_id: int,
-    ) -> "IrAssign | IrIndexSet | IrBuiltinStore":
-        """Lower an assignment statement (simple name, indexed target, or builtin var)."""
+    ) -> "IrAssign | IrFieldSet | IrIndexSet | IrBuiltinStore":
+        """Lower an assignment statement to a binding, index, field, or builtin-var store."""
+        if isinstance(target, FieldTarget):
+            receiver_type = self._node_type(target.obj.node_id)
+            assert isinstance(receiver_type, RecordType), (
+                f"compiler bug: non-record type in field assignment: {receiver_type!r}"
+            )
+            return IrFieldSet(
+                location=self._loc(span),
+                value=self.lower_expr(target.obj),
+                nominal=NominalId(receiver_type.decl_id),
+                field=target.field,
+                new=self.lower_coerced(rhs, self._node_type(target.node_id)),
+            )
+
         if isinstance(target, IndexTarget):
             # An IndexTarget has no binding of its own -- under reference
             # semantics an indexed assignment needs no root symbol or Cell,

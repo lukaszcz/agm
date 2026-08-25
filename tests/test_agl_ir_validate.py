@@ -47,6 +47,7 @@ from agm.agl.ir import (
     IrDirectCall,
     IrField,
     IrFieldMode,
+    IrFieldSet,
     IrFunctionBody,
     IrFunctionParam,
     IrIndex,
@@ -245,6 +246,7 @@ def test_case_arm_cannot_bind_multiple_fields_to_one_symbol() -> None:
                 declared_name="Pair",
                 kind=NominalKind.RECORD,
                 fields=("left", "right"),
+                field_mutability=(False, False),
             )
         },
     )
@@ -297,6 +299,7 @@ def test_case_rejects_closure_capture_outside_payload_dominance() -> None:
                 declared_name="PayloadMember",
                 kind=NominalKind.RECORD,
                 fields=("value",),
+                field_mutability=(False,),
             ),
         },
         functions={FN0: _make_fn_desc(fn_sym=SYM0)},
@@ -351,6 +354,7 @@ def test_case_arm_cannot_bind_a_private_source_symbol() -> None:
                 declared_name="Box",
                 kind=NominalKind.RECORD,
                 fields=("value",),
+                field_mutability=(False,),
             )
         },
     )
@@ -778,6 +782,35 @@ class TestDeepTierNominalDescriptor:
         )
         prog = _make_program(nominals={NOM0: nom_desc})
         validate_ir(prog, deep=False)
+
+    @pytest.mark.parametrize("field_mutability", ((True,), (True, False, True)))
+    def test_record_mutability_metadata_must_align_with_fields(
+        self, field_mutability: tuple[bool, ...]
+    ) -> None:
+        descriptor = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Foo",
+            kind=NominalKind.RECORD,
+            fields=("x", "y"),
+            field_mutability=field_mutability,
+        )
+        with pytest.raises(InvalidIrError, match="field_mutability"):
+            validate_ir(_make_program(nominals={NOM0: descriptor}))
+
+    @pytest.mark.parametrize("kind", (NominalKind.ENUM, NominalKind.EXCEPTION))
+    def test_non_record_descriptor_cannot_declare_field_mutability(self, kind: NominalKind) -> None:
+        descriptor = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Foo",
+            kind=kind,
+            field_mutability=(True,),
+        )
+        with pytest.raises(InvalidIrError, match="field_mutability"):
+            validate_ir(_make_program(nominals={NOM0: descriptor}))
 
 
 # ===========================================================================
@@ -1218,6 +1251,7 @@ class TestIrFieldValidation:
                 declared_name="Foo",
                 kind=NominalKind.RECORD,
                 fields=("x",),
+                field_mutability=(False,),
             ),
             NominalDescriptor(
                 nominal=NOM0,
@@ -1237,7 +1271,13 @@ class TestIrFieldValidation:
             nominals={
                 NOM0: descriptor,
                 NominalId(100): NominalDescriptor(
-                    NominalId(100), MOD_A, (), "some", NominalKind.RECORD, ("x",)
+                    NominalId(100),
+                    MOD_A,
+                    (),
+                    "some",
+                    NominalKind.RECORD,
+                    ("x",),
+                    field_mutability=(False,),
                 ),
             },
         )
@@ -1253,6 +1293,7 @@ class TestIrFieldValidation:
                 declared_name="Foo",
                 kind=NominalKind.RECORD,
                 fields=("x",),
+                field_mutability=(False,),
             ),
             NominalDescriptor(
                 nominal=NOM0,
@@ -1285,7 +1326,13 @@ class TestIrFieldValidation:
             nominals={
                 NOM0: descriptor,
                 NominalId(100): NominalDescriptor(
-                    NominalId(100), MOD_A, (), "some", NominalKind.RECORD, ("x",)
+                    NominalId(100),
+                    MOD_A,
+                    (),
+                    "some",
+                    NominalKind.RECORD,
+                    ("x",),
+                    field_mutability=(False,),
                 ),
             },
         )
@@ -1316,6 +1363,7 @@ class TestIrFieldValidation:
                     declared_name="Foo",
                     kind=NominalKind.RECORD,
                     fields=("x",),
+                    field_mutability=(False,),
                 )
             },
         )
@@ -1324,6 +1372,79 @@ class TestIrFieldValidation:
     def test_ir_field_empty_name_fails_shallow_validation(self) -> None:
         prog = _make_program(
             initializers=(IrBind(LOC, SYM0, IrField(LOC, IrConstInt(LOC, 1), NOM0, "")),)
+        )
+        with pytest.raises(InvalidIrError, match="non-empty"):
+            validate_ir(prog, deep=False)
+
+
+class TestIrFieldSetValidation:
+    """Structural validation for mutable record-field stores."""
+
+    def _program_with_store(
+        self,
+        *,
+        mutable: bool,
+        nominal_kind: NominalKind = NominalKind.RECORD,
+        has_mutability_metadata: bool = True,
+    ) -> ExecutableProgram:
+        store = IrFieldSet(LOC, IrConstInt(LOC, 1), NOM0, "x", IrConstInt(LOC, 2))
+        descriptor = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Foo",
+            kind=nominal_kind,
+            fields=("x",),
+            field_mutability=(mutable,)
+            if nominal_kind is NominalKind.RECORD and has_mutability_metadata
+            else (),
+        )
+        return _make_program(initializers=(store,), nominals={NOM0: descriptor})
+
+    def test_mutable_record_field_store_passes_deep_validation(self) -> None:
+        validate_ir(self._program_with_store(mutable=True), deep=True)
+
+    def test_immutable_record_field_store_fails_deep_validation(self) -> None:
+        with pytest.raises(InvalidIrError, match="mutable"):
+            validate_ir(self._program_with_store(mutable=False), deep=True)
+
+    def test_non_record_field_store_fails_deep_validation(self) -> None:
+        with pytest.raises(InvalidIrError, match="record"):
+            validate_ir(
+                self._program_with_store(mutable=True, nominal_kind=NominalKind.EXCEPTION),
+                deep=True,
+            )
+
+    def test_field_store_without_mutability_metadata_fails_deep_validation(self) -> None:
+        prog = self._program_with_store(mutable=True, has_mutability_metadata=False)
+        with pytest.raises(InvalidIrError, match="field_mutability"):
+            validate_ir(prog, deep=True)
+
+    def test_unknown_field_store_fails_deep_validation(self) -> None:
+        descriptor = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Foo",
+            kind=NominalKind.RECORD,
+            fields=("x",),
+            field_mutability=(True,),
+        )
+        prog = _make_program(
+            initializers=(
+                IrFieldSet(LOC, IrConstInt(LOC, 1), NOM0, "missing", IrConstInt(LOC, 2)),
+            ),
+            nominals={NOM0: descriptor},
+        )
+        with pytest.raises(InvalidIrError, match="unknown field"):
+            validate_ir(prog, deep=True)
+
+    def test_mutable_field_store_passes_shallow_validation(self) -> None:
+        validate_ir(self._program_with_store(mutable=True), deep=False)
+
+    def test_empty_field_name_fails_shallow_validation(self) -> None:
+        prog = _make_program(
+            initializers=(IrFieldSet(LOC, IrConstInt(LOC, 1), NOM0, "", IrConstInt(LOC, 2)),)
         )
         with pytest.raises(InvalidIrError, match="non-empty"):
             validate_ir(prog, deep=False)

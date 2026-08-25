@@ -80,6 +80,7 @@ __all__ = [
     "IrExpr",
     "IrField",
     "IrFieldMode",
+    "IrFieldSet",
     "IrFunctionParam",
     "IrIf",
     "IrIfBranch",
@@ -447,6 +448,22 @@ class IrField:
     nominal: NominalId
     field: str
     mode: IrFieldMode = IrFieldMode.EXACT
+
+
+@dataclass(frozen=True, slots=True)
+class IrFieldSet:
+    """IR mutable record-field assignment: ``value.field := new``.
+
+    ``nominal`` identifies the precise record declaration that owns ``field``.
+    Evaluation verifies that identity before storing, so a value from a
+    superseded declaration cannot be updated through a newer same-named type.
+    """
+
+    location: Location
+    value: "IrExpr"
+    nominal: NominalId
+    field: str
+    new: "IrExpr"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1148,6 +1165,7 @@ IrExpr = (
     | IrOr
     | IrUnary
     | IrField
+    | IrFieldSet
     | IrUpdateRecord
     | IrIndex
     | IrIndexSet

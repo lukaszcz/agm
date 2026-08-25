@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "small_seed",
+      "params": {"seed": 1, "receiver": {"b": -1}},
+      "expect": {"stdout": "6\n5\n1\n101\n7\n"}
+    },
+    {
+      "name": "larger_seed",
+      "params": {"seed": 10, "receiver": {"b": -1}},
+      "expect": {"stdout": "15\n14\n10\n110\n16\n"}
+    }
+  ]
+}

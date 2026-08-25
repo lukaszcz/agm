@@ -31,6 +31,8 @@ Two tiers (validate_ir runs ONLY when explicitly called):
        engine-key catalog.
     9. Every ``IrField`` nominal is registered, field-bearing, and declares
        its projected field (on at least one enum payload shape for enums).
+       Every ``IrFieldSet`` targets a declared mutable field of a registered
+       record nominal.
     10. ``program_symbols`` and ``program_functions`` form a one-to-one,
         bidirectional index of linked ``program def`` entries with registered
         symbols and zero-argument ``IrFunctionBody`` functions; when present,
@@ -104,6 +106,7 @@ from agm.agl.ir.nodes import (
     IrExpr,
     IrField,
     IrFieldMode,
+    IrFieldSet,
     IrFunctionParam,
     IrIf,
     IrIndex,
@@ -303,6 +306,19 @@ def _check_nominal_field(nominal: NominalId, field: str, mode: IrFieldMode, ctx:
         known_fields = set(desc.fields)
     if field not in known_fields:
         raise InvalidIrError(f"IrField references unknown field {field!r} of nominal {nominal!r}")
+
+
+def _check_mutable_record_field(nominal: NominalId, field: str, ctx: _Context) -> None:
+    """Require a mutable field on the precise record declaration for a store."""
+    _check_nominal_field(nominal, field, IrFieldMode.EXACT, ctx)
+    desc = ctx.program.nominals[nominal]
+    if desc.kind is not NominalKind.RECORD:
+        raise InvalidIrError(f"IrFieldSet references non-record nominal {nominal!r}")
+    field_index = desc.fields.index(field)
+    if not desc.field_mutability[field_index]:
+        raise InvalidIrError(
+            f"IrFieldSet references immutable field {field!r} of nominal {nominal!r}"
+        )
 
 
 def _check_record_nominal(nominal: NominalId, ctx: _Context, node_name: str) -> None:
@@ -930,6 +946,16 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                 _check_nominal_field(nominal, field, mode, ctx)
             _validate_expr(val, ctx)
 
+        case IrFieldSet(value=val, nominal=nominal, field=field, new=new):
+            _validate_location(node.location, ctx)
+            if not field:
+                raise InvalidIrError("IrFieldSet field must be non-empty")
+            if ctx.deep:
+                _check_nominal_in_table(nominal, ctx)
+                _check_mutable_record_field(nominal, field, ctx)
+            _validate_expr(val, ctx)
+            _validate_expr(new, ctx)
+
         case IrUpdateRecord(value=val, updates=updates):
             _validate_location(node.location, ctx)
             _validate_expr(val, ctx)
@@ -1217,6 +1243,18 @@ def _validate_program_tables(ctx: _Context) -> None:
                 f"program.nominals entry keyed by {nom_key!r} has"
                 f" nominal={nom_desc.nominal!r} (mismatch)"
             )
+        if nom_desc.kind is NominalKind.RECORD:
+            if len(nom_desc.field_mutability) != len(nom_desc.fields):
+                raise InvalidIrError(
+                    "record descriptor field_mutability length must equal fields length "
+                    f"for nominal {nom_key!r}"
+                )
+        elif nom_desc.field_mutability:
+            raise InvalidIrError(
+                "enum and exception descriptors must have empty field_mutability "
+                f"for nominal {nom_key!r}"
+            )
+
         if nom_desc.kind is NominalKind.ENUM:
             variant_names: set[str] = set()
             member_nominals: set[NominalId] = set()

@@ -77,6 +77,7 @@ from agm.agl.ir.nodes import (
     IrExpr,
     IrField,
     IrFieldMode,
+    IrFieldSet,
     IrFunctionParam,
     IrIf,
     IrIndex,
@@ -1273,9 +1274,22 @@ class IrInterpreter:
                 slot.value = self._eval(val_expr)
                 return VOID_VALUE
 
+            case IrFieldSet(value=value_expr, nominal=nominal, field=field, new=new_expr):
+                # Evaluate the receiver before the replacement. The exact guard
+                # protects superseded same-named declarations from writes.
+                value = self._eval(value_expr)
+                if not isinstance(value, RecordValue):
+                    raise InvalidIrError(
+                        f"IrFieldSet: expected RecordValue, got {type(value).__name__}"
+                    )
+                _project_nominal_field(value, nominal, field, IrFieldMode.EXACT)
+                new = self._eval(new_expr)
+                value.fields[field] = new
+                return VOID_VALUE
+
+            # Plain left-to-right evaluation order: container, then index,
+            # then the right-hand side, then the checked in-place store.
             case IrIndexSet(container=container_expr, kind=kind, index=idx_expr, value=val_expr):
-                # Plain left-to-right evaluation order: container, then index,
-                # then the right-hand side, then the checked in-place store.
                 container = self._eval(container_expr)
                 index_val = self._eval(idx_expr)
                 new_value = self._eval(val_expr)

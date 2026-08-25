@@ -699,7 +699,15 @@ def test_validate_rejects_malformed_encode_nominal_shapes() -> None:
     exception = NominalId(5)
     enum = NominalId(6)
     program_nominals = {
-        record: NominalDescriptor(record, ENTRY_ID, (), "Record", NominalKind.RECORD, ("field",)),
+        record: NominalDescriptor(
+            record,
+            ENTRY_ID,
+            (),
+            "Record",
+            NominalKind.RECORD,
+            ("field",),
+            field_mutability=(False,),
+        ),
         exception: NominalDescriptor(
             exception, ENTRY_ID, (), "Exception", NominalKind.EXCEPTION, ("field",)
         ),
@@ -780,6 +788,7 @@ def test_validate_accepts_recursive_to_json_encode_plan() -> None:
                 "Node",
                 NominalKind.RECORD,
                 ("child",),
+                field_mutability=(False,),
             ),
         }
     )
@@ -809,8 +818,24 @@ def test_validate_accepts_a_parameterized_to_json_encode_plan() -> None:
     program = _convert_program(recipe)
     program.nominals.update(
         {
-            box: NominalDescriptor(box, ENTRY_ID, (), "Box", NominalKind.RECORD, ("item",)),
-            inner: NominalDescriptor(inner, ENTRY_ID, (), "Inner", NominalKind.RECORD, ("value",)),
+            box: NominalDescriptor(
+                box,
+                ENTRY_ID,
+                (),
+                "Box",
+                NominalKind.RECORD,
+                ("item",),
+                field_mutability=(False,),
+            ),
+            inner: NominalDescriptor(
+                inner,
+                ENTRY_ID,
+                (),
+                "Inner",
+                NominalKind.RECORD,
+                ("value",),
+                field_mutability=(False,),
+            ),
         }
     )
     validate_ir(program, deep=True)
@@ -944,14 +969,26 @@ def test_validate_rejects_decode_with_unregistered_nominal() -> None:
         (
             RecordDecode(NominalId(10), "Record", (("wrong", ScalarDecode(ScalarKind.INT)),)),
             NominalDescriptor(
-                NominalId(10), ENTRY_ID, (), "Record", NominalKind.RECORD, ("value",)
+                NominalId(10),
+                ENTRY_ID,
+                (),
+                "Record",
+                NominalKind.RECORD,
+                ("value",),
+                field_mutability=(False,),
             ),
             "fields disagree",
         ),
         (
             RecordDecode(NominalId(10), "Wrong", (("value", ScalarDecode(ScalarKind.INT)),)),
             NominalDescriptor(
-                NominalId(10), ENTRY_ID, (), "Record", NominalKind.RECORD, ("value",)
+                NominalId(10),
+                ENTRY_ID,
+                (),
+                "Record",
+                NominalKind.RECORD,
+                ("value",),
+                field_mutability=(False,),
             ),
             "display name disagrees",
         ),
@@ -1149,6 +1186,7 @@ def test_validate_accepts_recursive_recipe_with_matching_defs() -> None:
                 "Node",
                 NominalKind.RECORD,
                 ("value", "left", "right"),
+                field_mutability=(False, False, False),
             ),
         },
         sources={sid: SourceFile(display_name="<test>", normalized_text=" ")},

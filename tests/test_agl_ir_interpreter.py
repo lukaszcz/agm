@@ -55,6 +55,7 @@ from agm.agl.ir import (
     IrExpr,
     IrField,
     IrFieldMode,
+    IrFieldSet,
     IrFunctionBody,
     IrFunctionParam,
     IrIndex,
@@ -1129,6 +1130,96 @@ class TestIrField:
                 y_val=4,
                 expected_nominal=NominalId(3),
             )
+
+    def test_ir_field_set_evaluates_receiver_then_replacement_then_stores(self) -> None:
+        """A successful store observes receiver evaluation before its replacement."""
+        record_symbol, record_descriptor = _let_sym(20, "record")
+        marker_symbol, marker_descriptor = _var_sym(21, "marker")
+        result_symbol, result_descriptor = _let_sym(22, "result")
+        nominal = NominalId(2)
+        prog = _make_program(
+            (
+                IrBind(
+                    _LOC,
+                    record_symbol,
+                    IrMakeRecord(_LOC, nominal, "Point", (("x", IrConstInt(_LOC, 0)),)),
+                ),
+                IrBind(_LOC, marker_symbol, IrConstInt(_LOC, 0)),
+                IrFieldSet(
+                    _LOC,
+                    IrSequence(
+                        _LOC,
+                        (
+                            IrAssign(_LOC, marker_symbol, IrConstInt(_LOC, 7)),
+                            IrLoad(_LOC, record_symbol),
+                        ),
+                    ),
+                    nominal,
+                    "x",
+                    IrLoad(_LOC, marker_symbol),
+                ),
+                IrBind(
+                    _LOC,
+                    result_symbol,
+                    IrField(_LOC, IrLoad(_LOC, record_symbol), nominal, "x"),
+                ),
+            ),
+            {
+                record_symbol: record_descriptor,
+                marker_symbol: marker_descriptor,
+                result_symbol: result_descriptor,
+            },
+            nominals={
+                nominal: NominalDescriptor(
+                    nominal,
+                    ENTRY_ID,
+                    (),
+                    "Point",
+                    NominalKind.RECORD,
+                    ("x",),
+                    field_mutability=(True,),
+                )
+            },
+        )
+        assert IrInterpreter(prog).run()["result"] == IntValue(7)
+
+    def test_ir_field_set_checks_identity_before_evaluating_replacement(self) -> None:
+        """A mismatched receiver rejects the store without evaluating its replacement."""
+        record_nominal = NominalId(2)
+        store_nominal = NominalId(3)
+        prog = _make_program(
+            (
+                IrFieldSet(
+                    _LOC,
+                    IrMakeRecord(
+                        _LOC,
+                        record_nominal,
+                        "Point",
+                        (("x", IrConstInt(_LOC, 1)),),
+                    ),
+                    store_nominal,
+                    "x",
+                    IrRaise(
+                        _LOC,
+                        IrMakeException(
+                            _LOC,
+                            NominalId(4),
+                            "ReplacementWasEvaluated",
+                            (),
+                        ),
+                    ),
+                ),
+            )
+        )
+        with pytest.raises(InvalidIrError, match="expected nominal"):
+            IrInterpreter(prog).run()
+
+    def test_ir_field_set_rejects_a_non_record_receiver(self) -> None:
+        prog = _make_program(
+            (IrFieldSet(_LOC, IrConstInt(_LOC, 1), NominalId(2), "x", IrConstInt(_LOC, 2)),)
+        )
+        with pytest.raises(InvalidIrError, match="RecordValue"):
+            IrInterpreter(prog).run()
 
     def _run_with_exception_field(self, field: str, mode: IrFieldMode) -> Value:
         """Project *field* from a concrete exception using *mode*."""

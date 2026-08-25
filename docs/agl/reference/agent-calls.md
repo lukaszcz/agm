@@ -20,7 +20,8 @@ reviewer.ask::[Review]("Review %{artifact}", on_parse_error = Retry(n = 2))
 `ask` is a built-in function with the following declared-name signature:
 
 ```text
-ask(prompt: text, format: text = "", strict_json: bool = false,
+ask(prompt: text, agent: Agent = std/config::default-agent,
+    format: text = "", strict_json: bool = false,
     on_parse_error: ParsePolicy = ParsePolicy::Abort) -> T
 ```
 
@@ -35,10 +36,11 @@ Agent::ask(self, prompt: text, format: text = "",
            on_parse_error: ParsePolicy = ParsePolicy::Abort) -> T
 ```
 
-Free `ask` uses the snapshot default `Session`, whose agent is selected from
-`std/config::default-agent`; it accepts no `agent` named argument. The receiver
-of `reviewer.ask(...)` selects an explicit agent for that one call. It opens a
-short-lived session for the call and all of its parse retries, then closes it.
+Free `ask` uses the snapshot default `Session` when `agent` is omitted; its
+agent is selected from `std/config::default-agent`. Supplying the named `agent`
+argument instead selects an explicit agent for that one call, as does the
+`reviewer.ask(...)` receiver form. Explicit-agent calls open a short-lived
+session for the call and all of its parse retries, then close it.
 Both forms support contextual and explicit `::[T]` target types and named parse
 options. Built-in methods are call-only; `let f = reviewer.ask` and
 `let f = reviewer.ask::[text]` are static errors.
@@ -548,17 +550,17 @@ See [Host environment](host-environment.md).
 
 ## `ask-request` — the request builder
 
-`ask-request` is the side-effect-free twin of `ask`: it builds an
-agent-independent, first-attempt text `AgentRequest` **without invoking an
-agent**. Its direct form is:
+`ask-request` is the side-effect-free twin of `ask`: it builds a first-attempt
+text `AgentRequest` **without invoking an agent**. Its direct form is:
 
 ```text
-ask-request(prompt: text) -> AgentRequest
+ask-request(prompt: text, agent: Agent = std/config::default-agent) -> AgentRequest
 ```
 
-It accepts neither an agent nor output-parsing options or type arguments. It
-only assembles the text-output request contract; it never dispatches, retries,
-parses, or emits trace events.
+The optional named `agent` is captured in the request; `reviewer.ask-request(...)`
+captures its receiver instead. The builder accepts no output-parsing options or
+type arguments. It only assembles the text-output request contract; it never
+dispatches, retries, parses, or emits trace events.
 
 <!-- agl-check: fragment -->
 ```agl

@@ -164,6 +164,51 @@ def test_referenced_member_pattern_rejects_a_different_record_instantiation() ->
     )
 
 
+@pytest.mark.parametrize(
+    "source",
+    (
+        "enum Tree[T]\n"
+        "  | Node(value: T)\n"
+        "let tree: Tree[int] = Node(value = 1)\n"
+        "case tree of | Tree[text]::Node(value) => value | _ => 0",
+        "enum E\n  | M\nlet value: E = M\ncase value of | E[Unknown]::M() => 0 | _ => 1",
+    ),
+)
+def test_qualified_enum_constructor_patterns_validate_applied_owner_arguments(source: str) -> None:
+    reject(source)
+
+
+def test_referenced_enum_member_aliases_match_in_patterns_and_is_tests() -> None:
+    accept(
+        "record R(value: int)\n"
+        "type Alias = R\n"
+        "enum E = ::Alias\n"
+        "let value: E = R(value = 1)\n"
+        "let matched = case value of | Alias(value) => value\n"
+        "let tested = value is Alias\n"
+        "matched"
+    )
+
+
+def test_generic_referenced_enum_member_patterns_validate_the_applied_owner() -> None:
+    accept(
+        "record R[T](value: T)\n"
+        "enum E[T] = ::R[T]\n"
+        "let value: E[int] = R(value = 1)\n"
+        "case value of | E[int]::R(value) => value"
+    )
+
+
+def test_enum_alias_does_not_match_a_referenced_record_member() -> None:
+    reject(
+        "record R(value: int)\n"
+        "enum E = ::R\n"
+        "type Alias = E\n"
+        "let value: E = R(value = 1)\n"
+        "case value of | Alias(value) => value"
+    )
+
+
 def test_simple_let_name_binds_even_when_it_matches_a_nullary_constructor() -> None:
     checked = accept("enum Opt\n  | none\nlet value: Opt = none\nlet none = value\nnone\n")
     let = checked.resolved.program.body.items[2]

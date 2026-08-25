@@ -4002,13 +4002,12 @@ class _Checker:
             enum_type = expr_type
             constructor = self._constructor_ref_for(node.node_id)
             if node.qualifier is None:
-                member_ids = self._env.type_table.enum_member_ids(enum_type)
                 matching = tuple(
                     candidate
                     for candidate in self._resolved.is_test_constructor_candidates.get(
                         node.node_id, ()
                     )
-                    if candidate.owner_decl_node_id in member_ids
+                    if self._enum_member_for_constructor_candidate(enum_type, candidate) is not None
                 )
                 constructor = self._unique_constructor_candidate(
                     node.variant,
@@ -4036,28 +4035,18 @@ class _Checker:
                     raise _variant_not_in_enum(node.variant, enum_type, node.span)
                 return BoolType()
 
-            member = self._env.type_table.enum_member_by_decl(
-                enum_type, constructor.owner_decl_node_id
-            )
+            member = self._enum_member_for_constructor_candidate(enum_type, constructor)
             if member is None:
                 raise _variant_not_in_enum(node.variant, enum_type, node.span)
 
-            # An owner-applied member spelling resolves to its concrete record
-            # handle. Members that capture no owner type parameters therefore
-            # remain valid across owner instantiations; capturing members must
-            # match the subject enum's concrete member handle.
-            qualified_member = (
-                None
-                if node.qualifier is None
-                else self._env.resolve_owner_applied_inline_member_type(
-                    node.qualifier,
-                    constructor.owner_name,
-                    type_vars=self._current_type_vars,
-                    span=node.span,
-                )
+            self._validate_enum_constructor_qualification(
+                qualifier=node.qualifier,
+                variant=node.variant,
+                enum_type=enum_type,
+                constructor=constructor,
+                member=member,
+                span=node.span,
             )
-            if qualified_member is not None and qualified_member != member:
-                raise _variant_not_in_enum(node.variant, enum_type, node.span)
             return BoolType()
 
     def _qualified_constructor_typed_call_error(self, span: SourceSpan) -> AglTypeError:
@@ -4903,9 +4892,18 @@ class _Checker:
                 if selected_member is None:
                     raise _variant_not_in_enum(pattern.name, subj_type, pattern.span)
             else:
-                selected_member = self._env.type_table.enum_member_ids(subj_type)[
-                    constructor_ref.owner_decl_node_id
-                ]
+                selected_member = self._enum_member_for_constructor_candidate(
+                    subj_type, constructor_ref
+                )
+                assert selected_member is not None
+                self._validate_enum_constructor_qualification(
+                    qualifier=pattern.qualifier,
+                    variant=pattern.name,
+                    enum_type=subj_type,
+                    constructor=constructor_ref,
+                    member=selected_member,
+                    span=pattern.span,
+                )
             owner_type = selected_member
             fields = self._env.type_table.record_fields(owner_type)
             context_desc = f"member '{subj_type.name}.{owner_type.name}'"
@@ -4988,9 +4986,10 @@ class _Checker:
             return None
         candidates = self._resolved.pattern_constructor_candidates.get(pattern.node_id, ())
         if isinstance(owner_type, EnumType):
-            member_ids = self._env.type_table.enum_member_ids(owner_type)
             matching = tuple(
-                candidate for candidate in candidates if candidate.owner_decl_node_id in member_ids
+                candidate
+                for candidate in candidates
+                if self._enum_member_for_constructor_candidate(owner_type, candidate) is not None
             )
         else:
             matching = tuple(
@@ -5014,6 +5013,67 @@ class _Checker:
             matching,
             subject="Constructor pattern",
         )
+
+    def _enum_member_for_constructor_candidate(
+        self, enum_type: EnumType, candidate: ConstructorRef
+    ) -> RecordType | None:
+        """Return the enum member denoted by a source constructor candidate.
+
+        A source alias has its own declaration identity but transparently
+        denotes its target record.  Membership is therefore first checked by
+        the record declaration id and then by alias-transparent matching of
+        the candidate's checked source template against the enum members.
+        """
+        direct = self._env.type_table.enum_member_by_decl(enum_type, candidate.owner_decl_node_id)
+        if direct is not None:
+            return direct
+        source_template = self._env.source_type_template_qname(
+            candidate.owner_module_id,
+            candidate.owner_name,
+            scope_path=candidate.owner_path,
+        )
+        assert source_template is not None
+        canonical_record = source_template.template
+        assert isinstance(canonical_record, RecordType)
+        if canonical_record.decl_id == candidate.owner_decl_node_id:
+            return None
+        return next(
+            (
+                member
+                for member in self._env.type_table.enum_members(enum_type)
+                if canonical_record.decl_id == member.decl_id
+                and self._env.match_source_type_qname(
+                    candidate.owner_module_id,
+                    candidate.owner_name,
+                    member,
+                    scope_path=candidate.owner_path,
+                )
+                is not None
+            ),
+            None,
+        )
+
+    def _validate_enum_constructor_qualification(
+        self,
+        *,
+        qualifier: QualifierChain | None,
+        variant: str,
+        enum_type: EnumType,
+        constructor: ConstructorRef,
+        member: RecordType,
+        span: SourceSpan,
+    ) -> None:
+        """Validate an explicit enum owner and its applied member spelling."""
+        if qualifier is None or qualifier.segments[-1].type_args is None:
+            return
+        qualified_member = self._env.resolve_owner_applied_inline_member_type(
+            qualifier,
+            constructor.owner_name,
+            type_vars=self._current_type_vars,
+            span=span,
+        )
+        if qualified_member not in (None, member):
+            raise _variant_not_in_enum(variant, enum_type, span)
 
     @staticmethod
     def _unique_constructor_candidate(
@@ -5113,7 +5173,7 @@ class _Checker:
     ) -> None:
         """Require a bare constructor spelling to be a nullary matched enum variant."""
         assert isinstance(enum_type, EnumType)
-        member = self._env.type_table.enum_member_by_decl(enum_type, candidate.owner_decl_node_id)
+        member = self._enum_member_for_constructor_candidate(enum_type, candidate)
         assert member is not None
         if self._env.type_table.record_fields(member):
             raise AglTypeError(

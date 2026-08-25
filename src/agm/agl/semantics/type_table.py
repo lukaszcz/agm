@@ -633,6 +633,8 @@ class TypeTable:
         so their missing bindings are permitted here. Callers that need a
         concrete enum handle still require bindings for every enum parameter.
         """
+        if member.decl_id != record.decl_id:
+            return None
         return match_nominal_owner_template(TypeTemplate(member, enum_def.type_params), record)
 
     def records_share_enum_membership(self, records: tuple[RecordType, ...]) -> bool:
@@ -716,7 +718,7 @@ class TypeTable:
         while concrete owner arguments must match exactly.
         """
         member = self.enum_member_names(enum).get(member_name)
-        if member is None:
+        if member is None or member.decl_id != record.decl_id:
             return False
         parameters = tuple(sorted(free_type_vars(member)))
         return match_nominal_owner_template(TypeTemplate(member, parameters), record) is not None

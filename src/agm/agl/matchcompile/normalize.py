@@ -352,6 +352,7 @@ def _canonical_enum_pattern_variant(
     source_name: str,
     node_id: int,
     constructor_ref: ConstructorRef,
+    selected_owner: int | None,
     subject_type: EnumType,
     checked: CheckedPatternOwner,
 ) -> str:
@@ -363,11 +364,20 @@ def _canonical_enum_pattern_variant(
     recorded_spelling = checked.resolved.pattern_constructor_spellings.get(node_id)
     if recorded_spelling is not None and recorded_spelling != source_name:
         raise MatchCompileInvariantError("invalid final constructor classification")
-    canonical_variant = constructor_ref.owner_name
-    member = members.get(canonical_variant)
-    if member is None or member.decl_id != constructor_ref.owner_decl_node_id:
+    candidates = checked.resolved.pattern_constructor_candidates.get(node_id, ())
+    candidate_matches_owner = any(
+        candidate.owner_decl_node_id == selected_owner for candidate in candidates
+    )
+    if selected_owner is None or (
+        candidates
+        and (constructor_ref.owner_decl_node_id != selected_owner or candidate_matches_owner)
+        and constructor_ref not in candidates
+    ):
         raise MatchCompileInvariantError("invalid final constructor classification")
-    return canonical_variant
+    member = next((member for member in members.values() if member.decl_id == selected_owner), None)
+    if member is None:
+        raise MatchCompileInvariantError("invalid final constructor classification")
+    return member.name
 
 
 def normalize_pattern(
@@ -399,7 +409,12 @@ def normalize_pattern(
                 )
             if isinstance(subject_type, EnumType):
                 canonical_variant = _canonical_enum_pattern_variant(
-                    name, node_id, constructor_ref, subject_type, checked
+                    name,
+                    node_id,
+                    constructor_ref,
+                    constructor_ref.owner_decl_node_id,
+                    subject_type,
+                    checked,
                 )
                 constructor = enum_constructor(
                     subject_type,
@@ -440,7 +455,12 @@ def normalize_pattern(
             selected_owner = checked.pattern_constructor_owner_for(pattern.node_id)
             applied_variant = (
                 _canonical_enum_pattern_variant(
-                    pattern.name, pattern.node_id, constructor_ref, subject_type, checked
+                    pattern.name,
+                    pattern.node_id,
+                    constructor_ref,
+                    None if selected_owner is None else selected_owner.value,
+                    subject_type,
+                    checked,
                 )
                 if isinstance(subject_type, EnumType)
                 else None

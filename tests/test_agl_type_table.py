@@ -153,6 +153,25 @@ def test_enum_owner_for_referenced_member_requires_its_full_type_template() -> N
     )
 
 
+def test_enum_member_template_requires_the_same_record_declaration() -> None:
+    enum = TypeDef(
+        kind="enum",
+        name="E",
+        module_id=ENTRY_ID,
+        members=(RecordType("R", module_id=ENTRY_ID, decl_id=10),),
+        decl_node_id=11,
+    )
+
+    assert (
+        TypeTable._match_enum_member_template(
+            enum,
+            enum.members[0],
+            RecordType("R", module_id=ENTRY_ID, decl_id=12),
+        )
+        is None
+    )
+
+
 def test_referenced_member_with_concrete_arguments_does_not_share_enum_membership() -> None:
     table = TypeTable()
     table.register(

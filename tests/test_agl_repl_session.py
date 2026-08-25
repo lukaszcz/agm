@@ -2198,6 +2198,18 @@ enum Agent
         assert narrowed.value == IntValue(1)
         assert not not_a_member.ok
 
+    def test_referenced_enum_does_not_match_a_redeclared_record_member(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("record R(old: int)").ok
+        assert session.eval_entry("enum E = ::R").ok
+        assert session.eval_entry("record R(fresh: text)").ok
+        assert session.eval_entry("enum F = ::R").ok
+        assert session.eval_entry('let fresh = R(fresh = "new")').ok
+
+        matched = session.eval_entry("case fresh of | E::R(fresh) => fresh")
+
+        assert not matched.ok
+
     def test_referenced_generic_member_preserves_its_applied_field_for_json_casts(self) -> None:
         """A referenced member applies the enum's arguments to its own fields."""
         session = ReplSession()

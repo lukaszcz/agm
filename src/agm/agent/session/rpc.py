@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import select
 import subprocess
 import threading
 import time
@@ -247,7 +248,10 @@ class PiRpcSessionBackend:
         command = {"id": request_id, "type": operation, **payload}
         started = time.monotonic()
         try:
-            _write_command(child, command)
+            _write_command(child, command, self._idle_timeout)
+        except _RpcIdleTimeout as exc:
+            self._kill_dead_child(child)
+            self._raise_transport_or_host(operation, "Pi RPC stdin write timed out", started, exc, child)
         except (BrokenPipeError, OSError) as exc:
             self._kill_dead_child(child)
             self._raise_transport_or_host(operation, "Pi RPC stdin closed", started, exc, child)
@@ -262,7 +266,7 @@ class PiRpcSessionBackend:
                 event = self._next_event(child)
                 ui_cancellation = _extension_ui_cancellation(event)
                 if ui_cancellation is not None:
-                    _write_command(child, ui_cancellation)
+                    _write_command(child, ui_cancellation, self._idle_timeout)
                 delta = _event_text_delta(event)
                 if event["type"] == "response":
                     _validate_response(event)
@@ -483,17 +487,36 @@ def _queue_stdout(child: _RpcChild, chunk: bytes | None) -> None:
             pass
 
 
-def _write_command(child: _RpcChild, command: dict[str, object]) -> None:
+def _write_command(
+    child: _RpcChild, command: dict[str, object], idle_timeout: float | None = None
+) -> None:
     stdin = child.process.stdin
     if stdin is None:
         raise BrokenPipeError("Pi RPC stdin is unavailable")
-    stdin.write(
-        json.dumps(command, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode(
-            "utf-8"
-        )
-        + b"\n"
-    )
-    stdin.flush()
+    data = json.dumps(
+        command, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8") + b"\n"
+    if idle_timeout is None:
+        stdin.write(data)
+        stdin.flush()
+        return
+
+    descriptor = stdin.fileno()
+    deadline = time.monotonic() + idle_timeout
+    view = memoryview(data)
+    os.set_blocking(descriptor, False)
+    try:
+        while view:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not select.select([], [descriptor], [], remaining)[1]:
+                raise _RpcIdleTimeout
+            try:
+                written = os.write(descriptor, view)
+            except BlockingIOError:
+                continue
+            view = view[written:]
+    finally:
+        os.set_blocking(descriptor, True)
 
 
 def _terminate(child: _RpcChild) -> None:

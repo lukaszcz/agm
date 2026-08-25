@@ -269,10 +269,12 @@ def test_extension_ui_cancellation_write_failure_is_an_ask_error(
     backend = open_backend()
     write_command = rpc._write_command
 
-    def fail_ui_cancellation(child: rpc._RpcChild, command: dict[str, object]) -> None:
+    def fail_ui_cancellation(
+        child: rpc._RpcChild, command: dict[str, object], idle_timeout: float | None
+    ) -> None:
         if command["type"] == "extension_ui_response":
             raise BrokenPipeError
-        write_command(child, command)
+        write_command(child, command, idle_timeout)
 
     monkeypatch.setattr(rpc, "_write_command", fail_ui_cancellation)
 
@@ -421,6 +423,26 @@ def test_idle_timeout_waits_for_explicit_child_readiness(
     thread.join()
     assert isinstance(errors[0], SessionAskError)
     assert errors[0].cause == "timeout"
+    with pytest.raises(SessionHostError):
+        backend.stats()
+    backend.close()
+
+
+def test_idle_timeout_covers_blocked_rpc_stdin_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pi = tmp_path / "pi"
+    pi.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(30)\n")
+    pi.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    backend = open_backend(timeout=0.05)
+
+    started = monotonic()
+    with pytest.raises(SessionAskError) as raised:
+        backend.ask(SessionAskRequest("x" * 1_000_000))
+
+    assert raised.value.cause == "timeout"
+    assert monotonic() - started < 2
     with pytest.raises(SessionHostError):
         backend.stats()
     backend.close()

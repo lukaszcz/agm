@@ -480,8 +480,10 @@ def test_prompt_output_limit_and_write_failure_close_the_session(
     RpcStub(second, monkeypatch)
     backend = open_backend()
 
-    def fail_write(child: rpc._RpcChild, command: dict[str, object]) -> None:
-        del child, command
+    def fail_write(
+        child: rpc._RpcChild, command: dict[str, object], idle_timeout: float | None
+    ) -> None:
+        del child, command, idle_timeout
         raise OSError("closed")
 
     monkeypatch.setattr(rpc, "_write_command", fail_write)

@@ -203,7 +203,7 @@ def test_claude_delivers_compact_literal_and_fork_promptlessly_through_runner(
             "--effort",
             "t",
         ],
-        None,
+        "",
     )
     assert isinstance(child, ClaudeCliSessionBackend)
 
@@ -333,6 +333,7 @@ def test_pi_forks_started_transcript_natively(monkeypatch: pytest.MonkeyPatch) -
     fork_argv = transport.calls[1][0]
     child_id = fork_argv[fork_argv.index("--session-id") + 1]
     assert fork_argv[fork_argv.index("--fork") + 1] == parent_id
+    assert transport.calls[1][1] == ""
     assert child_id in transport.calls[2][0]
 
 

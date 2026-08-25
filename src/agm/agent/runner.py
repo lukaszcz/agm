@@ -481,6 +481,11 @@ def run_prompt_command(
     return output
 
 
+def _prepared_stdin_text(prepared: PreparedPromptRun) -> str | None:
+    """Return piped input, using an empty pipe to deliver EOF explicitly."""
+    return "" if prepared.delivery is PromptDelivery.NONE else prepared.stdin_prompt
+
+
 def run_prepared_prompt(
     prepared: PreparedPromptRun,
     *,
@@ -517,7 +522,7 @@ def run_prepared_prompt(
         env=prepared.env,
         stdout_callback=stdout_callback,
         stderr_callback=stderr_callback,
-        stdin_text=prepared.stdin_prompt,
+        stdin_text=_prepared_stdin_text(prepared),
         prepared_argv=prepared.argv,
         append_target=append_target,
     )
@@ -642,7 +647,7 @@ def run_prepared_prompt_result(
     capture: ProcessCaptureResult = run_capture_result(
         argv,
         env=prepared.env if prepared.env else None,
-        stdin_text=prepared.stdin_prompt,
+        stdin_text=_prepared_stdin_text(prepared),
         idle_timeout=idle_timeout,
         isolate_process_group=True,
     )

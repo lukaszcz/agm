@@ -404,7 +404,36 @@ def test_run_prepared_prompt_honors_prepared_argv_and_stdin_in_normal_mode(
     )
 
     assert run_prepared_prompt(prepared) == "output"
-    assert captured == {"command": argv, "stdin_text": stdin_prompt}
+    expected_stdin = "" if delivery is PromptDelivery.NONE else stdin_prompt
+    assert captured == {"command": argv, "stdin_text": expected_stdin}
+
+
+def test_prepared_result_closes_stdin_for_no_prompt_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agm.agent.runner import PreparedPromptRun, run_prepared_prompt_result
+    from agm.core.process import ProcessCaptureResult
+
+    captured: dict[str, object] = {}
+
+    def fake_run_capture_result(argv: list[str], **kwargs: object) -> ProcessCaptureResult:
+        captured["argv"] = argv
+        captured["stdin_text"] = kwargs.get("stdin_text")
+        return ProcessCaptureResult(0, "", "", 0.0, False, None, None)
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+    prepared = PreparedPromptRun(
+        command=["runner"],
+        effective_file=Path("unused.md"),
+        env={},
+        temp_files=[],
+        argv=["runner", "--fork"],
+        delivery=PromptDelivery.NONE,
+    )
+
+    run_prepared_prompt_result(prepared, idle_timeout=None)
+
+    assert captured == {"argv": ["runner", "--fork"], "stdin_text": ""}
 
 
 @pytest.mark.parametrize(

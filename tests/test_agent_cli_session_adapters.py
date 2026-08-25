@@ -695,9 +695,7 @@ def test_claude_lifecycle_protocol_errors_are_host_errors(
 
 
 def test_claude_rejects_an_unsuccessful_compaction(monkeypatch: pytest.MonkeyPatch) -> None:
-    transport = CaptureTransport(
-        [CaptureOutcome("started"), CaptureOutcome('{"is_error": true}')]
-    )
+    transport = CaptureTransport([CaptureOutcome("started"), CaptureOutcome('{"is_error": true}')])
     transport.install(monkeypatch)
     backend = ClaudeCliSessionBackend()
     _open(backend, AgentClaude("", ""))

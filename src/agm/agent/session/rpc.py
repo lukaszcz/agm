@@ -255,7 +255,9 @@ class PiRpcSessionBackend:
             _write_command(child, command, self._idle_timeout)
         except _RpcIdleTimeout as exc:
             self._kill_dead_child(child)
-            self._raise_transport_or_host(operation, "Pi RPC stdin write timed out", started, exc, child)
+            self._raise_transport_or_host(
+                operation, "Pi RPC stdin write timed out", started, exc, child
+            )
         except (BrokenPipeError, OSError) as exc:
             self._kill_dead_child(child)
             self._raise_transport_or_host(operation, "Pi RPC stdin closed", started, exc, child)
@@ -497,9 +499,12 @@ def _write_command(
     stdin = child.process.stdin
     if stdin is None:
         raise BrokenPipeError("Pi RPC stdin is unavailable")
-    data = json.dumps(
-        command, ensure_ascii=False, separators=(",", ":"), allow_nan=False
-    ).encode("utf-8") + b"\n"
+    data = (
+        json.dumps(command, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode(
+            "utf-8"
+        )
+        + b"\n"
+    )
     if idle_timeout is None:
         stdin.write(data)
         stdin.flush()

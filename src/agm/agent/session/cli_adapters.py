@@ -306,6 +306,15 @@ class _SessionIdCliBackend(_CliPromptBackend, Generic[_SessionAgentT], ABC):
         session = self._session_for(SessionOperation.FORK.value)
         child._session = _SessionIdCliState(session.agent, session_id, "", False, started=True)
 
+    def _initialize_unstarted_fork(
+        self, child: _SessionIdCliBackend[_SessionAgentT]
+    ) -> None:
+        """Fork deferred local state before either transcript exists natively."""
+        session = self._session_for(SessionOperation.FORK.value)
+        child._session = _SessionIdCliState(
+            session.agent, str(uuid4()), "", session.one_shot, started=False
+        )
+
 
 class ClaudeCliSessionBackend(_SessionIdCliBackend[AgentClaude]):
     """Continue Claude conversations through its CLI session flags."""
@@ -333,6 +342,8 @@ class ClaudeCliSessionBackend(_SessionIdCliBackend[AgentClaude]):
     def compact(self, instructions: str) -> None:
         """Ask Claude to compact the current transcript and confirm the result."""
         session = self._session_for(SessionOperation.COMPACT.value)
+        if not session.started:
+            return
         prompt = "/compact" if not instructions else f"/compact {instructions}"
         response = self._run_prompt(
             prompt,
@@ -345,6 +356,10 @@ class ClaudeCliSessionBackend(_SessionIdCliBackend[AgentClaude]):
     def fork(self) -> ClaudeCliSessionBackend:
         """Fork the current Claude transcript and return its child backend."""
         session = self._session_for(SessionOperation.FORK.value)
+        if not session.started:
+            child = ClaudeCliSessionBackend(idle_timeout=self._idle_timeout)
+            self._initialize_unstarted_fork(child)
+            return child
         response = self._run_prompt(
             "",
             session.agent.session_argv(
@@ -470,6 +485,10 @@ class PiCliSessionBackend(_SessionIdCliBackend[AgentPi]):
     def fork(self) -> PiCliSessionBackend:
         """Snapshot this transcript natively and return the live child backend."""
         session = self._session_for(SessionOperation.FORK.value)
+        if not session.started:
+            child = PiCliSessionBackend(idle_timeout=self._idle_timeout)
+            self._initialize_unstarted_fork(child)
+            return child
         child_id = str(uuid4())
         self._run_prompt(
             "",

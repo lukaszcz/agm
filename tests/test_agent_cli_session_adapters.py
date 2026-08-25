@@ -211,13 +211,7 @@ def test_claude_delivers_compact_literal_and_fork_promptlessly_through_runner(
 def test_claude_forks_immediately_after_open_with_independent_child_continuation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    transport = CaptureTransport(
-        [
-            CaptureOutcome('{"session_id": "child"}'),
-            CaptureOutcome("child answer"),
-            CaptureOutcome("parent answer"),
-        ]
-    )
+    transport = CaptureTransport([CaptureOutcome("child answer"), CaptureOutcome("parent answer")])
     transport.install(monkeypatch)
     parent = ClaudeCliSessionBackend()
     _open(parent, AgentClaude("m", "t"), name="named")
@@ -226,39 +220,24 @@ def test_claude_forks_immediately_after_open_with_independent_child_continuation
     assert child.ask(SessionAskRequest("child follow-up")).content == "child answer"
     assert parent.ask(SessionAskRequest("parent follow-up")).content == "parent answer"
 
-    parent_id = transport.calls[0][0][3]
-    assert parent_id != "child"
-    assert transport.calls[0] == (
+    child_id = transport.calls[0][0][3]
+    parent_id = transport.calls[1][0][3]
+    assert child_id != parent_id
+    _file_prompt_argv(
+        transport.calls[0][0],
         [
             "claude",
             "-p",
-            "--resume",
-            parent_id,
-            "--fork-session",
-            "--output-format",
-            "json",
+            "--session-id",
+            child_id,
             "--model",
             "m",
             "--effort",
             "t",
         ],
-        None,
     )
     _file_prompt_argv(
         transport.calls[1][0],
-        [
-            "claude",
-            "-p",
-            "--resume",
-            "child",
-            "--model",
-            "m",
-            "--effort",
-            "t",
-        ],
-    )
-    _file_prompt_argv(
-        transport.calls[2][0],
         [
             "claude",
             "-p",
@@ -274,32 +253,43 @@ def test_claude_forks_immediately_after_open_with_independent_child_continuation
     )
 
 
-def test_pi_forks_immediately_after_open_then_child_is_live_without_repeating_fork(
+def test_claude_compact_before_first_ask_is_deferred(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = CaptureTransport([CaptureOutcome("answer")])
+    transport.install(monkeypatch)
+    backend = ClaudeCliSessionBackend()
+    _open(backend, AgentClaude("m", "t"), name="named")
+
+    backend.compact("instructions")
+    backend.ask(SessionAskRequest("question"))
+
+    assert len(transport.calls) == 1
+    assert "--session-id" in transport.calls[0][0]
+    assert "--resume" not in transport.calls[0][0]
+    assert "named" in transport.calls[0][0]
+
+
+def test_pi_forks_immediately_after_open_then_child_starts_independently(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    transport = CaptureTransport(
-        [CaptureOutcome("forked"), CaptureOutcome("child"), CaptureOutcome("parent")]
-    )
+    transport = CaptureTransport([CaptureOutcome("child"), CaptureOutcome("parent")])
     transport.install(monkeypatch)
-    agent = AgentPi("p", "m", "t")
     parent = PiCliSessionBackend()
-    _open(parent, agent, name="named")
+    _open(parent, AgentPi("p", "m", "t"), name="named")
 
     child = parent.fork()
     child.ask(SessionAskRequest("child"))
     parent.ask(SessionAskRequest("parent"))
 
     child_id = transport.calls[0][0][3]
-    parent_id = transport.calls[0][0][5]
+    parent_id = transport.calls[1][0][3]
     assert child_id != parent_id
-    assert transport.calls[0] == (
+    _file_prompt_argv(
+        transport.calls[0][0],
         [
             "pi",
             "-p",
             "--session-id",
             child_id,
-            "--fork",
-            parent_id,
             "--provider",
             "p",
             "--model",
@@ -307,25 +297,9 @@ def test_pi_forks_immediately_after_open_then_child_is_live_without_repeating_fo
             "--thinking",
             "t",
         ],
-        None,
     )
     _file_prompt_argv(
         transport.calls[1][0],
-        [
-            "pi",
-            "-p",
-            "--session-id",
-            child_id,
-            "--provider",
-            "p",
-            "--model",
-            "m",
-            "--thinking",
-            "t",
-        ],
-    )
-    _file_prompt_argv(
-        transport.calls[2][0],
         [
             "pi",
             "-p",
@@ -671,11 +645,14 @@ def test_first_invocation_transport_failure_consumes_creation_state_until_reset(
 def test_service_maps_cli_lifecycle_transport_failures_to_host_errors(
     monkeypatch: pytest.MonkeyPatch, operation: str
 ) -> None:
-    transport = CaptureTransport([CaptureOutcome(returncode=1, stderr="failed")])
+    transport = CaptureTransport(
+        [CaptureOutcome("started"), CaptureOutcome(returncode=1, stderr="failed")]
+    )
     transport.install(monkeypatch)
     backend = ClaudeCliSessionBackend()
     service = SessionService(lambda _agent, _transport: backend)
     handle = service.open(AgentClaude("", ""), "cli")
+    service.ask(handle, SessionAskRequest("start"))
 
     with pytest.raises(SessionHostError) as raised:
         if operation == "compact":
@@ -700,10 +677,11 @@ def test_service_maps_cli_lifecycle_transport_failures_to_host_errors(
 def test_claude_lifecycle_protocol_errors_are_host_errors(
     monkeypatch: pytest.MonkeyPatch, method: str, output: str
 ) -> None:
-    transport = CaptureTransport([CaptureOutcome(output)])
+    transport = CaptureTransport([CaptureOutcome("started"), CaptureOutcome(output)])
     transport.install(monkeypatch)
     backend = ClaudeCliSessionBackend()
     _open(backend, AgentClaude("", ""))
+    backend.ask(SessionAskRequest("start"))
 
     with pytest.raises(SessionHostError) as raised:
         if method == "compact":
@@ -715,10 +693,13 @@ def test_claude_lifecycle_protocol_errors_are_host_errors(
 
 
 def test_claude_rejects_an_unsuccessful_compaction(monkeypatch: pytest.MonkeyPatch) -> None:
-    transport = CaptureTransport([CaptureOutcome('{"is_error": true}')])
+    transport = CaptureTransport(
+        [CaptureOutcome("started"), CaptureOutcome('{"is_error": true}')]
+    )
     transport.install(monkeypatch)
     backend = ClaudeCliSessionBackend()
     _open(backend, AgentClaude("", ""))
+    backend.ask(SessionAskRequest("start"))
 
     with pytest.raises(SessionHostError) as raised:
         backend.compact("")

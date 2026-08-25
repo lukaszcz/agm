@@ -22,6 +22,7 @@ from pathlib import Path
 from agm.agl.repl import ReplSession
 from agm.agl.semantics.values import (
     ArrayValue,
+    BoolValue,
     ExceptionValue,
     IntValue,
     RecordValue,
@@ -194,6 +195,27 @@ class TestCapturedClassSurvivesRedeclaration:
 
 
 class TestFreshImportSeesTheCurrentDeclaration:
+    def test_referenced_member_in_its_enum_scope_stays_visible_after_enum_redeclaration(
+        self, tmp_path: Path
+    ) -> None:
+        """A referenced record keeps its companion paths even when they match its enum's scope."""
+        _write_extern_lib(
+            tmp_path,
+            "same_scope_member",
+            "extern def visible() -> bool\n",
+            ("from agl import R, nominals\ndef visible():\n    return R is nominals.entry.E.R\n"),
+        )
+        s = _make_session_with_root(tmp_path)
+        declaration = "scope E\nrecord R(value: int)\nend E\nenum E = ::E::R"
+        assert s.eval_entry(declaration).ok
+        assert s.eval_entry("enum E = ::E::R").ok
+
+        assert s.eval_entry("import same_scope_member::*").ok
+        result = s.eval_entry("visible()")
+
+        assert result.ok, result.diagnostics
+        assert result.value == BoolValue(True)
+
     def test_fresh_import_sees_the_new_record_shape_not_the_old_one(self, tmp_path: Path) -> None:
         _write_extern_lib(
             tmp_path,

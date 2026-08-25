@@ -127,12 +127,7 @@ def lower_program(
     # reference the same record, so listing it as one enum's member must not
     # suppress it.
     inline_member_ids = {
-        member.decl_id
-        for enum_def in type_table.entries()
-        if enum_def.kind == "enum"
-        for member in enum_def.members
-        if isinstance(member, RecordType)
-        and member.scope_path == (*enum_def.scope_path, enum_def.name)
+        typedef.decl_node_id for typedef in type_table.entries() if typedef.is_inline_enum_member
     }
 
     # Step 2: Build nominals from the authoritative TypeTable declarations.

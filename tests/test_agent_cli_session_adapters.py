@@ -317,6 +317,25 @@ def test_pi_forks_immediately_after_open_then_child_starts_independently(
     )
 
 
+def test_pi_forks_started_transcript_natively(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = CaptureTransport(
+        [CaptureOutcome("parent"), CaptureOutcome("forked"), CaptureOutcome("child")]
+    )
+    transport.install(monkeypatch)
+    parent = PiCliSessionBackend()
+    _open(parent, AgentPi("p", "m", "t"))
+
+    parent.ask(SessionAskRequest("start"))
+    child = parent.fork()
+    child.ask(SessionAskRequest("continue"))
+
+    parent_id = transport.calls[0][0][3]
+    fork_argv = transport.calls[1][0]
+    child_id = fork_argv[fork_argv.index("--session-id") + 1]
+    assert fork_argv[fork_argv.index("--fork") + 1] == parent_id
+    assert child_id in transport.calls[2][0]
+
+
 @pytest.mark.parametrize(
     ("backend", "agent", "name_flag"),
     [

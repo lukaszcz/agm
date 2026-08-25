@@ -240,6 +240,24 @@ def test_session_failures_report_the_session_call_location() -> None:
     assert result.error.col == 17
 
 
+def test_session_operation_failures_report_the_operation_location() -> None:
+    class FailingCloseHost(_Host):
+        def close(self, handle: str) -> None:
+            del handle
+            raise SessionHostError("unavailable", "close")
+
+    result = _run(
+        "program def main() -> unit =\n"
+        '  let session = Session::open(AgentCommand("worker"))\n'
+        "  session.close()\n",
+        FailingCloseHost(),
+    )
+
+    assert result.error is not None
+    assert result.error.line == 3
+    assert result.error.col == 3
+
+
 def test_agent_method_maps_session_agent_errors_to_agent_call_errors() -> None:
     class InvalidAgentHost(_Host):
         def open(self, agent: EnumValue, transport: str, *, name: str = "") -> str:

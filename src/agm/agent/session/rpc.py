@@ -519,11 +519,7 @@ def _write_command(
             remaining = deadline - time.monotonic()
             if remaining <= 0 or not select.select([], [descriptor], [], remaining)[1]:
                 raise _RpcIdleTimeout
-            try:
-                written = os.write(descriptor, view)
-            except BlockingIOError:
-                continue
-            view = view[written:]
+            view = view[os.write(descriptor, view) :]
     finally:
         os.set_blocking(descriptor, True)
 
@@ -562,15 +558,10 @@ def _terminate_process_group(process: subprocess.Popen[bytes], process_group: in
     except ProcessLookupError:
         pass
     try:
-        process.wait(timeout=1)
-    except subprocess.TimeoutExpired:
-        pass
-    try:
         os.killpg(process_group, signal.SIGKILL)
     except ProcessLookupError:
         pass
-    if process.poll() is None:
-        process.wait()
+    process.wait()
 
 
 def _json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:

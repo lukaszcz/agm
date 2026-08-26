@@ -31,7 +31,7 @@ from agm.agent.session.protocol import (
     SessionStats,
 )
 from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi
-from agm.agent.transport import AgentCallInfo, stderr_tail
+from agm.agent.transport import AgentCallInfo, AgentTransportFailureCause, stderr_tail
 from agm.core.cleanup import preserve_primary_error
 from agm.core.env import clone_env
 from agm.util.interp import InterpolationError
@@ -185,10 +185,7 @@ class AgentCommandSessionBackend(_CliPromptBackend):
     def open(self, request: SessionOpenRequest) -> None:
         """Validate and initialize a command session."""
         if request.name:
-            raise SessionHostError(
-                "command sessions do not support names",
-                SessionOperation.SET_NAME.value,
-            )
+            raise SessionHostError("command sessions do not support names", "open")
         if not isinstance(request.agent, AgentCommand):
             raise SessionHostError("command session requires an AgentCommand", "open")
         try:
@@ -376,9 +373,7 @@ class CodexCliSessionBackend(_CliPromptBackend):
     def open(self, request: SessionOpenRequest) -> None:
         """Allocate a deferred Codex session handle without starting a thread."""
         if request.name:
-            raise SessionHostError(
-                "Codex CLI sessions do not support names", SessionOperation.SET_NAME.value
-            )
+            raise SessionHostError("Codex CLI sessions do not support names", "open")
         if not isinstance(request.agent, AgentCodex):
             raise SessionHostError("Codex CLI session requires an AgentCodex", "open")
         self._session = _CodexSession(request.agent, request.single_prompt)
@@ -410,15 +405,10 @@ class CodexCliSessionBackend(_CliPromptBackend):
             return response
         try:
             thread_id, content = _parse_codex_jsonl(response.content)
+        except _CodexTurnFailedError as exc:
+            raise _codex_ask_error(response, "nonzero_exit", exc) from exc
         except _CodexProtocolError as exc:
-            call_info = cast(AgentCallInfo, response.call_info)
-            raise SessionAskError(
-                cause="protocol_failure",
-                exit_code=call_info.exit_code,
-                stderr_tail=stderr_tail(str(exc)),
-                elapsed=call_info.elapsed,
-                call_info=call_info,
-            ) from exc
+            raise _codex_ask_error(response, "protocol_failure", exc) from exc
         session.session_id = thread_id
         return replace(response, content=content)
 
@@ -508,10 +498,17 @@ def _require_claude_session_id(output: str) -> str:
 
 
 def _parse_codex_jsonl(output: str) -> tuple[str, str]:
-    """Validate Codex's JSONL event stream and extract its completed reply."""
+    """Validate Codex's JSONL event stream and extract its completed reply.
+
+    The stream belongs to Codex, not to AGM, so unrecognized event types are
+    ignored rather than rejected; only a failed turn and a malformed stream
+    stop the parse.
+    """
     thread_id: str | None = None
     messages: list[str] = []
     for line in output.splitlines():
+        if not line.strip():
+            continue
         try:
             event = cast(object, json.loads(line))
         except json.JSONDecodeError as exc:
@@ -527,8 +524,8 @@ def _parse_codex_jsonl(output: str) -> tuple[str, str]:
             if thread_id is not None or not isinstance(candidate, str) or not candidate:
                 raise _CodexProtocolError("Codex reported an invalid thread id")
             thread_id = candidate
-        elif event_type in {"turn.started", "turn.completed", "item.started", "item.updated"}:
-            continue
+        elif event_type == "turn.failed":
+            raise _CodexTurnFailedError(_codex_turn_failure(event_object))
         elif event_type == "item.completed":
             item = event_object.get("item")
             if not isinstance(item, dict):
@@ -542,8 +539,6 @@ def _parse_codex_jsonl(output: str) -> tuple[str, str]:
                 if not isinstance(text, str):
                     raise _CodexProtocolError("Codex assistant message had no text")
                 messages.append(text)
-        else:
-            raise _CodexProtocolError("Codex returned an unknown JSONL event")
     if thread_id is None:
         raise _CodexProtocolError("Codex did not report a session id")
     if not messages:
@@ -551,8 +546,36 @@ def _parse_codex_jsonl(output: str) -> tuple[str, str]:
     return thread_id, "\n".join(messages)
 
 
+def _codex_turn_failure(event: dict[str, object]) -> str:
+    """Return the reason Codex reported for a failed turn."""
+    error = event.get("error")
+    if isinstance(error, dict):
+        message = cast(dict[str, object], error).get("message")
+        if isinstance(message, str) and message:
+            return message
+    return "Codex reported a failed turn without a reason"
+
+
+def _codex_ask_error(
+    response: SessionAskResponse, cause: AgentTransportFailureCause, exc: Exception
+) -> SessionAskError:
+    """Build the ask failure for a started Codex thread that produced no reply."""
+    call_info = cast(AgentCallInfo, response.call_info)
+    return SessionAskError(
+        cause=cause,
+        exit_code=call_info.exit_code,
+        stderr_tail=stderr_tail(str(exc)),
+        elapsed=call_info.elapsed,
+        call_info=call_info,
+    )
+
+
 class _CodexProtocolError(Exception):
     """Codex output did not satisfy its JSONL response protocol."""
+
+
+class _CodexTurnFailedError(Exception):
+    """Codex reported a failed turn through its JSONL event stream."""
 
 
 def _json_object(output: str, *, operation: SessionOperation) -> dict[str, object]:

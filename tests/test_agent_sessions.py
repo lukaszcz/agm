@@ -334,6 +334,23 @@ def test_reset_all_retains_failed_closes_for_cleanup_retry() -> None:
     assert not service.is_known(failed)
 
 
+def test_reset_all_starts_a_fresh_default_even_when_another_close_fails() -> None:
+    service, factory = _service()
+    first_default = service.default(AgentCommand("default"), "cli")
+    other = service.open(AgentCommand("other"), "cli")
+    factory.backends[1].close_error = RuntimeError("busy")
+
+    with pytest.raises(ExceptionGroup):
+        service.reset_all()
+
+    assert not service.is_known(first_default)
+    assert service.is_known(other)
+
+    next_default = service.default(AgentCommand("second"), "cli")
+    assert next_default != first_default
+    assert service.ask(next_default, SessionAskRequest(prompt="hello")).content == "answer"
+
+
 def test_close_all_closes_live_backends_once_and_is_safe_to_repeat() -> None:
     service, factory = _service()
     first = service.open(object(), "cli")

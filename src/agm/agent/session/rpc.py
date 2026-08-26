@@ -95,9 +95,12 @@ class PiRpcSessionBackend:
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
         """Send a prompt and collect its text deltas through the settled event."""
         started = time.monotonic()
+        # Resolve the child before sending: a process that exits once the answer is
+        # settled must not discard that answer, so report its state without requiring
+        # it to still be alive here.
+        child = self._live_child("prompt")
         _, text = self._send("prompt", {"message": request.prompt}, wait_for_settled=True)
         elapsed = time.monotonic() - started
-        child = self._live_child("prompt")
         return SessionAskResponse(
             content="".join(text),
             metadata={"elapsed": elapsed},

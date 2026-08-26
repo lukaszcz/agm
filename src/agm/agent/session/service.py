@@ -383,10 +383,14 @@ class SessionService:
         """Close and forget all sessions so the next default starts fresh.
 
         Successfully closed and previously closed entries are discarded. Entries
-        whose close fails remain available for a later cleanup attempt.
+        whose close fails remain available for a later cleanup attempt. The default
+        handle is released even when the sweep raises, so the next default session
+        always starts a fresh generation.
         """
-        self._close_every_entry("failed to reset one or more agent sessions", discard=True)
-        self._default_handle = None
+        try:
+            self._close_every_entry("failed to reset one or more agent sessions", discard=True)
+        finally:
+            self._default_handle = None
 
     def close_all(self) -> None:
         """Close every live backend, raising grouped failures after all attempts.

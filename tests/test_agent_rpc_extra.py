@@ -755,3 +755,50 @@ def test_fork_spawn_failure_does_not_move_the_live_parent(
         backend.fork()
     assert backend._child is original
     backend.close()
+
+
+def test_answer_survives_a_child_that_exits_before_the_response_is_built(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fully settled answer is returned even when Pi exits right after settling."""
+    RpcStub(
+        tmp_path,
+        monkeypatch,
+        {
+            "get_state": [
+                {
+                    "id": "$id",
+                    "type": "response",
+                    "command": "get_state",
+                    "success": True,
+                    "data": {"sessionId": "root", "isStreaming": False},
+                },
+                {"exit": True},
+            ]
+        },
+    )
+    backend = open_backend()
+    send = rpc.PiRpcSessionBackend._send
+
+    def send_then_await_exit(
+        self: rpc.PiRpcSessionBackend,
+        operation: rpc._RpcOperation,
+        payload: dict[str, object],
+        *,
+        wait_for_settled: bool = False,
+    ) -> tuple[dict[str, object], list[str]]:
+        """Close the exit race deterministically: settle first, then reap the child."""
+        result = send(self, operation, payload, wait_for_settled=wait_for_settled)
+        child = self._child
+        assert child is not None
+        child.process.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(rpc.PiRpcSessionBackend, "_send", send_then_await_exit)
+
+    response = backend.ask(SessionAskRequest("hello"))
+
+    assert response.content == "answer"
+    assert response.call_info is not None
+    assert response.call_info.exit_code == 0
+    backend.close()

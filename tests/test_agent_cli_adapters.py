@@ -139,7 +139,7 @@ def test_open_rejects_a_backend_visible_name() -> None:
     with pytest.raises(SessionHostError) as raised:
         _open(backend, "runner --session %{SESSION_ID}", name="named")
 
-    assert raised.value.operation == "set-name"
+    assert raised.value.operation == "open"
 
 
 def test_asks_reuse_one_underlying_id_with_a_symmetric_command_shape(

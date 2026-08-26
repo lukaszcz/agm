@@ -819,11 +819,20 @@ def test_pi_first_invocation_failure_does_not_repeat_creation_flags_until_reset(
     )
 
 
-def test_codex_rejects_a_name_when_opening() -> None:
+@pytest.mark.parametrize(
+    ("backend", "agent"),
+    [
+        (AgentCommandSessionBackend, AgentCommand("runner --session %{SESSION_ID}")),
+        (CodexCliSessionBackend, AgentCodex("", "")),
+    ],
+)
+def test_backends_rejecting_a_name_report_the_open_operation(
+    backend: Callable[[], object], agent: object
+) -> None:
     with pytest.raises(SessionHostError) as raised:
-        _open(CodexCliSessionBackend(), AgentCodex("", ""), name="named")
+        _open(backend(), agent, name="named")
 
-    assert raised.value.operation == "set-name"
+    assert raised.value.operation == "open"
 
 
 def test_codex_retries_thread_creation_after_spawn_failure(
@@ -969,3 +978,112 @@ def test_pi_single_prompt_session_uses_the_standard_command(
     (argv, _stdin) = transport.calls[0]
     assert "--session-id" not in argv
     _file_prompt_argv(argv, AgentPi("p", "m", "t").argv())
+
+
+def test_codex_turn_failure_reports_the_agent_error_not_a_protocol_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = CaptureTransport(
+        [
+            CaptureOutcome(
+                "\n".join(
+                    (
+                        '{"type":"thread.started","thread_id":"first"}',
+                        '{"type":"turn.started"}',
+                        '{"type":"turn.failed","error":{"message":"upstream rate limit"}}',
+                    )
+                )
+            )
+        ]
+    )
+    transport.install(monkeypatch)
+    backend = CodexCliSessionBackend()
+    _open(backend, AgentCodex("m", "t"))
+
+    with pytest.raises(SessionAskError) as raised:
+        backend.ask(SessionAskRequest("first"))
+
+    assert raised.value.cause == "nonzero_exit"
+    assert "upstream rate limit" in raised.value.stderr_tail
+    assert raised.value.call_info.argv[:3] == ["codex", "exec", "--json"]
+
+
+@pytest.mark.parametrize(
+    "failure_event",
+    [
+        '{"type":"turn.failed"}',
+        '{"type":"turn.failed","error":null}',
+        '{"type":"turn.failed","error":"boom"}',
+        '{"type":"turn.failed","error":{}}',
+        '{"type":"turn.failed","error":{"message":42}}',
+        '{"type":"turn.failed","error":{"message":""}}',
+    ],
+)
+def test_codex_turn_failure_without_a_usable_message_still_fails_the_ask(
+    monkeypatch: pytest.MonkeyPatch, failure_event: str
+) -> None:
+    transport = CaptureTransport(
+        [
+            CaptureOutcome(
+                "\n".join(('{"type":"thread.started","thread_id":"first"}', failure_event))
+            )
+        ]
+    )
+    transport.install(monkeypatch)
+    backend = CodexCliSessionBackend()
+    _open(backend, AgentCodex("", ""))
+
+    with pytest.raises(SessionAskError) as raised:
+        backend.ask(SessionAskRequest("first"))
+
+    assert raised.value.cause == "nonzero_exit"
+    assert raised.value.stderr_tail
+
+
+def test_codex_ignores_unrecognized_protocol_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = CaptureTransport(
+        [
+            CaptureOutcome(
+                "\n".join(
+                    (
+                        '{"type":"thread.started","thread_id":"first"}',
+                        '{"type":"turn.started"}',
+                        '{"type":"turn.introduced_later","detail":{"kind":"unknown"}}',
+                        '{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}',
+                        '{"type":"turn.completed"}',
+                    )
+                )
+            )
+        ]
+    )
+    transport.install(monkeypatch)
+    backend = CodexCliSessionBackend()
+    _open(backend, AgentCodex("", ""))
+
+    assert backend.ask(SessionAskRequest("first")).content == "answer"
+
+
+def test_codex_tolerates_blank_lines_in_the_jsonl_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = CaptureTransport(
+        [
+            CaptureOutcome(
+                "\n".join(
+                    (
+                        "",
+                        '{"type":"thread.started","thread_id":"first"}',
+                        "   ",
+                        '{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}',
+                        "\t",
+                        "",
+                    )
+                )
+            )
+        ]
+    )
+    transport.install(monkeypatch)
+    backend = CodexCliSessionBackend()
+    _open(backend, AgentCodex("", ""))
+
+    assert backend.ask(SessionAskRequest("first")).content == "answer"

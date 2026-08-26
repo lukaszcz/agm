@@ -23,8 +23,9 @@ representation shared by records, enums, and exceptions.
 ``type_args`` into those templates and memoize the result per handle;
 ``TypeTable.exception_fields`` has no ``type_args`` to substitute but instead
 flattens the ``extends`` base chain into one field mapping. The table also
-keeps plain ``MethodDef`` data keyed by nominal owner identity; exception method lookup
-uses the same base-chain flattening and cache discipline as exception fields.
+keeps plain ``MethodDef`` data keyed by nominal owner identity or by a built-in
+receiver constructor; exception method lookup uses the same base-chain
+flattening and cache discipline as exception fields.
 
 ``comparable_types``/``_reaches_non_data`` live here rather than in
 ``semantics.types`` because their record/enum/exception arms consult the
@@ -63,7 +64,7 @@ from agm.agl.ir.reserved_nominals import (
     require_reserved_enum_member_id,
 )
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id as _reserved_id
-from agm.agl.modules.ids import STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import STD_CORE_ID, STD_OPTION_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import (
     HOST_MINTED_PRELUDE_TYPE_IDS,
@@ -116,7 +117,7 @@ NominalOwner = RecordType | EnumType | ExceptionType
 
 @dataclass(frozen=True, slots=True)
 class MethodDef:
-    """Plain declaration data for one method owned by a nominal type.
+    """Plain declaration data for one nominal or built-in receiver method.
 
     ``module_id``/``scope_path``/``name`` and ``decl_node_id`` identify the
     declared function, not its owner: a root ``Point`` method ``Point::move``
@@ -300,6 +301,7 @@ class TypeTable:
         # Exception method maps flatten inherited entries and therefore need
         # the same whole-cache invalidation as exception fields.
         self._methods: dict[DeclId, dict[str, MethodDef]] = {}
+        self._builtin_methods: dict[str, dict[str, MethodDef]] = {}
         self._exception_methods_cache: dict[DeclId, Mapping[str, MethodDef]] = {}
         # Whole-table non-data-reachability fixpoint (see
         # :meth:`nominal_reaches_non_data`), computed lazily on first use and
@@ -453,6 +455,42 @@ class TypeTable:
         neither frontend package is imported here.
         """
         self._put_method(owner.decl_id, method)
+
+    def register_builtin_method(self, constructor: str, method: MethodDef) -> None:
+        """Register *method* under a built-in receiver type constructor.
+
+        Unlike nominal owners, built-in types have no declaration identity.
+        Their methods are consequently indexed by their stable language-level
+        constructor spelling (``array``, ``dict``, or one of the scalar names).
+        """
+        methods = self._builtin_methods.setdefault(constructor, {})
+        methods[method.name] = method
+
+    @staticmethod
+    def _builtin_constructor(owner: Type) -> str | None:
+        """Return the method-table key for a structural or scalar built-in type."""
+        if isinstance(owner, ArrayType):
+            return "array"
+        if isinstance(owner, DictType):
+            return "dict"
+        if isinstance(owner, TextType):
+            return "text"
+        if isinstance(owner, JsonType):
+            return "json"
+        if isinstance(owner, IntType):
+            return "int"
+        if isinstance(owner, DecimalType):
+            return "decimal"
+        if isinstance(owner, BoolType):
+            return "bool"
+        return None
+
+    def lookup_builtin_method(self, owner: Type, name: str) -> MethodDef | None:
+        """Return the built-in receiver method selected by *owner* and *name*."""
+        constructor = self._builtin_constructor(owner)
+        if constructor is None:
+            return None
+        return self._builtin_methods.get(constructor, {}).get(name)
 
     def methods_for(self, owner: NominalOwner) -> Mapping[str, MethodDef]:
         """Return methods available on *owner*, including exception bases.
@@ -903,24 +941,24 @@ class TypeTable:
         return override if override is not None else standard
 
     def standard_builtin_declaration(self, name: str) -> TypeDef | None:
-        """Return the loaded ``std/core`` source declaration for *name*.
+        """Return the loaded standard-library source declaration for *name*.
 
         Host contracts may contain fields whose values are supplied by the
         standard host representation rather than by the selected top-level
         contract declaration. Reserved fallback identities cover the same
-        fields when ``std/core`` is not loaded.
+        fields when the owning standard-library module is not loaded.
         """
         return self.standard_builtin_declarations().get(name)
 
     def standard_builtin_declarations(self) -> Mapping[str, TypeDef]:
-        """Return all loaded ``std/core`` source builtin declarations."""
+        """Return all loaded standard-library source builtin declarations."""
         result = self._standard_builtins
         if result is None:
             result = {}
             for decl_id, typedef in self._defs.items():
                 if (
                     typedef.is_builtin
-                    and typedef.module_id == STD_CORE_ID
+                    and typedef.module_id in {STD_CORE_ID, STD_OPTION_ID}
                     and decl_id not in self._orphaned
                 ):
                     result[typedef.name] = typedef
@@ -1356,6 +1394,8 @@ class TypeTable:
         for decl_id, methods in other._methods.items():
             for method in methods.values():
                 self._put_method(decl_id, method)
+        for constructor, methods in other._builtin_methods.items():
+            self._builtin_methods.setdefault(constructor, {}).update(methods)
 
 
 def decl_def_sort_key(typedef: TypeDef) -> tuple[tuple[str, ...], tuple[str, ...], str]:
@@ -1685,6 +1725,7 @@ def _builtin_enum_defs(
     variants: tuple[tuple[str, tuple[tuple[str, Type], ...]], ...],
     *,
     type_params: tuple[str, ...] = (),
+    module_id: ModuleId = STD_CORE_ID,
 ) -> tuple[TypeDef, tuple[TypeDef, ...]]:
     """Build canonical enum and scoped record-member definitions for the prelude."""
     scope_path = (name,)
@@ -1692,7 +1733,7 @@ def _builtin_enum_defs(
         TypeDef(
             kind="record",
             name=member_name,
-            module_id=STD_CORE_ID,
+            module_id=module_id,
             scope_path=scope_path,
             type_params=tuple(
                 param
@@ -1712,7 +1753,7 @@ def _builtin_enum_defs(
         TypeDef(
             kind="enum",
             name=name,
-            module_id=STD_CORE_ID,
+            module_id=module_id,
             type_params=type_params,
             members=members,
         ),
@@ -1763,6 +1804,7 @@ _OPTION_DEF, _OPTION_MEMBER_DEFS = _builtin_enum_defs(
     "Option",
     (("None", ()), ("Some", (("value", TypeVarType("T")),))),
     type_params=("T",),
+    module_id=STD_OPTION_ID,
 )
 
 
@@ -1819,7 +1861,7 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
                 EnumType(
                     name="Option",
                     type_args=(TextType(),),
-                    module_id=STD_CORE_ID,
+                    module_id=STD_OPTION_ID,
                     decl_id=_reserved_id("Option"),
                 ),
             ),
@@ -1828,7 +1870,7 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
                 EnumType(
                     name="Option",
                     type_args=(TextType(),),
-                    module_id=STD_CORE_ID,
+                    module_id=STD_OPTION_ID,
                     decl_id=_reserved_id("Option"),
                 ),
             ),
@@ -1837,7 +1879,7 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
                 EnumType(
                     name="Option",
                     type_args=(JsonType(),),
-                    module_id=STD_CORE_ID,
+                    module_id=STD_OPTION_ID,
                     decl_id=_reserved_id("Option"),
                 ),
             ),
@@ -1847,7 +1889,7 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
                 EnumType(
                     name="Option",
                     type_args=(TextType(),),
-                    module_id=STD_CORE_ID,
+                    module_id=STD_OPTION_ID,
                     decl_id=_reserved_id("Option"),
                 ),
             ),
@@ -1895,7 +1937,7 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
 
 BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = _with_reserved_ids(_PRELUDE_SHAPES)
 
-# Generic ``Option`` template under ``STD_CORE_ID`` (type parameter ``T``,
+# Generic ``Option`` template under ``STD_OPTION_ID`` (type parameter ``T``,
 # variants ``None``/``Some(value: T)``), matching the shape of the concrete
 # ``Option[text]``/``Option[json]`` prelude constants, so a program loaded
 # without the standard library can still resolve its member set on

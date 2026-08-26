@@ -19,6 +19,27 @@ as a function; it cannot be bound as a function value; it remains legal
 as a field name. A host may statically disallow shell execution altogether,
 in which case every `exec` call is a static error.
 
+## Spawn parameters
+
+`exec` has this signature:
+
+<!-- agl-check: fragment -->
+```agl
+exec(
+  command: text,
+  env: Environ = std/env::environ,
+  cwd: Option[text] = Option[text]::None,
+  timeout: Option[text] = std/config::timeout,
+) -> ExecResult
+```
+
+`env` is the complete environment given to the shell; it replaces rather than
+merges with the AGM process environment. The default is the startup ambient
+`std/env::environ` snapshot. Use `environ.extended(overrides)` when a command
+needs an explicit overlay. `cwd` is an optional working directory and `timeout`
+is an optional idle timeout duration. `exec!` supplies only its command, so it
+uses all three defaults.
+
 ## Single-argument sugar
 
 With no named arguments, `exec` may be called with the command template
@@ -116,8 +137,8 @@ returns the `ExecResult` standard core record:
 
 ```text
 stdout:    text
-stderr:    text
 exit_code: int
+stderr:    text
 timed_out: bool
 ```
 
@@ -171,8 +192,8 @@ invalid for a `unit` target.
 ## Execution semantics
 
 1. The rendered command runs via the host shell (`sh -c` semantics),
-   un-sandboxed, with the user's privileges. The host's configured idle
-   timeout applies.
+   un-sandboxed, with the user's privileges, using its `env`, `cwd`, and
+   `timeout` arguments.
 2. Standard output and standard error are captured.
 3. In the **parsed form**, on success (exit status 0), trailing newlines are
    stripped from stdout — as in `$(…)` command substitution — and the result
@@ -182,7 +203,8 @@ invalid for a `unit` target.
 
 ## Named parameters
 
-`exec` accepts the same codec-related named parameters as `ask`:
+In addition to the spawn parameters above, `exec` accepts the same codec-related
+named parameters as `ask`:
 
 - `format` — codec name (a `text` value); normally auto-selected.
 - `strict_json` — `bool`; opts the JSON codec into strict parsing.
@@ -193,9 +215,9 @@ invalid for a `unit` target.
 ## Retries
 
 **Retries re-run the command.** Unlike an `ask` retry — which sends
-corrective feedback in its existing session — an `exec` retry executes the
-command again; each invocation is traced separately. If every attempt fails to
-parse, `ExecError` is raised.
+corrective feedback in the same conversation — an `exec` retry executes the
+command again with the same evaluated spawn parameters; each invocation is
+traced separately. If every attempt fails to parse, `ExecError` is raised.
 
 ## Exceptions
 

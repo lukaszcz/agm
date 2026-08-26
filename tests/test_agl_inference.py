@@ -469,6 +469,46 @@ def test_method_with_inferred_return_uses_receiver_header_type() -> None:
     assert strip_decl_ids(signature.params[0].type) == RecordType("Box", (TypeVarType("E"),))
 
 
+def test_generic_lambda_widens_a_member_result_before_function_constraint() -> None:
+    """A lambda result widens directly before its generic function slot is unified."""
+    checked = resolve_and_check_inline_entry(
+        "def apply[U](f: (int) -> Result[U, text]) -> Result[U, text] = f(1)\n"
+        "apply(fn(value: int) => Result::Ok(value = value))",
+        HostCapabilities(),
+    )
+
+    result = checked.resolved.program.body.items[-1]
+    result_type = checked.node_types[result.node_id]
+    assert isinstance(result_type, EnumType)
+    assert result_type.name == "Result"
+    assert result_type.type_args == (IntType(), TextType())
+
+
+def test_generic_lambda_rejects_a_member_result_that_conflicts_with_prior_evidence() -> None:
+    """Direct member widening still reports conflicts from an earlier generic argument."""
+    with pytest.raises(AglTypeError):
+        resolve_and_check_inline_entry(
+            "def apply[T](value: T, f: () -> Result[T, text]) -> Result[T, text] = f()\n"
+            'apply("text", fn() => Result::Ok(value = 1))',
+            HostCapabilities(),
+        )
+
+
+def test_contextual_lambda_with_bottom_body_keeps_its_concrete_result_type() -> None:
+    """A lambda which always raises still adopts its concrete function result context."""
+    checked = resolve_and_check_inline_entry(
+        "def apply(f: (int) -> Result[int, text]) -> Result[int, text] = f(1)\n"
+        'apply(fn(value: int) => raise Abort(message = "failed"))',
+        HostCapabilities(),
+    )
+
+    result = checked.resolved.program.body.items[-1]
+    result_type = checked.node_types[result.node_id]
+    assert isinstance(result_type, EnumType)
+    assert result_type.name == "Result"
+    assert result_type.type_args == (IntType(), TextType())
+
+
 def test_bound_generic_method_pins_receiver_and_inferrs_own_type_parameter() -> None:
     """Only method parameters beyond the receiver are inferred at member access."""
     checked = resolve_and_check_inline_entry(
@@ -497,6 +537,23 @@ def test_bound_generic_method_accepts_explicit_own_type_parameter() -> None:
 
     result = checked.resolved.program.body.items[-1]
     assert strip_decl_ids(checked.node_types[result.node_id]) == RecordType("Box", (TextType(),))
+
+
+def test_qualified_generic_member_infers_without_shadowing_a_bare_builtin() -> None:
+    """A qualified generic function owns its spelling, while bare ``render`` stays builtin."""
+    checked = resolve_and_check_inline_entry(
+        "use Codec::*\n"
+        "scope Codec\n"
+        "def render[T](value: T) -> array[T] = [value]\n"
+        "end Codec\n"
+        "let values = Codec::render(1)\n"
+        "let text: text = render(1)\n"
+        "values",
+        HostCapabilities(),
+    )
+
+    result = checked.resolved.program.body.items[-1]
+    assert strip_decl_ids(checked.node_types[result.node_id]) == ArrayType(IntType())
 
 
 class TestFinalizationAndProvenance:

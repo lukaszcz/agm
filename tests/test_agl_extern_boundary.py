@@ -218,13 +218,17 @@ class TestValueDirectedBoundary:
         assert result["b"].fields == {"value": TextValue("outer")}
         assert result["i"].fields == {"label": TextValue("scoped")}
 
-    def test_argument_with_no_boundary_representation_becomes_a_catchable_extern_error(
-        self, tmp_path: Path
-    ) -> None:
-        source = "def f(x: int) = x\nextern def id[T](x: T) -> T\nlet _ = id(f)\n()\n"
-        companion = "def id(x): return x\n"
-        exc = evaluate_ir_raises_with_externs(source, companion, tmp_path)
-        assert exc.fields["python_type"].value == ""
+    def test_function_argument_round_trips_through_an_extern(self, tmp_path: Path) -> None:
+        source = (
+            "def f(x: int) = x\n"
+            "extern def id[T](x: T) -> T\n"
+            "let callback = id(f)\n"
+            "let result = callback(2)\n"
+            "result\n"
+        )
+        companion = "def id(x): x(2); return x\n"
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["result"] == IntValue(2)
 
     def test_companion_exception_message_over_a_cyclic_argument_raises_cyclic_value_error(
         self, tmp_path: Path
@@ -353,6 +357,16 @@ def test_array_view_contains_returns_true_for_a_present_value() -> None:
     view = AglArrayView(ArrayValue([IntValue(1), IntValue(2)]))
 
     assert 2 in view
+
+
+def test_array_view_index_uses_agl_equality_for_nested_arrays_and_json() -> None:
+    nested = AglArrayView(ArrayValue([ArrayValue([IntValue(1)])]))
+    json_values = AglArrayView(ArrayValue([JsonValue([True]), JsonValue([1])]))
+
+    assert nested.index(AglArrayView(ArrayValue([IntValue(1)]))) == 0
+    assert json_values.index(AglJson([1])) == 1
+    assert json_values.index(AglJson([1]), -1) == 1
+    assert json_values.index(AglJson([True]), 0, -1) == 0
 
 
 def test_array_view_clear_empties_the_array() -> None:

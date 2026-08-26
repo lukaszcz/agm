@@ -18,6 +18,6 @@ program def main() -> unit =
     | some(value) => print "value %{value}"
 
   # Imported generic RECORD constructor as a value, called positionally.
-  let mkp: (int, text) -> Pair[int, text] = Pair
-  let p: Pair[int, text] = mkp(n, "tag")
+  let mkp: (int, text) -> collections::Pair[int, text] = collections::Pair
+  let p: collections::Pair[int, text] = mkp(n, "tag")
   print "%{p.first}:%{p.second}"

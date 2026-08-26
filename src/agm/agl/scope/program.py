@@ -7,9 +7,10 @@ results plus whole-program pre-pass tables.
 
 Design
 ------
-- **Public surfaces**: declaration export maps and separate named-scope
-  identity maps per module, including explicit ``export`` declarations,
-  computed before any body is resolved.
+- **Public surfaces**: declaration export maps covering top-level declarations
+  and named immutable bindings, plus separate named-scope identity maps per
+  module, including explicit ``export`` declarations, all computed before any
+  body is resolved.
 - **Contribution import environment per module**: built from each module's
   import declarations against the already-loaded graph (no re-reading files).
 - **Whole-program pre-pass tables**: ``all_public_funcs`` and ``all_public_types``
@@ -83,6 +84,7 @@ from agm.agl.syntax.nodes import (
     VarDecl,
     VariantDef,
     VariantRef,
+    simple_let_pattern_name,
     static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -393,6 +395,15 @@ def _item_atom(
     return _atom((*tuple(segment.name for segment in item.scope_path), item.name))
 
 
+def _let_atom(item: LetDecl) -> NameAtom | None:
+    if item.type_ann is None:
+        return None
+    name = simple_let_pattern_name(item.pattern)
+    if name is None or name == "_":
+        return None
+    return _atom((*tuple(segment.name for segment in item.scope_path), name))
+
+
 def _compute_local_scope_exports(
     self_id: ModuleId, program: Program
 ) -> dict[NameAtom, ScopeOrigins]:
@@ -449,6 +460,10 @@ def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[NameAtom
         elif isinstance(item, BuiltinVarDecl):
             atom = _item_atom(item)
             result[atom] = (self_id, atom)
+        elif isinstance(item, LetDecl):
+            let_atom = _let_atom(item)
+            if let_atom is not None:
+                result[let_atom] = (self_id, let_atom)
     return result
 
 
@@ -898,6 +913,16 @@ def resolve_program(
                     BinderKind.builtin_var_binding,
                     False,
                 )
+            elif isinstance(item, LetDecl):
+                let_atom = _let_atom(item)
+                if let_atom is not None:
+                    key = (mid, let_atom)
+                    decl_info[key] = (
+                        item.pattern.node_id,
+                        item.span,
+                        BinderKind.let_binding,
+                        False,
+                    )
 
     prelude_static_decl_node_ids = _builtin_static_decl_node_ids(all_public_funcs, all_public_types)
     cross_module_constructor_refs = _member_record_constructor_refs(all_public_types)
@@ -962,6 +987,8 @@ def resolve_program(
             program_import_envs=import_envs,
             all_public_types=all_public_types,
             allow_root_statements=is_entry and entry_parent_scope is not None,
+            is_entry_module=mid == graph.entry_id,
+            is_standard_library_module=bool(mid.segments and mid.segments[0] == "std"),
             repl_session_scope=entry_repl_session_scope if is_entry else None,
             repl_session_scope_nodes=entry_repl_session_scope_nodes if is_entry else None,
             repl_session_type_paths=entry_repl_session_type_paths if is_entry else None,

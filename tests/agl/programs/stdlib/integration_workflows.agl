@@ -1,0 +1,47 @@
+# Cross-module workflows exercise the standard library through mocked shell
+# calls and isolated filesystem fixtures.
+import std/array
+import std/env::*
+import std/fs
+import std/json
+import std/path
+import std/regex
+import std/regex::Match
+import std/time
+import std/toml
+
+param workflow: int
+param root: text
+
+def parse-schedule(path: text) -> decimal =
+  let content = fs::read(path)
+  let document = toml::parse(content)
+  time::parse-iso((document.get("when") as text).slice(1, -1))
+
+def report-schedule-failure(schedule: text) -> unit =
+  let parsed = attempt(fn() => parse-schedule(schedule))
+  print(parsed.is-err())
+  print(parsed.err?().is-some())
+
+program def main() -> unit =
+  case workflow of
+    | 1 =>
+        let names = (exec "inventory").stdout |> json::parse |> (fn(value: json) => value.get("items") as array[json]) |> (fn(items: array[json]) => items.map(fn(item: json) => item.get("name") as text))
+        let metadata = json::parse('{"source": "mock"}') as dict[text, json]
+        print(array::join(names, ","))
+        print(metadata.get("source"))
+    | 2 =>
+        let labels = fs::read(path::join([root, "report.txt"])) |> (fn(content: text) => regex::find-all("ticket-[0-9]+", content)) |> (fn(matches: array[Match]) => matches.map(fn(found: Match) => found.matched.upper()))
+        print(array::join(labels, " | "))
+    | 3 =>
+        let parsed = attempt(fn() => parse-schedule(path::join([root, "schedule.toml"])))
+        print(parsed.is-ok())
+        print(parsed.ok?().map(time::format-iso))
+    | 4 => report-schedule-failure(path::join([root, "missing.toml"]))
+    | 6 => report-schedule-failure(path::join([root, "schedule.toml"]))
+    | 7 => report-schedule-failure(path::join([root, "schedule.toml"]))
+    | _ =>
+        let workdir = path::normalize("project/../workspace")
+        let child = environ.extended({"REPORT_DIR": workdir})
+        let cwd: Option[text] = Option::Some(value = workdir)
+        print((exec("with-env", env = child, cwd = cwd)).stdout.trim())

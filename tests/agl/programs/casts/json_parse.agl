@@ -1,7 +1,7 @@
-# `parse_json(text) -> json` built-in: strict JSON parsing with no target
-# schema.  Raises JsonParseError (fields: message, raw) on malformed
-# input.  Contrasts with `text as json`, which embeds text as a JSON string
-# without parsing.
+# `json::parse(text) -> json` performs strict parsing with no target schema.
+# It raises JsonParseError on malformed input. In contrast, `text as json`
+# embeds text as a JSON string without parsing.
+import std/json
 param raw
 
 # `text as json` embeds the text verbatim as a JSON string — always succeeds
@@ -10,9 +10,9 @@ program def main() -> unit =
   let embedded: json = raw as json
   print embedded
 
-  # parse_json performs strict parsing — may raise JsonParseError
+  # json::parse performs strict parsing — may raise JsonParseError
   try
-    let parsed = parse_json(raw)
+    let parsed = json::parse(raw)
     print parsed
   catch JsonParseError as e =>
     print "parse error"

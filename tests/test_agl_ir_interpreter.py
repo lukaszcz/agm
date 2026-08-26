@@ -119,6 +119,26 @@ _LOC = Location(
 _SOURCE_TEXT = "x"
 
 
+def _empty_environ(location: Location) -> IrMakeRecord:
+    """Build a minimal Environ operand for hand-built exec IR."""
+    return IrMakeRecord(
+        location=location,
+        nominal=NominalId(-1),
+        display_name="Environ",
+        fields=(("vars", IrMakeDict(location=location, entries=())),),
+    )
+
+
+def _none_option(location: Location) -> IrMakeRecord:
+    """Build the absent cwd/timeout operand for hand-built exec IR."""
+    return IrMakeRecord(
+        location=location,
+        nominal=NominalId(-2),
+        display_name="Option::None",
+        fields=(),
+    )
+
+
 def _make_program(
     initializers: tuple[IrExpr, ...],
     symbols: dict[SymbolId, SymbolDescriptor] | None = None,
@@ -2206,7 +2226,7 @@ class TestIndirectCallInterpreterDefensivePaths:
 
 
 # ===========================================================================
-# IrPrint / IrParseJson / IrParam evaluator tests
+# IrPrint and IrParam evaluator tests
 # ===========================================================================
 
 
@@ -2236,21 +2256,6 @@ class TestPrintParseJsonParam:
         )
         # No param_values provided — the required param has no value
         with pytest.raises(InvalidIrError, match="n"):
-            IrInterpreter(prog).run()
-
-    def test_ir_parse_json_non_text_value_raises_invalid_ir_error(self) -> None:
-        """IrParseJson with a non-TextValue argument raises InvalidIrError (bad IR)."""
-        from agm.agl.ir.nodes import IrParseJson
-
-        # Construct a program where parse_json is called on a bool (bad IR)
-        sym, desc = _let_sym(0, "r")
-        node = IrBind(
-            _LOC,
-            sym,
-            IrParseJson(_LOC, IrConstBool(_LOC, True)),  # bool is not TextValue
-        )
-        prog = _make_program(initializers=(node,), symbols={sym: desc})
-        with pytest.raises(InvalidIrError, match="IrParseJson"):
             IrInterpreter(prog).run()
 
     def test_ir_print_returns_void(self, capsys: pytest.CaptureFixture[str]) -> None:
@@ -2382,6 +2387,9 @@ class TestIrExec:
         node = IrExec(
             location=location,
             command=command,
+            env=_empty_environ(location),
+            cwd=_none_option(location),
+            timeout=_none_option(location),
             contract_id=cid,
             max_attempts=max_attempts,
         )
@@ -2460,6 +2468,9 @@ class TestIrExec:
         exec_node = IrExec(
             location=_LOC,
             command=IrLoad(location=_LOC, symbol=sym_xs),
+            env=_empty_environ(_LOC),
+            cwd=_none_option(_LOC),
+            timeout=_none_option(_LOC),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2496,8 +2507,11 @@ class TestIrExec:
             args: list[str],
             *,
             idle_timeout: float | None = None,
+            cwd: pathlib.Path | None = None,
+            env: dict[str, str] | None = None,
             isolate_process_group: bool = False,
         ) -> ProcessCaptureResult:
+            del idle_timeout, cwd, env, isolate_process_group
             call_count[0] += 1
             if call_count[0] == 1:
                 # First call: succeeds but returns invalid JSON (triggers retry)
@@ -2546,6 +2560,9 @@ class TestIrExec:
         node = IrExec(
             location=_LOC,
             command=IrConstText(_LOC, "dummy"),
+            env=_empty_environ(_LOC),
+            cwd=_none_option(_LOC),
+            timeout=_none_option(_LOC),
             contract_id=cid,
             max_attempts=2,
         )
@@ -2562,6 +2579,16 @@ class TestIrExec:
             with pytest.raises(AglRaise) as exc_info:
                 IrInterpreter(prog).run()
         assert exc_info.value.exc.display_name == "ExecError"
+
+    def test_legacy_string_key_builtin_default_initializes_engine_setting(self) -> None:
+        """Hand-built legacy IR defaults still address root ``std/config`` keys."""
+        program = _make_program((IrBuiltinLoad(_LOC, "max-iters"),))
+        program.builtin_setting_defaults["max-iters"] = IrConstInt(_LOC, 7)
+
+        interpreter = IrInterpreter(program)
+        interpreter.run()
+
+        assert interpreter.initializer_values == [IntValue(7)]
 
     def test_host_setting_write_rolls_back_when_live_reconfiguration_fails(self) -> None:
         """A failed host callback leaves the setting register at its prior value."""
@@ -2665,8 +2692,11 @@ class TestIrExec:
             args: list[str],
             *,
             idle_timeout: float | None = None,
+            cwd: pathlib.Path | None = None,
+            env: dict[str, str] | None = None,
             isolate_process_group: bool = False,
         ) -> ProcessCaptureResult:
+            del idle_timeout, cwd, env, isolate_process_group
             call_count[0] += 1
             if call_count[0] == 1:
                 return ProcessCaptureResult(
@@ -2704,6 +2734,9 @@ class TestIrExec:
         node = IrExec(
             location=_LOC,
             command=IrConstText(_LOC, "dummy"),
+            env=_empty_environ(_LOC),
+            cwd=_none_option(_LOC),
+            timeout=_none_option(_LOC),
             contract_id=cid,
             max_attempts=2,
         )
@@ -2744,8 +2777,11 @@ class TestIrExec:
             args: list[str],
             *,
             idle_timeout: float | None = None,
+            cwd: pathlib.Path | None = None,
+            env: dict[str, str] | None = None,
             isolate_process_group: bool = False,
         ) -> ProcessCaptureResult:
+            del idle_timeout, cwd, env, isolate_process_group
             call_count[0] += 1
             if call_count[0] == 1:
                 return ProcessCaptureResult(
@@ -2783,6 +2819,9 @@ class TestIrExec:
         node = IrExec(
             location=_LOC,
             command=IrConstText(_LOC, "dummy"),
+            env=_empty_environ(_LOC),
+            cwd=_none_option(_LOC),
+            timeout=_none_option(_LOC),
             contract_id=cid,
             max_attempts=2,
         )
@@ -2819,8 +2858,11 @@ class TestIrExec:
             args: list[str],
             *,
             idle_timeout: float | None = None,
+            cwd: pathlib.Path | None = None,
+            env: dict[str, str] | None = None,
             isolate_process_group: bool = False,
         ) -> ProcessCaptureResult:
+            del idle_timeout, cwd, env, isolate_process_group
             # Returns a valid JSON string (not int), so schema validation fails with errors
             return ProcessCaptureResult(
                 returncode=0,
@@ -2847,6 +2889,9 @@ class TestIrExec:
         node = IrExec(
             location=_LOC,
             command=IrConstText(_LOC, "dummy"),
+            env=_empty_environ(_LOC),
+            cwd=_none_option(_LOC),
+            timeout=_none_option(_LOC),
             contract_id=cid,
             max_attempts=1,
         )

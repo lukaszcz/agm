@@ -19,7 +19,7 @@ from agm.agl.ir.reserved_nominals import (
     RESERVED_NOMINAL_NAMES,
     reserved_nominal_id,
 )
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, STD_OPTION_ID, ModuleId
 from agm.agl.repl import ReplSession
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.analyses import (
@@ -1899,15 +1899,15 @@ class TestBuiltinSeeding:
                     member.name: dict(table.record_fields(member)) for member in expected.members
                 }
 
-    def test_generic_option_seeded_under_std_core(self) -> None:
+    def test_generic_option_seeded_under_std_option(self) -> None:
         table = create_seeded_type_table()
-        typedef = table.get(STD_CORE_ID, "Option")
+        typedef = table.get(STD_OPTION_ID, "Option")
         assert typedef is not None
         assert typedef.type_params == ("T",)
         handle = EnumType(
             name="Option",
             type_args=(TextType(),),
-            module_id=STD_CORE_ID,
+            module_id=STD_OPTION_ID,
             decl_id=typedef.decl_node_id,
         )
         result = _enum_fields(table, handle)
@@ -4070,20 +4070,19 @@ class TestDeclarationIdentity:
         """Loading ``std/core`` selects its declarations over the reserved
         fallbacks without making their identity depend on the module path."""
         checked = _check_program(tmp_path, {"entry": "()"})
-        core = checked.modules[STD_CORE_ID]
-        generics = core.type_env.all_generic_types()
-        declarations = {
-            item.name: item
-            for item in core.resolved.program.body.items
-            if isinstance(item, (RecordDef, EnumDef, ExceptionDef))
-        }
         declared_reserved = set(RESERVED_NOMINAL_NAMES) - COMPATIBILITY_PRELUDE_TYPE_NAMES
         assert "Option" in declared_reserved
         for name in sorted(declared_reserved):
-            handle = core.type_env.get_type(name)
+            module = checked.modules[STD_OPTION_ID if name == "Option" else STD_CORE_ID]
+            declarations = {
+                item.name: item
+                for item in module.resolved.program.body.items
+                if isinstance(item, (RecordDef, EnumDef, ExceptionDef))
+            }
+            handle = module.type_env.get_type(name)
             if handle is None:
                 # Generic declarations register a template, not a bare handle.
-                handle = generics[name].template
+                handle = module.type_env.all_generic_types()[name].template
             assert isinstance(handle, (RecordType, EnumType, ExceptionType))
             assert handle.decl_id == declarations[name].node_id, name
             assert handle.decl_id != reserved_nominal_id(name), name
@@ -4095,7 +4094,7 @@ class TestDeclarationIdentity:
                     for member in declaration.members
                     if isinstance(member, VariantDef)
                 }
-                resolved_members = core.type_env.type_table.enum_member_names(handle)
+                resolved_members = module.type_env.type_table.enum_member_names(handle)
                 assert {
                     member_name: member.decl_id for member_name, member in resolved_members.items()
                 } == source_members

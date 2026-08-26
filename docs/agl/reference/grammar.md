@@ -24,7 +24,7 @@ block         ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 
 item       ::= import_decl                  (* header position only; scope_item also permits it *)
              | use_decl                     (* module-root or scope-region header only *)
-             | builtin_var_def              (* root only; standard library only *)
+             | builtin_var_def              (* root or standard-library scope region *)
              | builtin_modifier? record_def (* root only *)
              | builtin_modifier? enum_def   (* root only *)
              | type_alias                   (* root only *)
@@ -309,9 +309,12 @@ concrete type arguments (`Box[int]`, `Outcome[int, text]`). The built-in
 ## Function declarations
 
 ```ebnf
-func_def         ::= "def" decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
-builtin_func_def ::= "builtin" NEWLINE? "def" decl_head type_params? "(" param_list? ")" "->" type_expr
-extern_func_def  ::= "extern" NEWLINE? "def" decl_head type_params? "(" param_list? ")" "->" type_expr
+func_def         ::= "def" func_decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
+builtin_func_def ::= "builtin" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
+extern_func_def  ::= "extern" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
+func_decl_head   ::= decl_head | builtin_receiver "::" name
+builtin_receiver ::= "array" "[" name "]" | "dict" "[" "text" "," name "]"
+                   | "text" | "json" | "int" | "decimal" | "bool"
 func_body        ::= expr | suite
 param_list      ::= param_entry ("," param_entry)* ","?
 param_entry     ::= param | param_marker
@@ -335,9 +338,12 @@ positional-fillable (pos-only/standard) parameter may follow a defaulted one
 in the same zone. An optional `type_params` list after the function name makes
 the `def` generic (e.g. `def id[T](x: T) -> T`); see [Generics](generics.md).
 
-`extern_func_def` shares this signature surface with `func_def` but is never
-followed by a body; it declares a function implemented by a companion Python
-file (see [Python FFI](ffi.md)) rather than an AgL expression.
+All three function declaration forms accept the same `func_decl_head` surface.
+A builtin receiver is valid only in its owning standard-library module and must
+use the bare generic form (`array[E]` or `dict[text, V]`); see
+[Methods](functions.md#methods). `extern_func_def` is never followed by a body;
+it declares a function implemented by a companion Python file (see
+[Python FFI](ffi.md)) rather than an AgL expression.
 
 ## Infix declarations
 
@@ -353,27 +359,35 @@ infix_op        ::= "or" | "and" | "in"
 
 `infixl` and `infixr` declare a symbolic operator's associativity and optional
 integer priority. Larger priorities bind tighter; omitted priority defaults to
-the `+`/`-` level. `prio <op> +/- <int>` is resolved from an existing builtin or user-declared operator.
+the `+`/`-` level. `prio <op> +/- <int>` is resolved from a builtin, a local
+operator declaration, an operator made bare-visible by an import wildcard or
+tail, or a member made bare by a `use` declaration; a plain qualified import
+does not make its fixity available. A chain cannot mix `infixl` and `infixr`
+operators at the same priority: parenthesize one side or assign distinct
+priorities.
 
 ## Bindings and mutation
 
 ```ebnf
 let_decl       ::= "let" pattern type_ann? "=" expr
 var_decl       ::= "var" decl_head type_ann? "=" expr
-builtin_var_def ::= "builtin" NEWLINE? "var" name type_ann ["=" expr]  (* std/config only *)
+builtin_var_def ::= "builtin" NEWLINE? "var" name type_ann ["=" expr]  (* standard library only *)
 assign_stmt ::= assign_target ":=" expr
 assign_target ::= qualifier_chain? name
                 | postfix "[" expr "]"
 ```
 
 A `builtin var` is a body-less, host-backed mutable binding with a mandatory
-type and an optional constant initializer. The initializer must have the
+type and an optional constant initializer. Its host identity is its defining
+module, scope path, and name, so same-named declarations in distinct scope
+regions remain independent. The initializer must have the
 declared type and use only literals, literal containers, constructors, and
 unary operators over those. It
-becomes the engine default only when the host supplies no initial value. The
+becomes the binding default only when the host supplies no initial value. The
 `builtin` modifier may sit on the same line or the line directly above (like
 `builtin def`). It may be declared only at the root, or in a named scope region,
-of `std/config`; entry modules and other library modules cannot declare one.
+of a standard-library module; entry modules and ordinary library modules cannot
+declare one. `std/config` reserves builtin vars for engine settings.
 
 `var`'s `decl_head` accepts the same optional scope-path prefix as the type
 declarations above (`var A::count = 0`). `let` needs no separate grammar for

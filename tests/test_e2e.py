@@ -7636,7 +7636,7 @@ class TestPackageInstall:
         assert published.stdout == "flag\n9\n"
         assert configured.stdout == "configured\n9\n"
         assert inspected.stdout == "trailing\n"
-        assert dry_run.stdout == ""
+        assert "call-sites:" in dry_run.stdout
         assert uninstalled.returncode == 0
         assert unknown.returncode != 0
 

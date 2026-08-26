@@ -14,6 +14,13 @@ their ordinary REPL behavior. Nominal redeclarations receive fresh declaration
 identities, so retained values and methods keep the exact record, enum-member,
 or exception shape against which they were checked.
 
+Each evaluated entry still creates a fresh `IrInterpreter`. The shared extern
+registry keeps a loaded companion module and its ordinary Python globals for
+the session, but the companion `runtime.state` accessor reaches an
+interpreter-owned bag through the extern call's `ContextVar`; that bag lives
+for one entry only. `:reset` also replaces the registry, so companions and
+their module globals reload on a later import.
+
 Imports and `use` declarations also persist after a successful entry. A later
 import replaces retained declarations for the modules it names at the same
 scope path. A later `use` replaces a retained use with the same resolved target
@@ -42,6 +49,25 @@ for entry-local parameters. Both hosts seed engine settings and use the shared
 runtime for agents, shell commands, and standard-library services. Agent enum
 members cross the host boundary as their nominal record values rather than as
 enum wrappers.
+
+Engine settings — `default-agent`, `log`, `log-file`, `strict-json`,
+`max-iters`, `timeout` — are root `builtin var` bindings of `std/config`;
+scoped `std/config` bindings and other standard-library host-backed bindings
+are module-, scope-, and name-keyed values rather than engine settings. Because
+a write is an ordinary statement, settings take effect in program order and a
+completed REPL write persists across entries. The session also snapshots the
+process environment once at startup and supplies it as `std/env::environ`, so
+later AgL environment mutations stay inside the session. `std/process::exit`
+ends the REPL host: its `SystemExit` is re-raised only after the entry trace
+receives its final `run_end`, matching batch execution.
+
+Fresh default-stdlib sessions in one host process reuse an unchanged checked
+bootstrap image from a small per-process LRU cache; changed source content,
+missing required extern companions, changed canonical module paths, changed
+root discovery, setting overrides, roots, and host capabilities each select a
+fresh image. Retained user `infixl`/`infixr` fixity resolves relative
+priorities against the same bare-visible assembly table used for the submitted
+entry, without retaining imported operators as session declarations.
 
 ## Front-End Seam
 

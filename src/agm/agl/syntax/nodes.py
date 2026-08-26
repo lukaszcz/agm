@@ -498,6 +498,7 @@ class FuncDef(GenericDeclaration):
     is_program: bool = False
     is_synthetic: bool = False
     scope_path: tuple[ScopeSegment, ...] = ()
+    receiver_type: TypeExpr | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -841,6 +842,45 @@ class DictLit:
     """A dict literal: ``{k: v, ...}``."""
 
     entries: tuple[DictEntry, ...]
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class RawInfixOperator:
+    """One operator token retained while a raw infix chain awaits resolution."""
+
+    name: str
+    builtin: BinOp | None
+    callee_node_id: int
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class RawPrefixNot:
+    """One ``not`` prefix retained while a raw infix chain awaits resolution."""
+
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class RawInfixOperand:
+    """One operand and its pending ``not`` prefixes in a raw infix chain."""
+
+    expr: Expr | RawInfixChain
+    prefix_nots: tuple[RawPrefixNot, ...]
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class RawInfixChain:
+    """A flat infix chain awaiting parser-layer fixity resolution."""
+
+    operands: tuple[RawInfixOperand, ...]
+    operators: tuple[RawInfixOperator, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 
@@ -1258,13 +1298,13 @@ class BuiltinVarDecl:
     MUTABLE binding.
 
     Mirrors ``builtin def`` / ``builtin record`` (a host-provided declaration with
-    a signature but no body).  A ``builtin var`` names an engine setting whose
-    value lives in an interpreter register: programs read it as an ordinary value
-    and assign it with ``:=``.  An optional constant initializer supplies the
-    engine default when the host has not seeded the key; the declaration itself
-    still introduces no program initializer.
+    a signature but no body). A ``builtin var`` names a host-backed value identified
+    by its defining module, scope path, and name: programs read it as an ordinary value
+    and assign it with ``:=``. An optional constant initializer supplies the value when the host
+    has not seeded that identity; the declaration itself still introduces no program
+    initializer. ``std/config`` reserves its bindings for named engine settings.
 
-    ``name``      — the declared engine key (kebab-case, e.g. ``"max-iters"``).
+    ``name``      — the declared binding name (for example, ``"max-iters"``).
     ``type_ann``  — the mandatory declared type.
     ``default``   — an optional constant expression of that type.
 

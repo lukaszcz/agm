@@ -300,6 +300,18 @@ class TestResolveStdlibRoot:
 
         assert resolve_stdlib_root(home=home, env={}) == store_stdlib.resolve()
 
+    def test_pre_option_active_store_stdlib_requires_the_managed_refresh(
+        self, tmp_path: Path
+    ) -> None:
+        """An installed library that predates ``std/option`` cannot be selected."""
+        home = tmp_path / "home"
+        installed_version = "0.1.0"
+        assert installed_version != AGM_VERSION
+        _activate_stdlib(home, installed_version)
+
+        with pytest.raises(StdlibVersionMismatchError):
+            resolve_stdlib_root(home=home, env={})
+
     def test_active_store_stdlib_version_mismatch_names_versions_and_remediation(
         self, tmp_path: Path
     ) -> None:

@@ -159,6 +159,24 @@ def append_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
         handle.write(content)
 
 
+def copy_file(source: Path, destination: Path) -> None:
+    """Copy one file unless dry-run is enabled."""
+
+    if dry_run.enabled():
+        dry_run.print_operation("copy-file", f"{display_path(source)} {display_path(destination)}")
+        return
+    shutil.copy2(source, destination)
+
+
+def move(source: Path, destination: Path) -> None:
+    """Move a file or directory unless dry-run is enabled."""
+
+    if dry_run.enabled():
+        dry_run.print_operation("move", f"{display_path(source)} {display_path(destination)}")
+        return
+    shutil.move(source, destination)
+
+
 def copy_tree(source: Path, destination: Path, *, dirs_exist_ok: bool = False) -> None:
     """Copy a tree, preserving source links and refusing linked roots or destinations.
 

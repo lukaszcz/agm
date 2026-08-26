@@ -1,0 +1,70 @@
+# Strict and lenient JSON parsing plus ambient json methods.
+import std/json
+
+param mode: int
+
+program def main() -> unit =
+  case mode of
+    | 1 =>
+        let object = json::parse('{"name": "agm", "count": 2}')
+        print(object.kind())
+        print(object.size())
+        print(object.keys())
+        print(object.has("name"))
+        print(object.get("count"))
+        print(object.get?("missing"))
+    | 2 =>
+        let array = json::parse-lenient("```json\n[1, 2]\n```")
+        let scalar = json::parse("true")
+        print(array.kind())
+        print(array.size())
+        print(array.keys())
+        print(array.has("0"))
+        print(array.get?("0"))
+        print(scalar.kind())
+        print(scalar.size())
+        print(scalar.keys())
+        print(scalar.has("value"))
+        print(scalar.get?("value"))
+    | 3 =>
+        let strict = try
+          json::parse("answer: 42")
+        catch JsonParseError as error =>
+          print(error.raw)
+          null
+        print(strict)
+        print(json::parse?("answer: 42"))
+        print(json::parse-lenient("answer: 42"))
+        print(json::parse-lenient?("not JSON at all"))
+    | 4 =>
+        let object = json::parse("{}")
+        try
+          let value = object.get("missing")
+          print(value)
+        catch KeyError as error => print(error.key)
+    | 5 =>
+        let array = json::parse("[]")
+        let _ = array.get("missing")
+        ()
+    | 6 =>
+        let scalar = json::parse("true")
+        let _ = scalar.get("missing")
+        ()
+    | 7 => print(json::parse?("{\"answer\": 42}"))
+    | 8 => print(json::parse-lenient?("result: [1, 2]"))
+    | 9 => print(json::parse("{\"name\": \"agm\"}").get?("name"))
+    | _ =>
+        let null_value = json::parse("null")
+        let bool_value = json::parse("false")
+        let int_value = json::parse("1")
+        let decimal_value = json::parse("1.5")
+        let text_value = json::parse('"text"')
+        let array_value = json::parse("[]")
+        let object_value = json::parse("{}")
+        print(null_value.kind())
+        print(bool_value.kind())
+        print(int_value.kind())
+        print(decimal_value.kind())
+        print(text_value.kind())
+        print(array_value.kind())
+        print(object_value.kind())

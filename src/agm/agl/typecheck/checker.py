@@ -55,7 +55,7 @@ from typing import Literal, Protocol, TypeGuard, assert_never, cast
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic, static_root_message
 from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, STD_OPTION_ID, ModuleId
 from agm.agl.scope.imports import (
     qualification_repair_guidance,
 )
@@ -72,6 +72,7 @@ from agm.agl.scope.symbols import (
     builtin_type_static_kind,
     duplicate_binder_message,
     immutable_assignment_message,
+    is_qualified_function_member,
 )
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import (
@@ -86,6 +87,7 @@ from agm.agl.semantics.type_table import (
 )
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
+    OPTION_TEXT_TYPE,
     ArrayType,
     BoolType,
     BottomType,
@@ -276,20 +278,16 @@ _ExternTargets = tuple[_ExternTarget, ...]
 class _SelectedBuiltinMethod:
     """A call-only host method selected by member access.
 
-    Such a method has no first-class function value: only the member-call path
-    can consume the selection, and its own builtin rule owns the call's type
-    arguments and result. Deliberately not a ``Type``, so that member access
-    returns ``Type | _SelectedBuiltinMethod`` and the type checker itself makes
-    every consumer say which of the two it accepts. Non-call positions route
-    through :meth:`_Checker._require_field_access_type`, which rejects the
-    selection; nothing publishes it as a node type.
-
-    ``receiver_type`` is the checked type of the object the method was
-    selected from. It selects the host operation's receiver-specific checker.
+    Session and agent methods use receiver-directed host checkers. Other
+    source-declared host methods bind their registered signature before
+    lowering reuses the underlying builtin with the receiver as its value
+    argument. ``method`` is absent only for an agent enum member whose method
+    is inherited from its builtin enum owner.
     """
 
     name: str
-    receiver_type: RecordType | EnumType
+    receiver_type: Type
+    method: MethodDef | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -470,8 +468,6 @@ def _builtin_function_signature(
             return FunctionSignature(params=(_std_param("value", t),), result=t, type_params=("T",))
         case "shallow_copy":
             return FunctionSignature(params=(_std_param("value", t),), result=t, type_params=("T",))
-        case "parse_json":
-            return FunctionSignature(params=(_std_param("value", TextType()),), result=JsonType())
         case "resource":
             return FunctionSignature(params=(_std_param("path", TextType()),), result=TextType())
         case "resource-dir":
@@ -498,7 +494,12 @@ def _builtin_function_signature(
             )
         case "exec":
             return FunctionSignature(
-                params=(_std_param("command", TextType()),),
+                params=(
+                    _std_param("command", TextType()),
+                    _std_param("env", RecordType(name="Environ"), has_default=True),
+                    _std_param("cwd", OPTION_TEXT_TYPE, has_default=True),
+                    _std_param("timeout", OPTION_TEXT_TYPE, has_default=True),
+                ),
                 result=BUILTIN_PRELUDE_TYPES["ExecResult"],
             )
         case _:
@@ -528,6 +529,14 @@ def _builtin_function_signature_alternates(
         return (
             expected,
             FunctionSignature(params=(_std_param("prompt", TextType()),), result=TextType()),
+        )
+    if name == "exec":
+        return (
+            expected,
+            FunctionSignature(
+                params=(_std_param("command", TextType()),),
+                result=BUILTIN_PRELUDE_TYPES["ExecResult"],
+            ),
         )
     return (expected,)
 
@@ -616,68 +625,6 @@ def _validate_extern_name(name: str, span: SourceSpan) -> None:
             "define a Python function with exactly this name.",
             span=span,
         )
-
-
-def _contains_function_type(
-    t: Type, type_table: TypeTable, _seen: frozenset[Type] = frozenset()
-) -> bool:
-    """Return ``True`` if *t* contains a function type anywhere.
-
-    The FFI is a pure data boundary: function values can never cross
-    it, so they are static errors anywhere in an extern's parameter or return
-    types, including nested inside ``array``/``dict``/record/enum
-    instantiations.  Type variables are permitted at any depth — dynamic
-    sealing keeps values at those positions opaque.  Record/enum field and
-    variant shapes are resolved through *type_table*; *_seen* tracks the
-    nominal instantiations already on the current path so a recursive type
-    (e.g. a self-referential record) is examined once rather than forever.
-    """
-    match t:
-        case FunctionType():
-            return True
-        case ArrayType():
-            return _contains_function_type(t.elem, type_table, _seen)
-        case DictType():
-            return _contains_function_type(t.value, type_table, _seen)
-        case RecordType():
-            if t in _seen:
-                return False
-            seen = _seen | {t}
-            return any(_contains_function_type(ta, type_table, seen) for ta in t.type_args) or any(
-                _contains_function_type(ft, type_table, seen)
-                for ft in type_table.record_fields(t).values()
-            )
-        case EnumType():
-            if t in _seen:
-                return False
-            seen = _seen | {t}
-            return any(_contains_function_type(ta, type_table, seen) for ta in t.type_args) or any(
-                _contains_function_type(ft, type_table, seen)
-                for member in type_table.enum_members(t)
-                for ft in type_table.record_fields(member).values()
-            )
-        case ExceptionType():
-            if t in _seen:
-                return False
-            seen = _seen | {t}
-            return any(
-                _contains_function_type(ft, type_table, seen)
-                for ft in type_table.exception_fields(t).values()
-            )
-        case (
-            TextType()
-            | JsonType()
-            | BoolType()
-            | IntType()
-            | DecimalType()
-            | UnitType()
-            | BottomType()
-            | TypeVarType()
-            | InferenceVarType()
-        ):
-            return False
-        case _ as unreachable:  # pragma: no cover
-            assert_never(unreachable)
 
 
 # ---------------------------------------------------------------------------
@@ -843,8 +790,10 @@ class _Checker:
             self._validate_extern_signature(node, sig)
             self._env.register_extern_node_id(node.node_id)
         self._validate_program_signature(node, sig)
-        self._register_funcdef_signature(node, sig, func_type, receiver=receiver)
-        register_method_header(self._env, node, sig, receiver)
+        self._register_funcdef_signature(
+            node, sig, func_type, is_method=is_method, receiver=receiver
+        )
+        register_method_header(self._env, node, sig, receiver, self._module_id)
 
     def _validate_funcdef_header(self, node: FuncDef, *, is_method: bool) -> None:
         """Validate declaration-level properties that do not need a return type.
@@ -877,7 +826,15 @@ class _Checker:
                 f"'{node.name}' is a built-in type name and cannot be used as a function name.",
                 span=node.span,
             )
-        if not is_method and node.name in _BUILTIN_FUNC_NAMES and not node.is_builtin:
+        if (
+            not is_method
+            and node.name in _BUILTIN_FUNC_NAMES
+            and not node.is_builtin
+            and not is_qualified_function_member(
+                self._resolved.is_entry_module,
+                tuple(segment.name for segment in node.scope_path),
+            )
+        ):
             raise AglTypeError(
                 f"'{node.name}' is a built-in function name and cannot be redefined.",
                 span=node.span,
@@ -907,53 +864,23 @@ class _Checker:
             raise AglTypeError(f"Program function '{node.name}' must return unit.", span=node.span)
 
     def _validate_extern_signature(self, node: FuncDef, sig: FunctionSignature) -> None:
-        """Reject types that cannot cross the Python boundary in an extern's signature.
+        """Require finite extern data shapes while allowing callback parameters.
 
-        Two kinds are rejected: a function type anywhere (a value that cannot
-        marshal across the FFI), and a type with no finite schema (its
-        recursive instantiations never close, so it cannot be represented by
-        the language's finite type machinery). Finite recursive types cross as
-        ordinary recursive Python object graphs.
+        Function values can cross from AgL into a companion as interpreter
+        callbacks. The reverse conversion remains value-directed at runtime,
+        where a bare Python callable has no AgL representation.
         """
-        for p, spec in zip(node.params, sig.params):
-            self._reject_uncrossable_extern_type(
-                spec.type,
-                span=p.span,
-                use="an extern parameter type",
-                banned_message=(
-                    f"extern function '{node.name}' parameter '{p.name}' has a "
-                    "function type, which cannot cross the Python boundary."
-                ),
+        for param, spec in zip(node.params, sig.params):
+            self._reject_unbounded_extern_type(
+                spec.type, span=param.span, use="an extern parameter type"
             )
-        self._reject_uncrossable_extern_type(
-            sig.result,
-            span=node.span,
-            use="an extern return type",
-            banned_message=(
-                f"extern function '{node.name}' has a return type containing a "
-                "function type, which cannot cross the Python boundary."
-            ),
-        )
+        self._reject_unbounded_extern_type(sig.result, span=node.span, use="an extern return type")
 
-    def _reject_uncrossable_extern_type(
-        self, typ: Type, *, span: SourceSpan, use: str, banned_message: str
-    ) -> None:
-        """Reject one extern parameter/result type that cannot cross the boundary.
-
-        Finite-schema is checked BEFORE the banned-type walk: a type whose
-        instantiations never close (growing polymorphic recursion) has an
-        infinite structure, and ``_contains_function_type`` walks that
-        structure — its cycle guard only catches repeated instantiations, not
-        ever-growing ones. ``no_finite_schema_message`` works at the
-        declaration level and always terminates, so it rejects such a type
-        first, leaving the banned-type walk only finite closures to traverse.
-        """
-        type_table = self._env.type_table
-        message = type_table.no_finite_schema_message(typ, use=use)
+    def _reject_unbounded_extern_type(self, typ: Type, *, span: SourceSpan, use: str) -> None:
+        """Reject an extern type whose recursive declaration shape cannot close."""
+        message = self._env.type_table.no_finite_schema_message(typ, use=use)
         if message is not None:
             raise AglTypeError(message, span=span)
-        if _contains_function_type(typ, type_table):
-            raise AglTypeError(banned_message, span=span)
 
     def _register_funcdef_signature(
         self,
@@ -961,22 +888,31 @@ class _Checker:
         sig: FunctionSignature,
         func_type: FunctionType,
         *,
+        is_method: bool,
         receiver: ResolvedReceiver | None,
     ) -> None:
         """Register a resolved ``def`` signature in every function side table."""
         static_kind = _builtin_static_kind(
             self._resolved, self._env.type_table, self._module_id, node
         )
-        if node.is_builtin:
+        if node.is_builtin and receiver is not None and receiver.builtin_constructor is not None:
+            self._validate_builtin_receiver_signature(node, sig, receiver)
+        elif node.is_builtin:
             own_path = tuple(segment.name for segment in node.scope_path)
             # A method's final scope segment names its receiver. Its receiver
             # and sibling types live in the enclosing scope, so remove that
             # shared prefix before comparing with the root canonical contract.
-            is_method = receiver is not None
             reroot_prefix = own_path[:-1] if is_method or static_kind is not None else own_path
             rerooted_sig = _rerooted_signature(sig, reroot_prefix)
-            method_receiver = None if receiver is None else NominalId(receiver.owner.decl_id)
-            method_receiver_name = None if receiver is None else receiver.owner.name
+            nominal_receiver = (
+                None
+                if receiver is None
+                else cast(RecordType | EnumType | ExceptionType, receiver.owner)
+            )
+            method_receiver = (
+                None if nominal_receiver is None else NominalId(nominal_receiver.decl_id)
+            )
+            method_receiver_name = None if nominal_receiver is None else nominal_receiver.name
             expected_sigs = _builtin_function_signature_alternates(
                 node.name,
                 is_method=is_method,
@@ -998,6 +934,42 @@ class _Checker:
             )
         self._env.register_function_signature_by_node_id(node.node_id, sig)
         self._env.set_binding_type(node.node_id, func_type)
+
+    def _validate_builtin_receiver_signature(
+        self, node: FuncDef, sig: FunctionSignature, receiver: ResolvedReceiver
+    ) -> None:
+        """Validate a builtin-receiver declaration against a host call route."""
+        kind = BUILTIN_CALL_NAMES.get(node.name)
+        if kind not in {
+            BuiltinKind.PRINT,
+            BuiltinKind.RENDER,
+            BuiltinKind.COPY,
+            BuiltinKind.SHALLOW_COPY,
+        }:
+            raise AglTypeError(
+                f"Builtin receiver method '{node.name}' has no host call route.", span=node.span
+            )
+        result: Type = receiver.owner
+        if kind is BuiltinKind.PRINT:
+            result = UnitType()
+        elif kind is BuiltinKind.RENDER:
+            result = TextType()
+        expected = FunctionSignature(
+            params=(
+                ParamSpec(
+                    name="self",
+                    type=receiver.owner,
+                    kind=ParamKind.POSITIONAL_ONLY,
+                    has_default=False,
+                ),
+            ),
+            result=result,
+            type_params=sig.type_params[: receiver.type_param_arity],
+        )
+        if not _signature_matches(sig, expected):
+            raise AglTypeError(
+                f"Builtin receiver method '{node.name}' has an invalid signature.", span=node.span
+            )
 
     # ------------------------------------------------------------------
     # Program-level check
@@ -1369,38 +1341,32 @@ class _Checker:
         assert_never(schema_type)  # pragma: no cover
 
     def _check_builtin_var(self, node: BuiltinVarDecl) -> None:
-        """Check a ``builtin var`` declaration against the engine-key registry.
-
-        The name whitelist that gates every builtin declaration applies here: a
-        ``builtin var`` must name a known engine key, and its declared type must
-        match the key's source-selected type. The program pre-pass replaces a
-        canonical fallback nominal with the loaded ``builtin`` declaration;
-        standalone checking falls back to the registry type.
-        """
+        """Check a host-backed binding and preserve ``std/config`` engine rules."""
+        from agm.agl.modules.ids import STD_CONFIG_ID
         from agm.agl.semantics.engine_keys import get_engine_key_type
 
-        canonical_key_type = get_engine_key_type(node.name)
-        if canonical_key_type is None:
-            raise AglTypeError(
-                f"Unknown builtin var '{node.name}'.",
-                span=node.span,
-            )
-        key_type = canonical_key_type
-        if isinstance(canonical_key_type, (RecordType, EnumType, ExceptionType)):
-            standard = self._env.type_table.standard_builtin_declaration(canonical_key_type.name)
-            if standard is not None:
-                type_args = (
-                    canonical_key_type.type_args
-                    if isinstance(canonical_key_type, (RecordType, EnumType))
-                    else ()
-                )
-                key_type = standard.handle(type_args=type_args)
         declared = self._env.resolve_type_expr(node.type_ann, span=node.span, type_vars=frozenset())
-        if declared != key_type:
-            raise AglTypeError(
-                f"builtin var '{node.name}' must have type '{key_type!r}', got '{declared!r}'.",
-                span=node.span,
-            )
+        if self._module_id == STD_CONFIG_ID and not node.scope_path:
+            key_type = get_engine_key_type(node.name)
+            if key_type is None:
+                raise AglTypeError(
+                    f"Unknown builtin var '{node.name}'.",
+                    span=node.span,
+                )
+            if isinstance(key_type, (RecordType, EnumType, ExceptionType)):
+                standard = self._env.type_table.standard_builtin_declaration(key_type.name)
+                if standard is not None:
+                    type_args = (
+                        key_type.type_args if isinstance(key_type, (RecordType, EnumType)) else ()
+                    )
+                    key_type = standard.handle(type_args=type_args)
+            if declared != key_type:
+                raise AglTypeError(
+                    f"builtin var '{node.name}' must have type '{key_type!r}', got '{declared!r}'.",
+                    span=node.span,
+                )
+        else:
+            key_type = declared
         self._env.set_binding_type(node.node_id, key_type)
         if node.default is not None:
             default_type = self._check_boundary_expr(node.default, expected=key_type)
@@ -1585,6 +1551,11 @@ class _Checker:
         # same helper a read uses, so a non-container root is framed with the
         # same inferred-return-provenance guidance as `expr[index]`.
         container_type = self._check_boundary_expr(target.obj, expected=None)
+        if isinstance(container_type, TextType):
+            raise AglTypeError(
+                "indexed assignment requires an array or dict; text is immutable.",
+                span=target.span,
+            )
         elem_type = self._check_index_operand(
             container_type, target.index, span=target.span, obj_expr=target.obj
         )
@@ -2866,8 +2837,6 @@ class _Checker:
                     return self._builtins.check_ask(node, expected=expected)
                 case BuiltinKind.ASK_REQUEST:
                     return self._builtins.check_ask_request(node)
-                case BuiltinKind.PARSE_JSON:
-                    return self._builtins.check_parse_json(node)
                 case BuiltinKind.RESOURCE:
                     return self._builtins.check_resource(node)
                 case BuiltinKind.RESOURCE_DIR:
@@ -3221,14 +3190,23 @@ class _Checker:
             if not isinstance(callee_type, _SelectedBuiltinMethod):
                 self._record_node_type(field_access.node_id, callee_type)
         if isinstance(callee_type, _SelectedBuiltinMethod):
-            # Session dispatch is directed by the exact receiver nominal.
-            # Scoped Agent declarations retain their established host-contract
-            # handling, including its receiver identity diagnostics.
-            receiver_key = _builtin_method_receiver_key(callee_type.receiver_type)
-            checker = self._builtin_method_checkers.get(receiver_key, {}).get(callee_type.name)
-            if checker is None:
-                checker = self._agent_builtin_method_checkers[callee_type.name]
-            return checker(node, expected=expected, receiver_type=callee_type.receiver_type)
+            checker: _BuiltinMethodChecker | None = None
+            if isinstance(callee_type.receiver_type, (RecordType, EnumType)):
+                receiver_key = _builtin_method_receiver_key(callee_type.receiver_type)
+                checker = self._builtin_method_checkers.get(receiver_key, {}).get(callee_type.name)
+                if checker is None:
+                    checker = self._agent_builtin_method_checkers.get(callee_type.name)
+            if checker is not None:
+                return checker(node, expected=expected, receiver_type=callee_type.receiver_type)
+            selected_method = callee_type.method
+            assert selected_method is not None
+            callee_type = self._bound_method_type(
+                selected_method,
+                callee_type.receiver_type,
+                type_args=node.type_args or None,
+                expected=expected,
+                span=field_access.span,
+            )
         method = self._method_selections.get(field_access.node_id)
         if method is None:
             return self._check_value_call(
@@ -3428,25 +3406,70 @@ class _Checker:
             if not isinstance(body_type, BottomType):
                 self._assert_assignable_from(body_type, result_type, node.span, node.body)
         else:
-            with self._return_context(None) as collected:
-                body_type = self._check_expr(node.body, expected=None)
+            contextual_result = (
+                expected.result
+                if isinstance(expected, FunctionType) and expected.params == tuple(param_types)
+                else None
+            )
+            concrete_contextual_result = (
+                contextual_result
+                if contextual_result is not None and not contains_inference_var(contextual_result)
+                else None
+            )
+            with self._return_context(concrete_contextual_result) as collected:
+                body_type = self._check_expr(node.body, expected=concrete_contextual_result)
                 return_provenance = tuple(self._return_collected_provenance_stack[-1])
-            if isinstance(body_type, BottomType) and not collected:
-                raise AglTypeError(
-                    "Cannot infer return type of lambda: body always raises.",
-                    span=node.span,
-                )
-            try:
-                result_type = self._unify_branch_types(
-                    [*collected, body_type], node.span, "Lambda return"
-                )
-            except AglTypeError as exc:
-                raise AglTypeError(
-                    "Cannot infer return type of lambda: return values have incompatible "
-                    "types. Add a return type annotation.",
-                    span=node.span,
-                    related=exc.related,
-                ) from exc
+            if concrete_contextual_result is not None:
+                if not isinstance(body_type, BottomType):
+                    self._assert_assignable_from(
+                        body_type, concrete_contextual_result, node.span, node.body
+                    )
+                result_type = concrete_contextual_result
+            elif (
+                contextual_result is not None
+                and isinstance(body_type, RecordType)
+                and isinstance(contextual_result, EnumType)
+                and self._env.type_table.enum_member_by_decl(contextual_result, body_type.decl_id)
+                is not None
+            ):
+                # A lambda body is a direct value boundary even when the lambda
+                # itself occupies a nested generic function slot. Widen the
+                # member here, before exact function-type unification, so its
+                # enum arguments contribute to this instantiation without
+                # making containers or arbitrary nested types covariant.
+                engine = self._active_inference_engine()
+                try:
+                    engine.unify(
+                        body_type,
+                        contextual_result,
+                        engine.origin(
+                            node.body.span,
+                            role=ConstraintRole.EXPECTED_RESULT,
+                            subject="lambda return",
+                        ),
+                    )
+                except InferenceError as exc:
+                    raise _InferenceConstraintError(
+                        f"Inconsistent type argument for lambda return: {exc}", original=exc
+                    ) from exc
+                result_type = engine.zonk(contextual_result)
+            else:
+                if isinstance(body_type, BottomType) and not collected:
+                    raise AglTypeError(
+                        "Cannot infer return type of lambda: body always raises.",
+                        span=node.span,
+                    )
+                try:
+                    result_type = self._unify_branch_types(
+                        [*collected, body_type], node.span, "Lambda return"
+                    )
+                except AglTypeError as exc:
+                    raise AglTypeError(
+                        "Cannot infer return type of lambda: return values have incompatible "
+                        "types. Add a return type annotation.",
+                        span=node.span,
+                        related=exc.related,
+                    ) from exc
             self._set_inferred_return_expr_provenance(
                 node.node_id,
                 self._provenance_for_result(result_type, (node.body,))
@@ -4345,7 +4368,7 @@ class _Checker:
     def _bound_method_type(
         self,
         method: MethodDef,
-        receiver: RecordType | EnumType | ExceptionType,
+        receiver: Type,
         *,
         type_args: tuple[TypeExpr, ...] | None,
         expected: Type | None,
@@ -4363,6 +4386,14 @@ class _Checker:
                 )
                 if isinstance(template_arg, TypeVarType)
             }
+        elif isinstance(receiver_template, ArrayType):
+            assert isinstance(receiver, ArrayType)
+            assert isinstance(receiver_template.elem, TypeVarType)
+            substitutions[receiver_template.elem.name] = receiver.elem
+        elif isinstance(receiver_template, DictType):
+            assert isinstance(receiver, DictType)
+            assert isinstance(receiver_template.value, TypeVarType)
+            substitutions[receiver_template.value.name] = receiver.value
         own_type_params = method.type_params[method.receiver_type_param_arity :]
         engine = self._active_inference_engine()
         # Freshen the method's own type parameters in the same substitution pass
@@ -4502,34 +4533,50 @@ class _Checker:
                     )
                 return field_type
 
+            method_receiver = obj_type
             if isinstance(obj_type, (RecordType, EnumType, ExceptionType)):
                 method = self._env.type_table.lookup_method(obj_type, node.field)
-                if method is not None:
-                    self._record_method_selection(node.node_id, method)
-                    if method.is_builtin:
-                        # Host methods are call-only and their dispatch-specific
-                        # checker owns explicit type arguments and result typing.
-                        # Do not freshen the declared generic result merely to
-                        # discover the selected method; return the selection
-                        # itself rather than a fabricated function type.
-                        assert isinstance(obj_type, (RecordType, EnumType))
-                        return _SelectedBuiltinMethod(name=method.name, receiver_type=obj_type)
-                    bound = self._bound_method_type(
-                        method, obj_type, type_args=type_args, expected=expected, span=node.span
+                if isinstance(obj_type, RecordType) and method is None:
+                    enum_owners = self._env.type_table.enum_owners_for_member(obj_type)
+                    if (
+                        len(enum_owners) == 1
+                        and enum_owners[0].module_id == STD_OPTION_ID
+                        and enum_owners[0].name == "Option"
+                    ):
+                        method_receiver = enum_owners[0]
+                        method = self._env.type_table.lookup_method(method_receiver, node.field)
+            else:
+                method = self._env.type_table.lookup_builtin_method(obj_type, node.field)
+            if method is not None:
+                self._record_method_selection(node.node_id, method)
+                if method.is_builtin:
+                    # Host methods are call-only and their dispatch-specific
+                    # checker owns explicit type arguments and result typing.
+                    # Do not freshen the declared generic result merely to
+                    # discover the selected method; return the selection
+                    # itself rather than a fabricated function type.
+                    return _SelectedBuiltinMethod(
+                        name=method.name,
+                        receiver_type=method_receiver,
+                        method=method,
                     )
-                    if self._env.is_extern_node_id(method.decl_node_id):
-                        self._set_extern_expr_targets(
-                            node.node_id,
-                            (
-                                _ExternTarget(
-                                    name=method.name,
-                                    result_type=bound.result,
-                                    decl_node_id=method.decl_node_id,
-                                    module_id=method.module_id,
-                                ),
+                bound = self._bound_method_type(
+                    method, method_receiver, type_args=type_args, expected=expected, span=node.span
+                )
+                if self._env.is_extern_node_id(method.decl_node_id):
+                    self._set_extern_expr_targets(
+                        node.node_id,
+                        (
+                            _ExternTarget(
+                                name=method.name,
+                                result_type=bound.result,
+                                decl_node_id=method.decl_node_id,
+                                module_id=method.module_id,
                             ),
-                        )
-                    return bound
+                        ),
+                    )
+                return bound
+            if isinstance(obj_type, (RecordType, EnumType, ExceptionType)):
                 builtin_agent = self._env.type_table.builtin_declaration("Agent")
                 if (
                     node.field in {"ask", "ask-request"}
@@ -4546,9 +4593,9 @@ class _Checker:
                     f"'{node.field}'.",
                     span=node.span,
                 )
-
             raise AglTypeError(
-                f"Member access requires a record, enum, or exception value; got '{obj_type!r}'.",
+                f"Member access requires a record, enum, exception, or built-in receiver; "
+                f"got '{obj_type!r}'.",
                 span=node.span,
             )
         except AglTypeError as exc:
@@ -4650,13 +4697,18 @@ class _Checker:
             self._assert_assignable_from(index_type, IntType(), index.span, index)
             return obj_type.elem
 
+        if isinstance(obj_type, TextType):
+            index_type = self._check_expr(index, expected=IntType())
+            self._assert_assignable_from(index_type, IntType(), index.span, index)
+            return TextType()
+
         if isinstance(obj_type, DictType):
             index_type = self._check_expr(index, expected=TextType())
             self._assert_assignable_from(index_type, TextType(), index.span, index)
             return obj_type.value
 
         error = AglTypeError(
-            f"indexing requires an array or dict; got '{obj_type!r}'.",
+            f"indexing requires an array or dict or text; got '{obj_type!r}'.",
             span=span,
         )
         raise self._frame_inferred_return_error(

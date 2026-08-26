@@ -1,0 +1,30 @@
+{
+  "scenarios": [
+    {
+      "name": "functional_types_combinators_and_attempt",
+      "params": {"mode": 1},
+      "expect": {
+        "stdout": "6\n5\n7\n7\n6\n5\n5\nPair(first = 4, second = \"x!\")\nPair(first = \"x!\", second = 4)\nOption::Some(value = 4)\nOption::Some(value = \"ok!\")\ntrue\nfalse\nfalse\ntrue\nOption::None\nOption::None\nEither::Right(value = 2)\nEither::Left(value = \"ok\")\n7\nOption::Some(value = \"missing\")\n5\n2\ntrue\nfalse\nOption::Some(value = 2)\nOption::None\n7\n0\nfalse\ntrue\nOption::None\nOption::Some(value = \"lost\")\n8\nOption::Some(value = 10)\nOption::Some(value = \"failed\")\n8\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "option_unwrap_raises",
+      "params": {"mode": 2},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "UnwrapError"},
+        "calls": {}
+      }
+    },
+    {
+      "name": "result_unwrap_raises",
+      "params": {"mode": 3},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "UnwrapError"},
+        "calls": {}
+      }
+    }
+  ]
+}

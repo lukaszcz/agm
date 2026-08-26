@@ -36,13 +36,14 @@ from tests.agl.module_graph import resolve_and_check_inline_entry, resolve_inlin
 _ROOTS = RootSet(frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
 _CAPS = HostCapabilities()
 _STD_CORE = Path(__file__).resolve().parents[1] / "stdlib" / "std" / "core.agl"
+_STD_OPTION = Path(__file__).resolve().parents[1] / "stdlib" / "std" / "option.agl"
 
 
 def _check(source: str, *, default_stdlib: bool = True) -> None:
     resolve_and_check_inline_entry(source, _CAPS, default_stdlib=default_stdlib)
 
 
-def test_core_stdlib_is_opened_unqualified_by_default() -> None:
+def test_core_stdlib_is_bare_by_default() -> None:
     _check("let x: Option[int] = Some(value = 1)\nprint(x)\n")
 
 
@@ -121,7 +122,6 @@ def test_builtin_function_signature_mismatches_are_rejected() -> None:
     cases = [
         "builtin def print[T](value: T, extra: int) -> unit\n()\n",
         "builtin def print[T](item: T) -> unit\n()\n",
-        'builtin def parse_json(value: text = "{}") -> json\n()\n',
         "builtin def ask-request(prompt: text) -> ExecResult\n()\n",
         "builtin def exec(command: int) -> ExecResult\n()\n",
         "builtin def copy(value: int) -> int\n()\n",
@@ -199,11 +199,7 @@ def test_std_core_declares_every_public_builtin() -> None:
         if item.scope_path and (not item.params or item.params[0].name != "self")
     }
 
-    # ``Option`` is validated against its own canonical generic template
-    # (``semantics.type_table.OPTION_TYPE_DEF``), registered separately from
-    # ``BUILTIN_PRELUDE_TYPES`` (see ``create_seeded_type_table``), so it is
-    # declared ``builtin`` in ``std/core`` without appearing in that table.
-    public_prelude = set(BUILTIN_PRELUDE_TYPES) - set(COMPATIBILITY_PRELUDE_TYPE_NAMES) | {"Option"}
+    public_prelude = set(BUILTIN_PRELUDE_TYPES) - set(COMPATIBILITY_PRELUDE_TYPE_NAMES)
     session_nominals = {"SessionTransport", "Session", "SessionStats", "SessionError"}
     assert session_nominals <= records | enums | exceptions
     assert session_nominals <= set(BUILTIN_PRELUDE_TYPES)
@@ -216,6 +212,26 @@ def test_std_core_declares_every_public_builtin() -> None:
         if module_id == STD_CORE_ID
         for static_name in names
     }
+
+
+def test_std_option_declares_the_builtin_option_and_keeps_its_host_identity() -> None:
+    from agm.agl.parser import parse_program
+    from tests.agl.ir_harness import lower_ir
+
+    program = parse_program(_STD_OPTION.read_text())
+    from agm.agl.syntax.nodes import EnumDef
+
+    enums = {
+        item.name for item in program.body.items if isinstance(item, EnumDef) and item.is_builtin
+    }
+    assert enums == {"Option"}
+
+    executable = lower_ir("program def main() -> unit = ()\n", caps=_CAPS)
+    option = executable.builtin_nominals.resolve("Option")
+    option_descriptor = executable.nominals[option.nominal]
+    assert option_descriptor.module_id == ModuleId.from_path("std/option")
+    assert {variant.name for variant in option_descriptor.variants} == {"None", "Some"}
+    assert all(variant.member in executable.nominals for variant in option_descriptor.variants)
 
 
 def test_unknown_builtin_type_is_rejected() -> None:
@@ -327,13 +343,6 @@ def test_lowerer_skips_builtin_function_definitions() -> None:
 
     source = "builtin def print[T](value: T) -> unit\nprogram def main() = ()\n"
     lower_ir(source, caps=_CAPS, default_stdlib=False)
-
-
-def test_source_declared_builtin_function_call_is_classified() -> None:
-    """A program's own ``parse_json`` declaration is a duplicate of
-    ``std/core``'s while the standard library is loaded, so this checks the
-    entry module's declaration alone, without it."""
-    _check('builtin def parse_json(value: text) -> json\nparse_json("{}")\n', default_stdlib=False)
 
 
 def test_copy_and_shallow_copy_source_declared_calls_are_classified() -> None:

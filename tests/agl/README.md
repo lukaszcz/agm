@@ -23,7 +23,7 @@ Layout:
 | `basics/` | `let`/`var`/`:=`, params, agent calls, print rendering |
 | `calls/` | `ask` parse policies (`Retry`/`Abort`), format options |
 | `canonical/` | Multi-agent review/fix workflows |
-| `casts/` | `as`/`as?` casts, `CastError`/`JsonParseError`, `parse_json` |
+| `casts/` | `as`/`as?` casts and `CastError`/`JsonParseError` handling |
 | `control/` | `if`/`case`/`do…until`/`try…catch`/`raise` |
 | `errors/` | Exception types, field access in catch, rethrow |
 | `exec/` | Shell execution, `ExecResult` structured handle |
@@ -64,6 +64,7 @@ Layout:
       },
       "shell": [{"command": "printf done", "stdout": "done"}],
       "runtime": {"default_call_depth_limit": 20, "default_strict_json": true},
+      "filesystem": {"directories": ["work"]},
       "expect": {
         "stdout": "exact full stdout",
         "stdout_contains": ["fragment"],
@@ -94,6 +95,7 @@ Layout:
         "raises": {"type": "MaxIterationsExceeded",
                    "fields": {"limit": 3},
                    "message_contains": ["fragment"]},
+        "exit_code": 42,
         "host_error": {"message_contains": ["spec"]}
       }
     }
@@ -129,6 +131,9 @@ Field notes:
   so acceptance tests never execute a real shell command.
 - `runtime` — optional `PipelineDriver` constructor overrides
   (`default_call_depth_limit`, `default_strict_json`).
+- `filesystem` — optional fixture in a test-created temporary root. It may declare
+  `directories`, UTF-8 `text_files`, hexadecimal `hex_files`, and
+  `directory_symlinks`; a `"$TEMP_ROOT"` parameter value is replaced with that root.
 - `module_roots` — optional paths relative to `tests/agl/`. When present, the
   program runs through the multi-file module graph with these library roots.
 - `inline_entry` — the program declares no `program def`: it runs through the
@@ -162,6 +167,8 @@ Field notes:
   capability rejection; omit the field to leave operation coverage unchecked.
 - `expect.raises` — the uncaught AgL exception ending the run: its type name, an
   exact-match subset of its fields, and substrings of its `message` field.
+- `expect.exit_code` — the program must terminate through `SystemExit` with this
+  status; it is used for host-termination workflows such as `std/process::exit`.
 - `expect.host_error` — the run must fail pre-execution (param validation): no agent
   is called, no AgL exception is raised, and the diagnostics mention the fragments.
 - Exact `stdout` is asserted only where rendering is pinned by the design (`text`

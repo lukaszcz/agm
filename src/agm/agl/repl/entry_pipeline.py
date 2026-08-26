@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from agm.agl.eval.ir_interpreter import IrInterpreter
+    from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.contracts import ContractPayload
     from agm.agl.ir.ids import SymbolId
     from agm.agl.ir.program import IrParam
@@ -38,7 +39,7 @@ if TYPE_CHECKING:
     from agm.agl.semantics.values import Frame, Value
     from agm.agl.setting_overrides import SettingOverride
     from agm.agl.syntax.advisories import SpacedQualifier
-    from agm.agl.syntax.nodes import ImportDecl, Item, Program, ScopeRegion
+    from agm.agl.syntax.nodes import ImportDecl, InfixAssoc, Item, Program, ScopeRegion
     from agm.agl.typecheck.env import CheckedModule, TypeEnvironment
     from agm.agl.typecheck.program import CheckedProgram
 
@@ -52,9 +53,11 @@ class EntryPipelineCtx(Protocol):
     """The minimal ReplSession surface the program pipeline needs."""
 
     _loaded_lib_modules: dict[ModuleId, LoadedModule]
+    _bootstrap_checked_modules: dict[ModuleId, CheckedModule]
     _active_imported_params: dict[SymbolId, IrParam]
     _accumulated_imports: list[tuple[ImportDecl, ...]]
     _accumulated_scoped_imports: list[tuple[ImportDecl | ScopeRegion, ...]]
+    _accumulated_infix: dict[str, tuple[int, InfixAssoc]]
     _link_image: LinkImage
     _ir_base_frame: Frame
     _setting_overrides: dict[str, SettingOverride]
@@ -70,6 +73,9 @@ class EntryPipelineCtx(Protocol):
     _default_call_depth_limit: int
     _default_stdlib: bool
     _shell_exec_timeout: float | None
+    _process_environment: dict[str, str] | None
+    _builtin_var_seed: dict[BuiltinVarKey, Value]
+    _builtin_var_values: dict[BuiltinVarKey, Value]
     # The current-value register for the five engine keys with a ``Value``
     # form (strict-json, timeout, log, log-file, default-agent); a key is
     # present only once a host seed or a learned declared default has made it
@@ -111,6 +117,7 @@ class EntryPipelineCtx(Protocol):
         next_start_id: int,
         partial: bool,
         promoted_declaration_ids: frozenset[int],
+        infix_ambient: Mapping[str, tuple[int, InfixAssoc]],
     ) -> tuple[str, ...]: ...
 
     def _classify(self, program: Program) -> tuple[EntryKind, str | None]: ...
@@ -150,6 +157,7 @@ class LoadedCheckedProgram:
     new_next_id: int
     entry_imports: "tuple[ImportDecl, ...]"
     entry_uses: "tuple[ImportDecl | ScopeRegion, ...]"
+    entry_infix_ambient: "dict[str, tuple[int, InfixAssoc]]"
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +230,7 @@ class EntryPipeline:
             roots=roots,
             default_stdlib=self._ctx._default_stdlib,
             spaced_qualifiers=spaced_qualifiers,
+            session_infix=self._ctx._accumulated_infix,
         )
 
         graph, new_next_id, override_diagnostics, new_modules = apply_setting_overrides(
@@ -235,8 +244,16 @@ class EntryPipeline:
             raise OverrideRejected(override_diagnostics)
 
         resolved_program = self._resolve_program(graph)
+        bootstrap_modules = self._ctx._bootstrap_checked_modules
+        static_module_ids = frozenset(graph.modules) - {graph.entry_id}
+        cached_checked_modules = (
+            bootstrap_modules if static_module_ids == frozenset(bootstrap_modules) else None
+        )
         checked_program = check_program(
-            resolved_program, host_env.capabilities, entry_seed_env=self._ctx._type_env
+            resolved_program,
+            host_env.capabilities,
+            entry_seed_env=self._ctx._type_env,
+            cached_checked_modules=cached_checked_modules,
         )
         return LoadedCheckedProgram(
             checked_program=checked_program,
@@ -245,6 +262,7 @@ class EntryPipeline:
             new_next_id=new_next_id,
             entry_imports=entry_imports,
             entry_uses=entry_uses,
+            entry_infix_ambient=graph.entry_infix_ambient,
         )
 
     def eval_entry(
@@ -312,6 +330,7 @@ class EntryPipeline:
         new_next_id = loaded.new_next_id
         entry_imports = loaded.entry_imports
         entry_uses = loaded.entry_uses
+        entry_infix_ambient = loaded.entry_infix_ambient
         entry_cm = checked_program.modules[ENTRY_ID]
 
         # Collect warnings from all passes.
@@ -356,6 +375,7 @@ class EntryPipeline:
             module_adjacency=module_adjacency,
             entry_imports=entry_imports,
             entry_uses=entry_uses,
+            entry_infix_ambient=entry_infix_ambient,
             contract_payloads=contract_payloads,
         )
 
@@ -391,6 +411,7 @@ class EntryPipeline:
             roots=roots,
             default_stdlib=self._ctx._default_stdlib,
             spaced_qualifiers=spaced_qualifiers,
+            session_infix=self._ctx._accumulated_infix,
         )
         resolved_program = self._resolve_program(graph)
         return check_program(
@@ -602,6 +623,7 @@ class EntryPipeline:
         module_adjacency: dict[ModuleId, tuple[ModuleId, ...]],
         entry_imports: tuple[ImportDecl, ...],
         entry_uses: tuple[ImportDecl | ScopeRegion, ...],
+        entry_infix_ambient: Mapping[str, tuple[int, InfixAssoc]],
         contract_payloads: Mapping[int, "ContractPayload"],
     ) -> EntryResult:
         """Lower and execute one program entry in the persistent IR image."""
@@ -723,7 +745,8 @@ class EntryPipeline:
                 # an earlier entry): a key genuinely absent here is exactly one
                 # this interpreter should learn its own ``std/config`` declared
                 # default for, rather than have imposed on it.
-                builtin_host_settings=dict(self._ctx._current),
+                builtin_host_settings=self._builtin_host_settings(),
+                process_environment=self._ctx._process_environment,
             )
         except AglRaise as exc:
             error = exception_value_to_run_error(
@@ -776,8 +799,17 @@ class EntryPipeline:
                 ok=False,
                 trace_path=self._ctx._trace_path,
             )
+        from agm.agl.modules.ids import STD_CONFIG_ID
+
         self._ctx._record_declared_engine_defaults(
-            frozenset(lowered.program.builtin_setting_defaults), interp
+            frozenset(
+                name
+                for module_id, scope_path, name in cast(
+                    "Mapping[BuiltinVarKey, object]", lowered.program.builtin_setting_defaults
+                )
+                if module_id == STD_CONFIG_ID and not scope_path
+            ),
+            interp,
         )
 
         def retain_library_state(module_ids: frozenset[ModuleId]) -> None:
@@ -844,6 +876,7 @@ class EntryPipeline:
                 next_start_id=new_next_id,
                 partial=partial,
                 promoted_declaration_ids=promoted_declaration_ids,
+                infix_ambient=entry_infix_ambient,
             )
 
         def partial_failure(
@@ -892,6 +925,9 @@ class EntryPipeline:
 
         try:
             interp.run()
+        except SystemExit as exc:
+            trace.run_end(ok=exc.code is None or exc.code == 0)
+            raise
         except AglRaise as exc:
             error = exception_value_to_run_error(
                 exc.exc,
@@ -909,6 +945,11 @@ class EntryPipeline:
                 diagnostics=[_parameter_default_cycle_diagnostic(program_to_run, exc)],
                 error=None,
             )
+        except HostConfigurationError as exc:
+            # A host-backed library value may be read after earlier entry work
+            # completed. Preserve that completed state while reporting the
+            # missing/invalid host value as an ordinary language diagnostic.
+            return partial_failure(diagnostics=[Diagnostic(message=str(exc), line=1)], error=None)
         except (AgentCancelled, KeyboardInterrupt) as exc:
             cancellation_message = (
                 "Agent call cancelled — entry aborted."
@@ -1177,6 +1218,15 @@ class EntryPipeline:
             return
         self._ctx._accumulated_imports.append(entry_imports)
         self._ctx._accumulated_scoped_imports.append(entry_uses)
+
+    def _builtin_host_settings(self) -> dict[str | BuiltinVarKey, Value]:
+        """Combine persistent engine and standard-library binding state."""
+        settings: dict[str | BuiltinVarKey, Value] = {}
+        for engine_key, value in self._ctx._current.items():
+            settings[engine_key] = value
+        for builtin_key, value in self._ctx._builtin_var_values.items():
+            settings[builtin_key] = value
+        return settings
 
     def _persist_interpreter_settings(self, interp: "IrInterpreter", trace: "TraceStore") -> None:
         """Persist completed setting writes and the live trace destination."""

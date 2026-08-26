@@ -22,7 +22,7 @@ import decimal
 import inspect
 import sys
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Protocol, assert_never, cast
+from typing import TYPE_CHECKING, ContextManager, Protocol, assert_never, cast
 
 from agm.agl.eval._decimal import AGL_DECIMAL_CONTEXT
 from agm.agl.eval.arith import (
@@ -41,6 +41,7 @@ from agm.agl.eval.conversions import AglCastConversion, run_recipe
 from agm.agl.eval.effects import EffectHandlers
 from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, index_set
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
+from agm.agl.ir.builtin_vars import BuiltinVarKey, builtin_var_key, is_engine_builtin_var_key
 from agm.agl.ir.contracts import (
     ContractRequest,
     ConversionFailureMode,
@@ -101,7 +102,6 @@ from agm.agl.ir.nodes import (
     IrNominalCast,
     IrNominalIs,
     IrOr,
-    IrParseJson,
     IrPrint,
     IrRaise,
     IrRenderTemplate,
@@ -137,11 +137,16 @@ from agm.agl.ir.program import (
     IrParam,
 )
 from agm.agl.ir.validate import InvalidIrError
-from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.ids import STD_CONFIG_ID, STD_ENV_ID, ModuleId
 from agm.agl.runtime.agents import AgentFn
+from agm.agl.runtime.boundary import encode_boundary_value
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
-from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
-from agm.agl.runtime.externs import ExternRegistry
+from agm.agl.runtime.externs import (
+    AglCallableProxy,
+    ExternCallWindow,
+    ExternRegistry,
+    ExternRuntimeState,
+)
 from agm.agl.runtime.option import none_value, option_text, some_value
 from agm.agl.runtime.params import engine_default_settings
 from agm.agl.runtime.render import render_value
@@ -188,6 +193,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "HostConfigurationError",
+    "MissingBuiltinVarSeedError",
     "IrInterpreter",
     "ParameterDefaultCycleError",
     "_apply_coercion",
@@ -229,21 +235,25 @@ class ParameterDefaultCycleError(Exception):
 
 
 class HostConfigurationError(Exception):
-    """The materialized ``default-agent`` value cannot be dispatched.
+    """A host-backed value cannot be materialized as a valid AgL binding.
 
-    Raised by :class:`IrInterpreter`'s constructor when the winning
-    ``default-agent`` value — a host seed (``[exec] runner``, already
-    validated before this point) or a declared/spliced ``builtin var``
-    default (``--agent``, ``[exec]``/qualified program-table ``default-agent``, or
-    ``std/config``'s own default) — is an ``AgentCommand`` whose command text
-    does not shell-split (see :func:`agm.agent.runner.parse_command`).
-
-    This only covers the value materialized at construction time, before any
-    statement of the entry runs: a later ``std/config::default-agent := ...``
-    source write is never checked here, so a malformed command written at
-    runtime stays an ordinary AgL runtime error raised from the ``ask`` call
-    site that actually dispatches it, not a host-configuration failure.
+    The evaluator raises this for a malformed startup ``default-agent`` and
+    for a read of a non-engine ``builtin var`` that has neither a host seed nor
+    a declared default. Pipeline hosts translate it to an ordinary language
+    diagnostic rather than leaking a Python implementation exception.
     """
+
+
+class MissingBuiltinVarSeedError(HostConfigurationError):
+    """A non-engine host-backed binding was read without a value source."""
+
+    def __init__(self, key: BuiltinVarKey) -> None:
+        module_id, scope_path, name = key
+        scoped_name = "::".join((*scope_path, name))
+        super().__init__(
+            f"builtin var '{module_id.path_str()}::{scoped_name}' has no value: "
+            "the host did not seed it and its declaration has no default"
+        )
 
 
 class _FlexibleParse(Protocol):
@@ -500,7 +510,8 @@ class IrInterpreter:
         base_frame: Frame | None = None,
         extern_registry: ExternRegistry | None = None,
         host_reconfigurer: "HostSettingsReconfigurer | None" = None,
-        builtin_host_settings: Mapping[str, Value] | None = None,
+        builtin_host_settings: Mapping[str | BuiltinVarKey, Value] | None = None,
+        process_environment: Mapping[str, str] | None = None,
     ) -> None:
         self._program = program
         self._frames: list[Frame] = [base_frame if base_frame is not None else {}]
@@ -546,33 +557,46 @@ class IrInterpreter:
         self._shell_exec_timeout: float | None = None
         self._timeout_setting = none_value(nominals=self._program.builtin_nominals)
         self._builtin_host_settings: dict[str, Value] = {}
+        self._builtin_vars: dict[BuiltinVarKey, Value] = {}
         self._host_reconfigurer = host_reconfigurer
 
-        defaults = dict(_engine_default_settings())
+        defaults: dict[BuiltinVarKey, Value] = {
+            builtin_var_key(STD_CONFIG_ID, (), key): value
+            for key, value in _engine_default_settings().items()
+        }
         defaults.update(
             {
-                key: self._eval(value)
+                self._builtin_var_key(key): self._eval(value)
                 for key, value in self._program.builtin_setting_defaults.items()
             }
         )
-        seed = builtin_host_settings if builtin_host_settings is not None else {}
+        seed: dict[BuiltinVarKey, Value] = {
+            (builtin_var_key(STD_CONFIG_ID, (), key) if isinstance(key, str) else key): value
+            for key, value in (builtin_host_settings or {}).items()
+        }
+        if process_environment is not None:
+            environ_seed = self._process_environ_seed(process_environment)
+            if environ_seed is not None:
+                seed.setdefault(environ_seed[0], environ_seed[1])
 
         # Runtime-live settings use an explicit host seed when present.  Their
         # driver arguments remain compatibility fallbacks: an absent false/None
         # must not suppress a declaration default.  Bootstrap through the same
         # effect path as a source write so host-invalid declared values become
         # normal AgL runtime errors.
-        strict_setting = seed.get("strict-json")
+        strict_key = builtin_var_key(STD_CONFIG_ID, (), "strict-json")
+        strict_setting = seed.get(strict_key)
         if strict_setting is None:
-            strict_default = defaults["strict-json"]
+            strict_default = defaults[strict_key]
             assert isinstance(strict_default, BoolValue)
             strict_setting = BoolValue(strict_json or strict_default.value)
         assert isinstance(strict_setting, BoolValue)
         self._apply_config_effect("strict-json", strict_setting)
 
-        max_iters_setting = seed.get("max-iters")
+        max_iters_key = builtin_var_key(STD_CONFIG_ID, (), "max-iters")
+        max_iters_setting = seed.get(max_iters_key)
         if max_iters_setting is None:
-            max_iters_default = defaults["max-iters"]
+            max_iters_default = defaults[max_iters_key]
             assert isinstance(max_iters_default, IntValue)
             max_iters_setting = IntValue(
                 loop_limit if loop_limit is not None else max_iters_default.value
@@ -580,7 +604,8 @@ class IrInterpreter:
         assert isinstance(max_iters_setting, IntValue)
         self._apply_config_effect("max-iters", max_iters_setting)
 
-        timeout_setting = seed.get("timeout")
+        timeout_key = builtin_var_key(STD_CONFIG_ID, (), "timeout")
+        timeout_setting = seed.get(timeout_key)
         if timeout_setting is None:
             timeout_setting = (
                 some_value(
@@ -588,7 +613,7 @@ class IrInterpreter:
                     nominals=self._program.builtin_nominals,
                 )
                 if shell_exec_timeout is not None
-                else defaults["timeout"]
+                else defaults[timeout_key]
             )
         assert isinstance(timeout_setting, RecordValue)
         timeout_setting = _rebind_host_enum_member(
@@ -606,7 +631,12 @@ class IrInterpreter:
         # reading it is then a hard error (see ``_load_builtin_setting``).
         effective = {**defaults, **seed}
         self._builtin_host_settings = {
-            key: effective[key] for key in HOST_CONSUMED_ENGINE_KEYS if key in effective
+            key: effective[builtin_var_key(STD_CONFIG_ID, (), key)]
+            for key in HOST_CONSUMED_ENGINE_KEYS
+            if builtin_var_key(STD_CONFIG_ID, (), key) in effective
+        }
+        self._builtin_vars = {
+            key: value for key, value in effective.items() if not is_engine_builtin_var_key(key)
         }
         default_agent = self._builtin_host_settings.get("default-agent")
         if isinstance(default_agent, RecordValue):
@@ -626,6 +656,8 @@ class IrInterpreter:
         self._extern_registry: ExternRegistry = (
             extern_registry if extern_registry is not None else ExternRegistry()
         )
+        self._extern_call_window_guard = ExternCallWindow()
+        self._extern_runtime_state = ExternRuntimeState()
         self._effects = EffectHandlers(self)
 
     def _parse_host_output(
@@ -674,6 +706,11 @@ class IrInterpreter:
         return self._shell_exec_timeout
 
     @property
+    def builtin_vars(self) -> dict[BuiltinVarKey, Value]:
+        """Current non-engine host-backed bindings for incremental hosts."""
+        return dict(self._builtin_vars)
+
+    @property
     def builtin_host_settings(self) -> dict[str, Value]:
         """Current host-consumed register values.
 
@@ -711,7 +748,7 @@ class IrInterpreter:
                 return AglRaise(
                     _make_exc_value(
                         "IndexError",
-                        f"Array index {err.index} out of range for length {err.length}",
+                        str(err),
                         nominals=self._program.builtin_nominals,
                         index=IntValue(err.index),
                         length=IntValue(err.length),
@@ -897,6 +934,40 @@ class IrInterpreter:
         module scope for its own defaults.
         """
         return self._eval_default_in_frame(param, {})
+
+    def _extern_call_window(self) -> ContextManager[None]:
+        """Open this interpreter's callback window for one extern invocation."""
+        return self._extern_call_window_guard.active()
+
+    def _encode_extern_value(self, value: Value) -> object:
+        """Encode one value for an extern, preserving callable interpreter access."""
+        return encode_boundary_value(value, self._make_extern_callable_proxy)
+
+    def _make_extern_callable_proxy(self, closure: IrClosureValue) -> AglCallableProxy:
+        """Wrap one AgL closure for a companion's synchronous callback."""
+
+        def invoke(args: tuple[Value, ...]) -> Value:
+            return self._invoke_crossed_closure(closure, args)
+
+        return AglCallableProxy(
+            arity=closure.arity,
+            closure=closure,
+            require_active_window=self._extern_call_window_guard.require_active,
+            invoke=invoke,
+            encode=self._encode_extern_value,
+        )
+
+    def _invoke_crossed_closure(self, closure: IrClosureValue, args: tuple[Value, ...]) -> Value:
+        """Re-enter this interpreter to execute an AgL callback from an extern."""
+        desc = self._program.functions[closure.function_id]
+        match desc.impl:
+            case ExternFunctionBody() as extern:
+                return self._effects.eval_extern_call(desc.module_id, extern, args)
+            case IrFunctionBody(body=body):
+                self._check_call_depth()
+                return self._bind_and_invoke(desc, body, closure, list(args))
+            case other:  # pragma: no cover
+                assert_never(other)
 
     def _execute_direct_call(
         self,
@@ -1780,26 +1851,6 @@ class IrInterpreter:
                     )
                 )
 
-            case IrParseJson(value=val_expr):
-                val = self._eval(val_expr)
-                if not isinstance(val, TextValue):
-                    raise InvalidIrError(
-                        f"IrParseJson: expected TextValue, got {type(val).__name__}"
-                    )
-                try:
-                    obj = parse_json_strict(val.value)
-                except StrictJsonParseError as exc:
-                    raise AglRaise(
-                        _make_exc_value(
-                            "JsonParseError",
-                            exc.message,
-                            nominals=self._program.builtin_nominals,
-                            raw=TextValue(val.value),
-                        ),
-                        span=node.location,
-                    ) from exc
-                return JsonValue(obj)
-
             case IrCopyValue(kind=kind, value=val_expr):
                 value = self._eval(val_expr)
                 return (
@@ -1829,11 +1880,22 @@ class IrInterpreter:
 
             case IrExec(
                 command=command_expr,
+                env=env_expr,
+                cwd=cwd_expr,
+                timeout=timeout_expr,
                 contract_id=contract_id,
                 max_attempts=max_attempts,
             ):
                 try:
-                    return self._effects.eval_ir_exec(node, command_expr, contract_id, max_attempts)
+                    return self._effects.eval_ir_exec(
+                        node,
+                        command_expr,
+                        env_expr,
+                        cwd_expr,
+                        timeout_expr,
+                        contract_id,
+                        max_attempts,
+                    )
                 except AglRaise as exc:
                     if exc.span is None:
                         exc.span = node.location
@@ -1877,8 +1939,40 @@ class IrInterpreter:
     # Builtin-var register access
     # ------------------------------------------------------------------
 
-    def _load_builtin_setting(self, key: str) -> Value:
-        """Return the current value of the ``builtin var`` engine setting *key*.
+    def _process_environ_seed(
+        self, process_environment: Mapping[str, str]
+    ) -> tuple[BuiltinVarKey, RecordValue] | None:
+        """Build ``std/env::environ`` from an immutable host environment snapshot."""
+        descriptor = next(
+            (
+                descriptor
+                for descriptor in self._program.nominals.values()
+                if descriptor.module_id == STD_ENV_ID and descriptor.declared_name == "Environ"
+            ),
+            None,
+        )
+        if descriptor is None:
+            return None
+        return (
+            builtin_var_key(STD_ENV_ID, (), "environ"),
+            RecordValue(
+                nominal=descriptor.nominal,
+                display_name=descriptor.display_name,
+                fields={
+                    "vars": DictValue(
+                        {name: TextValue(value) for name, value in process_environment.items()}
+                    )
+                },
+            ),
+        )
+
+    @staticmethod
+    def _builtin_var_key(key: BuiltinVarKey | str) -> BuiltinVarKey:
+        """Normalize legacy engine-only IR keys to their ``std/config`` owner."""
+        return builtin_var_key(STD_CONFIG_ID, (), key) if isinstance(key, str) else key
+
+    def _load_builtin_setting(self, key: BuiltinVarKey | str) -> Value:
+        """Return the current value of the host-backed binding *key*.
 
         The runtime-live keys read the live interpreter fields; the
         host-consumed keys read their register in ``_builtin_host_settings``.
@@ -1887,21 +1981,28 @@ class IrInterpreter:
 
         :raises InvalidIrError: if *key* has no host-consumed register.
         """
-        if key == "strict-json":
+        key = self._builtin_var_key(key)
+        _, _, name = key
+        if not is_engine_builtin_var_key(key):
+            try:
+                return self._builtin_vars[key]
+            except KeyError as exc:
+                raise MissingBuiltinVarSeedError(key) from exc
+        if name == "strict-json":
             return BoolValue(self._strict_json)
-        if key == "max-iters":
+        if name == "max-iters":
             return IntValue(0 if self._loop_limit is None else self._loop_limit)
-        if key == "timeout":
+        if name == "timeout":
             return self._timeout_setting
-        if key not in self._builtin_host_settings:
+        if name not in self._builtin_host_settings:
             raise InvalidIrError(
-                f"builtin var {key!r} has no host-consumed register value: it was neither "
+                f"builtin var {name!r} has no host-consumed register value: it was neither "
                 "seeded by the host nor given a declaration default"
             )
-        return self._builtin_host_settings[key]
+        return self._builtin_host_settings[name]
 
-    def _store_builtin_setting(self, key: str, value: Value) -> None:
-        """Store *value* into the ``builtin var`` engine setting *key*.
+    def _store_builtin_setting(self, key: BuiltinVarKey | str, value: Value) -> None:
+        """Store *value* into the host-backed binding *key*.
 
         The three runtime-live keys route through ``_apply_config_effect`` so the
         live effect (loop cap, strict-json mode, shell timeout) takes hold from
@@ -1910,22 +2011,27 @@ class IrInterpreter:
         reconfigure the live trace service when a host reconfigurer is present;
         ``default-agent`` remains a register-only value.
         """
-        if key in RUNTIME_LIVE_ENGINE_KEYS:
-            self._apply_config_effect(key, value)
-            if key == "timeout":
+        key = self._builtin_var_key(key)
+        _, _, name = key
+        if not is_engine_builtin_var_key(key):
+            self._builtin_vars[key] = value
+            return
+        if name in RUNTIME_LIVE_ENGINE_KEYS:
+            self._apply_config_effect(name, value)
+            if name == "timeout":
                 assert isinstance(value, RecordValue)
                 self._timeout_setting = value
             return
 
         previous = dict(self._builtin_host_settings)
-        self._builtin_host_settings[key] = value
+        self._builtin_host_settings[name] = value
         if trace_write_implies_enabled(
-            key,
+            name,
             isinstance(value, RecordValue)
             and option_text(value, nominals=self._program.builtin_nominals) is not None,
         ):
             self._builtin_host_settings["log"] = BoolValue(True)
-        if self._host_reconfigurer is None or key not in TRACE_ENGINE_KEYS:
+        if self._host_reconfigurer is None or name not in TRACE_ENGINE_KEYS:
             return
         try:
             self._reconfigure_host_service()

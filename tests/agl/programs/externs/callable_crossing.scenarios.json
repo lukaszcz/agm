@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "callbacks_support_multiple_arities",
+      "params": {"mode": "arity"},
+      "expect": {"stdout": "5\n7\n"}
+    },
+    {
+      "name": "generic_callback_values_cross_both_directions",
+      "params": {"mode": "generic"},
+      "expect": {"stdout": "[[value]]\n"}
+    },
+    {
+      "name": "retained_callback_is_valid_during_a_later_extern_call",
+      "params": {"mode": "retained"},
+      "expect": {"stdout": "10\n"}
+    }
+  ]
+}

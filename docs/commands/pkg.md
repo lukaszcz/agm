@@ -30,7 +30,7 @@ repository = "https://example.test/review-tools"
 keywords = ["review", "workflow"]
 
 [dependencies]
-std = "0.1.0"
+std = "0.1.1"
 helpers = { version = "1.2.0", path = "../helpers" }
 
 [dependencies.remote]

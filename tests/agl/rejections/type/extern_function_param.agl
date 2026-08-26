@@ -1,3 +1,0 @@
-extern def apply(cb: (int) -> int) -> int
-program def main() -> unit =
-  0

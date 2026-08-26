@@ -41,10 +41,12 @@ Algorithm
    annotations for top-level ``FuncDef`` declarations in every module,
    producing a declaration-node-id-keyed signature table.
 
-3. **Import-SCC candidate inference** — consume the preserved loader import
-   SCCs in reverse topological order. Each candidate function dependency SCC
-   publishes only closed unannotated signatures; one import cycle builds a
-   single cross-module function graph.
+3. **Import-SCC candidate inference** — consume the loader's derived
+   inference SCCs in reverse topological order. Ambient builtin-method modules
+   are ordering-only dependencies, so their closed method signatures publish
+   before consuming program modules without becoming source imports. Each
+   candidate function dependency SCC publishes only closed unannotated
+   signatures; one resulting cycle builds a single cross-module function graph.
 
 4. **Authoritative per-module type-check** — after every signature is concrete,
    recheck each module body with its module-aware
@@ -63,7 +65,7 @@ from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import ImportEnv
 from agm.agl.scope.program import ResolvedProgram
-from agm.agl.scope.symbols import ModuleResolution
+from agm.agl.scope.symbols import ModuleResolution, is_qualified_function_member
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
 from agm.agl.semantics.type_table import (
@@ -80,10 +82,12 @@ from agm.agl.syntax.nodes import (
     EnumDef,
     ExceptionDef,
     FuncDef,
+    LetDecl,
     ParamKind,
     Program,
     RecordDef,
     TypeAlias,
+    simple_let_pattern_name,
     static_function_items,
     static_items,
     static_type_items,
@@ -93,6 +97,7 @@ from agm.agl.typecheck.builder import _TypeBuilder
 from agm.agl.typecheck.checker import _check_prepared_module, prepare_module_headers
 from agm.agl.typecheck.declaration_validation import (
     validate_builtin_declaration_uniqueness,
+    validate_builtin_method_ownership,
     validate_method_declaration_collisions,
 )
 from agm.agl.typecheck.env import (
@@ -163,6 +168,10 @@ class CheckedProgram:
     ``import_sccs``
         Loader-computed reverse-topological import components, retained for
         dependency-ordered lowering after this pass's presentation ordering.
+    ``runtime_modules``
+        Entry-reachable modules through explicit source imports and exports.
+        Loader-injected standard-library and ambient-registry edges do not add
+        dry-run call sites.
     """
 
     modules: dict[ModuleId, CheckedModule]
@@ -172,6 +181,7 @@ class CheckedProgram:
     capabilities: HostCapabilities | None = None
     import_sccs: tuple[tuple[ModuleId, ...], ...] = ()
     resource_roots: Mapping[ModuleId, Path | None] = field(default_factory=dict)
+    runtime_modules: frozenset[ModuleId] | None = None
 
 
 def _assert_checked_module_closed(module: CheckedModule) -> None:
@@ -716,7 +726,14 @@ def _build_program_func_sig_table(
             # when their name matches a global builtin.
             if receiver_owner is None and (
                 item.name in _BUILTIN_TYPE_NAMES
-                or (item.name in _BUILTIN_FUNC_NAMES and not item.is_builtin)
+                or (
+                    item.name in _BUILTIN_FUNC_NAMES
+                    and not item.is_builtin
+                    and not is_qualified_function_member(
+                        mid == resolved.entry_id,
+                        tuple(segment.name for segment in item.scope_path),
+                    )
+                )
             ):
                 continue
             if item.return_type is None:
@@ -745,25 +762,53 @@ def _build_program_func_sig_table(
     return result
 
 
+def _build_program_static_let_table(
+    resolved: ResolvedProgram, module_envs: Mapping[ModuleId, TypeEnvironment]
+) -> dict[int, Type]:
+    """Resolve annotated static ``let`` bindings for cross-module access.
+
+    Module-root lets initialize before importers execute. An annotation makes
+    their type available in the whole-program header phase, while the ordinary
+    body check remains responsible for validating the initializer.
+    """
+    result: dict[int, Type] = {}
+    for mid, loaded in resolved.modules.items():
+        env = module_envs[mid]
+        for item in static_items(loaded.resolved.program.body.items):
+            if not isinstance(item, LetDecl) or item.type_ann is None:
+                continue
+            name = simple_let_pattern_name(item.pattern)
+            if name is None or name == "_":
+                continue
+            scope_path = tuple(segment.name for segment in item.scope_path)
+            with env.type_scope(scope_path):
+                result[item.pattern.node_id] = env.resolve_type_expr(
+                    item.type_ann, span=item.span, type_vars=frozenset()
+                )
+    return result
+
+
 def _build_program_builtin_var_table(
     resolved: ResolvedProgram,
+    module_envs: Mapping[ModuleId, TypeEnvironment],
     type_table: TypeTable,
 ) -> dict[int, Type]:
     """Compute binding types for every ``builtin var`` across all modules.
 
-    The engine-key registry supplies a canonical fallback type. If the program
-    loaded a source ``builtin`` declaration for that nominal, select the source
-    identity instead, matching host-value minting. The table is keyed by the
-    declaration node id (globally unique), so seeding it into every module's
-    env makes each engine setting readable and assignable from any importer.
-    Unknown-key declarations are omitted; the owning module rejects them.
+    Engine settings use their registry type, selecting a loaded source builtin
+    identity when available. Other standard-library bindings use their declared
+    type resolved in their owning module's complete type environment.
     """
+    from agm.agl.modules.ids import STD_CONFIG_ID
     from agm.agl.semantics.engine_keys import get_engine_key_type
 
     result: dict[int, Type] = {}
-    for _mid, loaded in resolved.modules.items():
+    for mid, loaded in resolved.modules.items():
+        env = module_envs[mid]
         for item in static_items(loaded.resolved.program.body.items):
-            if isinstance(item, BuiltinVarDecl):
+            if not isinstance(item, BuiltinVarDecl):
+                continue
+            if mid == STD_CONFIG_ID and not item.scope_path:
                 key_type = get_engine_key_type(item.name)
                 if key_type is not None:
                     if isinstance(key_type, (RecordType, EnumType, ExceptionType)):
@@ -776,6 +821,12 @@ def _build_program_builtin_var_table(
                             )
                             key_type = declared.handle(type_args=type_args)
                     result[item.node_id] = key_type
+                continue
+            scope_path = tuple(segment.name for segment in item.scope_path)
+            with env.type_scope(scope_path):
+                result[item.node_id] = env.resolve_type_expr(
+                    item.type_ann, span=item.span, type_vars=frozenset()
+                )
     return result
 
 
@@ -809,7 +860,6 @@ def _prepare_module_environment(
     program_type_table: dict[DeclKey, Type],
     import_env_map: Mapping[ModuleId, object],
     program_func_sig_table: dict[int, FunctionSignatureRecord],
-    program_builtin_var_table: dict[int, Type],
     program_generic_table: dict[DeclKey, GenericTypeDef],
     program_alias_table: dict[DeclKey, GenericAliasDef],
     program_ctor_sig_table: dict[DeclKey, ConstructorSignature],
@@ -825,7 +875,7 @@ def _prepare_module_environment(
     - Explicit function signatures from the whole-program pre-pass
       (``program_func_sig_table``), seeded before any body is checked. Their
       globally unique ``node_id`` keys make declared cross-module calls
-      independent of per-module checking order. The import-SCC candidate
+      independent of per-module checking order. The candidate-inference SCC
       coordinator adds unannotated signatures after their dependency SCCs close.
     - ``type_table``: the single ``TypeTable`` instance shared by every module
       in this program (the same one built and dual-written in the type pre-pass),
@@ -865,6 +915,9 @@ def _prepare_module_environment(
     for (t_mid, scope_path, t_name), t in program_type_table.items():
         if t_mid == mid:
             env.register_type("::".join((*scope_path, t_name)), t)
+    for (g_mid, scope_path, g_name), gdef in program_generic_table.items():
+        if g_mid == mid:
+            env.register_generic_type("::".join((*scope_path, g_name)), gdef)
 
     # Seed explicit binding types from the whole-program header collection.
     # The candidate coordinator installs only concrete signatures after their
@@ -892,13 +945,6 @@ def _prepare_module_environment(
         if record.is_extern:
             env.register_extern_node_id(node_id)
 
-    # Seed builtin-var binding types (engine settings) from the whole-program
-    # pre-pass so a ``std/config::key`` read/assign in any module resolves its
-    # type.  Keyed by globally-unique decl node id, so seeding the whole table
-    # into every module's env is safe and collision-free.
-    for var_node_id, var_type in program_builtin_var_table.items():
-        env.set_binding_type(var_node_id, var_type)
-
     return env
 
 
@@ -911,6 +957,7 @@ def check_program(
     resolved: ResolvedProgram,
     capabilities: HostCapabilities,
     entry_seed_env: TypeEnvironment | None = None,
+    cached_checked_modules: Mapping[ModuleId, CheckedModule] | None = None,
 ) -> CheckedProgram:
     """Run the full type-checking pass over a :class:`ResolvedProgram`.
 
@@ -925,6 +972,10 @@ def check_program(
         environment before the program type table and function signatures are
         installed.  Used by the REPL program context to make prior session
         bindings available in program entries.
+    cached_checked_modules:
+        Checked library modules from an unchanged REPL bootstrap image. Their
+        bodies are immutable and can be reused after this call has rebuilt the
+        whole-program declaration and signature context for the fresh entry.
 
     Returns
     -------
@@ -960,7 +1011,7 @@ def check_program(
 
     # Phase 2: build the program-wide explicit function-signature table.
     # It resolves declared header type expressions without checking bodies;
-    # unannotated functions are inferred import SCC by import SCC in Phase 3.
+    # unannotated functions are inferred inference SCC by inference SCC in Phase 3.
     program_func_sig_table = _build_program_func_sig_table(
         resolved,
         program_type_table,
@@ -969,10 +1020,6 @@ def check_program(
         entry_seed_env=entry_seed_env,
     )
 
-    # Phase 2b: source-selected binding types for every ``builtin var``
-    # (engine settings), keyed by decl node id and seeded into every module.
-    program_builtin_var_table = _build_program_builtin_var_table(resolved, shared_type_table)
-
     # Collect import envs for per-module checking.
     import_env_map: dict[ModuleId, object] = {
         mid: rmod.import_env for mid, rmod in resolved.modules.items()
@@ -980,8 +1027,11 @@ def check_program(
 
     # Phase 3: build every module environment before candidate inference. The
     # completed explicit headers are present in every environment, while each
-    # loader-provided import SCC later adds only its closed candidates.
-    ordered_mids = tuple(mid for import_scc in resolved.import_sccs for mid in import_scc)
+    # derived inference SCC later adds only its closed candidates. Ambient
+    # builtin-method modules are ordering-only dependencies, leaving the
+    # loader's source graph and its SCCs unchanged for other consumers.
+    inference_sccs = resolved.graph.inference_sccs
+    ordered_mids = tuple(mid for inference_scc in inference_sccs for mid in inference_scc)
     module_envs: dict[ModuleId, TypeEnvironment] = {}
     for mid in ordered_mids:
         module_envs[mid] = _prepare_module_environment(
@@ -990,7 +1040,6 @@ def check_program(
             program_type_table,
             import_env_map,
             program_func_sig_table,
-            program_builtin_var_table,
             program_generic_table,
             program_alias_table,
             program_ctor_sig_table,
@@ -998,6 +1047,23 @@ def check_program(
             shared_type_table,
             entry_seed_env=entry_seed_env if mid.is_entry else None,
         )
+
+    # Annotated static lets and builtin vars need each module's complete type
+    # environment, while the environments themselves need those types only for
+    # later body checks. Build the environments first, then seed their completed
+    # binding tables into every module for cross-module references.
+    program_static_let_table = _build_program_static_let_table(resolved, module_envs)
+    program_builtin_var_table = _build_program_builtin_var_table(
+        resolved, module_envs, shared_type_table
+    )
+    for env in module_envs.values():
+        for binding_node_id, binding_type in program_static_let_table.items():
+            env.set_binding_type(binding_node_id, binding_type)
+        for var_node_id, var_type in program_builtin_var_table.items():
+            env.set_binding_type(var_node_id, var_type)
+
+    program_modules = {module_id: module.resolved for module_id, module in resolved.modules.items()}
+    validate_builtin_method_ownership(program_modules)
 
     for mid in ordered_mids:
         prepare_module_headers(
@@ -1007,17 +1073,16 @@ def check_program(
             module_id=mid,
         )
 
-    program_modules = {module_id: module.resolved for module_id, module in resolved.modules.items()}
     validate_builtin_declaration_uniqueness(program_modules)
     validate_method_declaration_collisions(program_modules, shared_type_table)
 
-    # Candidate discovery follows the preserved reverse-topological import SCC
-    # sequence. A cycle is one cross-module function graph; a dependency SCC's
-    # concrete records are available before its importers are considered. Each
-    # SCC's closed signatures are published only into itself and the later SCCs
-    # (their potential importers); earlier SCCs are dependencies that cannot
-    # reference it, so registering there would be wasted work.
-    for index, import_scc in enumerate(resolved.import_sccs):
+    # Candidate discovery follows the derived reverse-topological inference
+    # SCC sequence. A cycle is one cross-module function graph; a dependency
+    # SCC's concrete records are available before its importers are considered.
+    # Each SCC's closed signatures are published only into itself and the later
+    # SCCs (their potential importers); earlier SCCs are dependencies that
+    # cannot reference it, so registering there would be wasted work.
+    for index, inference_scc in enumerate(inference_sccs):
         candidates = tuple(
             CandidateModule(
                 resolved.modules[mid].resolved,
@@ -1025,10 +1090,10 @@ def check_program(
                 capabilities,
                 mid,
             )
-            for mid in import_scc
+            for mid in inference_scc
         )
         publication_envs = tuple(
-            module_envs[mid] for later_scc in resolved.import_sccs[index:] for mid in later_scc
+            module_envs[mid] for later_scc in inference_sccs[index:] for mid in later_scc
         )
         for record in infer_module_component_candidates(
             ModuleCandidateComponent(candidates, publication_envs)
@@ -1041,6 +1106,10 @@ def check_program(
     candidate_records = candidate_records_for(program_func_sig_table)
     checked_modules: dict[ModuleId, CheckedModule] = {}
     for mid in ordered_mids:
+        cached = cached_checked_modules.get(mid) if cached_checked_modules is not None else None
+        if cached is not None and cached.resolved.program is resolved.modules[mid].resolved.program:
+            checked_modules[mid] = cached
+            continue
         rmod = resolved.modules[mid]
         cp = _check_prepared_module(
             rmod.resolved,
@@ -1066,6 +1135,8 @@ def check_program(
     presentation_order = tuple(mid for mid in resolved.modules if not mid.is_entry) + (
         resolved.entry_id,
     )
+    runtime_modules = frozenset(resolved.graph.source_reachable_modules(resolved.entry_id))
+
     checked = CheckedProgram(
         modules={mid: checked_modules[mid] for mid in presentation_order},
         entry_id=resolved.entry_id,
@@ -1076,6 +1147,7 @@ def check_program(
         capabilities=capabilities,
         import_sccs=resolved.import_sccs,
         resource_roots={mid: resolved.graph.resource_root_for(mid) for mid in presentation_order},
+        runtime_modules=runtime_modules,
     )
     if self_validation_enabled():
         assert_checked_program_closed(checked)

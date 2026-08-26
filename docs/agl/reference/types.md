@@ -97,8 +97,11 @@ of a zero-argument call — the two are syntactically unified.
 
 ### `text`
 
-An immutable Unicode string. Untyped `ask` results default to `text`
-([Agent calls](agent-calls.md)).
+An immutable Unicode string. Text indexing (`s[i]`) returns the Unicode code
+point at an integer index; negative indexes count from the end, and an
+out-of-range index raises `IndexError`. Text cannot be changed through indexed
+assignment. Untyped `ask` results default to `text` ([Agent calls](agent-calls.md)).
+See [`std/text`](#stdtext) for its methods.
 
 ### Numbers: `int` and `decimal`
 
@@ -163,6 +166,17 @@ snapshot — see [Casts and convertibility](#casts-and-convertibility) below —
 and `with` ([Expressions](expressions.md)) builds a shallow copy of a record.
 See [Copying values](#copying-values) below for `copy`/`shallow_copy`.)
 
+#### Builtin-type methods
+
+Methods declared on `array[T]`, `dict[text, T]`, `text`, `json`, `int`, and
+`decimal` are supplied by their owning standard-library modules. When the
+standard-library prelude injects its optional `std/builtin-methods` registry,
+they are ambient members of their receiver types: use them directly wherever a
+value has that type. With `--no-stdlib`, or a custom standard library without
+the registry, import the owning module first. The module's free functions remain
+subject to normal import visibility. See [Functions](functions.md#methods) for
+method declarations, bound values, and calls.
+
 #### Cycles
 
 Because an array or dict is a mutable reference value, an indexed assignment
@@ -221,7 +235,7 @@ Both are generic and identity-typed — `T -> T` — so they compose with any
 value and never change its type. An explicit type argument
 (`copy::[decimal](5)`) is accepted and behaves like passing that value to any
 other declaration expecting the explicit type: the argument must be
-assignable to it. Like `print`, `render`, and `parse_json`, neither `copy`
+assignable to it. Like `print` and `render`, neither `copy`
 nor `shallow_copy` can be bound as a function value — both are only valid in
 call position.
 
@@ -301,16 +315,44 @@ are capability handles, not data.
 
 See [Functions](functions.md) for the declaration and call syntax.
 
-## Standard core types
+## Standard library types
 
 The following types are defined by `std/core`. Every loaded entry and library
 module except `std/core` itself receives an automatic `import std/core::*`, unless
 `--no-stdlib` disables it or an explicit import whose expansion includes `std/core`
-supplies the core contribution instead.
+supplies the core contribution instead. `std/core` also re-exports
+`std/option`, `std/pair`, `std/either`, and `std/result`.
+
+### `std/text`
+
+`std/text` owns methods on `text`. They are ambient only when the loader
+injects `std/builtin-methods`; otherwise, including with `--no-stdlib` or a
+custom standard library without that registry, import `std/text` before calling
+them. Importing it is also required for its free `interp(template, vars)`
+function. Text lengths, indexes, slices, padding, and `chars()` use Unicode
+code points. `lines()` recognizes Unicode line boundaries and omits line
+terminators.
+
+| Method | Result |
+| ------ | ------ |
+| `size()`, `is-empty()` | Code-point length or emptiness |
+| `chars()`, `lines()`, `split(separator)` | `array[text]` of code points, lines, or exact-separator fields |
+| `trim()`, `trim-start()`, `trim-end()` | Whitespace-trimmed text |
+| `upper()`, `lower()` | Unicode case conversion |
+| `starts-with(prefix)`, `ends-with(suffix)`, `contains(substring)` | Predicate result |
+| `index-of(substring)` | First code-point position; raises `IndexError` when absent |
+| `index-of?(substring)` | `Option[int]`, with `None` when absent |
+| `replace(old, new)` | Text with every non-overlapping `old` occurrence replaced |
+| `slice(start, end)` | End-exclusive text slice; negative and out-of-range bounds are clamped |
+| `repeat(count)` | Text repeated `count` times; non-positive counts yield empty text |
+| `pad-start(length, fill)`, `pad-end(length, fill)` | Pad to a code-point length, truncating repeated `fill` as needed; an empty fill leaves the text unchanged |
+
+`interp(template, vars)` keeps runtime name-only interpolation available for a
+`dict[text, text]`; see [Strings and interpolation](strings-and-interpolation.md).
 
 ### `Option[T]`
 
-A generic enum for optional values:
+`std/option` defines the generic enum for optional values:
 
 ```text
 enum Option[T]
@@ -319,7 +361,58 @@ enum Option[T]
 ```
 
 `null` is only a value of type `json`; ordinary AgL types are not nullable.
-Use `Option[T]` when a value may be absent.
+Use `Option[T]` when a value may be absent. `Option` is available through the
+prelude, directly from `std/option`, or through `import std/core::Option`.
+
+Its methods are `map`, `and-then`, `filter`, `or-else`, `with-default`,
+`unwrap`, `is-some`, `is-none`, `each`, and `to-result`. `map` transforms a
+present value; `and-then` chains an operation that returns an `Option`;
+`filter` retains a present value only when its predicate succeeds; and
+`or-else` supplies an alternative. `with-default` returns the contained value
+or its argument, while `unwrap` returns the contained value or raises
+`UnwrapError`. `each` invokes its callback only for `Some`. `to-result(error)`
+converts `Some(value)` to `Ok(value)` and `None` to `Err(error)`.
+
+### `Pair[A, B]`
+
+`std/pair` defines a two-field record:
+
+```text
+record Pair[A, B](first: A, second: B)
+```
+
+`map-first` and `map-second` transform one component while preserving the
+other; `swap` returns `Pair[B, A]` with the components reversed.
+
+### `Either[A, B]`
+
+`std/either` defines a neutral two-branch sum:
+
+```text
+enum Either[A, B]
+  | Left(value: A)
+  | Right(value: B)
+```
+
+It has no error convention. `map-left` and `map-right` transform their
+respective branches; `is-left` and `is-right` test the branch; `left?` and
+`right?` project a branch as an `Option`; and `swap` exchanges the branches.
+
+### `Result[T, E]`
+
+`std/result` represents an explicit successful or fallible outcome:
+
+```text
+enum Result[T, E]
+  | Ok(value: T)
+  | Err(error: E)
+```
+
+`map`, `map-err`, `and-then`, and `or-else` transform or chain outcomes.
+`with-default` returns the success value or a fallback; `unwrap` returns it or
+raises `UnwrapError`; `is-ok`/`is-err` test the branch; and `ok?`/`err?`
+project it as an `Option`. `attempt(f)` calls a nullary function and returns
+`Ok` on success or `Err` containing its raised `Exception`.
 
 ### `ExecResult`
 
@@ -586,10 +679,10 @@ enum Result
   | Ok(value: int)
   | Err(reason: text, fatal: bool)
 
-let ok = Ok(42)
-let ok2 = Ok(value = 42)
-let err = Err("bad", false)
-let named_err = Err(reason = "bad", fatal = false)
+let ok = Result::Ok(42)
+let ok2 = Result::Ok(value = 42)
+let err = Result::Err("bad", false)
+let named_err = Result::Err(reason = "bad", fatal = false)
 ```
 
 Zone markers are also available on inline member fields:
@@ -618,7 +711,7 @@ under that name: an unannotated `exec` returns that program's
 `builtin exception` of that name. Such a value carries that declaration's own
 path, so it renders under that path and a `catch` clause naming the declaration
 matches it. A name the program declares no `builtin` for keeps the standard
-core type described in [Standard core types](#standard-core-types). A `catch`
+core type described in [Standard library types](#standard-library-types). A `catch`
 clause naming the standard declaration of a name the program declares its own
 `builtin` for is rejected, wherever in the program it is written, because the
 host raises the program's own declaration under that name instead.
@@ -1068,10 +1161,9 @@ Because `text` is already JSON-shaped, `"42" as json` produces the JSON
 **string** `"42"` — it wraps the text in JSON representation and does not
 interpret it as a JSON value. This is a total, no-parse cast.
 
-To parse the *contents* of a text as JSON, use the built-in
-**`parse_json`** function ([Expressions](expressions.md)). `parse_json("42")`
-produces the JSON number `42` and raises `JsonParseError`
-([Exceptions](exceptions.md)) on malformed input.
+To parse the *contents* of a text as JSON, import `std/json` and use
+`json::parse("42")`. It produces the JSON number `42` and raises
+`JsonParseError` ([Modules](modules.md#stdjson)) on malformed input.
 
 ## Values and equality
 

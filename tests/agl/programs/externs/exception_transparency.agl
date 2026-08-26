@@ -1,0 +1,31 @@
+# AgL exceptions cross callback and companion frames without becoming ExternError.
+param mode: text
+
+exception Problem extends Exception
+  detail: text
+
+extern def invoke(f: () -> int) -> int
+extern def catch_and_reraise(f: () -> int) -> int
+extern def raise_from_companion() -> int
+
+def fail_from_callback() -> int =
+  raise Problem(message = "callback", detail = "original")
+
+program def main() -> unit =
+  if mode == "callback" =>
+    try
+      let _ = invoke(fail_from_callback)
+    catch Problem as error =>
+      print "%{error.message}:%{error.detail}"
+
+  if mode == "reraise" =>
+    try
+      let _ = catch_and_reraise(fail_from_callback)
+    catch Problem as error =>
+      print "%{error.message}:%{error.detail}"
+
+  if mode == "companion" =>
+    try
+      let _ = raise_from_companion()
+    catch Problem as error =>
+      print "%{error.message}:%{error.detail}"

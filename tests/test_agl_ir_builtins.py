@@ -1,4 +1,4 @@
-"""IR evaluation tests for print, parse_json, copy/shallow_copy, and entry params.
+"""IR evaluation tests for print, copy/shallow_copy, and entry params.
 
 Each test evaluates a program through the IR pipeline and asserts
 the produced bindings and stdout.
@@ -15,14 +15,12 @@ from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
     IntValue,
-    JsonValue,
     TextValue,
     UnitValue,
 )
 from tests.agl.ir_harness import (
     evaluate_ir,
     evaluate_ir_output,
-    evaluate_ir_raises,
 )
 
 # ===========================================================================
@@ -166,79 +164,6 @@ def test_print_inside_loop() -> None:
     """)
     out = evaluate_ir_output(source)
     assert out == "0\n1\n2\n"
-
-
-# ===========================================================================
-# parse_json — success and failure
-# ===========================================================================
-
-
-def test_parse_json_success_object() -> None:
-    """parse_json succeeds for a JSON object."""
-    source = "let j = parse_json('{\"key\": 42}')\n()"
-    ir = evaluate_ir(source)
-    assert isinstance(ir["j"], JsonValue)
-
-
-def test_parse_json_success_array() -> None:
-    """parse_json succeeds for a JSON array."""
-    source = "let j = parse_json('[1, 2, 3]')\n()"
-    ir = evaluate_ir(source)
-    assert isinstance(ir["j"], JsonValue)
-
-
-def test_parse_json_success_string() -> None:
-    """parse_json succeeds for a JSON string."""
-    source = "let j = parse_json('\"hello\"')\n()"
-    ir = evaluate_ir(source)
-    assert isinstance(ir["j"], JsonValue)
-
-
-def test_parse_json_success_number() -> None:
-    """parse_json succeeds for a JSON number."""
-    source = "let j = parse_json('123')\n()"
-    ir = evaluate_ir(source)
-    assert isinstance(ir["j"], JsonValue)
-
-
-def test_parse_json_success_null() -> None:
-    """parse_json('null') returns JsonValue(None)."""
-    source = "let j = parse_json('null')\n()"
-    ir = evaluate_ir(source)
-    assert ir["j"] == JsonValue(None)
-
-
-def test_parse_json_failure_malformed() -> None:
-    """parse_json raises JsonParseError on malformed input."""
-    source = "let j = parse_json('not-json')\n()"
-    evaluate_ir_raises(source)
-
-
-def test_parse_json_failure_empty() -> None:
-    """parse_json raises JsonParseError on empty input."""
-    source = "let j = parse_json('')\n()"
-    evaluate_ir_raises(source)
-
-
-def test_parse_json_failure_trailing_garbage() -> None:
-    """parse_json raises JsonParseError when trailing content follows valid JSON."""
-    source = "let j = parse_json('1 2 3')\n()"
-    evaluate_ir_raises(source)
-
-
-def test_parse_json_caught_by_try() -> None:
-    """parse_json error caught in try — IR pipeline handles caught exception correctly."""
-    source = textwrap.dedent("""\
-        var result: text = "default"
-        try
-          let j = parse_json('bad')
-          result := "ok"
-        catch JsonParseError as e =>
-          result := "caught"
-        ()
-    """)
-    ir = evaluate_ir(source)
-    assert ir["result"] == TextValue("caught")
 
 
 # ===========================================================================

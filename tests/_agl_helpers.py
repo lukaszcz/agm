@@ -46,6 +46,7 @@ from pathlib import Path
 from agm.agl import PipelineDriver
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import IrBind, IrExpr, IrSequence
+from agm.agl.ir.program import NominalDescriptor, NominalKind, VariantDescriptor
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.roots import RootSet
@@ -402,6 +403,41 @@ def enum_type(
         name, variants, module_id=module_id, type_params=type_params, decl_id=decl_id
     )
     return typedef.handle(type_args), typedef
+
+
+def option_nominal_descriptors(
+    option: NominalId, none: NominalId, some: NominalId
+) -> dict[NominalId, NominalDescriptor]:
+    """Build the ``Option`` enum and its two member-record descriptors for test FFI images."""
+    module_id = ModuleId(("std", "option"))
+    return {
+        option: NominalDescriptor(
+            nominal=option,
+            module_id=module_id,
+            scope_path=(),
+            declared_name="Option",
+            kind=NominalKind.ENUM,
+            variants=(
+                VariantDescriptor("Some", ("value",), some),
+                VariantDescriptor("None", (), none),
+            ),
+        ),
+        none: NominalDescriptor(
+            nominal=none,
+            module_id=module_id,
+            scope_path=("Option",),
+            declared_name="None",
+            kind=NominalKind.RECORD,
+        ),
+        some: NominalDescriptor(
+            nominal=some,
+            module_id=module_id,
+            scope_path=("Option",),
+            declared_name="Some",
+            kind=NominalKind.RECORD,
+            fields=("value",),
+        ),
+    }
 
 
 def agent_value(variant: str, **fields: str) -> RecordValue:

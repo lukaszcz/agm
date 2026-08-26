@@ -1,0 +1,54 @@
+{
+  "scenarios": [
+    {
+      "name": "relative_path_with_extension",
+      "params": {
+        "parts": ["work", "notes", "draft.txt"],
+        "path": "work/notes/draft.txt",
+        "base": "work"
+      },
+      "expect": {
+        "stdout_contains": [
+          "draft.txt",
+          "Option::Some(value = \".txt\")",
+          "draft.bak",
+          "\nfalse\ntrue\n",
+          "[\"work\", \"notes\", \"draft.txt\"]"
+        ]
+      }
+    },
+    {
+      "name": "empty_path_parts_join_to_empty_text",
+      "params": {
+        "parts": [],
+        "path": "work/notes",
+        "base": "work"
+      },
+      "expect": {
+        "stdout_contains": [
+          "\nwork\nnotes\n",
+          "Option::None",
+          "notes.bak",
+          "\nfalse\ntrue\n",
+          "[\"work\", \"notes\"]"
+        ]
+      }
+    },
+    {
+      "name": "extensionless_path_and_trailing_separator",
+      "params": {
+        "parts": ["work", "notes"],
+        "path": "work/notes/",
+        "base": "work"
+      },
+      "expect": {
+        "stdout_contains": [
+          "Option::None",
+          "notes.bak",
+          "\nfalse\ntrue\n",
+          "[\"work\", \"notes\"]"
+        ]
+      }
+    }
+  ]
+}

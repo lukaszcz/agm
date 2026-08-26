@@ -1,9 +1,24 @@
 import std/config
+import std/env::*
+import std/option::Option
+import std/pair
+import std/either
+import std/result
 
-builtin
-enum Option[T] =
-  | None
-  | Some(value: T)
+export std/option
+export std/pair
+export std/either
+export std/result
+
+infixl |> at 5
+infixr <| at 4
+infixl >> at 60
+infixr << at 60
+
+def |>[A, B](x: A, f: (A) -> B) -> B = f(x)
+def <|[A, B](f: (A) -> B, x: A) -> B = f(x)
+def >>[A, B, C](f: (A) -> B, g: (B) -> C) -> (A) -> C = fn (x: A) => g(f(x))
+def <<[A, B, C](f: (B) -> C, g: (A) -> B) -> (A) -> C = fn (x: A) => f(g(x))
 
 builtin
 record ExecResult
@@ -164,7 +179,6 @@ builtin def print[T](value: T) -> unit
 builtin def render[T](value: T) -> text
 builtin def copy[T](value: T) -> T
 builtin def shallow_copy[T](value: T) -> T
-builtin def parse_json(value: text) -> json
 builtin def resource(path: text) -> text
 builtin def resource-dir() -> text
 builtin def ask[T](
@@ -206,4 +220,9 @@ builtin def Session::fork(self) -> Session
 builtin def Session::stats(self) -> SessionStats
 builtin def Session::set-name(self, name: text) -> unit
 builtin def Session::close(self) -> unit
-builtin def exec(command: text) -> ExecResult
+builtin def exec(
+  command: text,
+  env: Environ = std/env::environ,
+  cwd: Option[text] = Option[text]::None,
+  timeout: Option[text] = std/config::timeout,
+) -> ExecResult

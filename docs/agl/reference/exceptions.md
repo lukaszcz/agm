@@ -225,6 +225,19 @@ catch Exception as e =>
   raise (e with message = "while deploying: %{e.message}")
 ```
 
+## Standard library exceptions
+
+### `UnwrapError`
+
+`std/option` raises `UnwrapError` when `Option[T].unwrap()` is called on
+`None`; `std/result` raises the same exception when `Result[T, E].unwrap()` is
+called on `Err`. It carries only the inherited `message` field.
+
+### `FsError`
+
+`std/fs` raises `FsError` for a failed filesystem operation. In addition to
+`message`, it carries `path: text` and `operation: text`.
+
 ## Built-in exception catalog
 
 Field lists below are in addition to the base `message`.
@@ -362,7 +375,8 @@ environment](host-environment.md#engine-settings)).
 
 ### `IndexError`
 
-Raised by out-of-range array indexing or indexed array assignment.
+Raised by out-of-range array or text indexing, indexed array assignment, or
+`text::index-of` when a substring is absent.
 
 ```text
 index: int
@@ -416,17 +430,47 @@ it reports whether the cast would succeed as a `bool`.
 
 ### `JsonParseError`
 
-The `parse_json` built-in received text that is not a well-formed JSON
-document ([Expressions](expressions.md#parse_json)).
+A `std/json` parsing function received text that is not a well-formed JSON
+document ([Modules](modules.md#stdjson)).
 
 ```text
 raw: text   # the input text that failed to parse
 ```
 
+### `TomlParseError`
+
+A `std/toml` parsing function received text that is not a well-formed TOML
+document ([Modules](modules.md#stdtoml)).
+
+```text
+raw: text   # the input text that failed to parse
+```
+
+### `TomlRenderError`
+
+`std/toml::render` received a JSON value that TOML cannot represent: a
+non-object root, a value containing `null`, an integer outside TOML's signed
+64-bit range, or a signaling/payload `decimal` NaN. It carries only the base
+fields.
+
+```text
+(base fields only)
+```
+
+### `RegexError`
+
+A `std/regex` operation received a pattern that Python `re` cannot compile
+([Modules](modules.md#stdregex)).
+
+```text
+pattern: text   # the pattern that failed to compile
+```
+
 ### `RangeError`
 
-Raised when a range `for` step (`by k`) evaluates to a non-positive `int`
-(`k ≤ 0`) at loop entry. Carries only the base fields. It is catchable.
+Raised when `int.pow` receives a negative exponent or a range `for` step
+(`by k`) evaluates to a non-positive `int` (`k ≤ 0`) at loop entry. Carries
+only the base fields. It is catchable.
 
 ```text
 (base fields only)
@@ -457,7 +501,7 @@ a cycle arises, which operations raise this and which tolerate a cycle instead
 
 | Source | Exception |
 | ------ | --------- |
-| Out-of-range array index access or assignment | `IndexError` |
+| Out-of-range array/text index access, array indexed assignment, or absent `text::index-of` substring | `IndexError` |
 | Missing dictionary key access or assignment | `KeyError` |
 | Agent transport failure | `AgentCallError` |
 | Invalid structured output after all attempts | `AgentParseError` |
@@ -468,13 +512,16 @@ a cycle arises, which operations raise this and which tolerate a cycle instead
 | Session prompt transport failure | `AgentCallError` |
 | Extern (Python FFI) companion raised, or its return value violated the contract | `ExternError` |
 | Loop bound exhausted | `MaxIterationsExceeded` |
-| Non-positive range `for` step (`by k` with `k ≤ 0`) | `RangeError` |
+| Negative `int.pow` exponent or non-positive range `for` step (`by k` with `k ≤ 0`) | `RangeError` |
 | Call-depth limit exceeded | `RecursionError` |
 | Explicit `raise MatchError(...)` | `MatchError` |
 | Division by zero | `ArithmeticError` |
 | Engine-setting write the host rejects (negative `max-iters`, unparseable `timeout`) | `TypeError` |
 | Fallible `as` cast — source does not conform to target type | `CastError` |
-| `parse_json` — input is not well-formed JSON | `JsonParseError` |
+| `std/json` parsing — input is not well-formed JSON | `JsonParseError` |
+| `std/toml` parsing — input is not well-formed TOML | `TomlParseError` |
+| `std/toml` rendering — root is not an object, a value is `null`, an integer is outside signed 64-bit range, or a `decimal` NaN is signaling/payload | `TomlRenderError` |
+| `std/regex` pattern compilation — Python `re` rejects the pattern | `RegexError` |
 | Rendering, `as text`, or `as json` encounters a reference cycle; or an extern companion `repr()`s the corresponding cyclic view | `CyclicValueError` |
 | `raise` of a constructed or re-raised value | any concrete type |
 

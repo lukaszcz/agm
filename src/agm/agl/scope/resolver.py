@@ -49,7 +49,7 @@ from functools import partial
 from typing import TYPE_CHECKING, TypeVar, cast
 
 from agm.agl.diagnostics import static_root_message
-from agm.agl.modules.ids import STD_CONFIG_ID, STD_CORE_ID, ModuleId, spell_declaration
+from agm.agl.modules.ids import STD_CORE_ID, ModuleId, spell_declaration
 from agm.agl.scope.imports import (
     EMPTY_IMPORT_ENV,
     BareRoute,
@@ -95,6 +95,7 @@ from agm.agl.scope.symbols import (
     duplicate_binder_message,
     immutable_binder_phrase,
     is_builtin_type_static_owner,
+    is_qualified_function_member,
 )
 from agm.agl.scope.symbols import import_item_path as _item_path
 from agm.agl.scope.symbols import to_bare_atom as _bare_atom
@@ -278,6 +279,10 @@ _BUILTIN_CALL_NAMES = BUILTIN_CALL_NAMES
 # The set of names that may NOT be used as any kind of binding.
 _RESERVED_NAMES: frozenset[str] = frozenset(_BUILTIN_CALL_NAMES)
 
+_BUILTIN_METHOD_RECEIVER_NAMES: frozenset[str] = frozenset(
+    {"array", "dict", "text", "json", "int", "decimal", "bool"}
+)
+
 _TEXTUALLY_ORDERED_BINDER_KINDS: frozenset[BinderKind] = frozenset(
     {
         BinderKind.let_binding,
@@ -346,6 +351,8 @@ class _Resolver:
         cross_module_type_scopes: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
         program_import_envs: Mapping[ModuleId, ImportEnv] | None = None,
         allow_root_statements: bool = False,
+        is_entry_module: bool = False,
+        is_standard_library_module: bool = False,
         repl_session_scope: ScopeNode | None = None,
         repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
         repl_session_type_paths: Mapping[ScopePath, str | None] | None = None,
@@ -416,6 +423,8 @@ class _Resolver:
         # The REPL is an incremental host and intentionally retains root
         # statements. File and inline exec entries use static roots.
         self._allow_root_statements = allow_root_statements
+        self._is_entry_module = is_entry_module
+        self._is_standard_library_module = is_standard_library_module
         # Optional REPL session scope for ``::name`` self-ref fallback.
         # When set, ``_lookup_own_root`` falls back to this scope for names not
         # in the entry's own root scope, allowing ``::name`` to resolve to a
@@ -681,6 +690,7 @@ class _Resolver:
             scope_nodes=dict(self._scope_nodes),
             declared_functions=dict(self._declared_functions),
             allows_root_statements=self._allow_root_statements,
+            is_entry_module=self._is_entry_module,
             origin_path=self._origin_path,
             declared_type_names=frozenset(self._declared_type_names),
             declared_type_paths=frozenset(self._type_paths),
@@ -891,11 +901,21 @@ class _Resolver:
                     f"which targets '{target_text}'.",
                     span=receiver.span,
                 )
-            if owner_path in self._type_paths and (
-                (self._module_id, owner_path[:-1], owner_path[-1]) in self._declaration_items
-                or self._scope_entity_kinds.get((self._module_id, owner_path[:-1], owner_path[-1]))
-                == "type"
-                or owner_path in self._repl_session_type_paths
+            if (
+                (
+                    owner_path in self._type_paths
+                    and (
+                        (self._module_id, owner_path[:-1], owner_path[-1])
+                        in self._declaration_items
+                        or self._scope_entity_kinds.get(
+                            (self._module_id, owner_path[:-1], owner_path[-1])
+                        )
+                        == "type"
+                        or owner_path in self._repl_session_type_paths
+                    )
+                )
+                or declaration.receiver_type is not None
+                or (len(owner_path) == 1 and owner_path[0] in _BUILTIN_METHOD_RECEIVER_NAMES)
             ):
                 if receiver.default is not None:
                     raise AglScopeError(
@@ -1070,7 +1090,13 @@ class _Resolver:
 
     def _validate_function_decl(self, decl: FuncDef) -> None:
         """Apply function declaration validation independently of its scope path."""
-        if decl.name in _RESERVED_NAMES and not decl.is_builtin:
+        if (
+            decl.name in _RESERVED_NAMES
+            and not decl.is_builtin
+            and not is_qualified_function_member(
+                self._is_entry_module, tuple(segment.name for segment in decl.scope_path)
+            )
+        ):
             raise AglScopeError(
                 f"'{decl.name}' is a built-in name and cannot be used as a function name.",
                 span=decl.span,
@@ -1499,8 +1525,14 @@ class _Resolver:
                 # classification, but an ordinary session binding retains its
                 # expression-position meaning.
                 continue
-            # Use the first candidate's decl as the representative binding.
-            rep = crefs[0]
+            # A local bare constructor shadows imported candidates with the
+            # same spelling. Enum members are injected at the root from their
+            # owner scope, so they count as local even though their canonical
+            # record path is not root-level.
+            rep = next(
+                (candidate for candidate in crefs if candidate.owner_module_id == self._module_id),
+                crefs[0],
+            )
             ref = BindingRef(
                 name=name,
                 mutable=False,
@@ -1561,13 +1593,13 @@ class _Resolver:
             self._current_scope().define(name, ref)
 
     def _resolve_builtin_var(self, node: BuiltinVarDecl) -> None:
-        """Resolve a standard-library engine setting into a mutable register binding.
+        """Resolve a standard-library host-backed mutable binding.
 
-        ``builtin var`` is reserved to the canonical ``std/config`` module, but
+        A ``builtin var`` may be declared by any standard-library module and
         is otherwise a member like any other: legal at the module root and
         inside a named scope region (both keep ``_at_root`` set), rejected
-        only inside a nested block. The typecheck pass then validates that the
-        name is a known engine key with its canonical type.
+        only inside a nested block. The typecheck pass reserves engine-setting
+        names and types to ``std/config``.
         """
         if not self._at_root:
             raise AglScopeError(
@@ -1575,10 +1607,10 @@ class _Resolver:
                 f"not inside a nested block (found 'builtin var {node.name}' here).",
                 span=node.span,
             )
-        if self._module_id != STD_CONFIG_ID:
+        if not self._is_standard_library_module:
             raise AglScopeError(
-                "'builtin var' declarations are only allowed in the standard-library "
-                "module 'std/config'.",
+                "'builtin var' declarations are only allowed in standard-library modules "
+                "(including std/config).",
                 span=node.span,
             )
         ref = BindingRef(
@@ -3093,21 +3125,33 @@ class _Resolver:
                 node, self._resolution.get(node.node_id), is_call_target=is_call_target
             )
             return
-        # Standard lexical lookup. A receiver method may legally share a host
-        # built-in's spelling, but bare call syntax still denotes the visible
-        # builtin declaration; methods are selected by qualification or member
-        # access. Discard that method candidate so the ordinary contribution
-        # lookup below can recover the builtin with its real provenance.
+        # A builtin spelling is reserved in bare namespace lookups. Qualified
+        # module and scope members may share it, but cannot intercept the
+        # builtin after a ``use`` or other bare contribution.
         ref = self._current_scope().lookup(node.name)
-        if (
-            is_call_target
-            and node.name in _BUILTIN_CALL_NAMES
-            and ref is not None
-            and ref.kind is BinderKind.function_binding
-            and not ref.is_builtin
+        if node.name in _BUILTIN_CALL_NAMES and (
+            ref is None
+            or (ref.kind is BinderKind.function_binding and not self._is_builtin_function_ref(ref))
         ):
-            ref = None
-        if ref is None:
+            builtin_ref = self._bare_builtin_ref(node.name, node.span)
+            if builtin_ref is not None:
+                self._reject_builtin_value_ref(node, builtin_ref, is_call_target=is_call_target)
+                self._record_varref_binding(node, builtin_ref)
+                return
+            raise AglScopeError(f"'{node.name}' is not defined.", span=node.span)
+        # Only a missing or constructor binding can consume regional candidates:
+        # any other kind leaves *ref* untouched below and returns from
+        # ``_record_varref_binding`` before the candidates are read.
+        regional_candidates = (
+            self._regional_constructor_candidates(node.name)
+            if ref is None or ref.kind is BinderKind.constructor_binding
+            else None
+        )
+        if ref is None or (
+            ref.kind is BinderKind.constructor_binding
+            and ref.module_id != self._module_id
+            and regional_candidates is not None
+        ):
             contributed = self._lookup_bare_contribution(node.name, node.span)
             if contributed is not None:
                 ref = contributed
@@ -3264,15 +3308,14 @@ class _Resolver:
         A member of a named scope is selected by that scope's structured
         identity; only a module-root binding uses the root-only candidate map.
         """
-        if ref.scope_path and ref.module_id == self._module_id:
-            return tuple(self._scoped_constructor_candidates.get((ref.scope_path, name), ()))
-        candidates = self._constructor_candidates.get(name, ())
-        root_candidates = tuple(
-            candidate
-            for candidate in candidates
-            if candidate.owner_module_id == ref.module_id and not candidate.owner_path
-        )
-        return root_candidates or tuple(candidates)
+        if ref.module_id == self._module_id:
+            if ref.scope_path:
+                scoped = tuple(self._scoped_constructor_candidates.get((ref.scope_path, name), ()))
+                if scoped:
+                    return scoped
+            candidates = self._constructor_candidates.get(name, ())
+            return self._prefer_local_constructor_candidates(candidates)
+        return tuple(self._constructor_candidates.get(name, ()))
 
     def _validate_qualifier_chains(self, program: object) -> None:
         """Validate qualifier syntax in the current lexical scope layer."""
@@ -3912,10 +3955,28 @@ class _Resolver:
         )
         return None if nearest is None else nearest[1]
 
+    def _prefer_local_constructor_candidates(
+        self, candidates: Collection[ConstructorRef]
+    ) -> tuple[ConstructorRef, ...]:
+        """Let a local bare constructor shadow imported candidates.
+
+        Inline members are records below their enum owner, but their terminal
+        constructor names are injected into the module root. They therefore
+        have the same lexical precedence as root record constructors over the
+        automatic ``std/core`` prelude.
+        """
+        local = tuple(
+            candidate for candidate in candidates if candidate.owner_module_id == self._module_id
+        )
+        local_root = tuple(candidate for candidate in local if not candidate.owner_path)
+        return local_root or local or tuple(candidates)
+
     def _regional_constructor_candidates(self, name: NameAtom) -> set[ConstructorRef] | None:
         """Return the nearest region's constructor candidates, including live local uses."""
         nearest = self._nearest_bare_contribution_layer(name, constructors_only=True)
-        return None if nearest is None else nearest[2]
+        return (
+            None if nearest is None else set(self._prefer_local_constructor_candidates(nearest[2]))
+        )
 
     def _lookup_bare_contribution(self, name: NameAtom, span: SourceSpan) -> BindingRef | None:
         """Resolve one region's bare contributions, deferring clashes to use sites."""
@@ -4162,6 +4223,19 @@ class _Resolver:
     def _is_builtin_function_ref(self, ref: BindingRef | None) -> bool:
         """Return whether *ref* names an actual ``builtin def`` declaration."""
         return ref is not None and ref.kind is BinderKind.function_binding and ref.is_builtin
+
+    def _bare_builtin_ref(self, name: str, span: SourceSpan) -> BindingRef | None:
+        """Find the host builtin made visible by the standard-library prelude."""
+        qnames = self._import_env.unqualified.get(name, frozenset())
+        builtin_refs = [
+            ref
+            for qname in qnames
+            for ref, _constructor in (self._cross_module_member_ref(name, qname, span),)
+            if self._is_builtin_function_ref(ref)
+        ]
+        if len(builtin_refs) == 1:
+            return builtin_refs[0]
+        return None
 
     def _resolve_call(self, node: Call) -> None:
         """Resolve a ``Call`` node.

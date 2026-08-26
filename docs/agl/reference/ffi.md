@@ -34,15 +34,44 @@ missing callables, and import failures are load-time diagnostics. In a REPL
 session a companion is imported once until `:reset`.
 
 During the import, AGM temporarily supplies a module named `agl`. A companion
-imports the program's nominal classes and value constructors from it:
+imports the program's nominal classes, value constructors, and exception carrier from it:
 
 ```python
-from agl import Box, Shape, array, dict, json
+from agl import AglException, Box, Shape, array, dict, json
 ```
 
 `agl` is available only for the companion import. The imported classes and
 constructors remain valid afterwards. The fixed module name means concurrent
 program loads in one Python process are not supported.
+
+### Interpreter-local companion state
+
+A companion that needs mutable state may retain `runtime` and allocate a value
+by a stable key. The value belongs to the interpreter making the active extern
+call, even when interpreters share an imported companion module:
+
+```python
+import random
+from typing import cast
+
+from agl import runtime
+
+
+def rng() -> random.Random:
+    return cast(random.Random, runtime.state("mylib/rng", random.Random))
+```
+
+`runtime.state(key, factory)` calls `factory` once for each interpreter state
+bag and returns that value on later calls. It must be called during an extern
+invocation; direct host calls outside evaluation use a separate detached state.
+
+This is distinct from ordinary Python module globals. A cached companion's
+globals are shared by every interpreter using that registry and last until its
+companion is re-imported. `runtime.state` instead uses the interpreter active
+for the current extern call: its bag lasts for that interpreter's run, not for
+the Python module. Thus a batch run gets a fresh bag, and every REPL entry gets
+a fresh bag even though its session keeps the companion module cached until
+`:reset`.
 
 ## Value mapping
 
@@ -91,11 +120,14 @@ def null_json():
 ## Nominal values
 
 Each program receives one synthesized class per nominal identity. Records,
-enum-member records, and exceptions have immutable fields and `__match_args__`.
-An inline member record is available below its enum scope, so `Shape.circle`
-remains its Python spelling. A nominal whose final name is unique can be
-imported directly. When names collide, use the identity-preserving `nominals`
-namespace, rooted by module path (or `entry`) and then by AgL scope:
+enum-member records, and exceptions have immutable fields and `__match_args__`;
+an enum class is a namespace over its member classes. An inline member record
+is available below its enum scope, so `Shape.circle` remains its Python
+spelling. A nominal whose final name is unique and does not collide with a
+built-in `agl` API can be imported directly. Use the identity-preserving
+`nominals` namespace, rooted by module path (or `entry`) and then by AgL scope,
+for name collisions and reserved names such as an exception named
+`AglException`:
 
 ```python
 from agl import Box, Shape, nominals
@@ -133,9 +165,9 @@ legal AgL spelling, pass it through `**` and retrieve it with `getattr`, for
 example `Prompt(**{"ask-prompt": "continue"})` and
 `getattr(prompt, "ask-prompt")`.
 
-Exception classes are plain Python objects, not `Exception` subclasses. AgL
-exceptions cross as values; a companion cannot raise one directly as an AgL
-raise.
+Exception classes are plain Python objects, not `Exception` subclasses. They
+cross as values. To raise one from a companion, wrap it in `AglException`, as
+described in [Raising AgL exceptions](#raising-agl-exceptions).
 
 ## Container views
 
@@ -150,6 +182,88 @@ Views are not built-in `list` or `dict`. Use `list(view)` or `dict(view)` for a
 detached Python snapshot. A view encodes and decodes elements lazily, so a
 companion may write any supported boundary value. An unsupported write raises
 `TypeError`.
+
+## Callbacks
+
+An AgL function passed to an extern is a Python callable. Its Python arguments
+are decoded as ordinary extern return values, and its result is encoded as an
+ordinary extern argument. The companion calls it positionally; its AgL arity
+applies, and Python keyword arguments are not accepted.
+
+<!-- agl-check: fragment -->
+```agl
+extern def apply(f: (int) -> int, value: int) -> int
+
+def increment(value: int) -> int = value + 1
+
+let result = apply(increment, 4)
+```
+
+```python
+# Companion
+
+def apply(f, value):
+    return f(value)
+```
+
+A callback may itself call another extern. As with every extern declaration,
+the companion is responsible for honoring the declared types, including
+parametric type positions. Python callables do not cross in the other
+direction: a companion cannot return a bare Python function as an AgL function
+value.
+
+## Callback invocation window
+
+A callback is valid only on the interpreter thread while an extern call is
+active. A companion may retain a callback and invoke it during a later extern
+call on that thread, including a nested extern call. Calling it after the
+outermost extern call returns, or from another thread, raises a Python-side
+error before AgL execution resumes.
+
+## Transparent callback exceptions
+
+If a callback raises an AgL exception, that exception passes through companion
+frames without becoming `ExternError`. The companion can let it escape, or
+catch `AglException` and re-raise the same carrier; AgL then resumes the
+original raise with the same exception value, type, and fields.
+
+```python
+from agl import AglException
+
+def retrying_callback(f):
+    try:
+        return f()
+    except AglException as error:
+        raise error
+```
+
+A companion must not replace this carrier with an ordinary Python exception if
+it intends the AgL exception to remain catchable by its original type.
+
+## Raising AgL exceptions
+
+A companion may create an AgL exception with its synthesized exception class
+and raise it through `AglException`. AgL receives it as an ordinary `raise`,
+so its `catch` clauses match it normally.
+
+<!-- agl-check: fragment -->
+```agl
+exception ParseFailure extends Exception
+  input: text
+
+extern def parse(input: text) -> json
+```
+
+```python
+from agl import AglException, ParseFailure
+
+def parse(input):
+    raise AglException(ParseFailure(message="invalid input", input=input))
+```
+
+`AglException` requires a synthesized AgL exception value. Every other Python
+value, including a record, enum, scalar, container, callable, or arbitrary
+object, raises a Python-side `TypeError`.
 
 ## Generics and trust
 

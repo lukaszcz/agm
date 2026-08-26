@@ -1,0 +1,15 @@
+# Cross-module fixity follows bare visibility: the prelude supplies |>, an
+# A wildcard import supplies %>, and a selective import tail supplies ~>.
+import flow/pipe::*
+import flow/compose::~>
+
+param value: int
+
+def |>(x: int, f: (int) -> int) -> int = f(x)
+def inc(x: int) -> int = x + 1
+
+program def main() -> unit =
+  print((value |> inc) as text)
+  print((value %> inc) as text)
+  let twice = inc ~> inc
+  print(twice(value) as text)

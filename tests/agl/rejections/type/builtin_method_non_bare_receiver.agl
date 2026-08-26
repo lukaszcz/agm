@@ -1,0 +1,2 @@
+def array[int]::copy(self) -> array[int] = self
+program def main() -> unit = ()

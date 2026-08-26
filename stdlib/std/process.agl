@@ -1,0 +1,4 @@
+extern def exit(code: int = 0) -> unit
+extern def cwd() -> text
+extern def pid() -> int
+extern def hostname() -> text

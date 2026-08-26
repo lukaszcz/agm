@@ -23,7 +23,8 @@ for the entry plus a :class:`~agm.agl.modules.ids.ModuleId` per library module.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import agm.agl.syntax as syntax
@@ -31,15 +32,27 @@ from agm.agl.lexer import spaced_qualifier_collector
 from agm.agl.modules.errors import (
     ImportEntryError,
     MissingExternCompanion,
+    ModuleNotFound,
     PackageImportVisibilityError,
 )
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_BUILTIN_METHODS_ID, STD_CORE_ID, ModuleId
 from agm.agl.modules.resolver import expand_wildcard, resolve_module
 from agm.agl.modules.roots import RootSet
-from agm.agl.parser import AglSyntaxError
+from agm.agl.parser import AglSyntaxError, build_infix_operator_table, resolve_infix_chains
 from agm.agl.parser.parser import parse_program_seeded
+from agm.agl.parser.transform import resolve_infix_fixity
 from agm.agl.syntax.advisories import SpacedQualifier
-from agm.agl.syntax.nodes import ExportDecl, FuncDef, ImportDecl, static_items
+from agm.agl.syntax.nodes import (
+    ExportDecl,
+    ExportItem,
+    FuncDef,
+    ImportDecl,
+    ImportItem,
+    InfixDecl,
+    ScopeRegion,
+    UseDecl,
+    static_items,
+)
 from agm.agl.syntax.spans import SourceId, SourceSpan
 from agm.core import fs
 from agm.packages.model import owning_package
@@ -135,13 +148,74 @@ class ModuleGraph:
         Direct dependency edges for every loaded module. This includes imports
         and exports after wildcard expansion; uses do not create edges. It is
         the authoritative reachability relation for graph consumers.
+    source_adjacency:
+        The subset of direct dependency edges authored in source. Loader
+        injections are absent, retaining provenance for runtime inventories.
+    ambient_modules:
+        Standard-library modules reached from the optional builtin-method
+        registry when the loader, rather than source imports, introduced it.
+        They are linked and initialized for every selected program,
+        but contribute no names to an entry's import environment. They are
+        virtual dependencies only for :attr:`inference_sccs`; :attr:`adjacency`
+        and :attr:`sccs` retain source import/export graph semantics.
     """
 
     modules: dict[ModuleId, LoadedModule]
     entry_id: ModuleId
     sccs: tuple[tuple[ModuleId, ...], ...]
     adjacency: dict[ModuleId, tuple[ModuleId, ...]]
+    source_adjacency: dict[ModuleId, tuple[ModuleId, ...]] = field(default_factory=dict)
+    ambient_modules: frozenset[ModuleId] = frozenset()
     roots: RootSet = field(default_factory=lambda: RootSet(roots=frozenset()))
+    # Unambiguous root-level user fixities visible while assembling the entry.
+    # REPL promotion uses this to retain declarations with relative priorities
+    # without retaining imported operators as session declarations.
+    entry_infix_ambient: dict[str, tuple[int, syntax.InfixAssoc]] = field(default_factory=dict)
+
+    @property
+    def inference_sccs(self) -> tuple[tuple[ModuleId, ...], ...]:
+        """Return dependency-ordered SCCs with ambient methods available first.
+
+        Ambient builtin-method modules do not form source import edges: adding
+        them to :attr:`adjacency` would expose their routes and free functions
+        to user scope and would alter ordinary graph consumers. Candidate
+        inference nevertheless needs their closed method signatures before it
+        processes any consuming module. This derived graph adds those ordering-
+        only edges while retaining every real edge, so any resulting cycle is
+        still inferred as one component.
+        """
+        if not self.ambient_modules:
+            return self.sccs
+        ambient = tuple(sorted(self.ambient_modules, key=_mid_sort_key))
+        inference_adjacency = {
+            mid: [
+                *targets,
+                *(ambient if mid not in self.ambient_modules else ()),
+            ]
+            for mid, targets in self.adjacency.items()
+        }
+        return _tarjan_sccs(inference_adjacency)
+
+    def source_reachable_modules(self, module_id: ModuleId) -> tuple[ModuleId, ...]:
+        """Return modules reachable through source-authored import/export edges.
+
+        ``source_adjacency`` records edge provenance at load time, excluding
+        loader-injected standard-library and builtin-method-registry edges.
+        Thus a module reached through a source import remains reachable even
+        if it also belongs to the ambient registry closure.
+        """
+        adjacency = self.source_adjacency or self.adjacency
+        reachable: list[ModuleId] = []
+        seen: set[ModuleId] = set()
+        pending = [module_id]
+        while pending:
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            reachable.append(current)
+            pending.extend(reversed(adjacency[current]))
+        return tuple(reachable)
 
     def resource_root_for(self, module_id: ModuleId) -> Path | None:
         """Return the filesystem anchor used by a module's resource calls."""
@@ -237,6 +311,28 @@ def _synthetic_stdlib_import(node_id: int) -> ImportDecl:
     )
 
 
+def _ambient_builtin_methods_import() -> ImportDecl:
+    """Return the loader-only edge to the optional builtin-method registry."""
+    span = SourceSpan(
+        start_line=0,
+        start_col=0,
+        end_line=0,
+        end_col=0,
+        start_offset=0,
+        end_offset=0,
+        source=SourceId(label="<builtin-method-registry>"),
+    )
+    return ImportDecl(
+        module_path=STD_BUILTIN_METHODS_ID.segments,
+        wildcard=False,
+        alias=None,
+        tail=None,
+        hidden=(),
+        span=span,
+        node_id=-1,
+    )
+
+
 def _with_default_stdlib_import(
     program: syntax.Program,
     *,
@@ -256,6 +352,516 @@ def _with_default_stdlib_import(
         node_id=program.body.node_id,
     )
     return syntax.Program(body=body, span=program.span, node_id=program.node_id)
+
+
+# ---------------------------------------------------------------------------
+# Infix resolution
+# ---------------------------------------------------------------------------
+
+
+_OperatorOrigin = tuple[ModuleId, str]
+_InfixFixity = tuple[int, syntax.InfixAssoc]
+
+
+def _operator_declarations(program: syntax.Program) -> tuple[InfixDecl, ...]:
+    """Return one module root's operator declarations in source order."""
+    return tuple(item for item in program.body.items if isinstance(item, InfixDecl))
+
+
+def _operator_export_paths(program: syntax.Program, name: str) -> set[_OperatorPath]:
+    """Return exported paths for functions that implement one operator."""
+    paths = {
+        (*(segment.name for segment in function.scope_path), name)
+        for function in static_items(program.body.items)
+        if isinstance(function, FuncDef) and not function.is_synthetic and function.name == name
+    }
+    # Infix declarations are independently meaningful during parsing, including
+    # in incomplete REPL entries where their function has not been supplied yet.
+    return paths or {(name,)}
+
+
+def _dependency_targets(
+    decl: ImportDecl | ExportDecl, modules: Mapping[ModuleId, LoadedModule]
+) -> tuple[ModuleId, ...]:
+    """Return loaded targets for one import or export declaration."""
+    if not decl.wildcard:
+        return (ModuleId(segments=tuple(decl.module_path)),)
+    prefix = tuple(decl.module_path)
+    return tuple(
+        sorted(
+            (mid for mid in modules if not mid.is_entry and mid.segments[: len(prefix)] == prefix),
+            key=ModuleId.path_str,
+        )
+    )
+
+
+_OperatorPath = tuple[str, ...]
+_OperatorExports = Mapping[_OperatorPath, set[_OperatorOrigin]]
+
+
+def _operator_item_path(item: ImportItem | ExportItem) -> _OperatorPath:
+    """Return an import/export selection item's complete source path."""
+    return (*(segment.name for segment in item.scope_path), item.name)
+
+
+def _operator_decl_scope_path(decl: ImportDecl | ExportDecl) -> _OperatorPath:
+    """Return the enclosing lexical path of one import/export declaration."""
+    return tuple(segment.name for segment in decl.scope_path)
+
+
+def _matched_operator_paths(
+    items: tuple[ImportItem, ...] | tuple[ExportItem, ...], exports: _OperatorExports
+) -> set[_OperatorPath]:
+    """Return the operator paths one selection list reaches."""
+    matched: set[_OperatorPath] = set()
+    for item in items:
+        prefix = _operator_item_path(item)
+        matched.update(path for path in exports if path[: len(prefix)] == prefix)
+    return matched
+
+
+def _forwarded_operator_exports(
+    decl: ExportDecl, exports: _OperatorExports
+) -> dict[_OperatorPath, set[_OperatorOrigin]]:
+    """Apply one export's selection, renaming, hiding, and regional re-rooting."""
+    hidden = _matched_operator_paths(decl.hidden, exports)
+    region = _operator_decl_scope_path(decl)
+    result: dict[_OperatorPath, set[_OperatorOrigin]] = {}
+    if not decl.items:
+        for path, origins in exports.items():
+            if path not in hidden:
+                result.setdefault((*region, *path), set()).update(origins)
+        return result
+    for item in decl.items:
+        prefix = _operator_item_path(item)
+        for path, origins in exports.items():
+            if path[: len(prefix)] != prefix or path in hidden:
+                continue
+            exposed = (item.rename, *path[len(prefix) :]) if item.rename is not None else path
+            result.setdefault((*region, *exposed), set()).update(origins)
+    return result
+
+
+def _imported_operator_surface(
+    decl: ImportDecl, exports: _OperatorExports
+) -> dict[_OperatorPath, set[_OperatorOrigin]]:
+    """Return the qualified operator surface one import declaration reaches."""
+    hidden = _matched_operator_paths(decl.hidden, exports)
+    return {path: set(origins) for path, origins in exports.items() if path not in hidden}
+
+
+def _bare_operator_members(
+    tail: tuple[ImportItem, ...], surface: _OperatorExports
+) -> dict[_OperatorPath, set[_OperatorOrigin]]:
+    """Return the operator paths one import or ``use`` tail makes bare.
+
+    An empty tail contributes the whole surface; a selection contributes each
+    matched path under both its source spelling and its rename.
+    """
+    if not tail:
+        return {path: set(origins) for path, origins in surface.items()}
+    result: dict[_OperatorPath, set[_OperatorOrigin]] = {}
+    for item in tail:
+        prefix = _operator_item_path(item)
+        for path, origins in surface.items():
+            if path[: len(prefix)] != prefix:
+                continue
+            result.setdefault(path, set()).update(origins)
+            if item.rename is not None:
+                result.setdefault((item.rename, *path[len(prefix) :]), set()).update(origins)
+    return result
+
+
+def _relative_operator_members(
+    exports: _OperatorExports, target_path: _OperatorPath
+) -> dict[_OperatorPath, set[_OperatorOrigin]]:
+    """Return operator paths nested beneath *target_path*, relative to it."""
+    members: dict[_OperatorPath, set[_OperatorOrigin]] = {}
+    for path, origins in exports.items():
+        if path[: len(target_path)] == target_path and len(path) > len(target_path):
+            members.setdefault(path[len(target_path) :], set()).update(origins)
+    return members
+
+
+def _operator_export_maps(
+    graph: ModuleGraph,
+) -> dict[ModuleId, dict[_OperatorPath, set[_OperatorOrigin]]]:
+    """Build operator export maps, preserving paths and re-export origins."""
+    exports: dict[ModuleId, dict[_OperatorPath, set[_OperatorOrigin]]] = {
+        mid: {
+            path: {(mid, decl.name)}
+            for decl in _operator_declarations(loaded.program)
+            for path in _operator_export_paths(loaded.program, decl.name)
+        }
+        for mid, loaded in graph.modules.items()
+    }
+
+    def propagate() -> tuple[ExportDecl, ...]:
+        changed_decls: list[ExportDecl] = []
+        for mid, loaded in graph.modules.items():
+            for decl in loaded.export_decls:
+                for target in _dependency_targets(decl, graph.modules):
+                    for path, origins in _forwarded_operator_exports(
+                        decl, exports.get(target, {})
+                    ).items():
+                        before = len(exports[mid].setdefault(path, set()))
+                        exports[mid][path].update(origins)
+                        if len(exports[mid][path]) != before:
+                            changed_decls.append(decl)
+        return tuple(changed_decls)
+
+    # As in scope's export resolver, an acyclic propagation path traverses at
+    # most every export declaration once; the following pass observes its
+    # fixed point. Further growth therefore means a scoped re-export cycle is
+    # continually extending its exposed path rather than converging.
+    declaration_count = sum(len(loaded.export_decls) for loaded in graph.modules.values())
+    for _ in range(declaration_count + 1):
+        changed_decls = propagate()
+        if not changed_decls:
+            return exports
+
+    raise AglSyntaxError(
+        "cyclic re-export expansion does not converge",
+        span=changed_decls[-1].span,
+    )
+
+
+def _operator_use_declarations(
+    program: syntax.Program,
+) -> tuple[tuple[UseDecl, _OperatorPath], ...]:
+    """Return each ``use`` declaration with its enclosing lexical scope path."""
+    uses: list[tuple[UseDecl, _OperatorPath]] = []
+
+    def collect(items: tuple[syntax.Item, ...], scope_path: _OperatorPath) -> None:
+        for item in items:
+            if isinstance(item, ScopeRegion):
+                collect(item.items, (*scope_path, item.segment.name))
+            elif isinstance(item, UseDecl):
+                uses.append((item, scope_path))
+
+    collect(program.body.items, ())
+    return tuple(uses)
+
+
+def _local_scope_paths(program: syntax.Program) -> set[_OperatorPath]:
+    """Return every named scope path declared by one module."""
+    paths: set[_OperatorPath] = {()}
+
+    def collect(items: tuple[syntax.Item, ...], scope_path: _OperatorPath) -> None:
+        for item in items:
+            if isinstance(item, ScopeRegion):
+                path = (*scope_path, item.segment.name)
+                paths.add(path)
+                collect(item.items, path)
+
+    collect(program.body.items, ())
+    return paths
+
+
+def _operator_import_routes(decl: ImportDecl, target: ModuleId) -> tuple[_OperatorPath, ...]:
+    """Return the qualifier routes one import makes available for *target*."""
+    if decl.alias is not None:
+        return ((decl.alias,),)
+    return tuple(target.segments[index:] for index in range(len(target.segments)))
+
+
+def _has_local_use_target(
+    scope_paths: set[_OperatorPath],
+    scope_path: _OperatorPath,
+    requested_path: _OperatorPath,
+) -> bool:
+    """Whether an unanchored ``use`` resolves to a local scope first."""
+    current = scope_path
+    while True:
+        if (*current, *requested_path) in scope_paths:
+            return True
+        if not current:
+            return False
+        current = current[:-1]
+
+
+def _used_operator_surface(
+    module_id: ModuleId,
+    decl: UseDecl,
+    scope_path: _OperatorPath,
+    graph: ModuleGraph,
+    exports: Mapping[ModuleId, _OperatorExports],
+    local_scopes: set[_OperatorPath],
+) -> dict[_OperatorPath, set[_OperatorOrigin]]:
+    """Return the operator members nested beneath one ``use`` target.
+
+    A target is reached either through an import's qualifier route or, without
+    a route, through a scope an enclosing import tail already named bare.
+    """
+    requested_path = tuple(segment.name for segment in decl.target)
+    if decl.anchored or _has_local_use_target(local_scopes, scope_path, requested_path):
+        return _relative_operator_members(exports.get(module_id, {}), requested_path)
+
+    members: dict[_OperatorPath, set[_OperatorOrigin]] = {}
+
+    def absorb(surface: _OperatorExports, target_path: _OperatorPath) -> None:
+        for path, origins in _relative_operator_members(surface, target_path).items():
+            members.setdefault(path, set()).update(origins)
+
+    route = tuple(requested_path[0].split("/"))
+    routed_path = requested_path[1:]
+    for import_decl in graph.modules[module_id].imports:
+        decl_scope = _operator_decl_scope_path(import_decl)
+        tail = import_decl.tail
+        bare_here = tail is not None and scope_path[: len(decl_scope)] == decl_scope
+        for target in _dependency_targets(import_decl, graph.modules):
+            surface = _imported_operator_surface(import_decl, exports.get(target, {}))
+            if route in _operator_import_routes(import_decl, target):
+                absorb(surface, routed_path)
+            if tail is not None and bare_here:
+                absorb(_bare_operator_members(tail, surface), requested_path)
+    return members
+
+
+def _operator_use_members(
+    module_id: ModuleId,
+    decl: UseDecl,
+    scope_path: _OperatorPath,
+    graph: ModuleGraph,
+    exports: Mapping[ModuleId, _OperatorExports],
+    local_scopes: set[_OperatorPath],
+) -> dict[_OperatorPath, set[_OperatorOrigin]]:
+    """Return relative operator members made bare by one ``use`` declaration."""
+    if decl.tail is None:
+        # ``use TARGET as ALIAS`` names one qualifier route rather than
+        # selecting from it, so it contributes no bare operator.
+        return {}
+    members = _used_operator_surface(module_id, decl, scope_path, graph, exports, local_scopes)
+    hidden = _matched_operator_paths(decl.hidden, members)
+    visible = {path: origins for path, origins in members.items() if path not in hidden}
+    return _bare_operator_members(decl.tail, visible)
+
+
+def _operator_bare_layers(
+    module_id: ModuleId,
+    graph: ModuleGraph,
+    exports: Mapping[ModuleId, _OperatorExports],
+) -> dict[_OperatorPath, dict[str, set[_OperatorOrigin]]]:
+    """Build bare operator contributions keyed by their lexical scope layer."""
+    loaded = graph.modules[module_id]
+    layers: dict[_OperatorPath, dict[str, set[_OperatorOrigin]]] = {}
+
+    def contribute(
+        scope_path: _OperatorPath, members: Mapping[_OperatorPath, set[_OperatorOrigin]]
+    ) -> None:
+        layer = layers.setdefault(scope_path, {})
+        for path, origins in members.items():
+            if len(path) == 1:
+                layer.setdefault(path[0], set()).update(origins)
+
+    for decl in loaded.imports:
+        tail = decl.tail
+        if tail is None:
+            continue
+        members: dict[_OperatorPath, set[_OperatorOrigin]] = {}
+        for target in _dependency_targets(decl, graph.modules):
+            surface = _imported_operator_surface(decl, exports.get(target, {}))
+            for path, origins in _bare_operator_members(tail, surface).items():
+                members.setdefault(path, set()).update(origins)
+        contribute(_operator_decl_scope_path(decl), members)
+
+    local_scopes = _local_scope_paths(loaded.program)
+    for use_decl, scope_path in _operator_use_declarations(loaded.program):
+        contribute(
+            scope_path,
+            _operator_use_members(module_id, use_decl, scope_path, graph, exports, local_scopes),
+        )
+    return layers
+
+
+def _visible_operator_origins(
+    scope_path: _OperatorPath,
+    bare_layers: Mapping[_OperatorPath, Mapping[str, set[_OperatorOrigin]]],
+) -> dict[str, set[_OperatorOrigin]]:
+    """Return operators visible through the nearest bare-contribution layers."""
+    visible: dict[str, set[_OperatorOrigin]] = {}
+    current = scope_path
+    while True:
+        for name, origins in bare_layers.get(current, {}).items():
+            visible.setdefault(name, set(origins))
+        if not current:
+            return visible
+        current = current[:-1]
+
+
+def _raw_chain_scope_paths(program: syntax.Program) -> dict[int, _OperatorPath]:
+    """Map every raw infix chain to the named scope that lexically owns it."""
+    paths: dict[int, _OperatorPath] = {}
+
+    def collect(item: object, scope_path: _OperatorPath) -> None:
+        if isinstance(item, syntax.ScopeRegion):
+            nested_path = (*scope_path, item.segment.name)
+            for child in item.items:
+                collect(child, nested_path)
+            return
+        if (
+            isinstance(
+                item,
+                (
+                    syntax.BuiltinVarDecl,
+                    syntax.EnumDef,
+                    syntax.ExceptionDef,
+                    syntax.FuncDef,
+                    syntax.LetDecl,
+                    syntax.ParamDecl,
+                    syntax.RecordDef,
+                    syntax.TypeAlias,
+                    syntax.VarDecl,
+                ),
+            )
+            and item.scope_path
+        ):
+            scope_path = tuple(segment.name for segment in item.scope_path)
+
+        def record(node: object) -> None:
+            if isinstance(node, syntax.RawInfixChain):
+                paths[node.node_id] = scope_path
+
+        syntax.walk(item, record)
+
+    for root_item in program.body.items:
+        collect(root_item, ())
+    return paths
+
+
+def _reject_obvious_scoped_reexport_cycles(graph: ModuleGraph) -> None:
+    """Reject unrestricted scoped re-export cycles before resolving infix chains.
+
+    A named scope is itself exported. Thus, when an unrestricted re-export
+    cycle contains a scoped declaration, each trip around the cycle prefixes
+    that scope again. The scope pass also detects less direct non-converging
+    cycles, but rejecting this self-evident case here avoids resolving every
+    infix chain in a graph that cannot be name-resolved.
+    """
+    adjacency: dict[ModuleId, list[ModuleId]] = {mid: [] for mid in graph.modules}
+    declarations: dict[tuple[ModuleId, ModuleId], list[ExportDecl]] = {}
+    for mid, loaded in graph.modules.items():
+        for declaration in loaded.export_decls:
+            if declaration.items or declaration.hidden:
+                continue
+            for target in _dependency_targets(declaration, graph.modules):
+                adjacency[mid].append(target)
+                declarations.setdefault((mid, target), []).append(declaration)
+
+    for component in _tarjan_sccs(adjacency):
+        members = frozenset(component)
+        is_self_cycle = component[0] in adjacency[component[0]]
+        cyclic = len(members) > 1 or is_self_cycle
+        if not cyclic:
+            continue
+        for source in component:
+            for target in adjacency[source]:
+                if target not in members:
+                    continue
+                for declaration in declarations[(source, target)]:
+                    if declaration.scope_path:
+                        raise AglSyntaxError(
+                            "cyclic re-export expansion does not converge", span=declaration.span
+                        )
+
+
+def _resolve_graph_infix(
+    graph: ModuleGraph,
+    session_infix: Mapping[str, _InfixFixity] | None = None,
+) -> ModuleGraph:
+    """Resolve each raw module chain with the fixity visible at that module."""
+    declarations = {
+        mid: _operator_declarations(loaded.program) for mid, loaded in graph.modules.items()
+    }
+    exports = _operator_export_maps(graph)
+    bare_layers = {mid: _operator_bare_layers(mid, graph, exports) for mid in graph.modules}
+    origin_fixities: dict[_OperatorOrigin, _InfixFixity] = {}
+    session_origins: dict[str, _OperatorOrigin] = {}
+    if session_infix is not None:
+        for name, fixity in session_infix.items():
+            origin = (ENTRY_ID, f"<session:{name}>")
+            session_origins[name] = origin
+            origin_fixities[origin] = fixity
+    unresolved: AglSyntaxError | None = None
+
+    def visible_at(mid: ModuleId, scope_path: _OperatorPath) -> dict[str, set[_OperatorOrigin]]:
+        visible = _visible_operator_origins(scope_path, bare_layers[mid])
+        if mid == ENTRY_ID:
+            for name, origin in session_origins.items():
+                visible.setdefault(name, set()).add(origin)
+        return visible
+
+    # Fixities normally resolve locally, but this fixed point also lets a
+    # declaration express its priority relative to a bare-visible imported operator.
+    changed = True
+    while changed:
+        changed = False
+        unresolved = None
+        for mid, decls in declarations.items():
+            fixity_ambient: dict[str, _InfixFixity] = {}
+            for name, origins in visible_at(mid, ()).items():
+                values = {
+                    origin_fixities[origin] for origin in origins if origin in origin_fixities
+                }
+                if len(values) == 1:
+                    fixity_ambient[name] = next(iter(values))
+            try:
+                resolved = resolve_infix_fixity(decls, fixity_ambient)
+            except AglSyntaxError as error:
+                unresolved = error
+                continue
+            for decl in decls:
+                fixity = resolved[decl.name]
+                origin = (mid, decl.name)
+                if origin_fixities.get(origin) != fixity:
+                    origin_fixities[origin] = fixity
+                    changed = True
+    if unresolved is not None:
+        raise unresolved
+
+    modules: dict[ModuleId, LoadedModule] = {}
+    entry_infix_ambient: dict[str, _InfixFixity] = {}
+    for mid, loaded in graph.modules.items():
+        chain_tables: dict[int, dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]]] = {}
+        chain_conflicts: dict[int, frozenset[str]] = {}
+        own_names = {decl.name for decl in declarations[mid]}
+        for chain_id, scope_path in _raw_chain_scope_paths(loaded.program).items():
+            ambient: dict[str, _InfixFixity] = {}
+            conflicts: set[str] = set()
+            for name, origins in visible_at(mid, scope_path).items():
+                values = {origin_fixities[origin] for origin in origins}
+                if len(values) == 1:
+                    ambient[name] = next(iter(values))
+                else:
+                    conflicts.add(name)
+            conflicts.difference_update(own_names)
+            chain_tables[chain_id] = build_infix_operator_table(declarations[mid], ambient)
+            chain_conflicts[chain_id] = frozenset(conflicts)
+
+        root_ambient: dict[str, _InfixFixity] = {}
+        root_conflicts: set[str] = set()
+        for name, origins in visible_at(mid, ()).items():
+            values = {origin_fixities[origin] for origin in origins}
+            if len(values) == 1:
+                root_ambient[name] = next(iter(values))
+            else:
+                root_conflicts.add(name)
+        root_conflicts.difference_update(own_names)
+        if mid == ENTRY_ID:
+            entry_infix_ambient = root_ambient
+        resolved_program = resolve_infix_chains(
+            loaded.program,
+            build_infix_operator_table(declarations[mid], root_ambient),
+            conflicting_operators=frozenset(root_conflicts),
+            operator_tables=chain_tables,
+            conflicting_operators_by_chain=chain_conflicts,
+        )
+        modules[mid] = (
+            loaded
+            if resolved_program == loaded.program
+            else replace(loaded, program=resolved_program)
+        )
+    return replace(graph, modules=modules, entry_infix_ambient=entry_infix_ambient)
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +953,8 @@ def _load_into_graph(
     seed_modules: dict[ModuleId, LoadedModule],
     start_id: int,
     default_stdlib: bool,
+    session_infix: Mapping[str, _InfixFixity] | None = None,
+    preflight_reexport_cycles: bool = False,
 ) -> tuple[ModuleGraph, int, dict[ModuleId, LoadedModule]]:
     """BFS the transitive module graph from *entry_loaded*.
 
@@ -361,12 +969,14 @@ def _load_into_graph(
     so no module is re-resolved when SCCs are computed.
 
     Returns the assembled :class:`ModuleGraph`, the next free node id, and the
-    dict of modules loaded during this call (those not in *seed_modules*).
+    dict of modules loaded during this call (those not in *seed_modules*), after
+    their source infix chains are resolved to match the returned graph.
     """
     modules: dict[ModuleId, LoadedModule] = dict(seed_modules)
     modules[ENTRY_ID] = entry_loaded
     newly_loaded: dict[ModuleId, LoadedModule] = {}
     adj: dict[ModuleId, list[ModuleId]] = {}
+    source_adj: dict[ModuleId, list[ModuleId]] = {}
     next_id = start_id
 
     # BFS queue: (module id, dependency decl, canonical target path). We sort each
@@ -374,6 +984,7 @@ def _load_into_graph(
     # and therefore the start_id seed assignments — are stable regardless of
     # dict/set ordering.
     queue: deque[_ResolvedDependency] = deque()
+    loader_injected_registry = False
 
     def _resolve_dependencies(
         source: ModuleId,
@@ -381,6 +992,7 @@ def _load_into_graph(
     ) -> None:
         """Record *source*'s module dependencies in ``adj`` and enqueue new ones."""
         targets: list[ModuleId] = []
+        source_targets: list[ModuleId] = []
         new_pairs: list[_ResolvedDependency] = []
         source_path = modules[source].path
         for decl in decls:
@@ -394,13 +1006,35 @@ def _load_into_graph(
                     source_path, target_path, mid, roots=roots, span=decl.span
                 )
                 targets.append(mid)
+                if decl.span.source.label not in {"<stdlib-import>", "<builtin-method-registry>"}:
+                    source_targets.append(mid)
                 if mid not in modules:
                     new_pairs.append((mid, decl, target_path))
         adj[source] = targets
+        source_adj[source] = source_targets
         new_pairs.sort(key=_pair_sort_key)
         queue.extend(new_pairs)
 
     _resolve_dependencies(ENTRY_ID, (*entry_loaded.imports, *entry_loaded.export_decls))
+
+    # Cached modules were loaded in an earlier REPL compilation. Rebuild their
+    # adjacency before draining the queue so any dependency absent from this
+    # invocation's cache is loaded normally.
+    for mid, loaded in modules.items():
+        if mid != ENTRY_ID:
+            _resolve_dependencies(mid, (*loaded.imports, *loaded.export_decls))
+
+    if default_stdlib:
+        registry_decl = _ambient_builtin_methods_import()
+        try:
+            registry_path = resolve_module(STD_BUILTIN_METHODS_ID, roots, span=registry_decl.span)
+        except ModuleNotFound:
+            # The registry was introduced after existing standard libraries.
+            # Its absence deliberately preserves their current module set.
+            pass
+        else:
+            queue.append((STD_BUILTIN_METHODS_ID, registry_decl, registry_path))
+            loader_injected_registry = True
 
     while queue:
         mid, decl, canon_path = queue.popleft()
@@ -420,6 +1054,7 @@ def _load_into_graph(
                 source_text,
                 start_id=next_id,
                 source=file_source_id,
+                resolve_infix=False,
             )
         if default_stdlib and mid != STD_CORE_ID:
             program = _with_default_stdlib_import(program, import_node_id=next_id)
@@ -440,22 +1075,38 @@ def _load_into_graph(
         newly_loaded[mid] = loaded
         _resolve_dependencies(mid, (*loaded.imports, *loaded.export_decls))
 
-    # Seeded (cached) modules are reused as-is and were never re-walked above;
-    # record their adjacency so SCCs cover the whole program.  Their import targets
-    # were all loaded when they were first discovered, so nothing new is queued.
-    for mid, loaded in modules.items():
-        if mid not in adj:
-            _resolve_dependencies(mid, (*loaded.imports, *loaded.export_decls))
-
     sccs = _tarjan_sccs(adj)
+    # The registry is ambient only when the loader alone introduced it. An
+    # explicit source import (including one in a standard-library module)
+    # keeps its normal route, visibility, and runtime-dependency semantics.
+    ambient_roots = (
+        {STD_BUILTIN_METHODS_ID}
+        if loader_injected_registry
+        and not any(STD_BUILTIN_METHODS_ID in targets for targets in adj.values())
+        else set()
+    )
+    ambient_modules: set[ModuleId] = set()
+    pending = list(ambient_roots)
+    while pending:
+        current = pending.pop()
+        if current in ambient_modules:
+            continue
+        ambient_modules.add(current)
+        pending.extend(adj[current])
     graph = ModuleGraph(
         modules=modules,
         entry_id=ENTRY_ID,
         sccs=sccs,
         adjacency={mid: tuple(targets) for mid, targets in adj.items()},
+        source_adjacency={mid: tuple(targets) for mid, targets in source_adj.items()},
+        ambient_modules=frozenset(ambient_modules),
         roots=roots,
     )
-    return graph, next_id, newly_loaded
+    if preflight_reexport_cycles:
+        _reject_obvious_scoped_reexport_cycles(graph)
+    resolved_graph = _resolve_graph_infix(graph, session_infix)
+    resolved_newly_loaded = {mid: resolved_graph.modules[mid] for mid in newly_loaded}
+    return resolved_graph, next_id, resolved_newly_loaded
 
 
 def entry_source_id(
@@ -486,7 +1137,9 @@ def parse_entry_module(
     canonical_path, source_id = entry_source_id(entry_path)
     with spaced_qualifier_collector() as spaced_sink:
         try:
-            program, next_id = parse_program_seeded(entry_source, start_id=0, source=source_id)
+            program, next_id = parse_program_seeded(
+                entry_source, start_id=0, source=source_id, resolve_infix=False
+            )
         except AglSyntaxError as error:
             raise EntryParseSyntaxError(error, tuple(spaced_sink)) from error
     return ParsedEntryModule(
@@ -607,6 +1260,8 @@ def build_repl_graph(
     spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
     default_label: str = "<repl>",
     source_text: str = "",
+    session_infix: Mapping[str, _InfixFixity] | None = None,
+    preflight_reexport_cycles: bool = False,
 ) -> tuple[ModuleGraph, int, dict[ModuleId, LoadedModule]]:
     """Build a module graph from an already-parsed entry program.
 
@@ -648,6 +1303,10 @@ def build_repl_graph(
         its own lowering step supplies the per-entry text directly (see
         ``agm.agl.lower.repl``), so the loader's copy is never consulted. A
         caller outside the REPL passes the real entry source here.
+    preflight_reexport_cycles:
+        Whether to reject unrestricted scoped re-export cycles before infix
+        resolution. Package discipline enables this fast failure; ordinary
+        compilation leaves all re-export diagnostics to the scope pass.
 
     Returns
     -------
@@ -676,4 +1335,6 @@ def build_repl_graph(
         seed_modules=seed_modules,
         start_id=next_start_id,
         default_stdlib=default_stdlib,
+        session_infix=session_infix,
+        preflight_reexport_cycles=preflight_reexport_cycles,
     )

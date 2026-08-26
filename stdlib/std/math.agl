@@ -1,0 +1,67 @@
+scope IntInternals
+extern def int_pow(self: int, exponent: int) -> int
+end IntInternals
+
+scope DecimalInternals
+extern def floor(self: decimal) -> int
+extern def ceil(self: decimal) -> int
+extern def round(self: decimal, digits: int) -> decimal
+extern def sqrt(self: decimal) -> decimal
+extern def pow(self: decimal, exponent: int) -> decimal
+end DecimalInternals
+
+let pi: decimal = 3.141592653589793238462643383
+let e: decimal = 2.718281828459045235360287471
+
+def int::abs(self) -> int = if self < 0 => -self else => self
+def int::min(self, other: int) -> int = if self < other => self else => other
+def int::max(self, other: int) -> int = if self > other => self else => other
+def int::clamp(self, lower: int, upper: int) -> int = self.max(lower).min(upper)
+def int::compare(self, other: int) -> int =
+  if
+    | self < other => -1
+    | self > other => 1
+    | else => 0
+def int::pow(self, exponent: int) -> int =
+  if exponent < 0 => raise RangeError(message = "integer exponent must be non-negative") else =>
+    IntInternals::int_pow(self, exponent)
+def int::sign(self) -> int =
+  if
+    | self < 0 => -1
+    | self > 0 => 1
+    | else => 0
+def int::to-decimal(self) -> decimal = self as decimal
+
+def decimal::abs(self) -> decimal = if self < 0 => -self else => self
+def decimal::min(self, other: decimal) -> decimal = if self < other => self else => other
+def decimal::max(self, other: decimal) -> decimal = if self > other => self else => other
+def decimal::clamp(self, lower: decimal, upper: decimal) -> decimal = self.max(lower).min(upper)
+def decimal::compare(self, other: decimal) -> int =
+  if
+    | self < other => -1
+    | self > other => 1
+    | else => 0
+def decimal::sign(self) -> int =
+  if
+    | self < 0 => -1
+    | self > 0 => 1
+    | else => 0
+def decimal::floor(self) -> int = DecimalInternals::floor(self)
+def decimal::ceil(self) -> int = DecimalInternals::ceil(self)
+def decimal::round(self, digits: int = 0) -> decimal = DecimalInternals::round(self, digits)
+def decimal::sqrt(self) -> decimal = DecimalInternals::sqrt(self)
+def decimal::pow(self, exponent: int) -> decimal = DecimalInternals::pow(self, exponent)
+
+def sum(values: array[int]) -> int =
+  var total = 0
+  for value in values do
+    total := total + value
+  done
+  total
+
+def sum-decimal(values: array[decimal]) -> decimal =
+  var total: decimal = 0.0
+  for value in values do
+    total := total + value
+  done
+  total

@@ -1,0 +1,37 @@
+import std/fs
+import std/path
+
+param root: text
+param scenario: text
+
+def at(name: text) -> text = path::join([root, name])
+
+program def main() -> unit =
+  if scenario == "success" =>
+    fs::mkdir(at("nested/deep"))
+    fs::write(at("nested/source.txt"), "first")
+    fs::append(at("nested/source.txt"), " second")
+    fs::copy(at("nested/source.txt"), at("nested/copy.txt"))
+    fs::move(at("nested/copy.txt"), at("nested/deep/moved.txt"))
+    print(fs::read(at("nested/source.txt")))
+    print(fs::is-file(at("nested/source.txt")))
+    print(fs::is-dir(at("nested/deep")))
+    print(fs::list(at("nested")).size())
+    print(fs::glob(path::join([root, "nested", "*.txt"])).size())
+    print(fs::glob(path::join([root, "missing", "*.txt"])).size())
+    fs::remove(at("nested"))
+    print(fs::exists(at("nested")))
+  if scenario == "missing_file" =>
+    let _ = fs::read(at("missing.txt"))
+  if scenario == "missing_directory" =>
+    let _ = fs::list(at("missing"))
+  if scenario == "optional_read" =>
+    print(fs::read?(at("missing.txt")))
+  if scenario == "invalid_encoding" =>
+    let _ = fs::read(at("invalid.txt"))
+  if scenario == "invalid_encoding_optional" =>
+    print(fs::read?(at("invalid.txt")))
+  if scenario == "directory_symlink" =>
+    fs::remove(at("directory-link"))
+    print(fs::is-dir(at("directory-target")))
+    print(fs::exists(at("directory-link")))

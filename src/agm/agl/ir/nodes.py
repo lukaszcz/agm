@@ -27,6 +27,7 @@ import enum
 from dataclasses import dataclass
 from typing import TypeAlias
 
+from agm.agl.ir.builtin_vars import BuiltinVarKey
 from agm.agl.ir.contracts import ConversionFailureMode, ConversionRecipe
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SymbolId
 from agm.agl.ir.operations import (
@@ -105,7 +106,6 @@ __all__ = [
     "IrMakeJsonObject",
     "IrMakeRecord",
     "IrOr",
-    "IrParseJson",
     "IrPrint",
     "IrRaise",
     "IrReturn",
@@ -473,7 +473,7 @@ class IrUpdateRecord:
 
 @dataclass(frozen=True, slots=True)
 class IrIndex:
-    """IR index access: obj[index] on an array (ARRAY) or dict (DICT)."""
+    """IR index access: obj[index] on an array, dict, or text value."""
 
     location: Location
     kind: IndexKind
@@ -485,7 +485,8 @@ class IrIndex:
 class IrIndexSet:
     """IR indexed assignment: ``container[index] := value``.
 
-    ``container`` evaluates to the array or dict being mutated; under
+    ``container`` evaluates to the array or dict being mutated; text is immutable and
+    cannot produce this node. Under
     reference semantics it needs no root symbol or ``Cell`` — only a
     container reference, which ``container`` supplies directly. Nesting
     (``m["a"]["b"] := v``) falls out for free: ``container`` is itself an
@@ -1015,20 +1016,6 @@ class IrRenderValue:
 
 
 @dataclass(frozen=True, slots=True)
-class IrParseJson:
-    """IR host-op: ``parse_json(text)`` — parse a JSON text value strictly.
-
-    Evaluates ``value`` (always a ``TextValue`` in well-lowered IR), then calls
-    ``parse_json_strict``.  On success returns ``JsonValue(obj)``; on
-    ``StrictJsonParseError`` raises ``AglRaise`` with a ``JsonParseError``
-    exception with the language-defined diagnostic fields.
-    """
-
-    location: Location
-    value: "IrExpr"
-
-
-@dataclass(frozen=True, slots=True)
 class IrCopyValue:
     """IR host-op for deep or shallow copying, selected by ``kind``.
 
@@ -1144,10 +1131,13 @@ class IrAskRequest:
 
 @dataclass(frozen=True, slots=True)
 class IrExec:
-    """IR host-op: exec(command, ...) builtin call."""
+    """IR host-op: exec(command, env:, cwd:, timeout:, ...) builtin call."""
 
     location: Location
     command: "IrExpr"
+    env: "IrExpr"
+    cwd: "IrExpr"
+    timeout: "IrExpr"
     contract_id: "ContractId"
     max_attempts: int
 
@@ -1159,27 +1149,25 @@ class IrExec:
 
 @dataclass(frozen=True, slots=True)
 class IrBuiltinLoad:
-    """IR read of a ``builtin var`` engine setting from its interpreter register.
+    """IR read of a host-backed ``builtin var`` binding.
 
-    ``key`` is the engine-key name (e.g. ``"max-iters"``).  Evaluating yields the
-    current register value as an AgL ``Value``.
+    ``key`` identifies the declaration by its owning module, scope path, and name.
     """
 
     location: Location
-    key: str
+    key: BuiltinVarKey | str
 
 
 @dataclass(frozen=True, slots=True)
 class IrBuiltinStore:
-    """IR write of a ``builtin var`` engine setting to its interpreter register.
+    """IR write of a host-backed ``builtin var`` binding.
 
-    ``key`` is the engine-key name; ``value`` is the new value.  For the
-    runtime-live keys the store also applies the corresponding live engine
-    effect (e.g. capping unguarded loops for ``max-iters``).  Yields ``unit``.
+    ``key`` identifies the declaration by its owning module, scope path, and name.
+    Root ``std/config`` engine keys additionally apply their live engine effect.
     """
 
     location: Location
-    key: str
+    key: BuiltinVarKey | str
     value: "IrExpr"
 
 
@@ -1244,7 +1232,6 @@ IrExpr = (
     | IrIndirectCall
     | IrPrint
     | IrRenderValue
-    | IrParseJson
     | IrCopyValue
     | IrAsk
     | IrAskRequest

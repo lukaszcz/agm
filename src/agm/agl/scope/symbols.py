@@ -94,9 +94,6 @@ class BuiltinKind(enum.Enum):
         ``ask-request[prompt, ...)`` — builds the ``AgentRequest`` that the
         corresponding ``ask`` call would dispatch, without invoking the agent;
         yields an ``AgentRequest`` record.
-    ``PARSE_JSON``
-        ``parse_json(text)`` — parses a ``text`` value as strict JSON; yields
-        ``json``.
     ``COPY``
         ``copy(value)`` — deep copy, preserving sharing; yields the same type
         as its argument.
@@ -110,7 +107,6 @@ class BuiltinKind(enum.Enum):
     EXEC = "EXEC"
     ASK = "ASK"
     ASK_REQUEST = "ASK_REQUEST"
-    PARSE_JSON = "PARSE_JSON"
     COPY = "COPY"
     SHALLOW_COPY = "SHALLOW_COPY"
     RESOURCE = "RESOURCE"
@@ -133,7 +129,6 @@ BUILTIN_CALL_NAMES: dict[str, BuiltinKind] = {
     "exec": BuiltinKind.EXEC,
     "ask": BuiltinKind.ASK,
     "ask-request": BuiltinKind.ASK_REQUEST,
-    "parse_json": BuiltinKind.PARSE_JSON,
     "copy": BuiltinKind.COPY,
     "shallow_copy": BuiltinKind.SHALLOW_COPY,
     "resource": BuiltinKind.RESOURCE,
@@ -177,6 +172,16 @@ BUILTIN_CALL_DISPLAY_NAMES: dict[BuiltinKind | BuiltinStaticKind, str] = {
 }
 
 
+def is_qualified_function_member(is_entry_module: bool, scope_path: ScopePath) -> bool:
+    """Return whether a function is reachable only through a qualification.
+
+    A builtin spelling is reserved in the selected entry module's bare
+    namespace, but an imported-module or named-scope member has an independent
+    qualified namespace.
+    """
+    return not is_entry_module or bool(scope_path)
+
+
 # ---------------------------------------------------------------------------
 # BinderKind — how a binding was introduced
 # ---------------------------------------------------------------------------
@@ -201,8 +206,9 @@ class BinderKind(enum.Enum):
     ``function_binding``
         A top-level ``def`` declaration (immutable value binding).
     ``builtin_var_binding``
-        A ``builtin var`` declaration (mutable, engine-backed setting; readable
-        and assignable with ``:=``).
+        A mutable, host-backed ``builtin var`` declaration, readable and
+        assignable with ``:=``. ``std/config`` bindings are engine settings;
+        other standard-library modules may own independent bindings.
     ``constructor_binding``
         A record constructor or enum variant binding (immutable value binding).
     ``loop_var_binding``
@@ -650,6 +656,9 @@ class ModuleResolution:
     ``allows_root_statements``
         Whether this entry is an incremental REPL entry, whose root retains
         executable items instead of enforcing a static module root.
+    ``is_entry_module``
+        Whether this resolution belongs to the selected program entry rather
+        than one of its qualified library modules.
     ``origin_path``
         This module's canonical source file, or ``None`` for a module with no
         backing file (inline sources, REPL entries). Later passes consult it to
@@ -707,6 +716,7 @@ class ModuleResolution:
     scope_nodes: dict[ScopePath, ScopeNode] = field(default_factory=dict)
     declared_functions: dict[str, FuncDef] = field(default_factory=dict)
     allows_root_statements: bool = False
+    is_entry_module: bool = True
     origin_path: Path | None = None
     declared_type_names: frozenset[str] = frozenset()
     declared_type_paths: frozenset[ScopePath] = frozenset()

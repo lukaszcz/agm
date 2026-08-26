@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from agm.core.process import ProcessCaptureResult
@@ -51,9 +52,11 @@ class FakeShell:
         args: list[str],
         *,
         idle_timeout: float | None = None,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
         isolate_process_group: bool = False,
     ) -> ProcessCaptureResult:
-        del idle_timeout, isolate_process_group
+        del isolate_process_group
         assert args[:2] == ["sh", "-c"]
         command = args[2]
         index = len(self.commands)
@@ -65,6 +68,12 @@ class FakeShell:
         assert command == spec["command"], (
             f"shell command {index}: expected {spec['command']!r}, got {command!r}"
         )
+        if "env" in spec:
+            assert env == spec["env"]
+        if "cwd" in spec:
+            assert cwd == (None if spec["cwd"] is None else Path(spec["cwd"]))
+        if "idle_timeout" in spec:
+            assert idle_timeout == spec["idle_timeout"]
         return process_result(
             returncode=spec.get("returncode", 0),
             stdout=spec.get("stdout", ""),

@@ -1,0 +1,74 @@
+# TOML parsing and rendering preserve AgL's json representation.
+import std/toml
+import std/toml::TomlParseError
+
+param mode: int
+
+program def main() -> unit =
+  case mode of
+    | 1 =>
+        let document = toml::parse('''
+title = "TOML Example"
+
+[owner]
+name = "Tom Preston-Werner"
+
+[database]
+ports = [8000, 8001, 8002]
+
+[servers.alpha]
+ip = "10.0.0.1"
+''')
+        print(document.get("owner").get("name") == ("Tom Preston-Werner" as json))
+        print(document.get("database").get("ports") == ([8000, 8001, 8002] as json))
+        print(document.get("servers").get("alpha").get("ip") == ("10.0.0.1" as json))
+    | 2 =>
+        let document = toml::parse("ratio = 1.25")
+        print(document.get("ratio") as decimal)
+    | 3 =>
+        let document = toml::parse('''
+date = 1979-05-27
+time = 07:32:00
+timestamp = 1979-05-27T07:32:00Z
+''')
+        print(document.get("date") == ("1979-05-27" as json))
+        print(document.get("time") == ("07:32:00" as json))
+        print(document.get("timestamp") == ("1979-05-27T07:32:00+00:00" as json))
+    | 4 =>
+        try
+          let _ = toml::parse("broken = [")
+        catch TomlParseError as error => print(error.raw)
+        print(toml::parse?("broken = ["))
+    | 5 => print(toml::render({"title": "AGM", "enabled": true}))
+    | 6 =>
+        let _ = toml::render({"value": null})
+        ()
+    | 7 =>
+        let _ = toml::render(["not", "a", "table"] as json)
+        ()
+    | 8 =>
+        let _ = toml::render({"value": 9223372036854775808})
+        ()
+    | 9 =>
+        let document = toml::parse('''
+zero = 0.0
+negative_zero = -0.0
+exponent = 1E+2
+negative_nan = -nan
+negative_infinity = -inf
+''')
+        print(toml::render(document))
+    | 10 =>
+        case toml::parse?("enabled = true") of
+          | Option::Some(value = _ as document) => print(document.get("enabled") == (true as json))
+          | Option::None => print(false)
+    | _ =>
+        let original = toml::parse('''
+ratio = 1.25
+ports = [8000, 8001]
+
+[owner]
+name = "Ada"
+''')
+        let rendered = toml::render(original)
+        print(toml::parse(rendered) == original)

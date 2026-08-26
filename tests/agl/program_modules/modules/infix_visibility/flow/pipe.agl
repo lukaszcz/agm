@@ -1,0 +1,2 @@
+infixl %> at 5
+def %>(x: int, f: int -> int) -> int = f(x)

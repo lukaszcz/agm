@@ -1,0 +1,2 @@
+infixr ~> at 60
+def ~>(f: int -> int, g: int -> int) -> int -> int = fn(x: int) => g(f(x))

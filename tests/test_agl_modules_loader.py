@@ -18,13 +18,14 @@ from agm.agl.modules.errors import (
     ModuleNotFound,
     PackageImportVisibilityError,
 )
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, STD_OPTION_ID, ModuleId
 from agm.agl.modules.loader import LoadedModule, ModuleGraph, build_repl_graph, load_graph
 from agm.agl.modules.roots import RootSet, assemble_roots
 from agm.agl.syntax.nodes import ImportDecl
 from agm.agl.syntax.spans import SourceId
 from agm.packages.manifest import load_manifest
 from agm.packages.model import PackageInfo
+from tests._timeouts import fail_if_slow
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -165,13 +166,35 @@ class TestGraphBuild:
         root = tmp_path / "r"
         root.mkdir()
         graph = load_graph("let x = 1", entry_path=None, roots=_roots(root))
-        assert len(graph.modules) == 3
+        registry_id = ModuleId.from_path("std/builtin-methods")
+        array_id = ModuleId.from_path("std/array")
+        text_id = ModuleId.from_path("std/text")
+
         assert ENTRY_ID in graph.modules
         assert STD_CORE_ID in graph.modules
+        assert STD_OPTION_ID in graph.modules
         assert ModuleId.from_path("std/config") in graph.modules
         assert graph.modules[ENTRY_ID].imports[0].module_path == STD_CORE_ID.segments
         assert graph.modules[ENTRY_ID].imports[0].tail == ()
         assert graph.modules[STD_CORE_ID].path == (_REPO_STDLIB_ROOT / "std" / "core.agl").resolve()
+        assert {registry_id, array_id, text_id}.issubset(graph.ambient_modules)
+        assert graph.adjacency[ENTRY_ID] == (STD_CORE_ID,)
+        assert {array_id, text_id}.issubset(graph.adjacency[registry_id])
+
+    def test_explicit_builtin_method_registry_import_is_not_ambient(self, tmp_path: Path) -> None:
+        """A user registry import retains ordinary source-import semantics."""
+        root = tmp_path / "r"
+        root.mkdir()
+
+        graph = load_graph(
+            "import std/builtin-methods\n()",
+            entry_path=None,
+            roots=_roots(root),
+        )
+
+        registry_id = ModuleId.from_path("std/builtin-methods")
+        assert registry_id in graph.adjacency[ENTRY_ID]
+        assert registry_id not in graph.ambient_modules
 
     def test_imported_module_appears_in_graph(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -237,6 +260,321 @@ class TestGraphBuild:
             for item in entry_mod.imports
         )
 
+    def test_wildcard_import_resolves_an_exported_operator_fixity(self, tmp_path: Path) -> None:
+        from agm.agl.syntax.nodes import Call, VarRef
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(
+            root,
+            "operators",
+            "infixl %% at 5\ndef %%(x: int, y: int) -> int = x + y\n",
+        )
+
+        graph = load_graph(
+            "import operators::*\n1 %% 2",
+            entry_path=None,
+            roots=_roots(root),
+            default_stdlib=False,
+        )
+
+        expression = graph.modules[ENTRY_ID].program.body.items[-1]
+        assert isinstance(expression, Call)
+        assert isinstance(expression.callee, VarRef)
+        assert expression.callee.name == "%%"
+
+    def test_reexported_operator_fixity_can_be_renamed(self, tmp_path: Path) -> None:
+        from agm.agl.syntax.nodes import Call, VarRef
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "operators", "infixl %% at 5\n")
+        _write_module(root, "facade", "export operators::{%% as ~~}\n")
+
+        graph = load_graph(
+            "import facade::*\n1 ~~ 2",
+            entry_path=None,
+            roots=_roots(root),
+            default_stdlib=False,
+        )
+
+        expression = graph.modules[ENTRY_ID].program.body.items[-1]
+        assert isinstance(expression, Call)
+        assert isinstance(expression.callee, VarRef)
+        assert expression.callee.name == "~~"
+
+    def test_scoped_wildcard_import_makes_operator_visible_only_inside_its_region(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.syntax.nodes import Call, FuncDef, ScopeRegion, VarRef
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "operators", "infixl %% at 5\n")
+
+        graph = load_graph(
+            "scope Local\nimport operators::*\ndef apply(x: int, y: int) -> int = x %% y\n"
+            "end Local\n",
+            entry_path=None,
+            roots=_roots(root),
+            default_stdlib=False,
+        )
+
+        region = graph.modules[ENTRY_ID].program.body.items[0]
+        assert isinstance(region, ScopeRegion)
+        function = region.items[-1]
+        assert isinstance(function, FuncDef)
+        assert isinstance(function.body, Call)
+        assert isinstance(function.body.callee, VarRef)
+        assert function.body.callee.name == "%%"
+
+    def test_used_scoped_facade_export_makes_operator_fixity_bare_visible(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.syntax.nodes import Call, VarRef
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "operators", "infixl %% at 5\n")
+        _write_module(root, "facade", "scope Public\nexport operators::{%%}\nend Public\n")
+
+        graph = load_graph(
+            "import facade::*\nuse Public::*\n1 %% 2",
+            entry_path=None,
+            roots=_roots(root),
+            default_stdlib=False,
+        )
+
+        expression = graph.modules[ENTRY_ID].program.body.items[-1]
+        assert isinstance(expression, Call)
+        assert isinstance(expression.callee, VarRef)
+        assert expression.callee.name == "%%"
+
+    @pytest.mark.parametrize(
+        "entry",
+        (
+            "import operators\nuse operators::Arithmetic::*\n1 %% 2",
+            "import operators::{Arithmetic::%% as %%}\n1 %% 2",
+        ),
+    )
+    def test_scoped_operator_function_makes_its_fixity_bare_visible(
+        self, tmp_path: Path, entry: str
+    ) -> None:
+        from agm.agl.syntax.nodes import Call, VarRef
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(
+            root,
+            "operators",
+            "infixl %% at 5\nscope Arithmetic\ndef %%(x: int, y: int) -> int = x + y\n"
+            "end Arithmetic\n",
+        )
+
+        graph = load_graph(
+            entry,
+            entry_path=None,
+            roots=_roots(root),
+            default_stdlib=False,
+        )
+
+        expression = graph.modules[ENTRY_ID].program.body.items[-1]
+        assert isinstance(expression, Call)
+        assert isinstance(expression.callee, VarRef)
+        assert expression.callee.name == "%%"
+
+    def test_reexport_hiding_drops_only_the_named_operator(self, tmp_path: Path) -> None:
+        from agm.agl.parser import AglSyntaxError
+        from agm.agl.syntax.nodes import Call, VarRef
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "operators", "infixl %% at 5\ninfixl ^^ at 6\n")
+        _write_module(root, "facade", "export operators hiding %%\n")
+
+        graph = load_graph(
+            "import facade::*\n1 ^^ 2",
+            entry_path=None,
+            roots=_roots(root),
+            default_stdlib=False,
+        )
+
+        expression = graph.modules[ENTRY_ID].program.body.items[-1]
+        assert isinstance(expression, Call)
+        assert isinstance(expression.callee, VarRef)
+        assert expression.callee.name == "^^"
+
+        with pytest.raises(AglSyntaxError):
+            load_graph(
+                "import facade::*\n1 %% 2",
+                entry_path=None,
+                roots=_roots(root),
+                default_stdlib=False,
+            )
+
+    def test_untailed_scoped_reexport_forwards_every_exported_operator(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.syntax.nodes import Call, VarRef
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "operators", "infixl %% at 5\ninfixl ^^ at 6\n")
+        _write_module(root, "facade", "scope Public\nexport operators\nend Public\n")
+
+        graph = load_graph(
+            "import facade::*\nuse Public::*\n1 %% 2 ^^ 3",
+            entry_path=None,
+            roots=_roots(root),
+            default_stdlib=False,
+        )
+
+        expression = graph.modules[ENTRY_ID].program.body.items[-1]
+        assert isinstance(expression, Call)
+        assert isinstance(expression.callee, VarRef)
+        # ^^ binds tighter, so the outer application is %%.
+        assert expression.callee.name == "%%"
+        inner = expression.args[-1]
+        assert isinstance(inner, Call)
+        assert isinstance(inner.callee, VarRef)
+        assert inner.callee.name == "^^"
+
+    def test_used_scoped_facade_operator_selection_honors_alias_and_rename(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.syntax.nodes import Call, VarRef
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "operators", "infixl %% at 5\n")
+        _write_module(root, "alternate", "infixl ^^ at 6\n")
+        _write_module(
+            root,
+            "facade",
+            "infixl ^^ at 4\nscope Public\nexport operators\nexport alternate\nend Public\n",
+        )
+
+        graph = load_graph(
+            "import facade as API\nuse API::Public::{%% as ~~}\n1 ~~ 2",
+            entry_path=None,
+            roots=_roots(root),
+            default_stdlib=False,
+        )
+
+        expression = graph.modules[ENTRY_ID].program.body.items[-1]
+        assert isinstance(expression, Call)
+        assert isinstance(expression.callee, VarRef)
+        assert expression.callee.name == "~~"
+
+    def test_used_scoped_facade_exports_with_conflicting_fixities_are_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.parser import AglSyntaxError
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "left", "infixl %% at 5\n")
+        _write_module(root, "right", "infixr %% at 5\n")
+        _write_module(root, "left_facade", "scope Public\nexport left::{%%}\nend Public\n")
+        _write_module(root, "right_facade", "scope Public\nexport right::{%%}\nend Public\n")
+
+        with pytest.raises(AglSyntaxError):
+            load_graph(
+                "import left_facade\nimport right_facade\n"
+                "use left_facade::Public::*\nuse right_facade::Public::*\n1 %% 2",
+                entry_path=None,
+                roots=_roots(root),
+                default_stdlib=False,
+            )
+
+    def test_cyclic_scoped_operator_reexports_are_rejected_without_hanging(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.parser import AglSyntaxError
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "operators", "infixl %% at 5\n")
+        _write_module(
+            root,
+            "a",
+            "export operators\nscope Loop\nexport b\nend Loop\n",
+        )
+        _write_module(root, "b", "scope Loop\nexport a\nend Loop\n")
+
+        with (
+            fail_if_slow("operator re-export resolution did not terminate"),
+            pytest.raises(AglSyntaxError),
+        ):
+            load_graph(
+                "import a\n()",
+                entry_path=None,
+                roots=_roots(root),
+                default_stdlib=False,
+            )
+
+    def test_scoped_reexport_operator_can_be_selected_and_renamed_for_a_region(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.syntax.nodes import Call, FuncDef, ScopeRegion, VarRef
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "operators", "infixl %% at 5\n")
+        _write_module(root, "facade", "scope Public\nexport operators::{%%}\nend Public\n")
+
+        graph = load_graph(
+            "scope Local\nimport facade::{Public::%% as %%}\n"
+            "def apply(x: int, y: int) -> int = x %% y\nend Local\n",
+            entry_path=None,
+            roots=_roots(root),
+            default_stdlib=False,
+        )
+
+        region = graph.modules[ENTRY_ID].program.body.items[0]
+        assert isinstance(region, ScopeRegion)
+        function = region.items[-1]
+        assert isinstance(function, FuncDef)
+        assert isinstance(function.body, Call)
+        assert isinstance(function.body.callee, VarRef)
+        assert function.body.callee.name == "%%"
+
+    def test_package_reexported_operator_is_bare_visible_through_wildcard_import(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.syntax.nodes import Call, VarRef
+
+        operators = _package(tmp_path, "operators")
+        _write_module(operators.root, "operators/ops", "infixl %% at 5\n")
+        _write_module(operators.root, "operators/public", "export operators/ops\n")
+
+        graph = load_graph(
+            "import operators/public::*\n1 %% 2",
+            entry_path=None,
+            roots=_package_roots(tmp_path, operators),
+            default_stdlib=False,
+        )
+
+        expression = graph.modules[ENTRY_ID].program.body.items[-1]
+        assert isinstance(expression, Call)
+        assert isinstance(expression.callee, VarRef)
+        assert expression.callee.name == "%%"
+
+    def test_unresolved_relative_operator_priority_is_rejected(self, tmp_path: Path) -> None:
+        from agm.agl.parser import AglSyntaxError
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "operators", "infixl %% at prio ?? + 1\n")
+
+        with pytest.raises(AglSyntaxError):
+            load_graph(
+                "import operators\n()",
+                entry_path=None,
+                roots=_roots(root),
+                default_stdlib=False,
+            )
+
     def test_imports_extracted_from_a_scope_region_are_graph_edges(self, tmp_path: Path) -> None:
         """A scoped `import` is discovered exactly like a root one."""
         root = tmp_path / "r"
@@ -286,10 +624,13 @@ class TestCycles:
         _write_module(root, "a", "import b")
         _write_module(root, "b", "import a")
         graph = load_graph("import a", entry_path=None, roots=_roots(root))
-        assert ModuleId.from_path("a") in graph.modules
-        assert ModuleId.from_path("b") in graph.modules
-        # Exactly 4 modules: std/core + entry + a + b
-        assert len(graph.modules) == 5
+        a_id = ModuleId.from_path("a")
+        b_id = ModuleId.from_path("b")
+        assert a_id in graph.modules
+        assert b_id in graph.modules
+        assert set(graph.adjacency[a_id]) == {b_id, STD_CORE_ID}
+        assert set(graph.adjacency[b_id]) == {a_id, STD_CORE_ID}
+        assert any({a_id, b_id}.issubset(component) for component in graph.sccs)
 
     def test_longer_cycle_terminates(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -298,7 +639,9 @@ class TestCycles:
         _write_module(root, "y", "import z")
         _write_module(root, "z", "import x")
         graph = load_graph("import x", entry_path=None, roots=_roots(root))
-        assert len(graph.modules) == 6  # std/core + std/config + entry + x + y + z
+        cycle_ids = {ModuleId.from_path("x"), ModuleId.from_path("y"), ModuleId.from_path("z")}
+        assert cycle_ids.issubset(graph.modules)
+        assert any(cycle_ids.issubset(component) for component in graph.sccs)
 
     def test_cycle_nodes_linked_in_sccs(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -874,10 +1217,14 @@ class TestBuildReplGraph:
         )
         assert ENTRY_ID in graph.modules
         assert STD_CORE_ID in graph.modules
-        assert new_modules == {
-            STD_CORE_ID: graph.modules[STD_CORE_ID],
-            ModuleId.from_path("std/config"): graph.modules[ModuleId.from_path("std/config")],
-        }
+        assert {
+            ModuleId.from_path("std/builtin-methods"),
+            ModuleId.from_path("std/array"),
+            ModuleId.from_path("std/text"),
+        }.issubset(graph.ambient_modules)
+        assert ENTRY_ID not in new_modules
+        assert set(new_modules) == set(graph.modules) - {ENTRY_ID}
+        assert all(graph.modules[mid] is module for mid, module in new_modules.items())
 
     def test_import_loads_lib_module(self, tmp_path: Path) -> None:
         """A program with import declarations loads the referenced lib module."""
@@ -911,6 +1258,36 @@ class TestBuildReplGraph:
             program2, next_id, path=None, cached=cached, roots=_roots(tmp_path)
         )
         assert mid not in new2
+
+    def test_cached_module_loads_an_uncached_transitive_dependency(self, tmp_path: Path) -> None:
+        _write_module(tmp_path, "dependency", "def value() -> int = 1")
+        _write_module(
+            tmp_path,
+            "library",
+            "import dependency\ndef value() -> int = dependency::value()",
+        )
+        library_id = ModuleId.from_path("library")
+        dependency_id = ModuleId.from_path("dependency")
+
+        program1 = _parse_for_repl("import library\n()")
+        _, next_id, new1 = build_repl_graph(
+            program1, 0, path=None, cached={}, roots=_roots(tmp_path)
+        )
+        cached_library = new1[library_id]
+
+        program2 = _parse_for_repl("import library\n()")
+        graph2, _next_id, new2 = build_repl_graph(
+            program2,
+            next_id,
+            path=None,
+            cached={library_id: cached_library},
+            roots=_roots(tmp_path),
+        )
+
+        assert graph2.modules[library_id] is cached_library
+        assert dependency_id in new2
+        assert graph2.modules[dependency_id] is new2[dependency_id]
+        assert dependency_id in graph2.adjacency[library_id]
 
     def test_cached_std_core_not_reloaded(self, tmp_path: Path) -> None:
         """The REPL graph builder reuses cached std/core when present."""
@@ -1040,7 +1417,9 @@ class TestUseDeclarationLoading:
 
 
 class TestPreludeSupersession:
-    def test_explicit_open_core_import_suppresses_the_default_prelude(self, tmp_path: Path) -> None:
+    def test_explicit_core_wildcard_import_suppresses_the_default_prelude(
+        self, tmp_path: Path
+    ) -> None:
         from agm.agl.scope import resolve_program
 
         graph = load_graph(

@@ -1294,7 +1294,7 @@ def test_later_lexical_binding_does_not_retroactively_shadow_case_variant() -> N
     assert render_witness(witness) == "item(value = _)"
 
 
-def test_renamed_open_import_keeps_constructor_witnesses_unqualified(
+def test_renamed_wildcard_import_keeps_constructor_witnesses_unqualified(
     tmp_path: Path,
 ) -> None:
     compiled = _compile_graph_case(
@@ -1671,11 +1671,11 @@ def test_nested_witness_selects_alias_for_each_concrete_instantiation(
                 ")\n"
             ),
             "entry": (
-                "import library/remote::{IntRemote, TextRemote, Pair, make}\n"
+                "import library/remote::{IntRemote, TextRemote, Pair as RemotePair, make}\n"
                 "let value = make()\n"
                 "case value of\n"
-                "  | Pair::pair(left = IntRemote::empty, right = _) => 0\n"
-                "  | Pair::pair(left = _, right = TextRemote::empty) => 1\n"
+                "  | RemotePair::pair(left = IntRemote::empty, right = _) => 0\n"
+                "  | RemotePair::pair(left = _, right = TextRemote::empty) => 1\n"
             ),
         },
     )

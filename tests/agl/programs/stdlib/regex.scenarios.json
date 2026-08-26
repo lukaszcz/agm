@@ -1,0 +1,44 @@
+{
+  "scenarios": [
+    {
+      "name": "test_and_optional_find_distinguish_matches_from_absence",
+      "params": {"mode": 1},
+      "expect": {"stdout": "false\ntrue\nOption::None\n", "calls": {}}
+    },
+    {
+      "name": "match_reports_offsets_numbered_groups_named_groups_and_nonparticipants",
+      "params": {"mode": 2},
+      "expect": {"stdout": "ref-42\n0\n6\n[Option::Some(value = \"ref\"), Option::Some(value = \"42\"), Option::None]\n{\"word\": \"ref\"}\n", "calls": {}}
+    },
+    {
+      "name": "find_all_and_replace_follow_python_re_search_and_backreference_rules",
+      "params": {"mode": 3},
+      "expect": {"stdout": "2\none\n7\nitem[42]\n", "calls": {}}
+    },
+    {
+      "name": "split_preserves_boundary_empty_fields_and_captured_separators",
+      "params": {"mode": 4},
+      "expect": {"stdout": "[\"\", \"a\", \"\", \"b\", \"\"]\n[\"a\", \",\", \"b\", \";\", \"c\", \",\", \"\"]\n", "calls": {}}
+    },
+    {
+      "name": "escape_produces_a_pattern_that_matches_the_original_literal",
+      "params": {"mode": 5},
+      "expect": {"stdout": "true\n", "calls": {}}
+    },
+    {
+      "name": "invalid_patterns_raise_regex_error_with_the_source_pattern",
+      "params": {"mode": 6},
+      "expect": {"stdout": "[\n", "calls": {}}
+    },
+    {
+      "name": "uncaught_invalid_pattern_preserves_the_typed_error",
+      "params": {"mode": 7},
+      "expect": {"stdout": "", "raises": {"type": "RegexError", "fields": {"pattern": "["}}, "calls": {}}
+    },
+    {
+      "name": "named_arguments_use_the_public_regex_parameter_names",
+      "params": {"mode": 8},
+      "expect": {"stdout": "true\nOption::Some(value = Match(matched = \"42\", start = 5, end = 7, groups = [], named-groups = {}))\n2\nitem-#\n2\na\\+b\\?\\.\n", "calls": {}}
+    }
+  ]
+}

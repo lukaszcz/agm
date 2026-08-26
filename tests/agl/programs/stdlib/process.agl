@@ -1,0 +1,19 @@
+# Process metadata is available through explicit std/process imports.
+import std/process
+
+param mode: int
+
+program def main() -> unit =
+  let directory = process::cwd()
+  let process_id = process::pid()
+  let host = process::hostname()
+  case mode of
+    | 1 =>
+        print(directory.size() > 0)
+        print(process_id > 0)
+        print(host.size() > 0)
+    | 2 =>
+        print(directory == directory)
+        print(process_id == process_id)
+        print(host == host)
+    | _ => process::exit(mode)

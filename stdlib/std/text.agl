@@ -1,1 +1,36 @@
+import std/option::Option
+
 extern def interp(template: text, vars: dict[text, text]) -> text
+
+extern def text::size(self) -> int
+extern def text::chars(self) -> array[text]
+extern def text::lines(self) -> array[text]
+extern def text::split(self, separator: text) -> array[text]
+extern def text::trim(self) -> text
+extern def text::upper(self) -> text
+extern def text::lower(self) -> text
+extern def text::contains(self, substring: text) -> bool
+extern def text::replace(self, old: text, new: text) -> text
+extern def text::slice(self, start: int, end: int) -> text
+extern def text::repeat(self, count: int) -> text
+
+scope TextInternals
+extern def trim_start(self: text) -> text
+extern def trim_end(self: text) -> text
+extern def starts_with(self: text, prefix: text) -> bool
+extern def ends_with(self: text, suffix: text) -> bool
+extern def index_of(self: text, substring: text) -> int
+extern def index_of_option(self: text, substring: text) -> Option[int]
+extern def pad_start(self: text, length: int, fill: text) -> text
+extern def pad_end(self: text, length: int, fill: text) -> text
+end TextInternals
+
+def text::is-empty(self) -> bool = self.size() == 0
+def text::trim-start(self) -> text = TextInternals::trim_start(self)
+def text::trim-end(self) -> text = TextInternals::trim_end(self)
+def text::starts-with(self, prefix: text) -> bool = TextInternals::starts_with(self, prefix)
+def text::ends-with(self, suffix: text) -> bool = TextInternals::ends_with(self, suffix)
+def text::index-of(self, substring: text) -> int = TextInternals::index_of(self, substring)
+def text::index-of?(self, substring: text) -> Option[int] = TextInternals::index_of_option(self, substring)
+def text::pad-start(self, length: int, fill: text) -> text = TextInternals::pad_start(self, length, fill)
+def text::pad-end(self, length: int, fill: text) -> text = TextInternals::pad_end(self, length, fill)

@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "methods_are_available_without_importing_the_owner",
+      "params": {"values": [1, 2, 3]},
+      "expect": {"stdout": "3\n[3, 2, 1]\n", "calls": {}}
+    },
+    {
+      "name": "ambient_methods_preserve_empty_array_behavior",
+      "params": {"values": []},
+      "expect": {"stdout": "0\n[]\n", "calls": {}}
+    }
+  ]
+}

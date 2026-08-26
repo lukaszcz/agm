@@ -1,0 +1,4 @@
+infixl %% at 5
+infixr ~~ at 5
+program def main() -> unit =
+  1 %% 2 ~~ 3

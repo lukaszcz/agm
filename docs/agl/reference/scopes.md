@@ -152,7 +152,8 @@ A region admits every `builtin` form — `builtin record`, `builtin enum`,
 region, following the same visibility rules as every other member. A
 `builtin` declaration's complete scoped name is different from an ordinary
 member's, though: it is one host identity shared across the whole program at
-that exact path, so it must be declared only once there — see [Built-in
+that exact path, so it must be declared only once there. A `builtin var` host
+identity additionally includes its defining module, scope path, and name — see [Built-in
 functions](functions.md#built-in-functions). This allows a receiver method
 such as `Agent::ask` to coexist with root `ask`. The example below therefore
 presumes a program started with `--no-stdlib` ([Modules](modules.md#prelude)),
@@ -179,9 +180,10 @@ as part of its nominal identity, exactly like an ordinary scoped type; a
 scoped `builtin def` dispatches to the same host implementation as a root
 one, reached bare inside its region or after `use`, and by its exact path
 outside. A `builtin def` with first parameter `self` in a type scope is a
-builtin method: `Agent::ask` uses ordinary method
-selection and their receiver supplies the agent. `builtin var` keeps its separate restriction to the canonical
-`std/config` module regardless of scoping — see
+builtin method: `Agent::ask`, `Agent::ask-request`, and the receiver-based
+`Session` operations use ordinary method selection, with the receiver supplying
+the target agent or session. `builtin var` remains restricted to standard-library
+modules regardless of scoping; `std/config` owns engine settings — see
 [Program structure](program-structure.md#declarations).
 
 ## Names and visibility

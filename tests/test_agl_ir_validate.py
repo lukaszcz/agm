@@ -78,7 +78,7 @@ from agm.agl.ir import (
     VariantDescriptor,
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
-from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.ids import STD_CONFIG_ID, ModuleId
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -158,6 +158,7 @@ def _make_program(
     program_symbols: dict[int, SymbolId] | None = None,
     program_functions: dict[SymbolId, FunctionId] | None = None,
     synthetic_main_symbol: SymbolId | None = None,
+    builtin_var_declarations: frozenset[tuple[ModuleId, tuple[str, ...], str]] = frozenset(),
 ) -> ExecutableProgram:
     """Build a valid base program; callers override individual tables."""
     nom_desc = NominalDescriptor(
@@ -179,6 +180,7 @@ def _make_program(
         program_symbols={} if program_symbols is None else program_symbols,
         program_functions={} if program_functions is None else program_functions,
         synthetic_main_symbol=synthetic_main_symbol,
+        builtin_var_declarations=builtin_var_declarations,
     )
 
 
@@ -657,6 +659,85 @@ def test_cheap_validation_does_not_require_known_builtin_key() -> None:
     program = _make_program(initializers=(IrBuiltinLoad(location=LOC, key="bogus"),))
 
     validate_ir(program, deep=False)
+
+
+def test_deep_rejects_module_builtin_key_for_unloaded_module() -> None:
+    program = _make_program(initializers=(IrBuiltinLoad(location=LOC, key=(MOD_B, (), "value")),))
+
+    with pytest.raises(InvalidIrError, match="unloaded module"):
+        validate_ir(program)
+
+    validate_ir(program, deep=False)
+
+
+def test_deep_rejects_undeclared_module_builtin_key() -> None:
+    program = _make_program(initializers=(IrBuiltinLoad(location=LOC, key=(MOD_A, (), "value")),))
+
+    with pytest.raises(InvalidIrError, match="declaration"):
+        validate_ir(program)
+
+
+def test_deep_rejects_module_builtin_key_at_undeclared_scope() -> None:
+    modules = {
+        MOD_A: ExecutableModule(
+            module_id=MOD_A,
+            initializers=(IrBuiltinLoad(location=LOC, key=(STD_CONFIG_ID, ("Region",), "value")),),
+        ),
+        STD_CONFIG_ID: ExecutableModule(module_id=STD_CONFIG_ID, initializers=()),
+    }
+    program = _make_program(
+        modules=modules,
+        builtin_var_declarations=frozenset(((STD_CONFIG_ID, ("Other",), "value"),)),
+    )
+
+    with pytest.raises(InvalidIrError, match="declaration"):
+        validate_ir(program)
+
+
+def test_deep_accepts_declared_scoped_module_builtin_key() -> None:
+    key = (MOD_A, ("Region",), "value")
+    program = _make_program(
+        initializers=(IrBuiltinLoad(location=LOC, key=key),),
+        builtin_var_declarations=frozenset((key,)),
+    )
+
+    validate_ir(program)
+
+
+def test_deep_validates_module_qualified_engine_keys() -> None:
+    key = (STD_CONFIG_ID, (), "max-iters")
+    modules = {
+        MOD_A: ExecutableModule(
+            module_id=MOD_A,
+            initializers=(IrBuiltinLoad(location=LOC, key=key),),
+        ),
+        STD_CONFIG_ID: ExecutableModule(module_id=STD_CONFIG_ID, initializers=()),
+    }
+    known = _make_program(modules=modules, builtin_var_declarations=frozenset((key,)))
+    validate_ir(known)
+
+    modules[MOD_A] = ExecutableModule(
+        module_id=MOD_A,
+        initializers=(IrBuiltinLoad(location=LOC, key=(STD_CONFIG_ID, (), "unknown")),),
+    )
+    unknown = _make_program(modules=modules)
+    with pytest.raises(InvalidIrError, match="unknown engine key"):
+        validate_ir(unknown)
+
+
+def test_deep_accepts_legacy_string_key_builtin_default() -> None:
+    program = _make_program()
+    program.builtin_setting_defaults["max-iters"] = _int(1)
+
+    validate_ir(program)
+
+
+def test_deep_rejects_undeclared_module_builtin_default_key() -> None:
+    program = _make_program()
+    program.builtin_setting_defaults[(MOD_A, ("Region",), "value")] = _int(1)
+
+    with pytest.raises(InvalidIrError, match="declaration"):
+        validate_ir(program)
 
 
 def test_deep_accepts_known_builtin_keys() -> None:
@@ -2003,12 +2084,12 @@ class TestIrIndirectCall:
 
 
 # ===========================================================================
-# IrPrint / IrParseJson validation
+# IrPrint validation
 # ===========================================================================
 
 
 class TestPrintParseJsonValidation:
-    """Negative validate tests for IrPrint and IrParseJson nodes."""
+    """Negative validation tests for IrPrint nodes."""
 
     def test_ir_print_valid(self) -> None:
         """IrPrint with valid location and inner expr passes validation."""
@@ -2047,47 +2128,6 @@ class TestPrintParseJsonValidation:
         )
         inner = IrConstInt(location=bad_loc, value=1)
         node = IrPrint(location=LOC, value=inner)
-        prog = _make_program(initializers=(node,))
-        with pytest.raises(InvalidIrError, match="start_offset"):
-            validate_ir(prog, deep=False)
-
-    def test_ir_parse_json_valid(self) -> None:
-        """IrParseJson with valid location and inner expr passes validation."""
-        from agm.agl.ir import IrParseJson
-
-        node = IrParseJson(location=LOC, value=IrConstText(location=LOC, value="null"))
-        prog = _make_program(initializers=(node,))
-        validate_ir(prog, deep=False)  # no exception
-
-    def test_ir_parse_json_bad_location_raises(self) -> None:
-        """IrParseJson with invalid own location raises InvalidIrError."""
-        from agm.agl.ir import IrParseJson
-
-        bad_loc = Location(
-            source_id=SID0,
-            start_offset=10,
-            end_offset=3,  # bad: start > end
-            start_line=1,
-            start_col=0,
-        )
-        node = IrParseJson(location=bad_loc, value=IrConstText(location=LOC, value="null"))
-        prog = _make_program(initializers=(node,))
-        with pytest.raises(InvalidIrError, match="start_offset"):
-            validate_ir(prog, deep=False)
-
-    def test_ir_parse_json_bad_inner_location_raises(self) -> None:
-        """IrParseJson validator recurses into the inner value expression."""
-        from agm.agl.ir import IrParseJson
-
-        bad_loc = Location(
-            source_id=SID0,
-            start_offset=10,
-            end_offset=3,  # bad
-            start_line=1,
-            start_col=0,
-        )
-        inner = IrConstText(location=bad_loc, value="null")
-        node = IrParseJson(location=LOC, value=inner)
         prog = _make_program(initializers=(node,))
         with pytest.raises(InvalidIrError, match="start_offset"):
             validate_ir(prog, deep=False)
@@ -2336,6 +2376,9 @@ class TestIrExecValidation:
         node = IrExec(
             location=LOC,
             command=IrConstText(location=LOC, value="echo hi"),
+            env=IrConstText(location=LOC, value="env"),
+            cwd=IrConstText(location=LOC, value="cwd"),
+            timeout=IrConstText(location=LOC, value="timeout"),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2351,6 +2394,9 @@ class TestIrExecValidation:
         node = IrExec(
             location=LOC,
             command=IrConstText(location=LOC, value="echo hi"),
+            env=IrConstText(location=LOC, value="env"),
+            cwd=IrConstText(location=LOC, value="cwd"),
+            timeout=IrConstText(location=LOC, value="timeout"),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2379,6 +2425,9 @@ class TestIrExecValidation:
         node = IrExec(
             location=LOC,
             command=IrConstText(location=LOC, value="echo hi"),
+            env=IrConstText(location=LOC, value="env"),
+            cwd=IrConstText(location=LOC, value="cwd"),
+            timeout=IrConstText(location=LOC, value="timeout"),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2410,6 +2459,9 @@ class TestIrExecValidation:
         node = IrExec(
             location=LOC,
             command=IrConstText(location=LOC, value="echo hi"),
+            env=IrConstText(location=LOC, value="env"),
+            cwd=IrConstText(location=LOC, value="cwd"),
+            timeout=IrConstText(location=LOC, value="timeout"),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2438,6 +2490,9 @@ class TestIrExecValidation:
         node = IrExec(
             location=LOC,
             command=IrConstText(location=LOC, value="echo hi"),
+            env=IrConstText(location=LOC, value="env"),
+            cwd=IrConstText(location=LOC, value="cwd"),
+            timeout=IrConstText(location=LOC, value="timeout"),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2465,6 +2520,9 @@ class TestIrExecValidation:
         node = IrExec(
             location=LOC,
             command=IrConstText(location=LOC, value="echo hi"),
+            env=IrConstText(location=LOC, value="env"),
+            cwd=IrConstText(location=LOC, value="cwd"),
+            timeout=IrConstText(location=LOC, value="timeout"),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2492,6 +2550,9 @@ class TestIrExecValidation:
         node = IrExec(
             location=LOC,
             command=IrConstText(location=LOC, value="echo hi"),
+            env=IrConstText(location=LOC, value="env"),
+            cwd=IrConstText(location=LOC, value="cwd"),
+            timeout=IrConstText(location=LOC, value="timeout"),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2519,6 +2580,9 @@ class TestIrExecValidation:
         node = IrExec(
             location=LOC,
             command=IrConstText(location=LOC, value="echo hi"),
+            env=IrConstText(location=LOC, value="env"),
+            cwd=IrConstText(location=LOC, value="cwd"),
+            timeout=IrConstText(location=LOC, value="timeout"),
             contract_id=cid,
             max_attempts=0,  # invalid
         )

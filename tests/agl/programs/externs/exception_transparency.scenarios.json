@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "callback_exception_keeps_its_type_and_fields",
+      "params": {"mode": "callback"},
+      "expect": {"stdout": "callback:original\n"}
+    },
+    {
+      "name": "companion_can_catch_and_reraise_a_callback_exception",
+      "params": {"mode": "reraise"},
+      "expect": {"stdout": "callback:original\n"}
+    },
+    {
+      "name": "companion_can_raise_a_typed_agl_exception",
+      "params": {"mode": "companion"},
+      "expect": {"stdout": "companion:initiated\n"}
+    }
+  ]
+}

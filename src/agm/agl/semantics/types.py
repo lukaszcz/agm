@@ -55,7 +55,7 @@ from typing import assert_never
 
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, reserved_nominal_id
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id as _reserved_id
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, STD_OPTION_ID, ModuleId
 
 # ---------------------------------------------------------------------------
 # Primitive types (singletons-by-construction; frozen dataclasses)
@@ -994,7 +994,7 @@ _AGENT_TYPE = EnumType(name="Agent", module_id=STD_CORE_ID, decl_id=_reserved_id
 _OPTION_TEXT_TYPE = EnumType(
     name="Option",
     type_args=(TextType(),),
-    module_id=STD_CORE_ID,
+    module_id=STD_OPTION_ID,
     decl_id=_reserved_id("Option"),
 )
 
@@ -1005,7 +1005,7 @@ OPTION_TEXT_TYPE: EnumType = _OPTION_TEXT_TYPE
 _OPTION_JSON_TYPE = EnumType(
     name="Option",
     type_args=(JsonType(),),
-    module_id=STD_CORE_ID,
+    module_id=STD_OPTION_ID,
     decl_id=_reserved_id("Option"),
 )
 

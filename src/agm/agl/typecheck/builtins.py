@@ -1,4 +1,4 @@
-"""Built-in call (print/render/copy/shallow_copy/parse_json/ask/ask-request/exec)
+"""Built-in call (print/render/copy/shallow_copy/ask/ask-request/exec)
 type-checking collaborator.
 
 Driven by ``_Checker`` via the narrow ``BuiltinCheckCtx`` Protocol.  All logic
@@ -15,17 +15,17 @@ from typing import Protocol
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.ir.reserved_nominals import reserved_nominal_id
-from agm.agl.modules.ids import spell_declaration
+from agm.agl.modules.ids import STD_ENV_ID, spell_declaration
 from agm.agl.scope.symbols import ConstructorRef
 from agm.agl.semantics.analyses import nominal_references
 from agm.agl.semantics.type_table import DeclId
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
+    OPTION_TEXT_TYPE,
     BoolType,
     EnumType,
     ExceptionType,
     FunctionType,
-    JsonType,
     RecordType,
     TextType,
     Type,
@@ -170,7 +170,7 @@ class BuiltinCallChecker:
     )
 
     _EXEC_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset(
-        {"format", "strict_json", "on_parse_error"}
+        {"env", "cwd", "timeout", "format", "strict_json", "on_parse_error"}
     )
 
     def __init__(self, ctx: BuiltinCheckCtx) -> None:
@@ -406,18 +406,6 @@ class BuiltinCallChecker:
         except ResourceError as exc:
             raise AglTypeError(str(exc), span=node.span) from exc
         return TextType()
-
-    # --- parse_json ---
-
-    def check_parse_json(self, node: Call) -> Type:
-        if len(node.args) != 1 or node.named_args:
-            raise AglTypeError(
-                "parse_json() requires exactly one positional text argument.",
-                span=node.span,
-            )
-        arg_type = self._ctx._check_expr(node.args[0], expected=TextType())
-        self._ctx._assert_assignable_from(arg_type, TextType(), node.args[0].span, node.args[0])
-        return JsonType()
 
     # --- ask ---
 
@@ -685,6 +673,7 @@ class BuiltinCallChecker:
             raise AglTypeError("exec: too many positional arguments (expected 1).", span=node.span)
         cmd_type = self._ctx._check_expr(node.args[0], expected=TextType())
         self._ctx._assert_assignable_from(cmd_type, TextType(), node.args[0].span, node.args[0])
+        self._check_exec_spawn_options(named)
         format_name, strict_json, parse_policy = self._parse_options(named)
         self._ctx._register_builtin_obligation(
             PendingBuiltinObligation(
@@ -700,6 +689,39 @@ class BuiltinCallChecker:
             )
         )
         return target_type
+
+    def _check_exec_spawn_options(self, named: dict[str, NamedArg]) -> None:
+        """Check the non-codec ``exec`` options against their stdlib types."""
+        if "env" in named:
+            env_type_def = self._ctx._env.type_table.get(STD_ENV_ID, "Environ")
+            if env_type_def is None:
+                raise AglTypeError(
+                    "exec 'env' requires std/env::Environ, which this standard library "
+                    "does not provide.",
+                    span=named["env"].span,
+                )
+            env_type = env_type_def.handle()
+            actual = self._ctx._check_expr(named["env"].value, expected=env_type)
+            self._ctx._assert_assignable_from(
+                actual, env_type, named["env"].span, named["env"].value
+            )
+        option_text = self._standard_option_text_type()
+        for name in ("cwd", "timeout"):
+            if name not in named:
+                continue
+            actual = self._ctx._check_expr(named[name].value, expected=option_text)
+            self._ctx._assert_assignable_from(
+                actual, option_text, named[name].span, named[name].value
+            )
+
+    def _standard_option_text_type(self) -> EnumType:
+        """Return the loaded ``std/option::Option[text]`` handle when present."""
+        declaration = self._ctx._env.type_table.standard_builtin_declaration("Option")
+        if declaration is None:
+            return OPTION_TEXT_TYPE
+        option = declaration.handle((TextType(),))
+        assert isinstance(option, EnumType), "Option's builtin declaration must be an enum"
+        return option
 
     def _builtin_contract_type(self, name: str) -> RecordType | EnumType | ExceptionType:
         """Return the type this program's own ``builtin`` declaration of *name* names.

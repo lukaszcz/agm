@@ -20,11 +20,13 @@ from agm.agl.semantics.values import (
     DictValue,
     ExceptionValue,
     IntValue,
+    IrClosureValue,
     JsonValue,
     RecordValue,
     TextValue,
     UnitValue,
     Value,
+    value_equal,
     values_equal,
 )
 
@@ -59,6 +61,26 @@ class AglJson:
     """The distinct Python representation of an AgL ``json`` value."""
 
     value: object
+
+
+class AglException(Exception):
+    """Carry an AgL exception value through companion Python frames.
+
+    Companions construct this with an instance of a synthesized exception
+    class. Callbacks construct it from their already-materialized
+    :class:`ExceptionValue`. In either case, it carries the resulting AgL
+    exception value rather than turning it into a Python exception.
+    """
+
+    def __init__(self, value: ExceptionValue | object) -> None:
+        try:
+            decoded = value if isinstance(value, ExceptionValue) else decode_boundary_value(value)
+        except BoundaryViolation as exc:
+            raise TypeError("AglException requires an AgL exception value") from exc
+        if not isinstance(decoded, ExceptionValue):
+            raise TypeError("AglException requires an AgL exception value")
+        super().__init__(decoded.display_name)
+        self.value = decoded
 
 
 class _AglNominal:
@@ -110,8 +132,9 @@ class _AglNominal:
 class _AglRecordView:
     """Base implementation for synthesized live views of mutable record values."""
 
-    __slots__ = ("_agl_value",)
+    __slots__ = ("_agl_value", "_function_encoder")
     _agl_value: RecordValue
+    _function_encoder: Callable[[IrClosureValue], object] | None
     _agl_nominal: NominalId
     _agl_kind: NominalKind
     _agl_fields: tuple[str, ...]
@@ -122,6 +145,7 @@ class _AglRecordView:
         if set(fields) != set(expected):
             raise TypeError(f"expected fields {expected!r}")
         descriptor = type(self)._agl_descriptor
+        object.__setattr__(self, "_function_encoder", None)
         object.__setattr__(
             self,
             "_agl_value",
@@ -133,14 +157,19 @@ class _AglRecordView:
         )
 
     @classmethod
-    def _from_value(cls, value: RecordValue) -> Self:
+    def _from_value(
+        cls,
+        value: RecordValue,
+        function_encoder: Callable[[IrClosureValue], object] | None = None,
+    ) -> Self:
         view = object.__new__(cls)
         object.__setattr__(view, "_agl_value", value)
+        object.__setattr__(view, "_function_encoder", function_encoder)
         return view
 
     def __getattr__(self, name: str) -> object:
         try:
-            return encode_boundary_value(self._agl_value.fields[name])
+            return encode_boundary_value(self._agl_value.fields[name], self._function_encoder)
         except KeyError:
             raise AttributeError(name) from None
 
@@ -311,10 +340,16 @@ def synthesize_nominal_classes(
 class AglArrayView(MutableSequence[object]):
     """A mutable, lazy Python view over one AgL array value."""
 
-    __slots__ = ("_value",)
+    __slots__ = ("_value", "_function_encoder")
 
-    def __init__(self, value: ArrayValue) -> None:
+    def __init__(
+        self,
+        value: ArrayValue,
+        *,
+        function_encoder: Callable[[IrClosureValue], object] | None = None,
+    ) -> None:
         self._value = value
+        self._function_encoder = function_encoder
 
     def __len__(self) -> int:
         return len(self._value.elements)
@@ -330,8 +365,13 @@ class AglArrayView(MutableSequence[object]):
     ) -> object | list[object]:
         if not isinstance(index, SupportsIndex):
             slice_index = index
-            return [encode_boundary_value(value) for value in self._value.elements[slice_index]]
-        return encode_boundary_value(self._value.elements[operator.index(index)])
+            return [
+                encode_boundary_value(value, self._function_encoder)
+                for value in self._value.elements[slice_index]
+            ]
+        return encode_boundary_value(
+            self._value.elements[operator.index(index)], self._function_encoder
+        )
 
     @overload
     def __setitem__(self, index: SupportsIndex, value: object) -> None: ...
@@ -401,9 +441,9 @@ class AglArrayView(MutableSequence[object]):
             (
                 cast(
                     "_SortKey",
-                    encode_boundary_value(value)
+                    encode_boundary_value(value, self._function_encoder)
                     if key is None
-                    else key(encode_boundary_value(value)),
+                    else key(encode_boundary_value(value, self._function_encoder)),
                 ),
                 index,
             )
@@ -414,14 +454,41 @@ class AglArrayView(MutableSequence[object]):
 
     def __iter__(self) -> Iterator[object]:
         for value in self._value.elements:
-            yield encode_boundary_value(value)
+            yield encode_boundary_value(value, self._function_encoder)
 
     def __contains__(self, value: object) -> bool:
         try:
+            self.index(value)
+        except ValueError:
+            return False
+        return True
+
+    def index(self, value: object, start: int = 0, stop: int | None = None) -> int:
+        """Find *value* using the language's equality relation.
+
+        A companion sees encoded values, but array search must agree with AgL
+        ``in`` rather than Python view identity or Python's JSON bool/number
+        comparison. This intentionally mirrors ``list.index`` bounds.
+        """
+        try:
             probe = decode_boundary_value(value)
         except BoundaryViolation:
-            return False
-        return any(probe == item for item in self._value.elements)
+            raise ValueError(f"{value!r} is not in array") from None
+        length = len(self._value.elements)
+        lower = operator.index(start)
+        upper = length if stop is None else operator.index(stop)
+        if lower < 0:
+            lower = max(lower + length, 0)
+        else:
+            lower = min(lower, length)
+        if upper < 0:
+            upper = max(upper + length, 0)
+        else:
+            upper = min(upper, length)
+        for position in range(lower, upper):
+            if value_equal(probe, self._value.elements[position]):
+                return position
+        raise ValueError(f"{value!r} is not in array")
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, AglArrayView) and self._value is other._value
@@ -436,13 +503,19 @@ class AglArrayView(MutableSequence[object]):
 class AglDictView(MutableMapping[str, object]):
     """A mutable, lazy Python view over one AgL dict value."""
 
-    __slots__ = ("_value",)
+    __slots__ = ("_value", "_function_encoder")
 
-    def __init__(self, value: DictValue) -> None:
+    def __init__(
+        self,
+        value: DictValue,
+        *,
+        function_encoder: Callable[[IrClosureValue], object] | None = None,
+    ) -> None:
         self._value = value
+        self._function_encoder = function_encoder
 
     def __getitem__(self, key: str) -> object:
-        return encode_boundary_value(self._value.entries[key])
+        return encode_boundary_value(self._value.entries[key], self._function_encoder)
 
     def __setitem__(self, key: str, value: object) -> None:
         if not isinstance(key, str):
@@ -466,7 +539,7 @@ class AglDictView(MutableMapping[str, object]):
 
     def popitem(self) -> tuple[str, object]:
         key, value = self._value.entries.popitem()
-        return key, encode_boundary_value(value)
+        return key, encode_boundary_value(value, self._function_encoder)
 
     def __contains__(self, key: object) -> bool:
         return key in self._value.entries
@@ -481,12 +554,16 @@ class AglDictView(MutableMapping[str, object]):
         return render_value(self._value)
 
 
-def encode_boundary_value(value: Value) -> object:
+def encode_boundary_value(
+    value: Value, function_encoder: Callable[[IrClosureValue], object] | None = None
+) -> object:
     """Encode an AgL value by its runtime subclass.
 
     An ``array``/``dict`` crosses as a live view (mutating it mutates the AgL
-    value).  A ``json`` payload crosses uncopied and unchecked: the companion
-    is trusted to treat what it receives as read-only.
+    value). A caller that owns an interpreter supplies *function_encoder* to
+    turn closures into callable proxies; the runtime boundary itself remains
+    evaluator-independent. A ``json`` payload crosses uncopied and unchecked:
+    the companion is trusted to treat what it receives as read-only.
     """
     if isinstance(value, UnitValue):
         return None
@@ -501,17 +578,24 @@ def encode_boundary_value(value: Value) -> object:
     if isinstance(value, JsonValue):
         return AglJson(value.raw)
     if isinstance(value, ArrayValue):
-        return AglArrayView(value)
+        return AglArrayView(value, function_encoder=function_encoder)
     if isinstance(value, DictValue):
-        return AglDictView(value)
+        return AglDictView(value, function_encoder=function_encoder)
+    if isinstance(value, IrClosureValue):
+        if function_encoder is None:
+            raise BoundaryViolation("cannot encode an AgL function without an interpreter")
+        return function_encoder(value)
     if isinstance(value, (RecordValue, ExceptionValue)):
         try:
             cls = _NOMINAL_CLASSES[value.nominal]
         except KeyError as exc:
             raise BoundaryViolation(f"unknown AgL nominal {value.display_name!r}") from exc
         if isinstance(value, RecordValue) and issubclass(cls, _AglRecordView):
-            return cls._from_value(value)
-        fields = {name: encode_boundary_value(field) for name, field in value.fields.items()}
+            return cls._from_value(value, function_encoder)
+        fields = {
+            name: encode_boundary_value(field, function_encoder)
+            for name, field in value.fields.items()
+        }
         return cls(**fields)
     raise BoundaryViolation(f"cannot encode {type(value).__name__}")
 
@@ -541,6 +625,13 @@ def decode_boundary_value(obj: object) -> Value:
         return obj._value
     if isinstance(obj, AglDictView):
         return obj._value
+    # Imported lazily because externs depends on this module for normal
+    # boundary conversion. Only proxies minted by the evaluator carry an AgL
+    # closure; arbitrary Python callables remain unsupported.
+    from agm.agl.runtime.externs import AglCallableProxy
+
+    if isinstance(obj, AglCallableProxy):
+        return obj._closure
     descriptor = cast(object, getattr(type(obj), "_agl_descriptor", None))
     if isinstance(descriptor, NominalDescriptor):
         if isinstance(obj, _AglRecordView):

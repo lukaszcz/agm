@@ -335,9 +335,10 @@ class TestPackageDiscipline:
     def test_rejects_cyclic_scoped_resource_reexports_without_hanging(self, tmp_path: Path) -> None:
         package = _custom_package(tmp_path)
         (package.module_root / "a.agl").write_text(
-            "export std/core::{resource}\nscope Loop\nexport custom/b\nend Loop\n"
+            "export std/core::{resource}\nexport custom/c\nscope Loop\nexport custom/b\nend Loop\n"
         )
         (package.module_root / "b.agl").write_text("scope Loop\nexport custom/a\nend Loop\n")
+        (package.module_root / "c.agl").write_text("let value = 1\n")
 
         with (
             fail_if_slow("resource re-export resolution did not terminate"),
@@ -462,12 +463,13 @@ class TestPackageDiscipline:
 
         validate_package(package)
 
-    def test_rejects_function_declared_with_a_resource_builtin_name(self, tmp_path: Path) -> None:
+    def test_accepts_qualified_function_declared_with_a_resource_builtin_name(
+        self, tmp_path: Path
+    ) -> None:
         package = _custom_package(tmp_path)
         (package.module_root / "main.agl").write_text("def resource(path: text) -> text = path\n")
 
-        with pytest.raises(DisciplineError):
-            validate_package(package)
+        validate_package(package)
 
     def test_accepts_scoped_enum_constructor_shadowing_resource_import(
         self, tmp_path: Path

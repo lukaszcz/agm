@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from agm.agl.capabilities import HostCapabilities
+    from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode
     from agm.agl.ir.ids import NominalId, SymbolId
     from agm.agl.ir.program import ExecutableProgram, NominalDescriptor
@@ -289,9 +290,9 @@ class PipelineDriver:
     agent_dispatcher : callable or None
         The callable used to dispatch a typed ``Agent`` value for ``ask``.
     shell_exec_timeout : float or None
-        Idle timeout (in seconds) applied to every ``exec`` shell call. ``None``
-        means no timeout (the shell command may run indefinitely). This is the
-        ``[exec] timeout`` config value, threaded in from the CLI.
+        Initial idle timeout (in seconds) for the ``std/config::timeout``
+        binding used by omitted ``exec`` timeout arguments. ``None`` means no
+        timeout; an explicit call argument takes precedence.
     default_call_depth_limit : int or None
         Maximum call depth for recursive functions.  Exceeding
         this limit raises a ``RecursionError`` in the AgL program.  ``None``
@@ -300,7 +301,8 @@ class PipelineDriver:
     extern_registry : ExternRegistry or None
         Optional shared Python FFI registry. Hosts that run several drivers
         across one program invocation pass the same registry to each so
-        companion module imports and module state are shared.
+        companion module imports and Python module globals are shared. Each
+        run still creates an interpreter with its own companion runtime state.
     """
 
     def __init__(
@@ -411,6 +413,8 @@ class PipelineDriver:
         warnings: list[Diagnostic],
         host_settings_policy: "HostSettingsPolicy | None" = None,
         builtin_host_settings: "Mapping[str, Value] | None" = None,
+        builtin_var_seeds: "Mapping[BuiltinVarKey, Value] | None" = None,
+        process_environment: "Mapping[str, str] | None" = None,
         program_symbol: "SymbolId | None" = None,
         select_default_program: bool = False,
     ) -> RunResult:
@@ -501,6 +505,18 @@ class PipelineDriver:
         else:
             reconfigurer = None
 
+        # ``builtin_host_settings`` is the legacy, engine-key-only API. Keep
+        # it for config-host compatibility while exposing module-qualified
+        # seeds for every host-backed standard-library binding.
+        interpreter_builtin_settings: dict[str | BuiltinVarKey, Value] = {}
+        if builtin_host_settings is not None:
+            interpreter_builtin_settings.update(builtin_host_settings)
+        if builtin_var_seeds is not None:
+            # The structured API wins for a ``std/config`` key supplied by
+            # both routes: it is the more specific host declaration.
+            for key, value in builtin_var_seeds.items():
+                interpreter_builtin_settings[key] = value
+
         try:
             interp = IrInterpreter(
                 executable,
@@ -515,7 +531,8 @@ class PipelineDriver:
                 host_contracts=host_contracts,
                 extern_registry=host_env.extern_registry,
                 host_reconfigurer=reconfigurer,
-                builtin_host_settings=builtin_host_settings,
+                builtin_host_settings=interpreter_builtin_settings,
+                process_environment=process_environment,
             )
             entry_bindings = interp.run(program_symbol=program_symbol)
         except AglRaise as exc:
@@ -543,6 +560,9 @@ class PipelineDriver:
                 bindings={},
                 trace_path=trace.path,
             )
+        except SystemExit as exc:
+            trace.run_end(ok=exc.code is None or exc.code == 0)
+            raise
         except ParameterDefaultCycleError as exc:
             trace.run_end(ok=False)
             return RunResult(
@@ -554,11 +574,10 @@ class PipelineDriver:
                 trace_path=trace.path,
             )
         except HostConfigurationError as exc:
-            # The materialized ``default-agent`` value cannot be dispatched: a
-            # pre-execution host-configuration failure (exit 1 per the CLI
-            # contract), not an uncaught AgL exception — nothing has executed
-            # yet, so it is reported as an ordinary diagnostic rather than
-            # ``result.error``.
+            # An invalid startup host value, or an unseeded non-engine binding
+            # read during evaluation, is a host-configuration failure (exit 1
+            # per the CLI contract), not an uncaught AgL exception. Report it
+            # as an ordinary language diagnostic rather than ``result.error``.
             trace.run_end(ok=False)
             return RunResult(
                 ok=False,
@@ -884,8 +903,15 @@ class PipelineDriver:
         roots: "RootSet | None" = None,
         package_roots: "Iterable[PackageInfo]" = (),
         default_stdlib: bool = True,
+        builtin_var_seeds: "Mapping[BuiltinVarKey, Value] | None" = None,
+        process_environment: "Mapping[str, str] | None" = None,
     ) -> RunResult:
-        """Compile and run a program with the standard module roots by default."""
+        """Compile and run a program with the standard module roots by default.
+
+        ``builtin_var_seeds`` supplies typed host values by their complete
+        ``(ModuleId, scope_path, name)`` identity. It is independent of the legacy
+        engine-only ``builtin_host_settings`` accepted by :meth:`run_prepared`.
+        """
         return self.run_prepared(
             self.prepare_program(
                 source,
@@ -897,6 +923,8 @@ class PipelineDriver:
             param_values=param_values,
             check_only=check_only,
             log_file=log_file,
+            builtin_var_seeds=builtin_var_seeds,
+            process_environment=process_environment,
             select_default_program=True,
         )
 
@@ -1081,6 +1109,8 @@ class PipelineDriver:
         executable: "ExecutableProgram | None" = None,
         host_settings_policy: "HostSettingsPolicy | None" = None,
         builtin_host_settings: "Mapping[str, Value] | None" = None,
+        builtin_var_seeds: "Mapping[BuiltinVarKey, Value] | None" = None,
+        process_environment: "Mapping[str, str] | None" = None,
         program_symbol: "SymbolId | None" = None,
         select_default_program: bool = False,
     ) -> RunResult:
@@ -1121,6 +1151,8 @@ class PipelineDriver:
             executable=executable,
             host_settings_policy=host_settings_policy,
             builtin_host_settings=builtin_host_settings,
+            builtin_var_seeds=builtin_var_seeds,
+            process_environment=process_environment,
             program_symbol=program_symbol,
             select_default_program=select_default_program,
         )
@@ -1172,6 +1204,8 @@ class PipelineDriver:
         executable: "ExecutableProgram | None" = None,
         host_settings_policy: "HostSettingsPolicy | None" = None,
         builtin_host_settings: "Mapping[str, Value] | None" = None,
+        builtin_var_seeds: "Mapping[BuiltinVarKey, Value] | None" = None,
+        process_environment: "Mapping[str, str] | None" = None,
         program_symbol: "SymbolId | None" = None,
         select_default_program: bool = False,
         selected_program: ProgramDeclInfo | None = None,
@@ -1333,6 +1367,8 @@ class PipelineDriver:
                 warnings=warnings,
                 host_settings_policy=host_settings_policy,
                 builtin_host_settings=builtin_host_settings,
+                builtin_var_seeds=builtin_var_seeds,
+                process_environment=process_environment,
                 program_symbol=program_symbol,
                 select_default_program=select_default_program,
             ),
@@ -1378,8 +1414,10 @@ def _append_checker_warnings(
     warnings.extend(checked.warnings)
 
 
-def _reachable_modules(module_id: "ModuleId", graph: "ModuleGraph") -> tuple[ModuleId, ...]:
-    """Return *module_id* and its dependency subgraph in deterministic order."""
+def _reachable_modules(
+    module_id: "ModuleId", adjacency: "Mapping[ModuleId, tuple[ModuleId, ...]]"
+) -> tuple[ModuleId, ...]:
+    """Return a module and its dependencies in *adjacency* order."""
     reachable: list[ModuleId] = []
     seen: set[ModuleId] = set()
     pending = [module_id]
@@ -1389,22 +1427,29 @@ def _reachable_modules(module_id: "ModuleId", graph: "ModuleGraph") -> tuple[Mod
             continue
         seen.add(current)
         reachable.append(current)
-        pending.extend(reversed(graph.adjacency[current]))
+        pending.extend(reversed(adjacency[current]))
     return tuple(reachable)
 
 
 def _select_program_inventory(
     executable: "ExecutableProgram", graph: "ModuleGraph", module_id: "ModuleId"
 ) -> "ExecutableProgram":
-    """Restrict runtime metadata to a selected program's dependency graph."""
-    reachable = frozenset(_reachable_modules(module_id, graph))
+    """Restrict a selected program to its runtime modules and source inventories."""
+    source_reachable = frozenset(graph.source_reachable_modules(module_id))
+    runtime_reachable = (
+        frozenset(_reachable_modules(module_id, graph.adjacency)) | graph.ambient_modules
+    )
     return replace(
         executable,
         entry_module=module_id,
-        modules={mid: module for mid, module in executable.modules.items() if mid in reachable},
-        params=tuple(param for param in executable.params if param.module in reachable),
+        modules={
+            mid: module for mid, module in executable.modules.items() if mid in runtime_reachable
+        },
+        params=tuple(param for param in executable.params if param.module in source_reachable),
         dry_run_inventory=tuple(
-            call_site for call_site in executable.dry_run_inventory if call_site.module in reachable
+            call_site
+            for call_site in executable.dry_run_inventory
+            if call_site.module in source_reachable
         ),
     )
 
@@ -1421,7 +1466,7 @@ def _param_inventory(
     contribute their params to a program inventory.
     """
     return tuple(
-        info for mid in _reachable_modules(module_id, graph) for info in infos_by_module[mid]
+        info for mid in graph.source_reachable_modules(module_id) for info in infos_by_module[mid]
     )
 
 

@@ -77,6 +77,7 @@ def test_refresh_registers_stdlib_package_under_an_isolated_agm_home(tmp_path: P
 
     assert installed.root == agm_home / "packages" / "std" / AGM_VERSION
     assert (installed.root / "std" / "core.agl").is_file()
+    assert (installed.root / "std" / "option.agl").is_file()
     assert verify_record(installed.root)
     index = load_activation_index(home=tmp_path / "ignored-home", env={"AGM_HOME": str(agm_home)})
     assert index.packages["std"].version == installed.manifest.version

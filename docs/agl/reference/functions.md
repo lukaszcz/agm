@@ -11,9 +11,13 @@ from other functions. The type of a function value is written
 ## `def` — named function declarations
 
 ```ebnf
-func_def      ::= "def" decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
-                | "builtin" NEWLINE? "def" decl_head type_params? "(" param_list? ")" "->" type_expr
+func_def         ::= "def" func_decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
+builtin_func_def ::= "builtin" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
+extern_func_def  ::= "extern" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
+func_decl_head   ::= decl_head | builtin_receiver "::" name
 decl_head     ::= [scope_path "::"] name
+builtin_receiver ::= "array" "[" name "]" | "dict" "[" "text" "," name "]"
+                   | "text" | "json" | "int" | "decimal" | "bool"
 func_body     ::= expr | suite
 type_params   ::= "[" name ("," name)* "]"
 param_list    ::= param_entry ("," param_entry)* ","?
@@ -209,6 +213,35 @@ parameter is `self`. The receiver is supplied by member access: `p.f(x)` is
 the same call as `Type::f(p, x)`. A method names its enclosing type explicitly
 in its annotations; there is no implicit receiver type name.
 
+The standard library may also declare a method for a builtin receiver directly
+in its declaration head. This syntax is available to ordinary, `builtin`, and
+`extern` definitions. `array[E]::name` and `dict[text, V]::name` bind their
+receiver element or value parameter; `text`, `json`, `int`, `decimal`, and
+`bool` are bare receivers. Such a declaration belongs only in its owning
+module: `std/array`, `std/dict`, `std/text`, `std/json`, and `std/math`
+respectively. The standard library declares methods for every listed receiver
+except `bool`. A builtin receiver must use its bare generic form, so
+`array[int]::name` and `dict[text, array[int]]::name` are invalid. As with a
+nominal generic receiver, `_` may occupy an unused builtin receiver slot; it
+binds a private rigid parameter and cannot be named by the method body.
+
+Declared builtin receiver methods are available by member access once their
+owning module is loaded. With the standard-library prelude enabled, the loader
+injects the optional `std/builtin-methods` registry when present, loading the
+owning modules ambiently; then `xs.size()` or `(-3).abs()` does not need an
+import of that module. With `--no-stdlib`, or a custom standard library without
+the registry, import the owning module first. This ambient availability applies
+only to methods: an ordinary free function in an owning module still requires
+an import. Ordinary and `extern` builtin-receiver methods use the same
+direct-call, bound-method, and generic-specialization rules as nominal methods.
+
+A `builtin def` receiver method is instead a call-only host route. Its name and
+signature must be one of `print`, `render`, `copy`, or `shallow_copy`; each
+takes only `self`. `copy` and `shallow_copy` return the receiver's exact type,
+`print` returns `unit`, and `render` returns `text`. Such a call reuses the
+corresponding bare builtin operation with `self` as its value; it cannot be
+bound or partially applied.
+
 ```agl
 record Person
   name: text
@@ -333,7 +366,8 @@ param_marker ::= "/" | "*" | "@" NAME    (* @pos, @std, @named *)
 ```
 
 `fn` produces a function value. The return type annotation is **optional**:
-when omitted it is inferred from the body. Parameter types are always
+when omitted it is inferred from the body, unless a concrete expected function
+type checks the body against its result type. Parameter types are always
 required.
 
 ```agl
@@ -363,8 +397,8 @@ program def main() -> unit =
 
 A lambda's name (the binding introduced by `let`) is not in scope inside
 the lambda body. Local recursion is expressed via a top-level `def`. The
-restriction is intentional: lambda return-type inference is bottom-up and
-safe precisely because the body never depends on the lambda's own type.
+restriction is intentional: lambda return-type inference is local and safe
+precisely because the body never depends on the lambda's own type.
 
 ## Generic functions
 
@@ -379,6 +413,25 @@ def id[T](x: T) -> T = x
 
 def fst[A, B](a: A, b: B) -> A = a
 ```
+
+An ordinary function in a named scope or imported module may use the same name
+as a built-in function because it is reached through its own qualified
+namespace. The bare built-in spelling remains reserved, even after a `use`
+declaration makes that scope's or module's members bare:
+
+<!-- agl-check: fragment -->
+```agl
+use Codec::*
+scope Codec
+def render[T](value: T) -> array[T] = [value]
+end Codec
+
+let values = Codec::render(1)  # the scoped generic function
+let text = render(1)           # the built-in render
+```
+
+An ordinary user `def` at the selected entry module's root cannot use a
+built-in function name.
 
 A type parameter is an ordinary name; it may be used anywhere a type may
 appear within the declaration — parameter types, the return type, and any
@@ -743,7 +796,7 @@ Error conditions are reported statically:
   forms such as a standalone `?`, `f(? + 1)`, and the single-argument sugar
   `f ?` do not parse.
 - Partial application is not supported by the special built-in calls `print`,
-  `render`, `exec`, `ask`, `ask-request`, `parse_json`, `copy`, and
+  `render`, `exec`, `ask`, `ask-request`, `copy`, and
   `shallow_copy`; for example, `print(?)` is rejected.
 - Numbered placeholders must be a permutation from `?1` through `?n`; examples
   such as `f(?0)`, `f(?2)`, `f(?1, ?1)`, and `f(?, ?1)` are rejected.

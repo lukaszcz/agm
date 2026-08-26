@@ -18,11 +18,18 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.type_table import MethodDef, NominalOwner
 from agm.agl.semantics.types import (
+    ArrayType,
+    BoolType,
+    DecimalType,
+    DictType,
     EnumType,
     ExceptionType,
     FunctionType,
     InferenceVarType,
+    IntType,
+    JsonType,
     RecordType,
+    TextType,
     Type,
     TypeVarType,
     contains_inference_var,
@@ -42,6 +49,7 @@ from agm.agl.syntax.nodes import (
     static_items,
 )
 from agm.agl.syntax.visitor import walk
+from agm.agl.typecheck.declaration_validation import builtin_method_receiver_for
 from agm.agl.typecheck.inference import ConstraintRole, InferenceEngine, InferenceError
 from agm.util.graph import sccs
 
@@ -49,10 +57,7 @@ if TYPE_CHECKING:
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import (
-    TYPE_PARAMETER_WILDCARD,
-    TypeExpr,
-)
+from agm.agl.syntax.types import TYPE_PARAMETER_WILDCARD, TypeExpr
 from agm.agl.typecheck.env import (
     AglTypeError,
     FunctionSignature,
@@ -431,7 +436,7 @@ def _infer_function_component(
                 result_type=result,
                 receiver_owner=receiver_owner,
             )
-        register_method_header(module.env, node, signature, receiver)
+        register_method_header(module.env, node, signature, receiver, module.module_id)
         for env in discovery_envs:
             _register_signature(env, module, node, signature, function_type)
         provisional.append(_ProvisionalHeader(module, node, result, signature, receiver))
@@ -517,7 +522,7 @@ def _infer_function_component(
         )
         for env in publication_envs:
             _register_signature(env, module, node, concrete_signature, function_type)
-        register_method_header(module.env, node, concrete_signature, receiver)
+        register_method_header(module.env, node, concrete_signature, receiver, module.module_id)
         records.append(
             FunctionSignatureRecord(
                 declaration_node_id=node.node_id,
@@ -629,17 +634,17 @@ def _method_owner(
 
 @dataclass(frozen=True, slots=True)
 class ResolvedReceiver:
-    """A classified method's owner, resolved once and reused by its registration.
+    """A classified method's receiver resolved once for header registration.
 
-    ``scope_path`` is the owner's declaration path as scope classified it,
-    ``owner`` the nominal handle that path resolves to, and
-    ``type_param_arity`` how many leading method type parameters that owner
-    binds.
+    Nominal receivers retain their declaration owner for the nominal method
+    table. Builtin receivers carry their structural or scalar type and the
+    constructor key that publishes their methods for member selection.
     """
 
     scope_path: tuple[str, ...]
-    owner: NominalOwner
+    owner: Type
     type_param_arity: int
+    builtin_constructor: str | None = None
 
 
 def _method_type_parameter_name(node: FuncDef, index: int) -> str:
@@ -663,10 +668,42 @@ def _method_signature_type_params(node: FuncDef, arity: int) -> tuple[str, ...]:
     )
 
 
+def _builtin_receiver_type(
+    node: FuncDef, owner_path: tuple[str, ...]
+) -> tuple[Type, int, str] | None:
+    """Build the semantic type for a previously validated builtin receiver."""
+    receiver = builtin_method_receiver_for(node, owner_path)
+    if receiver is None:
+        return None
+    if receiver.name == "array":
+        type_parameter = _method_signature_type_params(node, 1)[0]
+        return ArrayType(TypeVarType(type_parameter)), 1, receiver.name
+    if receiver.name == "dict":
+        type_parameter = _method_signature_type_params(node, 1)[0]
+        return DictType(TypeVarType(type_parameter)), 1, receiver.name
+    scalar_types: dict[str, Type] = {
+        "text": TextType(),
+        "json": JsonType(),
+        "int": IntType(),
+        "decimal": DecimalType(),
+        "bool": BoolType(),
+    }
+    return scalar_types[receiver.name], 0, receiver.name
+
+
 def _receiver_type(
     env: TypeEnvironment, node: FuncDef, owner_path: tuple[str, ...]
 ) -> tuple[Type, ResolvedReceiver]:
     """Build the receiver type and its resolved owner from a classified method declaration."""
+    builtin = _builtin_receiver_type(node, owner_path)
+    if builtin is not None:
+        receiver, arity, constructor = builtin
+        return receiver, ResolvedReceiver(
+            scope_path=owner_path,
+            owner=receiver,
+            type_param_arity=arity,
+            builtin_constructor=constructor,
+        )
     owner, arity, generic = _method_owner(env, owner_path)
     resolved = ResolvedReceiver(scope_path=owner_path, owner=owner, type_param_arity=arity)
     if len(node.type_param_slots) < arity:
@@ -699,25 +736,28 @@ def register_method_header(
     node: FuncDef,
     signature: FunctionSignature,
     receiver: ResolvedReceiver | None,
+    module_id: ModuleId,
 ) -> None:
     """Publish one already-resolved classified method into the shared registry."""
     if receiver is None:
         return
-    env.type_table.register_method(
-        receiver.owner,
-        MethodDef(
-            module_id=receiver.owner.module_id,
-            scope_path=receiver.scope_path,
-            name=node.name,
-            decl_node_id=node.node_id,
-            signature=FunctionType(
-                params=tuple(param.type for param in signature.params), result=signature.result
-            ),
-            receiver_type_param_arity=receiver.type_param_arity,
-            type_params=signature.type_params,
-            is_builtin=node.is_builtin,
+    method = MethodDef(
+        module_id=module_id,
+        scope_path=receiver.scope_path,
+        name=node.name,
+        decl_node_id=node.node_id,
+        signature=FunctionType(
+            params=tuple(param.type for param in signature.params), result=signature.result
         ),
+        receiver_type_param_arity=receiver.type_param_arity,
+        type_params=signature.type_params,
+        is_builtin=node.is_builtin,
     )
+    if receiver.builtin_constructor is not None:
+        env.type_table.register_builtin_method(receiver.builtin_constructor, method)
+    else:
+        assert isinstance(receiver.owner, (RecordType, EnumType, ExceptionType))
+        env.type_table.register_method(receiver.owner, method)
 
 
 def resolve_function_header(

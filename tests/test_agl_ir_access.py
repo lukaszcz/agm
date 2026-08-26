@@ -40,6 +40,24 @@ def test_index_get_array_out_of_range() -> None:
         index_get(IndexKind.ARRAY, lst, IntValue(5))
     assert exc_info.value.index == 5
     assert exc_info.value.length == 2
+    assert str(exc_info.value) == "Array index 5 out of range for length 2"
+
+
+def test_index_get_text_uses_unicode_code_points() -> None:
+    value = TextValue("é😀")
+    assert index_get(IndexKind.TEXT, value, IntValue(0)) == TextValue("é")
+    assert index_get(IndexKind.TEXT, value, IntValue(-1)) == TextValue("😀")
+
+
+def test_index_get_text_rejects_bad_indices_and_containers() -> None:
+    with pytest.raises(AglIndexOutOfRange):
+        index_get(IndexKind.TEXT, TextValue("x"), IntValue(1))
+    with pytest.raises(AssertionError, match="index_get TEXT: expected TextValue"):
+        index_get(IndexKind.TEXT, ArrayValue([]), IntValue(0))
+    with pytest.raises(AssertionError, match="index_get TEXT: expected IntValue"):
+        index_get(IndexKind.TEXT, TextValue("x"), TextValue("x"))
+    with pytest.raises(AssertionError, match="index_set TEXT: text is immutable"):
+        index_set(IndexKind.TEXT, TextValue("x"), IntValue(0), TextValue("y"))
 
 
 def test_index_get_dict_basic() -> None:

@@ -245,6 +245,10 @@ def _is_as(token: Token) -> bool:
     return _scanner_token_type(token.type) == KW_AS
 
 
+# Token types that can spell one selected member of a ``use`` header.
+_MEMBER_TYPES = frozenset({NAME, OP_NAME})
+
+
 def _is_use_declaration(tokens: list[Token], index: int) -> bool:
     """Whether an item-start ``use`` has a declaration-shaped token header."""
 
@@ -262,6 +266,8 @@ def _is_use_declaration(tokens: list[Token], index: int) -> bool:
         token.type == DCOLON or _is_as(token) for token in header
     ):
         return False
+    # ``hiding`` atoms and ``as`` targets both spell a member name, which the
+    # grammar admits as an ordinary name or an operator.
     for hiding_index, token in enumerate(header):
         if not (
             token.type == NAME
@@ -270,10 +276,11 @@ def _is_use_declaration(tokens: list[Token], index: int) -> bool:
             and header[hiding_index - 1].type in {STAR, "RBRACE"}
         ):
             continue
-        if hiding_index + 1 >= len(header) or header[hiding_index + 1].type != NAME:
+        if hiding_index + 1 >= len(header) or header[hiding_index + 1].type not in _MEMBER_TYPES:
             return False
     if any(
-        _is_as(token) and (position + 1 >= len(header) or header[position + 1].type != NAME)
+        _is_as(token)
+        and (position + 1 >= len(header) or header[position + 1].type not in _MEMBER_TYPES)
         for position, token in enumerate(header)
     ):
         return False

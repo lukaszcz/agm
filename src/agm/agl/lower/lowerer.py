@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import assert_never, cast
 
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals, DeclaredNominal
+from agm.agl.ir.builtin_vars import builtin_var_key
 from agm.agl.ir.contracts import (
     ContractPayload,
     ContractRequest,
@@ -102,7 +103,6 @@ from agm.agl.ir.nodes import (
     IrNominalCast,
     IrNominalIs,
     IrOr,
-    IrParseJson,
     IrPrint,
     IrRaise,
     IrRenderTemplate,
@@ -164,8 +164,20 @@ from agm.agl.matchcompile import (
     Occurrence,
     OccurrenceId,
 )
-from agm.agl.modules.ids import STD_CORE_ID, ModuleId, spell_scope_path
-from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind, BuiltinStaticKind
+from agm.agl.modules.ids import (
+    STD_CONFIG_ID,
+    STD_CORE_ID,
+    STD_ENV_ID,
+    ModuleId,
+    spell_scope_path,
+)
+from agm.agl.scope.symbols import (
+    BUILTIN_CALL_NAMES,
+    BinderKind,
+    BindingRef,
+    BuiltinKind,
+    BuiltinStaticKind,
+)
 from agm.agl.semantics.type_table import MethodDef, TypeDef, TypeTable
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -454,6 +466,7 @@ class _Lowerer:
         sites: Mapping[int, CompiledMatchSite],
         resource_root: Path | None = None,
         *,
+        has_std_env: bool = False,
         contract_payloads: Mapping[int, ContractPayload] | None = None,
     ) -> None:
         self._checked = checked
@@ -463,6 +476,7 @@ class _Lowerer:
         self._source_text = normalize_newlines(source_text)
         self._compiled_sites = sites
         self._resource_root = resource_root
+        self._has_std_env = has_std_env
         self._params: list[IrParam] = []
         # Shared TypeTable built during checking; resolves record/enum field
         # and variant shapes for constructor lowering, nominal descriptors,
@@ -1257,9 +1271,13 @@ class _Lowerer:
                 ref = self._checked.binding_for(nid)
                 assert ref is not None, f"compiler bug: no binding for VarRef node_id={nid!r}"
                 if ref.kind is BinderKind.builtin_var_binding:
-                    # A ``builtin var`` read pulls the engine setting from its
-                    # interpreter register, keyed by the engine-key name.
-                    return IrBuiltinLoad(location=self._loc(span), key=ref.name)
+                    # A ``builtin var`` read is keyed by its defining module
+                    # and name; the interpreter routes ``std/config`` keys to
+                    # engine registers and other keys to host-backed values.
+                    return IrBuiltinLoad(
+                        location=self._loc(span),
+                        key=builtin_var_key(ref.module_id, ref.scope_path, ref.name),
+                    )
                 if ref.kind is BinderKind.constructor_binding:
                     node_typ = self._node_type(nid)
                     assert isinstance(node_typ, FunctionType)
@@ -2145,10 +2163,11 @@ class _Lowerer:
         span: "SourceSpan",
         *,
         agent: IrExpr | None = None,
+        receiver: IrExpr | None = None,
     ) -> IrExpr:
         """Lower a builtin call node by dispatching on ``BuiltinKind``.
 
-        Host builtins (``PRINT``, ``RENDER``, ``PARSE_JSON``, ``COPY``,
+        Host builtins (``PRINT``, ``RENDER``, ``COPY``,
         ``SHALLOW_COPY``, ``ASK``, ``ASK_REQUEST``, and ``EXEC``) are lowered
         here.
         """
@@ -2160,7 +2179,9 @@ class _Lowerer:
                 # ``_explicit_builtin_target_type``).
                 target = self._explicit_builtin_target_type(call_node)
                 arg_ir = (
-                    self.lower_expr(call_node.args[0])
+                    receiver
+                    if receiver is not None
+                    else self.lower_expr(call_node.args[0])
                     if target is None
                     else self.lower_coerced(call_node.args[0], target)
                 )
@@ -2172,7 +2193,9 @@ class _Lowerer:
                 # present) and any supplied boolean display options.
                 target = self._explicit_builtin_target_type(call_node)
                 arg_ir = (
-                    self.lower_expr(call_node.args[0])
+                    receiver
+                    if receiver is not None
+                    else self.lower_expr(call_node.args[0])
                     if target is None
                     else self.lower_coerced(call_node.args[0], target)
                 )
@@ -2191,11 +2214,6 @@ class _Lowerer:
                     quote_strings=quote_strings,
                 )
 
-            case BuiltinKind.PARSE_JSON:
-                # parse_json(text) — arg is statically text; lower without coercion.
-                arg_ir = self.lower_expr(call_node.args[0])
-                return IrParseJson(location=loc, value=arg_ir)
-
             case BuiltinKind.RESOURCE | BuiltinKind.RESOURCE_DIR:
                 try:
                     path = resource_path(call_node, is_directory=kind is BuiltinKind.RESOURCE_DIR)
@@ -2211,7 +2229,11 @@ class _Lowerer:
                 # explicit scalar-widening override (e.g. copy::[decimal](5)) takes
                 # effect, matching how any other call site coerces its arguments.
                 result_type = self._node_type(call_node.node_id)
-                arg_ir = self.lower_coerced(call_node.args[0], result_type)
+                arg_ir = (
+                    receiver
+                    if receiver is not None
+                    else self.lower_coerced(call_node.args[0], result_type)
+                )
                 copy_kind = CopyKind.SHALLOW if kind is BuiltinKind.SHALLOW_COPY else CopyKind.DEEP
                 return IrCopyValue(location=loc, kind=copy_kind, value=arg_ir)
 
@@ -2308,7 +2330,7 @@ class _Lowerer:
         to IrMakeRecord/IrMakeException. Direct user function
         calls are lowered to IrDirectCall.  Lambda calls are lowered to IrMakeClosure,
         indirect calls to IrIndirectCall, and host builtins to
-        IrPrint/IrRenderValue/IrParseJson/IrCopyValue/IrAsk/
+        IrPrint/IrRenderValue/IrCopyValue/IrAsk/
         IrAskRequest/IrExec.
         """
         callee = call_node.callee
@@ -2330,13 +2352,21 @@ class _Lowerer:
         if builtin_kind is not None:
             if isinstance(callee, FieldAccess):
                 method = self._checked.method_selection_for(callee.node_id)
-                if method is None or method.is_builtin:
+                if method is None:
                     return self._lower_builtin_call(
                         builtin_kind,
                         call_node,
                         span,
                         agent=self.lower_expr(callee.obj),
                     )
+                if method.is_builtin:
+                    method_kind = BUILTIN_CALL_NAMES[method.name]
+                    receiver = self.lower_expr(callee.obj)
+                    if method_kind in {BuiltinKind.ASK, BuiltinKind.ASK_REQUEST}:
+                        return self._lower_builtin_call(
+                            method_kind, call_node, span, agent=receiver
+                        )
+                    return self._lower_builtin_call(method_kind, call_node, span, receiver=receiver)
             else:
                 return self._lower_builtin_call(builtin_kind, call_node, span)
 
@@ -3254,7 +3284,10 @@ class _Lowerer:
         # apply to ``ask`` alone.
         if is_request:
             if agent is None:
-                agent = IrBuiltinLoad(location=loc, key="default-agent")
+                agent = IrBuiltinLoad(
+                    location=loc,
+                    key=builtin_var_key(STD_CONFIG_ID, (), "default-agent"),
+                )
             return IrAskRequest(location=loc, agent=agent, prompt=prompt_ir)
 
         # 3. Determine max_attempts from the on_parse_error named arg.
@@ -3327,8 +3360,41 @@ class _Lowerer:
         """Lower an exec() builtin call to IrExec."""
         loc = self._loc(span)
 
-        # command is first positional arg
+        # The command is positional. The host-backed defaults are expressed
+        # as ordinary IR operands so each call reads the current module binding.
         command_ir = self.lower_expr(call_node.args[0])
+        named_map = {arg.name: arg for arg in call_node.named_args}
+        if "env" in named_map:
+            env_ir = self.lower_expr(named_map["env"].value)
+        elif self._has_std_env:
+            env_ir = IrBuiltinLoad(
+                location=loc,
+                key=builtin_var_key(STD_ENV_ID, (), "environ"),
+            )
+        else:
+            # A user-supplied legacy host declaration can expose only the
+            # original command parameter outside the standard library. It has
+            # no ambient Environ binding, so retain its empty child env.
+            env_ir = IrMakeDict(location=loc, entries=())
+        cwd_ir: IrExpr
+        if "cwd" in named_map:
+            cwd_ir = self.lower_expr(named_map["cwd"].value)
+        else:
+            option_none = self._link.builtin_nominals.resolve_standard_member("Option", "None")
+            cwd_ir = IrMakeRecord(
+                location=loc,
+                nominal=option_none.nominal,
+                display_name=option_none.display_name,
+                fields=(),
+            )
+        timeout_ir = (
+            self.lower_expr(named_map["timeout"].value)
+            if "timeout" in named_map
+            else IrBuiltinLoad(
+                location=loc,
+                key=builtin_var_key(STD_CONFIG_ID, (), "timeout"),
+            )
+        )
 
         max_attempts = self._extract_max_attempts(call_node)
 
@@ -3356,6 +3422,9 @@ class _Lowerer:
         return IrExec(
             location=loc,
             command=command_ir,
+            env=env_ir,
+            cwd=cwd_ir,
+            timeout=timeout_ir,
             contract_id=contract_id,
             max_attempts=max_attempts,
         )
@@ -3588,12 +3657,13 @@ class _Lowerer:
         )
 
         if ref.kind is BinderKind.builtin_var_binding:
-            # A ``builtin var`` assignment stores into the engine setting's
-            # interpreter register (keyed by engine-key name); it has no symbol.
+            # A ``builtin var`` assignment stores by defining module, scope path,
+            # and name; it has no symbol. Root ``std/config`` stores additionally
+            # apply their engine effects.
             slot_type = self._binding_type(ref.decl_node_id)
             return IrBuiltinStore(
                 location=self._loc(span),
-                key=ref.name,
+                key=builtin_var_key(ref.module_id, ref.scope_path, ref.name),
                 value=self.lower_coerced(rhs, slot_type),
             )
 
@@ -3607,12 +3677,14 @@ class _Lowerer:
         )
 
     def _kind_for_container(self, t: Type) -> IndexKind:
-        """Return IndexKind for a container type (ARRAY or DICT)."""
+        """Return IndexKind for an indexable array, dict, or text value."""
         if isinstance(t, ArrayType):
             return IndexKind.ARRAY
         if isinstance(t, DictType):
             return IndexKind.DICT
-        raise AssertionError(f"compiler bug: non-container type in index path: {t!r}")
+        if isinstance(t, TextType):
+            return IndexKind.TEXT
+        raise AssertionError(f"compiler bug: non-indexable type in index path: {t!r}")
 
     # ------------------------------------------------------------------
     # Top-level entry point

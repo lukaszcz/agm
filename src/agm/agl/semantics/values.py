@@ -303,6 +303,20 @@ class ExceptionValue:
 _STRUCTURAL_KINDS = (ArrayValue, DictValue, RecordValue, ExceptionValue)
 
 
+def value_equal(left: Value, right: Value) -> bool:
+    """Return AgL equality for one value position.
+
+    ``int`` and ``decimal`` widen when compared directly. Structural equality
+    remains responsible for recursive positions, where values retain their
+    exact element types and therefore do not widen.
+    """
+    if isinstance(left, IntValue) and isinstance(right, DecimalValue):
+        return decimal.Decimal(left.value) == right.value
+    if isinstance(left, DecimalValue) and isinstance(right, IntValue):
+        return left.value == decimal.Decimal(right.value)
+    return values_equal(left, right)
+
+
 def values_equal(a: Value, b: Value, _seen: "set[tuple[int, int]] | None" = None) -> bool:
     """Structural equality between two values — cycle-safe and co-inductive.
 
@@ -511,5 +525,6 @@ __all__ = [
     "Value",
     "_json_eq",
     "_json_hash",
+    "value_equal",
     "values_equal",
 ]

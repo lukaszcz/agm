@@ -2282,7 +2282,7 @@ class TestLowerGraph:
         - Both modules appear in ``program.modules`` with distinct entries.
         - Both modules' functions appear in ``program.functions`` with DISTINCT FunctionIds.
         - ``program.nominals`` contains types from both modules (one record per module).
-        - Exactly one ``SourceFile`` per module (3 sources total, including std/core).
+        - Exactly one ``SourceFile`` per loaded module, including ambient method libraries.
         - The library ``ExecutableModule.initializers`` contains ONLY function binds
           (IrBind wrapping IrMakeClosure).
         - The entry module is LAST in ``program.modules`` insertion order.
@@ -2334,8 +2334,9 @@ class TestLowerGraph:
 
         prog = lower_program(_compiled_checked(cg))
 
-        # Both modules must appear
-        assert len(prog.modules) == 3
+        # The library, entry, automatic standard-library modules, and ambient
+        # method libraries must appear.
+        assert set(prog.modules) == set(cg.modules)
 
         # Entry module is LAST in insertion order
         module_ids = list(prog.modules.keys())
@@ -2343,8 +2344,8 @@ class TestLowerGraph:
             "Entry module must be last in program.modules insertion order"
         )
 
-        # Exactly one SourceFile per module, including the automatic std/core import.
-        assert len(prog.sources) == 3
+        # Exactly one SourceFile per module, including ambient method libraries.
+        assert len(prog.sources) == len(prog.modules)
 
         # Both modules' functions appear in program.functions with DISTINCT FunctionIds.
         # lib has make_point; entry has no user functions here, but they share one table.
@@ -2411,6 +2412,8 @@ class TestLowerGraph:
         program = lower_program(_compiled_checked(checked), _link=link)
 
         for mid, executable_module in program.modules.items():
+            if mid != lib_mid:
+                continue
             items = checked.modules[mid].resolved.program.body.items
             origins = link.initializer_origins[mid]
             assert len(origins) == len(executable_module.initializers)
@@ -2518,7 +2521,7 @@ class TestLowerGraph:
 
 
 # ---------------------------------------------------------------------------
-# Golden lowering: print, parse_json, param declarations
+# Golden lowering: print and parameter declarations
 # ---------------------------------------------------------------------------
 
 
@@ -2620,18 +2623,6 @@ class TestHostOpLowering:
         ir_print = desc.impl.body
         assert isinstance(ir_print, IrPrint)
         assert not isinstance(ir_print.value, IrCoerce)
-
-    def test_parse_json_lowers_to_ir_parse_json(self) -> None:
-        """parse_json(s) lowers to IrParseJson wrapping the argument expression."""
-        from agm.agl.ir.nodes import IrParseJson
-
-        source = "let j = parse_json('null')\n()"
-        prog = _lower(source)
-        entry = prog.modules[list(prog.modules.keys())[-1]]
-        ir_bind = _let_root_capture(entry.initializers[0])
-        assert isinstance(ir_bind.value, IrParseJson), (
-            f"Expected IrBind.value to be IrParseJson, got {type(ir_bind.value).__name__}"
-        )
 
     def test_copy_lowers_to_ir_copy_value(self) -> None:
         """copy(x) lowers to IrCopyValue wrapping the argument expression."""

@@ -1,0 +1,6 @@
+# Methods are ambient through std/builtin-methods; this module imports nothing.
+param values: array[int]
+
+program def main() -> unit =
+  print(values.size())
+  print(values.reverse())

@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from agm.agl.modules.ids import ENTRY_ID, STD_CONFIG_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import (
+    ENTRY_ID,
+    STD_BUILTIN_METHODS_ID,
+    STD_CONFIG_ID,
+    STD_CORE_ID,
+    ModuleId,
+)
 
 
 class TestModuleIdConstruction:
@@ -91,6 +97,9 @@ class TestModuleIdFromPathValidation:
     def test_segment_with_hyphen_raises(self) -> None:
         with pytest.raises(ValueError):
             ModuleId.from_path("foo-bar")
+
+    def test_builtin_method_registry_path_is_the_one_hyphenated_exception(self) -> None:
+        assert ModuleId.from_path("std/builtin-methods") == STD_BUILTIN_METHODS_ID
 
     def test_segment_with_space_raises(self) -> None:
         with pytest.raises(ValueError):

@@ -1,0 +1,33 @@
+{
+  "scenarios": [
+    {
+      "name": "explicit_and_ambient_spawn_settings",
+      "process_environment": {
+        "AMBIENT": "present"
+      },
+      "shell": [
+        {
+          "command": "explicit",
+          "stdout": "explicit\n",
+          "env": {
+            "ONLY": "child"
+          },
+          "cwd": "/work",
+          "idle_timeout": 2.0
+        },
+        {
+          "command": "ambient",
+          "stdout": "ambient\n",
+          "env": {
+            "AMBIENT": "present"
+          },
+          "cwd": null,
+          "idle_timeout": null
+        }
+      ],
+      "expect": {
+        "stdout": "explicit\nambient\n"
+      }
+    }
+  ]
+}

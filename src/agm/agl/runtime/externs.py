@@ -9,11 +9,14 @@ their underlying AgL containers.
 
 from __future__ import annotations
 
+import contextvars
 import decimal
 import importlib.machinery
 import importlib.util
 import sys
-from collections.abc import Sequence
+import threading
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
 from typing import Protocol, cast
@@ -26,7 +29,9 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.boundary import (
     AglArrayView,
     AglDictView,
+    AglException,
     AglJson,
+    BoundaryTypeError,
     BoundaryViolation,
     decode_boundary_value,
     encode_boundary_value,
@@ -35,7 +40,59 @@ from agm.agl.runtime.boundary import (
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
 from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
-from agm.agl.semantics.values import ArrayValue, DictValue, TextValue, Value
+from agm.agl.semantics.values import ArrayValue, DictValue, IrClosureValue, TextValue, Value
+
+# These companion module attributes are APIs, never synthesized nominal aliases.
+_COMPANION_API_NAMES = frozenset({"AglException", "array", "dict", "json", "nominals", "runtime"})
+
+
+class ExternRuntimeState:
+    """Mutable companion state belonging to one interpreter instance."""
+
+    __slots__ = ("_values",)
+
+    def __init__(self) -> None:
+        self._values: dict[str, object] = {}
+
+    def get_or_create(self, key: str, factory: Callable[[], object]) -> object:
+        """Return this state's value for *key*, creating it once when absent."""
+        if key not in self._values:
+            self._values[key] = factory()
+        return self._values[key]
+
+
+class _CompanionRuntime:
+    """Route companion state to the interpreter active in this call context."""
+
+    __slots__ = ("_active_state", "_detached_state")
+
+    def __init__(self) -> None:
+        self._active_state: contextvars.ContextVar[ExternRuntimeState | None] = (
+            contextvars.ContextVar("agl_extern_runtime_state", default=None)
+        )
+        # Direct companion use outside evaluation remains useful to host tests
+        # and tools, but evaluation always supplies its interpreter-owned state.
+        self._detached_state = ExternRuntimeState()
+
+    @contextmanager
+    def activate(self, state: ExternRuntimeState | None) -> Iterator[None]:
+        """Make *state* visible to a companion for the dynamic call extent."""
+        if state is None:
+            yield
+            return
+        token = self._active_state.set(state)
+        try:
+            yield
+        finally:
+            self._active_state.reset(token)
+
+    def state(self, key: str, factory: Callable[[], object]) -> object:
+        """Get companion-local state scoped to the active interpreter call."""
+        state = self._active_state.get()
+        return (state if state is not None else self._detached_state).get_or_create(key, factory)
+
+
+_COMPANION_RUNTIME = _CompanionRuntime()
 
 
 class ExternImportError(AglError):
@@ -85,6 +142,101 @@ class _CacheFreeLoader(importlib.machinery.SourceFileLoader):
 # ---------------------------------------------------------------------------
 # ExternRegistry
 # ---------------------------------------------------------------------------
+
+
+class CallableProxyError(RuntimeError):
+    """An AgL callback was invoked outside its active interpreter window."""
+
+
+class ExternCallWindow:
+    """Track one interpreter's active extern calls and their owning thread.
+
+    An interpreter owns this guard rather than its shared
+    :class:`ExternRegistry`: multiple interpreters can safely use one
+    registry, but a callback belongs to the interpreter that encoded it.
+    """
+
+    __slots__ = ("_depth", "_lock", "_thread")
+
+    def __init__(self) -> None:
+        self._depth = 0
+        self._lock = threading.Lock()
+        self._thread: int | None = None
+
+    @contextmanager
+    def active(self) -> Iterator[None]:
+        """Open a nestable callback window on this interpreter's thread."""
+        thread_id = threading.get_ident()
+        with self._lock:
+            if self._thread is None:
+                self._thread = thread_id
+            elif self._thread != thread_id:
+                raise CallableProxyError(
+                    "an interpreter extern call is already active on another thread"
+                )
+            self._depth += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._depth -= 1
+                if self._depth == 0:
+                    self._thread = None
+
+    def require_active(self) -> None:
+        """Require this interpreter's active extern call on its owning thread."""
+        with self._lock:
+            if self._depth != 0 and self._thread == threading.get_ident():
+                return
+        raise CallableProxyError(
+            "AgL callbacks may run only on the owning interpreter thread during an extern call"
+        )
+
+
+class _ClosureInvoker(Protocol):
+    """The evaluator-owned execution hook for one crossed AgL closure."""
+
+    def __call__(self, args: tuple[Value, ...]) -> Value: ...
+
+
+class AglCallableProxy:
+    """A Python callable backed by an AgL closure during an extern call.
+
+    The evaluator supplies execution while this runtime-side adapter owns
+    Python argument/result conversion and the invocation-window guard.
+    """
+
+    __slots__ = ("_arity", "_closure", "_require_active_window", "_invoke", "_encode")
+
+    def __init__(
+        self,
+        *,
+        arity: int,
+        closure: IrClosureValue,
+        require_active_window: Callable[[], None],
+        invoke: _ClosureInvoker,
+        encode: Callable[[Value], object],
+    ) -> None:
+        self._arity = arity
+        self._closure = closure
+        self._require_active_window = require_active_window
+        self._invoke = invoke
+        self._encode = encode
+
+    def __call__(self, *args: object) -> object:
+        self._require_active_window()
+        if len(args) != self._arity:
+            raise TypeError(
+                f"AgL callback expected {self._arity} positional arguments, got {len(args)}"
+            )
+        try:
+            values = tuple(decode_boundary_value(arg) for arg in args)
+        except BoundaryViolation as exc:
+            raise BoundaryTypeError(str(exc)) from exc
+        try:
+            return self._encode(self._invoke(values))
+        except AglRaise as exc:
+            raise AglException(exc.exc) from exc
 
 
 class ExternCallable(Protocol):
@@ -175,6 +327,8 @@ class ExternRegistry:
         setattr(module, "array", _array)
         setattr(module, "dict", _dict)
         setattr(module, "json", AglJson)
+        setattr(module, "AglException", AglException)
+        setattr(module, "runtime", _COMPANION_RUNTIME)
         nominals = ModuleType("agl.nominals")
         setattr(module, "nominals", nominals)
         leaves: dict[tuple[str, ...], type[object]] = {}
@@ -187,7 +341,7 @@ class ExternRegistry:
         for cls in leaves.values():
             names.setdefault(cls.__name__, []).append(cls)
         for name, classes in names.items():
-            if len(classes) == 1 and name not in {"array", "dict", "json", "nominals"}:
+            if len(classes) == 1 and name not in _COMPANION_API_NAMES:
                 setattr(module, name, classes[0])
         return module
 
@@ -286,6 +440,8 @@ class ExternRegistry:
         args: Sequence[Value],
         *,
         nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS,
+        function_encoder: Callable[[IrClosureValue], object] | None = None,
+        runtime_state: ExternRuntimeState | None = None,
     ) -> Value:
         """Cross the boundary for one extern call: encode, call, and decode.
 
@@ -303,9 +459,11 @@ class ExternRegistry:
         *nominals* resolves the ``ExternError``/``CyclicValueError`` nominal;
         it defaults to the shipped standard library's own identities for a
         caller (e.g. a direct unit test) that invokes without a program.
+        *runtime_state* is the evaluator-owned companion state activated for
+        this call; absent direct callers use detached host state instead.
         """
         try:
-            encoded_args = [encode_boundary_value(arg) for arg in args]
+            encoded_args = [encode_boundary_value(arg, function_encoder) for arg in args]
         except BoundaryViolation as exc:
             raise _extern_error(
                 function_name,
@@ -315,8 +473,10 @@ class ExternRegistry:
             ) from exc
 
         try:
-            with decimal.localcontext():
+            with _COMPANION_RUNTIME.activate(runtime_state), decimal.localcontext():
                 result = fn(*encoded_args)
+        except AglException as exc:
+            raise AglRaise(exc.value) from exc
         except AglCyclicValue as exc:
             raise cyclic_value_raise(nominals=nominals) from exc
         except Exception as exc:

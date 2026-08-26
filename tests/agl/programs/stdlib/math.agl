@@ -1,0 +1,65 @@
+# Scalar methods are ambient; free functions require this explicit import.
+import std/array
+import std/math
+
+param mode: int
+
+program def main() -> unit =
+  case mode of
+    | 1 =>
+        print((-3).abs())
+        print(0.sign())
+        print(5.sign())
+        print(3.min(5))
+        print(3.max(5))
+        print((-2).clamp(-1, 4))
+        print(9.clamp(-1, 4))
+        print((-3).compare(7))
+        print(7.compare(7))
+        print(7.compare(-3))
+        print(2.pow(10))
+        print((-7).to-decimal())
+        print(math::sum([-3, 0, 5]))
+        print(math::pi)
+        print(math::e)
+    | 2 =>
+        print((-12.75).abs())
+        print((-3.5).min(2.0))
+        print((-3.5).max(2.0))
+        print((-4.0).clamp(-2.5, 3.5))
+        print(9.0.clamp(-2.5, 3.5))
+        print((-1.5).compare(2.0))
+        print(2.0.compare(2.0))
+        print(2.0.compare(-1.5))
+        print((-1.5).sign())
+        print(0.0.sign())
+        print(1.5.sign())
+        print(3.9.floor())
+        print((-3.1).floor())
+        print(3.1.ceil())
+        print((-3.9).ceil())
+        print(2.345.round())
+        print(2.345.round(2))
+        print(2.355.round(2))
+        print(2.0.sqrt())
+        print(1.25.pow(3))
+        print(math::sum-decimal([0.1, 0.2, 0.3]))
+    | 3 =>
+        var integers = [3, -1, 0, 2]
+        let compare_ints = fn(left: int, right: int) => left.compare(right)
+        let compare_decimals = fn(left: decimal, right: decimal) => left.compare(right)
+        print(integers.sort(compare_ints))
+        integers.sort!(compare_ints)
+        print(integers)
+        print([2.5, -1.5, 0.0].sort(compare_decimals))
+        let compare_to_five = 5.compare
+        print(compare_to_five(3))
+        print((-8).abs().clamp(0, 5).pow(2).to-decimal().sqrt().round(1))
+    | 4 =>
+        let _ = 2.pow(-1)
+        ()
+    | _ =>
+        print(2.pow(1000000) > 0)
+        print((-1).pow(10000000000000000000000000005000000000000) == 1)
+        print(17.pow(0))
+        print(0.pow(5))

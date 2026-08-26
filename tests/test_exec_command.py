@@ -2460,9 +2460,11 @@ class TestExecTimeoutAndLogFileFlags:
                 executable: ExecutableProgram | None = None,
                 host_settings_policy: HostSettingsPolicy | None = None,
                 builtin_host_settings: Mapping[str, Value] | None = None,
+                process_environment: Mapping[str, str] | None = None,
                 program_symbol: SymbolId | None = None,
             ) -> RunResult:
                 captured["shell_exec_timeout"] = self._shell_exec_timeout
+                captured["process_environment"] = process_environment
                 return super().run_prepared(
                     prepared,
                     param_values=param_values,
@@ -2472,11 +2474,24 @@ class TestExecTimeoutAndLogFileFlags:
                     executable=executable,
                     host_settings_policy=host_settings_policy,
                     builtin_host_settings=builtin_host_settings,
+                    process_environment=process_environment,
                     program_symbol=program_symbol,
                 )
 
         monkeypatch.setattr(exec_engine, "PipelineDriver", CapturingRuntime)
         return captured
+
+    def test_exec_captures_a_process_environment_snapshot(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, "let x = 1\nx\n")
+        captured = self._capture_timeout(monkeypatch)
+        monkeypatch.setattr(exec_engine.os, "environ", {"EXEC_ONLY": "seeded"})
+
+        exec_command.run(_exec_args_no_log(agl_file))
+
+        assert captured["process_environment"] == {"EXEC_ONLY": "seeded"}
 
     def test_cli_timeout_flag_sets_engine_timeout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -3994,6 +4009,18 @@ class TestSettingOverrideProvenanceWithNoStdlib:
         result = exec_command.run(_exec_args_no_log(agl_file, no_stdlib=True))
         assert result is None
 
+    def test_process_environment_is_inert_without_stdlib(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The command may snapshot its environment even without ``std/env``."""
+        monkeypatch.setenv("AGL_TEST_NO_STDLIB", "original")
+        agl_file = tmp_path / "plain.agl"
+        agl_file.write_text("program def main() -> unit = ()\n", encoding="utf-8")
+
+        assert exec_command.run(_exec_args_no_log(agl_file, no_stdlib=True)) is None
+        assert capsys.readouterr().out == ""
+        assert os.environ["AGL_TEST_NO_STDLIB"] == "original"
+
     def test_agent_flag_still_fails_without_stdlib(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -4008,6 +4035,27 @@ class TestSettingOverrideProvenanceWithNoStdlib:
 
         assert exc_info.value.code == 1
         assert "--agent" in capsys.readouterr().err
+
+
+class TestExecProcessEnvironment:
+    """The command wires one process snapshot into ``std/env``."""
+
+    def test_std_env_reads_the_command_snapshot_without_mutating_process_environ(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setenv("AGL_TEST_ENV", "original")
+        agl_file = tmp_path / "env.agl"
+        write_file_program(
+            agl_file,
+            "import std/env::*\n"
+            'print getenv("AGL_TEST_ENV")\n'
+            'setenv("AGL_TEST_ENV", "changed")\n'
+            'print getenv("AGL_TEST_ENV")\n',
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == "original\nchanged\n"
+        assert os.environ["AGL_TEST_ENV"] == "original"
 
 
 class TestExecProgramSelection:

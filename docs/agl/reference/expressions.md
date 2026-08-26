@@ -188,10 +188,10 @@ enum Result
   | Ok(value: int)
   | Err(reason: text, fatal: bool)
 
-let ok = Ok(42)
-let ok2 = Ok(value = 42)
-let err = Err("bad", false)
-let named_err = Err(reason = "bad", fatal = false)
+let ok = Result::Ok(42)
+let ok2 = Result::Ok(value = 42)
+let err = Result::Err("bad", false)
+let named_err = Result::Err(reason = "bad", fatal = false)
 ```
 
 ### Unqualified member ambiguity
@@ -367,15 +367,19 @@ program def main() -> unit =
 
 Thus `meter.add(3)` calls the method with `meter` as its receiver, while
 `meter.add` can be stored, passed to another function, or partially applied.
-A member access is statically checked. Dictionaries and arrays have no members;
-use indexing for those values. A member record value exposes its own fields and
-methods. An enum-typed value exposes only methods declared by that enum: it
-has no fields, even when every member record defines the same field. Likewise,
-method selection never crosses the member/enum boundary: a member-record
-method requires a member-record receiver, and an enum method requires an
-enum-typed receiver. Bind or cast a member value to the enum type before
-calling an enum method; use a pattern or member-record cast before accessing a
-member's fields or methods.
+A member access is statically checked. Arrays and dictionaries have no fields;
+use indexing to read their elements or values. Their methods are available by
+member access when the loader injects the optional `std/builtin-methods`
+registry. With `--no-stdlib`, or a custom standard library without that
+registry, import `std/array` or `std/dict`, respectively, before calling a
+method.
+
+A member record value exposes its own fields and methods. An enum-typed value
+exposes only methods declared by that enum: it has no fields, even when every
+member record defines the same field. A `std/option::Option` member can select
+an `Option` method directly; the call keeps the member value as its receiver.
+Other enum methods require an enum-typed receiver. Use a pattern or member-record
+cast before accessing a member's fields or methods from an enum value.
 
 A field assignment `receiver.field := value` requires `field` to be declared
 with `var` on a record or enum-member record. It updates that field in place,
@@ -443,13 +447,14 @@ the value's concrete exception type — see
 
 ## Indexing
 
-`expr[index]` reads from an array or dictionary:
+`expr[index]` reads from an array, dictionary, or text:
 
 <!-- agl-check: fragment -->
 ```agl
 let third = xs[2]
 let last = xs[-1]
 let value = metadata["source"]
+let initial = "Ada"[0]
 ```
 
 Indexing is a postfix operator and may be chained with calls and field access:
@@ -464,9 +469,11 @@ let item = make_items()[0]
 Whitespace matters. `xs[0]` is indexing because the `[` is adjacent to `xs`.
 `f [0]` remains the single-argument call sugar `f([0])`.
 
-Array indexes must be `int`. Negative indexes count from the end, as in
-Python: `xs[-1]` selects the last element. An out-of-range array index raises
-catchable `IndexError` with `index`, `length`, and `message` fields.
+Array and text indexes must be `int`. Negative indexes count from the end, as
+in Python: `xs[-1]` selects the last element. A text index returns one Unicode
+code point. An out-of-range array or text index raises catchable `IndexError`
+with `index`, `length`, and `message` fields. Text is immutable, so it cannot
+be an indexed-assignment target.
 
 Dictionary indexes must be `text`. Missing keys raise catchable `KeyError`
 with `key` and `message` fields.
@@ -474,8 +481,8 @@ with `key` and `message` fields.
 ## Calls
 
 All calls use the same uniform parenthesized syntax. This applies equally to
-user `def`s, built-in functions (`ask`, `exec`, `print`, `render`, `parse_json`,
-`copy`, `shallow_copy`, `resource`, `resource-dir`), and
+user `def`s, built-in functions (`ask`, `exec`, `print`, `render`, `copy`,
+`shallow_copy`, `resource`, `resource-dir`), and
 function values stored in bindings:
 
 ```ebnf
@@ -574,47 +581,11 @@ assignable to it, and renders the argument coerced to that type — so
 `"hi"`: `quote_strings` controls only a top-level `text` argument, and the
 coerced argument has type `json`.
 
-## `parse_json`
+## JSON parsing
 
-`parse_json` is a built-in function that parses a `text` value as a strict
-JSON document and returns the resulting `json` value:
-
-```text
-parse_json(input: text) -> json
-```
-
-It uses **strict JSON parsing**: the input must be exactly one well-formed
-JSON value with nothing but surrounding whitespace — no Markdown fences, no
-prose, no repair. On success it returns the parsed JSON tree. On failure it
-raises a catchable `JsonParseError` ([Exceptions](exceptions.md)).
-
-```agl
-program def main() -> unit =
-  let v: json = parse_json('{"key": 42}')
-  let n: json = parse_json("42")
-  let b: json = parse_json("true")
-  let embedded: json = "42" as json
-  let parsed: json   = parse_json("42")
-```
-
-**Contrast with `text as json`.** Because `text` is already JSON-shaped,
-`"42" as json` wraps the text in JSON representation — it yields the JSON
-**string** `"42"`. `parse_json("42")` instead interprets the characters of
-the text and yields the JSON **number** `42`. Use `parse_json` when you have
-a text value that contains serialized JSON and you want to traverse or
-validate its structure.
-
-<!-- agl-check: fragment -->
-```agl
-try
-  let data: json = parse_json(raw_output)
-  # use data...
-catch JsonParseError as e =>
-  print "Malformed JSON: %{e.raw}"
-```
-
-`parse_json` cannot be bound as a function value (`let f = parse_json` is a
-static error, because built-ins are only valid in call position).
+[`std/json`](modules.md#stdjson) provides strict and lenient text parsing for
+`json` values. Its `parse` functions are ordinary module functions and can be
+used as values where their function type is expected.
 
 ## `resource` and `resource-dir`
 
@@ -657,18 +628,21 @@ program def main() -> unit =
 
 | Function | Result |
 | --- | --- |
-| `read(path: text)` | Reads and returns the file's text. |
+| `read(path: text)` / `read?(path: text)` | Reads valid UTF-8 text; `read?` returns `Option::None` when reading fails, including invalid UTF-8. |
 | `write(path: text, content: text)` | Replaces a file's text and returns `unit`. |
 | `append(path: text, content: text)` | Appends text to a file and returns `unit`. |
-| `exists(path: text)` | Returns whether the path exists. |
-| `list(path: text)` | Returns an `array[text]` of immediate child paths. |
+| `exists(path: text)`, `is-file(path: text)`, `is-dir(path: text)` | Inspect a path. |
+| `list(path: text)` / `glob(pattern: text)` | Return immediate children or pattern matches as `array[text]`. |
+| `mkdir(path: text)` | Creates a directory and missing parent directories. |
+| `remove(path: text)`, `copy(source: text, destination: text)`, `move(source: text, destination: text)` | Change filesystem entries. |
 
 Every relative path is resolved against the invocation working directory, not
-the importing module or a resource anchor. A relative `list` result remains
-relative; an absolute input yields absolute child paths. `read`, `write`,
-`append`, and `list` surface filesystem failures as `ExternError`; `exists`
-returns `false` for a missing path. Hosts may suppress filesystem mutations in
-dry-run mode.
+the importing module or a resource anchor. A relative `list` or `glob` result
+remains relative; an absolute input yields absolute paths. Failed filesystem
+operations raise `FsError`, carrying the requested `path` and `operation`;
+`read?` instead returns `Option::None`, including for invalid UTF-8 input.
+Predicates return `false` for missing paths. `remove` unlinks symbolic links rather
+than following them. Hosts may suppress filesystem mutations in dry-run mode.
 
 ## `copy` and `shallow_copy`
 

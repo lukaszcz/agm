@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "fixed_iso_and_strftime_values_round_trip_in_utc",
+      "params": {"mode": 1},
+      "expect": {"stdout": "2024-01-02T03:04:05.123456+00:00\n2024/01/02 03:04:05.123456 +0000\ntrue\n", "calls": {}}
+    },
+    {
+      "name": "invalid_iso_and_strptime_text_raise_time_parse_error",
+      "params": {"mode": 2},
+      "expect": {"stdout": "not an instant\nnot a date\n", "calls": {}}
+    },
+    {
+      "name": "clock_operations_have_stable_shape_without_asserting_wall_time",
+      "params": {"mode": 3},
+      "expect": {"stdout": "true\ntrue\ntrue\n", "calls": {}}
+    }
+  ]
+}

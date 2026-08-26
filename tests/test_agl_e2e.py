@@ -723,11 +723,19 @@ def _agent_from_spec(name: str, spec: Any) -> ScriptedAgent:
     )
 
 
-def _run_prepared_entry(runtime: Any, prepared: Any, *, param_values: dict[str, Any]) -> Any:
+def _run_prepared_entry(
+    runtime: Any,
+    prepared: Any,
+    *,
+    param_values: dict[str, Any],
+    process_environment: dict[str, str] | None = None,
+) -> Any:
     """Run the sole selected file-style entry through the public pipeline seams."""
     discovery = runtime.discover_params(prepared)
     if discovery.checked is None:
-        return runtime.run_prepared(prepared, param_values=param_values)
+        return runtime.run_prepared(
+            prepared, param_values=param_values, process_environment=process_environment
+        )
     preflight = runtime.preflight_params(
         prepared,
         param_values=param_values,
@@ -744,6 +752,7 @@ def _run_prepared_entry(runtime: Any, prepared: Any, *, param_values: dict[str, 
         compiled=discovery.compiled,
         executable=preflight.executable,
         program_symbol=preflight.executable.program_symbols[entry_programs[0].node_id],
+        process_environment=process_environment,
     )
 
 
@@ -790,16 +799,21 @@ def _run_program(
     runtime = PipelineDriver(**runtime_options)
     module_roots = scenario.get("module_roots", [])
     default_stdlib = not scenario.get("no_stdlib", False)
+    stdlib_root = (
+        (AGL_DIR / str(scenario["stdlib_root"])).resolve()
+        if "stdlib_root" in scenario
+        else REPO_STDLIB_ROOT
+    )
     entry_path: Path | None = None
     roots: Any | None = None
-    if module_roots:
+    if module_roots or "stdlib_root" in scenario:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(
             roots=frozenset(
                 {
                     *((AGL_DIR / str(root)).resolve() for root in module_roots),
-                    REPO_STDLIB_ROOT,
+                    stdlib_root,
                 }
             )
         )
@@ -809,7 +823,7 @@ def _run_program(
         from agm.agl.modules.roots import RootSet
 
         entry_path = program
-        roots = RootSet(roots=frozenset({program.parent.resolve(), REPO_STDLIB_ROOT}))
+        roots = RootSet(roots=frozenset({program.parent.resolve(), stdlib_root}))
     # `inline_entry` sources carry no `program def`: they run through the same
     # synthetic-entry transform as `agm exec -c`.
     prepare = (
@@ -820,7 +834,15 @@ def _run_program(
             source, entry_path=entry_path, roots=roots, default_stdlib=default_stdlib
         )
 
-        result = _run_prepared_entry(runtime, prepared, param_values=scenario.get("params", {}))
+        try:
+            result = _run_prepared_entry(
+                runtime,
+                prepared,
+                param_values=scenario.get("params", {}),
+                process_environment=scenario.get("process_environment"),
+            )
+        except SystemExit as exc:
+            result = exc
     return result, agents, shell
 
 
@@ -963,6 +985,59 @@ def _assert_calls(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> N
         for needle in spec.get("schema_contains", []):
             assert _schema_contains(schema, needle), f"{needle!r} not in schema {schema!r}"
         _assert_schema_paths(schema, spec.get("schema_paths", []))
+
+
+def _prepare_temp_filesystem(scenario: dict[str, Any], tmp_path: Path) -> dict[str, Any]:
+    """Create a scenario's isolated filesystem fixture and bind its root parameter."""
+    fixture = scenario.get("filesystem")
+    if fixture is None:
+        return scenario
+
+    root = tmp_path / "filesystem"
+    root.mkdir()
+    for directory in fixture.get("directories", []):
+        (root / directory).mkdir(parents=True)
+    for relative_path, content in fixture.get("text_files", {}).items():
+        path = root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    for relative_path, content in fixture.get("hex_files", {}).items():
+        path = root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(bytes.fromhex(content))
+    for relative_path, target in fixture.get("directory_symlinks", {}).items():
+        try:
+            (root / relative_path).symlink_to(root / target, target_is_directory=True)
+        except OSError:
+            pytest.skip("symbolic links are unavailable")
+
+    params = {
+        name: str(root) if value == "$TEMP_ROOT" else value
+        for name, value in scenario.get("params", {}).items()
+    }
+    return {**scenario, "params": params}
+
+
+def test_filesystem_fixture_skips_symlink_scenarios_when_symlinks_are_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unavailable_symlink(
+        self: Path, target: str | Path, target_is_directory: bool = False
+    ) -> None:
+        raise OSError("symbolic links are unavailable")
+
+    monkeypatch.setattr(Path, "symlink_to", unavailable_symlink)
+
+    with pytest.raises(pytest.skip.Exception):
+        _prepare_temp_filesystem(
+            {
+                "filesystem": {
+                    "directories": ["target"],
+                    "directory_symlinks": {"link": "target"},
+                }
+            },
+            tmp_path,
+        )
 
 
 def _assert_sessions(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> None:
@@ -1416,13 +1491,24 @@ def _rejection_params() -> list[Any]:
 
 @pytest.mark.parametrize(("program", "scenario"), _scenario_params())
 def test_program_scenario(
-    program: Path, scenario: dict[str, Any], capsys: pytest.CaptureFixture[str]
+    program: Path,
+    scenario: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
 ) -> None:
+    scenario = _prepare_temp_filesystem(scenario, tmp_path)
     result, agents, shell = _run_program(program.read_text(encoding="utf-8"), scenario, program)
     out = capsys.readouterr().out
     expect = scenario["expect"]
     if "host_error" in expect:
         _assert_host_error(result, agents, expect["host_error"])
+        shell.assert_complete()
+        return
+    if "exit_code" in expect:
+        assert isinstance(result, SystemExit)
+        assert result.code == expect["exit_code"]
+        _assert_output(out, expect)
+        _assert_calls(agents, expect)
         shell.assert_complete()
         return
     _assert_outcome(result, expect)
@@ -1436,8 +1522,22 @@ def test_program_scenario(
 def test_static_rejection(program: Path) -> None:
     from agm.agl import PipelineDriver
 
-    expect = _load_json(program.with_name(program.stem + ".expect.json"))["diagnostic"]
-    result = PipelineDriver().run(program.read_text(encoding="utf-8"), param_values={})
+    spec = _load_json(program.with_name(program.stem + ".expect.json"))
+    expect = spec["diagnostic"]
+    module_roots = spec.get("module_roots", [])
+    roots = None
+    if module_roots:
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(
+            roots=frozenset(
+                {
+                    *((AGL_DIR / str(root)).resolve() for root in module_roots),
+                    REPO_STDLIB_ROOT,
+                }
+            )
+        )
+    result = _run_source_entry(PipelineDriver(), program.read_text(encoding="utf-8"), roots=roots)
     assert not result.ok, "expected the program to be rejected statically"
     assert result.error is None, "static rejection must happen before execution"
     diagnostics = list(result.diagnostics)
@@ -1476,6 +1576,54 @@ def test_pipeline_check_only_rejects_ambiguous_default_program() -> None:
     ]
 
 
+def test_direct_std_option_import_runs_without_the_automatic_prelude(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An explicit ``std/option`` import remains sufficient under ``--no-stdlib``."""
+    from agm.agl import PipelineDriver
+    from agm.agl.modules.roots import RootSet
+
+    roots = RootSet(roots=frozenset({REPO_STDLIB_ROOT}))
+    result = _run_source_entry(
+        PipelineDriver(),
+        "import std/core::print\n"
+        "import std/option::Option\n"
+        "program def main() -> unit =\n"
+        "  let option: Option[int] = Option::Some(value = 2)\n"
+        "  print(option.map(fn(x: int) => x + 1))\n",
+        roots=roots,
+        default_stdlib=False,
+    )
+
+    assert list(result.diagnostics) == []
+    assert result.error is None
+    assert capsys.readouterr().out == "Option::Some(value = 3)\n"
+
+
+def test_std_core_option_reexport_preserves_nominal_identity(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The re-export and direct module name one interoperable ``Option`` type."""
+    from agm.agl import PipelineDriver
+    from agm.agl.modules.roots import RootSet
+
+    roots = RootSet(roots=frozenset({REPO_STDLIB_ROOT}))
+    result = _run_source_entry(
+        PipelineDriver(),
+        "import std/core::{Option as CoreOption, print}\n"
+        "import std/option::Option\n"
+        "program def main() -> unit =\n"
+        "  let value: CoreOption[int] = Option::Some(value = 3)\n"
+        "  print(value.with-default(0))\n",
+        roots=roots,
+        default_stdlib=False,
+    )
+
+    assert list(result.diagnostics) == []
+    assert result.error is None
+    assert capsys.readouterr().out == "3\n"
+
+
 def test_qualified_std_core_print_still_works(capsys: pytest.CaptureFixture[str]) -> None:
     """A fully qualified ``std/core::print(...)`` call still runs, exactly as
     the bare form does — a built-in call is classified once its callee
@@ -1494,43 +1642,81 @@ def test_qualified_std_core_print_still_works(capsys: pytest.CaptureFixture[str]
 
 
 def _scoped_stdlib_root(tmp_path: Path) -> Path:
-    """Build a throwaway module root with ``std/core.agl`` wrapped in ``scope Std``.
+    """Build a throwaway module root with the real ``std/core`` scoped.
 
-    Never the installed/repo stdlib root — the standard ``module_roots``
-    scenario mechanism always adds ``REPO_STDLIB_ROOT`` too, which would
-    collide with this substitute ``std/core``, so callers build their own
-    ``RootSet`` from the returned root instead.
+    The expanded core and its functional dependencies are copied. Imports
+    needed only by the extended ``exec`` signature are removed when that
+    declaration is reduced to its legacy host-boundary shape, and canonical
+    session statics are omitted because wrapping changes their owner path.
+    Infix declarations stay at module root because scopes cannot contain them.
     """
+    scoped_stdlib_root = tmp_path / "scoped_stdlib"
+    std_dir = scoped_stdlib_root / "std"
+    std_dir.mkdir(parents=True)
     core_source = (
         (REPO_STDLIB_ROOT / "std" / "core.agl")
         .read_text(encoding="utf-8")
-        .replace("import std/config\n\n", "")
+        .replace("import std/config\n", "")
+        .replace("import std/env::*\n", "")
         .replace(_SESSION_STATIC_DECLARATIONS, "")
         .replace("std/config::default-agent", 'AgentClaude("sonnet", "medium")')
+        .replace(
+            "builtin def exec(\n"
+            "  command: text,\n"
+            "  env: Environ = std/env::environ,\n"
+            "  cwd: Option[text] = Option[text]::None,\n"
+            "  timeout: Option[text] = std/config::timeout,\n"
+            ") -> ExecResult\n",
+            "builtin def exec(command: text) -> ExecResult\n",
+        )
     )
-    scoped_stdlib_root = tmp_path / "scoped_stdlib"
-    (scoped_stdlib_root / "std").mkdir(parents=True)
-    (scoped_stdlib_root / "std" / "core.agl").write_text(
-        f"scope Std\n{core_source}end Std\n", encoding="utf-8"
+    infix_declarations = "".join(
+        line for line in core_source.splitlines(keepends=True) if line.startswith("infix")
     )
+    scoped_core_source = "".join(
+        line for line in core_source.splitlines(keepends=True) if not line.startswith("infix")
+    )
+    (std_dir / "core.agl").write_text(
+        f"{infix_declarations}\nscope Std\n{scoped_core_source}end Std\n", encoding="utf-8"
+    )
+    for name in ("option.agl", "pair.agl", "either.agl", "result.agl"):
+        source = (REPO_STDLIB_ROOT / "std" / name).read_text(encoding="utf-8")
+        if name == "result.agl":
+            source = source.replace(
+                "def attempt[T](f: () -> T) -> Result[T, Exception] =\n"
+                "  try Result::Ok(value = f()) catch Exception as e => Result::Err(error = e)\n",
+                "def attempt[T](f: () -> T) -> Result[T, Exception] = Result::Ok(value = f())\n",
+            )
+        (std_dir / name).write_text(source, encoding="utf-8")
     return scoped_stdlib_root
+
+
+def test_legacy_exec_signature_rejects_extended_options_with_a_diagnostic(tmp_path: Path) -> None:
+    """A custom old-style exec declaration must not trip an internal assertion."""
+    from agm.agl import PipelineDriver
+    from agm.agl.modules.roots import RootSet
+
+    scoped_stdlib_root = _scoped_stdlib_root(tmp_path)
+    result = _run_source_entry(
+        PipelineDriver(),
+        'program def main() -> unit = Std::exec("echo hi", env = ())\n',
+        roots=RootSet(roots=frozenset({scoped_stdlib_root})),
+    )
+
+    assert not result.ok
+    assert result.diagnostics
 
 
 def test_scoped_stdlib_arrangement_runs_end_to_end(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A whole stdlib module wrapped in a named scope region works end to end.
+    """A whole scoped ``std/core`` module works end to end.
 
-    Wraps the runtime-lowerable subset of ``stdlib/std/core.agl`` in a
-    ``scope Std ... end Std`` region under a throwaway module root (never the installed/repo
-    stdlib — the standard ``module_roots`` scenario mechanism always adds
-    ``REPO_STDLIB_ROOT`` too, which would collide with this substitute
-    ``std/core``, so this test builds its own ``RootSet`` instead), then runs
-    a program against it through parsing, scope resolution, typechecking,
-    lowering, and evaluation. Exercises a scoped ``builtin def`` (``exec``)
-    dispatching to a scoped ``builtin record`` (``ExecResult``) at a real host
-    boundary, and a fully scoped exception hierarchy (``Exception``/
-    ``RangeError`` both declared inside the region) raised and left uncaught.
+    This runs the runtime-lowerable expanded prelude through parsing, scope
+    resolution, typechecking, lowering, and evaluation. It exercises scoped
+    ``exec`` dispatching to scoped ``ExecResult`` at a real host boundary,
+    plus a scoped ``Exception`` / ``RangeError`` hierarchy raised and left
+    uncaught. The throwaway root avoids colliding with the repository stdlib.
     """
     from agm.agl import PipelineDriver
     from agm.agl.modules.roots import RootSet
@@ -1549,11 +1735,10 @@ def test_scoped_stdlib_arrangement_runs_end_to_end(
         result = _run_source_entry(
             runtime, program, roots=RootSet(roots=frozenset({scoped_stdlib_root}))
         )
-    shell.assert_complete()
-
     assert list(result.diagnostics) == [], (
         f"unexpected static diagnostics: {' | '.join(d.message for d in result.diagnostics)}"
     )
+    shell.assert_complete()
     assert capsys.readouterr().out == "hi\n"
     assert result.error is not None, "expected the uncaught scoped RangeError"
     assert result.error.type_name == "Std::RangeError"
@@ -1632,14 +1817,12 @@ def test_scoped_stdlib_arrangement_uncaught_host_raised_exec_error_reports_scope
 def test_scoped_stdlib_arrangement_bare_print_is_undefined_but_qualified_works(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """With the whole standard library wrapped in ``scope Std``, a bare
-    ``print`` call has no reachable declaration — only ``Std::print`` does.
+    """With the real core wrapped in ``scope Std``, only ``Std::print`` works.
 
     A built-in call is classified only once its callee resolves to a
-    ``builtin def`` declaration, the same as any other reference; wrapping
-    the whole standard library in a named region takes the bare route away
-    from every name it declares, ``print`` included, leaving only the
-    region's own qualified path."""
+    ``builtin def`` declaration, the same as any other reference. The named
+    region takes the bare route away from ``print``, leaving its qualified
+    path."""
     from agm.agl import PipelineDriver
     from agm.agl.modules.roots import RootSet
 
@@ -1677,8 +1860,8 @@ def test_scoped_builtin_hierarchy_declared_in_the_entry_module_catches_a_host_ra
     catch already uses. This program declares the whole exec/exception
     surface itself and loads without the standard library (``default_stdlib
     =False``), so its own ``scope Host`` module lowers normally (unlike the
-    real ``std/core`` module, which is excluded from per-module function
-    lowering). A failed (``text``-typed, non-structured) ``exec`` call
+    real ``std/core`` module, whose pure declarations are linked with the
+    prelude). A failed (``text``-typed, non-structured) ``exec`` call
     raises ``ExecError`` at the host boundary; before per-path identity was
     restored the host would have minted a path-free nominal while the type
     kept its declared path, so this bare ``catch`` could never match. Now

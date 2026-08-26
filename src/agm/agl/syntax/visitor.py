@@ -80,6 +80,10 @@ from agm.agl.syntax.nodes import (
     QualifierChain,
     QualifierSegment,
     Raise,
+    RawInfixChain,
+    RawInfixOperand,
+    RawInfixOperator,
+    RawPrefixNot,
     RecordDef,
     RecordUpdate,
     Return,
@@ -243,6 +247,10 @@ class Visitor:
     def visit_Try(self, node: Try) -> None: ...
     def visit_Raise(self, node: Raise) -> None: ...
     def visit_Return(self, node: Return) -> None: ...
+    def visit_RawInfixChain(self, node: RawInfixChain) -> None: ...
+    def visit_RawInfixOperand(self, node: RawInfixOperand) -> None: ...
+    def visit_RawInfixOperator(self, node: RawInfixOperator) -> None: ...
+    def visit_RawPrefixNot(self, node: RawPrefixNot) -> None: ...
 
     # Pattern nodes
     def visit_WildcardPattern(self, node: WildcardPattern) -> None: ...
@@ -348,6 +356,10 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         Try,
         Raise,
         Return,
+        RawInfixChain,
+        RawInfixOperand,
+        RawInfixOperator,
+        RawPrefixNot,
         # pattern nodes
         WildcardPattern,
         LiteralPattern,
@@ -689,6 +701,20 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, Return):
         if node.value is not None:
             walk(node.value, callback)
+
+    elif isinstance(node, RawInfixChain):
+        for operand in node.operands:
+            walk(operand, callback)
+        for operator in node.operators:
+            walk(operator, callback)
+
+    elif isinstance(node, RawInfixOperand):
+        walk(node.expr, callback)
+        for prefix in node.prefix_nots:
+            walk(prefix, callback)
+
+    elif isinstance(node, (RawInfixOperator, RawPrefixNot)):
+        pass
 
     elif isinstance(node, Break | Continue):
         pass  # leaf

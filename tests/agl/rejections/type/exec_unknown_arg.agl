@@ -1,3 +1,3 @@
 program def main() -> unit =
-  let r = exec("ls", timeout = 10)
+  let r = exec("ls", unknown = 10)
   r

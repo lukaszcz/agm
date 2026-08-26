@@ -168,13 +168,9 @@ class _ParamMarker:
     span: SourceSpan
 
 
-@dataclass(frozen=True, slots=True)
-class _InfixOperator:
-    """Transformer-internal operator token in a flat infix chain."""
-
-    name: str
-    builtin: syntax.BinOp | None
-    span: SourceSpan
+_InfixOperator: TypeAlias = syntax.RawInfixOperator
+_InfixOperand: TypeAlias = syntax.RawInfixOperand
+_RawInfixChain: TypeAlias = syntax.RawInfixChain
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,24 +180,6 @@ class _InfixPriority:
     value: int | None
     base: str | None
     delta: int
-
-
-@dataclass(frozen=True, slots=True)
-class _InfixOperand:
-    """Transformer-internal infix operand with pending prefix ``not`` operators."""
-
-    expr: syntax.Expr | _RawInfixChain
-    not_count: int
-    span: SourceSpan
-
-
-@dataclass(frozen=True, slots=True)
-class _RawInfixChain:
-    """Transformer-internal flat chain awaiting declaration-aware regrouping."""
-
-    operands: tuple[_InfixOperand, ...]
-    operators: tuple[_InfixOperator, ...]
-    span: SourceSpan
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,6 +197,30 @@ _RawArgLists: TypeAlias = tuple[list[_RawPosArg], list[_RawNamed]]
 _ArgLists: TypeAlias = tuple[list[syntax.Expr], list[syntax.NamedArg]]
 _JuxtCall: TypeAlias = tuple[tuple[TypeExpr, ...], _ArgLists]
 _RawItem: TypeAlias = syntax.Item | _RawInfixChain
+_InfixOperatorSpec: TypeAlias = tuple[int, syntax.InfixAssoc, syntax.BinOp | None]
+
+
+class _OperatorTables(dict[str, _InfixOperatorSpec]):
+    """Default and raw-chain-specific operator tables for one program."""
+
+    def __init__(
+        self,
+        default: Mapping[str, _InfixOperatorSpec],
+        by_chain: Mapping[int, Mapping[str, _InfixOperatorSpec]],
+    ) -> None:
+        super().__init__(default)
+        self._by_chain = by_chain
+
+    def for_chain(self, chain: _RawInfixChain) -> Mapping[str, _InfixOperatorSpec]:
+        """Return the table selected for *chain*'s lexical use site."""
+        return self._by_chain.get(chain.node_id, self)
+
+
+def _chain_table(
+    table: Mapping[str, _InfixOperatorSpec], chain: _RawInfixChain
+) -> Mapping[str, _InfixOperatorSpec]:
+    """Select a raw chain's table while preserving ordinary parser callers."""
+    return table.for_chain(chain) if isinstance(table, _OperatorTables) else table
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,6 +276,15 @@ class _QualifierChainSegment:
 
     segment: syntax.QualifierSegment
     anchored: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _BuiltinReceiverHead:
+    """A function declaration head headed by an applied builtin receiver."""
+
+    name: str
+    receiver_type: TypeExpr
+    span: SourceSpan
 
 
 @dataclass(frozen=True, slots=True)
@@ -421,7 +432,6 @@ class AstBuilder(Transformer):
         *,
         start_id: int = 0,
         source: SourceId | None = None,
-        ambient_infix: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
         allow_late_uses: bool = False,
     ) -> None:
         super().__init__()
@@ -434,11 +444,6 @@ class AstBuilder(Transformer):
         # Source identity stamped on every span this builder constructs.
         # Defaults to UNKNOWN_SOURCE when no source is supplied.
         self._source: SourceId = source if source is not None else UNKNOWN_SOURCE
-        # Already-resolved user infix fixity carried over from a prior context
-        # (REPL entries). Merged into the operator table so an operator declared
-        # in an earlier entry can be used in a later one. ``None`` for a standalone
-        # whole-program parse.
-        self._ambient_infix = ambient_infix
         # Transcript parsing discovers entry boundaries only; each entry is
         # parsed normally before evaluation and owns its own header ordering.
         self._allow_late_uses = allow_late_uses
@@ -505,9 +510,7 @@ class AstBuilder(Transformer):
         if stray_end is not None:
             raise AglSyntaxError("stray 'end'; no scope region is open.", span=stray_end.span)
         span = self._span_from_meta(meta)
-        table = _operator_table_from_decls(block.items, self._ambient_infix)
-        body = _rewrite_block_infix(block, table, self)
-        return syntax.Program(body=body, span=span, node_id=self._next_id())
+        return syntax.Program(body=block, span=span, node_id=self._next_id())
 
     def _build_block(self, meta: Meta, args: _Args) -> syntax.Block:
         """Build a root or suite block from its non-layout children."""
@@ -617,6 +620,33 @@ class AstBuilder(Transformer):
         assert path.segments
         name, _span = path.segments[-1]
         return name, self._scope_segments(_ScopePath(path.segments[:-1]))
+
+    def _receiver_type_params(self, receiver: TypeExpr | None) -> tuple[str, ...]:
+        """Return the positional type-variable slots bound by a builtin receiver."""
+        if isinstance(receiver, ArrayT) and isinstance(receiver.elem, NameT):
+            return (receiver.elem.name,)
+        if isinstance(receiver, DictT) and isinstance(receiver.value, NameT):
+            return (receiver.value.name,)
+        return ()
+
+    def _function_declaration_head(
+        self, args: _Args
+    ) -> tuple[str, tuple[syntax.ScopeSegment, ...], TypeExpr | None]:
+        receiver = next((arg for arg in args if isinstance(arg, _BuiltinReceiverHead)), None)
+        if receiver is None:
+            name, scope_path = self._declaration_head(args)
+            return name, scope_path, None
+        return (
+            receiver.name,
+            (
+                syntax.ScopeSegment(
+                    name=render_type_expr(receiver.receiver_type),
+                    span=receiver.span,
+                    node_id=self._next_id(),
+                ),
+            ),
+            receiver.receiver_type,
+        )
 
     def _binder_scope_path(
         self, qualifier: syntax.QualifierChain
@@ -1009,11 +1039,12 @@ class AstBuilder(Transformer):
 
     def _func_def(self, meta: Meta, args: _Args, *, is_program: bool = False) -> syntax.FuncDef:
         """Build an ordinary or ``program``-marked function definition."""
-        name, scope_path = self._declaration_head(args)
+        name, scope_path, receiver_type = self._function_declaration_head(args)
         type_params_val: tuple[str, ...] = ()
         for a in args:
             if _is_str_tuple(a):
                 type_params_val = cast(tuple[str, ...], a)
+        type_params_val = self._receiver_type_params(receiver_type) + type_params_val
         params, return_type, body = self._split_params_type_body(args)
         assert body is not None, "func_def: no body"
         return syntax.FuncDef(
@@ -1026,6 +1057,7 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
             is_program=is_program,
             scope_path=scope_path,
+            receiver_type=receiver_type,
         )
 
     def func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
@@ -1045,11 +1077,12 @@ class AstBuilder(Transformer):
         "def" name type_params? (params) -> type_expr with no body; only the
         leading modifier and the resulting flag differ.
         """
-        name, scope_path = self._declaration_head(args)
+        name, scope_path, receiver_type = self._function_declaration_head(args)
         type_params_val: tuple[str, ...] = ()
         for a in args:
             if _is_str_tuple(a):
                 type_params_val = cast(tuple[str, ...], a)
+        type_params_val = self._receiver_type_params(receiver_type) + type_params_val
         params, return_type, body = self._split_params_type_body(args)
         assert return_type is not None, "bodyless func def: no return type"
         assert body is None, "bodyless func def: unexpected body"
@@ -1064,7 +1097,33 @@ class AstBuilder(Transformer):
             is_builtin=is_builtin,
             is_extern=is_extern,
             scope_path=scope_path,
+            receiver_type=receiver_type,
         )
+
+    def func_decl_head(self, meta: Meta, args: _Args) -> object:
+        """Unwrap an ordinary function declaration head."""
+        return args[0]
+
+    def builtin_receiver_head(self, meta: Meta, args: _Args) -> _BuiltinReceiverHead:
+        """Build an applied builtin receiver declaration head."""
+        segment = next(arg for arg in args if isinstance(arg, _QualifierChainSegment)).segment
+        name = str(next(arg for arg in args if _is_name_token(arg)))
+        type_args = segment.type_args
+        assert type_args is not None
+        if segment.name == "array" and len(type_args) == 1:
+            receiver_type: TypeExpr = ArrayT(
+                elem=type_args[0], span=segment.span, node_id=self._next_id()
+            )
+        elif segment.name == "dict" and len(type_args) == 2 and isinstance(type_args[0], TextT):
+            receiver_type = DictT(value=type_args[1], span=segment.span, node_id=self._next_id())
+        else:
+            receiver_type = AppliedT(
+                name=segment.name,
+                args=type_args,
+                span=segment.span,
+                node_id=self._next_id(),
+            )
+        return _BuiltinReceiverHead(name=name, receiver_type=receiver_type, span=segment.span)
 
     def builtin_func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
         """builtin_func_def: "builtin" "def" name type_params? (...) -> type_expr"""
@@ -1423,7 +1482,9 @@ class AstBuilder(Transformer):
                 params = cast(tuple[syntax.Param, ...], a)
             elif isinstance(a, _ALL_TYPE_EXPRS):
                 return_type = a
-            elif a is not None and not isinstance(a, (Token, tuple, _ScopePath)):
+            elif a is not None and not isinstance(
+                a, (Token, tuple, _ScopePath, _BuiltinReceiverHead)
+            ):
                 body = cast(syntax.Expr, a)
         return params, return_type, body
 
@@ -1895,7 +1956,13 @@ class AstBuilder(Transformer):
     def _op(
         self, meta: Meta, args: _Args, name: str, builtin: syntax.BinOp | None
     ) -> _InfixOperator:
-        return _InfixOperator(name=name, builtin=builtin, span=self._span_from_meta(meta))
+        return _InfixOperator(
+            name=name,
+            builtin=builtin,
+            callee_node_id=self._next_id(),
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
 
     def op_or(self, meta: Meta, args: _Args) -> _InfixOperator:
         return self._op(meta, args, "or", syntax.BinOp.OR)
@@ -1940,16 +2007,16 @@ class AstBuilder(Transformer):
         tok = next(a for a in args if isinstance(a, Token))
         return self._op(meta, args, str(tok), None)
 
-    def not_prefix(self, meta: Meta, args: _Args) -> object:
-        return object()
+    def not_prefix(self, meta: Meta, args: _Args) -> syntax.RawPrefixNot:
+        return syntax.RawPrefixNot(span=self._span_from_meta(meta), node_id=self._next_id())
 
     def infix_operand(self, meta: Meta, args: _Args) -> _InfixOperand:
         expr = cast(syntax.Expr | _RawInfixChain, next(a for a in args if _is_expr_node(a)))
-        not_count = sum(1 for a in args if not isinstance(a, Token) and not _is_expr_node(a))
         return _InfixOperand(
             expr=expr,
-            not_count=not_count,
+            prefix_nots=tuple(a for a in args if isinstance(a, syntax.RawPrefixNot)),
             span=self._span_from_meta(meta),
+            node_id=self._next_id(),
         )
 
     def infix_chain(self, meta: Meta, args: _Args) -> syntax.Expr | _RawInfixChain:
@@ -1957,12 +2024,13 @@ class AstBuilder(Transformer):
         operators = tuple(a for a in args if isinstance(a, _InfixOperator))
         if not operators:
             assert len(operands) == 1
-            if operands[0].not_count == 0:
+            if not operands[0].prefix_nots:
                 return operands[0].expr
         return _RawInfixChain(
             operands=operands,
             operators=operators,
             span=self._span_from_meta(meta),
+            node_id=self._next_id(),
         )
 
     # ------------------------------------------------------------------
@@ -3608,10 +3676,11 @@ def _resolve_infix_priority(
     return _DEFAULT_USER_INFIX_PRIORITY
 
 
-def _operator_table_from_decls(
-    items: tuple[syntax.Item, ...],
+def build_infix_operator_table(
+    decls: Iterable[syntax.InfixDecl],
     ambient: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
 ) -> dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]]:
+    """Build the complete built-in and user fixity table for a use site."""
     table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]] = {
         name: (
             priority,
@@ -3620,10 +3689,83 @@ def _operator_table_from_decls(
         )
         for name, priority in _BUILTIN_INFIX_PRIORITIES.items()
     }
-    user_decls = [item for item in items if isinstance(item, syntax.InfixDecl)]
-    for name, (priority, assoc) in resolve_infix_fixity(user_decls, ambient).items():
+    for name, (priority, assoc) in resolve_infix_fixity(decls, ambient).items():
         table[name] = (priority, assoc, None)
     return table
+
+
+def resolve_program_infix(
+    program: syntax.Program,
+    ambient: Mapping[str, tuple[int, syntax.InfixAssoc]] | None = None,
+) -> syntax.Program:
+    """Resolve a parsed program using its declarations and ambient fixities."""
+    return resolve_infix_chains(
+        program,
+        build_infix_operator_table(
+            (item for item in program.body.items if isinstance(item, syntax.InfixDecl)), ambient
+        ),
+    )
+
+
+def resolve_infix_chains(
+    program: syntax.Program,
+    operator_table: Mapping[str, _InfixOperatorSpec],
+    *,
+    conflicting_operators: frozenset[str] = frozenset(),
+    operator_tables: Mapping[int, Mapping[str, _InfixOperatorSpec]] | None = None,
+    conflicting_operators_by_chain: Mapping[int, frozenset[str]] | None = None,
+) -> syntax.Program:
+    """Rewrite every raw infix chain in *program* using *operator_table*.
+
+    This parser-layer AST-to-AST pass is the only stage that may consume raw
+    infix nodes. Callers must resolve a program before scope resolution.
+    """
+    table = _OperatorTables(operator_table, operator_tables or {})
+    _validate_infix_chains(
+        program,
+        table,
+        conflicting_operators,
+        conflicting_operators_by_chain or {},
+    )
+    return replace(program, body=_rewrite_block_infix(program.body, table, AstBuilder()))
+
+
+def _validate_infix_chains(
+    program: syntax.Program,
+    table: Mapping[str, _InfixOperatorSpec],
+    conflicting_operators: frozenset[str],
+    conflicting_operators_by_chain: Mapping[int, frozenset[str]],
+) -> None:
+    """Reject invalid raw chains before grouping them into ordinary AST nodes."""
+
+    def validate(node: object) -> None:
+        if not isinstance(node, syntax.RawInfixChain):
+            return
+        associativity_by_priority: dict[int, syntax.InfixAssoc] = {}
+        chain_table = _chain_table(table, node)
+        chain_conflicts = conflicting_operators_by_chain.get(node.node_id, conflicting_operators)
+        for operator in node.operators:
+            if operator.name in chain_conflicts:
+                raise AglSyntaxError(
+                    f"Visible declarations disagree on fixity for operator '{operator.name}'.",
+                    span=operator.span,
+                )
+            spec = chain_table.get(operator.name)
+            if spec is None:
+                raise AglSyntaxError(
+                    f"Operator '{operator.name}' must be declared with infixl or infixr "
+                    "before use.",
+                    span=operator.span,
+                )
+            priority, assoc, _builtin = spec
+            existing = associativity_by_priority.setdefault(priority, assoc)
+            if existing is not assoc:
+                raise AglSyntaxError(
+                    "Operators at the same priority cannot mix left and right associativity.",
+                    span=operator.span,
+                )
+
+    syntax.walk(program, validate)
 
 
 def _rewrite_block_infix(
@@ -3898,19 +4040,19 @@ def _resolve_infix_chain(
     builder: AstBuilder,
 ) -> syntax.Expr:
     operands = [_rewrite_expr(operand.expr, table, builder) for operand in chain.operands]
-    not_counts = [operand.not_count for operand in chain.operands]
-    operand_spans = [operand.span for operand in chain.operands]
+    chain_table = _chain_table(table, chain)
+    prefix_nots = [list(operand.prefix_nots) for operand in chain.operands]
     operators = list(chain.operators)
 
     def parse_prefix(operand_index: int) -> tuple[syntax.Expr, int]:
-        if not_counts[operand_index] > 0:
-            not_counts[operand_index] -= 1
+        if prefix_nots[operand_index]:
+            prefix = prefix_nots[operand_index].pop(0)
             operand, next_operand_index = parse_at(_NOT_PRIORITY, operand_index)
             return (
                 syntax.UnaryNot(
                     operand=operand,
-                    span=operand_spans[operand_index],
-                    node_id=builder._next_id(),
+                    span=prefix.span,
+                    node_id=prefix.node_id,
                 ),
                 next_operand_index,
             )
@@ -3921,13 +4063,7 @@ def _resolve_infix_chain(
         op_index = next_operand_index - 1
         while op_index < len(operators):
             op = operators[op_index]
-            spec = table.get(op.name)
-            if spec is None:
-                raise AglSyntaxError(
-                    f"Operator '{op.name}' must be declared with infixl or infixr before use.",
-                    span=op.span,
-                )
-            priority, assoc, builtin = spec
+            priority, assoc, builtin = chain_table[op.name]
             if priority < min_priority:
                 break
             next_min = priority + 1 if assoc is syntax.InfixAssoc.LEFT else priority
@@ -3963,15 +4099,15 @@ def _make_infix_node(
             left=left,
             right=right,
             span=span,
-            node_id=builder._next_id(),
+            node_id=op.node_id,
         )
-    callee = syntax.VarRef(name=op.name, span=op.span, node_id=builder._next_id())
+    callee = syntax.VarRef(name=op.name, span=op.span, node_id=op.callee_node_id)
     return syntax.Call(
         callee=callee,
         args=(left, right),
         named_args=(),
         span=span,
-        node_id=builder._next_id(),
+        node_id=op.node_id,
     )
 
 

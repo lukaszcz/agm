@@ -27,7 +27,7 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.parser import parse_program
 from agm.agl.scope import AglScopeError
-from agm.agl.scope.symbols import BinderKind, BindingRef, ScopeNode
+from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind, ScopeNode
 from agm.agl.scope.symbols import ModuleResolution as _ModuleResolution
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_TYPE_DEFS,
@@ -1472,6 +1472,40 @@ class TestScopedBindingTypes:
         confirmed not to reach typechecking as an unresolved-reference crash."""
         with pytest.raises(AglScopeError):
             parse_resolve_check("scope Config\ndef f() -> int = 0\nlet f = 1\nend Config\n()")
+
+
+class TestQualifiedGenericFunctionBuiltinCollisions:
+    """Qualified generic functions retain an independent builtin namespace."""
+
+    def test_imported_qualified_generic_function_infers_while_bare_builtin_is_preserved(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.typecheck.program import check_program
+        from tests.agl.ir_harness import make_repl_graph_from_files, resolve_repl_graph
+
+        modules = {
+            "entry": (
+                "import codec::*\nlet values = codec::render(1)\nlet text = render(1)\nvalues"
+            ),
+            "codec": "def render[T](value: T) -> array[T] = [value]\n",
+        }
+        checked = check_program(
+            resolve_repl_graph(make_repl_graph_from_files(tmp_path, modules)),
+            default_capabilities(),
+        ).modules[ENTRY_ID]
+
+        values, text = checked.resolved.program.body.items[-3:-1]
+        assert isinstance(values, LetDecl)
+        assert isinstance(text, LetDecl)
+        assert strip_decl_ids(checked.node_types[values.value.node_id]) == ArrayType(IntType())
+        assert checked.node_types[text.value.node_id] == TextType()
+        assert isinstance(text.value, Call)
+        assert checked.resolved.builtin_calls[text.value.node_id] is BuiltinKind.RENDER
+
+    def test_entry_root_generic_function_named_after_a_builtin_is_rejected(self) -> None:
+        err = reject_any("def render[T](value: T) -> array[T] = [value]\nrender(1)")
+
+        assert "built-in" in err.to_diagnostic().message.lower()
 
 
 class TestScopedParamTypes:
@@ -3618,7 +3652,7 @@ class TestFuncDef:
             "let values: array[text] = [recurse(0)]\nvalues",
             "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\n"
             'let values: dict[text, text] = {"value": recurse(0)}\nvalues',
-            "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\nparse_json(recurse(0))",
+            "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\nask(recurse(0))",
             "record Box\n  value: text\n"
             "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\n"
             "Box(value = recurse(0))",
@@ -3649,8 +3683,7 @@ class TestFuncDef:
         "source",
         (
             'def recurse(n: int) = if n == 0 => [1] else => recurse(n - 1)\nrecurse(0)["x"]',
-            "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\n"
-            "recurse(0) + parse_json(1)",
+            "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\nrecurse(0) + ask(1)",
         ),
         ids=("index-operand", "binary-child"),
     )
@@ -4352,7 +4385,7 @@ class TestPartialDeclaredCalls:
 
     @pytest.mark.parametrize(
         "name",
-        ["print", "render", "exec", "ask", "ask-request", "parse_json", "copy", "shallow_copy"],
+        ["print", "render", "exec", "ask", "ask-request", "copy", "shallow_copy"],
     )
     def test_special_builtin_partial_call_rejected(self, name: str) -> None:
         err = reject_type(f"let g = {name}(?)\ng")
@@ -5830,6 +5863,37 @@ class TestFieldAccess:
         assert isinstance(fill_decl.value.callee, FieldAccess)
         assert checked.method_selection_for(fill_decl.value.callee.node_id) is not None
 
+    def test_option_member_selects_its_unambiguous_enum_method(self) -> None:
+        checked = accept_type(
+            'let result = Option::Some(value = "x").map(fn(value: text) => value + "!")\nresult'
+        )
+
+        result = checked.resolved.program.body.items[-1]
+        result_type = checked.node_types[result.node_id]
+        assert isinstance(result_type, EnumType)
+        assert result_type.name == "Option"
+        assert result_type.type_args == (TextType(),)
+
+    def test_option_member_satisfies_a_generic_option_argument(self) -> None:
+        checked = accept_type(
+            "def unwrap[T](value: Option[T]) -> T = value.unwrap()\nunwrap(Option::Some(value = 1))"
+        )
+
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == IntType()
+
+    def test_option_member_satisfies_a_callback_option_result(self) -> None:
+        checked = accept_type(
+            "def invoke(callback: (int) -> Option[int]) -> Option[int] = callback(1)\n"
+            "invoke(fn(value: int) => Option::Some(value = value))"
+        )
+
+        result = checked.resolved.program.body.items[-1]
+        result_type = checked.node_types[result.node_id]
+        assert isinstance(result_type, EnumType)
+        assert result_type.name == "Option"
+        assert result_type.type_args == (IntType(),)
+
 
 # ---------------------------------------------------------------------------
 # Is test
@@ -6532,7 +6596,7 @@ class TestConstructorRefDispatch:
     def test_single_field_variant_positional(self) -> None:
         # Single-field enum variant with no markers → STANDARD zone → positional works.
         # Named "Item"/"Payload" (not "Option"/"Some") so the bare constructor is
-        # unambiguous against std/core's own Option::Some.
+        # unambiguous against std/option's Option::Some.
         r = accept_type("enum Item\n  | Payload(value: int)\n  | Empty\nPayload(42)")
         assert r.resolved.program is not None
 
@@ -7401,7 +7465,7 @@ class TestHostContractBuiltinIdentity:
     def test_scoped_agent_request_naming_a_scoped_option_rejected(self) -> None:
         """With the standard library loaded, a scoped ``AgentRequest`` whose
         ``target_type``/``format_instructions``/``previous_error`` fields
-        resolve a SIBLING scoped ``Option`` (shadowing ``std/core::Option``
+        resolve a SIBLING scoped ``Option`` (shadowing ``std/option::Option``
         the same way a sibling scoped ``Agent`` shadows the canonical one)
         is rejected the same way, even though its ``agent`` field -- nothing
         shadows ``Agent`` here -- still resolves the canonical identity:
@@ -12133,30 +12197,6 @@ class TestNoFiniteSchemaUseSites:
         assert accept_type(_PHANTOM_GROWING_TYPE_SRC + 'exec::[R[int]]("cmd")')
         assert accept_type(_PHANTOM_GROWING_TYPE_SRC + 'let raw: text = "{}"\nraw as R[int]')
         assert accept_type(_PHANTOM_GROWING_TYPE_SRC + "param r: R[int]\nr")
-
-
-class TestParseJsonCall:
-    """Tests for parse_json built-in."""
-
-    def test_parse_json_returns_json(self) -> None:
-        """parse_json("...") yields json."""
-        r = accept_type('let j: json = parse_json("42")\nj')
-        assert r
-
-    def test_parse_json_named_arg_rejected(self) -> None:
-        """Named args to parse_json are rejected."""
-        err = reject_type('parse_json(text = "42")')
-        assert "parse_json" in str(err).lower() or "positional" in str(err).lower()
-
-    def test_parse_json_wrong_arity_rejected(self) -> None:
-        """parse_json() with wrong arity is rejected."""
-        err = reject_type('parse_json("a", "b")')
-        assert "parse_json" in str(err).lower()
-
-    def test_parse_json_no_args_rejected(self) -> None:
-        """parse_json() with no args is rejected."""
-        err = reject_type("parse_json()")
-        assert "parse_json" in str(err).lower()
 
 
 class TestCopyAndShallowCopyCall:

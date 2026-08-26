@@ -1,0 +1,5 @@
+import operators
+import facade::*
+
+program def main() -> unit =
+  1 %% 2

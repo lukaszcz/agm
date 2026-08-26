@@ -21,7 +21,7 @@ from agm.agl.semantics.values import (
     IntValue,
     TextValue,
     Value,
-    values_equal,
+    value_equal,
 )
 
 __all__ = [
@@ -59,11 +59,7 @@ def value_eq(left: Value, right: Value) -> bool:
     terminates instead of recursing forever. The widening here only applies
     at this top level, never inside a container (unchanged from before).
     """
-    if isinstance(left, IntValue) and isinstance(right, DecimalValue):
-        return decimal.Decimal(left.value) == right.value
-    if isinstance(left, DecimalValue) and isinstance(right, IntValue):
-        return left.value == decimal.Decimal(right.value)
-    return values_equal(left, right)
+    return value_equal(left, right)
 
 
 _Ordered = TypeVar("_Ordered", int, decimal.Decimal, str)

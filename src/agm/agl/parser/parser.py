@@ -6,9 +6,12 @@ The module-level ``_PARSER`` is built once at import time from
 grammar-hash-keyed temp file so repeated process starts (every ``agm exec`` /
 ``agm repl`` invocation) reload them instead of rebuilding from scratch.
 
-``parse_program(text)`` is the single public entry point.  It feeds the
-source string to ``_PARSER``, then passes the resulting Lark tree to
-``AstBuilder`` to produce a ``syntax.Program``.  All Lark exceptions and
+``parse_program(text)`` is the normal public entry point. It feeds the source
+string to ``_PARSER``, passes the resulting Lark tree to ``AstBuilder`` to
+produce a raw ``syntax.Program``, then resolves its infix chains before
+returning it. ``parse_program_unresolved(text)`` exposes the preceding
+parser-stage boundary for code that must supply its own operator table; callers
+must resolve that result before passing it to scope. All Lark exceptions and
 ``LexError``s are wrapped into ``AglSyntaxError``.
 """
 
@@ -33,7 +36,7 @@ from agm.agl.lexer.errors import LexError
 from agm.agl.lexer.lexer import build_parser
 from agm.agl.lexer.tokens import RAW_TAIL_END, RAW_TAIL_START
 from agm.agl.parser.errors import AglSyntaxError, syntax_error_from_lark
-from agm.agl.parser.transform import AstBuilder
+from agm.agl.parser.transform import AstBuilder, resolve_program_infix
 from agm.agl.syntax.spans import SourceId
 
 
@@ -141,7 +144,6 @@ def _transform_tree(
     start_id: int,
     filename: str,
     source: SourceId | None,
-    ambient_infix: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
     allow_late_uses: bool = False,
 ) -> tuple[object, int]:
     """Transform a Lark tree via ``AstBuilder``, unwrapping ``VisitError``.
@@ -149,12 +151,7 @@ def _transform_tree(
     Returns ``(result, next_node_id)`` where ``next_node_id`` is the first id NOT
     consumed by the builder's counter (the seed for the next incremental parse).
     """
-    builder = AstBuilder(
-        start_id=start_id,
-        source=source,
-        ambient_infix=ambient_infix,
-        allow_late_uses=allow_late_uses,
-    )
+    builder = AstBuilder(start_id=start_id, source=source, allow_late_uses=allow_late_uses)
     try:
         result = builder.transform(tree)
     except VisitError as exc:
@@ -167,6 +164,32 @@ def _transform_tree(
     return result, builder.next_node_id
 
 
+def _parse_to_unresolved_program(
+    text: str,
+    *,
+    filename: str,
+    start_id: int,
+    source: SourceId | None = None,
+    allow_late_uses: bool = False,
+) -> tuple[syntax.Program, int]:
+    """Build a raw ``Program`` from *text* and report the next unused node id.
+
+    This is the boundary between Lark/AstBuilder parsing and parser-layer infix
+    resolution. Its result may contain ``RawInfixChain`` nodes and must not be
+    passed to scope until ``resolve_infix_chains`` has rewritten them.
+    """
+    tree = _parse_tree(_PARSER, text, filename=filename, source=source)
+    result, next_id = _transform_tree(
+        tree,
+        start_id=start_id,
+        filename=filename,
+        source=source,
+        allow_late_uses=allow_late_uses,
+    )
+    assert isinstance(result, syntax.Program)
+    return result, next_id
+
+
 def _parse_to_program(
     text: str,
     *,
@@ -174,8 +197,9 @@ def _parse_to_program(
     start_id: int,
     source: SourceId | None = None,
     ambient_infix: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
+    resolve_infix: bool = True,
 ) -> tuple[syntax.Program, int]:
-    """Parse *text* into a ``Program`` and report the next unused node id.
+    """Parse and resolve *text*, reporting the next unused node id.
 
     Shared body for :func:`parse_program` and :func:`parse_program_seeded`.
     Node ids are assigned starting at *start_id*; the returned ``int`` is the
@@ -184,18 +208,13 @@ def _parse_to_program(
 
     When *source* is supplied, every ``SourceSpan`` the builder constructs is
     stamped with that ``SourceId``; the same id is also stamped on any
-    ``AglSyntaxError`` raised during parsing.
-
-    *ambient_infix* is an already-resolved user infix fixity table carried over
-    from a prior context (REPL entries); it is merged into the operator table so
-    an operator declared in an earlier entry can be used in a later one.
+    ``AglSyntaxError`` raised during parsing. *ambient_infix* supplies fixities
+    declared in a prior context, such as earlier REPL entries.
     """
-    tree = _parse_tree(_PARSER, text, filename=filename, source=source)
-    result, next_id = _transform_tree(
-        tree, start_id=start_id, filename=filename, source=source, ambient_infix=ambient_infix
+    result, next_id = _parse_to_unresolved_program(
+        text, filename=filename, start_id=start_id, source=source
     )
-    assert isinstance(result, syntax.Program)
-    return result, next_id
+    return (resolve_program_infix(result, ambient_infix) if resolve_infix else result), next_id
 
 
 # Single-entry memo for is_incomplete_source: (last_text, last_result).
@@ -272,6 +291,26 @@ def is_incomplete_source(text: str) -> bool:
     return result
 
 
+def parse_program_unresolved(
+    text: str,
+    *,
+    filename: str = "<agl>",
+    start_id: int = 0,
+    source: SourceId | None = None,
+) -> syntax.Program:
+    """Parse *text* into an AST before parser-layer infix resolution.
+
+    The returned program may contain ``RawInfixChain`` nodes. It is a parser
+    seam for callers that supply an operator table; resolve it with
+    ``resolve_infix_chains`` before scope resolution. Most callers should
+    use :func:`parse_program`, which performs that resolution automatically.
+    """
+    program, _next_id = _parse_to_unresolved_program(
+        text, filename=filename, start_id=start_id, source=source
+    )
+    return program
+
+
 def parse_program(
     text: str,
     *,
@@ -307,7 +346,7 @@ def parse_program(
     Returns
     -------
     syntax.Program
-        The root AST node of the parsed program.
+        The root AST node of the parsed and infix-resolved program.
 
     Raises
     ------
@@ -326,19 +365,14 @@ def parse_repl_transcript(text: str, *, filename: str = "<agl>") -> syntax.Progr
     """Parse a saved REPL transcript for top-level entry boundary discovery.
 
     Header ordering is deferred because each top-level item is subsequently
-    parsed as an independent REPL entry before it can be evaluated.
+    parsed as an independent REPL entry before it can be evaluated. The result
+    is unresolved for the same reason: only the item spans are consumed.
     """
 
-    tree = _parse_tree(_PARSER, text, filename=filename, source=None)
-    result, _next_id = _transform_tree(
-        tree,
-        start_id=0,
-        filename=filename,
-        source=None,
-        allow_late_uses=True,
+    program, _next_id = _parse_to_unresolved_program(
+        text, filename=filename, start_id=0, allow_late_uses=True
     )
-    assert isinstance(result, syntax.Program)
-    return result
+    return program
 
 
 def parse_program_seeded(
@@ -348,6 +382,7 @@ def parse_program_seeded(
     filename: str = "<agl>",
     source: SourceId | None = None,
     ambient_infix: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
+    resolve_infix: bool = True,
 ) -> tuple[syntax.Program, int]:
     """Parse *text* with node ids starting at *start_id* for incremental use.
 
@@ -389,6 +424,7 @@ def parse_program_seeded(
         start_id=start_id,
         source=source,
         ambient_infix=ambient_infix,
+        resolve_infix=resolve_infix,
     )
 
 

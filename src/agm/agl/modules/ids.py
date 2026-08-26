@@ -15,6 +15,10 @@ _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # can produce a ModuleId with this segment via from_path.
 _ENTRY_SEGMENT = "\x00entry"
 
+# The ambient standard-library registry predates ordinary module-name
+# validation. It is a fixed loader-owned path, not a user-definable spelling.
+_SPECIAL_MODULE_PATHS: frozenset[tuple[str, ...]] = frozenset({("std", "builtin-methods")})
+
 ENTRY_DISPLAY = "<entry>"
 """The entry module's user-facing label, standing in for a name it has not got.
 
@@ -83,11 +87,14 @@ class ModuleId:
         """Parse a slash-separated module path into a :class:`ModuleId`.
 
         Raises :class:`ValueError` if *s* is empty or any segment is not a
-        valid identifier (``[A-Za-z_][A-Za-z0-9_]*``).
+        valid identifier (``[A-Za-z_][A-Za-z0-9_]*``), except the fixed
+        ``std/builtin-methods`` standard-library registry path.
         """
         if not s:
             raise ValueError("module id must not be empty")
         segments = s.split("/")
+        if tuple(segments) in _SPECIAL_MODULE_PATHS:
+            return cls(segments=tuple(segments))
         for seg in segments:
             if not seg:
                 raise ValueError(
@@ -137,14 +144,27 @@ def spell_declaration(
 #: via :meth:`ModuleId.from_path`.  Use ``module_id.is_entry`` to test.
 ENTRY_ID: ModuleId = ModuleId(segments=(_ENTRY_SEGMENT,))
 
-#: Logical module id for the shipped core standard library.  Every built-in
-#: type and function (``ExecResult``, every built-in exception, ``exec``,
-#: ``ask``, ...) is declared here (``stdlib/std/core.agl``); a program that
-#: declares nothing of its own for a built-in name is answered with this
-#: module's own identity for it (see
-#: :class:`~agm.agl.ir.builtin_nominals.BuiltinNominals`).
+#: Logical module id for the shipped core standard library. Core built-in
+#: types and functions (``ExecResult``, every built-in exception, ``exec``,
+#: ``ask``, ...) are declared here (``stdlib/std/core.agl``); ``Option`` is
+#: instead declared by :data:`STD_OPTION_ID`. A program that declares nothing
+#: of its own for a built-in name is answered with the owning module's identity
+#: (see :class:`~agm.agl.ir.builtin_nominals.BuiltinNominals`).
 STD_CORE_ID: ModuleId = ModuleId(segments=("std", "core"))
+
+#: Logical module id for the shipped Option standard library
+#: (``stdlib/std/option.agl``).
+STD_OPTION_ID: ModuleId = ModuleId(segments=("std", "option"))
 
 #: Logical module id for the shipped engine-settings standard library
 #: (``std/config``), which declares the engine keys as ``builtin var`` bindings.
 STD_CONFIG_ID: ModuleId = ModuleId(segments=("std", "config"))
+
+#: Logical module id for the ambient process-environment standard library.
+STD_ENV_ID: ModuleId = ModuleId(segments=("std", "env"))
+
+#: Optional standard-library registry of modules that declare methods on
+#: structural and scalar builtin receivers. The loader follows this module as
+#: an ambient dependency: its methods are selectable everywhere, while its
+#: free functions retain ordinary import visibility.
+STD_BUILTIN_METHODS_ID: ModuleId = ModuleId(segments=("std", "builtin-methods"))

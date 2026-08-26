@@ -10,9 +10,10 @@ exactly-once agent dispatch, the ``:set`` param flow, ``reset``, ``load_file``,
 from __future__ import annotations
 
 import dataclasses
+from collections import OrderedDict
 from collections.abc import Mapping
 from pathlib import Path
-from shutil import copyfile
+from shutil import copyfile, copytree
 from unittest.mock import patch
 
 import pytest
@@ -372,15 +373,18 @@ class TestPersistence:
 
     def test_simple_let_uses_one_frame_slot_per_entry(self) -> None:
         session = ReplSession()
+        assert session.eval_entry("()").ok
+
+        initial_frame_size = len(session._ir_base_frame)
 
         first = session.eval_entry("let value = 1")
         assert first.ok, first.diagnostics
-        assert len(session._ir_base_frame) == 1
+        assert len(session._ir_base_frame) == initial_frame_size + 1
         assert session.bindings() == [("value", IntType(), IntValue(1))]
 
         second = session.eval_entry("let value = 2")
         assert second.ok, second.diagnostics
-        assert len(session._ir_base_frame) == 2
+        assert len(session._ir_base_frame) == initial_frame_size + 2
         assert session.bindings() == [("value", IntType(), IntValue(2))]
 
     def test_lambda_binding_initializes_repl_parameter_default(self) -> None:
@@ -4498,6 +4502,27 @@ class TestTraceLogging:
         assert responses and responses[-1]["cancelled"] is True
         assert responses[-1]["reason"]
 
+    @pytest.mark.parametrize((("code", "trace_ok")), [(0, True), (255, False)])
+    def test_process_exit_finalizes_trace_and_propagates_status(
+        self, tmp_path: Path, code: int, trace_ok: bool
+    ) -> None:
+        import json
+
+        trace = tmp_path / "repl.log"
+        session = ReplSession(
+            trace_path=trace,
+            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+        )
+
+        with pytest.raises(SystemExit) as raised:
+            session.eval_entry(f"import std/process\nprocess::exit({code})")
+
+        assert raised.value.code == code
+        records = [json.loads(line) for line in trace.read_text().splitlines() if line]
+        assert records[0]["kind"] == "run_start"
+        assert records[-1]["kind"] == "run_end"
+        assert records[-1]["ok"] is trace_ok
+
     def test_write_failure_disables_logging_for_that_entry_only(self, tmp_path: Path) -> None:
         """A transient write failure must not kill logging for the whole session."""
         import json
@@ -4914,7 +4939,7 @@ class TestInfixDecl:
         assert _int(r.value) == 3
 
     def test_infixr_usable_in_subsequent_entry(self) -> None:
-        s = ReplSession()
+        s = ReplSession(default_stdlib=False)
         s.eval_entry("infixr << at 40")
         s.eval_entry('def <<(x: text, y: text) -> text = "(" + x + y + ")"')
         r = s.eval_entry('"a" << "b" << "c"')
@@ -4925,7 +4950,7 @@ class TestInfixDecl:
     def test_infix_relative_priority_persists(self) -> None:
         # A relative priority (``at prio > + 1``) declared in one entry must
         # keep binding correctly when the operator is used in a later entry.
-        s = ReplSession()
+        s = ReplSession(default_stdlib=False)
         s.eval_entry("infixl |> at prio > + 1")
         s.eval_entry("def |>(x: int, y: int) -> int = x * 10 + y")
         r = s.eval_entry("1 + 2 |> 3 > 20")
@@ -4962,6 +4987,83 @@ class TestInfixDecl:
         assert r.ok, r.diagnostics
         assert r.value is not None
         assert _int(r.value) == 7
+
+    def test_used_scoped_facade_export_makes_operator_fixity_available(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.modules.roots import assemble_roots
+
+        root = tmp_path / "modules"
+        root.mkdir()
+        (root / "operators.agl").write_text(
+            "infixl %% at 5\ndef %%(x: int, y: int) -> int = x + y\n"
+        )
+        (root / "facade.agl").write_text("scope Public\nexport operators::{%%}\nend Public\n")
+        s = ReplSession()
+        s._roots = assemble_roots(
+            invocation_root=root,
+            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            lib_root=None,
+            configured=[],
+            cli=[],
+            cwd=root,
+        )
+
+        result = s.eval_entry("import facade::*\nuse Public::*\n1 %% 2")
+
+        assert result.ok, result.diagnostics
+        assert result.value is not None
+        assert _int(result.value) == 3
+
+    def test_relative_infix_priority_to_bare_visible_import_persists(self, tmp_path: Path) -> None:
+        root = tmp_path / "modules"
+        root.mkdir()
+        (root / "operators.agl").write_text(
+            "infixl %% at 5\ndef %%(x: int, y: int) -> int = x * 10 + y\n"
+        )
+        from agm.agl.modules.roots import assemble_roots
+
+        s = ReplSession()
+        s._roots = assemble_roots(
+            invocation_root=root,
+            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            lib_root=None,
+            configured=[],
+            cli=[],
+            cwd=root,
+        )
+
+        declared = s.eval_entry("import operators::*\ninfixl +++ at prio %% + 1")
+        assert declared.ok, declared.diagnostics
+        assert s.eval_entry("def +++(x: int, y: int) -> int = x * 100 + y").ok
+
+        result = s.eval_entry("1 %% 2 +++ 3")
+
+        assert result.ok, result.diagnostics
+        assert result.value is not None
+        assert _int(result.value) == 213
+
+    def test_session_fixity_conflicts_with_a_bare_visible_import(self, tmp_path: Path) -> None:
+        from agm.agl.modules.roots import assemble_roots
+
+        root = tmp_path / "modules"
+        root.mkdir()
+        (root / "operators.agl").write_text("infixr %% at 5\n")
+        s = ReplSession()
+        s._roots = assemble_roots(
+            invocation_root=root,
+            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            lib_root=None,
+            configured=[],
+            cli=[],
+            cwd=root,
+        )
+
+        assert s.eval_entry("infixl %% at 5").ok
+        assert s.eval_entry("def %%(x: int, y: int) -> int = x + y").ok
+        result = s.eval_entry("import operators::*\n1 %% 2")
+
+        assert not result.ok
 
     def test_infix_decl_survives_reset(self) -> None:
         # ``:reset`` clears ALL session state, including accumulated fixity.
@@ -5748,10 +5850,10 @@ class TestImports:
 
         std_dir = tmp_path / "std"
         std_dir.mkdir()
-        copyfile(
-            Path(__file__).resolve().parents[1] / "stdlib" / "std" / "core.agl",
-            std_dir / "core.agl",
-        )
+        source_std_dir = Path(__file__).resolve().parents[1] / "stdlib" / "std"
+        for source in source_std_dir.iterdir():
+            if source.is_file():
+                copyfile(source, std_dir / source.name)
         config = std_dir / "config.agl"
         config.write_text(
             "import std/core::{Option, Agent}\n"
@@ -7437,6 +7539,287 @@ class TestSessionOpen:
         assert s.open() == ()
         assert s._loaded_lib_modules == {}
 
+    def test_open_rechecks_a_changed_cached_stdlib(self, tmp_path: Path) -> None:
+        """A fresh session never receives stale static results after an edit."""
+        stdlib = tmp_path / "stdlib"
+        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+
+        assert ReplSession(stdlib_root=stdlib).open() == ()
+        # This second fresh session can reuse the unchanged bootstrap image.
+        assert ReplSession(stdlib_root=stdlib).open() == ()
+
+        config = stdlib / "std" / "config.agl"
+        original_config = config.read_text(encoding="utf-8")
+        config.write_text(original_config + '\nlet broken: int = "text"\n')
+        diagnostics = ReplSession(stdlib_root=stdlib).open()
+        assert diagnostics
+
+        # Rebuild a valid snapshot, then make a cached source unreadable.
+        config.write_text(original_config, encoding="utf-8")
+        assert ReplSession(stdlib_root=stdlib).open() == ()
+        config.unlink()
+        assert ReplSession(stdlib_root=stdlib).open()
+
+    def test_open_reports_missing_extern_companion_after_a_cached_bootstrap(
+        self, tmp_path: Path
+    ) -> None:
+        """A cache hit must not bypass the loader's companion-file check."""
+        stdlib = tmp_path / "stdlib"
+        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+
+        assert ReplSession(stdlib_root=stdlib).open() == ()
+        (stdlib / "std" / "array.py").unlink()
+
+        diagnostics = ReplSession(stdlib_root=stdlib).open()
+
+        assert diagnostics
+        assert "companion" in diagnostics[0].message.lower()
+
+    def test_open_reports_invalid_utf8_after_a_cached_bootstrap(self, tmp_path: Path) -> None:
+        """Cache validation falls back to ordinary module-load diagnostics."""
+        stdlib = tmp_path / "stdlib"
+        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+
+        assert ReplSession(stdlib_root=stdlib).open() == ()
+        (stdlib / "std" / "config.agl").write_bytes(b"\xff")
+
+        diagnostics = ReplSession(stdlib_root=stdlib).open()
+        assert diagnostics
+
+    def test_open_rebuilds_when_a_module_resolves_to_a_new_canonical_path(
+        self, tmp_path: Path
+    ) -> None:
+        """A same-text symlink replacement must not reuse the old module image."""
+        from agm.agl.modules.ids import STD_CONFIG_ID
+
+        stdlib = tmp_path / "stdlib"
+        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        config = stdlib / "std" / "config.agl"
+        replacement = stdlib / "std" / "replacement.agl"
+        replacement.write_text(config.read_text(encoding="utf-8"), encoding="utf-8")
+
+        assert ReplSession(stdlib_root=stdlib).open() == ()
+
+        config.unlink()
+        config.symlink_to(replacement.name)
+
+        refreshed = ReplSession(stdlib_root=stdlib)
+        assert refreshed.open() == ()
+        assert refreshed._loaded_lib_modules[STD_CONFIG_ID].path == replacement.resolve()
+
+    def test_open_reuses_a_crlf_bootstrap_snapshot(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Source comparison uses the loader's universal-newline representation."""
+        import agm.agl.modules.loader as loader_mod
+
+        stdlib = tmp_path / "stdlib"
+        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        config = stdlib / "std" / "config.agl"
+        config.write_text(
+            config.read_text(encoding="utf-8").replace("\n", "\r\n"), encoding="utf-8"
+        )
+        original = loader_mod.build_repl_graph
+        build_count = 0
+
+        def spy(*args: object, **kwargs: object) -> object:
+            nonlocal build_count
+            build_count += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(loader_mod, "build_repl_graph", spy)
+
+        assert ReplSession(stdlib_root=stdlib).open() == ()
+        assert ReplSession(stdlib_root=stdlib).open() == ()
+
+        assert build_count == 1
+
+    def test_open_rejects_new_root_ambiguity_after_a_cached_bootstrap(self, tmp_path: Path) -> None:
+        """A cached image cannot bypass fresh module resolution ambiguity checks."""
+        stdlib = tmp_path / "stdlib"
+        workspace = tmp_path / "workspace"
+        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        workspace.mkdir()
+
+        assert ReplSession(stdlib_root=stdlib, cwd=workspace).open() == ()
+
+        duplicate = workspace / "std" / "core.agl"
+        duplicate.parent.mkdir()
+        duplicate.write_text("", encoding="utf-8")
+
+        diagnostics = ReplSession(stdlib_root=stdlib, cwd=workspace).open()
+        assert diagnostics
+        assert "ambiguous" in diagnostics[0].message.lower()
+
+    def test_open_rechecks_wildcard_root_discovery_after_a_cached_bootstrap(
+        self, tmp_path: Path
+    ) -> None:
+        """A cached wildcard expansion cannot omit newly matching modules."""
+        from agm.agl.modules.ids import ModuleId
+
+        stdlib = tmp_path / "stdlib"
+        std = stdlib / "std"
+        extra = std / "extra"
+        workspace = tmp_path / "workspace"
+        extra.mkdir(parents=True)
+        workspace.mkdir()
+        (std / "core.agl").write_text("import std/extra/*\n", encoding="utf-8")
+        (extra / "one.agl").write_text("let one: int = 1\n", encoding="utf-8")
+
+        assert ReplSession(stdlib_root=stdlib, cwd=workspace).open() == ()
+        assert ReplSession(stdlib_root=stdlib, cwd=workspace).open() == ()
+
+        (std / "builtin-methods.agl").write_text("let registry: int = 1\n", encoding="utf-8")
+        assert ReplSession(stdlib_root=stdlib, cwd=workspace).open() == ()
+
+        (extra / "two.agl").write_text("let two: int = 2\n", encoding="utf-8")
+        refreshed = ReplSession(stdlib_root=stdlib, cwd=workspace)
+        assert refreshed.open() == ()
+        assert ModuleId.from_path("std/extra/two") in refreshed._loaded_lib_modules
+
+    def test_open_reuses_an_unchanged_bootstrap_snapshot(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A second pristine session skips rebuilding the same stdlib image."""
+        import agm.agl.modules.loader as loader_mod
+
+        stdlib = tmp_path / "stdlib"
+        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        original = loader_mod.build_repl_graph
+        new_module_counts: list[int] = []
+
+        def spy(*args: object, **kwargs: object) -> object:
+            result = original(*args, **kwargs)
+            _graph, _next_id, new_modules = result
+            new_module_counts.append(len(new_modules))
+            return result
+
+        monkeypatch.setattr(loader_mod, "build_repl_graph", spy)
+
+        assert ReplSession(stdlib_root=stdlib).open() == ()
+        assert ReplSession(stdlib_root=stdlib).open() == ()
+
+        assert new_module_counts and new_module_counts[0] > 0
+        assert len(new_module_counts) == 1
+
+    def test_open_does_not_reuse_a_bootstrap_from_another_root(self, tmp_path: Path) -> None:
+        """The selected root is part of the bootstrap image's provenance."""
+        source_stdlib = Path(__file__).resolve().parent.parent / "stdlib"
+        first_root = tmp_path / "first"
+        second_root = tmp_path / "second"
+        copytree(source_stdlib, first_root)
+        copytree(source_stdlib, second_root)
+        config = second_root / "std" / "config.agl"
+        config.write_text(
+            config.read_text(encoding="utf-8").replace(
+                'AgentClaude("sonnet", "medium")', 'AgentCommand("second-root")'
+            ),
+            encoding="utf-8",
+        )
+
+        assert ReplSession(stdlib_root=first_root).open() == ()
+        second = ReplSession(stdlib_root=second_root)
+        assert second.open() == ()
+        result = second.eval_entry("import std/config\nstd/config::default-agent")
+
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value, RecordValue)
+        assert result.value.display_name == "Agent::AgentCommand"
+        assert result.value.fields["command"] == TextValue("second-root")
+
+    def test_open_does_not_reuse_a_bootstrap_with_different_capabilities(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Changing host capabilities recompiles the static bootstrap image."""
+        import agm.agl.modules.loader as loader_mod
+        from agm.agl.runtime.codec import TextCodec
+
+        class ExtraCodec(TextCodec):
+            @property
+            def name(self) -> str:
+                return "bootstrap-extra"
+
+        stdlib = tmp_path / "stdlib"
+        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        original = loader_mod.build_repl_graph
+        new_module_counts: list[int] = []
+
+        def spy(*args: object, **kwargs: object) -> object:
+            result = original(*args, **kwargs)
+            _graph, _next_id, new_modules = result
+            new_module_counts.append(len(new_modules))
+            return result
+
+        monkeypatch.setattr(loader_mod, "build_repl_graph", spy)
+
+        assert ReplSession(stdlib_root=stdlib).open() == ()
+        changed_capabilities = ReplSession(stdlib_root=stdlib)
+        changed_capabilities.register_codec(ExtraCodec())
+        assert changed_capabilities.open() == ()
+
+        assert len(new_module_counts) == 2
+        assert all(count > 0 for count in new_module_counts)
+
+    def test_open_does_not_reuse_a_bootstrap_when_settings_are_overridden(
+        self, tmp_path: Path
+    ) -> None:
+        """Source-level setting overrides require a freshly checked std/config."""
+        from agm.agl.setting_overrides import SettingOverride
+
+        stdlib = tmp_path / "stdlib"
+        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        assert ReplSession(stdlib_root=stdlib).open() == ()
+
+        overridden = ReplSession(
+            stdlib_root=stdlib,
+            setting_overrides={
+                "default-agent": SettingOverride(
+                    source='AgentCommand("overridden")', origin="--agent"
+                )
+            },
+        )
+        assert overridden.open() == ()
+        result = overridden.eval_entry("import std/config\nstd/config::default-agent")
+
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value, RecordValue)
+        assert result.value.display_name == "Agent::AgentCommand"
+        assert result.value.fields["command"] == TextValue("overridden")
+
+    def test_open_bootstrap_cache_has_bounded_lru_retention(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Frequently reused bootstrap images survive while least-recent ones expire."""
+        import agm.agl.modules.loader as loader_mod
+        import agm.agl.repl.session as session_mod
+
+        monkeypatch.setattr(session_mod, "_bootstrap_cache", OrderedDict())
+        monkeypatch.setattr(session_mod, "BOOTSTRAP_CACHE_MAX_ENTRIES", 2)
+        original = loader_mod.build_repl_graph
+        new_module_counts: list[int] = []
+
+        def spy(*args: object, **kwargs: object) -> object:
+            result = original(*args, **kwargs)
+            _graph, _next_id, new_modules = result
+            new_module_counts.append(len(new_modules))
+            return result
+
+        monkeypatch.setattr(loader_mod, "build_repl_graph", spy)
+        source_stdlib = Path(__file__).resolve().parent.parent / "stdlib"
+        roots = tuple(tmp_path / name for name in ("first", "second", "third"))
+        for root in roots:
+            copytree(source_stdlib, root)
+
+        assert ReplSession(stdlib_root=roots[0]).open() == ()
+        assert ReplSession(stdlib_root=roots[1]).open() == ()
+        assert ReplSession(stdlib_root=roots[0]).open() == ()  # refresh first
+        assert ReplSession(stdlib_root=roots[2]).open() == ()
+        assert ReplSession(stdlib_root=roots[1]).open() == ()  # second was least recent
+
+        assert all(count > 0 for count in new_module_counts)
+        assert len(new_module_counts) == 4
+        assert len(session_mod._bootstrap_cache) == 2
+
     def test_open_applies_a_well_formed_override_before_the_first_entry(self) -> None:
         from agm.agl.semantics.values import RecordValue, TextValue
         from agm.agl.setting_overrides import SettingOverride
@@ -7671,9 +8054,9 @@ class TestDeferredStdlibResolution:
         std_dir = stdlib_root / "std"
         std_dir.mkdir(parents=True)
         real_stdlib = Path(__file__).resolve().parents[1] / "stdlib" / "std"
-        for name in ("core.agl", "config.agl", "fs.agl", "fs.py", "text.agl", "text.py"):
-            source = real_stdlib / name
-            (std_dir / name).write_bytes(source.read_bytes())
+        for source in real_stdlib.iterdir():
+            if source.is_file():
+                (std_dir / source.name).write_bytes(source.read_bytes())
         (stdlib_root / "package.toml").write_bytes(
             (Path(__file__).resolve().parents[1] / "stdlib" / "package.toml").read_bytes()
         )

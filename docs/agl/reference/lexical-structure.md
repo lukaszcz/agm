@@ -418,6 +418,17 @@ The record-update operator `with` binds looser than every level in the table,
 on both sides; see
 [Record update](expressions.md#record-update).
 
+### Prelude combinators
+
+`std/core` makes four functional combinators available through the prelude:
+`|>` is left-associative at priority 5 and passes a value to a function; `<|`
+is right-associative at priority 4 and applies a function to a value; `>>` is
+left-associative at priority 60 and composes functions left-to-right; `<<` is
+right-associative at priority 60 and composes them right-to-left. Thus
+`increment <| 2 |> double` is `increment(double(2))`. A chain cannot mix `>>`
+and `<<` without parentheses because they have opposite associativity at the
+same priority.
+
 User-defined symbolic infix operators are declared with `infixl` or `infixr`:
 
 ```agl
@@ -426,10 +437,15 @@ infixr << at prio > + 1
 ```
 
 Priorities are integers where lower numbers bind looser and higher numbers bind
-tighter. A priority can be a literal integer or relative to an existing operator
-with `prio <op> + N` / `prio <op> - N`; omitted priority uses the `+`/`-` level.
-User infix use lowers to a normal two-argument function call, so the operator
-must also be declared as a function with the same name.
+tighter. A priority can be a literal integer or relative to an existing builtin,
+local operator, operator made bare-visible by an import wildcard or tail, or an
+operator member made bare by `use` (with the `std/core` prelude included);
+omitted priority uses the `+`/`-` level. A plain qualified import does not make
+an operator's fixity available. User infix
+use lowers to a normal two-argument function call, so the operator must also be
+declared as a function with the same name. Two visible declarations for one
+operator must agree on fixity, and operators at one priority cannot mix left and
+right associativity in a chain.
 
 **Cast operators (level 7)** — `as` and `as?` — sit between unary `-` and
 `* /`. They are left-associative: `x as json as text` = `(x as json) as text`.

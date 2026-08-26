@@ -1553,22 +1553,20 @@ class TestScopedBuiltinUsedAsValueRejected:
 
     def test_qualified_reference_used_as_a_value_is_rejected(self) -> None:
         err = reject_scope(
-            "scope H\nbuiltin def parse_json(value: text) -> json\nend H\n"
-            "let f = H::parse_json\nprint(f)"
+            "scope H\nbuiltin def render[T](value: T) -> text\nend H\nlet f = H::render\nprint(f)"
         )
         assert "cannot be used as a value" in err.to_diagnostic().message
 
     def test_bare_reference_inside_its_own_region_used_as_a_value_is_rejected(self) -> None:
         err = reject_scope(
-            "scope H\nbuiltin def parse_json(value: text) -> json\n"
-            "let f = parse_json\nend H\nprint(H::f)"
+            "scope H\nbuiltin def render[T](value: T) -> text\nlet f = render\nend H\nprint(H::f)"
         )
         assert "cannot be used as a value" in err.to_diagnostic().message
 
     def test_qualified_reference_with_a_type_argument_used_as_a_value_is_rejected(self) -> None:
         err = reject_scope(
-            "scope H\nbuiltin def parse_json(value: text) -> json\nend H\n"
-            "let f = H::parse_json[json]\nprint(f)"
+            "scope H\nbuiltin def render[T](value: T) -> text\nend H\n"
+            "let f = H::render[json]\nprint(f)"
         )
         assert "cannot be used as a value" in err.to_diagnostic().message
 
@@ -1576,10 +1574,32 @@ class TestScopedBuiltinUsedAsValueRejected:
         """The value-use rejection must not reject the legitimate call form
         it is easy to conflate it with: resolution must still succeed."""
         resolved = parse_and_resolve(
-            'scope H\nbuiltin def parse_json(value: text) -> json\nend H\nprint(H::parse_json("1"))'
+            'scope H\nbuiltin def render[T](value: T) -> text\nend H\nprint(H::render("1"))'
         )
         call_item = resolved.program.body.items[1]
         assert isinstance(call_item, Call)
+
+
+class TestQualifiedMembersSharingBuiltinNames:
+    """A qualified member may share a bare builtin name without shadowing it."""
+
+    def test_qualified_scope_member_named_after_a_builtin_is_accepted(self) -> None:
+        resolved = parse_and_resolve(
+            "scope Codec\ndef render(value: int) -> int = value\nend Codec\nCodec::render(1)"
+        )
+
+        qualified = _find_varref(resolved.program, "render")
+        assert qualified.qualifier is not None
+
+    def test_opened_member_does_not_intercept_the_bare_builtin(self) -> None:
+        resolved = parse_and_resolve(
+            "use Codec::*\nscope Codec\ndef render(value: int) -> int = value\nend Codec\n"
+            "let value = render(1)\nCodec::render(1)"
+        )
+
+        bare = _find_varref(resolved.program, "render", occurrence=0)
+        assert bare.qualifier is None
+        assert BuiltinKind.RENDER in resolved.builtin_calls.values()
 
 
 # ---------------------------------------------------------------------------
@@ -3268,6 +3288,15 @@ class TestConstructorBindings:
         owners = {c.owner_path for c in r.constructor_candidates["some"]}
         assert owners == {("A",), ("B",)}
 
+    def test_local_enum_member_shadows_an_automatic_prelude_constructor(self) -> None:
+        resolved = parse_and_resolve(
+            "enum Result\n  | Ok(value: int)\n  | Err(error: text)\nOk(value = 1)"
+        )
+
+        result = resolved.program.body.items[-1]
+        assert isinstance(result, Call)
+        assert resolved.constructor_refs[result.callee.node_id].owner_path == ("Result",)
+
     def test_ambiguous_bare_varref_raises(self) -> None:
         """Unqualified use of an ambiguous variant name raises an ambiguity error."""
         err = reject_scope("enum A\n  | some\nenum B\n  | some\nsome\n")
@@ -3461,7 +3490,7 @@ class TestConstructorBindings:
         """The enum name itself is NOT a value binding — only its variants are.
 
         default_stdlib=False: this program declares its own ``Option``, which
-        collides with std/core's own ``Option[T]`` under the default import.
+        collides with the default prelude's ``std/option::Option[T]``.
         The point of this test is purely local ("does a bare reference to a
         locally-declared enum's own name resolve as a value"), independent of
         any module graph, so nothing else needs to be in scope.
@@ -3707,14 +3736,6 @@ class TestCastScope:
         """undefined var inside a cast is a scope error."""
         err = reject_scope("undefinedVar as int")
         assert "undefinedVar" in err.to_diagnostic().message
-
-    def test_parse_json_resolves_as_builtin(self) -> None:
-        """parse_json(x) resolves as a builtin — no 'undefined name parse_json' error."""
-        r = parse_and_resolve('let s = "hello"\nparse_json(s)')
-        # The call to parse_json should be classified as PARSE_JSON builtin
-        from agm.agl.scope.symbols import BuiltinKind
-
-        assert BuiltinKind.PARSE_JSON in r.builtin_calls.values()
 
     def test_copy_and_shallow_copy_resolve_as_builtins(self) -> None:
         """copy(x)/shallow_copy(x) resolve as builtins, not undefined names."""

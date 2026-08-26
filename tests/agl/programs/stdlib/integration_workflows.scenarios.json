@@ -1,0 +1,60 @@
+{
+  "scenarios": [
+    {
+      "name": "exec_json_array_pipeline_uses_mocked_shell_output",
+      "params": {"workflow": 1, "root": "$TEMP_ROOT"},
+      "filesystem": {},
+      "shell": [
+        {
+          "command": "inventory",
+          "stdout": "{\"items\": [{\"name\": \"alpha\"}, {\"name\": \"beta\"}]}"
+        }
+      ],
+      "expect": {"stdout": "\"alpha\",\"beta\"\n\"mock\"\n", "calls": {}}
+    },
+    {
+      "name": "filesystem_regex_hofs_and_text_formatting_share_an_isolated_fixture",
+      "params": {"workflow": 2, "root": "$TEMP_ROOT"},
+      "filesystem": {"text_files": {"report.txt": "open ticket-12; then ticket-7"}},
+      "expect": {"stdout": "TICKET-12 | TICKET-7\n", "calls": {}}
+    },
+    {
+      "name": "attempt_wraps_filesystem_toml_and_time_failures_and_success",
+      "params": {"workflow": 3, "root": "$TEMP_ROOT"},
+      "filesystem": {"text_files": {"schedule.toml": "when = \"2024-01-02T03:04:05+00:00\""}},
+      "expect": {"stdout": "true\nOption::Some(value = \"2024-01-02T03:04:05+00:00\")\n", "calls": {}}
+    },
+    {
+      "name": "attempt_catches_missing_files_before_toml_and_time_parsing",
+      "params": {"workflow": 4, "root": "$TEMP_ROOT"},
+      "filesystem": {},
+      "expect": {"stdout": "true\ntrue\n", "calls": {}}
+    },
+    {
+      "name": "attempt_catches_malformed_toml_in_the_schedule_workflow",
+      "params": {"workflow": 6, "root": "$TEMP_ROOT"},
+      "filesystem": {"text_files": {"schedule.toml": "when = ["}},
+      "expect": {"stdout": "true\ntrue\n", "calls": {}}
+    },
+    {
+      "name": "attempt_catches_invalid_iso_time_in_the_schedule_workflow",
+      "params": {"workflow": 7, "root": "$TEMP_ROOT"},
+      "filesystem": {"text_files": {"schedule.toml": "when = \"not-a-time\""}},
+      "expect": {"stdout": "true\ntrue\n", "calls": {}}
+    },
+    {
+      "name": "environment_overlay_and_path_drive_mocked_exec_settings",
+      "params": {"workflow": 5, "root": "unused"},
+      "process_environment": {"BASE": "preserved"},
+      "shell": [
+        {
+          "command": "with-env",
+          "stdout": "configured\n",
+          "env": {"BASE": "preserved", "REPORT_DIR": "workspace"},
+          "cwd": "workspace"
+        }
+      ],
+      "expect": {"stdout": "configured\n", "calls": {}}
+    }
+  ]
+}

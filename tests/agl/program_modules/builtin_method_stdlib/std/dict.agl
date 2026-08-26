@@ -1,0 +1,2 @@
+def dict[text, V]::size(self) -> int = 1
+def dict[text, V]::value(self) -> V = self["value"]

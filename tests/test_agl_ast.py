@@ -2838,6 +2838,35 @@ class TestModuleSystemNodes:
         walk(decl, visited.append)
         assert visited == [decl]
 
+    def test_raw_infix_chain_walk_visits_all_raw_nodes(self) -> None:
+        from agm.agl.syntax import RawInfixChain, RawInfixOperand, RawInfixOperator, RawPrefixNot
+        from agm.agl.syntax.visitor import walk
+
+        raw_not = RawPrefixNot(span=self._sp(), node_id=1)
+        operand = RawInfixOperand(
+            expr=IntLit(value=1, span=self._sp(), node_id=2),
+            prefix_nots=(raw_not,),
+            span=self._sp(),
+            node_id=3,
+        )
+        operator = RawInfixOperator(
+            name="|>",
+            builtin=None,
+            callee_node_id=4,
+            span=self._sp(),
+            node_id=5,
+        )
+        chain = RawInfixChain(
+            operands=(operand,),
+            operators=(operator,),
+            span=self._sp(),
+            node_id=6,
+        )
+        visited: list[object] = []
+        walk(chain, visited.append)
+
+        assert visited == [chain, operand, operand.expr, raw_not, operator]
+
     def test_var_ref_qualifier_chain_default_none(self) -> None:
         ref = VarRef(name="x", span=self._sp(), node_id=0)
         assert ref.qualifier is None

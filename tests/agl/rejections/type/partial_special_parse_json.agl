@@ -1,3 +1,0 @@
-program def main() -> unit =
-  let parsed = parse_json(?)
-  parsed

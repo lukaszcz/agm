@@ -1,0 +1,66 @@
+# Dict methods are ambient; from-entries requires this explicit import.
+import std/dict
+
+param mode: int
+
+program def main() -> unit =
+  case mode of
+    | 1 =>
+        let empty: dict[text, int] = {}
+        print(empty.size())
+        print(empty.is-empty())
+        print(empty.get?("missing"))
+        print(empty.remove?("missing"))
+        print(empty.contains("missing"))
+        print(empty.keys())
+        print(empty.values())
+        print(empty.entries())
+        print(empty.map-values(fn(value: int) => value + 1))
+        print(empty.filter(fn(key: text, value: int) => key == "kept"))
+        empty.each(fn(key: text, value: int) => print(key))
+    | 2 =>
+        let offset = 10
+        let blocked = "one"
+        let prefix = "value:"
+        var values = {"one": 1, "two": 2}
+        let merged = values.merge({"two": 20, "three": 3})
+        print(values)
+        print(merged)
+        print(values.keys())
+        print(values.values())
+        print(values.entries())
+        print(values.map-values(fn(value: int) => value + offset))
+        print(values.filter(fn(key: text, value: int) => key != blocked))
+        values.each(fn(key: text, value: int) => print(prefix + key + ":" + (value as text)))
+        print(values.get("one"))
+        print(values.remove?("missing"))
+        print(values.remove("one"))
+        values.merge!({"two": 22, "three": 3})
+        values.filter!(fn(key: text, value: int) => key != "two")
+        print(values)
+        values.clear()
+        print(values.is-empty())
+    | 3 =>
+        let values = {"one": 1, "two": 2}
+        let rebuilt = dict::from-entries(values.entries())
+        print(rebuilt)
+        print(rebuilt == values)
+    | 4 =>
+        let values = {"one": 1}
+        let _ = values.get("missing")
+        ()
+    | 5 =>
+        var values = {"one": 1}
+        let _ = values.remove("missing")
+        ()
+    | _ =>
+        var values = {"one": 1, "two": 2}
+        let alias = values
+        print(values.get?("one"))
+        print(values.remove?("one"))
+        values.merge!({"two": 20, "three": 3})
+        print(alias)
+        values.filter!(fn(key: text, value: int) => key != "two")
+        print(alias)
+        values.clear()
+        print(alias.is-empty())

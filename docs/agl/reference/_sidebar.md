@@ -13,6 +13,7 @@
 - [Agent calls](agent-calls.md)
 - [Shell execution](shell-execution.md)
 - [Python FFI](ffi.md)
+- [Standard library](standard-library.md)
 - [Exceptions](exceptions.md)
 - [Host environment](host-environment.md)
 - [Grammar](grammar.md)

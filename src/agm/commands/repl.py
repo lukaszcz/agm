@@ -25,6 +25,7 @@ declarations opt into bare names.
 
 from __future__ import annotations
 
+import os
 import sys
 from typing import TYPE_CHECKING
 
@@ -186,6 +187,7 @@ def run(args: ReplArgs) -> None:
             if key in resolved
         }
 
+    process_environment = dict(os.environ)
     with preserve_primary_error(session_host.close_all, label="agent session cleanup"):
         session = ReplSession(
             default_strict_json=strict_json,
@@ -196,6 +198,7 @@ def run(args: ReplArgs) -> None:
             shell_exec_timeout=config.timeout,
             trace_path=trace_path,
             engine_base=engine_seeds.values,
+            process_environment=process_environment,
             setting_overrides=engine_seeds.overrides,
             host_settings_policy=host_settings_policy,
             cwd=ctx.cwd,

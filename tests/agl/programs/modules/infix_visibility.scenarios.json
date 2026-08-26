@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "positive_value",
+      "module_roots": ["program_modules/modules/infix_visibility"],
+      "stdlib_root": "program_modules/infix/prelude",
+      "params": {"value": 3},
+      "expect": {"stdout": "4\n4\n5\n", "calls": {}}
+    },
+    {
+      "name": "zero_value",
+      "module_roots": ["program_modules/modules/infix_visibility"],
+      "stdlib_root": "program_modules/infix/prelude",
+      "params": {"value": 0},
+      "expect": {"stdout": "1\n1\n2\n", "calls": {}}
+    }
+  ]
+}

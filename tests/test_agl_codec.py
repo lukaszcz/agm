@@ -44,7 +44,7 @@ from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser.parser import parse_program
-from agm.agl.runtime.codec import JsonCodec, ParseResult, TextCodec
+from agm.agl.runtime.codec import JsonCodec, ParseResult, TextCodec, extract_json_text
 from agm.agl.runtime.contract import OutputContract, materialize_contract, materialize_ir_contract
 from agm.agl.runtime.request import AgentRequest
 from agm.agl.semantics.exceptions import AglRaise
@@ -1373,6 +1373,14 @@ class TestLenientParsing:
         codec = self._codec()
         with pytest.raises(ValueError, match="defs.*RefDecode"):
             codec.parse("{}", schema={}, decode=RefDecode("Node"))
+
+
+class TestPublicJsonRecoveryAdapter:
+    """The explicit JSON module shares the codec's recovery implementation."""
+
+    def test_recovers_fenced_json_and_hides_ambiguous_output(self) -> None:
+        assert extract_json_text("```json\n[1, 2]\n```") == "[1, 2]"
+        assert extract_json_text("maybe true or maybe false") is None
 
 
 # ---------------------------------------------------------------------------

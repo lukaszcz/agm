@@ -45,11 +45,13 @@ Entering a bare type name displays the type; an unapplied generic type name such
 
 Importing a library module that declares `extern def` (see
 [Python FFI](../agl/reference/ffi.md)) works normally in the REPL; its companion
-Python file imports once for the session, not once per entry. A direct entry
-typed at the prompt (with no backing file of its own) may not declare
-`extern def` itself. `:reset` clears this session-held companion state along
-with everything else — a subsequent import resolves and imports the companion
-again as though the session were new.
+Python file imports once for the session, not once per entry. Its ordinary Python
+module globals therefore last for the session; `:reset` discards that cached
+companion and a later import creates new globals. A companion value obtained
+through `runtime.state(...)` is different: it belongs to the fresh interpreter
+that evaluates one entry and ends with that entry, even while the companion
+module remains cached. A direct entry typed at the prompt (with no backing file
+of its own) may not declare `extern def` itself.
 
 For the same reason, `resource` and `resource-dir` cannot be called from a direct
 entry: they anchor at the declaring module's file. An imported file-backed module
@@ -160,8 +162,10 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 
 ### Exit codes
 
-The REPL itself only fails before the loop starts; per-entry errors are reported inline
-and never exit the process. A blank or non-string `--agent`/`[exec] default-agent`
+The REPL itself only fails before the loop starts; ordinary per-entry errors are
+reported inline and never exit the process. `std/process::exit(code)` is the
+exception: it terminates the REPL host with its portable `0..255` status after
+finalizing that entry's trace. A blank or non-string `--agent`/`[exec] default-agent`
 value is one such pre-loop failure. A syntactically present but malformed literal —
 unparseable, the wrong type, a non-constant expression, or an unknown engine key — is
 also a pre-loop failure: session initialization loads the standard library and splices the

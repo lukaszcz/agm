@@ -1,0 +1,16 @@
+import std/option::Option
+
+exception TomlParseError extends Exception
+  raw: text
+
+exception TomlRenderError extends Exception()
+
+scope TomlInternals
+extern def parse(value: text) -> json
+extern def parse_option(value: text) -> Option[json]
+extern def render(value: json) -> text
+end TomlInternals
+
+def parse(value: text) -> json = TomlInternals::parse(value)
+def parse?(value: text) -> Option[json] = TomlInternals::parse_option(value)
+def render(value: json) -> text = TomlInternals::render(value)

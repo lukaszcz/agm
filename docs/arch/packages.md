@@ -13,10 +13,11 @@ compatible AGM release line (the same minor before 1.0, the same major thereafte
 `agm pkg check` validates a development package without modifying it. Manifest and module-tree
 checks that read no module source run before dependency resolution; dependency-aware validation
 then loads and name-resolves the package module graph with runtime package visibility, rejecting
-unresolved modules, imports outside the declared dependency closure, command program references
-that name no valid entry, and literal resource targets that are absent. Every module is parsed
-once, by that one graph load, and resource call sites come from the scope pass's own built-in
-classification rather than a separate name-resolution rule.
+unresolved modules, imports outside the declared dependency closure, non-converging unrestricted
+scoped re-export cycles, command program references that name no valid entry, and literal resource
+targets that are absent. Every module is parsed once, by that one graph load, and resource call
+sites come from the scope pass's own built-in classification rather than a separate name-resolution
+rule.
 Dependency checking retains one selected package per name across the closure, mirroring
 installation's path-source and minimum-version selection for ordinary diamond dependencies, while
 validating `std` directly against the running AGM release line.

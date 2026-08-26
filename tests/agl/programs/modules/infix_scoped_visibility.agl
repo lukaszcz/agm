@@ -1,0 +1,15 @@
+# Scoped imports keep an operator's fixity in the region where it is bare,
+# and a scoped re-export can be selected and renamed into another region.
+scope Local
+import operators::*
+def local(x: int, y: int) -> int = x %% y
+end Local
+
+scope Forwarded
+import facade::Public::%% as %%
+def forwarded(x: int, y: int) -> int = x %% y
+end Forwarded
+
+program def main() -> unit =
+  print(Local::local(2, 3) as text)
+  print(Forwarded::forwarded(4, 5) as text)

@@ -382,6 +382,18 @@ def _extract_json_text(raw: str) -> str | None | object:
     return _scan_bare_scalar(stripped)
 
 
+def extract_json_text(raw: str) -> str | None:
+    """Recover one JSON text from chatty output using the codec's recovery rules.
+
+    The explicit ``std/json`` lenient parser calls this public adapter instead
+    of maintaining a second fence/prose/repair implementation. Ambiguous and
+    unrecoverable inputs both return ``None``; output contracts retain their
+    distinct diagnostics through the internal extraction result.
+    """
+    extracted = _extract_json_text(raw)
+    return extracted if isinstance(extracted, str) else None
+
+
 # ---------------------------------------------------------------------------
 # Typeless validation-error classification and shared JSON parse core
 # ---------------------------------------------------------------------------

@@ -1,0 +1,64 @@
+{
+  "scenarios": [
+    {
+      "name": "creates_changes_and_removes_files_and_directories",
+      "params": {"root": "$TEMP_ROOT", "scenario": "success"},
+      "filesystem": {},
+      "expect": {"stdout": "first second\ntrue\ntrue\n2\n1\n0\nfalse\n"}
+    },
+    {
+      "name": "reports_a_missing_file_as_fs_error",
+      "params": {"root": "$TEMP_ROOT", "scenario": "missing_file"},
+      "filesystem": {},
+      "expect": {
+        "raises": {
+          "type": "FsError",
+          "fields": {"operation": "read"}
+        }
+      }
+    },
+    {
+      "name": "reports_a_missing_directory_as_fs_error",
+      "params": {"root": "$TEMP_ROOT", "scenario": "missing_directory"},
+      "filesystem": {},
+      "expect": {
+        "raises": {
+          "type": "FsError",
+          "fields": {"operation": "list"}
+        }
+      }
+    },
+    {
+      "name": "returns_none_for_an_optional_missing_read",
+      "params": {"root": "$TEMP_ROOT", "scenario": "optional_read"},
+      "filesystem": {},
+      "expect": {"stdout": "Option::None\n"}
+    },
+    {
+      "name": "reports_invalid_utf8_as_fs_error",
+      "params": {"root": "$TEMP_ROOT", "scenario": "invalid_encoding"},
+      "filesystem": {"hex_files": {"invalid.txt": "ff"}},
+      "expect": {
+        "raises": {
+          "type": "FsError",
+          "fields": {"operation": "read"}
+        }
+      }
+    },
+    {
+      "name": "returns_none_for_an_optional_invalid_utf8_read",
+      "params": {"root": "$TEMP_ROOT", "scenario": "invalid_encoding_optional"},
+      "filesystem": {"hex_files": {"invalid.txt": "ff"}},
+      "expect": {"stdout": "Option::None\n"}
+    },
+    {
+      "name": "removes_a_directory_symlink_without_removing_its_target",
+      "params": {"root": "$TEMP_ROOT", "scenario": "directory_symlink"},
+      "filesystem": {
+        "directories": ["directory-target"],
+        "directory_symlinks": {"directory-link": "directory-target"}
+      },
+      "expect": {"stdout": "true\nfalse\n"}
+    }
+  ]
+}

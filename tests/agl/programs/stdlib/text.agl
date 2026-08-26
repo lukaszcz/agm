@@ -1,0 +1,64 @@
+# Text methods are ambient; array::join remains an explicit free function.
+import std/array
+
+param mode: int
+
+program def main() -> unit =
+  case mode of
+    | 1 =>
+        let empty = ""
+        print(empty.size())
+        print(empty.is-empty())
+        print(empty.chars())
+        print(empty.lines())
+        print(empty.split(","))
+        print(empty.trim())
+        print(empty.upper())
+        print(empty.lower())
+        print(empty.starts-with(""))
+        print(empty.ends-with(""))
+        print(empty.contains(""))
+        print(empty.index-of?("missing"))
+        print(empty.repeat(-2))
+        print(empty.pad-start(3, "x"))
+        print(empty.pad-end(3, "x"))
+    | 2 =>
+        let value = "é😀"
+        print(value.size())
+        print(value.chars())
+        print(value[0])
+        print(value[-1])
+        print(value.slice(0, 1))
+        print(value.slice(-1, 3))
+        print(" Straße ".trim())
+        print(" Straße ".trim-start())
+        print(" Straße ".trim-end())
+        print("Straße".upper())
+        print("STRASSE".lower())
+    | 3 =>
+        print("banana".index-of("na"))
+        print("banana".index-of?("na"))
+        print("banana".index-of?("zz"))
+        let missing = try
+          "banana".index-of("zz") as text
+        catch IndexError => "missing caught"
+        print(missing)
+    | 4 =>
+        let value = " one,two,one "
+        print(value.split(","))
+        print(value.replace("one", "1"))
+        print(value.slice(1, -1))
+        print("ab".repeat(3))
+        print("cat".pad-start(8, "01"))
+        print("cat".pad-end(8, "01"))
+        print(value.starts-with(" one"))
+        print(value.ends-with("one "))
+        print(value.contains("two"))
+    | 5 =>
+        let result = try
+          "é😀"[2] as text
+        catch IndexError => "out of range caught"
+        print(result)
+    | _ =>
+        let result = " alpha \n beta \n".lines() |> (fn(lines: array[text]) => lines.map(fn(line: text) => line.trim())) |> (fn(lines: array[text]) => array::join(lines, "|"))
+        print(result)

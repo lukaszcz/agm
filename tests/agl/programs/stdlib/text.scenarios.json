@@ -1,0 +1,46 @@
+{
+  "scenarios": [
+    {
+      "name": "empty_text_has_identity_results_and_option_search",
+      "params": {"mode": 1},
+      "expect": {
+        "stdout": "0\ntrue\n[]\n[]\n[\"\"]\n\n\n\ntrue\ntrue\ntrue\nOption::None\n\nxxx\nxxx\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "unicode_text_uses_code_point_indexes_and_case_operations",
+      "params": {"mode": 2},
+      "expect": {
+        "stdout": "2\n[\"é\", \"😀\"]\né\n😀\né\n😀\nStraße\nStraße \n Straße\nSTRASSE\nstrasse\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "search_methods_distinguish_matches_options_and_typed_failures",
+      "params": {"mode": 3},
+      "expect": {
+        "stdout": "2\nOption::Some(value = 2)\nOption::None\nmissing caught\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "text_transformations_split_replace_slice_repeat_and_pad",
+      "params": {"mode": 4},
+      "expect": {
+        "stdout": "[\" one\", \"two\", \"one \"]\n 1,two,1 \none,two,one\nababab\n01010cat\ncat01010\ntrue\ntrue\ntrue\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "out_of_range_text_index_is_catchable",
+      "params": {"mode": 5},
+      "expect": {"stdout": "out of range caught\n", "calls": {}}
+    },
+    {
+      "name": "text_and_array_methods_compose_in_a_pipeline",
+      "params": {"mode": 6},
+      "expect": {"stdout": "alpha|beta\n", "calls": {}}
+    }
+  ]
+}

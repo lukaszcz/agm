@@ -1,0 +1,3 @@
+infixl %% at 5
+infixl ~~ at 5
+def %%(x: int, y: int) -> int = x + y

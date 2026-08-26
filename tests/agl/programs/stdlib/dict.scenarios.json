@@ -1,0 +1,54 @@
+{
+  "scenarios": [
+    {
+      "name": "empty_dicts_use_option_variants_and_identity_predicates",
+      "params": {"mode": 1},
+      "expect": {
+        "stdout": "0\ntrue\nOption::None\nOption::None\nfalse\n[]\n[]\n[]\n{}\n{}\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "pure_mutating_and_callback_operations_preserve_live_dicts",
+      "params": {"mode": 2},
+      "expect": {
+        "stdout": "{\"one\": 1, \"two\": 2}\n{\"one\": 1, \"two\": 20, \"three\": 3}\n[\"one\", \"two\"]\n[1, 2]\n[Pair(first = \"one\", second = 1), Pair(first = \"two\", second = 2)]\n{\"one\": 11, \"two\": 12}\n{\"two\": 2}\nvalue:one:1\nvalue:two:2\n1\nOption::None\n1\n{\"three\": 3}\ntrue\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "entries_round_trip_through_from_entries",
+      "params": {"mode": 3},
+      "expect": {
+        "stdout": "{\"one\": 1, \"two\": 2}\ntrue\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "raising_get_reports_the_typed_key_error",
+      "params": {"mode": 4},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "KeyError", "fields": {"key": "missing"}},
+        "calls": {}
+      }
+    },
+    {
+      "name": "raising_remove_reports_the_typed_key_error",
+      "params": {"mode": 5},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "KeyError", "fields": {"key": "missing"}},
+        "calls": {}
+      }
+    },
+    {
+      "name": "optional_lookup_and_removal_succeed_and_mutations_reach_aliases",
+      "params": {"mode": 6},
+      "expect": {
+        "stdout": "Option::Some(value = 1)\nOption::Some(value = 1)\n{\"two\": 20, \"three\": 3}\n{\"three\": 3}\ntrue\n",
+        "calls": {}
+      }
+    }
+  ]
+}

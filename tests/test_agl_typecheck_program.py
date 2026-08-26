@@ -939,7 +939,7 @@ def test_std_core_generic_member_type_resolves_to_an_inhabited_record() -> None:
     holder = next(typ for typ in checked.type_env.type_table.entries() if typ.name == "Holder")
     fields = dict(checked.type_env.type_table.record_fields(holder.handle()))
     assert strip_decl_ids(fields["value"]) == RecordType(
-        "Some", (IntType(),), module_id=ModuleId.from_path("std/core"), scope_path=("Option",)
+        "Some", (IntType(),), module_id=ModuleId.from_path("std/option"), scope_path=("Option",)
     )
 
 
@@ -3368,7 +3368,7 @@ def test_open_imported_generic_constructor_payload_type_apply_as_value(tmp_path:
     ``some::[int]`` in the entry resolves via the generic enum exposed by an
     import tail and yields a function value ``int -> Choice[int]`` owned by
     ``lib``. The type is renamed away from ``Option`` to avoid clashing with
-    the automatically exposed ``std/core::Option``.
+    the automatically exposed ``std/option::Option``.
     """
     lib_id = ModuleId.from_path("lib")
     modules = {

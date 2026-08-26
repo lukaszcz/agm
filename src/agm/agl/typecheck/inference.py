@@ -3,7 +3,8 @@
 This module owns solver-local flexible variables, fresh scheme instantiation,
 exact equality constraints, contextual completion, final zonking, solve
 requirements, and constraint provenance. It depends only on semantic types and
-an optional nominal table for the directed member-to-enum check.
+an optional nominal table for the directed member-to-enum check at the
+outer unification boundary.
 """
 
 from __future__ import annotations
@@ -108,9 +109,9 @@ class InferenceEngine:
     additionally have one structural solution. Rigid source variables are
     ordinary leaves: they can only equal themselves, while a flexible variable
     may solve to one. When given a type table, the engine additionally permits
-    the limited table-aware record-member-to-rigid-enum conversion at the
-    top-level unification boundary; callers apply all other assignability
-    rules after :meth:`zonk`.
+    the limited table-aware record-member-to-rigid-enum conversion only for the
+    outer equality constraint; callers apply all other assignability rules after
+    :meth:`zonk`.
     """
 
     def __init__(self, type_table: TypeTable | None = None) -> None:
@@ -157,19 +158,8 @@ class InferenceEngine:
         )
 
     def unify(self, left: Type, right: Type, origin: ConstraintOrigin) -> None:
-        """Unify exactly, except for the limited record-member-to-rigid-enum conversion."""
-        if self._type_table is not None:
-            zonked_left = self.zonk(left)
-            zonked_right = self.zonk(right)
-            if isinstance(zonked_left, RecordType) and isinstance(zonked_right, EnumType):
-                member = self._type_table.enum_member_by_decl(zonked_right, zonked_left.decl_id)
-                if member is not None:
-                    for value_arg, member_arg in zip(
-                        zonked_left.type_args, member.type_args, strict=True
-                    ):
-                        self.unify(value_arg, member_arg, origin)
-                    return
-        self._unify(left, right, origin, ())
+        """Unify exactly, except for a direct member-record-to-enum constraint."""
+        self._unify(left, right, origin, (), allow_member_to_enum=True)
 
     def complete_from_context(
         self, inferred: Type, context: Type, origin: ConstraintOrigin
@@ -240,6 +230,8 @@ class InferenceEngine:
         right: Type,
         origin: ConstraintOrigin,
         inherited: tuple[ConstraintOrigin, ...],
+        *,
+        allow_member_to_enum: bool = False,
     ) -> None:
         original_left, original_right = left, right
         left = self.zonk(left)
@@ -261,6 +253,17 @@ class InferenceEngine:
         evidence = self._merge_origins(
             inherited, self._origins_in(original_left), self._origins_in(original_right)
         )
+        if (
+            allow_member_to_enum
+            and self._type_table is not None
+            and isinstance(left, RecordType)
+            and isinstance(right, EnumType)
+        ):
+            member = self._type_table.enum_member_by_decl(right, left.decl_id)
+            if member is not None:
+                for value_arg, member_arg in zip(left.type_args, member.type_args, strict=True):
+                    self._unify(value_arg, member_arg, origin, evidence)
+                return
         if isinstance(left, ArrayType) and isinstance(right, ArrayType):
             self._unify(left.elem, right.elem, origin, evidence)
             return

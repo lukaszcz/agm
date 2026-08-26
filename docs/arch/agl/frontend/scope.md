@@ -19,8 +19,10 @@ Inline enum members are nominal record declarations beneath their owning enum
 scope. Scope resolution gives each local, imported, built-in, or REPL-retained
 constructor a canonical `ConstructorRef` for that record declaration. The
 reference carries module, scope path, terminal name, and declaration identity
-separately; display spellings are never used as identity. Patterns and `is`
-tests retain candidate sets when their matched enum type must select the member.
+separately; display spellings are never used as identity. A local injected
+constructor shadows automatic `std/core` prelude constructors with the same
+bare spelling. Patterns and `is` tests retain candidate sets when their matched
+enum type must select the member.
 
 ## Imports and `use`
 
@@ -58,12 +60,24 @@ Region-scoped bare contributions apply within that region and its nested regions
 while imports still make their qualified routes available to the module.
 
 Scope resolution also classifies declarations, bindings, constructors, and
-built-ins for typecheck. `IndexTarget` and `FieldTarget` receiver expressions
-resolve as ordinary reads and introduce no binding; typecheck owns container,
-field, and mutability rules. It records each `use` target's
-semantic local path or imported routes so incremental hosts retain target
-identity without re-deriving it from syntax. It publishes resolved program
-artifacts rather than rewriting source nodes.
+built-ins for typecheck. A built-in call is recognized by resolving its callee
+to a `builtin def` declaration, never by name alone; a module or named-scope
+member may reuse that spelling through its qualified namespace, while bare
+lookup still selects the built-in. A `self`-receiver `def` in a nominal scope
+is classified as a method, including an applied builtin receiver such as
+`array[E]::map`, whose type form and standard-library ownership typecheck
+validates later. Host-backed `builtin var` declarations are admitted in any
+standard-library module, at its root or in a named scope region; only root
+`std/config` bindings are engine-setting registers, while every other
+host-backed binding is an ordinary ambient value. Ambiguous bare constructor
+spellings in patterns and `is` tests remain candidate sets; typecheck selects
+them using the matched nominal type. It records each `use` target's semantic
+local path or imported routes so incremental hosts retain target identity
+without re-deriving it from syntax. It publishes resolved program artifacts
+rather than rewriting source nodes.
+
+`IndexTarget` and `FieldTarget` receiver expressions resolve as ordinary reads
+and introduce no binding; typecheck owns container, field, and mutability rules.
 
 ## Code Entry Points
 

@@ -17,6 +17,7 @@ setup:
 # Run the test suite
 check_coverage := "100"
 test:
+    cleanup_coverage() { find . -maxdepth 1 -type f -name '.coverage*' -delete; }; trap cleanup_coverage EXIT; \
     uv run python -m pytest tests/ -q -n auto --cov=agm --cov-branch --cov-fail-under={{check_coverage}} --cov-report=term:skip-covered
 
 # Lint and check formatting with ruff

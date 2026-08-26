@@ -350,6 +350,39 @@ class TestGraphBuild:
         assert isinstance(expression.callee, VarRef)
         assert expression.callee.name == "%%"
 
+    @pytest.mark.parametrize(
+        "entry",
+        (
+            "import operators\nuse operators::Arithmetic::*\n1 %% 2",
+            "import operators::{Arithmetic::%% as %%}\n1 %% 2",
+        ),
+    )
+    def test_scoped_operator_function_makes_its_fixity_bare_visible(
+        self, tmp_path: Path, entry: str
+    ) -> None:
+        from agm.agl.syntax.nodes import Call, VarRef
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(
+            root,
+            "operators",
+            "infixl %% at 5\nscope Arithmetic\ndef %%(x: int, y: int) -> int = x + y\n"
+            "end Arithmetic\n",
+        )
+
+        graph = load_graph(
+            entry,
+            entry_path=None,
+            roots=_roots(root),
+            default_stdlib=False,
+        )
+
+        expression = graph.modules[ENTRY_ID].program.body.items[-1]
+        assert isinstance(expression, Call)
+        assert isinstance(expression.callee, VarRef)
+        assert expression.callee.name == "%%"
+
     def test_reexport_hiding_drops_only_the_named_operator(self, tmp_path: Path) -> None:
         from agm.agl.parser import AglSyntaxError
         from agm.agl.syntax.nodes import Call, VarRef

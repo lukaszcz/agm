@@ -368,6 +368,18 @@ def _operator_declarations(program: syntax.Program) -> tuple[InfixDecl, ...]:
     return tuple(item for item in program.body.items if isinstance(item, InfixDecl))
 
 
+def _operator_export_paths(program: syntax.Program, name: str) -> set[_OperatorPath]:
+    """Return exported paths for functions that implement one operator."""
+    paths = {
+        (*(segment.name for segment in function.scope_path), name)
+        for function in static_items(program.body.items)
+        if isinstance(function, FuncDef) and not function.is_synthetic and function.name == name
+    }
+    # Infix declarations are independently meaningful during parsing, including
+    # in incomplete REPL entries where their function has not been supplied yet.
+    return paths or {(name,)}
+
+
 def _dependency_targets(
     decl: ImportDecl | ExportDecl, modules: Mapping[ModuleId, LoadedModule]
 ) -> tuple[ModuleId, ...]:
@@ -476,7 +488,11 @@ def _operator_export_maps(
 ) -> dict[ModuleId, dict[_OperatorPath, set[_OperatorOrigin]]]:
     """Build operator export maps, preserving paths and re-export origins."""
     exports: dict[ModuleId, dict[_OperatorPath, set[_OperatorOrigin]]] = {
-        mid: {(decl.name,): {(mid, decl.name)} for decl in _operator_declarations(loaded.program)}
+        mid: {
+            path: {(mid, decl.name)}
+            for decl in _operator_declarations(loaded.program)
+            for path in _operator_export_paths(loaded.program, decl.name)
+        }
         for mid, loaded in graph.modules.items()
     }
 

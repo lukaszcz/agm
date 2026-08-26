@@ -1,0 +1,5 @@
+# Agent::ask keeps CLI corrective retries in one continuation-capable session.
+program def main() -> unit =
+  let worker = AgentCommand("writer \%{SESSION_ID}")
+  let answer: int = worker.ask("calculate the total", on_parse_error = Retry(n = 1))
+  print answer

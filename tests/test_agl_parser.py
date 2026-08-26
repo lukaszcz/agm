@@ -1694,16 +1694,16 @@ class TestCalls:
         assert len(call.args) == 3
 
     def test_paren_call_named_arg(self) -> None:
-        call = first(parse("ask(x, agent = reviewer)"))
+        call = first(parse("f(x, option = reviewer)"))
         assert isinstance(call, Call)
         assert len(call.args) == 1
         assert len(call.named_args) == 1
         na = call.named_args[0]
         assert isinstance(na, NamedArg)
-        assert na.name == "agent"
+        assert na.name == "option"
 
     def test_paren_call_multiple_named(self) -> None:
-        call = first(parse("ask(x, agent = rev, format = json)"))
+        call = first(parse("f(x, option = rev, format = json)"))
         assert isinstance(call, Call)
         assert len(call.named_args) == 2
 
@@ -1978,10 +1978,10 @@ class TestTypedCalls:
         assert call.type_args[0].value.name == "Review"
 
     def test_typed_call_with_named_args(self) -> None:
-        call = first(parse('ask::[Review]("p", agent = reviewer)'))
+        call = first(parse('f::[Review]("p", option = reviewer)'))
         assert isinstance(call, Call)
         assert len(call.named_args) == 1
-        assert call.named_args[0].name == "agent"
+        assert call.named_args[0].name == "option"
         assert len(call.type_args) == 1
 
     def test_typed_call_no_args(self) -> None:
@@ -4340,19 +4340,19 @@ class TestQualifiedTypeRefs:
 class TestFieldAssignmentSyntax:
     def test_paren_call_named_arg_eq(self) -> None:
         """Named arguments use ``=``."""
-        call = first(parse("ask(x, agent = reviewer)"))
+        call = first(parse("f(x, option = reviewer)"))
         assert isinstance(call, Call)
         assert len(call.args) == 1
         assert len(call.named_args) == 1
         na = call.named_args[0]
         assert isinstance(na, NamedArg)
-        assert na.name == "agent"
+        assert na.name == "option"
 
     def test_paren_call_multiple_named_eq(self) -> None:
-        call = first(parse("ask(x, agent = rev, format = json)"))
+        call = first(parse("f(x, option = rev, format = json)"))
         assert isinstance(call, Call)
         assert len(call.named_args) == 2
-        assert {na.name for na in call.named_args} == {"agent", "format"}
+        assert {na.name for na in call.named_args} == {"option", "format"}
 
     def test_constructor_call_named_arg_eq(self) -> None:
         """Constructor construction uses '=' for its named fields."""

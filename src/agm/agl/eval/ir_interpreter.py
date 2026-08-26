@@ -110,6 +110,10 @@ from agm.agl.ir.nodes import (
     IrResource,
     IrReturn,
     IrSequence,
+    IrSessionAsk,
+    IrSessionDefault,
+    IrSessionOp,
+    IrSessionOpen,
     IrTemplateText,
     IrTemplateValue,
     IrTry,
@@ -143,6 +147,7 @@ from agm.agl.runtime.option import none_value, option_text, some_value
 from agm.agl.runtime.params import engine_default_settings
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import encode_value
+from agm.agl.runtime.sessions import AgentDispatcherSessionHost
 from agm.agl.runtime.trace import TraceStore, noop_trace
 from agm.agl.semantics.copying import deep_copy_value, shallow_copy_value
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
@@ -173,12 +178,14 @@ from agm.config.engine_keys import (
     TRACE_ENGINE_KEYS,
     trace_write_implies_enabled,
 )
+from agm.core.cleanup import preserve_primary_error
 from agm.core.parse import format_timeout as _format_timeout
 from agm.core.parse import parse_timeout as _parse_timeout
 
 if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
     from agm.agl.runtime.host_settings import HostSettingsReconfigurer
+    from agm.agl.runtime.sessions import SessionHost
 
 __all__ = [
     "HostConfigurationError",
@@ -378,6 +385,10 @@ _BASE_RECURSION_HEADROOM = 4000
 _MAX_PYTHON_RECURSION_LIMIT = 1_000_000
 
 
+def _noop() -> None:
+    """Provide an inert cleanup action when this interpreter owns no sessions."""
+
+
 # ---------------------------------------------------------------------------
 # Internal loop-control signals (not AglRaise — bypass IrTry catch handlers)
 # ---------------------------------------------------------------------------
@@ -481,6 +492,8 @@ class IrInterpreter:
         max_call_depth: int = DEFAULT_MAX_CALL_DEPTH,
         param_values: Mapping[SymbolId, Value] | None = None,
         agent_dispatcher: AgentFn | None = None,
+        session_host: "SessionHost | None" = None,
+        close_sessions: bool = True,
         strict_json: bool = False,
         loop_limit: int | None = None,
         shell_exec_timeout: float | None = None,
@@ -519,6 +532,12 @@ class IrInterpreter:
             param_values if param_values is not None else {}
         )
         self._agent_dispatcher = agent_dispatcher
+        self._session_host: SessionHost = (
+            session_host
+            if session_host is not None
+            else AgentDispatcherSessionHost(agent_dispatcher)
+        )
+        self._close_sessions = close_sessions
         # Bootstrap the setting fields so declared defaults can be evaluated by
         # the ordinary, typeless evaluator. Constant defaults cannot read a
         # setting or invoke a host operation, so this temporary state is never
@@ -1044,35 +1063,37 @@ class IrInterpreter:
         previous_limit = sys.getrecursionlimit()
         # Never lower an already-higher limit (e.g. a nested run); only raise it.
         sys.setrecursionlimit(max(previous_limit, target))
+        cleanup = self._session_host.close_all if self._close_sessions else _noop
         try:
-            with decimal.localcontext(AGL_DECIMAL_CONTEXT):
-                # Closures install before params: a failing param default must
-                # still let already-installed closures (and any declarations
-                # completed earlier in the entry) be promoted. Promotion itself
-                # is driven by ``lowered.promotion_plan.completed_declaration_ids``
-                # (see ``entry_pipeline.completed_declaration_ids``), which is
-                # conservative on its own — it excludes params whose symbols were
-                # never installed and applies the declaration-dependency
-                # fixpoint — so no separate "did the entry frame start" gate is
-                # needed here.
-                self._install_function_closures()
-                self._resolving_param_defaults = True
-                try:
-                    self._install_params()
-                finally:
-                    self._resolving_param_defaults = False
-
-                for mod in self._program.modules.values():
-                    for node in mod.initializers:
-                        if id(node) not in self._evaluated_static_binding_ids:
-                            self._eval_and_record_initializer(mod.module_id, node)
-                if program_symbol is not None:
+            with preserve_primary_error(cleanup, label="agent session cleanup"):
+                with decimal.localcontext(AGL_DECIMAL_CONTEXT):
+                    # Closures install before params: a failing param default must
+                    # still let already-installed closures (and any declarations
+                    # completed earlier in the entry) be promoted. Promotion itself
+                    # is driven by ``lowered.promotion_plan.completed_declaration_ids``
+                    # (see ``entry_pipeline.completed_declaration_ids``), which is
+                    # conservative on its own — it excludes params whose symbols were
+                    # never installed and applies the declaration-dependency
+                    # fixpoint — so no separate "did the entry frame start" gate is
+                    # needed here.
+                    self._install_function_closures()
+                    self._resolving_param_defaults = True
                     try:
-                        self._invoke_program(program_symbol)
-                    except RecursionError:
-                        error = self._recursion_error()
-                        error.span = self._program_entry_location(program_symbol)
-                        raise error from None
+                        self._install_params()
+                    finally:
+                        self._resolving_param_defaults = False
+
+                    for mod in self._program.modules.values():
+                        for node in mod.initializers:
+                            if id(node) not in self._evaluated_static_binding_ids:
+                                self._eval_and_record_initializer(mod.module_id, node)
+                    if program_symbol is not None:
+                        try:
+                            self._invoke_program(program_symbol)
+                        except RecursionError:
+                            error = self._recursion_error()
+                            error.span = self._program_entry_location(program_symbol)
+                            raise error from None
             return self._collect_results()
         except RecursionError:
             raise self._recursion_error() from None
@@ -1146,6 +1167,24 @@ class IrInterpreter:
     # ------------------------------------------------------------------
     # Expression evaluator (closed IrExpr dispatch)
     # ------------------------------------------------------------------
+
+    def _eval_session_effect(
+        self, node: IrSessionOpen | IrSessionDefault | IrSessionAsk | IrSessionOp
+    ) -> Value:
+        try:
+            if isinstance(node, IrSessionOpen):
+                return self._effects.eval_ir_session_open(node)
+            if isinstance(node, IrSessionDefault):
+                return self._effects.eval_ir_session_default(
+                    node, self._load_builtin_setting("default-agent")
+                )
+            if isinstance(node, IrSessionAsk):
+                return self._effects.eval_ir_session_ask(node)
+            return self._effects.eval_ir_session_op(node)
+        except AglRaise as exc:
+            if exc.span is None:
+                exc.span = node.location
+            raise
 
     def _eval(self, node: IrExpr) -> Value:
         """Evaluate *node* in the current frame and return its value.
@@ -1795,6 +1834,9 @@ class IrInterpreter:
                     if exc.span is None:
                         exc.span = node.location
                     raise
+
+            case IrSessionOpen() | IrSessionDefault() | IrSessionAsk() | IrSessionOp():
+                return self._eval_session_effect(node)
 
             case IrAskRequest(agent=agent_expr, prompt=prompt_expr):
                 return self._effects.eval_ir_ask_request(node, agent_expr, prompt_expr)

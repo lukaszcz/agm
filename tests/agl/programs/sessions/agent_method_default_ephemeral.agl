@@ -1,0 +1,5 @@
+# Agent::ask's default parse policy closes its ephemeral session after one failed attempt.
+program def main() -> unit =
+  let worker = AgentPi("writer", "model", "high")
+  let answer: int = worker.ask("calculate the total")
+  print answer

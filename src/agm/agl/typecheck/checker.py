@@ -23,7 +23,7 @@ Rules implemented
 4.  ``name := e`` — expected type is the binding's declared type.
 5.  ``print(expr)`` — accepts any value and yields ``unit``.
 6.  ``render(expr, pretty:, quote_strings:)`` — accepts any value and yields ``text``.
-7.  ``ask(prompt, ...)`` — named-agent or default-agent call with codec.
+7.  ``ask(prompt, ...)`` — default-session call with codec; ``Agent::ask`` selects a receiver.
 8.  ``exec(cmd, ...)`` — shell call; requires ``supports_shell_exec``.
 9.  Declared-name calls — checked against the full ``FunctionSignature``.
 10. Value calls — checked against the ``FunctionType``; named args disallowed.
@@ -50,29 +50,34 @@ import keyword
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from typing import Literal, TypeGuard, assert_never, cast
+from typing import Literal, Protocol, TypeGuard, assert_never, cast
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic, static_root_message
 from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.scope.imports import (
     qualification_repair_guidance,
 )
 from agm.agl.scope.symbols import (
+    BUILTIN_CALL_DISPLAY_NAMES,
     BUILTIN_CALL_NAMES,
     BinderKind,
     BindingRef,
     BuiltinKind,
+    BuiltinStaticKind,
     ConstructorRef,
     ModuleResolution,
     PatternSlot,
+    builtin_type_static_kind,
     duplicate_binder_message,
     immutable_assignment_message,
 )
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import (
+    OPTION_TYPE_DEF,
     MethodDef,
+    TypeDef,
     TypeTable,
     cast_classification,
     comparable_types,
@@ -209,6 +214,7 @@ from agm.agl.typecheck.function_inference import (
     CandidateSession,
     FunctionSignatureRecord,
     ModuleCandidateComponent,
+    ResolvedReceiver,
     infer_module_component_candidates,
     register_method_header,
     resolve_function_header,
@@ -228,6 +234,22 @@ from agm.config.engine_keys import ENGINE_KEY_NAMES
 # Built-in function names that user-defined defs may not shadow. Derived from
 # the single source of truth in ``scope.symbols`` so the two never drift.
 _BUILTIN_FUNC_NAMES: frozenset[str] = frozenset(BUILTIN_CALL_NAMES)
+
+_BuiltinMethodReceiver = NominalId
+
+_AGENT_PRELUDE_TYPE = cast(EnumType, BUILTIN_PRELUDE_TYPES["Agent"])
+_SESSION_PRELUDE_TYPE = cast(RecordType, BUILTIN_PRELUDE_TYPES["Session"])
+
+
+class _BuiltinMethodChecker(Protocol):
+    """Shared call shape for a receiver-directed built-in method checker."""
+
+    def __call__(self, node: Call, *, expected: Type | None, receiver_type: Type) -> Type: ...
+
+
+def _builtin_method_receiver_key(receiver_type: RecordType | EnumType) -> _BuiltinMethodReceiver:
+    """Return the nominal identity that directs a receiver's host-method dispatch."""
+    return NominalId(receiver_type.decl_id)
 
 
 def _variant_not_in_enum(variant: str, enum_type: EnumType, span: SourceSpan) -> AglTypeError:
@@ -253,7 +275,7 @@ _ExternTargets = tuple[_ExternTarget, ...]
 
 @dataclass(frozen=True, slots=True)
 class _SelectedBuiltinMethod:
-    """A call-only host method (``ask``/``ask-request``) selected by member access.
+    """A call-only host method selected by member access.
 
     Such a method has no first-class function value: only the member-call path
     can consume the selection, and its own builtin rule owns the call's type
@@ -264,13 +286,11 @@ class _SelectedBuiltinMethod:
     selection; nothing publishes it as a node type.
 
     ``receiver_type`` is the checked type of the object the method was
-    selected from. The receiver IS the agent a receiver-form ``ask``/
-    ``ask-request`` dispatches to, so the built-in rule needs it to hold the
-    receiver to the same requirement as an explicit ``agent`` argument.
+    selected from. It selects the host operation's receiver-specific checker.
     """
 
     name: str
-    receiver_type: Type
+    receiver_type: RecordType | EnumType
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,40 +357,107 @@ def _std_param(name: str, typ: Type, has_default: bool = False) -> ParamSpec:
     return ParamSpec(name=name, type=typ, kind=ParamKind.STANDARD, has_default=has_default)
 
 
-def _self_param() -> ParamSpec:
-    """Create the positional-only receiver shared by builtin Agent methods."""
+def _self_param(receiver_type: RecordType | EnumType) -> ParamSpec:
+    """Create the positional-only receiver for a builtin method."""
     return ParamSpec(
         name="self",
-        type=BUILTIN_PRELUDE_TYPES["Agent"],
+        type=receiver_type,
         kind=ParamKind.POSITIONAL_ONLY,
         has_default=False,
     )
 
 
-def _as_agent_method(signature: FunctionSignature) -> FunctionSignature:
-    """Rebind a root builtin signature as an ``Agent`` method.
-
-    The receiver supplies the agent, so its ``agent`` parameter is replaced by
-    the positional-only ``self``.  Deriving the method form keeps it in step
-    with the root form, whose parameters the stdlib method headers must match.
-    """
+def _as_builtin_method(
+    signature: FunctionSignature, receiver_type: RecordType | EnumType
+) -> FunctionSignature:
+    """Rebind a root agent-taking signature as a receiver method."""
     return replace(
         signature,
         params=(
-            _self_param(),
+            _self_param(receiver_type),
             *(param for param in signature.params if param.name != "agent"),
         ),
     )
 
 
-def _builtin_function_signature(name: str, *, is_method: bool = False) -> FunctionSignature | None:
+def _builtin_static_kind(
+    resolved: ModuleResolution, type_table: TypeTable, module_id: ModuleId, node: FuncDef
+) -> BuiltinStaticKind | None:
+    """Return a static kind only when its source owner has the registered nominal identity."""
+    owner_path = tuple(segment.name for segment in node.scope_path)
+    kind = builtin_type_static_kind(module_id, owner_path, node.name)
+    if kind is None:
+        return None
+    if owner_path not in resolved.declared_type_paths:
+        return None
+    owner = cast(TypeDef, type_table.get(module_id, owner_path[-1], owner_path[:-1]))
+    standard = type_table.standard_builtin_declaration("Session")
+    return kind if standard is not None and owner.decl_node_id == standard.decl_node_id else None
+
+
+def _session_static_signature(kind: BuiltinStaticKind) -> FunctionSignature:
+    """Return the canonical signature for one registered ``Session`` static."""
+    if kind is BuiltinStaticKind.SESSION_OPEN:
+        return FunctionSignature(
+            params=(
+                _std_param("agent", BUILTIN_PRELUDE_TYPES["Agent"]),
+                _std_param(
+                    "transport",
+                    OPTION_TYPE_DEF.handle((BUILTIN_PRELUDE_TYPES["SessionTransport"],)),
+                    has_default=True,
+                ),
+                _std_param("name", TextType(), has_default=True),
+            ),
+            result=BUILTIN_PRELUDE_TYPES["Session"],
+        )
+    assert kind is BuiltinStaticKind.SESSION_DEFAULT
+    return FunctionSignature(params=(), result=BUILTIN_PRELUDE_TYPES["Session"])
+
+
+def _builtin_function_signature(
+    name: str,
+    *,
+    is_method: bool = False,
+    method_receiver: _BuiltinMethodReceiver | None = None,
+    method_receiver_name: str | None = None,
+    allow_stdlib_session_declaration: bool = False,
+    static_kind: BuiltinStaticKind | None = None,
+) -> FunctionSignature | None:
     t = TypeVarType("T")
+    if static_kind is not None:
+        return _session_static_signature(static_kind)
     if is_method:
-        if name not in ("ask", "ask-request"):
-            return None
-        root = _builtin_function_signature(name)
-        assert root is not None
-        return _as_agent_method(root)
+        if method_receiver_name == "Agent" and name in {"ask", "ask-request"}:
+            root = _builtin_function_signature(name)
+            assert root is not None
+            return _as_builtin_method(root, _AGENT_PRELUDE_TYPE)
+        if method_receiver == NominalId(_SESSION_PRELUDE_TYPE.decl_id) or (
+            allow_stdlib_session_declaration and method_receiver_name == "Session"
+        ):
+            if name == "ask":
+                root = _builtin_function_signature(name)
+                assert root is not None
+                return _as_builtin_method(root, _SESSION_PRELUDE_TYPE)
+            session_self = _self_param(_SESSION_PRELUDE_TYPE)
+            return {
+                "compact": FunctionSignature(
+                    params=(
+                        session_self,
+                        _std_param("instructions", TextType(), has_default=True),
+                    ),
+                    result=UnitType(),
+                ),
+                "reset": FunctionSignature(params=(session_self,), result=UnitType()),
+                "close": FunctionSignature(params=(session_self,), result=UnitType()),
+                "fork": FunctionSignature(params=(session_self,), result=_SESSION_PRELUDE_TYPE),
+                "stats": FunctionSignature(
+                    params=(session_self,), result=BUILTIN_PRELUDE_TYPES["SessionStats"]
+                ),
+                "set-name": FunctionSignature(
+                    params=(session_self, _std_param("name", TextType())), result=UnitType()
+                ),
+            }.get(name)
+        return None
     match name:
         case "print":
             return FunctionSignature(
@@ -394,7 +481,6 @@ def _builtin_function_signature(name: str, *, is_method: bool = False) -> Functi
             return FunctionSignature(
                 params=(
                     _std_param("prompt", TextType()),
-                    _std_param("agent", BUILTIN_PRELUDE_TYPES["Agent"], has_default=True),
                     _std_param("format", TextType(), has_default=True),
                     _std_param("strict_json", BoolType(), has_default=True),
                     _std_param(
@@ -408,10 +494,7 @@ def _builtin_function_signature(name: str, *, is_method: bool = False) -> Functi
             )
         case "ask-request":
             return FunctionSignature(
-                params=(
-                    _std_param("prompt", TextType()),
-                    _std_param("agent", BUILTIN_PRELUDE_TYPES["Agent"], has_default=True),
-                ),
+                params=(_std_param("prompt", TextType()),),
                 result=BUILTIN_PRELUDE_TYPES["AgentRequest"],
             )
         case "exec":
@@ -424,12 +507,25 @@ def _builtin_function_signature(name: str, *, is_method: bool = False) -> Functi
 
 
 def _builtin_function_signature_alternates(
-    name: str, *, is_method: bool = False
+    name: str,
+    *,
+    is_method: bool = False,
+    method_receiver: _BuiltinMethodReceiver | None = None,
+    method_receiver_name: str | None = None,
+    allow_stdlib_session_declaration: bool = False,
+    static_kind: BuiltinStaticKind | None = None,
 ) -> tuple[FunctionSignature, ...]:
-    expected = _builtin_function_signature(name, is_method=is_method)
+    expected = _builtin_function_signature(
+        name,
+        is_method=is_method,
+        method_receiver=method_receiver,
+        method_receiver_name=method_receiver_name,
+        allow_stdlib_session_declaration=allow_stdlib_session_declaration,
+        static_kind=static_kind,
+    )
     if expected is None:
         return ()
-    if name == "ask":
+    if name == "ask" and not is_method:
         return (
             expected,
             FunctionSignature(params=(_std_param("prompt", TextType()),), result=TextType()),
@@ -689,6 +785,31 @@ class _Checker:
         self._extern_expr_targets: dict[int, _ExternTargets] = {}
         self._extern_binding_targets: dict[int, _ExternTargets] = {}
         self._builtins = BuiltinCallChecker(self)
+        # Agent method declarations may be scoped and retain their established
+        # host-contract checks. Session methods, by contrast, are available
+        # only on the canonical prelude nominal below.
+        self._agent_builtin_method_checkers: dict[str, _BuiltinMethodChecker] = {
+            "ask": self._builtins.check_ask,
+            "ask-request": self._builtins.check_agent_ask_request,
+        }
+        session_method_checkers: dict[str, _BuiltinMethodChecker] = {
+            "ask": self._builtins.check_session_ask,
+            "compact": self._builtins.check_session_compact,
+            "reset": self._builtins.check_session_reset,
+            "fork": self._builtins.check_session_fork,
+            "stats": self._builtins.check_session_stats,
+            "set-name": self._builtins.check_session_set_name,
+            "close": self._builtins.check_session_close,
+        }
+        session_owner = self._env.type_table.standard_builtin_declaration("Session")
+        session_owner_id = (
+            NominalId(session_owner.decl_node_id)
+            if session_owner is not None
+            else NominalId(_SESSION_PRELUDE_TYPE.decl_id)
+        )
+        self._builtin_method_checkers: dict[
+            _BuiltinMethodReceiver, dict[str, _BuiltinMethodChecker]
+        ] = {session_owner_id: session_method_checkers}
         self._constructors = ConstructorChecker(self)
         # Function return contexts. The top entry is either an annotated expected
         # result type or None for inference; the return collector records operand
@@ -723,7 +844,7 @@ class _Checker:
             self._validate_extern_signature(node, sig)
             self._env.register_extern_node_id(node.node_id)
         self._validate_program_signature(node, sig)
-        self._register_funcdef_signature(node, sig, func_type, is_method=is_method)
+        self._register_funcdef_signature(node, sig, func_type, receiver=receiver)
         register_method_header(self._env, node, sig, receiver)
 
     def _validate_funcdef_header(self, node: FuncDef, *, is_method: bool) -> None:
@@ -749,6 +870,9 @@ class _Checker:
                 )
             if is_method:
                 raise AglTypeError("Program def cannot be a method.", span=node.span)
+        static_kind = _builtin_static_kind(
+            self._resolved, self._env.type_table, self._module_id, node
+        )
         if not is_method and node.name in _BUILTIN_TYPE_NAMES:
             raise AglTypeError(
                 f"'{node.name}' is a built-in type name and cannot be used as a function name.",
@@ -760,10 +884,11 @@ class _Checker:
                 span=node.span,
             )
         if not is_method and node.is_builtin and node.name not in _BUILTIN_FUNC_NAMES:
-            raise AglTypeError(
-                f"Unknown builtin function '{node.name}'.",
-                span=node.span,
-            )
+            if static_kind is None:
+                raise AglTypeError(
+                    f"Unknown builtin function '{node.name}'.",
+                    span=node.span,
+                )
         if node.is_builtin and node.return_type is None:
             raise AglTypeError(
                 f"Builtin function '{node.name}' must declare a return type.",
@@ -832,17 +957,35 @@ class _Checker:
             raise AglTypeError(banned_message, span=span)
 
     def _register_funcdef_signature(
-        self, node: FuncDef, sig: FunctionSignature, func_type: FunctionType, *, is_method: bool
+        self,
+        node: FuncDef,
+        sig: FunctionSignature,
+        func_type: FunctionType,
+        *,
+        receiver: ResolvedReceiver | None,
     ) -> None:
         """Register a resolved ``def`` signature in every function side table."""
+        static_kind = _builtin_static_kind(
+            self._resolved, self._env.type_table, self._module_id, node
+        )
         if node.is_builtin:
             own_path = tuple(segment.name for segment in node.scope_path)
             # A method's final scope segment names its receiver. Its receiver
             # and sibling types live in the enclosing scope, so remove that
             # shared prefix before comparing with the root canonical contract.
-            reroot_prefix = own_path[:-1] if is_method else own_path
+            is_method = receiver is not None
+            reroot_prefix = own_path[:-1] if is_method or static_kind is not None else own_path
             rerooted_sig = _rerooted_signature(sig, reroot_prefix)
-            expected_sigs = _builtin_function_signature_alternates(node.name, is_method=is_method)
+            method_receiver = None if receiver is None else NominalId(receiver.owner.decl_id)
+            method_receiver_name = None if receiver is None else receiver.owner.name
+            expected_sigs = _builtin_function_signature_alternates(
+                node.name,
+                is_method=is_method,
+                method_receiver=method_receiver,
+                method_receiver_name=method_receiver_name,
+                allow_stdlib_session_declaration=self._module_id == STD_CORE_ID,
+                static_kind=static_kind,
+            )
             if not any(
                 _signature_matches(rerooted_sig, expected_sig) for expected_sig in expected_sigs
             ):
@@ -1194,6 +1337,8 @@ class _Checker:
         if isinstance(schema_type, DictType):
             return self._wire_type_is_serializable(schema_type.value, seen=seen, memo=memo)
         if isinstance(schema_type, RecordType):
+            if schema_type.decl_id in self._env.type_table.host_minted_declaration_ids():
+                return False
             if schema_type in seen:
                 return True
             next_seen = seen | {schema_type}
@@ -2757,37 +2902,43 @@ class _Checker:
         hole_indices: Mapping[int, int],
     ) -> Type:
         # Built-in?
-        if isinstance(node.callee, VarRef) and node.node_id in self._resolved.builtin_calls:
-            kind = self._resolved.builtin_calls[node.node_id]
+        builtin_kind = self._resolved.builtin_calls.get(node.node_id)
+        static_kind = self._resolved.builtin_static_calls.get(node.node_id)
+        if isinstance(node.callee, VarRef) and (kind := builtin_kind or static_kind) is not None:
             if hole_indices:
-                builtin_name = next(
-                    name for name, value in BUILTIN_CALL_NAMES.items() if value is kind
-                )
+                builtin_name = BUILTIN_CALL_DISPLAY_NAMES[kind]
                 raise AglTypeError(
                     f"Cannot use placeholder arguments with special builtin '{builtin_name}'; "
                     "partial application is not supported.",
                     span=node.span,
                 )
-            if kind == BuiltinKind.PRINT:
-                return self._builtins.check_print(node)
-            if kind == BuiltinKind.RENDER:
-                return self._builtins.check_render(node)
-            if kind == BuiltinKind.COPY:
-                return self._builtins.check_copy(node)
-            if kind == BuiltinKind.SHALLOW_COPY:
-                return self._builtins.check_shallow_copy(node)
-            if kind == BuiltinKind.ASK:
-                return self._builtins.check_ask(node, expected=expected)
-            if kind == BuiltinKind.ASK_REQUEST:
-                return self._builtins.check_ask_request(node)
-            if kind == BuiltinKind.PARSE_JSON:
-                return self._builtins.check_parse_json(node)
-            if kind == BuiltinKind.RESOURCE:
-                return self._builtins.check_resource(node)
-            if kind == BuiltinKind.RESOURCE_DIR:
-                return self._builtins.check_resource_dir(node)
-            # EXEC
-            return self._builtins.check_exec(node, expected=expected)
+            match kind:
+                case BuiltinKind.PRINT:
+                    return self._builtins.check_print(node)
+                case BuiltinKind.RENDER:
+                    return self._builtins.check_render(node)
+                case BuiltinKind.COPY:
+                    return self._builtins.check_copy(node)
+                case BuiltinKind.SHALLOW_COPY:
+                    return self._builtins.check_shallow_copy(node)
+                case BuiltinKind.ASK:
+                    return self._builtins.check_ask(node, expected=expected)
+                case BuiltinKind.ASK_REQUEST:
+                    return self._builtins.check_ask_request(node)
+                case BuiltinKind.PARSE_JSON:
+                    return self._builtins.check_parse_json(node)
+                case BuiltinKind.RESOURCE:
+                    return self._builtins.check_resource(node)
+                case BuiltinKind.RESOURCE_DIR:
+                    return self._builtins.check_resource_dir(node)
+                case BuiltinStaticKind.SESSION_OPEN:
+                    return self._builtins.check_session_open(node)
+                case BuiltinStaticKind.SESSION_DEFAULT:
+                    return self._builtins.check_session_default(node)
+                case BuiltinKind.EXEC:
+                    return self._builtins.check_exec(node, expected=expected)
+                case _ as unreachable:  # pragma: no cover
+                    assert_never(unreachable)
 
         # Constructor call?
         if (
@@ -3129,18 +3280,14 @@ class _Checker:
             if not isinstance(callee_type, _SelectedBuiltinMethod):
                 self._record_node_type(field_access.node_id, callee_type)
         if isinstance(callee_type, _SelectedBuiltinMethod):
-            # The record is always present: ``_resolve_call`` classifies every
-            # member call whose field spells a built-in name, speculatively,
-            # because scope cannot yet know which method the name selects. And
-            # it is always one of these two kinds, because header validation
-            # (``_register_funcdef_signature``) admits no other builtin method.
-            kind = self._resolved.builtin_calls[node.node_id]
-            if kind == BuiltinKind.ASK:
-                return self._builtins.check_ask(
-                    node, expected=expected, receiver_type=callee_type.receiver_type
-                )
-            # ASK_REQUEST
-            return self._builtins.check_ask_request(node, receiver_type=callee_type.receiver_type)
+            # Session dispatch is directed by the exact receiver nominal.
+            # Scoped Agent declarations retain their established host-contract
+            # handling, including its receiver identity diagnostics.
+            receiver_key = _builtin_method_receiver_key(callee_type.receiver_type)
+            checker = self._builtin_method_checkers.get(receiver_key, {}).get(callee_type.name)
+            if checker is None:
+                checker = self._agent_builtin_method_checkers[callee_type.name]
+            return checker(node, expected=expected, receiver_type=callee_type.receiver_type)
         method = self._method_selections.get(field_access.node_id)
         if method is None:
             return self._check_value_call(
@@ -4424,6 +4571,7 @@ class _Checker:
                         # Do not freshen the declared generic result merely to
                         # discover the selected method; return the selection
                         # itself rather than a fabricated function type.
+                        assert isinstance(obj_type, (RecordType, EnumType))
                         return _SelectedBuiltinMethod(name=method.name, receiver_type=obj_type)
                     bound = self._bound_method_type(
                         method, obj_type, type_args=type_args, expected=expected, span=node.span
@@ -4441,6 +4589,17 @@ class _Checker:
                             ),
                         )
                     return bound
+                builtin_agent = self._env.type_table.builtin_declaration("Agent")
+                if (
+                    node.field in {"ask", "ask-request"}
+                    and isinstance(obj_type, RecordType)
+                    and builtin_agent is not None
+                    and any(
+                        owner.decl_id == builtin_agent.decl_node_id
+                        for owner in self._env.type_table.enum_owners_for_member(obj_type)
+                    )
+                ):
+                    return _SelectedBuiltinMethod(name=node.field, receiver_type=obj_type)
                 raise AglTypeError(
                     f"{obj_type.kind.capitalize()} '{obj_type.name}' has no field or method "
                     f"'{node.field}'.",
@@ -4477,6 +4636,12 @@ class _Checker:
                 fields = self._env.type_table.exception_fields(obj_type)
                 kind_label = "Exception type"
             elif isinstance(obj_type, RecordType):
+                if obj_type.decl_id in self._env.type_table.host_minted_declaration_ids():
+                    raise AglTypeError(
+                        f"'{obj_type.name}' values are created by the host and cannot be "
+                        "updated in source.",
+                        span=node.span,
+                    )
                 fields = self._env.type_table.record_fields(obj_type)
                 kind_label = "Record"
             else:

@@ -161,5 +161,9 @@ BUILTIN_ENUM_CONTRACTS: Mapping[str, BuiltinTypeContract] = {
 }
 
 BUILTIN_EXCEPTION_CONTRACTS: Mapping[str, BuiltinTypeContract] = _canonical_contracts(
-    BUILTIN_EXCEPTION_TYPE_DEFS, _CANONICAL_TABLE
+    {
+        **BUILTIN_EXCEPTION_TYPE_DEFS,
+        "SessionError": BUILTIN_PRELUDE_TYPE_DEFS["SessionError"],
+    },
+    _CANONICAL_TABLE,
 )

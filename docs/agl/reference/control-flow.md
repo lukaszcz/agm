@@ -22,7 +22,7 @@ if present, must be last; its own `|` is optional:
 <!-- agl-check: fragment -->
 ```agl
 if code is Fail or design is Fail =>
-  artifact := ask("Fix issues:\n%{code}\n%{design}", agent = impl)
+  artifact := impl.ask("Fix issues:\n%{code}\n%{design}")
 else =>
   ()
 ```
@@ -173,10 +173,10 @@ while i < target do[1000]
 done
 
 # bare post-test loop
-var r: Review = ask("Review %{a}", agent = reviewer)
+var r: Review = reviewer.ask("Review %{a}")
 do
   case r of
-    | Fail(issues) => r := ask("Fix %{issues}", agent = impl)
+    | Fail(issues) => r := impl.ask("Fix %{issues}")
     | Pass => break
 until r is Pass
 ```

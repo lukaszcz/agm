@@ -1,9 +1,0 @@
-{
-  "diagnostic": {
-    "line": 12,
-    "message_contains": [
-      "Agent",
-      "A::Agent"
-    ]
-  }
-}

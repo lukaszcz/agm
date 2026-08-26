@@ -788,6 +788,8 @@ class TypeEnvironment:
                 self._constructor_field_kinds[(STD_CORE_ID, (), prelude_name)] = fields
                 self._constructor_field_kinds_by_decl_id[prelude_type.decl_id] = fields
                 continue
+            if isinstance(prelude_type, ExceptionType):
+                continue
             assert isinstance(prelude_type, EnumType)
             for member in self._type_table.enum_members(prelude_type):
                 fields = tuple(

@@ -1,0 +1,28 @@
+{
+  "scenarios": [
+    {
+      "name": "double_close_and_caught_use_after_close",
+      "params": {"ask_after_close": true},
+      "agents": {"writer": {"responses": []}},
+      "expect": {
+        "stdout": "ask\n",
+        "calls": {"writer": 0},
+        "sessions": [
+          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true, "parent": null}
+        ]
+      }
+    },
+    {
+      "name": "double_close_without_a_later_session_use",
+      "params": {"ask_after_close": false},
+      "agents": {"writer": {"responses": []}},
+      "expect": {
+        "stdout": "",
+        "calls": {"writer": 0},
+        "sessions": [
+          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true, "parent": null}
+        ]
+      }
+    }
+  ]
+}

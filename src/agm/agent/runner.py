@@ -9,6 +9,7 @@ import sys
 from collections import ChainMap
 from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -17,6 +18,7 @@ from agm.agent.prompt import (
     preprocess_prompt_file,
     require_prompt_file,
 )
+from agm.agent.transport import AgentTransportFailureCause
 from agm.core import dry_run
 from agm.core.process import ProcessCaptureResult, run_capture, run_capture_result
 from agm.util.interp import (
@@ -36,6 +38,7 @@ _RUNNER_NOT_FOUND_EXIT = 127
 # The variable a runner command uses to name the prepared prompt file, and its
 # shorthand alias.
 PROMPT_FILE_VAR = "PROMPT_FILE"
+SESSION_ID_VAR = "SESSION_ID"
 PROMPT_FILE_ALIAS = "%%"
 
 
@@ -55,18 +58,24 @@ class ResolvedPrompt:
     effective_file: Path
 
 
+class PromptDelivery(StrEnum):
+    """How a prepared agent invocation receives its rendered prompt."""
+
+    FILE = "file"
+    STDIN = "stdin"
+    LITERAL = "literal"
+    NONE = "none"
+
+
 @dataclass(slots=True)
 class PreparedPromptRun:
-    """Prepared agent prompt command and prompt files.
+    """Prepared agent argv and any temporary prompt files.
 
-    ``stdin_prompt`` carries the rendered prompt text for a spec whose
-    backend reads the prompt from standard input rather than from an
-    interpolated placeholder or an appended ``@<path>`` argument (see
-    ``AgentCodex``): ``run_prepared_prompt_result`` pipes this text in
-    directly rather than reading ``effective_file`` back off disk. It is
-    ``None`` for every other spec, which keep the existing file-based
-    delivery. The delivery mode is this one field — :attr:`prompt_via_stdin`
-    is a view onto it, so the two can never disagree.
+    Most agent calls attach a temporary prompt file. Native lifecycle calls
+    instead need either a literal argv argument (Claude's ``/compact``) or no
+    prompt at all (forking); Codex receives its prompt on stdin. Keeping that
+    choice explicit prevents a lifecycle command from accidentally receiving
+    a file attachment.
     """
 
     command: list[str]
@@ -75,11 +84,12 @@ class PreparedPromptRun:
     temp_files: list[Path]
     stdin_prompt: str | None = None
     argv: list[str] | None = None
+    delivery: PromptDelivery = PromptDelivery.FILE
 
     @property
     def prompt_via_stdin(self) -> bool:
         """Whether the backend receives the prompt on stdin rather than from a file."""
-        return self.stdin_prompt is not None
+        return self.delivery is PromptDelivery.STDIN
 
 
 @dataclass(slots=True)
@@ -89,7 +99,7 @@ class PromptRunResult:
     Unlike the existing ``run_prompt_command`` helper, this never prints to
     stderr and never raises ``SystemExit``.  All outcomes — spawn failure,
     nonzero exit, and idle-timeout — are represented here so that callers can
-    map them to structured AgL exceptions (``AgentCallError``).
+    map them to their own host errors.
     """
 
     returncode: int | None
@@ -98,6 +108,34 @@ class PromptRunResult:
     elapsed: float
     timed_out: bool
     spawn_error: str | None
+
+
+class PromptRunFailure(Exception):
+    """A failed structured prompt run, independent of any caller's error model."""
+
+    def __init__(self, cause: AgentTransportFailureCause, result: PromptRunResult) -> None:
+        self.cause = cause
+        self.result = result
+        super().__init__(_prompt_run_failure_message(cause, result))
+
+
+def prompt_run_result_error(result: PromptRunResult) -> PromptRunFailure | None:
+    """Return the failure represented by *result*, or ``None`` for success."""
+    if result.spawn_error is not None:
+        return PromptRunFailure("spawn_failure", result)
+    if result.timed_out:
+        return PromptRunFailure("timeout", result)
+    if result.returncode not in (None, 0):
+        return PromptRunFailure("nonzero_exit", result)
+    return None
+
+
+def _prompt_run_failure_message(cause: AgentTransportFailureCause, result: PromptRunResult) -> str:
+    if cause == "spawn_failure":
+        return f"agent command could not be started: {result.spawn_error}"
+    if cause == "timeout":
+        return "agent command timed out"
+    return f"agent command exited with code {result.returncode}"
 
 
 def parse_command(command: str, *, kind: str) -> list[str]:
@@ -146,6 +184,25 @@ def _targets_prompt_file(segments: list[Segment]) -> bool:
     )
 
 
+def command_targets_session_id(command: list[str]) -> bool:
+    """Whether a command contains an unescaped session-id placeholder.
+
+    Every element is parsed even after finding a placeholder so malformed
+    interpolation is always reported while a command session is opened.
+    """
+    targets_session_id = False
+    for arg in command:
+        try:
+            segments = _split_command_element(arg)
+        except InterpolationError as exc:
+            exc.context = f"in command element {arg!r}"
+            raise
+        targets_session_id = targets_session_id or any(
+            isinstance(segment, Hole) and segment.name == SESSION_ID_VAR for segment in segments
+        )
+    return targets_session_id
+
+
 def validate_command(command: list[str], *, kind: str, env: MutableMapping[str, str]) -> None:
     """Preflight-check a runner/selector command.
 
@@ -174,16 +231,26 @@ def validate_command(command: list[str], *, kind: str, env: MutableMapping[str, 
 
 
 def _interpolate_command(
-    command: list[str], target: Path, env: MutableMapping[str, str]
+    command: list[str],
+    target: Path,
+    env: MutableMapping[str, str],
+    *,
+    session_id: str | None = None,
 ) -> tuple[list[str], bool]:
-    """Interpolate *command* against *env*, binding ``PROMPT_FILE``/``%%`` to *target*.
+    """Interpolate *command* against *env*, binding prompt and session placeholders.
 
-    Returns the interpolated argv and whether any element targeted
-    ``PROMPT_FILE``/``%%``. *env* must be the same mapping the child process
-    will actually receive (see ``run_capture``'s ``env`` argument) so argv
-    holes and the spawned process resolve names identically.
+    ``PROMPT_FILE``/``%%`` always resolve to *target*. When *session_id* is
+    supplied, ``SESSION_ID`` resolves to it; otherwise it retains the normal
+    environment-backed interpolation behavior. Returns the interpolated argv
+    and whether any element targeted ``PROMPT_FILE``/``%%``. *env* must be the
+    same mapping the child process will actually receive (see
+    ``run_capture``'s ``env`` argument) so argv holes and the spawned process
+    resolve names identically.
     """
-    variables = ChainMap({PROMPT_FILE_VAR: str(target)}, env)
+    bindings = {PROMPT_FILE_VAR: str(target)}
+    if session_id is not None:
+        bindings[SESSION_ID_VAR] = session_id
+    variables = ChainMap(bindings, env)
     interpolated: list[str] = []
     targeted = False
 
@@ -205,6 +272,7 @@ def command_with_prompt_target(
     env: MutableMapping[str, str],
     *,
     append_target: bool = True,
+    session_id: str | None = None,
 ) -> list[str]:
     """Interpolate *command* against *env*, binding ``PROMPT_FILE``/``%%`` to *target*.
 
@@ -214,18 +282,22 @@ def command_with_prompt_target(
     so its argv is interpolated the same way but never gets an ``@<target>``
     argument — the prompt reaches the process on standard input instead.
     """
-    interpolated, targeted = _interpolate_command(command, target, env)
+    interpolated, targeted = _interpolate_command(command, target, env, session_id=session_id)
     if targeted or not append_target:
         return interpolated
     return [*interpolated, f"@{target}"]
 
 
 def command_with_prompt_target_or_exit(
-    command: list[str], target: Path, env: MutableMapping[str, str]
+    command: list[str],
+    target: Path,
+    env: MutableMapping[str, str],
+    *,
+    append_target: bool = True,
 ) -> list[str]:
     """Attach a prompt target, reporting interpolation failures as CLI errors."""
     try:
-        return command_with_prompt_target(command, target, env)
+        return command_with_prompt_target(command, target, env, append_target=append_target)
     except InterpolationError as exc:
         print(f"Error: cannot interpolate runner command: {exc}.", file=sys.stderr)
         raise SystemExit(1) from exc
@@ -317,6 +389,9 @@ def run_prompt_command(
     stdout_callback: Callable[[str], None] | None = None,
     stderr_callback: Callable[[str], None] | None = None,
     idle_timeout: float | None = None,
+    stdin_text: str | None = None,
+    prepared_argv: list[str] | None = None,
+    append_target: bool = True,
 ) -> str:
     ordered_output: list[str] = []
 
@@ -335,15 +410,21 @@ def run_prompt_command(
         if stderr_callback is None:
             print(message, end="", file=sys.stderr)
 
+    argv = (
+        command_with_prompt_target_or_exit(command, target, env, append_target=append_target)
+        if prepared_argv is None
+        else prepared_argv
+    )
     try:
         returncode, stdout, stderr = run_capture(
-            command_with_prompt_target_or_exit(command, target, env),
+            argv,
             env=env,
             stdout_callback=handle_stdout,
             stderr_callback=handle_stderr,
             timeout_callback=handle_timeout,
             isolate_process_group=True,
             idle_timeout=idle_timeout,
+            stdin_text=stdin_text,
         )
     except SystemExit as exc:
         # ``run_capture`` predates structured process results and represents an
@@ -389,6 +470,11 @@ def run_prompt_command(
     return output
 
 
+def _prepared_stdin_text(prepared: PreparedPromptRun) -> str | None:
+    """Return piped input, using an empty pipe to deliver EOF explicitly."""
+    return "" if prepared.delivery is PromptDelivery.NONE else prepared.stdin_prompt
+
+
 def run_prepared_prompt(
     prepared: PreparedPromptRun,
     *,
@@ -397,11 +483,17 @@ def run_prepared_prompt(
 ) -> str:
     """Run a prepared prompt invocation."""
 
+    append_target = prepared.delivery is PromptDelivery.FILE
     if dry_run.enabled():
         dry_run.print_labeled_command(
             "agent",
-            command_with_prompt_target_or_exit(
-                prepared.command, prepared.effective_file, prepared.env
+            prepared.argv
+            if prepared.argv is not None
+            else command_with_prompt_target_or_exit(
+                prepared.command,
+                prepared.effective_file,
+                prepared.env,
+                append_target=append_target,
             ),
         )
         return ""
@@ -411,6 +503,9 @@ def run_prepared_prompt(
         env=prepared.env,
         stdout_callback=stdout_callback,
         stderr_callback=stderr_callback,
+        stdin_text=_prepared_stdin_text(prepared),
+        prepared_argv=prepared.argv,
+        append_target=append_target,
     )
 
 
@@ -431,7 +526,8 @@ def prepare_rendered_prompt_run(
     runner: list[str],
     temp_files: list[Path],
     env: dict[str, str],
-    prompt_via_stdin: bool = False,
+    delivery: PromptDelivery = PromptDelivery.FILE,
+    session_id: str | None = None,
 ) -> PreparedPromptRun:
     """Prepare a runner invocation for an already-rendered AgL prompt.
 
@@ -446,42 +542,54 @@ def prepare_rendered_prompt_run(
       returned by ``run_prepared_prompt_result``.
     - Accepts an already-tokenized argv from an agent command builder, avoiding
       a string round-trip before the prepared invocation is run.
+    - Binds ``%{SESSION_ID}`` when *session_id* is provided, without changing
+      ordinary runner interpolation when it is not.
 
-    *prompt_via_stdin* is carried onto the returned ``PreparedPromptRun`` so
-    ``run_prepared_prompt_result`` knows to pipe *rendered_prompt* straight in
-    rather than attach it via placeholder or ``@<path>``. In that case no
-    temp file is written at all: the rendered text travels on
-    ``PreparedPromptRun.rendered_prompt`` instead, since nothing reads a file
-    back for this delivery mode. File-sourced delivery still writes
-    *rendered_prompt* verbatim to a temp file, because argv interpolation may
-    bind ``%{PROMPT_FILE}``/``%%`` to it and the backend reads the prompt from
-    that path.
+    *delivery* selects how the prompt reaches the agent, so literal and
+    promptless lifecycle commands share this same subprocess boundary without
+    making prompt files.
     """
     command = runner.copy()
-    if prompt_via_stdin:
-        effective_file = Path(os.devnull)
-        child_env = env if env else os.environ
+    child_env = env if env else os.environ
+    if delivery is PromptDelivery.FILE:
+        with NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".md") as handle:
+            handle.write(rendered_prompt)
+            effective_file = Path(handle.name)
+        temp_files.append(effective_file)
+        argv = command_with_prompt_target(
+            command,
+            effective_file,
+            child_env,
+            append_target=True,
+            session_id=session_id,
+        )
         return PreparedPromptRun(
             command=command,
             effective_file=effective_file,
             env=env,
             temp_files=temp_files,
-            stdin_prompt=rendered_prompt,
-            argv=command_with_prompt_target(
-                command, effective_file, child_env, append_target=False
-            ),
+            argv=argv,
+            delivery=delivery,
         )
-    with NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".md") as handle:
-        handle.write(rendered_prompt)
-        temp_path = Path(handle.name)
-    temp_files.append(temp_path)
-    child_env = env if env else os.environ
+
+    effective_file = Path(os.devnull)
+    argv = command_with_prompt_target(
+        command,
+        effective_file,
+        child_env,
+        append_target=False,
+        session_id=session_id,
+    )
+    if delivery is PromptDelivery.LITERAL:
+        argv.append(rendered_prompt)
     return PreparedPromptRun(
         command=command,
-        effective_file=temp_path,
+        effective_file=effective_file,
         env=env,
         temp_files=temp_files,
-        argv=command_with_prompt_target(command, temp_path, child_env, append_target=True),
+        stdin_prompt=rendered_prompt if delivery is PromptDelivery.STDIN else None,
+        argv=argv,
+        delivery=delivery,
     )
 
 
@@ -514,7 +622,7 @@ def run_prepared_prompt_result(
     capture: ProcessCaptureResult = run_capture_result(
         argv,
         env=prepared.env if prepared.env else None,
-        stdin_text=prepared.stdin_prompt,
+        stdin_text=_prepared_stdin_text(prepared),
         idle_timeout=idle_timeout,
         isolate_process_group=True,
     )

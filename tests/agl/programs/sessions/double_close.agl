@@ -1,0 +1,12 @@
+# Closing twice is harmless; subsequent use remains a catchable lifecycle error.
+param ask_after_close: bool
+
+program def main() -> unit =
+  let session = Session::open(AgentPi("writer", "model", "high"))
+  session.close()
+  session.close()
+  if ask_after_close =>
+    try
+      session.ask("must not dispatch")
+    catch SessionError as error =>
+      print error.operation

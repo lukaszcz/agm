@@ -28,6 +28,7 @@ from __future__ import annotations
 import sys
 from typing import TYPE_CHECKING
 
+from agm.agent.session import create_agl_session_host
 from agm.agl.diagnostics import format_diagnostic
 from agm.agl.repl import ReplSession
 from agm.agl.repl.agentmode import AgentMode
@@ -52,6 +53,7 @@ from agm.config.module_roots import (
 )
 from agm.config.qualified_keys import build_qualified_config_key, resolve_qualified_values
 from agm.core import dry_run
+from agm.core.cleanup import preserve_primary_error
 from agm.core.log import (
     LiveTracePathResolver,
     prepare_trace_log_from_decision,
@@ -121,6 +123,11 @@ def run(args: ReplArgs) -> None:
     confirm_agent_call = make_console_confirm()
     confirming_agent = ConfirmingAgent(runner_agent, agent_mode, confirm=confirm_agent_call)
 
+    session_host = create_agl_session_host(
+        idle_timeout=config.timeout,
+        confirm_session=confirming_agent.confirm_session_values,
+    )
+
     host_settings_policy = HostSettingsPolicy(
         resolve_trace_path=LiveTracePathResolver(command_name="repl", auto_path=trace_path),
     )
@@ -179,48 +186,50 @@ def run(args: ReplArgs) -> None:
             if key in resolved
         }
 
-    session = ReplSession(
-        default_strict_json=strict_json,
-        default_loop_limit=loop_limit,
-        default_call_depth_limit=call_depth_limit,
-        agent_dispatcher=confirming_agent,
-        shell_exec_timeout=config.timeout,
-        trace_path=trace_path,
-        engine_base=engine_seeds.values,
-        setting_overrides=engine_seeds.overrides,
-        host_settings_policy=host_settings_policy,
-        cwd=ctx.cwd,
-        stdlib_root=stdlib_root,
-        lib_root=lib_root,
-        configured_roots=mod_roots_cfg.extra,
-        package_roots=package_roots,
-        default_stdlib=not args.no_stdlib,
-        params_config_loader=imported_param_config,
-    )
+    with preserve_primary_error(session_host.close_all, label="agent session cleanup"):
+        session = ReplSession(
+            default_strict_json=strict_json,
+            default_loop_limit=loop_limit,
+            default_call_depth_limit=call_depth_limit,
+            agent_dispatcher=confirming_agent,
+            session_host=session_host,
+            shell_exec_timeout=config.timeout,
+            trace_path=trace_path,
+            engine_base=engine_seeds.values,
+            setting_overrides=engine_seeds.overrides,
+            host_settings_policy=host_settings_policy,
+            cwd=ctx.cwd,
+            stdlib_root=stdlib_root,
+            lib_root=lib_root,
+            configured_roots=mod_roots_cfg.extra,
+            package_roots=package_roots,
+            default_stdlib=not args.no_stdlib,
+            params_config_loader=imported_param_config,
+        )
 
-    # Load and check the session's initial library image now, so a rejected
-    # ``--agent``/``[exec] default-agent`` override (or any other startup
-    # failure loading the standard library) exits before the console opens
-    # and prints its banner, rather than surfacing only once the first entry
-    # happens to load ``std/config``.
-    open_diagnostics = session.open()
-    if open_diagnostics:
-        for diagnostic in open_diagnostics:
-            print(f"Error: {format_diagnostic(diagnostic)}", file=sys.stderr)
-        raise SystemExit(1)
+        # Load and check the session's initial library image now, so a rejected
+        # ``--agent``/``[exec] default-agent`` override (or any other startup
+        # failure loading the standard library) exits before the console opens
+        # and prints its banner, rather than surfacing only once the first entry
+        # happens to load ``std/config``.
+        open_diagnostics = session.open()
+        if open_diagnostics:
+            for diagnostic in open_diagnostics:
+                print(f"Error: {format_diagnostic(diagnostic)}", file=sys.stderr)
+            raise SystemExit(1)
 
-    history_path = agm_home_dir(home=ctx.home) / "repl_history"
-    history_path.parent.mkdir(parents=True, exist_ok=True)
+        history_path = agm_home_dir(home=ctx.home) / "repl_history"
+        history_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # ``--dry-run`` means type-check only in the REPL: every entry runs the full
-    # static pipeline but is never evaluated, so no agent/exec calls fire and no
-    # bindings are persisted.  It reads the same global flag ``agm exec`` honours.
-    run_console(
-        session,
-        echo=not args.quiet,
-        check_only=dry_run.enabled(),
-        agent_mode=agent_mode,
-        history_path=history_path,
-        theme=repl_config.theme,
-        on_theme_save=lambda t: save_repl_theme(t, home=ctx.home),
-    )
+        # ``--dry-run`` means type-check only in the REPL: every entry runs the full
+        # static pipeline but is never evaluated, so no agent/exec calls fire and no
+        # bindings are persisted.  It reads the same global flag ``agm exec`` honours.
+        run_console(
+            session,
+            echo=not args.quiet,
+            check_only=dry_run.enabled(),
+            agent_mode=agent_mode,
+            history_path=history_path,
+            theme=repl_config.theme,
+            on_theme_save=lambda t: save_repl_theme(t, home=ctx.home),
+        )

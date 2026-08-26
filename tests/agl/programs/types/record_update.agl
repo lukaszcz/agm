@@ -34,7 +34,7 @@ program def main() -> unit =
   print acc.x
   print acc.y
 
-  let fetched: Issue = ask("Fetch the top issue.", agent = tracker)
+  let fetched: Issue = tracker.ask("Fetch the top issue.")
   let escalated = if fetched.severity >= 3 => (fetched with severity = fetched.severity + bump) | else => fetched
   print escalated.title
   print escalated.severity

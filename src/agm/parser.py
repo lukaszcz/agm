@@ -578,12 +578,12 @@ _HELP_TEXTS: dict[str, str] = {
           --max-iters N         Cap unbounded loops; off by default (CLI > config).
           --max-call-depth N    Override the maximum recursion call depth
                                 (CLI > config).
-          --agent AGL_LITERAL   Seed std/config::default-agent from an AgL Agent literal.
+          --agent AGL_LITERAL   Seed the free-ask default session from an AgL Agent literal.
           --timeout DURATION    Override initial shell-exec and agent idle timeouts;
-                                seed std/config::timeout to some(DURATION). Mutually
+                                seed std/config::timeout to Some(DURATION). Mutually
                                 exclusive with --no-timeout.
-          --no-timeout          Remove any configured shell-exec timeout and seed
-                                std/config::timeout to none. Mutually exclusive
+          --no-timeout          Remove configured initial shell-exec and agent timeouts;
+                                seed std/config::timeout to None. Mutually exclusive
                                 with --timeout.
           --dry-run             Run the full static pipeline and validate parameters,
                                 but do not execute the workflow.
@@ -647,8 +647,8 @@ _HELP_TEXTS: dict[str, str] = {
                                 (source writes > CLI > config).
           --max-call-depth N    Override the maximum recursion call depth
                                 (CLI > config; source pragmas are not applied in the REPL).
-          --agent AGL_LITERAL   Seed std/config::default-agent from an AgL Agent literal.
-          --confirm-agents     Confirm each agent call before dispatching it
+          --agent AGL_LITERAL   Seed the free-ask default session from an AgL Agent literal.
+          --confirm-agents     Confirm each agent prompt before dispatching it
                                 (default: fire agent calls without confirming).
           --quiet               Suppress automatic echoing of entry results.
           --no-stdlib           Disable the automatic import std/core::* prelude for

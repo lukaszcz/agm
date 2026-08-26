@@ -1,0 +1,80 @@
+{
+  "scenarios": [
+    {
+      "name": "sessions_retain_identity_and_clean_up",
+      "agents": {
+        "writer": {
+          "responses": ["draft", "revision"],
+          "session": {
+            "operations": {
+              "compact": ["success"],
+              "reset": ["success"],
+              "fork": ["success"],
+              "set-name": ["success"],
+              "stats": [{"input_tokens": 3, "output_tokens": 5, "cost": "0.12", "context_percent": "4.5"}]
+            }
+          }
+        },
+        "reviewer": {"responses": ["review"]}
+      },
+      "expect": {
+        "calls": {"writer": 0, "reviewer": 0},
+        "sessions": [
+          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true, "parent": null},
+          {"agent": "writer", "tag": "session-2", "opened": true, "closed": true, "parent": "session-1"},
+          {"agent": "reviewer", "tag": "session-1", "opened": true, "closed": true, "parent": null}
+        ],
+        "session_prompts": [
+          {"agent": "writer", "session": "session-1", "call": 0, "equals": "write a draft"},
+          {"agent": "writer", "session": "session-1", "call": 1, "follow_up": {"equals": "revise it"}},
+          {"agent": "reviewer", "session": "session-1", "call": 0, "equals": "independent"}
+        ],
+        "session_operations": [
+          {"agent": "writer", "session": "session-1", "operation": "compact", "arg": "retain decisions", "outcome": "success"},
+          {"agent": "writer", "session": "session-1", "operation": "reset", "arg": null, "outcome": "success"},
+          {"agent": "writer", "session": "session-1", "operation": "fork", "arg": null, "outcome": "success"},
+          {"agent": "writer", "session": "session-2", "operation": "set-name", "arg": "child", "outcome": "success"},
+          {"agent": "writer", "session": "session-2", "operation": "stats", "arg": null, "outcome": "success"}
+        ]
+      }
+    },
+    {
+      "name": "low_usage_child_is_left_for_run_cleanup",
+      "agents": {
+        "writer": {
+          "responses": ["draft", "revision"],
+          "session": {
+            "operations": {
+              "compact": ["success"],
+              "reset": ["success"],
+              "fork": ["success"],
+              "set-name": ["success"],
+              "stats": [{"input_tokens": 0, "output_tokens": 5, "cost": "0.12", "context_percent": "4.5"}]
+            }
+          }
+        },
+        "reviewer": {"responses": ["review"]}
+      },
+      "expect": {
+        "calls": {"writer": 0, "reviewer": 0},
+        "sessions": [
+          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true, "parent": null},
+          {"agent": "writer", "tag": "session-2", "opened": true, "closed": true, "parent": "session-1"},
+          {"agent": "reviewer", "tag": "session-1", "opened": true, "closed": true, "parent": null}
+        ],
+        "session_prompts": [
+          {"agent": "writer", "session": "session-1", "call": 0, "equals": "write a draft"},
+          {"agent": "writer", "session": "session-1", "call": 1, "follow_up": {"equals": "revise it"}},
+          {"agent": "reviewer", "session": "session-1", "call": 0, "equals": "independent"}
+        ],
+        "session_operations": [
+          {"agent": "writer", "session": "session-1", "operation": "compact", "arg": "retain decisions", "outcome": "success"},
+          {"agent": "writer", "session": "session-1", "operation": "reset", "arg": null, "outcome": "success"},
+          {"agent": "writer", "session": "session-1", "operation": "fork", "arg": null, "outcome": "success"},
+          {"agent": "writer", "session": "session-2", "operation": "set-name", "arg": "child", "outcome": "success"},
+          {"agent": "writer", "session": "session-2", "operation": "stats", "arg": null, "outcome": "success"}
+        ]
+      }
+    }
+  ]
+}

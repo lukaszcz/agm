@@ -47,12 +47,12 @@ The layout rules:
    ```agl
    if
      | status is Complete => ()
-     | status is Blocked => (let report = ask("Explain %{status}", agent = critic); print report)
+     | status is Blocked => (let report = critic.ask("Explain %{status}"); print report)
      | else => ()
 
    var r: Review = Pass
    do[5]
-     r := ask("Review %{artifact}", agent = reviewer)
+     r := reviewer.ask("Review %{artifact}")
    until r is Pass
    ```
 

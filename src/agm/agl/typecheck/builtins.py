@@ -40,16 +40,19 @@ from agm.agl.syntax.nodes import (
     Expr,
     IntLit,
     NamedArg,
+    ParamKind,
     QualifierAnchor,
     StringLit,
     VarRef,
 )
 from agm.agl.syntax.resources import ResourceError, resource_path
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.typecheck.arguments import bind_call_args
 from agm.agl.typecheck.env import (
     AglTypeError,
     CallSiteRecord,
     OutputContractSpec,
+    ParamSpec,
     TypeEnvironment,
 )
 
@@ -246,6 +249,148 @@ class BuiltinCallChecker:
         self._ctx._assert_assignable_from(arg_type, explicit, arg_expr.span, arg_expr)
         return explicit
 
+    # --- Session statics ---
+
+    def check_session_open(self, node: Call) -> Type:
+        """Type-check ``Session::open(agent, transport?, name?)``."""
+        session_transport = self._builtin_contract_type("SessionTransport")
+        option = self._ctx._env.type_table.builtin_declaration("Option")
+        assert isinstance(session_transport, EnumType)
+        assert option is not None
+        transport = option.handle((session_transport,))
+        return self._check_static_call(
+            node,
+            "Session::open",
+            (
+                ParamSpec(
+                    name="agent",
+                    type=self._builtin_contract_type("Agent"),
+                    kind=ParamKind.STANDARD,
+                    has_default=False,
+                ),
+                ParamSpec(
+                    name="transport",
+                    type=transport,
+                    kind=ParamKind.STANDARD,
+                    has_default=True,
+                ),
+                ParamSpec(
+                    name="name",
+                    type=TextType(),
+                    kind=ParamKind.STANDARD,
+                    has_default=True,
+                ),
+            ),
+            self._builtin_contract_type("Session"),
+        )
+
+    def check_session_default(self, node: Call) -> Type:
+        """Type-check the nullary ``Session::default()`` static."""
+        return self._check_static_call(
+            node,
+            "Session::default",
+            (),
+            self._builtin_contract_type("Session"),
+        )
+
+    # --- Session methods ---
+
+    def check_session_ask(self, node: Call, *, expected: Type | None, receiver_type: Type) -> Type:
+        """Type-check ``Session.ask`` with its receiver-owned agent selection."""
+        if any(argument.name == "agent" for argument in node.named_args):
+            raise AglTypeError("Session.ask does not accept an explicit agent.", span=node.span)
+        return self.check_ask(node, expected=expected)
+
+    def check_session_compact(
+        self, node: Call, *, expected: Type | None, receiver_type: Type
+    ) -> Type:
+        return self._check_static_call(
+            node,
+            "Session::compact",
+            (ParamSpec("instructions", TextType(), ParamKind.STANDARD, has_default=True),),
+            UnitType(),
+        )
+
+    def check_session_reset(
+        self, node: Call, *, expected: Type | None, receiver_type: Type
+    ) -> Type:
+        return self._check_session_nullary(node, "Session::reset")
+
+    def check_session_fork(self, node: Call, *, expected: Type | None, receiver_type: Type) -> Type:
+        return self._check_static_call(node, "Session::fork", (), receiver_type)
+
+    def check_session_stats(
+        self, node: Call, *, expected: Type | None, receiver_type: Type
+    ) -> Type:
+        return self._check_session_nullary(node, "Session::stats", result="SessionStats")
+
+    def check_session_set_name(
+        self, node: Call, *, expected: Type | None, receiver_type: Type
+    ) -> Type:
+        return self._check_static_call(
+            node,
+            "Session::set-name",
+            (ParamSpec("name", TextType(), ParamKind.STANDARD, has_default=False),),
+            UnitType(),
+        )
+
+    def check_session_close(
+        self, node: Call, *, expected: Type | None, receiver_type: Type
+    ) -> Type:
+        return self._check_session_nullary(node, "Session::close")
+
+    def _check_session_nullary(self, node: Call, name: str, *, result: str | None = None) -> Type:
+        return self._check_static_call(
+            node,
+            name,
+            (),
+            UnitType() if result is None else self._builtin_contract_type(result),
+        )
+
+    def _check_static_call(
+        self,
+        node: Call,
+        name: str,
+        params: tuple[ParamSpec, ...],
+        result: Type,
+    ) -> Type:
+        """Bind and check one fixed-signature type-scoped builtin call."""
+        if node.type_args:
+            raise AglTypeError(
+                f"{name} does not accept type arguments.",
+                span=node.span,
+            )
+        binding = bind_call_args(
+            params,
+            node.args,
+            node.named_args,
+            call_span=node.span,
+            context_desc=f"call to '{name}'",
+        )
+        for param, argument in zip(params, binding, strict=True):
+            if argument is None:
+                continue
+            argument_type = self._ctx._check_expr(argument, expected=param.type)
+            if not (
+                name == "Session::open"
+                and param.name == "transport"
+                and isinstance(argument_type, RecordType)
+                and isinstance(param.type, EnumType)
+                and argument_type.name == "Some"
+                and param.type.name == "Option"
+                and self._ctx._env.type_table.enum_member_by_decl(param.type, argument_type.decl_id)
+                is not None
+                and len(argument_type.type_args) == len(param.type.type_args) == 1
+                and isinstance(argument_type.type_args[0], RecordType)
+                and isinstance(param.type.type_args[0], EnumType)
+                and argument_type.type_args[0]
+                in self._ctx._env.type_table.enum_members(param.type.type_args[0])
+            ):
+                self._ctx._assert_assignable_from(
+                    argument_type, param.type, argument.span, argument
+                )
+        return result
+
     # --- resources ---
 
     def check_resource(self, node: Call) -> Type:
@@ -296,6 +441,12 @@ class BuiltinCallChecker:
         return target_type
 
     # --- ask-request ---
+
+    def check_agent_ask_request(
+        self, node: Call, *, expected: Type | None, receiver_type: Type
+    ) -> Type:
+        """Type-check ``Agent.ask-request`` using its receiver as the agent."""
+        return self.check_ask_request(node, receiver_type=receiver_type)
 
     def check_ask_request(self, node: Call, *, receiver_type: Type | None = None) -> Type:
         """Type-check the fixed-text, side-effect-free ``ask-request`` builder."""
@@ -417,8 +568,15 @@ class BuiltinCallChecker:
         if agent_request_type is None:
             agent_request_type = self._resolve_host_record_contract("AgentRequest", span=node.span)
         expected_agent_type = self._ctx._env.type_table.record_fields(agent_request_type)["agent"]
-        if receiver_type is not None:
-            self._ctx._assert_assignable_from(receiver_type, expected_agent_type, node.span, node)
+        if receiver_type is not None and callee == "ask-request":
+            is_agent_member = isinstance(receiver_type, RecordType) and any(
+                owner == expected_agent_type
+                for owner in self._ctx._env.type_table.enum_owners_for_member(receiver_type)
+            )
+            if not is_agent_member:
+                self._ctx._assert_assignable_from(
+                    receiver_type, expected_agent_type, node.span, node
+                )
         if "agent" in named:
             agent_na = named["agent"]
             agent_type = self._ctx._check_expr(agent_na.value, expected=expected_agent_type)

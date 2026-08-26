@@ -220,9 +220,7 @@ class TestAgentCallRecord:
         rt = _agent_runtime(_agent_returning("good"))
         _run_inline(
             rt,
-            'let reviewer = AgentCommand("reviewer")\n'
-            'let x: text = ask("check this", agent = reviewer)\n'
-            "x",
+            'let reviewer = AgentCommand("reviewer")\nlet x: text = reviewer.ask("check this")\nx',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -235,7 +233,7 @@ class TestAgentCallRecord:
         rt = _agent_runtime(_agent_returning("ok"))
         _run_inline(
             rt,
-            'let critic = AgentCommand("critic")\nlet x: text = ask("review", agent = critic)\nx',
+            'let critic = AgentCommand("critic")\nlet x: text = critic.ask("review")\nx',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -250,7 +248,7 @@ class TestAgentCallRecord:
         log_path = tmp_path / "trace.jsonl"
         run_inline_command(
             _agent_runtime(_agent_returning("ok")),
-            'let a = AgentClaude("sonnet", "high")\nlet x: text = ask("review", agent = a)\nx',
+            'let a = AgentClaude("sonnet", "high")\nlet x: text = a.ask("review")\nx',
             log_file=log_path,
         )
         request = next(
@@ -266,7 +264,7 @@ class TestAgentCallRecord:
         rt = _agent_runtime(_agent_returning("result"))
         _run_inline(
             rt,
-            'let impl = AgentCommand("impl")\nlet x: text = ask("do work", agent = impl)\nx',
+            'let impl = AgentCommand("impl")\nlet x: text = impl.ask("do work")\nx',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -298,7 +296,7 @@ class TestAgentCallRecord:
 
         result = run_inline_command(
             _agent_runtime(agent, strict_json=True),
-            'let a = AgentCommand("a")\nlet value: int = ask("number", agent = a)\nvalue',
+            'let a = AgentCommand("a")\nlet value: int = a.ask("number")\nvalue',
             log_file=log_path,
         )
         assert result.ok
@@ -334,15 +332,14 @@ class TestRetryRecords:
         _run_inline(
             rt,
             'let impl = AgentCommand("impl")\n'
-            'let x: int = ask("get int", agent = impl, on_parse_error = Retry(n = 2))\nx',
+            'let x: int = impl.ask("get int", on_parse_error = Retry(n = 2))\nx',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
         call_recs = [r for r in records if r.get("kind") == "agent_request"]
         assert len(call_recs) == 3
         assert len([r for r in records if r.get("kind") == "agent_response"]) == 3
-        assert "Your previous response did not match" in str(call_recs[1]["prompt"])
-        assert "not json" in str(call_recs[1]["prompt"])
+        assert "Validation errors:" in str(call_recs[1]["prompt"])
         call_pairs = [
             record["kind"]
             for record in records
@@ -373,7 +370,7 @@ class TestRetryRecords:
         _run_inline(
             rt,
             'let impl = AgentCommand("impl")\n'
-            'let x: int = ask("get int", agent = impl, on_parse_error = Retry(n = 2))\nx',
+            'let x: int = impl.ask("get int", on_parse_error = Retry(n = 2))\nx',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -391,7 +388,7 @@ class TestRetryRecords:
         rt = _agent_runtime(agent, strict_json=True)
         src = (
             'let impl = AgentCommand("impl")\n'
-            'let x: int = ask("get int", agent = impl, on_parse_error = Retry(n = 1))\nx'
+            'let x: int = impl.ask("get int", on_parse_error = Retry(n = 1))\nx'
         )
         try:
             _run_inline(rt, src, log_file=log_path)
@@ -414,7 +411,7 @@ class TestRetryRecords:
 
         result = run_inline_command(
             _agent_runtime(agent),
-            'let a = AgentCommand("a")\nlet value: text = ask("work", agent = a)\nvalue',
+            'let a = AgentCommand("a")\nlet value: text = a.ask("work")\nvalue',
             log_file=log_path,
         )
         assert not result.ok
@@ -443,7 +440,7 @@ class TestExceptionRecord:
         rt = _agent_runtime(agent, strict_json=True)
         result = _run_inline(
             rt,
-            'let impl = AgentCommand("impl")\nlet x: int = ask("get int", agent = impl)\nx',
+            'let impl = AgentCommand("impl")\nlet x: int = impl.ask("get int")\nx',
             log_file=log_path,
         )
         assert not result.ok
@@ -462,7 +459,7 @@ class TestExceptionRecord:
         rt = _agent_runtime(agent, strict_json=True)
         result = _run_inline(
             rt,
-            'let impl = AgentCommand("impl")\nlet x: int = ask("get int", agent = impl)\nx',
+            'let impl = AgentCommand("impl")\nlet x: int = impl.ask("get int")\nx',
             log_file=log_path,
         )
         assert not result.ok
@@ -475,7 +472,7 @@ class TestExceptionRecord:
         log_path = tmp_path / "trace.jsonl"
         result = run_inline_command(
             _agent_runtime(_agent_returning("not json"), strict_json=True),
-            'let impl = AgentCommand("impl")\nlet x: int = ask("get int", agent = impl)\nx',
+            'let impl = AgentCommand("impl")\nlet x: int = impl.ask("get int")\nx',
             log_file=log_path,
         )
         assert result.error is not None
@@ -497,7 +494,7 @@ class TestExceptionRecord:
             rt,
             'let impl = AgentCommand("impl")\n'
             "try\n"
-            '  let x: int = ask("get int", agent = impl)\n'
+            '  let x: int = impl.ask("get int")\n'
             "  x\n"
             "catch AgentParseError as e =>\n"
             "  0\n",
@@ -625,7 +622,7 @@ class TestRunBoundaryRecords:
         run_inline_command(
             _agent_runtime(_agent_returning("agent output")),
             'let a = AgentCommand("a")\n'
-            'let x: text = ask("prompt", agent = a)\n'
+            'let x: text = a.ask("prompt")\n'
             'let y: text = exec "printf shell"\n'
             "print x\ny",
             log_file=log_path,
@@ -660,7 +657,7 @@ class TestNoLog:
     def test_no_log_with_agent_call_writes_nothing(self, tmp_path: Path) -> None:
         rt = _agent_runtime(_agent_returning("hello"))
         result = _run_inline(
-            rt, 'let a = AgentCommand("a")\nlet x: text = ask("hi", agent = a)\nx', log_file=None
+            rt, 'let a = AgentCommand("a")\nlet x: text = a.ask("hi")\nx', log_file=None
         )
         assert result.ok
         jsonl_files = list(tmp_path.rglob("*.jsonl"))
@@ -751,7 +748,7 @@ class TestSourceSpans:
         rt = _agent_runtime(_agent_returning("hello"))
         _run_inline(
             rt,
-            'let impl = AgentCommand("impl")\nlet x: text = ask("do work", agent = impl)\nx',
+            'let impl = AgentCommand("impl")\nlet x: text = impl.ask("do work")\nx',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -1029,7 +1026,7 @@ class TestUnparseableFeedback:
         result = _run_inline(
             rt,
             'let impl = AgentCommand("impl")\n'
-            'let x: int = ask("get int", agent = impl, on_parse_error = Retry(n = 1))\nx',
+            'let x: int = impl.ask("get int", on_parse_error = Retry(n = 1))\nx',
             log_file=log_path,
         )
         assert result.ok
@@ -1055,7 +1052,7 @@ class TestUnparseableFeedback:
         _run_inline(
             rt,
             'let impl = AgentCommand("impl")\n'
-            'let x: int = ask("get int", agent = impl, on_parse_error = Retry(n = 1))\nx',
+            'let x: int = impl.ask("get int", on_parse_error = Retry(n = 1))\nx',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -1088,7 +1085,7 @@ class TestUnparseableFeedback:
             result = _run_inline(
                 rt,
                 'let impl = AgentCommand("impl")\n'
-                'let x: int = ask("q", agent = impl, on_parse_error = Abort())\n'
+                'let x: int = impl.ask("q", on_parse_error = Abort())\n'
                 "x",
             )
         # The program raises AgentParseError; run returns ok=False.

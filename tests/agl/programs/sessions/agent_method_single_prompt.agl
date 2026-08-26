@@ -1,0 +1,5 @@
+# A single-attempt Agent::ask asks for no resumable conversation.
+program def main() -> unit =
+  let worker = AgentPi("writer", "model", "high")
+  let answer: int = worker.ask("calculate the total")
+  print answer

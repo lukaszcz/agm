@@ -73,11 +73,14 @@ from agm.agl.scope.imports import (
     try_resolve_qualified_member,
 )
 from agm.agl.scope.symbols import (
+    BUILTIN_CALL_DISPLAY_NAMES,
     BUILTIN_CALL_NAMES,
+    BUILTIN_TYPE_STATIC_OWNER_PATHS,
     AglScopeError,
     BinderKind,
     BindingRef,
     BuiltinKind,
+    BuiltinStaticKind,
     ConstructorRef,
     DeclarationKey,
     ImportedUseContribution,
@@ -89,8 +92,10 @@ from agm.agl.scope.symbols import (
     ScopePath,
     SlotCandidate,
     alias_denotes_constructible_type,
+    builtin_type_static_kind,
     duplicate_binder_message,
     immutable_binder_phrase,
+    is_builtin_type_static_owner,
 )
 from agm.agl.scope.symbols import import_item_path as _item_path
 from agm.agl.scope.symbols import to_bare_atom as _bare_atom
@@ -104,6 +109,7 @@ from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     COMPATIBILITY_PRELUDE_TYPE_NAMES,
     EnumType,
+    ExceptionType,
     RecordType,
 )
 from agm.agl.syntax.advisories import SpacedQualifier
@@ -333,6 +339,7 @@ class _Resolver:
         | None = None,
         cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef]
         | None = None,
+        builtin_static_decl_node_ids: frozenset[int] = frozenset(),
         referenced_member_constructor_refs: Mapping[
             tuple[ModuleId, int], tuple[ConstructorRef, ...]
         ]
@@ -365,6 +372,7 @@ class _Resolver:
         self._cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef] = (
             cross_module_constructor_refs if cross_module_constructor_refs is not None else {}
         )
+        self._builtin_static_decl_node_ids = builtin_static_decl_node_ids
         self._referenced_member_constructor_refs = (
             referenced_member_constructor_refs
             if referenced_member_constructor_refs is not None
@@ -447,6 +455,7 @@ class _Resolver:
 
         self._resolution: dict[int, BindingRef] = {}
         self._builtin_calls: dict[int, BuiltinKind] = {}
+        self._builtin_static_calls: dict[int, BuiltinStaticKind] = {}
         self._use_targets: dict[int, ResolvedUseTarget] = {}
         self._superseded_use_targets: set[ResolvedUseTarget] = set()
         self._current_use_declaration_ids: set[int] = set()
@@ -668,6 +677,7 @@ class _Resolver:
             program=program,
             resolution=self._resolution,
             builtin_calls=self._builtin_calls,
+            builtin_static_calls=self._builtin_static_calls,
             root_scope=root,
             declarations=dict(self._declarations),
             scope_nodes=dict(self._scope_nodes),
@@ -1222,7 +1232,7 @@ class _Resolver:
                             ),
                         )
             else:
-                assert isinstance(type_val, RecordType)
+                assert isinstance(type_val, (RecordType, ExceptionType))
                 self._add_constructor_candidate(
                     type_name,
                     self._canonical_constructor_ref(
@@ -3080,12 +3090,14 @@ class _Resolver:
             self._record_varref_binding(node, ref)
             return
         if self._resolve_local_scope_member(node):
+            self._raise_unrecognized_builtin_static(node)
             self._reject_builtin_value_ref(
                 node, self._resolution.get(node.node_id), is_call_target=is_call_target
             )
             return
         if node.qualifier is not None:
             self._resolve_qualified_chain(node)
+            self._raise_unrecognized_builtin_static(node)
             self._reject_builtin_value_ref(
                 node, self._resolution.get(node.node_id), is_call_target=is_call_target
             )
@@ -3125,6 +3137,56 @@ class _Resolver:
             candidates=self._regional_constructor_candidates(node.name),
         )
 
+    def _qualifier_denotes_builtin_static_owner(self, node: VarRef) -> bool:
+        """Return whether the resolved qualifier is a host static's nominal owner."""
+        if node.qualifier is None:
+            return False
+        chain = node.qualifier
+        relative_path = tuple(segment.name for segment in chain.segments)
+        if self._validate_local_scope_chain(chain) is not None:
+            return False
+        if qualifier_candidates(self._import_env, relative_path, anchored=chain.anchored):
+            return False
+        return self._denotes_builtin_static_owner(relative_path)
+
+    def _denotes_builtin_static_owner(self, relative_path: ScopePath) -> bool:
+        """Return whether *relative_path* names a live prelude built-in static owner."""
+        return relative_path in BUILTIN_TYPE_STATIC_OWNER_PATHS and bool(
+            self._builtin_static_decl_node_ids
+        )
+
+    def _builtin_static_kind(self, ref: BindingRef | None) -> BuiltinStaticKind | None:
+        """Return the static kind attached to its resolved prelude owner."""
+        if ref is None or not ref.is_builtin:
+            return None
+        kind = builtin_type_static_kind(ref.module_id, ref.scope_path, ref.name)
+        if kind is None or ref.decl_node_id not in self._builtin_static_decl_node_ids:
+            return None
+        return kind
+
+    def _is_unrecognized_builtin_static(self, node: VarRef) -> bool:
+        """Return whether a qualified prelude owner rejected an unknown static."""
+        constructor = self._constructor_refs.get(node.node_id)
+        if constructor is None:
+            return False
+        owner_path = (*constructor.owner_path, constructor.owner_name)
+        return is_builtin_type_static_owner(constructor.owner_module_id, owner_path)
+
+    def _raise_unrecognized_builtin_static(self, node: VarRef) -> None:
+        """Raise when a resolved prelude owner does not declare the requested static."""
+        if self._is_unrecognized_builtin_static(node):
+            raise self._unknown_static_error(node)
+
+    @staticmethod
+    def _unknown_static_error(node: VarRef) -> AglScopeError:
+        """Build the diagnostic for a prelude owner that lacks the requested static."""
+        assert node.qualifier is not None
+        owner = node.qualifier.render()
+        return AglScopeError(
+            f"Unknown static '{owner}::{node.name}' on prelude type '{owner}'.",
+            span=node.span,
+        )
+
     def _reject_builtin_value_ref(
         self, node: VarRef, ref: BindingRef | None, *, is_call_target: bool
     ) -> None:
@@ -3138,6 +3200,12 @@ class _Resolver:
         built-in's spelling, so declaration provenance rather than the
         reference name distinguishes the host implementation.
         """
+        static_kind = self._builtin_static_kind(ref)
+        if not is_call_target and static_kind is not None:
+            static_name = BUILTIN_CALL_DISPLAY_NAMES[static_kind]
+            raise AglScopeError(
+                f"Built-in static '{static_name}' cannot be used as a value.", span=node.span
+            )
         if (
             not is_call_target
             and self._is_builtin_function_ref(ref)
@@ -3340,11 +3408,13 @@ class _Resolver:
                 is not None
             )
             known_segment = any(relative_path[0] in scope_path for scope_path in self._scope_nodes)
+            is_prelude_static_owner = self._denotes_builtin_static_owner(relative_path)
             if (chain.anchor is QualifierAnchor.CURRENT_MODULE and len(chain.segments) > 1) or (
                 known_segment
                 and not has_module_route
                 and not has_leading_route
                 and not has_opened_member
+                and not is_prelude_static_owner
             ):
                 raise AglScopeError(
                     f"Unknown scope path '{'::'.join(relative_path)}'.", span=chain.span
@@ -4117,9 +4187,17 @@ class _Resolver:
         """
         callee = node.callee
         if isinstance(callee, VarRef):
-            self._resolve_varref(callee, is_call_target=True)
+            try:
+                self._resolve_varref(callee, is_call_target=True)
+            except AglScopeError:
+                if not self._qualifier_denotes_builtin_static_owner(callee):
+                    raise
+                raise self._unknown_static_error(callee) from None
             ref = self._resolution.get(callee.node_id)
-            if ref is not None and self._is_builtin_function_ref(ref):
+            static_kind = self._builtin_static_kind(ref)
+            if static_kind is not None:
+                self._builtin_static_calls[node.node_id] = static_kind
+            elif ref is not None and self._is_builtin_function_ref(ref):
                 kind = _BUILTIN_CALL_NAMES.get(ref.name)
                 if kind is not None:
                     self._builtin_calls[node.node_id] = kind

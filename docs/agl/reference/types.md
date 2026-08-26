@@ -387,6 +387,48 @@ record AgentRequest
 `previous_error` is `None` because it constructs only the first-attempt
 request.
 
+### `SessionTransport`
+
+The transport enum has two members: `Cli` for command-line continuation and
+`Rpc` for a persistent RPC process. When transport selection is omitted,
+`AgentPi` defaults to `Rpc` and other agents default to `Cli`.
+
+### `Session`
+
+`Session` is an opaque, host-created handle for a continuing agent conversation:
+
+```text
+record Session
+  id:        text
+  agent:     Agent
+  transport: SessionTransport
+```
+
+Create one with `Session::open(agent, transport = None, name = "")`, or obtain
+the lazy default conversation with `Session::default()`. Its call-only methods
+are `ask`, `compact`, `reset`, `fork`, `stats`, `set-name`, and `close`; backend
+support for optional lifecycle operations varies. See [Agent calls](agent-calls.md#sessions).
+
+Source cannot invoke the `Session` constructor. A `Session`, or a nominal or
+container value that transitively contains one, is opaque non-data: it cannot
+be compared for equality or converted to `json`.
+
+### `SessionStats`
+
+`Session::stats()` returns host-reported usage:
+
+```text
+record SessionStats
+  input-tokens:    int
+  output-tokens:   int
+  cost:            decimal
+  context-percent: decimal
+```
+
+Unlike `Session`, this record is ordinary comparable and JSON-convertible data.
+Session lifecycle failures raise `SessionError`; see
+[Exceptions](exceptions.md).
+
 ## Members of nominal types
 
 A method is a member of a record, enum, or exception's nominal type. It is
@@ -856,7 +898,7 @@ Typing is exact nominal matching with these implicit coercions:
    cast (see [Casts and convertibility](#casts-and-convertibility) below).
 5. Equality (`==`, `!=`) and ordering comparisons require both operands to
    have the *same* type after rule 1. Operands whose type is, or transitively
-   contains, a function or `unit` value are a static error — see
+   contains, a function, `unit`, or opaque `Session` value are a static error — see
    [Values and equality](#values-and-equality) below.
 6. All branches of a `case` expression must have the same type after rule 1.
 
@@ -927,8 +969,8 @@ are all static errors — booleans never convert to or from numbers.
 
 ### Convertibility to `json`
 
-A type converts to `json` with `as json` iff no **non-data** type — `unit` or
-a function type — is reachable from it:
+A type converts to `json` with `as json` iff no **non-data** type — `unit`, a
+function type, or the opaque host-created `Session` — is reachable from it:
 
 - the scalars `text`, `json`, `bool`, `int`, `decimal` always convert;
 - `array[E]`/`dict[text, V]` converts iff `E`/`V` does;
@@ -937,7 +979,7 @@ a function type — is reachable from it:
   exception, through its `extends` ancestors and its catchable descendants,
   since a value statically typed as a base may hold a descendant at
   runtime);
-- `unit` and function values never convert.
+- `unit`, function, and `Session` values never convert.
 
 This makes `array[R] as json`, `dict[text, R] as json`, nested containers
 (`array[array[R]]`, `dict[text, array[R]]`), and a recursive declaration such

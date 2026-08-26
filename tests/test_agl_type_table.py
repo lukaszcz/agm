@@ -2018,6 +2018,11 @@ class TestBuiltinSeeding:
             if isinstance(typ, RecordType):
                 handle = RecordType(name=name, module_id=STD_CORE_ID, decl_id=typedef.decl_node_id)
                 assert dict(table.record_fields(handle)) == dict(expected.fields)
+            elif isinstance(typ, ExceptionType):
+                handle = ExceptionType(
+                    name=name, module_id=STD_CORE_ID, decl_id=typedef.decl_node_id
+                )
+                assert table.exception_def(handle) == expected
             else:
                 handle = EnumType(name=name, module_id=STD_CORE_ID, decl_id=typedef.decl_node_id)
                 result = _enum_fields(table, handle)
@@ -2605,6 +2610,12 @@ class TestCastClassification:
 
 
 class TestIsJsonConvertible:
+    def test_host_minted_session_does_not_convert(self) -> None:
+        session = BUILTIN_PRELUDE_TYPES["Session"]
+        assert isinstance(session, RecordType)
+
+        assert is_json_convertible(session, create_seeded_type_table()) is False
+
     def test_scalars_convert(self) -> None:
         table = TypeTable()
         for scalar in (TextType(), JsonType(), BoolType(), IntType(), DecimalType()):

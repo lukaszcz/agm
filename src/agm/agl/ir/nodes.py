@@ -48,6 +48,10 @@ __all__ = [
     "IrArith",
     "IrAsk",
     "IrAskRequest",
+    "IrSessionAsk",
+    "IrSessionDefault",
+    "IrSessionOp",
+    "IrSessionOpen",
     "IrAssign",
     "IrExec",
     "IrBind",
@@ -1074,12 +1078,78 @@ class IrAsk:
 
 
 @dataclass(frozen=True, slots=True)
-class IrAskRequest:
-    """IR host-op: ask-request(prompt, agent:) builtin call.
+class IrSessionOpen:
+    """IR host-op: open a named or anonymous session for an agent.
 
-    Builds the AgentRequest record value WITHOUT dispatching the agent. Only
-    ``agent`` and ``prompt`` are evaluated; the record's contract fields are
-    fixed constants describing a text request. So, unlike ``IrAsk`` and
+    ``transport`` is absent when the source omits its optional transport
+    argument. ``name`` always holds an expression, including the empty-text
+    default, so the host receives a concrete session name.
+    """
+
+    location: Location
+    agent: "IrExpr"
+    transport: "IrExpr | None"
+    name: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrSessionDefault:
+    """IR host-op: obtain the lazily managed default session.
+
+    Evaluation reads the current ``default-agent`` register; the host creates
+    its default session from that agent once, then returns the same snapshot.
+    """
+
+    location: Location
+
+
+@dataclass(frozen=True, slots=True)
+class IrSessionAsk:
+    """IR host-op: send a prompt through an existing session.
+
+    Free ``ask`` supplies an :class:`IrSessionDefault` session expression;
+    explicit ``Session::ask`` supplies its receiver. The response contract and
+    retry count have the same meaning as on :class:`IrAsk`; the session
+    supplies the agent selection.
+    """
+
+    location: Location
+    session: "IrExpr"
+    prompt: "IrExpr"
+    contract_id: "ContractId"
+    max_attempts: int
+
+
+class IrSessionOpKind(enum.StrEnum):
+    """The non-ask lifecycle operations an :class:`IrSessionOp` can carry."""
+
+    COMPACT = "compact"
+    RESET = "reset"
+    FORK = "fork"
+    STATS = "stats"
+    SET_NAME = "set-name"
+    CLOSE = "close"
+
+
+@dataclass(frozen=True, slots=True)
+class IrSessionOp:
+    """IR host-op for a non-ask session operation.
+
+    ``arg`` is optional only for ``compact`` and required for ``set-name``.
+    """
+
+    location: Location
+    session: "IrExpr"
+    op: IrSessionOpKind
+    arg: "IrExpr | None" = None
+
+
+@dataclass(frozen=True, slots=True)
+class IrAskRequest:
+    """IR host-op: ``ask-request(prompt)`` builtin call.
+
+    Builds the agent-independent AgentRequest record value. The record's
+    contract fields are fixed constants describing a text request. Unlike ``IrAsk`` and
     ``IrExec``, this node carries no contract id and no retry count — there is
     nothing to dispatch and no output to parse.
     """
@@ -1196,6 +1266,10 @@ IrExpr = (
     | IrCopyValue
     | IrAsk
     | IrAskRequest
+    | IrSessionOpen
+    | IrSessionDefault
+    | IrSessionAsk
+    | IrSessionOp
     | IrExec
     | IrBuiltinLoad
     | IrBuiltinStore

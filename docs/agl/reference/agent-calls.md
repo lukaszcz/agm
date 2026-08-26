@@ -10,14 +10,14 @@ value that should receive the request:
 <!-- agl-check: fragment -->
 ```agl
 ask "Summarize %{topic}"
-ask("Review this artifact:\n%{artifact}", agent = reviewer)
-ask("Review %{artifact}", agent = reviewer, on_parse_error = Retry(n = 2))
+reviewer.ask("Review this artifact:\n%{artifact}")
+reviewer.ask("Review %{artifact}", on_parse_error = Retry(n = 2))
 reviewer.ask::[Review]("Review %{artifact}", on_parse_error = Retry(n = 2))
 ```
 
 ## `ask` — the agent call function
 
-`ask` is a built-in function with the following declared-name signature:
+`ask` is a built-in function with the following effective call signature:
 
 ```text
 ask(prompt: text, agent: Agent = std/config::default-agent,
@@ -36,16 +36,36 @@ Agent::ask(self, prompt: text, format: text = "",
            on_parse_error: ParsePolicy = ParsePolicy::Abort) -> T
 ```
 
-`reviewer.ask(...)` is equivalent to `ask(..., agent = reviewer)`: its receiver
-supplies the agent, so the method form has no `agent` named argument. It supports
-contextual and explicit `::[T]` target types, named parse options, and defaults
-just like the direct form. Built-in methods are call-only; `let f = reviewer.ask`
-and `let f = reviewer.ask::[text]` are static errors.
+Free `ask` uses the snapshot default `Session` when `agent` is omitted; its
+agent is selected from `std/config::default-agent`. Supplying the named `agent`
+argument instead selects an explicit agent for that one call, as does the
+`reviewer.ask(...)` receiver form. Explicit-agent calls open a short-lived
+session for the call and all of its parse retries, then close it.
+Both forms support contextual and explicit `::[T]` target types and named parse
+options. Built-in methods are call-only; `let f = reviewer.ask` and
+`let f = reviewer.ask::[text]` are static errors.
 
 `ask` is a **contextual keyword**: it cannot be declared with `let`, `var`,
 or `param`; it may not be bound as a function value (`let f = ask` is a static error, because `ask`'s type is
 not a fully expressible monomorphic type). It remains legal as a
 record/enum **field name**.
+
+### `Session::ask`
+
+`Session` also has the call-only method form:
+
+```text
+Session::ask[T](self, prompt: text, format: text = "",
+                strict_json: bool = false,
+                on_parse_error: ParsePolicy = ParsePolicy::Abort) -> T
+```
+
+It sends the prompt through that live session, so the session's stored agent
+and transport select the backend; it has no `agent` argument. It uses the same
+contextual or explicit `::[T]` target, concrete-target restriction, parse
+options, and output-contract checking as `ask`. `session.ask!` has the same
+raw-tail spelling rules as `reviewer.ask!`. Parse retries remain in this same
+conversation.
 
 ### Single-argument sugar
 
@@ -61,7 +81,7 @@ With named arguments, parentheses are required:
 
 <!-- agl-check: fragment -->
 ```agl
-let r: Review = ask("Review %{artifact}", agent = reviewer)
+let r: Review = reviewer.ask("Review %{artifact}")
 ```
 
 ## Raw-tail `ask!`
@@ -88,11 +108,10 @@ program def main() -> unit =
 Raw-tail prompt text is verbatim except for `%{expr}` interpolation and
 trailing spaces and tabs in an inline prompt; `\%{` writes a literal `%{`.
 A raw call needs a nonempty inline prompt or a block with at least one nonblank
-line. A bare `ask!` uses `std/config::default-agent` and the ordinary
-call defaults; `reviewer.ask!` uses its receiver. Use `ask(...)` or
-`reviewer.ask(...)` when setting `format`, `strict_json`, or `on_parse_error`;
-the parenthesized forms are also available outside a raw-tail line-final
-position.
+line. A bare `ask!` uses the default session and `reviewer.ask!` opens the
+short-lived session for its receiver. Use `ask(...)` or `reviewer.ask(...)`
+when setting `format`, `strict_json`, or `on_parse_error`; the parenthesized
+forms are also available outside a raw-tail line-final position.
 
 ## Agents as values
 
@@ -104,20 +123,21 @@ program def main() -> unit =
   let reviewer: Agent = AgentClaude("sonnet", "medium")
   let local = AgentCodex("o3", "high")
   let pi = AgentPi("openai", "gpt", "low")
-  let review: text = ask("Review this artifact", agent = reviewer)
+  let review: text = reviewer.ask("Review this artifact")
   let same_review: text = reviewer.ask("Review this artifact")
 ```
 
-Each member record builds its own argv at dispatch. `AgentCommand` accepts a
+Each member record selects its backend invocation. `AgentCommand` accepts a
 shell-like command string; the provider members carry their model and thinking
-settings:
+settings. An explicit `agent.ask(...)` uses an ephemeral session for the complete
+parse-retry loop, so its initial invocation is:
 
-| Member | Invocation |
+| Member | Initial invocation for an explicit ask |
 | --- | --- |
-| `AgentCommand(command)` | the supplied command, with the normal prompt-file handling |
-| `AgentClaude(model, thinking)` | `claude -p --model <model> --effort <thinking>` |
-| `AgentCodex(model, thinking)` | `codex exec --model <model> -c model_reasoning_effort=<thinking> -` (prompt on stdin) |
-| `AgentPi(provider, model, thinking)` | `pi -p --provider <provider> --model <model> --thinking <thinking>` |
+| `AgentCommand(command)` | the supplied command, with the normal prompt-file handling; retries require `%{SESSION_ID}` |
+| `AgentClaude(model, thinking)` | `claude -p --session-id <id> --model <model> --effort <thinking>` |
+| `AgentCodex(model, thinking)` | `codex exec --json --model <model> -c model_reasoning_effort=<thinking> -` (prompt on stdin) |
+| `AgentPi(provider, model, thinking)` | `pi --mode rpc --provider <provider> --model <model> --thinking <thinking>` |
 
 An empty provider, model, or thinking field omits its flag. `Agent` values are
 ordinary enum data: they can be stored, passed to functions, rendered,
@@ -132,10 +152,12 @@ that matters.
 
 ### The default agent
 
-When `agent` is omitted, `ask` evaluates the defaulted
-`std/config::default-agent` parameter. The standard library supplies a default;
-CLI `--agent` and `[exec] default-agent` seeds override it, and a source
-write takes effect from its program point onward:
+Free `ask` uses `Session::default`, which lazily opens one session and snapshots
+the current `std/config::default-agent` when it is first used. Every later free
+`ask` in that run or REPL session uses the same conversation and agent; a later
+`default-agent` write does not switch it. The standard library supplies a
+default; CLI `--agent` and `[exec] default-agent` seeds override it, and a
+source write takes effect before that snapshot is created:
 
 ```agl
 import std/config
@@ -144,6 +166,54 @@ program def main() -> unit =
   std/config::default-agent := AgentClaude("sonnet", "medium")
   let answer: text = ask("Summarize")
 ```
+
+## Sessions
+
+Open an explicit conversation when several calls or lifecycle operations must
+share it:
+
+<!-- agl-check: fragment -->
+```agl
+let session = Session::open(AgentClaude("sonnet", "medium"), name = "review")
+let first: text = session.ask("Read the artifact.")
+let second: text = session.ask("Now list the risks.")
+let branch = session.fork()
+session.close()
+branch.close()
+```
+
+`Session::open(agent, transport = None, name = "")` opens a session;
+`Session::default()` returns the same lazy default session used by free `ask`.
+`compact(instructions = "")`, `reset()`, `fork()`, `stats()`,
+`set-name(name)`, and `close()` are session operations. `reset` keeps the
+AgL session value but starts a fresh backend conversation; `fork` returns a
+new session whose history begins from the parent; `close` is idempotent, but
+later use of that session raises `SessionError`. Backend support for the other
+operations is runtime-dependent; an unsupported operation raises
+`SessionError`.
+
+When `transport` is omitted or `None`, `AgentPi` uses `Rpc`; every other
+agent uses `Cli`. `Rpc` is supported only for `AgentPi`; selecting it for
+another agent raises `SessionError` while opening. The CLI backends use their
+respective continuation conventions, while Pi RPC keeps one `pi --mode rpc`
+process for the session.
+
+| Agent and transport | Native optional operations | Notes |
+| --- | --- | --- |
+| `AgentCommand`, `Cli` | none | `ask`, `reset`, and `close` work. A continuing session requires an unescaped `%{SESSION_ID}` in the command. |
+| `AgentClaude`, `Cli` | `compact`, `fork` | `name` is accepted when opened; later `set-name` and `stats` are unsupported. |
+| `AgentCodex`, `Cli` | none | The first ask starts a thread; later asks resume it. |
+| `AgentPi`, `Cli` | `fork` | `name` is accepted when opened; later `compact`, `set-name`, and `stats` are unsupported. |
+| `AgentPi`, `Rpc` | `compact`, `fork`, `set-name`, `stats` | Persistent Pi RPC process; this is the default for `AgentPi`. |
+
+Every row supports `ask`, `reset`, and `close`. A nonempty `name` passed to
+`Session::open` is rejected for command and Codex CLI sessions. An explicit `Agent::ask` has
+the same transport default, but its session lasts only for that call and its
+retries; use `Session::open` to keep the conversation after the call. A single-attempt
+`Agent::ask` sends exactly one prompt, so its session never has to be continued: an
+`AgentCommand` does not require `%{SESSION_ID}` and the other CLI backends run their plain
+prompt command. Enabling corrective retries makes every attempt share one conversation, so
+an `AgentCommand` then requires the placeholder.
 
 ## Target types: types as contracts
 
@@ -159,9 +229,9 @@ expected types propagate ([Expressions](expressions.md)):
 <!-- agl-check: fragment -->
 ```agl
 let x = ask "A"                          # target: text
-let review: Review = ask("…", agent = reviewer)   # target: Review
-var proposal: Turn = ask("…", agent = researcher)
-proposal := ask("Revise.", agent = researcher)  # target: Turn
+let review: Review = reviewer.ask("…")   # target: Review
+var proposal: Turn = researcher.ask("…")
+proposal := researcher.ask("Revise.")  # target: Turn
 let completed: unit = ask("Perform this task")  # response ignored
 ```
 
@@ -231,7 +301,7 @@ enum Option[T]
   | none
   | some(value: T)
 
-let n: Option[int] = ask("Pick a number, or nothing.", agent = picker)
+let n: Option[int] = picker.ask("Pick a number, or nothing.")
 ```
 
 ### Recursive target types
@@ -247,7 +317,7 @@ enum Tree
   | Leaf
   | Node(value: int, left: Tree, right: Tree)
 
-let t: Tree = ask("Build a tree.", agent = builder)
+let t: Tree = builder.ask("Build a tree.")
 ```
 
 The one restriction is on the type's **shape**, not on recursion itself: the
@@ -261,16 +331,6 @@ other position, only its JSON Schema is unbounded. See
 
 ## Named parameters
 
-### `agent`
-
-Selects the agent. The value must have type `Agent`. When omitted, the
-defaulted `std/config::default-agent` value applies:
-
-<!-- agl-check: fragment -->
-```agl
-ask("Plan the next step.", agent = planner)
-```
-
 ### `format`
 
 Selects the output codec by name, as a `text` value. Normally unnecessary:
@@ -281,7 +341,7 @@ that supports the call's target type; both are checked statically.
 
 <!-- agl-check: fragment -->
 ```agl
-let r: Review = ask("Review %{a}", agent = reviewer, format = "json")
+let r: Review = reviewer.ask("Review %{a}", format = "json")
 ```
 
 ### `strict_json`
@@ -311,9 +371,8 @@ enum ParsePolicy
 
 <!-- agl-check: fragment -->
 ```agl
-let r: Review = ask(
+let r: Review = reviewer.ask(
   "Review %{artifact}",
-  agent = reviewer,
   on_parse_error = Retry(n = 2)
 )
 ```
@@ -327,8 +386,12 @@ The `prompt` argument is a template rendered using the uniform interpolation
 rules ([Strings and interpolation](strings-and-interpolation.md)). The
 rendered prompt is delivered to the agent verbatim, together with the
 contract's format instructions; the host must not perform further template
-or environment-variable expansion over it. Retries resend the same rendered
-prompt with corrective feedback appended.
+or environment-variable expansion over it. The prompt is delivered through its
+session. Corrective feedback includes a
+category-based validation summary, never validation paths, keys, or other
+response-derived details. Retries stay in their existing conversation and send
+only that summary plus a JSON-format reminder; they never resend the original
+prompt or invalid response.
 
 ## The JSON wire format
 
@@ -447,25 +510,29 @@ exactly one bare JSON value with nothing but surrounding whitespace.
 
 ## Parse policies and retries
 
-For a call with `on_parse_error = Retry(n = N)`:
+For a call with `on_parse_error = Retry(n = N)`, attempt 1 sends the rendered
+prompt plus its output-format instructions. The output is then parsed and
+validated. Each failed parse or validation sends at most `N` corrective
+follow-ups in the **same session** (`N + 1` attempts total). A follow-up contains
+only a category-based validation summary and a reminder to return valid JSON;
+it does not repeat the original prompt, output contract, or invalid response.
+The summary never exposes response-derived paths, keys, or values. Success
+returns the typed value; exhausting the attempts raises **`AgentParseError`**.
 
-1. The agent is called with the rendered prompt and the output contract.
-2. The raw output is parsed and validated.
-3. On success, the typed value is the call's result.
-4. On failure, a **corrective retry** is dispatched with the same prompt and
-   contract plus the previous invalid output and the structured validation
-   errors.
-5. At most `N` retries are made (`N + 1` total attempts).
-6. If every attempt fails, **`AgentParseError`** is raised.
+With `Abort` (the default), the first parse or validation failure raises
+`AgentParseError` directly. This retry rule applies equally to the default,
+explicit-agent, and explicit-session forms.
 
-With `Abort` (the default), the first failure raises `AgentParseError` directly.
+## Transport and session failures
 
-## Transport failures
-
-A failure to *run* the agent at all — the agent process cannot be spawned,
-exits nonzero, or times out — is distinct from a parse failure. It raises
-**`AgentCallError`**, is catchable in-language, and is not eligible for
-`on_parse_error` retries.
+A failed `ask` transport — for example a process spawn failure, nonzero exit,
+idle timeout, or a failed Pi RPC prompt — raises **`AgentCallError`**. It is
+catchable and is never retried by `on_parse_error`. **`SessionError`** instead
+reports a session lifecycle, capability, or non-ask backend failure: opening or
+using a closed session, an unsupported operation or transport, and failed
+compaction/fork/reset/name/stats operations. `SessionError.operation` names the
+operation. `AgentParseError` is only for output that arrived but could not meet
+the requested structured contract.
 
 ## Text targets
 
@@ -480,34 +547,31 @@ Each dispatch delivers to the host agent:
 - the fully rendered prompt;
 - the output contract: target type, format instructions, and derived JSON
   Schema;
-- the 0-based attempt number, and on retries the previous invalid output and
-  its validation errors.
+- the 0-based attempt number; retries include only a category-based validation
+  summary and a format reminder. The summary excludes response-derived
+  validation paths, keys, and values.
 
 See [Host environment](host-environment.md).
 
 ## `ask-request` — the request builder
 
-`ask-request` is the side-effect-free twin of `ask`: it builds the
-`AgentRequest` that a text-target `ask` call would dispatch on its first
-attempt, **without invoking an agent**. Its direct and method forms are:
+`ask-request` is the side-effect-free twin of `ask`: it builds a first-attempt
+text `AgentRequest` **without invoking an agent**. Its direct form is:
 
 ```text
 ask-request(prompt: text, agent: Agent = std/config::default-agent) -> AgentRequest
-Agent::ask-request(self, prompt: text) -> AgentRequest
 ```
 
-The direct form accepts an explicit `agent`; the method receiver supplies it.
-Neither form accepts output-parsing options or type arguments. Both only
-assemble the selected `Agent` value and its text-output contract: they never
-dispatch, retry, parse, or emit trace events.
+The optional named `agent` is captured in the request; `reviewer.ask-request(...)`
+captures its receiver instead. The builder accepts no output-parsing options or
+type arguments. It only assembles the text-output request contract; it never
+dispatches, retries, parses, or emits trace events.
 
 <!-- agl-check: fragment -->
 ```agl
 let r = ask-request("Summarize %{topic}")
-let review_request = ask-request("Review %{artifact}", agent = reviewer)
-let same_request = reviewer.ask-request("Review %{artifact}")
 ```
 
 The result is an `AgentRequest` record (see [Types](types.md)) with `attempt`
-set to `0`, `previous_error` set to `None`, and its selected `Agent` value and
-text-output contract recorded for inspection.
+set to `0`, `previous_error` set to `None`, and its fixed text-output contract
+recorded for inspection.

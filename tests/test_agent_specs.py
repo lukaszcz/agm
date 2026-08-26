@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from agm.agent.runner import PromptDelivery
 from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi, AgentSpec
 from agm.agl.runtime.agents import decode_agent_value
 from agm.agl.semantics.values import IntValue, RecordValue
@@ -122,7 +123,7 @@ def test_prepare_rendered_prompt_run_records_the_stdin_delivery_flag() -> None:
             runner=AgentCodex("o3", "high").argv(),
             temp_files=temp_files,
             env={},
-            prompt_via_stdin=True,
+            delivery=PromptDelivery.STDIN,
         )
     finally:
         cleanup_temp_files(temp_files)
@@ -165,7 +166,7 @@ def test_stdin_delivered_run_sends_prompt_as_stdin_and_appends_no_target(
             runner=AgentCodex("o3", "high").argv(),
             temp_files=temp_files,
             env={},
-            prompt_via_stdin=True,
+            delivery=PromptDelivery.STDIN,
         )
         run_prepared_prompt_result(prepared, idle_timeout=None)
     finally:
@@ -224,7 +225,7 @@ def test_stdin_delivered_prompt_does_not_read_the_prompt_back_off_disk(
             runner=AgentCodex("o3", "high").argv(),
             temp_files=temp_files,
             env={},
-            prompt_via_stdin=True,
+            delivery=PromptDelivery.STDIN,
         )
         # Nothing needs to read this delivery mode's prompt back off disk, so
         # no temp file should be created for it in the first place.
@@ -365,3 +366,124 @@ def test_prepared_runner_maps_process_capture_result(
 
     assert result.spawn_error == spawn_error
     assert result.timed_out is timed_out
+
+
+@pytest.mark.parametrize(
+    ("delivery", "argv", "stdin_prompt"),
+    [
+        (PromptDelivery.FILE, ["runner", "--prepared-file"], None),
+        (PromptDelivery.STDIN, ["runner", "--prepared-stdin", "-"], "stdin prompt"),
+        (PromptDelivery.LITERAL, ["runner", "--prepared-literal", "literal prompt"], None),
+        (PromptDelivery.NONE, ["runner", "--prepared-none"], None),
+    ],
+)
+def test_run_prepared_prompt_honors_prepared_argv_and_stdin_in_normal_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    delivery: PromptDelivery,
+    argv: list[str],
+    stdin_prompt: str | None,
+) -> None:
+    from agm.agent.runner import PreparedPromptRun, run_prepared_prompt
+
+    captured: dict[str, object] = {}
+
+    def fake_run_capture(command: list[str], **kwargs: object) -> tuple[int, str, str]:
+        captured["command"] = command
+        captured["stdin_text"] = kwargs.get("stdin_text")
+        return 0, "output", ""
+
+    monkeypatch.setattr("agm.agent.runner.run_capture", fake_run_capture)
+    prepared = PreparedPromptRun(
+        command=["runner", "--legacy"],
+        effective_file=Path("unused.md"),
+        env={},
+        temp_files=[],
+        stdin_prompt=stdin_prompt,
+        argv=argv,
+        delivery=delivery,
+    )
+
+    assert run_prepared_prompt(prepared) == "output"
+    expected_stdin = "" if delivery is PromptDelivery.NONE else stdin_prompt
+    assert captured == {"command": argv, "stdin_text": expected_stdin}
+
+
+def test_prepared_result_closes_stdin_for_no_prompt_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agm.agent.runner import PreparedPromptRun, run_prepared_prompt_result
+    from agm.core.process import ProcessCaptureResult
+
+    captured: dict[str, object] = {}
+
+    def fake_run_capture_result(argv: list[str], **kwargs: object) -> ProcessCaptureResult:
+        captured["argv"] = argv
+        captured["stdin_text"] = kwargs.get("stdin_text")
+        return ProcessCaptureResult(0, "", "", 0.0, False, None, None)
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+    prepared = PreparedPromptRun(
+        command=["runner"],
+        effective_file=Path("unused.md"),
+        env={},
+        temp_files=[],
+        argv=["runner", "--fork"],
+        delivery=PromptDelivery.NONE,
+    )
+
+    run_prepared_prompt_result(prepared, idle_timeout=None)
+
+    assert captured == {"argv": ["runner", "--fork"], "stdin_text": ""}
+
+
+@pytest.mark.parametrize(
+    ("delivery", "argv", "stdin_prompt", "formatted_argv"),
+    [
+        (PromptDelivery.FILE, ["runner", "--prepared-file"], None, "runner --prepared-file"),
+        (
+            PromptDelivery.STDIN,
+            ["runner", "--prepared-stdin", "-"],
+            "stdin prompt",
+            "runner --prepared-stdin -",
+        ),
+        (
+            PromptDelivery.LITERAL,
+            ["runner", "--prepared-literal", "literal prompt"],
+            None,
+            "runner --prepared-literal 'literal prompt'",
+        ),
+        (PromptDelivery.NONE, ["runner", "--prepared-none"], None, "runner --prepared-none"),
+    ],
+)
+def test_run_prepared_prompt_honors_prepared_argv_in_dry_run(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    delivery: PromptDelivery,
+    argv: list[str],
+    stdin_prompt: str | None,
+    formatted_argv: str,
+) -> None:
+    from agm.agent.runner import PreparedPromptRun, run_prepared_prompt
+    from agm.core import dry_run
+
+    monkeypatch.setattr(
+        "agm.agent.runner.run_capture",
+        lambda *args, **kwargs: pytest.fail("dry run must not execute the command"),
+    )
+    prepared = PreparedPromptRun(
+        command=["runner", "--legacy"],
+        effective_file=Path("unused.md"),
+        env={},
+        temp_files=[],
+        stdin_prompt=stdin_prompt,
+        argv=argv,
+        delivery=delivery,
+    )
+
+    dry_run.set_enabled(True)
+    try:
+        assert run_prepared_prompt(prepared) == ""
+    finally:
+        dry_run.set_enabled(False)
+
+    assert capsys.readouterr().out == f"dry-run: command [agent]: {formatted_argv}\n"

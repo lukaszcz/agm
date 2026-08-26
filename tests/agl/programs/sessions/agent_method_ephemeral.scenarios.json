@@ -1,0 +1,69 @@
+{
+  "scenarios": [
+    {
+      "name": "agent_method_retries_follow_up_in_one_ephemeral_pi_rpc_session",
+      "runtime": {"session_host": true},
+      "agents": {"writer": ["not a number", "7"]},
+      "expect": {
+        "stdout": "7\n",
+        "calls": {"writer": 0},
+        "sessions": [
+          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true, "parent": null}
+        ],
+        "session_prompts": [
+          {"agent": "writer", "session": "session-1", "call": 0, "starts_with": "calculate the total"},
+          {
+            "agent": "writer",
+            "session": "session-1",
+            "call": 1,
+            "follow_up": {
+              "contains": ["Validation errors:", "Return only valid JSON matching the schema."],
+              "not_contains": ["calculate the total", "not a number"]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "agent_method_parse_exhaustion_closes_one_ephemeral_session",
+      "runtime": {"session_host": true},
+      "agents": {"writer": ["not a number", "still not a number"]},
+      "expect": {
+        "raises": {"type": "AgentParseError"},
+        "calls": {"writer": 0},
+        "sessions": [
+          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true, "parent": null}
+        ],
+        "session_prompts": [
+          {"agent": "writer", "session": "session-1", "call": 0, "starts_with": "calculate the total"},
+          {
+            "agent": "writer",
+            "session": "session-1",
+            "call": 1,
+            "follow_up": {"contains": ["Validation errors:"]}
+          }
+        ]
+      }
+    },
+    {
+      "name": "agent_method_transport_failure_closes_one_ephemeral_session",
+      "runtime": {"session_host": true},
+      "agents": {
+        "writer": {
+          "responses": [],
+          "session": {"ask": [{"cause": "timeout", "stderr_tail": "offline"}]}
+        }
+      },
+      "expect": {
+        "raises": {"type": "AgentCallError"},
+        "calls": {"writer": 0},
+        "sessions": [
+          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true, "parent": null}
+        ],
+        "session_prompts": [
+          {"agent": "writer", "session": "session-1", "call": 0, "starts_with": "calculate the total"}
+        ]
+      }
+    }
+  ]
+}

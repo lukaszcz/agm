@@ -1785,7 +1785,7 @@ class TestScopedBuiltinTypes:
         )
         assert r.resolved.program is not None
 
-    @pytest.mark.parametrize("method", ("ask", "ask-request"))
+    @pytest.mark.parametrize("method", ("ask",))
     def test_builtin_agent_method_with_explicit_type_args_cannot_be_a_value(
         self, method: str
     ) -> None:
@@ -2443,7 +2443,7 @@ class TestAsk:
         )
 
     def test_ask_with_explicit_agent(self) -> None:
-        r = accept_type('let reviewer = AgentCommand("reviewer")\nask("Q", agent = reviewer)')
+        r = accept_type('let reviewer = AgentCommand("reviewer")\nreviewer.ask("Q")')
         assert r.resolved.program is not None
 
     def test_ask_default_agent_is_available_without_a_host_capability(self) -> None:
@@ -2460,8 +2460,8 @@ class TestAsk:
         assert "prompt" in str(err).lower() or "argument" in str(err).lower()
 
     def test_ask_wrong_agent_type(self) -> None:
-        err = reject_type('let x = "not_agent"\nask("Q", agent = x)')
-        assert "agent" in str(err).lower()
+        err = reject_type('let x = "not_agent"\nx.ask("Q")')
+        assert "member access" in str(err).lower()
 
     def test_ask_with_json_codec(self) -> None:
         r = accept_type('let n: int = ask("Q", format = "json")\nn')
@@ -2612,15 +2612,11 @@ class TestAskRequest:
         assert selected is not None
         assert binding_type == selected.handle()
 
-    def test_with_explicit_agent(self) -> None:
-        r = accept_type(
-            'let reviewer = AgentCommand("reviewer")\nask-request("Q", agent = reviewer)'
-        )
-        assert r.resolved.program is not None
+    def test_accepts_agent_argument(self) -> None:
+        accept_type('let reviewer = AgentCommand("reviewer")\nask-request("Q", agent = reviewer)')
 
-    def test_wrong_agent_type_raises(self) -> None:
-        err = reject_type('let x = "no"\nask-request("Q", agent = x)')
-        assert "agent" in str(err).lower()
+    def test_accepts_agent_method(self) -> None:
+        accept_type('let reviewer = AgentCommand("reviewer")\nreviewer.ask-request("Q")')
 
     def test_no_prompt_raises(self) -> None:
         err = reject_type("ask-request()")
@@ -2711,7 +2707,7 @@ class TestBuiltinAgentMethodSelection:
     ordinary user-declared method of the same name must still behave as a plain
     method in every position, value and partial positions included."""
 
-    @pytest.mark.parametrize("method", ("ask", "ask-request"))
+    @pytest.mark.parametrize("method", ("ask",))
     @pytest.mark.parametrize(
         "use",
         (
@@ -2980,7 +2976,7 @@ class TestRawTailTypingParity:
     def test_ask_raw_payload_has_no_agent_slot(self) -> None:
         accept_type("ask! agent = reviewer", capabilities=no_agent_caps())
         accept_type(
-            'let reviewer = AgentCommand("reviewer")\nask("prompt", agent = reviewer)',
+            'let reviewer = AgentCommand("reviewer")\nreviewer.ask("prompt")',
             capabilities=no_agent_caps(),
         )
 
@@ -7358,27 +7354,21 @@ _PARSE_POLICY_VARIANTS_TC = "  | Abort\n  | Retry(n: int)\n"
 
 
 class TestHostContractBuiltinIdentity:
-    def test_scoped_agent_value_rejected_as_ask_request_agent_argument(self) -> None:
-        """A value of the program's own scoped ``Agent`` is an ordinary
-        static type mismatch against ``AgentRequest``'s canonical ``agent``
-        field type (only ``Agent`` is redeclared here, not ``AgentRequest``,
-        so that field keeps its canonical static type)."""
-        err = reject_type(
+    def test_scoped_agent_does_not_affect_ask_request(self) -> None:
+        result = accept_type(
             f"scope A\nbuiltin enum Agent\n{_AGENT_VARIANTS_TC}end A\n"
             'let g = A::Agent::AgentCommand("x")\n'
-            'ask-request("hi", agent = g)\n'
+            'ask-request("hi")\n'
         )
-        assert "A::Agent" in err.to_diagnostic().message
+        assert result.resolved.program is not None
 
-    def test_unrelated_type_still_rejected_as_agent_argument_with_a_scoped_agent_live(
-        self,
-    ) -> None:
-        err = reject_type(
+    def test_unrelated_type_does_not_affect_ask_request(self) -> None:
+        result = accept_type(
             f"scope A\nbuiltin enum Agent\n{_AGENT_VARIANTS_TC}end A\n"
             "enum NotAgent\n  | X\n"
-            'ask-request("hi", agent = NotAgent::X)\n'
+            'ask-request("hi")\n'
         )
-        assert "NotAgent" in err.to_diagnostic().message
+        assert result.resolved.program is not None
 
     def test_scoped_agent_request_result_type_names_the_scoped_declaration(self) -> None:
         r = accept_type(
@@ -7401,9 +7391,8 @@ class TestHostContractBuiltinIdentity:
             "  | None\n"
             "  | Some(value: T)\n"
             f"builtin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
-            "builtin def ask-request(prompt: text, "
-            'agent: Agent = AgentCommand(command = "noop")) -> AgentRequest\n'
-            'ask-request("hi", agent = AgentCommand(command = "noop"))\n',
+            "builtin def ask-request(prompt: text) -> AgentRequest\n"
+            'ask-request("hi")\n',
             default_stdlib=False,
         )
         assert "target_type" in err.to_diagnostic().message
@@ -7467,8 +7456,7 @@ class TestHostContractBuiltinIdentity:
             "scope A\n"
             f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
             f"builtin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
-            'builtin def ask-request(prompt: text, agent: Agent = AgentCommand(command = "x")) '
-            "-> AgentRequest\n"
+            "builtin def ask-request(prompt: text) -> AgentRequest\n"
             "end A\n()\n"
         )
         assert r.resolved.program is not None
@@ -7481,8 +7469,7 @@ class TestHostContractBuiltinIdentity:
             "scope A\n"
             f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
             f"builtin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
-            'builtin def ask-request(prompt: text, agent: Agent = AgentCommand(command = "x")) '
-            "-> Agent\n"
+            "builtin def ask-request(prompt: text) -> Agent\n"
             "end A\n()\n"
         )
         assert "ask-request" in err.to_diagnostic().message
@@ -7502,11 +7489,11 @@ class TestHostContractBuiltinIdentity:
             'let q = g.ask-request("hi")\n'
             "end A\n()\n"
         )
-        assert "A::Agent" in err.to_diagnostic().message
+        assert "agent" in err.to_diagnostic().message.lower()
 
     def test_scoped_agent_receiver_rejected_for_ask(self) -> None:
         """The ``ask`` counterpart of the receiver form."""
-        err = reject_type(
+        result = accept_type(
             "scope A\n"
             f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
             "builtin def Agent::ask[T](\n"
@@ -7520,7 +7507,7 @@ class TestHostContractBuiltinIdentity:
             'let r: text = g.ask("hi")\n'
             "end A\n()\n"
         )
-        assert "A::Agent" in err.to_diagnostic().message
+        assert result.resolved.program is not None
 
     def test_canonical_agent_receiver_still_accepted(self) -> None:
         """Regression: the ordinary receiver form, with nothing redeclared,
@@ -9261,9 +9248,9 @@ class TestAskUnknownArgs:
         assert "ask" in str(err).lower() or "positional" in str(err).lower()
 
     def test_ask_valid_named_arg_combinations_still_accepted(self) -> None:
-        # All four known named args together must be accepted.
+        # All supported parse options work on an explicit Agent receiver.
         r = accept_type(
-            'let a = AgentCommand("a")\nlet n: int = ask("Q", agent = a, format = "json",'
+            'let a = AgentCommand("a")\nlet n: int = a.ask("Q", format = "json",'
             " strict_json = true, on_parse_error = Abort())\nn"
         )
         assert r.resolved.program is not None
@@ -12523,6 +12510,78 @@ def test_agent_is_an_ordinary_declaration_name(source: str) -> None:
     """`agent` is legal for records, enums, aliases, and functions."""
     checked = accept_type(source)
     assert checked.resolved.program is not None
+
+
+class TestSessionPreludeTypes:
+    def test_session_prelude_types_are_visible_with_their_declared_members(self) -> None:
+        checked = accept_type(
+            "def transport_name(transport: SessionTransport) -> text =\n"
+            "  case transport of\n"
+            '    | Cli => "cli"\n'
+            '    | Rpc => "rpc"\n'
+            "def session_cost(stats: SessionStats) -> decimal = stats.cost\n"
+            "def session_error_details() -> text =\n"
+            "  try\n"
+            '    "no error"\n'
+            "  catch SessionError as error =>\n"
+            '    "%{error.message}: %{error.operation}"\n'
+            "session_cost(SessionStats(input-tokens = 1, output-tokens = 2, cost = 3.0, "
+            "context-percent = 4.0))"
+        )
+        assert checked.resolved.program is not None
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            'ask::[Session]("Q")',
+            "param session: Session\nsession",
+            "def encode(session: Session) -> json = session as json\n()",
+        ),
+    )
+    def test_session_is_rejected_at_json_schema_boundaries(self, source: str) -> None:
+        err = reject_type(source)
+        assert "session" in str(err).lower()
+        assert "json" in str(err).lower()
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "record Box(session: Session)\n"
+            "let box = Box(session = Session::default())\n"
+            "box as json",
+            "record Box(session: Session)\n"
+            "Box(session = Session::default()) == Box(session = Session::default())",
+        ),
+    )
+    def test_session_remains_opaque_inside_nominal_records(self, source: str) -> None:
+        reject_type(source)
+
+    def test_session_transport_and_stats_remain_json_serializable(self) -> None:
+        checked = accept_type(
+            "param transport: SessionTransport\n"
+            "param stats: SessionStats\n"
+            "let transport_json: json = Cli as json\n"
+            "let stats_json: json = SessionStats(input-tokens = 1, output-tokens = 2, "
+            "cost = 3.0, context-percent = 4.0) as json\n"
+            "stats_json"
+        )
+        assert checked.resolved.program is not None
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            'Session(id = "session", agent = AgentCommand(command = "agent"), transport = Cli)',
+            "let make = Session\n"
+            'make("session", AgentCommand(command = "agent"), SessionTransport::Cli)',
+        ],
+    )
+    @pytest.mark.parametrize("default_stdlib", [True, False])
+    def test_session_cannot_be_constructed_by_user_code(
+        self, source: str, default_stdlib: bool
+    ) -> None:
+        with pytest.raises((AglScopeError, AglTypeError)) as exc_info:
+            parse_resolve_check(source, default_stdlib=default_stdlib)
+        assert "session" in str(exc_info.value).lower()
 
 
 def test_agent_enum_is_a_json_serializable_param_type() -> None:

@@ -139,7 +139,7 @@ class TestIdleTimeout:
         assert elapsed < 5
 
     def test_idle_timeout_without_isolate_terminates_process(self) -> None:
-        """When idle timeout fires without isolate_process_group, _terminate_process is used."""
+        """When idle timeout fires without isolate_process_group, terminate_process is used."""
         script = "import time\ntime.sleep(60)\n"
         start = time.monotonic()
         with pytest.raises(SystemExit) as exc_info:

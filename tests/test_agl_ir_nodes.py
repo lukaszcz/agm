@@ -223,6 +223,12 @@ class TestBuiltinNominals:
             require_reserved_nominal_id("ExecResult")
         )
 
+    @pytest.mark.parametrize(
+        "name", ("SessionTransport", "Session", "SessionStats", "SessionError")
+    )
+    def test_session_nominal_resolves_to_its_reserved_identity(self, name: str) -> None:
+        assert NO_BUILTIN_DECLARATIONS.nominal(name) == NominalId(require_reserved_nominal_id(name))
+
     def test_frozen(self) -> None:
         table = BuiltinNominals(declared={})
         with pytest.raises(dataclasses.FrozenInstanceError):

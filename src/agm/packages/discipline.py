@@ -100,7 +100,12 @@ def _resolve_package_modules(
     entry, next_id = _package_graph_entry(package.manifest.name)
     try:
         graph, _next_id, _loaded = build_repl_graph(
-            entry, next_id, path=None, cached={}, roots=roots
+            entry,
+            next_id,
+            path=None,
+            cached={},
+            roots=roots,
+            preflight_reexport_cycles=True,
         )
         resolved = resolve_program(graph)
     except (AglError, OSError, UnicodeDecodeError) as exc:

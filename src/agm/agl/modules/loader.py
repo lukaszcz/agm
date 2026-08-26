@@ -713,6 +713,42 @@ def _raw_chain_scope_paths(program: syntax.Program) -> dict[int, _OperatorPath]:
     return paths
 
 
+def _reject_obvious_scoped_reexport_cycles(graph: ModuleGraph) -> None:
+    """Reject unrestricted scoped re-export cycles before resolving infix chains.
+
+    A named scope is itself exported. Thus, when an unrestricted re-export
+    cycle contains a scoped declaration, each trip around the cycle prefixes
+    that scope again. The scope pass also detects less direct non-converging
+    cycles, but rejecting this self-evident case here avoids resolving every
+    infix chain in a graph that cannot be name-resolved.
+    """
+    adjacency: dict[ModuleId, list[ModuleId]] = {mid: [] for mid in graph.modules}
+    declarations: dict[tuple[ModuleId, ModuleId], list[ExportDecl]] = {}
+    for mid, loaded in graph.modules.items():
+        for declaration in loaded.export_decls:
+            if declaration.items or declaration.hidden:
+                continue
+            for target in _dependency_targets(declaration, graph.modules):
+                adjacency[mid].append(target)
+                declarations.setdefault((mid, target), []).append(declaration)
+
+    for component in _tarjan_sccs(adjacency):
+        members = frozenset(component)
+        is_self_cycle = component[0] in adjacency[component[0]]
+        cyclic = len(members) > 1 or is_self_cycle
+        if not cyclic:
+            continue
+        for source in component:
+            for target in adjacency[source]:
+                if target not in members:
+                    continue
+                for declaration in declarations[(source, target)]:
+                    if declaration.scope_path:
+                        raise AglSyntaxError(
+                            "cyclic re-export expansion does not converge", span=declaration.span
+                        )
+
+
 def _resolve_graph_infix(
     graph: ModuleGraph,
     session_infix: Mapping[str, _InfixFixity] | None = None,
@@ -902,6 +938,7 @@ def _load_into_graph(
     start_id: int,
     default_stdlib: bool,
     session_infix: Mapping[str, _InfixFixity] | None = None,
+    preflight_reexport_cycles: bool = False,
 ) -> tuple[ModuleGraph, int, dict[ModuleId, LoadedModule]]:
     """BFS the transitive module graph from *entry_loaded*.
 
@@ -1049,6 +1086,8 @@ def _load_into_graph(
         ambient_modules=frozenset(ambient_modules),
         roots=roots,
     )
+    if preflight_reexport_cycles:
+        _reject_obvious_scoped_reexport_cycles(graph)
     resolved_graph = _resolve_graph_infix(graph, session_infix)
     resolved_newly_loaded = {mid: resolved_graph.modules[mid] for mid in newly_loaded}
     return resolved_graph, next_id, resolved_newly_loaded
@@ -1206,6 +1245,7 @@ def build_repl_graph(
     default_label: str = "<repl>",
     source_text: str = "",
     session_infix: Mapping[str, _InfixFixity] | None = None,
+    preflight_reexport_cycles: bool = False,
 ) -> tuple[ModuleGraph, int, dict[ModuleId, LoadedModule]]:
     """Build a module graph from an already-parsed entry program.
 
@@ -1247,6 +1287,10 @@ def build_repl_graph(
         its own lowering step supplies the per-entry text directly (see
         ``agm.agl.lower.repl``), so the loader's copy is never consulted. A
         caller outside the REPL passes the real entry source here.
+    preflight_reexport_cycles:
+        Whether to reject unrestricted scoped re-export cycles before infix
+        resolution. Package discipline enables this fast failure; ordinary
+        compilation leaves all re-export diagnostics to the scope pass.
 
     Returns
     -------
@@ -1276,4 +1320,5 @@ def build_repl_graph(
         start_id=next_start_id,
         default_stdlib=default_stdlib,
         session_infix=session_infix,
+        preflight_reexport_cycles=preflight_reexport_cycles,
     )

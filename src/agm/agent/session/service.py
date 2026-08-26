@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, NoReturn, Protocol, TypeVar, cast
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, NoReturn, TypeVar
 from uuid import uuid4
 
 if TYPE_CHECKING:
@@ -34,8 +34,13 @@ SessionConfirmation = Callable[["RecordValue", str], None]
 SessionBackendFactory = Callable[[object, str], SessionBackend]
 
 
-class _SessionBackendConstructor(Protocol):
-    def __call__(self, *, idle_timeout: float | None = None) -> SessionBackend: ...
+@dataclass(frozen=True, slots=True)
+class _HostSession:
+    """The AgL-facing identity this host retains for one opaque handle."""
+
+    agent: "RecordValue"
+    transport: str
+    ephemeral: bool = False
 
 
 class AglSessionHost:
@@ -46,19 +51,19 @@ class AglSessionHost:
     ) -> None:
         self._service = service
         self._confirm_session = confirm_session
-        self._agents: dict[str, tuple[RecordValue, str]] = {}
-        self._ephemeral_handles: set[str] = set()
+        self._sessions: dict[str, _HostSession] = {}
 
     def open(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
         handle = self._open(agent, transport, name=name)
-        self._agents[handle] = (agent, transport)
+        self._sessions[handle] = _HostSession(agent, transport)
         return handle
 
-    def open_ephemeral(self, agent: RecordValue, transport: str, *, one_shot: bool = False) -> str:
+    def open_ephemeral(
+        self, agent: RecordValue, transport: str, *, single_prompt: bool = False
+    ) -> str:
         """Open one short-lived session for an AgL ask lifecycle."""
-        handle = self._open(agent, transport, ephemeral=True, one_shot=one_shot)
-        self._agents[handle] = (agent, transport)
-        self._ephemeral_handles.add(handle)
+        handle = self._open(agent, transport, ephemeral=True, single_prompt=single_prompt)
+        self._sessions[handle] = _HostSession(agent, transport, ephemeral=True)
         return handle
 
     def with_ephemeral(
@@ -67,29 +72,22 @@ class AglSessionHost:
         transport: str,
         action: Callable[[str], _T],
         *,
-        one_shot: bool = False,
+        single_prompt: bool = False,
     ) -> _T:
         """Run *action* in one ephemeral session and release it afterward."""
         spec = self._agent_spec(agent)
 
         def register(handle: str) -> _T:
-            self._agents[handle] = (agent, transport)
-            self._ephemeral_handles.add(handle)
+            self._sessions[handle] = _HostSession(agent, transport, ephemeral=True)
             return action(handle)
 
-        if one_shot:
-            return self._call_host(
-                lambda: self._service.with_ephemeral(
-                    spec,
-                    transport.lower(),
-                    register,
-                    on_closed=self._retire_ephemeral,
-                    one_shot=True,
-                )
-            )
         return self._call_host(
             lambda: self._service.with_ephemeral(
-                spec, transport.lower(), register, on_closed=self._retire_ephemeral
+                spec,
+                transport.lower(),
+                register,
+                on_closed=self._retire_ephemeral,
+                single_prompt=single_prompt,
             )
         )
 
@@ -100,26 +98,20 @@ class AglSessionHost:
         *,
         name: str = "",
         ephemeral: bool = False,
-        one_shot: bool = False,
+        single_prompt: bool = False,
     ) -> str:
         spec = self._agent_spec(agent)
-        if ephemeral:
-            if one_shot:
-                return self._call_host(
-                    lambda: self._service.open(
-                        spec, transport.lower(), name=name, ephemeral=True, one_shot=True
-                    )
-                )
-            return self._call_host(
-                lambda: self._service.open(spec, transport.lower(), name=name, ephemeral=True)
+        return self._call_host(
+            lambda: self._service.open(
+                spec, transport.lower(), name=name, ephemeral=ephemeral, single_prompt=single_prompt
             )
-        return self._call_host(lambda: self._service.open(spec, transport.lower(), name=name))
+        )
 
     def default(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
         handle = self._call_host(
             lambda: self._service.default(self._agent_spec(agent), transport.lower(), name=name)
         )
-        self._agents.setdefault(handle, (agent, transport))
+        self._sessions.setdefault(handle, _HostSession(agent, transport))
         return handle
 
     def ask(self, handle: str, prompt: str) -> str:
@@ -128,35 +120,19 @@ class AglSessionHost:
 
     def ask_request(self, handle: str, request: "AgentRequest") -> "AgentResponse":
         """Preserve a session response's metadata across the AgL firewall."""
-        from agm.agl.runtime.request import AgentCallInfo, AgentResponse
+        from agm.agl.runtime.request import AgentResponse
 
         response = self._ask(handle, request.prompt)
-        call_info = response.call_info
         return AgentResponse(
             content=response.content,
             metadata=dict(response.metadata),
-            call_info=(
-                None
-                if call_info is None
-                else AgentCallInfo(
-                    argv=call_info.argv,
-                    prompt_via_stdin=call_info.prompt_via_stdin,
-                    elapsed=call_info.elapsed,
-                    exit_code=call_info.exit_code,
-                )
-            ),
+            call_info=response.call_info,
         )
 
     def _ask(self, handle: str, prompt: str) -> SessionAskResponse:
         try:
             if self._confirm_session is not None:
-                try:
-                    agent, _transport = self._agents[handle]
-                except KeyError:
-                    from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
-
-                    raise AglSessionHostError("unknown session", "ask") from None
-                self._confirm_session(agent, prompt)
+                self._confirm_session(self._session_for(handle, "ask").agent, prompt)
             return self._service.ask(handle, SessionAskRequest(prompt))
         except SessionAskError as error:
             self._raise_ask_error(error)
@@ -171,7 +147,7 @@ class AglSessionHost:
 
     def fork(self, handle: str) -> str:
         forked = self._call_host(lambda: self._service.fork(handle))
-        self._agents[forked] = self._agents[handle]
+        self._sessions[forked] = replace(self._sessions[handle], ephemeral=False)
         return forked
 
     def set_name(self, handle: str, name: str) -> None:
@@ -189,14 +165,10 @@ class AglSessionHost:
         )
 
     def snapshot(self, handle: str) -> "SessionSnapshot":
-        from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
         from agm.agl.runtime.sessions import SessionSnapshot
 
-        try:
-            agent, transport = self._agents[handle]
-        except KeyError:
-            raise AglSessionHostError("unknown session", "snapshot") from None
-        return SessionSnapshot(agent=agent, transport=transport)
+        session = self._session_for(handle, "snapshot")
+        return SessionSnapshot(agent=session.agent, transport=session.transport)
 
     def close(self, handle: str) -> None:
         self._call_host(lambda: self._service.close(handle))
@@ -206,23 +178,32 @@ class AglSessionHost:
         try:
             self._service.reset_all()
         finally:
-            for handle in tuple(self._agents):
-                if not self._service.is_known(handle):
-                    self._agents.pop(handle, None)
-                    self._ephemeral_handles.discard(handle)
+            self._forget_released()
 
     def close_all(self) -> None:
         try:
             self._service.close_all()
         finally:
-            for handle in tuple(self._ephemeral_handles):
-                if not self._service.is_known(handle):
-                    self._retire_ephemeral(handle)
+            self._forget_released()
+
+    def _forget_released(self) -> None:
+        """Drop the identities of handles the service no longer retains."""
+        for handle in tuple(self._sessions):
+            if not self._service.is_known(handle):
+                del self._sessions[handle]
 
     def _retire_ephemeral(self, handle: str) -> None:
-        if handle in self._ephemeral_handles:
-            self._ephemeral_handles.remove(handle)
-            self._agents.pop(handle, None)
+        session = self._sessions.get(handle)
+        if session is not None and session.ephemeral:
+            del self._sessions[handle]
+
+    def _session_for(self, handle: str, operation: str) -> _HostSession:
+        from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
+
+        try:
+            return self._sessions[handle]
+        except KeyError:
+            raise AglSessionHostError("unknown session", operation) from None
 
     @staticmethod
     def _agent_spec(agent: object) -> object:
@@ -246,25 +227,14 @@ class AglSessionHost:
 
     @staticmethod
     def _raise_ask_error(error: SessionAskError) -> NoReturn:
-        from agm.agl.runtime.request import AgentCallInfo
         from agm.agl.runtime.sessions import SessionAskError as AglSessionAskError
 
-        call_info = (
-            AgentCallInfo(
-                argv=error.call_info.argv,
-                prompt_via_stdin=error.call_info.prompt_via_stdin,
-                elapsed=error.call_info.elapsed,
-                exit_code=error.call_info.exit_code,
-            )
-            if error.call_info is not None
-            else None
-        )
         raise AglSessionAskError(
             cause=error.cause,
             exit_code=error.exit_code,
             stderr_tail=error.stderr_tail,
             elapsed=error.elapsed,
-            call_info=call_info,
+            call_info=error.call_info,
         ) from error
 
     @staticmethod
@@ -294,8 +264,7 @@ def create_agl_session_host(
             raise SessionHostError("RPC transport is only supported by AgentPi", "open")
         if transport != "cli":
             raise SessionHostError(f"unsupported session transport {transport!r}", "open")
-        backend_type = CLI_SESSION_BACKENDS[type(agent).__name__]
-        return cast(_SessionBackendConstructor, backend_type)(idle_timeout=idle_timeout)
+        return CLI_SESSION_BACKENDS[type(agent).__name__](idle_timeout=idle_timeout)
 
     return AglSessionHost(SessionService(backend_for), confirm_session=confirm_session)
 
@@ -326,12 +295,14 @@ class SessionService:
         *,
         name: str = "",
         ephemeral: bool = False,
-        one_shot: bool = False,
+        single_prompt: bool = False,
     ) -> str:
         """Open a backend session and return its host-generated handle id."""
         backend = self._backend_factory(agent, transport)
         backend.open(
-            SessionOpenRequest(agent=agent, transport=transport, name=name, one_shot=one_shot)
+            SessionOpenRequest(
+                agent=agent, transport=transport, name=name, single_prompt=single_prompt
+            )
         )
         handle = str(uuid4())
         self._entries[handle] = _SessionEntry(
@@ -414,6 +385,19 @@ class SessionService:
         Successfully closed and previously closed entries are discarded. Entries
         whose close fails remain available for a later cleanup attempt.
         """
+        self._close_every_entry("failed to reset one or more agent sessions", discard=True)
+        self._default_handle = None
+
+    def close_all(self) -> None:
+        """Close every live backend, raising grouped failures after all attempts.
+
+        Sessions are marked closed only after their backend closes successfully, so a
+        later call can retry failed closes.
+        """
+        self._close_every_entry("failed to close one or more agent sessions", discard=False)
+
+    def _close_every_entry(self, message: str, *, discard: bool) -> None:
+        """Close every open entry, reporting all failures once the sweep finishes."""
         failures: list[Exception] = []
         for handle, entry in tuple(self._entries.items()):
             if not entry.closed:
@@ -422,27 +406,10 @@ class SessionService:
                 except Exception as error:
                     failures.append(error)
                     continue
-            self._entries.pop(handle, None)
-        self._default_handle = None
+            if discard:
+                self._entries.pop(handle, None)
         if failures:
-            raise ExceptionGroup("failed to reset one or more agent sessions", failures)
-
-    def close_all(self) -> None:
-        """Close every live backend, raising grouped failures after all attempts.
-
-        Sessions are marked closed only after their backend closes successfully, so a
-        later call can retry failed closes.
-        """
-        failures: list[Exception] = []
-        for handle, entry in tuple(self._entries.items()):
-            if entry.closed:
-                continue
-            try:
-                self.close(handle)
-            except Exception as error:
-                failures.append(error)
-        if failures:
-            raise ExceptionGroup("failed to close one or more agent sessions", failures)
+            raise ExceptionGroup(message, failures)
 
     def with_ephemeral(
         self,
@@ -452,10 +419,10 @@ class SessionService:
         *,
         name: str = "",
         on_closed: Callable[[str], None] | None = None,
-        one_shot: bool = False,
+        single_prompt: bool = False,
     ) -> _T:
         """Run *action* in a short-lived session and release it afterward."""
-        handle = self.open(agent, transport, name=name, ephemeral=True, one_shot=one_shot)
+        handle = self.open(agent, transport, name=name, ephemeral=True, single_prompt=single_prompt)
 
         def close() -> None:
             self.close(handle)
@@ -465,60 +432,29 @@ class SessionService:
         with preserve_primary_error(close, label="ephemeral session cleanup"):
             return action(handle)
 
-    def ask_ephemeral(
-        self,
-        agent: object,
-        transport: str,
-        request: SessionAskRequest,
-        *,
-        name: str = "",
-    ) -> SessionAskResponse:
-        """Ask through a short-lived session and close it even when asking fails."""
-        return self.with_ephemeral(
-            agent,
-            transport,
-            lambda handle: self.ask(handle, request),
-            name=name,
-            one_shot=True,
-        )
-
     @staticmethod
-    def _run_lifecycle(operation: SessionOperation | str, action: Callable[[], _T]) -> _T:
+    def _run_lifecycle(operation: str, action: Callable[[], _T]) -> _T:
         """Map backend transport failures to the public lifecycle error model."""
-        operation_name = SessionService._operation_name(operation)
         try:
             return action()
         except SessionAskError as error:
             raise SessionHostError(
-                f"session {operation_name} transport failed ({error.cause}): {error.stderr_tail}",
-                operation_name,
+                f"session {operation} transport failed ({error.cause}): {error.stderr_tail}",
+                operation,
             ) from error
 
-    def _entry_for(self, handle: str, operation: SessionOperation | str) -> _SessionEntry:
+    def _entry_for(self, handle: str, operation: str) -> _SessionEntry:
         entry = self._entries.get(handle)
         if entry is None:
             raise self._unknown_handle_error(handle, operation)
         if entry.closed:
-            raise SessionHostError(
-                f"session handle {handle!r} is closed",
-                self._operation_name(operation),
-            )
+            raise SessionHostError(f"session handle {handle!r} is closed", operation)
         return entry
 
     def _require_capability(self, entry: _SessionEntry, operation: SessionOperation) -> None:
         if not entry.backend.capabilities.supports(operation):
-            raise SessionHostError(
-                f"session backend does not support {operation.value}",
-                operation.value,
-            )
+            raise SessionHostError(f"session backend does not support {operation}", operation)
 
     @staticmethod
-    def _unknown_handle_error(handle: str, operation: SessionOperation | str) -> SessionHostError:
-        return SessionHostError(
-            f"unknown session handle {handle!r}",
-            SessionService._operation_name(operation),
-        )
-
-    @staticmethod
-    def _operation_name(operation: SessionOperation | str) -> str:
-        return operation.value if isinstance(operation, SessionOperation) else operation
+    def _unknown_handle_error(handle: str, operation: str) -> SessionHostError:
+        return SessionHostError(f"unknown session handle {handle!r}", operation)

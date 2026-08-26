@@ -423,7 +423,13 @@ class TestUncaughtAgentCallErrorSpan:
             )
 
         monkeypatch.setattr(exec_engine, "value_driven_agent_factory", lambda **_: failing_agent)
-        monkeypatch.setattr(exec_engine, "create_agl_session_host", lambda **_: None)
+        from agm.agl.runtime.sessions import AgentDispatcherSessionHost
+
+        monkeypatch.setattr(
+            exec_engine,
+            "create_agl_session_host",
+            lambda **_: AgentDispatcherSessionHost(failing_agent),
+        )
         args = ExecArgs(
             file=str(agl_file),
             param_tokens=[],

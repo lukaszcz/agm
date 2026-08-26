@@ -64,7 +64,7 @@ class CaptureTransport:
         monkeypatch.setattr("agm.agent.runner.run_capture_result", run)
 
 
-def _open(backend: object, agent: object, *, name: str = "", one_shot: bool = False) -> None:
+def _open(backend: object, agent: object, *, name: str = "", single_prompt: bool = False) -> None:
     if not isinstance(
         backend,
         (
@@ -75,7 +75,9 @@ def _open(backend: object, agent: object, *, name: str = "", one_shot: bool = Fa
         ),
     ):
         raise AssertionError("unexpected backend")
-    backend.open(SessionOpenRequest(agent=agent, transport="cli", name=name, one_shot=one_shot))
+    backend.open(
+        SessionOpenRequest(agent=agent, transport="cli", name=name, single_prompt=single_prompt)
+    )
 
 
 def _file_prompt_argv(argv: list[str], command: list[str]) -> None:
@@ -84,26 +86,12 @@ def _file_prompt_argv(argv: list[str], command: list[str]) -> None:
     assert argv[-1].startswith("@")
 
 
-def test_prepared_runner_rejects_conflicting_delivery_options() -> None:
-    from agm.agent.runner import PromptDelivery, prepare_rendered_prompt_run
-
-    with pytest.raises(ValueError):
-        prepare_rendered_prompt_run(
-            "prompt",
-            runner=["runner"],
-            temp_files=[],
-            env={},
-            prompt_via_stdin=True,
-            delivery=PromptDelivery.LITERAL,
-        )
-
-
 def test_agent_variant_spec_backend_catalogs_are_in_lockstep() -> None:
-    expected: dict[str, tuple[tuple[str, ...], type[AgentSpec], type[SessionBackend]]] = {
-        "AgentCommand": (("command",), AgentCommand, AgentCommandSessionBackend),
-        "AgentClaude": (("model", "thinking"), AgentClaude, ClaudeCliSessionBackend),
-        "AgentCodex": (("model", "thinking"), AgentCodex, CodexCliSessionBackend),
-        "AgentPi": (("provider", "model", "thinking"), AgentPi, PiCliSessionBackend),
+    expected: dict[str, tuple[tuple[str, ...], type[AgentSpec], type[SessionBackend], str]] = {
+        "AgentCommand": (("command",), AgentCommand, AgentCommandSessionBackend, "Cli"),
+        "AgentClaude": (("model", "thinking"), AgentClaude, ClaudeCliSessionBackend, "Cli"),
+        "AgentCodex": (("model", "thinking"), AgentCodex, CodexCliSessionBackend, "Cli"),
+        "AgentPi": (("provider", "model", "thinking"), AgentPi, PiCliSessionBackend, "Rpc"),
     }
     table = create_seeded_type_table()
     declared = {
@@ -112,11 +100,12 @@ def test_agent_variant_spec_backend_catalogs_are_in_lockstep() -> None:
     }
 
     assert set(declared) == set(expected) == set(AGENT_SPECS) == set(CLI_SESSION_BACKENDS)
-    for variant, (fields, spec, backend) in expected.items():
+    for variant, (fields, spec, backend, transport) in expected.items():
         assert tuple(name for name, _ in declared[variant]) == fields
         assert spec.PAYLOAD_FIELDS == fields
         assert AGENT_SPECS[variant] is spec
         assert CLI_SESSION_BACKENDS[variant] is backend
+        assert spec.DEFAULT_SESSION_TRANSPORT == transport
 
 
 def test_claude_delivers_compact_literal_and_fork_promptlessly_through_runner(
@@ -372,11 +361,13 @@ def test_session_id_cli_backends_reuse_ids_and_names_after_reset(
     assert reset_argv[reset_argv.index(name_flag) + 1] == "named"
 
 
-def test_codex_one_shot_session_uses_the_standard_command(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_codex_single_prompt_session_uses_the_standard_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     transport = CaptureTransport([CaptureOutcome("answer")])
     transport.install(monkeypatch)
     backend = CodexCliSessionBackend()
-    _open(backend, AgentCodex("m", "t"), one_shot=True)
+    _open(backend, AgentCodex("m", "t"), single_prompt=True)
 
     assert backend.ask(SessionAskRequest("prompt")).content == "answer"
     assert transport.calls == [
@@ -950,3 +941,31 @@ def test_native_cli_sessions_reject_an_agent_for_another_backend(
     with pytest.raises(SessionHostError) as raised:
         _open(backend(), agent)
     assert raised.value.operation == "open"
+
+
+def test_claude_single_prompt_session_uses_the_standard_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = CaptureTransport([CaptureOutcome("answer")])
+    transport.install(monkeypatch)
+    backend = ClaudeCliSessionBackend()
+    _open(backend, AgentClaude("m", "t"), single_prompt=True)
+
+    assert backend.ask(SessionAskRequest("prompt")).content == "answer"
+    (argv, _stdin) = transport.calls[0]
+    assert "--session-id" not in argv
+    _file_prompt_argv(argv, AgentClaude("m", "t").argv())
+
+
+def test_pi_single_prompt_session_uses_the_standard_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = CaptureTransport([CaptureOutcome("answer")])
+    transport.install(monkeypatch)
+    backend = PiCliSessionBackend()
+    _open(backend, AgentPi("p", "m", "t"), single_prompt=True)
+
+    assert backend.ask(SessionAskRequest("prompt")).content == "answer"
+    (argv, _stdin) = transport.calls[0]
+    assert "--session-id" not in argv
+    _file_prompt_argv(argv, AgentPi("p", "m", "t").argv())

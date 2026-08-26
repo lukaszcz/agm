@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from types import MappingProxyType
 from typing import ClassVar, TypeAlias
 
@@ -23,7 +24,19 @@ __all__ = [
     "AgentPi",
     "AGENT_SPECS",
     "AgentSpec",
+    "SessionTransport",
 ]
+
+
+class SessionTransport(StrEnum):
+    """The ways a session backend can drive an agent.
+
+    The member values are also the ``std/core::SessionTransport`` member names,
+    so a specification's default crosses into AgL without translation.
+    """
+
+    CLI = "Cli"
+    RPC = "Rpc"
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +47,7 @@ class AgentCommand:
 
     PAYLOAD_FIELDS: ClassVar[tuple[str, ...]] = ("command",)
     prompt_via_stdin: ClassVar[bool] = False
+    DEFAULT_SESSION_TRANSPORT: ClassVar[SessionTransport] = SessionTransport.CLI
 
     def argv(self) -> list[str]:
         """Split the configured command, retaining its prompt-file semantics.
@@ -54,6 +68,7 @@ class AgentClaude:
 
     PAYLOAD_FIELDS: ClassVar[tuple[str, ...]] = ("model", "thinking")
     prompt_via_stdin: ClassVar[bool] = False
+    DEFAULT_SESSION_TRANSPORT: ClassVar[SessionTransport] = SessionTransport.CLI
 
     def argv(self) -> list[str]:
         """Build the argv for a one-shot Claude prompt invocation."""
@@ -95,6 +110,7 @@ class AgentCodex:
 
     PAYLOAD_FIELDS: ClassVar[tuple[str, ...]] = ("model", "thinking")
     prompt_via_stdin: ClassVar[bool] = True
+    DEFAULT_SESSION_TRANSPORT: ClassVar[SessionTransport] = SessionTransport.CLI
 
     def argv(self) -> list[str]:
         """Build the argv for a one-shot Codex prompt invocation, reading stdin."""
@@ -127,6 +143,7 @@ class AgentPi:
 
     PAYLOAD_FIELDS: ClassVar[tuple[str, ...]] = ("provider", "model", "thinking")
     prompt_via_stdin: ClassVar[bool] = False
+    DEFAULT_SESSION_TRANSPORT: ClassVar[SessionTransport] = SessionTransport.RPC
 
     def argv(self) -> list[str]:
         """Build the argv for a one-shot Pi prompt invocation."""
@@ -143,9 +160,11 @@ class AgentPi:
             command.extend(("--name", name))
         return [*command, *_pi_options(self.provider, self.model, self.thinking)]
 
-    def rpc_argv(self, *, name: str = "") -> list[str]:
+    def rpc_argv(self, *, name: str = "", session_id: str = "") -> list[str]:
         """Build the argv for a persistent Pi RPC session."""
         command = ["pi", "--mode", "rpc"]
+        if session_id:
+            command.extend(("--session-id", session_id))
         if name:
             command.extend(("--name", name))
         return [*command, *_pi_options(self.provider, self.model, self.thinking)]

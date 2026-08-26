@@ -140,6 +140,7 @@ from agm.agl.ir.nodes import (
     IrSessionDefault,
     IrSessionOp,
     IrSessionOpen,
+    IrSessionOpKind,
     IrTemplateText,
     IrTemplateValue,
     IrTry,
@@ -1151,8 +1152,6 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
 
         case IrSessionAsk(session=session_expr, prompt=prompt_expr, contract_id=contract_id):
             _validate_location(node.location, ctx)
-            if session_expr is None:
-                raise InvalidIrError("IrSessionAsk requires a session operand")
             _validate_expr(session_expr, ctx)
             _validate_expr(prompt_expr, ctx)
             if ctx.deep:
@@ -1168,14 +1167,15 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
 
         case IrSessionOp(session=session_expr, op=op, arg=arg_expr):
             _validate_location(node.location, ctx)
-            if session_expr is None:
-                raise InvalidIrError("IrSessionOp requires a session operand")
             _validate_expr(session_expr, ctx)
-            if op not in {"compact", "reset", "fork", "stats", "set-name", "close"}:
+            if not isinstance(op, IrSessionOpKind):
                 raise InvalidIrError(f"IrSessionOp has unknown operation {op!r}")
-            if op == "set-name" and arg_expr is None:
+            if op is IrSessionOpKind.SET_NAME and arg_expr is None:
                 raise InvalidIrError("IrSessionOp set-name requires an argument")
-            if op not in {"compact", "set-name"} and arg_expr is not None:
+            if (
+                op not in {IrSessionOpKind.COMPACT, IrSessionOpKind.SET_NAME}
+                and arg_expr is not None
+            ):
                 raise InvalidIrError(f"IrSessionOp {op} does not accept an argument")
             if arg_expr is not None:
                 _validate_expr(arg_expr, ctx)

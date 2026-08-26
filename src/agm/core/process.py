@@ -33,7 +33,8 @@ def exit_with_output(returncode: int, stdout: str = "", stderr: str = "") -> Non
     raise SystemExit(returncode)
 
 
-def _terminate_process(process: subprocess.Popen[bytes]) -> None:
+def terminate_process(process: subprocess.Popen[bytes]) -> None:
+    """Terminate *process*, escalating to SIGKILL if it does not exit promptly."""
     if process.poll() is not None:
         return
 
@@ -52,9 +53,15 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
         process.wait()
 
 
-def _kill_process_group(process: subprocess.Popen[bytes]) -> None:
+def kill_process_group(process: subprocess.Popen[bytes], *, pgid: int | None = None) -> None:
+    """Tear down *process* and every other member of its process group.
+
+    *pgid* names the group when the caller isolated the child under an id
+    other than its pid; it defaults to ``process.pid``.
+    """
+    group = process.pid if pgid is None else pgid
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        os.killpg(group, signal.SIGTERM)
     except ProcessLookupError:
         return
 
@@ -62,9 +69,9 @@ def _kill_process_group(process: subprocess.Popen[bytes]) -> None:
         # The main process already exited, but other members of its process
         # group may still be alive.  Give them a brief moment to tear down
         # after the SIGTERM we just sent, then SIGKILL any stragglers.
-        _wait_for_process_group_exit(process.pid, grace=0.2)
+        _wait_for_process_group_exit(group, grace=0.2)
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            os.killpg(group, signal.SIGKILL)
         except ProcessLookupError:
             pass
         return
@@ -73,7 +80,7 @@ def _kill_process_group(process: subprocess.Popen[bytes]) -> None:
         process.wait(timeout=1)
     except subprocess.TimeoutExpired:
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            os.killpg(group, signal.SIGKILL)
         except ProcessLookupError:
             pass
         process.wait()
@@ -81,9 +88,9 @@ def _kill_process_group(process: subprocess.Popen[bytes]) -> None:
 
     # The main process exited promptly.  Give remaining group members a
     # brief moment to exit as well, then SIGKILL any stragglers.
-    _wait_for_process_group_exit(process.pid, grace=0.2)
+    _wait_for_process_group_exit(group, grace=0.2)
     try:
-        os.killpg(process.pid, signal.SIGKILL)
+        os.killpg(group, signal.SIGKILL)
     except ProcessLookupError:
         pass
 
@@ -181,9 +188,9 @@ def _drain_process_streams(
             except queue.Empty:
                 # Idle timeout: no output received within the deadline.
                 if isolate_process_group:
-                    _kill_process_group(process)
+                    kill_process_group(process)
                 else:
-                    _terminate_process(process)
+                    terminate_process(process)
                 _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
                 timed_out = True
                 break
@@ -217,9 +224,9 @@ def _drain_process_streams(
         stderr = "".join(stream_data["stderr"])
     except BaseException:
         if isolate_process_group:
-            _kill_process_group(process)
+            kill_process_group(process)
         else:
-            _terminate_process(process)
+            terminate_process(process)
         _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
         raise
     finally:
@@ -345,7 +352,7 @@ def run_subprocess(
     """Run a command and clean it up on interrupt.
 
     When *idle_timeout* is set (in seconds), the process is killed via
-    ``_kill_process_group`` if no output chunk is received for that
+    ``kill_process_group`` if no output chunk is received for that
     duration.  Requires *isolate_process_group=True* so the entire
     process tree can be cleaned up.
     """
@@ -387,9 +394,9 @@ def run_subprocess(
             process.wait()
         except BaseException:
             if isolate_process_group:
-                _kill_process_group(process)
+                kill_process_group(process)
             else:
-                _terminate_process(process)
+                terminate_process(process)
             _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
             raise
         return subprocess.CompletedProcess(cmd, process.returncode, None, None)

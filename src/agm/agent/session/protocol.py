@@ -44,14 +44,15 @@ class SessionCapabilities:
 class SessionOpenRequest:
     """The host-owned metadata supplied while opening a backend session.
 
-    ``one_shot`` selects a backend's legacy one-shot invocation. Handle
+    ``single_prompt`` states that this session serves exactly one prompt, so a
+    backend need not establish a conversation it will never continue. Handle
     lifetime is owned separately by the session service.
     """
 
     agent: object
     transport: str
     name: str = ""
-    one_shot: bool = False
+    single_prompt: bool = False
 
 
 @dataclass(frozen=True, slots=True)

@@ -82,7 +82,7 @@ class _ScriptedSession:
     tag: str
     parent: str | None
     transport: str = ""
-    one_shot: bool = False
+    single_prompt: bool = False
     opened: bool = False
     closed: bool = False
     prompts: list[str] = field(default_factory=list)
@@ -272,8 +272,8 @@ class _ScriptedSessionService:
         self._backends[handle] = self._agent.sessions[-1].backend
         return handle
 
-    def open_ephemeral(self, agent: object, transport: str, *, one_shot: bool = False) -> str:
-        handle = self._service.open(agent, transport, ephemeral=True, one_shot=one_shot)
+    def open_ephemeral(self, agent: object, transport: str, *, single_prompt: bool = False) -> str:
+        handle = self._service.open(agent, transport, ephemeral=True, single_prompt=single_prompt)
         self._sessions[handle] = self._agent.sessions[-1]
         self._backends[handle] = self._agent.sessions[-1].backend
         self._ephemeral_handles.add(handle)
@@ -286,7 +286,7 @@ class _ScriptedSessionService:
         action: Callable[[str], Any],
         *,
         on_closed: Callable[[str], None] | None = None,
-        one_shot: bool = False,
+        single_prompt: bool = False,
     ) -> Any:
         def register(handle: str) -> Any:
             self._sessions[handle] = self._agent.sessions[-1]
@@ -300,7 +300,7 @@ class _ScriptedSessionService:
                 on_closed(handle)
 
         return self._service.with_ephemeral(
-            agent, transport, register, on_closed=retire, one_shot=one_shot
+            agent, transport, register, on_closed=retire, single_prompt=single_prompt
         )
 
     def default(self, agent: object, transport: str, *, name: str = "") -> str:
@@ -351,9 +351,6 @@ class _ScriptedSessionService:
             del self._sessions[handle]
             del self._backends[handle]
 
-    def ask_ephemeral(self, agent: object, transport: str, request: Any, *, name: str = "") -> Any:
-        return self._service.ask_ephemeral(agent, transport, request, name=name)
-
     def _attempt(
         self,
         handle: str,
@@ -398,10 +395,10 @@ class _ScenarioSessionHost:
         self._snapshots[handle] = (agent, transport)
         return handle
 
-    def open_ephemeral(self, agent: Any, transport: str, *, one_shot: bool = False) -> str:
+    def open_ephemeral(self, agent: Any, transport: str, *, single_prompt: bool = False) -> str:
         service = self._service_for(agent)
         try:
-            handle = service.open_ephemeral(agent, transport.lower(), one_shot=one_shot)
+            handle = service.open_ephemeral(agent, transport.lower(), single_prompt=single_prompt)
         except SessionHostError as error:
             self._raise_host_error(error)
         self._handles[handle] = service
@@ -414,7 +411,7 @@ class _ScenarioSessionHost:
         transport: str,
         action: Callable[[str], Any],
         *,
-        one_shot: bool = False,
+        single_prompt: bool = False,
     ) -> Any:
         service = self._service_for(agent)
 
@@ -429,7 +426,7 @@ class _ScenarioSessionHost:
 
         try:
             return service.with_ephemeral(
-                agent, transport.lower(), register, on_closed=retire, one_shot=one_shot
+                agent, transport.lower(), register, on_closed=retire, single_prompt=single_prompt
             )
         except SessionHostError as error:
             self._raise_host_error(error)
@@ -604,7 +601,7 @@ class _ScriptedSessionBackend:
             self._agent.sessions.remove(self._session)
             raise SessionHostError("scripted session does not support names", "set-name")
         self._session.transport = request.transport
-        self._session.one_shot = request.one_shot
+        self._session.single_prompt = request.single_prompt
         self._session.opened = True
 
     def ask(self, request: Any) -> Any:
@@ -1012,7 +1009,7 @@ def _assert_sessions(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -
 
     for spec in expect.get("sessions", []):
         session = session_for(spec)
-        for key in ("opened", "closed", "parent", "transport", "one_shot"):
+        for key in ("opened", "closed", "parent", "transport", "single_prompt"):
             if key in spec:
                 assert getattr(session, key) == spec[key], (
                     f"session {session.tag!r} {key}: expected {spec[key]!r}, "
@@ -1380,8 +1377,12 @@ def test_scripted_session_ask_closes_an_ephemeral_session() -> None:
     from agm.agent.session import SessionAskRequest
 
     agent = _agent_from_spec("writer", ["answer"])
-    response = agent.session_service().ask_ephemeral(
-        object(), "scripted", SessionAskRequest("one-off")
+    service = agent.session_service()
+    response = service.with_ephemeral(
+        object(),
+        "scripted",
+        lambda handle: service.ask(handle, SessionAskRequest("one-off")),
+        single_prompt=True,
     )
 
     assert response.content == "answer"

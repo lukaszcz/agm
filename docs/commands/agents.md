@@ -98,8 +98,8 @@ with a generated id; it does not put `SESSION_ID` in the child environment.
 
 Free `ask`, `Session::open(AgentCommand(...))`, and an `AgentCommand(...).ask(...)`
 with corrective retries open continuing sessions, so their command must contain
-that placeholder. A single-attempt `AgentCommand(...).ask(...)` is one-shot and
-does not require it. A command without the placeholder cannot otherwise be
+that placeholder. A single-attempt `AgentCommand(...).ask(...)` sends exactly one
+prompt and does not require it. A command without the placeholder cannot otherwise be
 opened as a session and raises `SessionError`. See
 [`agm exec`](exec.md#agent-command-interpolation) for configuration precedence
 and [Agent calls](../agl/reference/agent-calls.md#sessions) for all session

@@ -7,6 +7,7 @@ from decimal import Decimal
 
 import pytest
 
+from agm.agent.spec import SessionTransport
 from agm.agl import PipelineDriver
 from agm.agl.pipeline import RunResult
 from agm.agl.runtime.request import (
@@ -23,32 +24,35 @@ from agm.agl.runtime.sessions import (
     SessionHostError,
     SessionSnapshot,
     SessionStats,
+    default_session_transport,
     with_ephemeral_session,
 )
-from agm.agl.semantics.values import EnumValue
+from agm.agl.semantics.values import RecordValue
 from tests._agl_helpers import agent_value
 
 
 @dataclass
 class _Host:
-    handles: dict[str, tuple[EnumValue, str]] = field(default_factory=dict)
+    handles: dict[str, tuple[RecordValue, str]] = field(default_factory=dict)
     prompts: dict[str, list[str]] = field(default_factory=dict)
     operations: list[tuple[str, str, str]] = field(default_factory=list)
     closed: set[str] = field(default_factory=set)
     default_handle: str | None = None
 
-    def open(self, agent: EnumValue, transport: str, *, name: str = "") -> str:
+    def open(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
         handle = f"s{len(self.handles) + 1}"
         self.handles[handle] = (agent, transport)
         self.prompts[handle] = []
         self.operations.append((handle, "open", name))
         return handle
 
-    def open_ephemeral(self, agent: EnumValue, transport: str, *, one_shot: bool = False) -> str:
-        del one_shot
+    def open_ephemeral(
+        self, agent: RecordValue, transport: str, *, single_prompt: bool = False
+    ) -> str:
+        del single_prompt
         return self.open(agent, transport)
 
-    def default(self, agent: EnumValue, transport: str, *, name: str = "") -> str:
+    def default(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
         if self.default_handle is None:
             self.default_handle = self.open(agent, transport, name=name)
         return self.default_handle
@@ -92,7 +96,7 @@ class _Host:
     def close_all(self) -> None:
         self.closed.update(self.handles)
 
-    def _live(self, handle: str, operation: str) -> tuple[EnumValue, str]:
+    def _live(self, handle: str, operation: str) -> tuple[RecordValue, str]:
         if handle not in self.handles:
             raise SessionHostError("unknown session", operation)
         if handle in self.closed:
@@ -102,12 +106,12 @@ class _Host:
 
 @dataclass
 class _LifecycleHost(_Host):
-    one_shot_flags: list[bool] = field(default_factory=list)
+    single_prompt_flags: list[bool] = field(default_factory=list)
 
     def with_ephemeral(
-        self, _agent: EnumValue, _transport: str, action: object, *, one_shot: bool = False
+        self, _agent: RecordValue, _transport: str, action: object, *, single_prompt: bool = False
     ) -> object:
-        self.one_shot_flags.append(one_shot)
+        self.single_prompt_flags.append(single_prompt)
         if not callable(action):
             raise AssertionError("expected callable action")
         return action("lifecycle")
@@ -118,20 +122,20 @@ def test_with_ephemeral_session_opens_and_closes_non_lifecycle_hosts() -> None:
     agent = agent_value("AgentCommand", command="worker")
 
     first = with_ephemeral_session(host, agent, "Cli", lambda handle: handle)
-    second = with_ephemeral_session(host, agent, "Cli", lambda handle: handle, one_shot=True)
+    second = with_ephemeral_session(host, agent, "Cli", lambda handle: handle, single_prompt=True)
 
     assert {first, second} == host.closed
 
 
-def test_with_ephemeral_session_delegates_one_shot_lifecycle_hosts() -> None:
+def test_with_ephemeral_session_delegates_single_prompt_lifecycle_hosts() -> None:
     host = _LifecycleHost()
     agent = agent_value("AgentCommand", command="worker")
 
     assert (
-        with_ephemeral_session(host, agent, "Cli", lambda handle: handle, one_shot=True)
+        with_ephemeral_session(host, agent, "Cli", lambda handle: handle, single_prompt=True)
         == "lifecycle"
     )
-    assert host.one_shot_flags == [True]
+    assert host.single_prompt_flags == [True]
 
 
 def test_dispatcher_session_host_snapshots_its_default_and_preserves_requests() -> None:
@@ -152,7 +156,7 @@ def test_dispatcher_session_host_snapshots_its_default_and_preserves_requests() 
     assert host.active_session_count == 0
     assert (
         with_ephemeral_session(
-            host, agent, "Cli", lambda handle: host.ask(handle, "one shot"), one_shot=True
+            host, agent, "Cli", lambda handle: host.ask(handle, "single prompt"), single_prompt=True
         )
         == "answer"
     )
@@ -199,7 +203,7 @@ def test_dispatcher_session_host_snapshots_its_default_and_preserves_requests() 
             operation()
 
 
-def test_dispatcher_retry_replays_complete_one_shot_request_context() -> None:
+def test_dispatcher_retry_replays_the_complete_request_context() -> None:
     requests: list[AgentRequest] = []
 
     def dispatch(request: AgentRequest) -> AgentResponse:
@@ -224,7 +228,7 @@ def _run(source: str, host: _Host) -> RunResult:
 
 def test_session_failures_report_the_session_call_location() -> None:
     class FailingHost(_Host):
-        def open(self, agent: EnumValue, transport: str, *, name: str = "") -> str:
+        def open(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
             del agent, transport, name
             raise SessionHostError("unavailable", "open")
 
@@ -260,7 +264,7 @@ def test_session_operation_failures_report_the_operation_location() -> None:
 
 def test_agent_method_maps_session_agent_errors_to_agent_call_errors() -> None:
     class InvalidAgentHost(_Host):
-        def open(self, agent: EnumValue, transport: str, *, name: str = "") -> str:
+        def open(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
             raise SessionAgentError("invalid agent", "open")
 
     result = _run(
@@ -634,7 +638,7 @@ def test_missing_host_and_lifecycle_errors_become_session_errors() -> None:
     assert default_unavailable.ok
 
     class FailingDefaultHost(_Host):
-        def default(self, agent: EnumValue, transport: str, *, name: str = "") -> str:
+        def default(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
             del agent, transport, name
             raise SessionHostError("unavailable", "default")
 
@@ -650,7 +654,7 @@ def test_missing_host_and_lifecycle_errors_become_session_errors() -> None:
     assert default_failed.ok
 
     class FailingOpenHost(_Host):
-        def open(self, agent: EnumValue, transport: str, *, name: str = "") -> str:
+        def open(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
             del agent, transport, name
             raise SessionHostError("unavailable", "open")
 
@@ -757,3 +761,14 @@ def test_default_transport_is_rpc_for_pi_and_host_errors_are_session_errors() ->
     assert host.handles["s1"][1] == "Rpc"
     assert host.handles["s2"][1] == "Cli"
     assert host.handles["s3"][1] == "Rpc"
+
+
+def test_default_session_transport_is_owned_by_each_agent_specification() -> None:
+    defaults = [
+        (agent_value("AgentCommand", command="worker"), SessionTransport.CLI),
+        (agent_value("AgentClaude", model="m", thinking="high"), SessionTransport.CLI),
+        (agent_value("AgentCodex", model="m", thinking="high"), SessionTransport.CLI),
+        (agent_value("AgentPi", provider="p", model="m", thinking="high"), SessionTransport.RPC),
+    ]
+    for agent, expected in defaults:
+        assert default_session_transport(agent) == expected

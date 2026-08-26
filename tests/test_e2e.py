@@ -593,7 +593,7 @@ _wait_for_path = wait_for_path
 
 def _assert_pid_gone(pid: int) -> None:
     # Process killing is asynchronous: even after the parent has exited and
-    # called _kill_process_group, the kernel may need a moment to reap the
+    # called kill_process_group, the kernel may need a moment to reap the
     # child.  Retry for up to 5 seconds before declaring failure — under
     # heavy parallel test load, process group signal delivery and reaping
     # can be slow.

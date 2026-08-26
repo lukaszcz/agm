@@ -290,6 +290,11 @@ class TypeTable:
         # Memo for exception_field_kinds — same keying convention as
         # _exception_fields_cache above.
         self._exception_field_kinds_cache: dict[DeclId, tuple[tuple[str, str], ...]] = {}
+        # Whole-table indexes over the live ``std/core`` builtin declarations.
+        # Both answer questions about what the session declares as a whole, so
+        # they are invalidated wholesale like the fixpoints below.
+        self._standard_builtins: dict[str, TypeDef] | None = None
+        self._host_minted_ids: frozenset[DeclId] | None = None
         # Methods are independent plain declaration data, keyed by their
         # nominal owner's identity rather than by an import environment.
         # Exception method maps flatten inherited entries and therefore need
@@ -349,6 +354,8 @@ class TypeTable:
         self._name_index[(typedef.module_id, typedef.scope_path, typedef.name)] = decl_id
         if existing is None:
             self._defs[decl_id] = typedef
+            self._standard_builtins = None
+            self._host_minted_ids = None
             self._non_data_caps = None
             self._member_enum_owners = None
             self._finite_closure = None
@@ -532,6 +539,8 @@ class TypeTable:
         # (any declaration's flag can in principle depend on any other's), so
         # a single changed identity invalidates the whole cached result rather
         # than just this one.
+        self._standard_builtins = None
+        self._host_minted_ids = None
         self._non_data_caps = None
         self._member_enum_owners = None
         self._finite_closure = None
@@ -901,27 +910,21 @@ class TypeTable:
         contract declaration. Reserved fallback identities cover the same
         fields when ``std/core`` is not loaded.
         """
-        result: TypeDef | None = None
-        for decl_id, typedef in self._defs.items():
-            if (
-                typedef.is_builtin
-                and typedef.name == name
-                and typedef.module_id == STD_CORE_ID
-                and decl_id not in self._orphaned
-            ):
-                result = typedef
-        return result
+        return self.standard_builtin_declarations().get(name)
 
     def standard_builtin_declarations(self) -> Mapping[str, TypeDef]:
         """Return all loaded ``std/core`` source builtin declarations."""
-        result: dict[str, TypeDef] = {}
-        for decl_id, typedef in self._defs.items():
-            if (
-                typedef.is_builtin
-                and typedef.module_id == STD_CORE_ID
-                and decl_id not in self._orphaned
-            ):
-                result[typedef.name] = typedef
+        result = self._standard_builtins
+        if result is None:
+            result = {}
+            for decl_id, typedef in self._defs.items():
+                if (
+                    typedef.is_builtin
+                    and typedef.module_id == STD_CORE_ID
+                    and decl_id not in self._orphaned
+                ):
+                    result[typedef.name] = typedef
+            self._standard_builtins = result
         return result
 
     def builtin_declarations(self) -> Mapping[str, TypeDef]:
@@ -945,12 +948,16 @@ class TypeTable:
 
     def host_minted_declaration_ids(self) -> frozenset[DeclId]:
         """Return reserved and loaded-source identities for host-owned resources."""
-        identities = set(HOST_MINTED_PRELUDE_TYPE_IDS)
-        for name in HOST_MINTED_PRELUDE_TYPE_NAMES:
-            declaration = self.standard_builtin_declaration(name)
-            if declaration is not None:
-                identities.add(declaration.decl_node_id)
-        return frozenset(identities)
+        cached = self._host_minted_ids
+        if cached is None:
+            identities = set(HOST_MINTED_PRELUDE_TYPE_IDS)
+            for name in HOST_MINTED_PRELUDE_TYPE_NAMES:
+                declaration = self.standard_builtin_declaration(name)
+                if declaration is not None:
+                    identities.add(declaration.decl_node_id)
+            cached = frozenset(identities)
+            self._host_minted_ids = cached
+        return cached
 
     def nominal_reaches_non_data(self, handle: RecordType | EnumType | ExceptionType) -> bool:
         """Return ``True`` if a non-data type is reachable from *handle* (cycle-safe).

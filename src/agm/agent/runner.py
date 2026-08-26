@@ -89,7 +89,7 @@ class PreparedPromptRun:
     @property
     def prompt_via_stdin(self) -> bool:
         """Whether the backend receives the prompt on stdin rather than from a file."""
-        return self.delivery is PromptDelivery.STDIN or self.stdin_prompt is not None
+        return self.delivery is PromptDelivery.STDIN
 
 
 @dataclass(slots=True)
@@ -416,27 +416,16 @@ def run_prompt_command(
         else prepared_argv
     )
     try:
-        if stdin_text is None:
-            returncode, stdout, stderr = run_capture(
-                argv,
-                env=env,
-                stdout_callback=handle_stdout,
-                stderr_callback=handle_stderr,
-                timeout_callback=handle_timeout,
-                isolate_process_group=True,
-                idle_timeout=idle_timeout,
-            )
-        else:
-            returncode, stdout, stderr = run_capture(
-                argv,
-                env=env,
-                stdout_callback=handle_stdout,
-                stderr_callback=handle_stderr,
-                timeout_callback=handle_timeout,
-                isolate_process_group=True,
-                idle_timeout=idle_timeout,
-                stdin_text=stdin_text,
-            )
+        returncode, stdout, stderr = run_capture(
+            argv,
+            env=env,
+            stdout_callback=handle_stdout,
+            stderr_callback=handle_stderr,
+            timeout_callback=handle_timeout,
+            isolate_process_group=True,
+            idle_timeout=idle_timeout,
+            stdin_text=stdin_text,
+        )
     except SystemExit as exc:
         # ``run_capture`` predates structured process results and represents an
         # idle timeout as SystemExit(124). At the agent boundary this is only a
@@ -494,7 +483,7 @@ def run_prepared_prompt(
 ) -> str:
     """Run a prepared prompt invocation."""
 
-    append_target = prepared.delivery is PromptDelivery.FILE and not prepared.prompt_via_stdin
+    append_target = prepared.delivery is PromptDelivery.FILE
     if dry_run.enabled():
         dry_run.print_labeled_command(
             "agent",
@@ -508,14 +497,6 @@ def run_prepared_prompt(
             ),
         )
         return ""
-    if prepared.argv is None and prepared.stdin_prompt is None and append_target:
-        return run_prompt_command(
-            prepared.command,
-            prepared.effective_file,
-            env=prepared.env,
-            stdout_callback=stdout_callback,
-            stderr_callback=stderr_callback,
-        )
     return run_prompt_command(
         prepared.command,
         prepared.effective_file,
@@ -545,8 +526,7 @@ def prepare_rendered_prompt_run(
     runner: list[str],
     temp_files: list[Path],
     env: dict[str, str],
-    prompt_via_stdin: bool | None = None,
-    delivery: PromptDelivery | None = None,
+    delivery: PromptDelivery = PromptDelivery.FILE,
     session_id: str | None = None,
 ) -> PreparedPromptRun:
     """Prepare a runner invocation for an already-rendered AgL prompt.
@@ -565,15 +545,10 @@ def prepare_rendered_prompt_run(
     - Binds ``%{SESSION_ID}`` when *session_id* is provided, without changing
       ordinary runner interpolation when it is not.
 
-    ``prompt_via_stdin`` remains the compatibility spelling for stdin
-    delivery. New callers use *delivery* so literal and promptless lifecycle
-    commands share this same subprocess boundary without making prompt files.
+    *delivery* selects how the prompt reaches the agent, so literal and
+    promptless lifecycle commands share this same subprocess boundary without
+    making prompt files.
     """
-    if delivery is None:
-        delivery = PromptDelivery.STDIN if prompt_via_stdin else PromptDelivery.FILE
-    elif prompt_via_stdin:
-        raise ValueError("prompt_via_stdin cannot be combined with an explicit delivery")
-
     command = runner.copy()
     child_env = env if env else os.environ
     if delivery is PromptDelivery.FILE:

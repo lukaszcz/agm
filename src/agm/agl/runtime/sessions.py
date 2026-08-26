@@ -7,16 +7,13 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, NoReturn, Protocol, TypeVar, runtime_checkable
 
-from agm.agl.runtime.request import (
-    AgentCallHostError,
-    AgentCallInfo,
-    AgentRequest,
-    AgentResponse,
-)
+from agm.agent.transport import AgentCallInfo
+from agm.agl.runtime.request import AgentCallHostError, AgentRequest, AgentResponse
 from agm.agl.semantics.values import RecordValue
 from agm.core.cleanup import preserve_primary_error
 
 if TYPE_CHECKING:
+    from agm.agent.spec import SessionTransport
     from agm.agl.runtime.agents import AgentFn
 
 __all__ = [
@@ -29,18 +26,22 @@ __all__ = [
     "SessionHostError",
     "SessionSnapshot",
     "SessionStats",
-    "SessionTransport",
+    "default_session_transport",
     "with_ephemeral_session",
 ]
 
 _T = TypeVar("_T")
 
 
-class SessionTransport:
-    """Canonical transport labels carried by AgL ``Session`` values."""
+def default_session_transport(agent: RecordValue) -> "SessionTransport":
+    """Return the transport an ``Agent`` value drives when none was selected.
 
-    CLI = "Cli"
-    RPC = "Rpc"
+    The choice belongs to the agent's host specification; AgL never recognizes
+    an agent by its variant name.
+    """
+    from agm.agl.runtime.agents import agent_spec_type
+
+    return agent_spec_type(agent).DEFAULT_SESSION_TRANSPORT
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,7 +97,7 @@ class SessionAskError(Exception):
 
 @runtime_checkable
 class SessionRequestHost(Protocol):
-    """Optional session-host seam that preserves a one-shot request envelope.
+    """Optional session-host seam that preserves the whole request envelope.
 
     Hosts that adapt an ordinary agent dispatcher use this to retain the
     dispatcher-facing request metadata while the evaluator still owns the
@@ -116,7 +117,7 @@ class EphemeralSessionHost(Protocol):
         transport: str,
         action: Callable[[str], _T],
         *,
-        one_shot: bool = False,
+        single_prompt: bool = False,
     ) -> _T: ...
 
 
@@ -126,7 +127,7 @@ class SessionHost(Protocol):
     def open(self, agent: RecordValue, transport: str, *, name: str = "") -> str: ...
 
     def open_ephemeral(
-        self, agent: RecordValue, transport: str, *, one_shot: bool = False
+        self, agent: RecordValue, transport: str, *, single_prompt: bool = False
     ) -> str: ...
 
     def default(self, agent: RecordValue, transport: str, *, name: str = "") -> str: ...
@@ -158,17 +159,16 @@ def with_ephemeral_session(
     transport: str,
     action: Callable[[str], _T],
     *,
-    one_shot: bool = False,
+    single_prompt: bool = False,
 ) -> _T:
-    """Run *action* through one host ephemeral handle and always release it."""
+    """Run *action* through one host ephemeral handle and always release it.
+
+    ``single_prompt`` tells the host the handle serves exactly one prompt, so a
+    backend need not establish a conversation it will never continue.
+    """
     if isinstance(host, EphemeralSessionHost):
-        if one_shot:
-            return host.with_ephemeral(agent, transport, action, one_shot=True)
-        return host.with_ephemeral(agent, transport, action)
-    if one_shot:
-        handle = host.open_ephemeral(agent, transport, one_shot=True)
-    else:
-        handle = host.open_ephemeral(agent, transport)
+        return host.with_ephemeral(agent, transport, action, single_prompt=single_prompt)
+    handle = host.open_ephemeral(agent, transport, single_prompt=single_prompt)
     with preserve_primary_error(
         lambda: host.close(handle), label="ephemeral agent session cleanup"
     ):
@@ -178,9 +178,9 @@ def with_ephemeral_session(
 class AgentDispatcherSessionHost(SessionHost):
     """Dispatcher-backed session host used when no native session service exists.
 
-    Its default handle snapshots an agent for the run, while each dispatch still
-    uses the legacy one-shot dispatcher. Explicit Agent-method calls retain
-    their short-lived lifecycle.
+    Its default handle snapshots an agent for the run, while each dispatch goes
+    through the plain agent dispatcher. Explicit Agent-method calls retain their
+    short-lived lifecycle.
     """
 
     def __init__(self, dispatcher: "AgentFn | None") -> None:
@@ -199,8 +199,10 @@ class AgentDispatcherSessionHost(SessionHost):
         del name
         self._unavailable("open")
 
-    def open_ephemeral(self, agent: RecordValue, transport: str, *, one_shot: bool = False) -> str:
-        del one_shot
+    def open_ephemeral(
+        self, agent: RecordValue, transport: str, *, single_prompt: bool = False
+    ) -> str:
+        del single_prompt
         handle = self._new_handle()
         self._sessions[handle] = SessionSnapshot(agent, transport)
         return handle

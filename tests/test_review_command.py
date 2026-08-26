@@ -499,6 +499,7 @@ def test_review_once_runs_prompt_and_cleans_temp_files(
         env: dict[str, str],
         stdout_callback: Callable[[str], None] | None = None,
         stderr_callback: Callable[[str], None] | None = None,
+        **_kwargs: object,
     ) -> str:
         assert command == ["fake-reviewer"]
         assert target.is_file()
@@ -548,6 +549,7 @@ def test_review_once_reuses_config_for_preparation(
         env: dict[str, str],
         stdout_callback: Callable[[str], None] | None = None,
         stderr_callback: Callable[[str], None] | None = None,
+        **_kwargs: object,
     ) -> str:
         del command, target, env, stdout_callback, stderr_callback
         return "review output\n"
@@ -577,6 +579,7 @@ def test_review_once_saves_output_to_default_review_file(
         env: dict[str, str],
         stdout_callback: Callable[[str], None] | None = None,
         stderr_callback: Callable[[str], None] | None = None,
+        **_kwargs: object,
     ) -> str:
         del command, target, env, stdout_callback, stderr_callback
         return "review output\n"
@@ -609,6 +612,7 @@ def test_review_once_honors_explicit_and_disabled_review_file(
         env: dict[str, str],
         stdout_callback: Callable[[str], None] | None = None,
         stderr_callback: Callable[[str], None] | None = None,
+        **_kwargs: object,
     ) -> str:
         del command, target, env, stdout_callback, stderr_callback
         return "review output\n"
@@ -641,6 +645,7 @@ def test_review_once_saves_to_configured_review_file(
         env: dict[str, str],
         stdout_callback: Callable[[str], None] | None = None,
         stderr_callback: Callable[[str], None] | None = None,
+        **_kwargs: object,
     ) -> str:
         del command, target, env, stdout_callback, stderr_callback
         return "review output\n"
@@ -673,6 +678,7 @@ def test_review_once_warns_before_overwriting_existing_review_file(
         env: dict[str, str],
         stdout_callback: Callable[[str], None] | None = None,
         stderr_callback: Callable[[str], None] | None = None,
+        **_kwargs: object,
     ) -> str:
         del command, target, env, stdout_callback, stderr_callback
         return "new review output\n"
@@ -701,6 +707,7 @@ def test_review_once_honors_none_and_absolute_review_file(
         env: dict[str, str],
         stdout_callback: Callable[[str], None] | None = None,
         stderr_callback: Callable[[str], None] | None = None,
+        **_kwargs: object,
     ) -> str:
         del command, target, env, stdout_callback, stderr_callback
         return "review output\n"

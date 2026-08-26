@@ -154,7 +154,9 @@ def test_production_session_host_selects_and_rejects_transports(
 ) -> None:
     from agm.agent.session.rpc import PiRpcSessionBackend
 
-    monkeypatch.setattr(PiRpcSessionBackend, "_start", lambda self, _argv, _operation: None)
+    monkeypatch.setattr(
+        PiRpcSessionBackend, "_start", lambda self, _agent, _operation, name="": None
+    )
     host = create_agl_session_host(idle_timeout=1.0)
     pi = agent_value("AgentPi", provider="provider", model="model", thinking="think")
     handle = host.open(pi, "Rpc")
@@ -387,19 +389,21 @@ def test_ephemeral_lifecycle_retires_its_handle_after_closing() -> None:
     assert service._entries == {}
 
 
-def test_agl_host_one_shot_ephemeral_lifecycle_retires_its_agent_mapping() -> None:
+def test_agl_host_single_prompt_ephemeral_lifecycle_retires_its_agent_mapping() -> None:
     service, factory = _service()
     host = AglSessionHost(service)
     agent = agent_value("AgentCommand", command="worker")
 
     assert (
-        host.with_ephemeral(agent, "Cli", lambda handle: host.ask(handle, "hello"), one_shot=True)
+        host.with_ephemeral(
+            agent, "Cli", lambda handle: host.ask(handle, "hello"), single_prompt=True
+        )
         == "answer"
     )
     assert factory.backends[0].open_requests == [
-        SessionOpenRequest(agent=AgentCommand("worker"), transport="cli", one_shot=True)
+        SessionOpenRequest(agent=AgentCommand("worker"), transport="cli", single_prompt=True)
     ]
-    assert host._agents == {}
+    assert host._sessions == {}
 
 
 def test_agl_host_ephemeral_lifecycle_retires_its_agent_mapping() -> None:
@@ -417,8 +421,7 @@ def test_agl_host_ephemeral_lifecycle_retires_its_agent_mapping() -> None:
     assert response == "answer"
     assert factory.backends[0].close_calls == 1
     assert service._entries == {}
-    assert host._agents == {}
-    assert host._ephemeral_handles == set()
+    assert host._sessions == {}
     with pytest.raises(AglSessionHostError):
         host.close(handles[0])
 
@@ -434,8 +437,7 @@ def test_agl_host_reset_all_retires_all_successfully_closed_mappings() -> None:
 
     assert not service.is_known(persistent)
     assert not service.is_known(ephemeral)
-    assert host._agents == {}
-    assert host._ephemeral_handles == set()
+    assert host._sessions == {}
 
 
 def test_agl_host_reset_all_keeps_only_failed_close_mappings() -> None:
@@ -449,7 +451,7 @@ def test_agl_host_reset_all_keeps_only_failed_close_mappings() -> None:
     with pytest.raises(ExceptionGroup):
         host.reset_all()
 
-    assert set(host._agents) == {failed}
+    assert set(host._sessions) == {failed}
     assert service.is_known(failed)
     assert not service.is_known(closed)
 
@@ -458,17 +460,16 @@ def test_close_all_retires_closed_ephemeral_host_mappings() -> None:
     service, factory = _service()
     host = AglSessionHost(service)
     agent = agent_value("AgentCommand", command="worker")
-    handle = host.open_ephemeral(agent, "Cli", one_shot=True)
+    handle = host.open_ephemeral(agent, "Cli", single_prompt=True)
 
     host.close_all()
 
     assert factory.backends[0].open_requests == [
-        SessionOpenRequest(agent=AgentCommand("worker"), transport="cli", one_shot=True)
+        SessionOpenRequest(agent=AgentCommand("worker"), transport="cli", single_prompt=True)
     ]
     assert factory.backends[0].close_calls == 1
     assert service._entries == {}
-    assert host._agents == {}
-    assert host._ephemeral_handles == set()
+    assert host._sessions == {}
     with pytest.raises(AglSessionHostError):
         host.close(handle)
 
@@ -483,22 +484,30 @@ def test_close_all_keeps_an_ephemeral_mapping_when_its_close_can_be_retried() ->
         host.close_all()
 
     assert handle in service._entries
-    assert handle in host._agents
-    assert handle in host._ephemeral_handles
+    assert host._sessions[handle].ephemeral
 
     factory.backends[0].close_error = None
     host.close(handle)
+
+
+def _ask_ephemeral(
+    service: SessionService, agent: object, request: SessionAskRequest
+) -> SessionAskResponse:
+    """Ask through one short-lived session, as the AgL ephemeral ask does."""
+    return service.with_ephemeral(
+        agent, "cli", lambda handle: service.ask(handle, request), single_prompt=True
+    )
 
 
 def test_ephemeral_ask_returns_its_response_after_closing() -> None:
     service, factory = _service()
     agent = object()
 
-    response = service.ask_ephemeral(agent, "cli", SessionAskRequest(prompt="hello"))
+    response = _ask_ephemeral(service, agent, SessionAskRequest(prompt="hello"))
 
     assert response == SessionAskResponse(content="answer")
     assert factory.backends[0].open_requests == [
-        SessionOpenRequest(agent=agent, transport="cli", one_shot=True)
+        SessionOpenRequest(agent=agent, transport="cli", single_prompt=True)
     ]
     assert factory.backends[0].close_calls == 1
 
@@ -515,7 +524,7 @@ def test_ephemeral_ask_closes_after_a_backend_failure() -> None:
     failing_service = SessionService(make_failing_backend)
 
     with pytest.raises(RuntimeError, match="transport failed"):
-        failing_service.ask_ephemeral(object(), "cli", SessionAskRequest(prompt="hello"))
+        _ask_ephemeral(failing_service, object(), SessionAskRequest(prompt="hello"))
 
     assert factory.backends[0].close_calls == 1
 
@@ -542,7 +551,7 @@ def test_ephemeral_ask_preserves_an_ask_error_when_close_also_fails() -> None:
     service = SessionService(make_failing_backend)
 
     with pytest.raises(SessionAskError) as raised:
-        service.ask_ephemeral(object(), "cli", SessionAskRequest(prompt="hello"))
+        _ask_ephemeral(service, object(), SessionAskRequest(prompt="hello"))
 
     assert raised.value is ask_error
     assert raised.value.call_info.to_trace() == {
@@ -566,7 +575,7 @@ def test_ephemeral_ask_surfaces_a_close_failure_after_a_successful_ask() -> None
     service = SessionService(make_failing_backend)
 
     with pytest.raises(RuntimeError) as raised:
-        service.ask_ephemeral(object(), "cli", SessionAskRequest(prompt="hello"))
+        _ask_ephemeral(service, object(), SessionAskRequest(prompt="hello"))
 
     assert raised.value is close_error
     assert factory.backends[0].close_calls == 1

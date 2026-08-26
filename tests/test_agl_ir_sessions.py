@@ -13,11 +13,12 @@ from agm.agl.ir.nodes import (
     IrConstText,
     IrExpr,
     IrLoad,
-    IrMakeEnum,
+    IrMakeRecord,
     IrSessionAsk,
     IrSessionDefault,
     IrSessionOp,
     IrSessionOpen,
+    IrSessionOpKind,
 )
 from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
 from agm.agl.ir.validate import InvalidIrError, validate_ir
@@ -95,7 +96,7 @@ def test_session_open_lowers_omitted_and_explicit_options() -> None:
     assert isinstance(omitted.name, IrConstText)
     assert omitted.name.value == ""
     assert isinstance(explicit, IrSessionOpen)
-    assert isinstance(explicit.transport, IrMakeEnum)
+    assert isinstance(explicit.transport, IrMakeRecord)
     assert isinstance(explicit.name, IrConstText)
     assert explicit.name.value == "review"
 
@@ -230,7 +231,7 @@ def test_session_op_defaults_its_optional_argument_to_none() -> None:
     operation = IrSessionOp(
         location=_LOC,
         session=IrConstText(location=_LOC, value="session"),
-        op="reset",
+        op=IrSessionOpKind.RESET,
     )
 
     assert operation.arg is None
@@ -257,13 +258,13 @@ def test_well_formed_session_nodes_pass_deep_validation() -> None:
         *(
             IrSessionOp(location=_LOC, session=session, op=op, arg=arg)
             for op, arg in (
-                ("compact", None),
-                ("compact", IrConstText(location=_LOC, value="instructions")),
-                ("reset", None),
-                ("fork", None),
-                ("stats", None),
-                ("set-name", IrConstText(location=_LOC, value="name")),
-                ("close", None),
+                (IrSessionOpKind.COMPACT, None),
+                (IrSessionOpKind.COMPACT, IrConstText(location=_LOC, value="instructions")),
+                (IrSessionOpKind.RESET, None),
+                (IrSessionOpKind.FORK, None),
+                (IrSessionOpKind.STATS, None),
+                (IrSessionOpKind.SET_NAME, IrConstText(location=_LOC, value="name")),
+                (IrSessionOpKind.CLOSE, None),
             )
         ),
         contracts={contract_id: _contract()},
@@ -271,24 +272,6 @@ def test_well_formed_session_nodes_pass_deep_validation() -> None:
 
     validate_ir(program, deep=False)
     validate_ir(program)
-
-
-@pytest.mark.parametrize(
-    "node",
-    (
-        IrSessionAsk(
-            location=_LOC,
-            session=cast(IrExpr, None),
-            prompt=IrConstText(location=_LOC, value="prompt"),
-            contract_id=ContractId(0),
-            max_attempts=1,
-        ),
-        IrSessionOp(location=_LOC, session=cast(IrExpr, None), op="reset", arg=None),
-    ),
-)
-def test_session_nodes_reject_a_missing_session_operand(node: IrExpr) -> None:
-    with pytest.raises(InvalidIrError, match="session"):
-        validate_ir(_program(node, contracts={ContractId(0): _contract()}), deep=False)
 
 
 def test_session_ask_rejects_unknown_contract_and_bad_max_attempts() -> None:
@@ -316,14 +299,23 @@ def test_session_ask_rejects_unknown_contract_and_bad_max_attempts() -> None:
 def test_session_op_rejects_unknown_tag_and_bad_argument_pairings() -> None:
     session = IrConstText(location=_LOC, value="session")
     with pytest.raises(InvalidIrError, match="operation"):
-        validate_ir(_program(IrSessionOp(location=_LOC, session=session, op="unknown", arg=None)))
+        validate_ir(
+            _program(
+                IrSessionOp(
+                    location=_LOC,
+                    session=session,
+                    op=cast(IrSessionOpKind, "unknown"),
+                    arg=None,
+                )
+            )
+        )
 
     for operation in (
-        IrSessionOp(location=_LOC, session=session, op="set-name", arg=None),
+        IrSessionOp(location=_LOC, session=session, op=IrSessionOpKind.SET_NAME, arg=None),
         IrSessionOp(
             location=_LOC,
             session=session,
-            op="reset",
+            op=IrSessionOpKind.RESET,
             arg=IrConstText(location=_LOC, value="unexpected"),
         ),
     ):

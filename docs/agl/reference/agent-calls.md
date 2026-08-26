@@ -210,8 +210,10 @@ Every row supports `ask`, `reset`, and `close`. A nonempty `name` passed to
 `Session::open` is rejected for command and Codex CLI sessions. An explicit `Agent::ask` has
 the same transport default, but its session lasts only for that call and its
 retries; use `Session::open` to keep the conversation after the call. A single-attempt
-`AgentCommand.ask` uses a one-shot session and does not require `%{SESSION_ID}`; enabling
-corrective retries requires the placeholder so all attempts share one conversation.
+`Agent::ask` sends exactly one prompt, so its session never has to be continued: an
+`AgentCommand` does not require `%{SESSION_ID}` and the other CLI backends run their plain
+prompt command. Enabling corrective retries makes every attempt share one conversation, so
+an `AgentCommand` then requires the placeholder.
 
 ## Target types: types as contracts
 

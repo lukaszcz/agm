@@ -25,7 +25,7 @@ import agm.cli as cli
 import agm.commands.repl as repl_command
 from agm.agl.repl import ReplSession
 from agm.agl.runtime.sessions import SessionSnapshot
-from agm.agl.semantics.values import EnumValue
+from agm.agl.semantics.values import RecordValue
 from agm.cli_support.args import ReplArgs
 
 
@@ -228,23 +228,23 @@ class TestReplRun:
         confirmations: list[tuple[str, str]] = []
 
         class SessionHost:
-            def __init__(self, confirm_session: Callable[[EnumValue, str], None]) -> None:
+            def __init__(self, confirm_session: Callable[[RecordValue, str], None]) -> None:
                 self._confirm_session = confirm_session
-                self._sessions: dict[str, tuple[EnumValue, str]] = {}
+                self._sessions: dict[str, tuple[RecordValue, str]] = {}
                 self._default_handle: str | None = None
                 self.opened: list[str] = []
                 self.prompts: list[tuple[str, str]] = []
                 self.close_calls = 0
                 self.closed_handles: set[str] = set()
 
-            def open(self, agent: EnumValue, transport: str, *, name: str = "") -> str:
+            def open(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
                 del name
                 handle = f"session-{len(self._sessions) + 1}"
                 self._sessions[handle] = (agent, transport)
                 self.opened.append(agent.fields["provider"].value)
                 return handle
 
-            def default(self, agent: EnumValue, transport: str, *, name: str = "") -> str:
+            def default(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
                 if self._default_handle is None:
                     self._default_handle = self.open(agent, transport, name=name)
                 return self._default_handle
@@ -266,7 +266,7 @@ class TestReplRun:
         hosts: list[SessionHost] = []
 
         def create_host(**kwargs: object) -> SessionHost:
-            confirm_session = cast(Callable[[EnumValue, str], None], kwargs["confirm_session"])
+            confirm_session = cast(Callable[[RecordValue, str], None], kwargs["confirm_session"])
             host = SessionHost(confirm_session)
             hosts.append(host)
             return host

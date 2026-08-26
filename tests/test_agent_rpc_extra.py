@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import io
+import itertools
 import os
 import queue
-import signal
 import subprocess
-import time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import cast
@@ -23,6 +22,40 @@ from agm.agent.session import (
 )
 from agm.agent.spec import AgentClaude, AgentPi
 from tests.test_agent_rpc import RpcStub, open_backend
+
+_PI = AgentPi(provider="provider", model="model", thinking="think")
+
+#: Fake children are given process groups above this floor so the autouse
+#: fixture below can recognize — and never actually signal — them.
+_FAKE_PROCESS_GROUP_FLOOR = 1 << 30
+_fake_process_groups = itertools.count(_FAKE_PROCESS_GROUP_FLOOR)
+
+
+@pytest.fixture(autouse=True)
+def killed_groups(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Record the teardown of fake children instead of signalling a real group."""
+    killed: list[int] = []
+    send_signal = os.killpg
+
+    def killpg(group: int, sig: int) -> None:
+        if group < _FAKE_PROCESS_GROUP_FLOOR:
+            send_signal(group, sig)
+            return
+        killed.append(group)
+        raise ProcessLookupError
+
+    monkeypatch.setattr(os, "killpg", killpg)
+    return killed
+
+
+def _child(process: object) -> rpc._RpcChild:
+    """Build an ``_RpcChild`` around a fake *process* with a plausible argv."""
+    return rpc._RpcChild(
+        cast(subprocess.Popen[bytes], process),
+        next(_fake_process_groups),
+        _PI,
+        ["pi", "--mode", "rpc"],
+    )
 
 
 @pytest.mark.parametrize(
@@ -215,7 +248,7 @@ def test_bounded_records_output_and_stderr(tmp_path: Path, monkeypatch: pytest.M
     class Unwritable:
         stdin: io.BufferedWriter | None = None
 
-    child = rpc._RpcChild(cast(subprocess.Popen[bytes], Unwritable()))
+    child = _child(Unwritable())
     child.stderr.append("x" * (rpc._MAX_STDERR_CHARS + 1))
     assert len(child.stderr.value) == rpc._MAX_STDERR_CHARS
     with pytest.raises(BrokenPipeError):
@@ -237,82 +270,8 @@ def test_terminate_closes_stdin() -> None:
             return 0
 
     process = Process()
-    rpc._terminate(rpc._RpcChild(cast(subprocess.Popen[bytes], process)))
+    rpc._terminate(_child(process))
     assert process.stdin.closed
-
-
-def test_terminate_process_group_allows_graceful_exit_before_kill(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    signals: list[int] = []
-
-    class Process:
-        stdin = None
-
-        def wait(self, timeout: float | None = None) -> int:
-            assert timeout == 1
-            signals.append(signal.SIGCHLD)
-            return 0
-
-    def record_signal(_group: int, sent: int) -> None:
-        signals.append(sent)
-
-    monkeypatch.setattr(os, "killpg", record_signal)
-
-    rpc._terminate_process_group(cast(subprocess.Popen[bytes], Process()), 123)
-
-    assert signals[:2] == [signal.SIGTERM, signal.SIGCHLD]
-    assert signals[-1] == signal.SIGKILL
-
-
-@pytest.mark.parametrize("kill_disappears", [False, True])
-def test_terminate_process_group_kills_after_timeout(
-    monkeypatch: pytest.MonkeyPatch, *, kill_disappears: bool
-) -> None:
-    signals: list[int] = []
-    waits: list[float | None] = []
-
-    class Process:
-        stdin = None
-
-        def wait(self, timeout: float | None = None) -> int:
-            waits.append(timeout)
-            if timeout is not None:
-                raise subprocess.TimeoutExpired("pi", timeout)
-            return 0
-
-    def send_signal(_group: int, sent: int) -> None:
-        signals.append(sent)
-        if sent == signal.SIGKILL and kill_disappears:
-            raise ProcessLookupError
-
-    monkeypatch.setattr(os, "killpg", send_signal)
-
-    rpc._terminate_process_group(cast(subprocess.Popen[bytes], Process()), 123)
-
-    assert signals == [signal.SIGTERM, signal.SIGKILL]
-    assert waits == [1, None]
-
-
-def test_terminate_process_group_ignores_disappearance_after_grace(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class Process:
-        stdin = None
-
-        def wait(self, timeout: float | None = None) -> int:
-            assert timeout == 1
-            return 0
-
-    def send_signal(_group: int, sent: int) -> None:
-        if sent == signal.SIGKILL:
-            raise ProcessLookupError
-
-    times = iter([0.0, 0.3])
-    monkeypatch.setattr(os, "killpg", send_signal)
-    monkeypatch.setattr(time, "monotonic", lambda: next(times))
-
-    rpc._terminate_process_group(cast(subprocess.Popen[bytes], Process()), 123)
 
 
 def test_terminate_ignores_stdin_close_failure() -> None:
@@ -326,7 +285,7 @@ def test_terminate_ignores_stdin_close_failure() -> None:
         def poll(self) -> int:
             return 0
 
-    rpc._terminate(rpc._RpcChild(cast(subprocess.Popen[bytes], Process())))
+    rpc._terminate(_child(Process()))
 
 
 def test_helpers_and_spawn_edges(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -404,7 +363,7 @@ def test_helpers_and_spawn_edges(monkeypatch: pytest.MonkeyPatch) -> None:
         def kill(self) -> None:
             raise ProcessLookupError
 
-    rpc._terminate(rpc._RpcChild(cast(subprocess.Popen[bytes], Process())))
+    rpc._terminate(_child(Process()))
 
     class NoPipes:
         pid = 999_999_999
@@ -498,7 +457,7 @@ def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> Non
         def poll(self) -> None:
             return None
 
-    child = rpc._RpcChild(cast(subprocess.Popen[bytes], RunningProcess()))
+    child = _child(RunningProcess())
     child.stdout.put(b"\r\n")
     with pytest.raises(rpc._RpcProtocolError):
         backend._next_line(child)
@@ -508,12 +467,12 @@ def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> Non
     child.stdout.put(b"x" * (rpc._MAX_JSONL_RECORD_BYTES + 1) + b"\n")
     with pytest.raises(rpc._RpcProtocolError):
         backend._next_line(child)
-    backend._stdout_buffer = b""
+    child.stdout_buffer.clear()
     backend._idle_timeout = 0
     with pytest.raises(rpc._RpcIdleTimeout):
         backend._next_line(child)
 
-    backend._stdout_buffer = b"x" * (rpc._MAX_JSONL_RECORD_BYTES + 1) + b"\n"
+    child.stdout_buffer[:] = b"x" * (rpc._MAX_JSONL_RECORD_BYTES + 1) + b"\n"
     with pytest.raises(rpc._RpcProtocolError):
         backend._next_line(child)
 
@@ -523,7 +482,7 @@ def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> Non
             full.stopped.set()
             raise queue.Full
 
-    full = rpc._RpcChild(cast(subprocess.Popen[bytes], RunningProcess()))
+    full = _child(RunningProcess())
     full.stdout = cast(queue.Queue[bytes | None], FullQueue())
     rpc._queue_stdout(full, b"blocked")
 
@@ -561,11 +520,11 @@ def test_open_rejects_an_already_live_child_and_dead_child_is_cleared(
         def poll(self) -> int:
             return 1
 
-    backend._child = rpc._RpcChild(cast(subprocess.Popen[bytes], DeadProcess()))
+    backend._child = _child(DeadProcess())
     with pytest.raises(SessionHostError):
         backend.compact("")
     assert backend._child is None
-    backend._kill_dead_child(rpc._RpcChild(cast(subprocess.Popen[bytes], DeadProcess())))
+    backend._kill_dead_child(_child(DeadProcess()))
 
 
 @pytest.mark.parametrize(
@@ -673,10 +632,9 @@ def test_fork_after_clone_failure_retains_replacement_parent(
             del timeout
 
     backend = rpc.PiRpcSessionBackend()
-    source = rpc._RpcChild(cast(subprocess.Popen[bytes], Process()))
-    replacement = rpc._RpcChild(cast(subprocess.Popen[bytes], Process()))
+    source = _child(Process())
+    replacement = _child(Process())
     backend._child = source
-    backend._command = ["pi", "--mode", "rpc"]
     source_states = iter([{"data": {"sessionId": "parent"}}, {}])
 
     def send(
@@ -689,8 +647,8 @@ def test_fork_after_clone_failure_retains_replacement_parent(
             return next(source_states), []
         return {"data": {"cancelled": False}}, []
 
-    def spawn(command: list[str], operation: str) -> rpc._RpcChild:
-        del command, operation
+    def spawn(agent: AgentPi, command: list[str], operation: str) -> rpc._RpcChild:
+        del agent, command, operation
         return replacement
 
     monkeypatch.setattr(rpc.PiRpcSessionBackend, "_send", send)
@@ -702,28 +660,21 @@ def test_fork_after_clone_failure_retains_replacement_parent(
 
 
 def test_fork_replacement_readiness_failure_leaves_source_unchanged(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, killed_groups: list[int]
 ) -> None:
     class Process:
         stdin = cast(io.BufferedWriter, io.BytesIO())
 
-        def __init__(self) -> None:
-            self.terminated = False
-
         def poll(self) -> None:
             return None
-
-        def terminate(self) -> None:
-            self.terminated = True
 
         def wait(self, timeout: float | None = None) -> None:
             del timeout
 
     backend = rpc.PiRpcSessionBackend()
-    source = rpc._RpcChild(cast(subprocess.Popen[bytes], Process()))
-    replacement = rpc._RpcChild(cast(subprocess.Popen[bytes], Process()))
+    source = _child(Process())
+    replacement = _child(Process())
     backend._child = source
-    backend._command = ["pi", "--mode", "rpc"]
 
     def send(
         self: rpc.PiRpcSessionBackend, operation: str, payload: dict[str, object], **kwargs: object
@@ -732,8 +683,8 @@ def test_fork_replacement_readiness_failure_leaves_source_unchanged(
         session_id = "parent" if self is backend else "wrong"
         return {"data": {"sessionId": session_id}}, []
 
-    def spawn(command: list[str], operation: str) -> rpc._RpcChild:
-        del command, operation
+    def spawn(agent: AgentPi, command: list[str], operation: str) -> rpc._RpcChild:
+        del agent, command, operation
         return replacement
 
     monkeypatch.setattr(rpc.PiRpcSessionBackend, "_send", send)
@@ -741,34 +692,26 @@ def test_fork_replacement_readiness_failure_leaves_source_unchanged(
     with pytest.raises(SessionHostError):
         backend.fork()
     assert backend._child is source
-    assert not source.process.terminated
-    assert replacement.process.terminated
+    assert set(killed_groups) == {replacement.process_group}
     backend.close()
 
 
 def test_fork_rejects_a_child_with_the_parent_session_id(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, killed_groups: list[int]
 ) -> None:
     class Process:
         stdin = cast(io.BufferedWriter, io.BytesIO())
 
-        def __init__(self) -> None:
-            self.terminated = False
-
         def poll(self) -> None:
             return None
-
-        def terminate(self) -> None:
-            self.terminated = True
 
         def wait(self, timeout: float | None = None) -> None:
             del timeout
 
     backend = rpc.PiRpcSessionBackend()
-    source = rpc._RpcChild(cast(subprocess.Popen[bytes], Process()))
-    replacement = rpc._RpcChild(cast(subprocess.Popen[bytes], Process()))
+    source = _child(Process())
+    replacement = _child(Process())
     backend._child = source
-    backend._command = ["pi", "--mode", "rpc"]
     calls: list[tuple[object, str]] = []
 
     def send(
@@ -780,8 +723,8 @@ def test_fork_rejects_a_child_with_the_parent_session_id(
             return {"data": {"cancelled": False}}, []
         return {"data": {"sessionId": "parent"}}, []
 
-    def spawn(command: list[str], operation: str) -> rpc._RpcChild:
-        del command, operation
+    def spawn(agent: AgentPi, command: list[str], operation: str) -> rpc._RpcChild:
+        del agent, command, operation
         return replacement
 
     monkeypatch.setattr(rpc.PiRpcSessionBackend, "_send", send)
@@ -791,7 +734,7 @@ def test_fork_rejects_a_child_with_the_parent_session_id(
     assert [operation for _, operation in calls] == ["get_state", "get_state", "clone", "get_state"]
     assert calls[1][0] is not backend
     assert backend._child is replacement
-    assert source.process.terminated
+    assert set(killed_groups) == {source.process_group}
     backend.close()
 
 
@@ -803,8 +746,8 @@ def test_fork_spawn_failure_does_not_move_the_live_parent(
     original = backend._child
     assert original is not None
 
-    def fail_spawn(command: list[str], operation: str) -> rpc._RpcChild:
-        del command
+    def fail_spawn(agent: AgentPi, command: list[str], operation: str) -> rpc._RpcChild:
+        del agent, command
         raise SessionHostError("no", operation)
 
     monkeypatch.setattr(backend, "_spawn", fail_spawn)

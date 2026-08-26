@@ -511,7 +511,7 @@ def _builtin_static_decl_node_ids(
     functions: Mapping[QName, FuncDef],
     types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
 ) -> frozenset[int]:
-    """Return static declarations whose owner is the prelude ``Session`` record."""
+    """Return static declarations owned by a builtin record that registers statics."""
     result: set[int] = set()
     for (module_id, _atom_name), function in functions.items():
         owner_path = tuple(segment.name for segment in function.scope_path)

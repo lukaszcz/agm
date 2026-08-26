@@ -113,6 +113,7 @@ from agm.agl.ir.nodes import (
     IrSessionDefault,
     IrSessionOp,
     IrSessionOpen,
+    IrSessionOpKind,
     IrTemplateText,
     IrTemplateValue,
     IrTry,
@@ -2245,19 +2246,16 @@ class _Lowerer:
                     call_node.args[1] if len(call_node.args) > 1 else named_args.get("transport")
                 )
                 name = call_node.args[2] if len(call_node.args) > 2 else named_args.get("name")
-                return cast(
-                    IrExpr,
-                    IrSessionOpen(
-                        location=loc,
-                        agent=self.lower_expr(agent),
-                        transport=None if transport is None else self.lower_expr(transport),
-                        name=IrConstText(location=loc, value="")
-                        if name is None
-                        else self.lower_expr(name),
-                    ),
+                return IrSessionOpen(
+                    location=loc,
+                    agent=self.lower_expr(agent),
+                    transport=None if transport is None else self.lower_expr(transport),
+                    name=IrConstText(location=loc, value="")
+                    if name is None
+                    else self.lower_expr(name),
                 )
             case BuiltinStaticKind.SESSION_DEFAULT:
-                return cast(IrExpr, IrSessionDefault(location=loc))
+                return IrSessionDefault(location=loc)
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
 
@@ -2292,14 +2290,11 @@ class _Lowerer:
             argument = call_node.args[0] if call_node.args else named_args["name"]
         else:
             argument = None
-        return cast(
-            IrExpr,
-            IrSessionOp(
-                location=self._loc(span),
-                session=session,
-                op=method.name,
-                arg=None if argument is None else self.lower_expr(argument),
-            ),
+        return IrSessionOp(
+            location=self._loc(span),
+            session=session,
+            op=IrSessionOpKind(method.name),
+            arg=None if argument is None else self.lower_expr(argument),
         )
 
     def _lower_call(self, call_node: "Call", nid: int, span: "SourceSpan") -> IrExpr:
@@ -3254,7 +3249,6 @@ class _Lowerer:
         # neither a retry count nor an output contract, and steps 3 and 4 below
         # apply to ``ask`` alone.
         if is_request:
-            assert session is None, "compiler bug: Session ask cannot build an agent request"
             if agent is None:
                 agent = IrBuiltinLoad(location=loc, key="default-agent")
             return IrAskRequest(location=loc, agent=agent, prompt=prompt_ir)
@@ -3301,15 +3295,12 @@ class _Lowerer:
         contract_id = self._alloc_contract(contract_req)
 
         if session is not None:
-            return cast(
-                IrExpr,
-                IrSessionAsk(
-                    location=loc,
-                    session=session,
-                    prompt=prompt_ir,
-                    contract_id=contract_id,
-                    max_attempts=max_attempts,
-                ),
+            return IrSessionAsk(
+                location=loc,
+                session=session,
+                prompt=prompt_ir,
+                contract_id=contract_id,
+                max_attempts=max_attempts,
             )
         assert agent is not None, "compiler bug: non-session ask requires an Agent receiver"
         return IrAsk(

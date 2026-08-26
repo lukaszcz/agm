@@ -6,7 +6,6 @@ import json
 import os
 import queue
 import select
-import signal
 import subprocess
 import threading
 import time
@@ -29,6 +28,7 @@ from agm.agent.session.protocol import (
 )
 from agm.agent.spec import AgentPi
 from agm.agent.transport import AgentCallInfo, AgentTransportFailureCause, stderr_tail
+from agm.core.process import kill_process_group
 
 _RpcOperation = Literal[
     "prompt",
@@ -63,7 +63,10 @@ class _RpcChild:
     """The process and bounded asynchronously drained streams for one Pi session."""
 
     process: subprocess.Popen[bytes]
-    process_group: int | None = None
+    process_group: int
+    agent: AgentPi
+    command: list[str]
+    stdout_buffer: bytearray = field(default_factory=bytearray)
     stdout: queue.Queue[bytes | None] = field(
         default_factory=lambda: queue.Queue(maxsize=_MAX_STDOUT_CHUNKS)
     )
@@ -80,8 +83,6 @@ class PiRpcSessionBackend:
     def __init__(self, *, idle_timeout: float | None = None) -> None:
         self._idle_timeout = idle_timeout
         self._child: _RpcChild | None = None
-        self._command: list[str] = []
-        self._stdout_buffer = b""
 
     def open(self, request: SessionOpenRequest) -> None:
         """Start Pi in RPC mode using the supplied Pi agent settings."""
@@ -89,7 +90,7 @@ class PiRpcSessionBackend:
             raise SessionHostError("Pi RPC session requires an AgentPi", "open")
         if self._child is not None:
             raise SessionHostError("Pi RPC session is already open", "open")
-        self._start(request.agent.rpc_argv(name=request.name), "open")
+        self._start(request.agent, "open", name=request.name)
 
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
         """Send a prompt and collect its text deltas through the settled event."""
@@ -101,7 +102,7 @@ class PiRpcSessionBackend:
             content="".join(text),
             metadata={"elapsed": elapsed},
             call_info=AgentCallInfo(
-                argv=self._command.copy(),
+                argv=child.command.copy(),
                 prompt_via_stdin=True,
                 elapsed=elapsed,
                 exit_code=child.process.poll(),
@@ -130,13 +131,10 @@ class PiRpcSessionBackend:
         parent_state, _ = self._send("get_state", {})
         parent_id = self._parse_operation_response(parent_state, "get_state", _required_session_id)
         source = self._live_child("clone")
-        source_command = self._command
-        source_stdout_buffer = self._stdout_buffer
-        parent_command = [*_without_option(source_command, "--name"), "--session-id", parent_id]
-        replacement = self._spawn(parent_command, SessionOperation.FORK.value)
+        parent_command = source.agent.rpc_argv(session_id=parent_id)
+        replacement = self._spawn(source.agent, parent_command, SessionOperation.FORK.value)
         replacement_backend = PiRpcSessionBackend(idle_timeout=self._idle_timeout)
         replacement_backend._child = replacement
-        replacement_backend._command = parent_command
         try:
             replacement_state, _ = replacement_backend._send("get_state", {})
             replacement_backend._parse_operation_response(
@@ -164,8 +162,6 @@ class PiRpcSessionBackend:
                 # The source now owns the clone, so retain the independently opened
                 # parent rather than leaving this backend pointed at the wrong session.
                 self._child = replacement
-                self._command = parent_command
-                self._stdout_buffer = replacement_backend._stdout_buffer
                 _terminate(source)
             else:
                 replacement_backend.close()
@@ -173,11 +169,7 @@ class PiRpcSessionBackend:
 
         child = PiRpcSessionBackend(idle_timeout=self._idle_timeout)
         child._child = source
-        child._command = source_command
-        child._stdout_buffer = source_stdout_buffer
         self._child = replacement
-        self._command = parent_command
-        self._stdout_buffer = replacement_backend._stdout_buffer
         return child
 
     def set_name(self, name: str) -> None:
@@ -195,16 +187,13 @@ class PiRpcSessionBackend:
         """Terminate the child process; repeated closes are harmless."""
         child = self._child
         self._child = None
-        self._stdout_buffer = b""
-        self._command = []
         if child is not None:
             _terminate(child)
 
-    def _start(self, command: list[str], operation: str) -> None:
-        self._child = self._spawn(command, operation)
-        self._command = command
+    def _start(self, agent: AgentPi, operation: str, *, name: str = "") -> None:
+        self._child = self._spawn(agent, agent.rpc_argv(name=name), operation)
 
-    def _spawn(self, command: list[str], operation: str) -> _RpcChild:
+    def _spawn(self, agent: AgentPi, command: list[str], operation: str) -> _RpcChild:
         try:
             process: subprocess.Popen[bytes] = subprocess.Popen(
                 command,
@@ -219,9 +208,9 @@ class PiRpcSessionBackend:
             raise SessionHostError(f"could not start Pi RPC session: {exc}", operation) from exc
         process_group = process.pid
         if process.stdin is None or process.stdout is None or process.stderr is None:
-            _terminate(_RpcChild(process, process_group))
+            _terminate(_RpcChild(process, process_group, agent, command))
             raise SessionHostError("could not create Pi RPC pipes", operation)
-        child = _RpcChild(process, process_group)
+        child = _RpcChild(process, process_group, agent, command)
         child.readers.extend(
             (
                 _start_reader(
@@ -240,17 +229,14 @@ class PiRpcSessionBackend:
         )
         return child
 
-    def _send(
+    def _write(
         self,
+        child: _RpcChild,
+        command: dict[str, object],
         operation: _RpcOperation,
-        payload: dict[str, object],
-        *,
-        wait_for_settled: bool = False,
-    ) -> tuple[dict[str, object], list[str]]:
-        child = self._live_child(operation)
-        request_id = str(uuid4())
-        command = {"id": request_id, "type": operation, **payload}
-        started = time.monotonic()
+        started: float,
+    ) -> None:
+        """Write one command, mapping every stdin failure to the session model."""
         try:
             _write_command(child, command, self._idle_timeout)
         except KeyboardInterrupt:
@@ -264,6 +250,19 @@ class PiRpcSessionBackend:
         except (BrokenPipeError, OSError) as exc:
             self._kill_dead_child(child)
             self._raise_transport_or_host(operation, "Pi RPC stdin closed", started, exc, child)
+
+    def _send(
+        self,
+        operation: _RpcOperation,
+        payload: dict[str, object],
+        *,
+        wait_for_settled: bool = False,
+    ) -> tuple[dict[str, object], list[str]]:
+        child = self._live_child(operation)
+        request_id = str(uuid4())
+        command = {"id": request_id, "type": operation, **payload}
+        started = time.monotonic()
+        self._write(child, command, operation, started)
 
         text: list[str] = []
         text_length = 0
@@ -319,25 +318,12 @@ class PiRpcSessionBackend:
                     response = event
                     if wait_for_settled:
                         state_request_id = str(uuid4())
-                        try:
-                            _write_command(
-                                child,
-                                {"id": state_request_id, "type": "get_state"},
-                                self._idle_timeout,
-                            )
-                        except KeyboardInterrupt:
-                            self._kill_dead_child(child)
-                            raise
-                        except _RpcIdleTimeout as exc:
-                            self._kill_dead_child(child)
-                            self._raise_transport_or_host(
-                                operation, "Pi RPC stdin write timed out", started, exc, child
-                            )
-                        except (BrokenPipeError, OSError) as exc:
-                            self._kill_dead_child(child)
-                            self._raise_transport_or_host(
-                                operation, "Pi RPC stdin closed", started, exc, child
-                            )
+                        self._write(
+                            child,
+                            {"id": state_request_id, "type": "get_state"},
+                            operation,
+                            started,
+                        )
                 elif event_id == state_request_id and event_command == "get_state":
                     streaming = cast(bool, streaming_state)
                 else:
@@ -425,10 +411,11 @@ class PiRpcSessionBackend:
     def _next_line(self, child: _RpcChild) -> str:
         deadline = None if self._idle_timeout is None else time.monotonic() + self._idle_timeout
         while True:
-            newline = self._stdout_buffer.find(b"\n")
+            buffer = child.stdout_buffer
+            newline = buffer.find(b"\n")
             if newline >= 0:
-                line = self._stdout_buffer[:newline]
-                self._stdout_buffer = self._stdout_buffer[newline + 1 :]
+                line = bytes(buffer[:newline])
+                del buffer[: newline + 1]
                 if len(line) > _MAX_JSONL_RECORD_BYTES:
                     raise _RpcProtocolError("Pi RPC JSONL record exceeded the protocol limit")
                 if line.endswith(b"\r"):
@@ -451,14 +438,13 @@ class PiRpcSessionBackend:
                 raise _RpcIdleTimeout from exc
             if chunk is None:
                 raise _RpcProcessExited
-            self._stdout_buffer += chunk
-            if len(self._stdout_buffer) > _MAX_JSONL_RECORD_BYTES:
+            child.stdout_buffer.extend(chunk)
+            if len(child.stdout_buffer) > _MAX_JSONL_RECORD_BYTES:
                 raise _RpcProtocolError("Pi RPC JSONL record exceeded the protocol limit")
 
     def _kill_dead_child(self, child: _RpcChild) -> None:
         if self._child is child:
             self._child = None
-            self._stdout_buffer = b""
             _terminate(child)
 
     def _raise_transport_or_host(
@@ -495,7 +481,7 @@ class PiRpcSessionBackend:
             stderr_tail=stderr_tail(_stderr(child, message, include_protocol_message)),
             elapsed=elapsed,
             call_info=AgentCallInfo(
-                argv=self._command.copy(),
+                argv=child.command.copy(),
                 prompt_via_stdin=True,
                 elapsed=elapsed,
                 exit_code=child.process.poll(),
@@ -583,59 +569,12 @@ def _terminate(child: _RpcChild) -> None:
             stdin.close()
         except OSError:
             pass
-    if child.process_group is not None:
-        _terminate_process_group(process, child.process_group)
-    elif process.poll() is None:
-        try:
-            process.terminate()
-        except ProcessLookupError:
-            pass
-        try:
-            process.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            try:
-                process.kill()
-            except ProcessLookupError:
-                pass
-            process.wait()
+    kill_process_group(process, pgid=child.process_group)
     for reader in child.readers:
         reader.join(timeout=1)
-
-
-def _terminate_process_group(process: subprocess.Popen[bytes], process_group: int) -> None:
-    try:
-        os.killpg(process_group, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    try:
-        process.wait(timeout=1)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(process_group, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait()
-        return
-
-    deadline = time.monotonic() + 0.2
-    while time.monotonic() < deadline:
-        try:
-            os.killpg(process_group, 0)
-        except ProcessLookupError:
-            return
-        time.sleep(0.01)
-    try:
-        os.killpg(process_group, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-
-
-def _without_option(command: list[str], option: str) -> list[str]:
-    try:
-        option_index = command.index(option)
-    except ValueError:
-        return command.copy()
-    return [*command[:option_index], *command[option_index + 2 :]]
+    # The reader callbacks close over ``child``; dropping them breaks that
+    # cycle so the process, queued stdout, and stderr tail are freed at once.
+    child.readers.clear()
 
 
 def _json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -881,8 +820,8 @@ def _transport_cause(error: BaseException | None) -> AgentTransportFailureCause:
     return "nonzero_exit"
 
 
-def _stderr(child: _RpcChild | None, fallback: str, include_fallback: bool = False) -> str:
-    if child is None or not child.stderr.value:
+def _stderr(child: _RpcChild, fallback: str, include_fallback: bool = False) -> str:
+    if not child.stderr.value:
         return fallback
     if include_fallback:
         return f"{child.stderr.value}\n{fallback}"

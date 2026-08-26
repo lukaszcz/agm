@@ -158,6 +158,14 @@ def open_backend(*, timeout: float | None = None) -> PiRpcSessionBackend:
     return backend
 
 
+def option_value(argv: object, option: str) -> str | None:
+    """Return the value *option* carries in *argv*, or ``None`` when absent."""
+    assert isinstance(argv, list)
+    if option not in argv:
+        return None
+    return str(argv[argv.index(option) + 1])
+
+
 def command_types(stub: RpcStub) -> list[str]:
     return [str(record["type"]) for record in stub.records("commands.jsonl")]
 
@@ -397,7 +405,7 @@ def test_clone_immediately_after_open_keeps_parent_and_child_live(
         "--thinking",
         "high",
     ]
-    assert replacement_argv[-2:] == ["--session-id", "root"]
+    assert option_value(replacement_argv, "--session-id") == "root"
     assert command_types(stub) == ["get_state", "get_state", "clone", "get_state"]
     assert child.ask(SessionAskRequest("child")).content == "answer"
     assert backend.ask(SessionAskRequest("parent")).content == "answer"
@@ -416,7 +424,7 @@ def test_clone_does_not_reapply_the_startup_name_to_the_parent(
 
     replacement_argv = stub.wait_for("starts.jsonl", 2)[1]["argv"]
     assert "--name" not in replacement_argv
-    assert replacement_argv[-2:] == ["--session-id", "root"]
+    assert option_value(replacement_argv, "--session-id") == "root"
     backend.close()
     child.close()
 
@@ -429,9 +437,7 @@ def test_clone_snapshots_current_branch_and_keeps_both_children_live(
     backend.ask(SessionAskRequest("before"))
     child = backend.fork()
     starts = stub.wait_for("starts.jsonl", 2)
-    child_argv = starts[1]["argv"]
-    assert isinstance(child_argv, list)
-    assert child_argv[-2:] == ["--session-id", "root"]
+    assert option_value(starts[1]["argv"], "--session-id") == "root"
     assert command_types(stub) == [
         "prompt",
         "get_state",

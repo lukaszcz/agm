@@ -151,6 +151,13 @@ BUILTIN_TYPE_STATICS: dict[tuple[ModuleId, ScopePath], dict[str, BuiltinStaticKi
 }
 
 
+#: The scope paths of every nominal that owns built-in statics, for callers
+#: that have resolved a relative path but not yet its owning module.
+BUILTIN_TYPE_STATIC_OWNER_PATHS: frozenset[ScopePath] = frozenset(
+    owner_path for _module_id, owner_path in BUILTIN_TYPE_STATICS
+)
+
+
 def builtin_type_static_kind(
     owner_module_id: ModuleId, owner_path: ScopePath, name: str
 ) -> BuiltinStaticKind | None:

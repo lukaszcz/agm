@@ -67,7 +67,7 @@ def test_open_requires_a_session_id_placeholder() -> None:
     assert raised.value.operation == "open"
 
 
-def test_one_shot_command_session_does_not_require_a_session_id_placeholder(
+def test_single_prompt_command_session_does_not_require_a_session_id_placeholder(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: list[list[str]] = []
@@ -79,8 +79,11 @@ def test_one_shot_command_session_does_not_require_a_session_id_placeholder(
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
     service = SessionService(lambda _agent, _transport: AgentCommandSessionBackend())
 
-    response = service.ask_ephemeral(
-        AgentCommand("runner --quiet"), "cli", SessionAskRequest(prompt="question")
+    response = service.with_ephemeral(
+        AgentCommand("runner --quiet"),
+        "cli",
+        lambda handle: service.ask(handle, SessionAskRequest(prompt="question")),
+        single_prompt=True,
     )
 
     assert response.content == "answer"

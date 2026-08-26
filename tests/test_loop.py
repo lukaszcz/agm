@@ -1624,6 +1624,7 @@ class TestRunCommandExit127Fatal:
             timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             return (127, "", "command not found")
 
@@ -1660,6 +1661,7 @@ class TestRunCommandExit127Fatal:
             timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             return (127, "", long_stderr)
 
@@ -1687,6 +1689,7 @@ class TestRunCommandExit127Fatal:
             timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             return (127, "", "")
 
@@ -1714,6 +1717,7 @@ class TestRunCommandExit127Fatal:
             timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             return (1, "agent output", "")
 
@@ -1752,6 +1756,7 @@ class TestRunCommandSpawnFailure:
             timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             # ``run_capture`` re-raises the original spawn exception (see
             # src/agm/core/process.py); simulate the exact scenario from the
@@ -1790,6 +1795,7 @@ class TestRunCommandSpawnFailure:
             timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             raise PermissionError(13, "Permission denied")
 
@@ -1842,6 +1848,7 @@ class TestRunCommandOutputAssemblyFull:
             timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             if stdout_callback is not None:
                 stdout_callback("hello")
@@ -1871,6 +1878,7 @@ class TestRunCommandOutputAssemblyFull:
             timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             return (0, "just-stdout", "")
 
@@ -1895,6 +1903,7 @@ class TestRunCommandOutputAssemblyFull:
             timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             return (0, "the-stdout", "the-stderr")
 
@@ -1957,6 +1966,7 @@ class TestRunCommandStderrCallback:
             timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             if stderr_callback is not None:
                 stderr_callback("error chunk")
@@ -3049,6 +3059,7 @@ class TestLoopRunIntegration:
             timeout_callback: object = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             nonlocal capture_calls
             capture_calls += 1

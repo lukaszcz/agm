@@ -261,11 +261,6 @@ class RecordValue:
         return NotImplemented
 
 
-# Compatibility spelling for enum-member records. Enum values are now represented
-# by their concrete member record, so this is intentionally an alias.
-EnumValue = RecordValue
-
-
 @dataclass(frozen=True, slots=True, eq=False)
 class ExceptionValue:
     """A built-in AgL exception value.
@@ -502,7 +497,6 @@ __all__ = [
     "ConstructorValue",
     "DecimalValue",
     "DictValue",
-    "EnumValue",
     "ExceptionValue",
     "Frame",
     "IntValue",

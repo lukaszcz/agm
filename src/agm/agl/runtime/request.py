@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
+from agm.agent.transport import AgentCallInfo
 from agm.agl.ir.ids import Location
 from agm.agl.semantics.values import RecordValue
 
@@ -50,24 +51,6 @@ class ValidationError:
             "message": self.message,
             "path": self.path,
             "field": self.field,
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class AgentCallInfo:
-    """Transport details from one agent invocation, when a process was prepared."""
-
-    argv: list[str]
-    prompt_via_stdin: bool
-    elapsed: float
-    exit_code: int | None
-
-    def to_trace(self) -> dict[str, object]:
-        return {
-            "argv": self.argv,
-            "prompt_via_stdin": self.prompt_via_stdin,
-            "elapsed": self.elapsed,
-            "exit_code": self.exit_code,
         }
 
 

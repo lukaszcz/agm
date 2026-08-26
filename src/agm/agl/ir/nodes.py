@@ -99,7 +99,6 @@ __all__ = [
     "IrMakeConstructor",
     "IrMakeClosure",
     "IrMakeDict",
-    "IrMakeEnum",
     "IrMakeException",
     "IrMakeArray",
     "IrMakeJsonArray",
@@ -548,11 +547,6 @@ class IrMakeRecord:
     nominal: NominalId
     display_name: str
     fields: "tuple[tuple[str, IrExpr], ...]"
-
-
-# Compatibility spelling for enum-member record construction. Enum members are
-# records, so the two names intentionally denote the same node type.
-IrMakeEnum = IrMakeRecord
 
 
 @dataclass(frozen=True, slots=True)
@@ -1109,18 +1103,27 @@ class IrSessionAsk:
     max_attempts: int
 
 
+class IrSessionOpKind(enum.StrEnum):
+    """The non-ask lifecycle operations an :class:`IrSessionOp` can carry."""
+
+    COMPACT = "compact"
+    RESET = "reset"
+    FORK = "fork"
+    STATS = "stats"
+    SET_NAME = "set-name"
+    CLOSE = "close"
+
+
 @dataclass(frozen=True, slots=True)
 class IrSessionOp:
     """IR host-op for a non-ask session operation.
 
-    ``op`` is one of ``compact``, ``reset``, ``fork``, ``stats``,
-    ``set-name``, or ``close``. ``arg`` is optional only for ``compact`` and
-    required for ``set-name``.
+    ``arg`` is optional only for ``compact`` and required for ``set-name``.
     """
 
     location: Location
     session: "IrExpr"
-    op: str
+    op: IrSessionOpKind
     arg: "IrExpr | None" = None
 
 

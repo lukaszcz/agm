@@ -116,8 +116,18 @@ class _RecordingSessionService(SessionService):
         super().__init__(lambda _agent, _transport: backend)
         self.opened_handle: str | None = None
 
-    def open(self, agent: object, transport: str, *, name: str = "") -> str:
-        handle = super().open(agent, transport, name=name)
+    def open(
+        self,
+        agent: object,
+        transport: str,
+        *,
+        name: str = "",
+        ephemeral: bool = False,
+        single_prompt: bool = False,
+    ) -> str:
+        handle = super().open(
+            agent, transport, name=name, ephemeral=ephemeral, single_prompt=single_prompt
+        )
         self.opened_handle = handle
         return handle
 

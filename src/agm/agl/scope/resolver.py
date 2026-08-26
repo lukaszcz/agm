@@ -74,6 +74,7 @@ from agm.agl.scope.imports import (
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_DISPLAY_NAMES,
     BUILTIN_CALL_NAMES,
+    BUILTIN_TYPE_STATIC_OWNER_PATHS,
     AglScopeError,
     BinderKind,
     BindingRef,
@@ -3137,7 +3138,13 @@ class _Resolver:
             return False
         if qualifier_candidates(self._import_env, relative_path, anchored=chain.anchored):
             return False
-        return relative_path == ("Session",) and bool(self._builtin_static_decl_node_ids)
+        return self._denotes_builtin_static_owner(relative_path)
+
+    def _denotes_builtin_static_owner(self, relative_path: ScopePath) -> bool:
+        """Return whether *relative_path* names a live prelude built-in static owner."""
+        return relative_path in BUILTIN_TYPE_STATIC_OWNER_PATHS and bool(
+            self._builtin_static_decl_node_ids
+        )
 
     def _builtin_static_kind(self, ref: BindingRef | None) -> BuiltinStaticKind | None:
         """Return the static kind attached to its resolved prelude owner."""
@@ -3158,12 +3165,16 @@ class _Resolver:
 
     def _raise_unrecognized_builtin_static(self, node: VarRef) -> None:
         """Raise when a resolved prelude owner does not declare the requested static."""
-        if not self._is_unrecognized_builtin_static(node):
-            return
+        if self._is_unrecognized_builtin_static(node):
+            raise self._unknown_static_error(node)
+
+    @staticmethod
+    def _unknown_static_error(node: VarRef) -> AglScopeError:
+        """Build the diagnostic for a prelude owner that lacks the requested static."""
         assert node.qualifier is not None
-        raise AglScopeError(
-            f"Unknown static '{node.qualifier.render()}::{node.name}' on prelude type "
-            f"'{node.qualifier.render()}'.",
+        owner = node.qualifier.render()
+        return AglScopeError(
+            f"Unknown static '{owner}::{node.name}' on prelude type '{owner}'.",
             span=node.span,
         )
 
@@ -3388,15 +3399,13 @@ class _Resolver:
                 is not None
             )
             known_segment = any(relative_path[0] in scope_path for scope_path in self._scope_nodes)
-            is_prelude_session_static = relative_path == ("Session",) and bool(
-                self._builtin_static_decl_node_ids
-            )
+            is_prelude_static_owner = self._denotes_builtin_static_owner(relative_path)
             if (chain.anchor is QualifierAnchor.CURRENT_MODULE and len(chain.segments) > 1) or (
                 known_segment
                 and not has_module_route
                 and not has_leading_route
                 and not has_opened_member
-                and not is_prelude_session_static
+                and not is_prelude_static_owner
             ):
                 raise AglScopeError(
                     f"Unknown scope path '{'::'.join(relative_path)}'.", span=chain.span
@@ -4174,12 +4183,7 @@ class _Resolver:
             except AglScopeError:
                 if not self._qualifier_denotes_builtin_static_owner(callee):
                     raise
-                assert callee.qualifier is not None
-                raise AglScopeError(
-                    f"Unknown static '{callee.qualifier.render()}::{callee.name}' on prelude "
-                    f"type '{callee.qualifier.render()}'.",
-                    span=callee.span,
-                ) from None
+                raise self._unknown_static_error(callee) from None
             ref = self._resolution.get(callee.node_id)
             static_kind = self._builtin_static_kind(ref)
             if static_kind is not None:

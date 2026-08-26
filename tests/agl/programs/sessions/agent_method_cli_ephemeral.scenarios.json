@@ -12,7 +12,7 @@
             "agent": "writer",
             "tag": "session-1",
             "transport": "cli",
-            "one_shot": false,
+            "single_prompt": false,
             "opened": true,
             "closed": true,
             "parent": null

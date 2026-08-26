@@ -123,7 +123,7 @@ def test_prepare_rendered_prompt_run_records_the_stdin_delivery_flag() -> None:
             runner=AgentCodex("o3", "high").argv(),
             temp_files=temp_files,
             env={},
-            prompt_via_stdin=True,
+            delivery=PromptDelivery.STDIN,
         )
     finally:
         cleanup_temp_files(temp_files)
@@ -166,7 +166,7 @@ def test_stdin_delivered_run_sends_prompt_as_stdin_and_appends_no_target(
             runner=AgentCodex("o3", "high").argv(),
             temp_files=temp_files,
             env={},
-            prompt_via_stdin=True,
+            delivery=PromptDelivery.STDIN,
         )
         run_prepared_prompt_result(prepared, idle_timeout=None)
     finally:
@@ -225,7 +225,7 @@ def test_stdin_delivered_prompt_does_not_read_the_prompt_back_off_disk(
             runner=AgentCodex("o3", "high").argv(),
             temp_files=temp_files,
             env={},
-            prompt_via_stdin=True,
+            delivery=PromptDelivery.STDIN,
         )
         # Nothing needs to read this delivery mode's prompt back off disk, so
         # no temp file should be created for it in the first place.

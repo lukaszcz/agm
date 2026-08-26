@@ -4,7 +4,7 @@ Two foundation packages sit beneath everything else, and *both* are shared by bo
 
 ## Process Execution
 
-Ordinary foreground and captured subprocess work goes through the shared process module. It distinguishes terminal-inheriting commands from captured output, offers "require success" variants, and manages process groups so interruption tears down descendants. The persistent Pi RPC session is the deliberate exception: `agent/session/rpc.py` owns a raw streaming `Popen`, nonblocking bounded writes, reader threads, and equivalent process-group teardown because the request/response process must outlive one capture call.
+Ordinary foreground and captured subprocess work goes through the shared process module. It distinguishes terminal-inheriting commands from captured output, offers "require success" variants, and manages process groups so interruption tears down descendants. The persistent Pi RPC session is the deliberate exception: `agent/session/rpc.py` owns a raw streaming `Popen`, nonblocking bounded writes, and reader threads because the request/response process must outlive one capture call; it still tears its child down through the shared process-group teardown.
 
 ## Environment Handling
 

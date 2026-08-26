@@ -86,7 +86,6 @@ from agm.agl.semantics.type_table import (
 )
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
-    HOST_MINTED_PRELUDE_TYPE_IDS,
     ArrayType,
     BoolType,
     BottomType,
@@ -1337,10 +1336,7 @@ class _Checker:
         if isinstance(schema_type, DictType):
             return self._wire_type_is_serializable(schema_type.value, seen=seen, memo=memo)
         if isinstance(schema_type, RecordType):
-            session = self._env.type_table.standard_builtin_declaration("Session")
-            if schema_type.decl_id in HOST_MINTED_PRELUDE_TYPE_IDS or (
-                session is not None and schema_type.decl_id == session.decl_node_id
-            ):
+            if schema_type.decl_id in self._env.type_table.host_minted_declaration_ids():
                 return False
             if schema_type in seen:
                 return True
@@ -2857,30 +2853,33 @@ class _Checker:
                     "partial application is not supported.",
                     span=node.span,
                 )
-            if kind == BuiltinKind.PRINT:
-                return self._builtins.check_print(node)
-            if kind == BuiltinKind.RENDER:
-                return self._builtins.check_render(node)
-            if kind == BuiltinKind.COPY:
-                return self._builtins.check_copy(node)
-            if kind == BuiltinKind.SHALLOW_COPY:
-                return self._builtins.check_shallow_copy(node)
-            if kind == BuiltinKind.ASK:
-                return self._builtins.check_ask(node, expected=expected)
-            if kind == BuiltinKind.ASK_REQUEST:
-                return self._builtins.check_ask_request(node)
-            if kind == BuiltinKind.PARSE_JSON:
-                return self._builtins.check_parse_json(node)
-            if kind == BuiltinKind.RESOURCE:
-                return self._builtins.check_resource(node)
-            if kind == BuiltinKind.RESOURCE_DIR:
-                return self._builtins.check_resource_dir(node)
-            if kind == BuiltinStaticKind.SESSION_OPEN:
-                return self._builtins.check_session_open(node)
-            if kind == BuiltinStaticKind.SESSION_DEFAULT:
-                return self._builtins.check_session_default(node)
-            # EXEC
-            return self._builtins.check_exec(node, expected=expected)
+            match kind:
+                case BuiltinKind.PRINT:
+                    return self._builtins.check_print(node)
+                case BuiltinKind.RENDER:
+                    return self._builtins.check_render(node)
+                case BuiltinKind.COPY:
+                    return self._builtins.check_copy(node)
+                case BuiltinKind.SHALLOW_COPY:
+                    return self._builtins.check_shallow_copy(node)
+                case BuiltinKind.ASK:
+                    return self._builtins.check_ask(node, expected=expected)
+                case BuiltinKind.ASK_REQUEST:
+                    return self._builtins.check_ask_request(node)
+                case BuiltinKind.PARSE_JSON:
+                    return self._builtins.check_parse_json(node)
+                case BuiltinKind.RESOURCE:
+                    return self._builtins.check_resource(node)
+                case BuiltinKind.RESOURCE_DIR:
+                    return self._builtins.check_resource_dir(node)
+                case BuiltinStaticKind.SESSION_OPEN:
+                    return self._builtins.check_session_open(node)
+                case BuiltinStaticKind.SESSION_DEFAULT:
+                    return self._builtins.check_session_default(node)
+                case BuiltinKind.EXEC:
+                    return self._builtins.check_exec(node, expected=expected)
+                case _ as unreachable:  # pragma: no cover
+                    assert_never(unreachable)
 
         # Constructor call?
         if (
@@ -4578,11 +4577,7 @@ class _Checker:
                 fields = self._env.type_table.exception_fields(obj_type)
                 kind_label = "Exception type"
             elif isinstance(obj_type, RecordType):
-                standard_session = self._env.type_table.standard_builtin_declaration("Session")
-                if obj_type.decl_id in HOST_MINTED_PRELUDE_TYPE_IDS or (
-                    standard_session is not None
-                    and obj_type.decl_id == standard_session.decl_node_id
-                ):
+                if obj_type.decl_id in self._env.type_table.host_minted_declaration_ids():
                     raise AglTypeError(
                         f"'{obj_type.name}' values are created by the host and cannot be "
                         "updated in source.",

@@ -103,7 +103,7 @@ region.
   module root or in a named scope region; a scoped `builtin def` still
   dispatches to the same host implementation as a root one. A `builtin def`
   with first parameter `self` in a type scope is a builtin method when it
-  matches a supported host contract (`Agent::ask` and `Agent::ask-request` in
+  matches a supported host contract (`Agent::ask` in
   the standard core); it is selected by ordinary member syntax and is
   call-only. Its complete scoped name is subject to the same whole-program
   uniqueness as a `builtin` type (see [Built-in functions](functions.md#built-in-functions)).
@@ -211,7 +211,7 @@ those positions must be parenthesized. Loop bodies also admit `case`, `if`,
 let x = 3; let y = x + 1; y
 
 # Inline do loop: body items, then until condition
-do[5] r := ask("Review %{a}", agent = reviewer); case r of Fail(issues) => a := ask("Fix %{issues} in %{a}", agent = impl) | Pass => () until r is Pass
+do[5] r := reviewer.ask("Review %{a}"); case r of Fail(issues) => a := impl.ask("Fix %{issues} in %{a}") | Pass => () until r is Pass
 
 # A case expression as a loop condition must be parenthesized:
 do[3] n := n + 1 until (case st of Done => true | _ => false)
@@ -224,7 +224,7 @@ branch body:
 ```agl
 case review of
   Pass => ()
-  | Fail(issues) => artifact := ask("Fix %{issues}", agent = impl)
+  | Fail(issues) => artifact := impl.ask("Fix %{issues}")
 ```
 
 ### Branch bodies

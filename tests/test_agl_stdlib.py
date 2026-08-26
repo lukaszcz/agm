@@ -5,12 +5,12 @@ from pathlib import Path
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.modules.loader import load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.scope import AglScopeError
 from agm.agl.scope.program import resolve_program
-from agm.agl.scope.symbols import BUILTIN_CALL_NAMES
+from agm.agl.scope.symbols import BUILTIN_CALL_NAMES, BUILTIN_TYPE_STATICS
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
@@ -31,7 +31,6 @@ from agm.agl.typecheck.checker import (
 )
 from agm.agl.typecheck.env import AglTypeError, FunctionSignature, ParamSpec
 from agm.agl.typecheck.program import check_program
-from tests._agl_helpers import strip_decl_ids
 from tests.agl.module_graph import resolve_and_check_inline_entry, resolve_inline_entry
 
 _ROOTS = RootSet(frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
@@ -91,17 +90,11 @@ def test_stdlib_ask_signature_is_context_inferred_with_optional_arguments() -> N
     assert ask_sig.result == TypeVarType("T")
     params = ask_sig.params
     assert params[0].name == "prompt" and params[0].type == TextType() and not params[0].has_default
+    assert params[1].name == "format" and params[1].type == TextType() and params[1].has_default
     assert (
-        params[1].name == "agent"
-        and strip_decl_ids(params[1].type)
-        == EnumType("Agent", module_id=ModuleId.from_path("std/core"))
-        and params[1].has_default
+        params[2].name == "strict_json" and params[2].type == BoolType() and params[2].has_default
     )
-    assert params[2].name == "format" and params[2].type == TextType() and params[2].has_default
-    assert (
-        params[3].name == "strict_json" and params[3].type == BoolType() and params[3].has_default
-    )
-    p4 = params[4]
+    p4 = params[3]
     assert p4.name == "on_parse_error"
     assert isinstance(p4.type, EnumType)
     assert p4.type.name == "ParsePolicy"
@@ -115,7 +108,6 @@ def test_canonical_builtin_signatures_name_the_shared_prelude_handles() -> None:
     ask = _builtin_function_signature("ask")
     assert ask is not None
     ask_params = {param.name: param.type for param in ask.params}
-    assert ask_params["agent"] == BUILTIN_PRELUDE_TYPES["Agent"]
     assert ask_params["on_parse_error"] == BUILTIN_PRELUDE_TYPES["ParsePolicy"]
     ask_request = _builtin_function_signature("ask-request")
     assert ask_request is not None
@@ -197,8 +189,14 @@ def test_std_core_declares_every_public_builtin() -> None:
         for item in program.body.items
         if isinstance(item, ExceptionDef) and item.is_builtin
     }
-    functions = {
-        item.name for item in program.body.items if isinstance(item, FuncDef) and item.is_builtin
+    builtin_functions = [
+        item for item in program.body.items if isinstance(item, FuncDef) and item.is_builtin
+    ]
+    functions = {item.name for item in builtin_functions if not item.scope_path}
+    statics = {
+        ("::".join(segment.name for segment in item.scope_path), item.name)
+        for item in builtin_functions
+        if item.scope_path and (not item.params or item.params[0].name != "self")
     }
 
     # ``Option`` is validated against its own canonical generic template
@@ -206,9 +204,18 @@ def test_std_core_declares_every_public_builtin() -> None:
     # ``BUILTIN_PRELUDE_TYPES`` (see ``create_seeded_type_table``), so it is
     # declared ``builtin`` in ``std/core`` without appearing in that table.
     public_prelude = set(BUILTIN_PRELUDE_TYPES) - set(COMPATIBILITY_PRELUDE_TYPE_NAMES) | {"Option"}
-    assert records | enums == public_prelude
-    assert exceptions == set(BUILTIN_EXCEPTIONS)
+    session_nominals = {"SessionTransport", "Session", "SessionStats", "SessionError"}
+    assert session_nominals <= records | enums | exceptions
+    assert session_nominals <= set(BUILTIN_PRELUDE_TYPES)
+    assert records | enums | exceptions == public_prelude | set(BUILTIN_EXCEPTIONS)
+    assert exceptions == set(BUILTIN_EXCEPTIONS) | {"SessionError"}
     assert functions == set(BUILTIN_CALL_NAMES)
+    assert statics == {
+        ("::".join(owner_path), static_name)
+        for (module_id, owner_path), names in BUILTIN_TYPE_STATICS.items()
+        if module_id == STD_CORE_ID
+        for static_name in names
+    }
 
 
 def test_unknown_builtin_type_is_rejected() -> None:

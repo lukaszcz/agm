@@ -14,7 +14,7 @@ program def main() -> unit =
   var total: int = 0
 
   do[rounds + 5]
-    let cmd: Cmd = ask("next", agent = src)
+    let cmd: Cmd = src.ask("next")
     n := n + 1
     case cmd of
       | Stop =>

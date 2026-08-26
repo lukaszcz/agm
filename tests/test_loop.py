@@ -1263,6 +1263,47 @@ class TestCommandWithPromptTarget:
 
         assert result == ["runner", f"--input={target}", str(target)]
 
+    def test_replaces_session_id_placeholder_in_each_command_element(self) -> None:
+        result = command_with_prompt_target(
+            ["runner", "--session=%{SESSION_ID}", "%{SESSION_ID}", "again-%{SESSION_ID}"],
+            Path("/tmp/prompt.md"),
+            env={},
+            session_id="session-123",
+        )
+
+        assert result == [
+            "runner",
+            "--session=session-123",
+            "session-123",
+            "again-session-123",
+            "@/tmp/prompt.md",
+        ]
+
+    def test_session_id_placeholder_interacts_with_prompt_target_and_escaping(self) -> None:
+        result = command_with_prompt_target(
+            ["runner", r"\%{SESSION_ID}", "%{SESSION_ID}:%{PROMPT_FILE}", "%%"],
+            Path("/tmp/prompt.md"),
+            env={},
+            session_id="session-123",
+        )
+
+        assert result == [
+            "runner",
+            "%{SESSION_ID}",
+            "session-123:/tmp/prompt.md",
+            "/tmp/prompt.md",
+        ]
+
+    def test_session_id_placeholder_remains_unknown_without_a_session_binding(self) -> None:
+        from agm.util.interp import InterpolationError
+
+        with pytest.raises(InterpolationError) as exc_info:
+            command_with_prompt_target(
+                ["runner", "--session=%{SESSION_ID}"], Path("/tmp/prompt.md"), env={}
+            )
+
+        assert exc_info.value.text == "SESSION_ID"
+
     def test_replaces_alias_and_prompt_file_hole_in_same_element(self, tmp_path: Path) -> None:
         target = tmp_path / "prompt.md"
 
@@ -1583,6 +1624,7 @@ class TestRunCommandExit127Fatal:
             timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             return (127, "", "command not found")
 
@@ -1619,6 +1661,7 @@ class TestRunCommandExit127Fatal:
             timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             return (127, "", long_stderr)
 
@@ -1646,6 +1689,7 @@ class TestRunCommandExit127Fatal:
             timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             return (127, "", "")
 
@@ -1673,6 +1717,7 @@ class TestRunCommandExit127Fatal:
             timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             return (1, "agent output", "")
 
@@ -1711,6 +1756,7 @@ class TestRunCommandSpawnFailure:
             timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             # ``run_capture`` re-raises the original spawn exception (see
             # src/agm/core/process.py); simulate the exact scenario from the
@@ -1749,6 +1795,7 @@ class TestRunCommandSpawnFailure:
             timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             raise PermissionError(13, "Permission denied")
 
@@ -1801,6 +1848,7 @@ class TestRunCommandOutputAssemblyFull:
             timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             if stdout_callback is not None:
                 stdout_callback("hello")
@@ -1830,6 +1878,7 @@ class TestRunCommandOutputAssemblyFull:
             timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             return (0, "just-stdout", "")
 
@@ -1854,6 +1903,7 @@ class TestRunCommandOutputAssemblyFull:
             timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             return (0, "the-stdout", "the-stderr")
 
@@ -1916,6 +1966,7 @@ class TestRunCommandStderrCallback:
             timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             if stderr_callback is not None:
                 stderr_callback("error chunk")
@@ -2665,6 +2716,55 @@ class TestLoopRunIntegration:
     run_capture).  No real agent is ever invoked.
     """
 
+    def test_legacy_loop_runs_through_the_existing_prompt_command_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = _setup_home_with_prompts(tmp_path, ["loop.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("SESSION_ID", "legacy-loop-session")
+        monkeypatch.setattr("shutil.which", _which_always_found)
+        monkeypatch.chdir(tmp_path)
+        tasks_dir = tmp_path / ".agent-files" / "tasks"
+        tasks_dir.mkdir(parents=True)
+        (tasks_dir / "PROGRESS.md").write_text("done\n", encoding="utf-8")
+        commands: list[list[str]] = []
+
+        def fake_run_capture(command: list[str], **kwargs: object) -> tuple[int, str, str]:
+            commands.append(command)
+            return 0, "COMPLETE\n", ""
+
+        monkeypatch.setattr("agm.agent.runner.run_capture", fake_run_capture)
+
+        loop_run(
+            LoopArgs(
+                command_name=None,
+                runner="fake-runner --session=%{SESSION_ID}",
+                runner_args=[],
+                selector=None,
+                no_selector=True,
+                tasks_dir=None,
+                no_log=True,
+                log_file=None,
+                prompt=None,
+                prompt_file=None,
+                selector_prompt=None,
+                selector_prompt_file=None,
+                extra_prompt=None,
+                extra_prompt_file=None,
+                extra_selector_prompt=None,
+                extra_selector_prompt_file=None,
+                timeout=None,
+            )
+        )
+
+        assert commands == [
+            [
+                "fake-runner",
+                "--session=legacy-loop-session",
+                f"@{home / '.agm' / 'prompts' / 'loop.md'}",
+            ]
+        ]
+
     def test_timeout_fails_only_the_call_then_continues_loop(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -2959,6 +3059,7 @@ class TestLoopRunIntegration:
             timeout_callback: object = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
+            stdin_text: str | None = None,
         ) -> tuple[int, str, str]:
             nonlocal capture_calls
             capture_calls += 1

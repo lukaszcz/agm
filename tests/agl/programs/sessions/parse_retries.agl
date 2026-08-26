@@ -1,0 +1,12 @@
+record Total
+  amount: int
+
+record Reply
+  total: Total
+
+program def main() -> unit =
+  let session = Session::open(AgentPi("writer", "model", "high"))
+  let answer: Reply = session.ask("calculate the total", on_parse_error = Retry(n = 2))
+  let context: text = session.ask("what should you remember?")
+  print answer.total.amount
+  print context

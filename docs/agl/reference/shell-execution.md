@@ -193,9 +193,9 @@ invalid for a `unit` target.
 ## Retries
 
 **Retries re-run the command.** Unlike an `ask` retry — which sends
-corrective feedback to the same conversation — an `exec` retry executes the
-command again; each invocation is traced separately. If every attempt fails
-to parse, `ExecError` is raised.
+corrective feedback in its existing session — an `exec` retry executes the
+command again; each invocation is traced separately. If every attempt fails to
+parse, `ExecError` is raised.
 
 ## Exceptions
 

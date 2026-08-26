@@ -21,6 +21,7 @@ Coverage targets:
 from __future__ import annotations
 
 import ast
+import dataclasses
 import decimal
 import importlib
 import pathlib
@@ -2280,6 +2281,68 @@ class TestPrintParseJsonParam:
         prog = _make_program(initializers=(node,), symbols={sym: desc})
         with pytest.raises(InvalidIrError, match="pretty"):
             IrInterpreter(prog).run()
+
+
+# ===========================================================================
+# Agent-call evaluator unit tests
+# ===========================================================================
+
+
+class TestIrAsk:
+    def test_ir_ask_preserves_a_prompt_expression_raise_span(self) -> None:
+        """An ask node does not replace an exception's source span."""
+        from agm.agl.ir.contracts import ContractRequest
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.nodes import IrAsk
+        from agm.agl.semantics.exceptions import AglRaise
+
+        prompt_location = _loc_at_line(4)
+        ask_location = _loc_at_line(8)
+        contract_id = ContractId(0)
+        program = _make_program(
+            (
+                IrAsk(
+                    location=ask_location,
+                    agent=IrMakeRecord(
+                        location=_LOC,
+                        nominal=NominalId(1),
+                        display_name="Agent::AgentCommand",
+                        fields=(),
+                    ),
+                    prompt=IrRaise(
+                        location=prompt_location,
+                        exc=IrMakeException(
+                            location=prompt_location,
+                            nominal=NominalId(2),
+                            display_name="Abort",
+                            fields=(("message", IrConstText(prompt_location, "boom")),),
+                        ),
+                    ),
+                    contract_id=contract_id,
+                    max_attempts=1,
+                ),
+            )
+        )
+        program = dataclasses.replace(
+            program,
+            contracts={
+                contract_id: ContractRequest(
+                    codec_name="text",
+                    strict_json=None,
+                    json_schema=None,
+                    decode=None,
+                    target_type_label="text",
+                    structured_exec=False,
+                    format_instructions="",
+                    is_unit=False,
+                )
+            },
+        )
+
+        with pytest.raises(AglRaise) as raised:
+            IrInterpreter(program).run()
+
+        assert raised.value.span == prompt_location
 
 
 # ===========================================================================

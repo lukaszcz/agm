@@ -1,0 +1,31 @@
+# Explicit session transports select supported adapters and reject incompatible ones at open.
+param backend: int
+
+program def main() -> unit =
+  if backend == 0 =>
+    let session = Session::open(
+      AgentPi("pi", "model", "high"),
+      transport = Some(SessionTransport::Cli)
+    )
+    session.ask("explicit cli")
+  else =>
+    try
+      if
+        | backend == 1 =>
+          let _ = Session::open(
+            AgentClaude("model", "high"),
+            transport = Some(SessionTransport::Rpc)
+          )
+        | backend == 2 =>
+          let _ = Session::open(
+            AgentCodex("model", "high"),
+            transport = Some(SessionTransport::Rpc)
+          )
+        | else =>
+          let _ = Session::open(
+            AgentCommand("command \%{SESSION_ID}"),
+            transport = Some(SessionTransport::Rpc)
+          )
+    catch SessionError as error =>
+      print error.operation
+      if error.message != "" => print "message"

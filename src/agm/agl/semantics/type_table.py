@@ -66,6 +66,8 @@ from agm.agl.ir.reserved_nominals import require_reserved_nominal_id as _reserve
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import (
+    HOST_MINTED_PRELUDE_TYPE_IDS,
+    HOST_MINTED_PRELUDE_TYPE_NAMES,
     ArrayType,
     BoolType,
     BottomType,
@@ -288,6 +290,11 @@ class TypeTable:
         # Memo for exception_field_kinds — same keying convention as
         # _exception_fields_cache above.
         self._exception_field_kinds_cache: dict[DeclId, tuple[tuple[str, str], ...]] = {}
+        # Whole-table indexes over the live ``std/core`` builtin declarations.
+        # Both answer questions about what the session declares as a whole, so
+        # they are invalidated wholesale like the fixpoints below.
+        self._standard_builtins: dict[str, TypeDef] | None = None
+        self._host_minted_ids: frozenset[DeclId] | None = None
         # Methods are independent plain declaration data, keyed by their
         # nominal owner's identity rather than by an import environment.
         # Exception method maps flatten inherited entries and therefore need
@@ -347,6 +354,8 @@ class TypeTable:
         self._name_index[(typedef.module_id, typedef.scope_path, typedef.name)] = decl_id
         if existing is None:
             self._defs[decl_id] = typedef
+            self._standard_builtins = None
+            self._host_minted_ids = None
             self._non_data_caps = None
             self._member_enum_owners = None
             self._finite_closure = None
@@ -530,6 +539,8 @@ class TypeTable:
         # (any declaration's flag can in principle depend on any other's), so
         # a single changed identity invalidates the whole cached result rather
         # than just this one.
+        self._standard_builtins = None
+        self._host_minted_ids = None
         self._non_data_caps = None
         self._member_enum_owners = None
         self._finite_closure = None
@@ -899,27 +910,21 @@ class TypeTable:
         contract declaration. Reserved fallback identities cover the same
         fields when ``std/core`` is not loaded.
         """
-        result: TypeDef | None = None
-        for decl_id, typedef in self._defs.items():
-            if (
-                typedef.is_builtin
-                and typedef.name == name
-                and typedef.module_id == STD_CORE_ID
-                and decl_id not in self._orphaned
-            ):
-                result = typedef
-        return result
+        return self.standard_builtin_declarations().get(name)
 
     def standard_builtin_declarations(self) -> Mapping[str, TypeDef]:
         """Return all loaded ``std/core`` source builtin declarations."""
-        result: dict[str, TypeDef] = {}
-        for decl_id, typedef in self._defs.items():
-            if (
-                typedef.is_builtin
-                and typedef.module_id == STD_CORE_ID
-                and decl_id not in self._orphaned
-            ):
-                result[typedef.name] = typedef
+        result = self._standard_builtins
+        if result is None:
+            result = {}
+            for decl_id, typedef in self._defs.items():
+                if (
+                    typedef.is_builtin
+                    and typedef.module_id == STD_CORE_ID
+                    and decl_id not in self._orphaned
+                ):
+                    result[typedef.name] = typedef
+            self._standard_builtins = result
         return result
 
     def builtin_declarations(self) -> Mapping[str, TypeDef]:
@@ -940,6 +945,19 @@ class TypeTable:
                 target = standard if typedef.module_id == STD_CORE_ID else overrides
                 target[typedef.name] = typedef
         return {**standard, **overrides}
+
+    def host_minted_declaration_ids(self) -> frozenset[DeclId]:
+        """Return reserved and loaded-source identities for host-owned resources."""
+        cached = self._host_minted_ids
+        if cached is None:
+            identities = set(HOST_MINTED_PRELUDE_TYPE_IDS)
+            for name in HOST_MINTED_PRELUDE_TYPE_NAMES:
+                declaration = self.standard_builtin_declaration(name)
+                if declaration is not None:
+                    identities.add(declaration.decl_node_id)
+            cached = frozenset(identities)
+            self._host_minted_ids = cached
+        return cached
 
     def nominal_reaches_non_data(self, handle: RecordType | EnumType | ExceptionType) -> bool:
         """Return ``True`` if a non-data type is reachable from *handle* (cycle-safe).
@@ -1514,6 +1532,8 @@ def is_json_convertible(t: Type, table: TypeTable) -> bool:
             return is_json_convertible(t.elem, table)
         case DictType():
             return is_json_convertible(t.value, table)
+        case RecordType() if t.decl_id in HOST_MINTED_PRELUDE_TYPE_IDS:
+            return False
         case ExceptionType():
             return table.nominal_is_json_convertible(t)
         case RecordType() | EnumType():
@@ -1651,7 +1671,8 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
 #
 # These ``TypeDef`` literals are the canonical shapes for AgL's built-in
 # prelude types (``ExecResult``, ``ParsePolicy``, ``Agent``, ``OutputContract``,
-# ``OutputContractOption``, ``AgentRequest``) and the generic ``Option``
+# ``OutputContractOption``, ``AgentRequest``, ``SessionTransport``, ``Session``,
+# ``SessionStats``, ``SessionError``) and the generic ``Option``
 # template.  ``create_seeded_type_table``, the scope resolver's builtin
 # constructor-candidate seeding, ``TypeEnvironment`` init seeding, and builtin
 # shape validation in the type builder all read these same literals — there
@@ -1715,6 +1736,10 @@ _AGENT_DEF, _AGENT_MEMBER_DEFS = _builtin_enum_defs(
         ),
     ),
 )
+_SESSION_TRANSPORT_DEF, _SESSION_TRANSPORT_MEMBER_DEFS = _builtin_enum_defs(
+    "SessionTransport", (("Cli", ()), ("Rpc", ()))
+)
+
 _OUTPUT_CONTRACT_OPTION_DEF, _OUTPUT_CONTRACT_OPTION_MEMBER_DEFS = _builtin_enum_defs(
     "OutputContractOption",
     (
@@ -1787,10 +1812,7 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
         name="AgentRequest",
         module_id=STD_CORE_ID,
         fields=(
-            (
-                "agent",
-                EnumType(name="Agent", module_id=STD_CORE_ID, decl_id=_reserved_id("Agent")),
-            ),
+            ("agent", EnumType(name="Agent", module_id=STD_CORE_ID, decl_id=_reserved_id("Agent"))),
             ("prompt", TextType()),
             (
                 "target_type",
@@ -1832,6 +1854,43 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
             ("metadata", JsonType()),
         ),
     ),
+    "SessionTransport": _SESSION_TRANSPORT_DEF,
+    "Session": TypeDef(
+        kind="record",
+        name="Session",
+        module_id=STD_CORE_ID,
+        fields=(
+            ("id", TextType()),
+            ("agent", EnumType(name="Agent", module_id=STD_CORE_ID, decl_id=_reserved_id("Agent"))),
+            (
+                "transport",
+                EnumType(
+                    name="SessionTransport",
+                    module_id=STD_CORE_ID,
+                    decl_id=_reserved_id("SessionTransport"),
+                ),
+            ),
+        ),
+    ),
+    "SessionStats": TypeDef(
+        kind="record",
+        name="SessionStats",
+        module_id=STD_CORE_ID,
+        fields=(
+            ("input-tokens", IntType()),
+            ("output-tokens", IntType()),
+            ("cost", DecimalType()),
+            ("context-percent", DecimalType()),
+        ),
+    ),
+    "SessionError": TypeDef(
+        kind="exception",
+        name="SessionError",
+        module_id=STD_CORE_ID,
+        fields=(("operation", TextType()),),
+        base=_reserved_id("Exception"),
+        field_kinds=("standard",),
+    ),
 }
 
 BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = _with_reserved_ids(_PRELUDE_SHAPES)
@@ -1848,6 +1907,7 @@ BUILTIN_PRELUDE_MEMBER_TYPE_DEFS: Mapping[DeclId, TypeDef] = {
         *_PARSE_POLICY_MEMBER_DEFS,
         *_AGENT_MEMBER_DEFS,
         *_OUTPUT_CONTRACT_OPTION_MEMBER_DEFS,
+        *_SESSION_TRANSPORT_MEMBER_DEFS,
         *_OPTION_MEMBER_DEFS,
     )
 }

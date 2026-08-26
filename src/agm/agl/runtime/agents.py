@@ -6,17 +6,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from agm.agl.runtime.request import (
-    AgentCallHostError,
-    AgentCallInfo,
-    AgentRequest,
-    AgentResponse,
-)
+from agm.agent.transport import AgentCallInfo, stderr_tail
+from agm.agl.runtime.request import AgentCallHostError, AgentRequest, AgentResponse
 from agm.agl.semantics.types import terminal_name
 from agm.agl.semantics.values import RecordValue, TextValue
 from agm.core.env import clone_env
 
 if TYPE_CHECKING:
+    from agm.agent.runner import PromptDelivery
     from agm.agent.spec import AgentSpec
 
 AgentFn = Callable[[AgentRequest], AgentResponse | str]
@@ -33,12 +30,13 @@ def _run_request(
     command: list[str],
     idle_timeout: float | None,
     *,
-    prompt_via_stdin: bool,
+    delivery: "PromptDelivery",
 ) -> AgentResponse:
     """Send the already-composed request prompt through the shared runner seam."""
     from agm.agent.runner import (
         cleanup_temp_files,
         prepare_rendered_prompt_run,
+        prompt_run_result_error,
         run_prepared_prompt_result,
     )
     from agm.util.interp import InterpolationError
@@ -50,7 +48,7 @@ def _run_request(
             runner=command,
             temp_files=temp_files,
             env=clone_env(),
-            prompt_via_stdin=prompt_via_stdin,
+            delivery=delivery,
         )
         result = run_prepared_prompt_result(prepared, idle_timeout=idle_timeout)
         call_info = AgentCallInfo(
@@ -65,27 +63,12 @@ def _run_request(
         ) from exc
     finally:
         cleanup_temp_files(temp_files)
-    if result.spawn_error is not None:
+    failure = prompt_run_result_error(result)
+    if failure is not None:
         raise AgentCallHostError(
-            cause="spawn_failure",
+            cause=failure.cause,
             exit_code=result.returncode,
-            stderr_tail=_stderr_tail(result.stderr),
-            elapsed=result.elapsed,
-            call_info=call_info,
-        )
-    if result.timed_out:
-        raise AgentCallHostError(
-            cause="timeout",
-            exit_code=result.returncode,
-            stderr_tail=_stderr_tail(result.stderr),
-            elapsed=result.elapsed,
-            call_info=call_info,
-        )
-    if result.returncode not in (None, 0):
-        raise AgentCallHostError(
-            cause="nonzero_exit",
-            exit_code=result.returncode,
-            stderr_tail=_stderr_tail(result.stderr),
+            stderr_tail=stderr_tail(result.stderr),
             elapsed=result.elapsed,
             call_info=call_info,
         )
@@ -96,14 +79,24 @@ def _run_request(
     )
 
 
-def decode_agent_value(value: RecordValue) -> "AgentSpec":
-    """Decode an ``Agent`` member record into its host-side specification."""
+def agent_spec_type(value: RecordValue) -> "type[AgentSpec]":
+    """Resolve the host specification class an ``Agent`` member is projected onto.
+
+    The single seam through which AgL asks what kind of agent a value is, so no
+    caller has to recognize a variant by its name.
+    """
     from agm.agent.spec import AGENT_SPECS
 
     member_name = terminal_name(value.display_name)
     spec_cls = AGENT_SPECS.get(member_name)
     if spec_cls is None:
         raise ValueError(f"unsupported Agent member: {member_name}")
+    return spec_cls
+
+
+def decode_agent_value(value: RecordValue) -> "AgentSpec":
+    """Decode an ``Agent`` member record into its host-side specification."""
+    spec_cls = agent_spec_type(value)
     return spec_cls(*(_text_field(value, name) for name in spec_cls.PAYLOAD_FIELDS))
 
 
@@ -125,10 +118,13 @@ def value_driven_agent_factory(*, idle_timeout: float | None) -> AgentFn:
             raise AgentCallHostError(
                 cause="invalid_agent", exit_code=None, stderr_tail=str(exc), elapsed=0.0
             ) from exc
-        return _run_request(request, command, idle_timeout, prompt_via_stdin=spec.prompt_via_stdin)
+        return _run_request(request, command, idle_timeout, delivery=_spec_delivery(spec))
 
     return dispatch
 
 
-def _stderr_tail(stderr: str, *, max_chars: int = 500) -> str:
-    return stderr[-max_chars:] if len(stderr) > max_chars else stderr
+def _spec_delivery(spec: "AgentSpec") -> "PromptDelivery":
+    """Return how *spec* wants its rendered prompt delivered."""
+    from agm.agent.runner import PromptDelivery
+
+    return PromptDelivery.STDIN if spec.prompt_via_stdin else PromptDelivery.FILE

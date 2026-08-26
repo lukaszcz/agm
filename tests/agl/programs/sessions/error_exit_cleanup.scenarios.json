@@ -1,0 +1,30 @@
+{
+  "scenarios": [
+    {
+      "name": "error_exit_closes_open_session",
+      "params": {"fail": true},
+      "agents": {"writer": {"responses": []}},
+      "expect": {
+        "calls": {"writer": 0},
+        "sessions": [
+          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true, "parent": null}
+        ],
+        "raises": {"type": "RangeError", "fields": {"message": "stop"}}
+      }
+    },
+    {
+      "name": "clean_session_ask_still_closes_on_exit",
+      "params": {"fail": false},
+      "agents": {"writer": {"responses": ["continued"]}},
+      "expect": {
+        "calls": {"writer": 0},
+        "sessions": [
+          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true, "parent": null}
+        ],
+        "session_prompts": [
+          {"agent": "writer", "session": "session-1", "call": 0, "equals": "continue"}
+        ]
+      }
+    }
+  ]
+}

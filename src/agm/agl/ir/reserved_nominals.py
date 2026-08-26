@@ -85,6 +85,10 @@ RESERVED_NOMINAL_NAMES: tuple[str, ...] = (
     "OutputContract",
     "OutputContractOption",
     "AgentRequest",
+    "SessionTransport",
+    "Session",
+    "SessionStats",
+    "SessionError",
     # Host-minted std/core::Option (see runtime/option.py).
     "Option",
 )
@@ -112,6 +116,8 @@ RESERVED_ENUM_MEMBER_IDS: Mapping[tuple[str, str], int] = types.MappingProxyType
         ("OutputContractOption", "Some"): -1021,
         ("Option", "None"): -1030,
         ("Option", "Some"): -1031,
+        ("SessionTransport", "Cli"): -1040,
+        ("SessionTransport", "Rpc"): -1041,
     }
 )
 

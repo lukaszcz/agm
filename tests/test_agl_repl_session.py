@@ -21,6 +21,7 @@ from agm.agl.diagnostics import AglError
 from agm.agl.ir.program import IrParam
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
+from agm.agl.runtime.sessions import AgentDispatcherSessionHost
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, create_seeded_type_table
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -28,6 +29,7 @@ from agm.agl.semantics.types import (
     COMPATIBILITY_PRELUDE_TYPE_NAMES,
     BoolType,
     BottomType,
+    DecimalType,
     EnumType,
     ExceptionType,
     IntType,
@@ -45,7 +47,7 @@ from agm.agl.semantics.values import (
     TextValue,
     UnitValue,
 )
-from tests._agl_helpers import strip_decl_ids
+from tests._agl_helpers import agent_value, strip_decl_ids
 from tests._process_helpers import FakeShell
 
 # ---------------------------------------------------------------------------
@@ -72,6 +74,8 @@ def _literal_for_type(typ: Type) -> str:
         return '"x"'
     if isinstance(typ, IntType):
         return "1"
+    if isinstance(typ, DecimalType):
+        return "1.0"
     if isinstance(typ, BoolType):
         return "false"
     if isinstance(typ, JsonType):
@@ -80,6 +84,8 @@ def _literal_for_type(typ: Type) -> str:
         return "None"
     if isinstance(typ, EnumType) and typ.name == "Agent":
         return 'AgentCommand("x")'
+    if isinstance(typ, EnumType) and typ.name == "SessionTransport":
+        return "SessionTransport::Cli"
     raise AssertionError(f"no test literal for {typ!r}")
 
 
@@ -1129,7 +1135,7 @@ class TestStdlib:
         table = create_seeded_type_table()
 
         for name, typ in BUILTIN_PRELUDE_TYPES.items():
-            if name in COMPATIBILITY_PRELUDE_TYPE_NAMES:
+            if name in COMPATIBILITY_PRELUDE_TYPE_NAMES | {"Session"}:
                 continue
             typedef = BUILTIN_PRELUDE_TYPE_DEFS[name]
             if isinstance(typ, RecordType):
@@ -1695,8 +1701,7 @@ class TestAgentRequestBuiltinIdentity:
             f"{_OPTION_DECL}"
             f"builtin\nenum Agent\n{_AGENT_VARIANTS}"
             f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}"
-            'builtin def ask-request(prompt: text, agent: Agent = AgentCommand(command = "noop")) '
-            "-> AgentRequest\n"
+            "builtin def ask-request(prompt: text) -> AgentRequest\n"
         )
         assert declare.ok, declare.diagnostics
 
@@ -1817,8 +1822,7 @@ class TestAgentArgumentBuiltinIdentity:
             f"{_OPTION_DECL}"
             f"builtin\nenum Agent\n{_AGENT_VARIANTS}"
             f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}"
-            'builtin def ask-request(prompt: text, agent: Agent = AgentCommand(command = "noop")) '
-            "-> AgentRequest\n"
+            "builtin def ask-request(prompt: text) -> AgentRequest\n"
         )
         assert declare.ok, declare.diagnostics
 
@@ -3481,6 +3485,18 @@ class TestExactlyOnce:
         assert _text(r2.value) == "the-answer"
         assert agent.calls == 1
 
+    def test_dispatcher_session_handle_survives_across_entries(self) -> None:
+        agent = CountingAgent("the-answer")
+        session = ReplSession(agent_dispatcher=agent)
+
+        opened = session.eval_entry("let saved = Session::default()")
+        asked = session.eval_entry('saved.ask("later")')
+
+        assert opened.ok
+        assert asked.ok, asked.diagnostics
+        assert _text(asked.value) == "the-answer"
+        assert agent.calls == 1
+
     def test_standalone_ask_echo_is_unquoted(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
@@ -3897,6 +3913,16 @@ class TestParams:
 
 
 class TestReset:
+    def test_reset_starts_a_fresh_default_agent_session(self) -> None:
+        host = AgentDispatcherSessionHost(None)
+        agent = agent_value("AgentCommand", command="worker")
+        first = host.default(agent, "Cli")
+        session = ReplSession(session_host=host)
+
+        session.reset()
+
+        assert host.default(agent, "Cli") != first
+
     def test_reset_clears_all_state(self) -> None:
         s = ReplSession()
         s.eval_entry("let x = 1")

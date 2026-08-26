@@ -1,0 +1,39 @@
+{
+  "scenarios": [
+    {
+      "name": "transport_failure_during_corrective_retry_stops_session_prompts",
+      "agents": {
+        "writer": {
+          "responses": ["not a number"],
+          "session": {
+            "ask": ["success", {"cause": "timeout", "stderr_tail": "idle timeout"}]
+          }
+        }
+      },
+      "expect": {
+        "calls": {"writer": 0},
+        "raises": {"type": "AgentCallError"},
+        "sessions": [
+          {"agent": "writer", "tag": "session-1", "opened": true, "closed": true}
+        ],
+        "session_prompts": [
+          {
+            "agent": "writer",
+            "session": "session-1",
+            "call": 0,
+            "starts_with": "parse then fail"
+          },
+          {
+            "agent": "writer",
+            "session": "session-1",
+            "call": 1,
+            "follow_up": {
+              "contains": ["Validation errors:", "Return only valid JSON matching the schema."],
+              "not_contains": ["parse then fail", "not a number"]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

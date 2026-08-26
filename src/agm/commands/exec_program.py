@@ -62,6 +62,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import NoReturn, TypeVar
 
+from agm.agent.session import create_agl_session_host
 from agm.agl import PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
 from agm.agl.runtime.agents import value_driven_agent_factory
@@ -95,6 +96,7 @@ from agm.config.qualified_keys import (
     route_table_paths,
 )
 from agm.core import dry_run
+from agm.core.cleanup import preserve_primary_error
 from agm.core.fs import read_text_arg
 from agm.core.log import (
     LiveTracePathResolver,
@@ -382,6 +384,7 @@ def run(
         resolved_timeout = config.timeout
 
     factory = value_driven_agent_factory(idle_timeout=resolved_timeout)
+    session_host = create_agl_session_host(idle_timeout=resolved_timeout)
 
     # Resolve the CLI > config logging decision ONCE: it both drives the trace
     # file prepared below and seeds the readable ``log`` register.
@@ -443,6 +446,7 @@ def run(
         default_loop_limit=resolved_loop_limit,
         default_strict_json=resolved_strict_json,
         agent_dispatcher=factory,
+        session_host=session_host,
         shell_exec_timeout=resolved_timeout,
         default_call_depth_limit=resolved_call_depth_limit,
     )
@@ -547,22 +551,6 @@ def run(
         assert param_preflight.executable is not None
         program_symbol = param_preflight.executable.program_symbols[selected_program.node_id]
 
-    # Reuse the ``PreparedProgram`` from above — no second parse/scope of the source.
-    # Pass the already-computed compiled from discovery and the program the
-    # preflight already lowered, so the graph is type-checked, match-compiled and
-    # lowered exactly once.
-    result = runtime.run_prepared(
-        prepared,
-        param_values=external_params,
-        check_only=dry_run.enabled(),
-        log_file=log_file,
-        compiled=discovery.compiled,
-        executable=param_preflight.executable,
-        host_settings_policy=policy,
-        builtin_host_settings=engine_seeds.values,
-        program_symbol=program_symbol,
-    )
-
     # Warnings live on their own channel and never affect the exit code;
     # ``result.diagnostics`` holds only error-severity pre-execution failures.
     # Warnings carry a ``warning:`` prefix to disambiguate them from error
@@ -578,46 +566,66 @@ def run(
         )
         for diag in discovery.warnings
     }
-    for diag in result.warnings:
-        warning_key = (
-            diag.line,
-            diag.column,
-            diag.end_line,
-            diag.end_column,
-            diag.message,
-            diag.severity,
+
+    # Reuse the ``PreparedProgram`` from above — no second parse/scope of the source.
+    # Pass the already-computed compiled from discovery and the program the
+    # preflight already lowered, so the graph is type-checked, match-compiled and
+    # lowered exactly once. Keep result-to-exit handling inside the cleanup
+    # boundary: a failed result is a primary program failure, just like an
+    # exception, and must not be replaced by a secondary close failure.
+    with preserve_primary_error(session_host.close_all, label="agent session cleanup"):
+        result = runtime.run_prepared(
+            prepared,
+            param_values=external_params,
+            check_only=dry_run.enabled(),
+            log_file=log_file,
+            compiled=discovery.compiled,
+            executable=param_preflight.executable,
+            host_settings_policy=policy,
+            builtin_host_settings=engine_seeds.values,
+            program_symbol=program_symbol,
         )
-        if warning_key not in printed_warnings:
-            print(
-                format_diagnostic(diag, source_name=diagnostic_source_name),
-                file=sys.stderr,
+
+        for diag in result.warnings:
+            warning_key = (
+                diag.line,
+                diag.column,
+                diag.end_line,
+                diag.end_column,
+                diag.message,
+                diag.severity,
             )
-
-    if result.ok:
-        # Print the static call-site inventory when running under --dry-run.
-        if dry_run.enabled() and result.call_sites:
-            print("call-sites:")
-            for site in result.call_sites:
-                schema_tag = ", schema: yes" if site.has_schema else ""
-                policy_tag = (
-                    f", policy: {site.parse_policy}" if site.parse_policy != "default" else ""
-                )
+            if warning_key not in printed_warnings:
                 print(
-                    f"  line {site.line}:{site.col}: {site.callee} "
-                    f"→ {site.target_type} "
-                    f"[{site.codec_name}{schema_tag}{policy_tag}]"
+                    format_diagnostic(diag, source_name=diagnostic_source_name),
+                    file=sys.stderr,
                 )
-        return
 
-    # Pre-execution failure: print error diagnostics and exit 1.
-    if result.error is None:
-        for diag in result.diagnostics:
-            print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
-        raise SystemExit(1)
+        if result.ok:
+            # Print the static call-site inventory when running under --dry-run.
+            if dry_run.enabled() and result.call_sites:
+                print("call-sites:")
+                for site in result.call_sites:
+                    schema_tag = ", schema: yes" if site.has_schema else ""
+                    policy_tag = (
+                        f", policy: {site.parse_policy}" if site.parse_policy != "default" else ""
+                    )
+                    print(
+                        f"  line {site.line}:{site.col}: {site.callee} "
+                        f"→ {site.target_type} "
+                        f"[{site.codec_name}{schema_tag}{policy_tag}]"
+                    )
+            return
 
-    # Uncaught AgL exception: print and exit 2.
-    print(result.error.to_message(), file=sys.stderr)
-    raise SystemExit(2)
+        # Pre-execution failure: print error diagnostics and exit 1.
+        if result.error is None:
+            for diag in result.diagnostics:
+                print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
+            raise SystemExit(1)
+
+        # Uncaught AgL exception: print and exit 2.
+        print(result.error.to_message(), file=sys.stderr)
+        raise SystemExit(2)
 
 
 def _resolve_installed_reference_or_exit(

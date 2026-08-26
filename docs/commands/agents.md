@@ -86,3 +86,21 @@ command name is forwarded to review/revise config lookup.
 
 - `[refine] max_steps`, `no_max_steps`, `runner`, `reviewer`, `reviser`, `scope`, `aspects`, `review_prompt`, `review_prompt_file`, `extra_review_prompt`, `extra_review_prompt_file`, `revise_prompt`, `revise_prompt_file`, `extra_revise_prompt`, `extra_revise_prompt_file`, `save_review`, `log_file`, `no_log`
 - `[refine.<command>]` overrides the base refine config for a specific command
+
+## AgL session runners
+
+This section applies to `AgentCommand(...)` and `[exec] runner`, used by AgL
+`ask`, not to the review/revise/refine runners above. They share
+`%{PROMPT_FILE}` (or `%%`) placement, `\%{` escaping, strict interpolation,
+and shlex splitting. A continuing `AgentCommand` session additionally requires
+an unescaped `%{SESSION_ID}` placeholder. AGM replaces it in the command argv
+with a generated id; it does not put `SESSION_ID` in the child environment.
+
+Free `ask`, `Session::open(AgentCommand(...))`, and an `AgentCommand(...).ask(...)`
+with corrective retries open continuing sessions, so their command must contain
+that placeholder. A single-attempt `AgentCommand(...).ask(...)` sends exactly one
+prompt and does not require it. A command without the placeholder cannot otherwise be
+opened as a session and raises `SessionError`. See
+[`agm exec`](exec.md#agent-command-interpolation) for configuration precedence
+and [Agent calls](../agl/reference/agent-calls.md#sessions) for all session
+backends.

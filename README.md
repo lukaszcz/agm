@@ -225,9 +225,9 @@ Execute an AgL (Agent Language) workflow program. AgL is a statically-typed, exp
 DSL for composable agent workflows: it supports typed params and outputs, user-defined functions
 (`def`/`fn`), functions implemented by a co-located Python file (`extern def`), structured JSON
 targets, do-loops with retry/abort policies, control flow (if/case/try), shell execution (`exec`),
-and typed `Agent` values. `ask` receives an `Agent` value — for example
-`AgentCommand("claude -p")` or `AgentClaude("sonnet", "medium")` — explicitly or from
-`std/config::default-agent`. The selected value determines the invoked command.
+and typed `Agent` values. Free `ask` lazily opens a persistent default agent
+session from `std/config::default-agent`; use `agent.ask(...)` or `Session::open(...)`
+to select an explicit agent or conversation. The selected value determines the invoked command.
 
 A file workflow declares one or more zero-argument `program def` entries: `agm exec`
 invokes the sole one after initialization, or selects one of several with

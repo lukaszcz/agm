@@ -43,6 +43,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 - `src/agm/core/` contains the cross-cutting process, environment, filesystem, and TOML primitives plus the dry-run facility; `src/agm/util/` holds pure, `agm`-import-free generic helpers (graph algorithms, text normalization).
 - `src/agm/version.py` defines AGM's release version; package and project metadata keep it in lockstep.
 - `src/agm/config/` implements loading and resolving general and sandbox configuration.
+- `src/agm/agent/` implements agent runner invocation and session backends.
 - `src/agm/project/` implements project/worktree setup and layout management.
 - `src/agm/packages/` implements package manifests, package identity, and package discipline validation.
 - `src/agm/sandbox/` implements sandbox runtime/template support.

@@ -8,6 +8,6 @@ program def main() -> unit =
   let copied_agent = copy(impl)
   let copied_fn = shallow_copy(inc)
 
-  let result = ask("Do it", agent = copied_agent)
+  let result = copied_agent.ask("Do it")
   print(result)
   print(copied_fn(4))

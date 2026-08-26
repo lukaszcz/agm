@@ -46,7 +46,7 @@ def widen(flag: bool) =
   1.5
 
 def agent-value() -> text =
-  return ask("give a short value", agent = helper)
+  return helper.ask("give a short value")
 
 program def main() -> unit =
   print "mode %{mode}"

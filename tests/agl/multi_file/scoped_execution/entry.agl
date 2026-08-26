@@ -6,12 +6,12 @@ use scoped_execution/workflow::Workflow::Status::*
 
 scope Dispatch
 let reviewer = AgentCommand("reviewer")
-def fetch() -> Task = ask("Return a recursive task.", agent = reviewer)
+def fetch() -> Task = reviewer.ask("Return a recursive task.")
 end Dispatch
 
 program def main() -> unit =
   let task = Dispatch::fetch()
-  let status: Status = ask("Return a workflow status.", agent = Dispatch::reviewer)
+  let status: Status = Dispatch::reviewer.ask("Return a workflow status.")
   print(score(task))
   print(label(status))
   print(status is completed)

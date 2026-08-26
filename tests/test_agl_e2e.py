@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import unittest.mock
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
@@ -43,6 +44,12 @@ from typing import Any
 
 import pytest
 
+from agm.agent.session import (
+    SessionCapabilities,
+    SessionHostError,
+    SessionOperation,
+    SessionService,
+)
 from tests._agl_helpers import prepare_inline_command
 from tests._process_helpers import FakeShell
 
@@ -52,6 +59,14 @@ REJECTIONS_DIR = AGL_DIR / "rejections"
 REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 EXTERNS_PROGRAMS_DIR = PROGRAMS_DIR / "externs"
 RESOURCE_PROGRAMS_DIR = PROGRAMS_DIR / "resources"
+_SESSION_STATIC_DECLARATIONS = """\
+builtin def Session::open(
+  agent: Agent,
+  transport: Option[SessionTransport] = Option[SessionTransport]::None,
+  name: text = "",
+) -> Session
+builtin def Session::default() -> Session
+"""
 
 
 def _load_json(path: Path) -> Any:
@@ -61,28 +76,145 @@ def _load_json(path: Path) -> Any:
 
 
 @dataclass
-class ScriptedAgent:
-    """Replays a scenario's scripted responses and records rendered prompts.
+class _ScriptedSession:
+    """One deterministic session observation owned by a scripted agent."""
 
-    ``schemas`` records, alongside each call's ``prompt``, the structured JSON
-    Schema from the output contract for that same call. It is a SEPARATE list
-    from ``prompts`` so existing ``equals``/``contains`` assertions against the
-    literal user prompt are unaffected; a scenario that wants to assert on the
-    schema instead uses ``schema_contains`` or ``schema_paths``.
+    tag: str
+    parent: str | None
+    transport: str = ""
+    single_prompt: bool = False
+    opened: bool = False
+    closed: bool = False
+    prompts: list[str] = field(default_factory=list)
+    operations: list[tuple[str, str | None, str]] = field(default_factory=list)
+    backend: Any = field(init=False, repr=False)
+
+
+_SESSION_CAPABILITY_NAMES = frozenset(operation.value for operation in SessionOperation)
+
+
+def _outcome_name(outcome: Any) -> str:
+    return str(outcome.get("outcome", "success")) if isinstance(outcome, dict) else str(outcome)
+
+
+@dataclass
+class ScriptedAgent:
+    """Replays scripted responses and records ordinary and session prompts.
+
+    ``schemas`` records, alongside each ordinary call's ``prompt``, the
+    structured JSON Schema from the output contract for that same call. It is
+    separate from ``prompts`` so existing literal-prompt assertions are
+    unaffected. Session observations use deterministic tags, letting scenarios
+    assert conversation identity without depending on host handles.
     """
 
     name: str
     responses: list[str]
     repeat_last: bool = False
+    session_capabilities: frozenset[str] = field(default_factory=lambda: _SESSION_CAPABILITY_NAMES)
+    session_operations: dict[str, list[Any]] = field(default_factory=dict)
+    session_ask_outcomes: list[Any] | None = None
     prompts: list[str] = field(default_factory=list)
     schemas: list[Any] = field(default_factory=list)
+    prompt_events: list[tuple[str, Any]] = field(default_factory=list)
+    sessions: list[_ScriptedSession] = field(default_factory=list)
     overflowed: bool = False
+    session_operations_overflowed: bool = False
+    session_ask_outcomes_overflowed: bool = False
+    require_session_id: bool = False
+    _response_count: int = 0
+
+    def __post_init__(self) -> None:
+        if any(
+            _outcome_name(outcome) == "unsupported"
+            for outcome in self.session_operations.get("reset", [])
+        ):
+            raise ValueError("reset does not support an unsupported outcome")
 
     def __call__(self, request: Any) -> str:
         self.prompts.append(request.prompt)
         contract = request.output_contract
-        self.schemas.append(contract.json_schema if contract is not None else None)
-        index = len(self.prompts) - 1
+        schema = contract.json_schema if contract is not None else None
+        self.schemas.append(schema)
+        self.prompt_events.append((request.prompt, schema))
+        return self._next_response()
+
+    def session_service(self) -> Any:
+        """Create an observable wrapper around the production session service."""
+        return _ScriptedSessionService(self)
+
+    def _new_session_backend(self, agent: object, transport: str) -> Any:
+        """Build the same transport-specific backend production would select."""
+        from agm.agent.runner import command_targets_session_id
+        from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi
+        from agm.agl.runtime.agents import decode_agent_value
+
+        if transport == "scripted":
+            session = _ScriptedSession(tag=f"session-{len(self.sessions) + 1}", parent=None)
+            self.sessions.append(session)
+            return _ScriptedSessionBackend(
+                self, session, frozenset(SessionOperation), supports_name=True
+            )
+        try:
+            spec = decode_agent_value(agent)
+        except (AttributeError, ValueError) as error:
+            raise SessionHostError(str(error), "open") from error
+        if transport == "rpc":
+            if not isinstance(spec, AgentPi):
+                raise SessionHostError("RPC transport is only supported by AgentPi", "open")
+            capabilities = frozenset(SessionOperation)
+            backend_type: type[_ScriptedSessionBackend] = _ScriptedPiRpcSessionBackend
+            supports_name = True
+        elif transport == "cli":
+            backend_type = _ScriptedSessionBackend
+            if isinstance(spec, AgentCommand):
+                try:
+                    argv = spec.argv()
+                except ValueError as error:
+                    raise SessionHostError(str(error), "open") from error
+                if self.require_session_id and not command_targets_session_id(argv):
+                    raise SessionHostError(
+                        "command session requires a %{SESSION_ID} placeholder; "
+                        "use [exec] default-agent instead",
+                        "open",
+                    )
+                capabilities = frozenset({SessionOperation.ASK})
+                supports_name = False
+            elif isinstance(spec, AgentClaude):
+                capabilities = frozenset(
+                    {SessionOperation.ASK, SessionOperation.COMPACT, SessionOperation.FORK}
+                )
+                supports_name = True
+            elif isinstance(spec, AgentCodex):
+                capabilities = frozenset({SessionOperation.ASK})
+                supports_name = False
+            elif isinstance(spec, AgentPi):
+                capabilities = frozenset({SessionOperation.ASK, SessionOperation.FORK})
+                supports_name = True
+            else:
+                raise SessionHostError("unsupported session agent", "open")
+        else:
+            raise SessionHostError(f"unsupported session transport {transport!r}", "open")
+        session = _ScriptedSession(tag=f"session-{len(self.sessions) + 1}", parent=None)
+        self.sessions.append(session)
+        return backend_type(self, session, capabilities, supports_name=supports_name)
+
+    def _fork_session(self, parent: _ScriptedSession) -> Any:
+        session = _ScriptedSession(
+            tag=f"session-{len(self.sessions) + 1}", parent=parent.tag, opened=True
+        )
+        self.sessions.append(session)
+        backend = parent.backend
+        return type(backend)(
+            self,
+            session,
+            backend._native_capabilities,
+            supports_name=backend._supports_name,
+        )
+
+    def _next_response(self) -> str:
+        index = self._response_count
+        self._response_count += 1
         if index < len(self.responses):
             return self.responses[index]
         if self.repeat_last and self.responses:
@@ -90,14 +222,504 @@ class ScriptedAgent:
         self.overflowed = True
         return ""
 
+    def _next_session_ask_outcome(self) -> Any:
+        if self.session_ask_outcomes is None:
+            return "success"
+        if not self.session_ask_outcomes:
+            self.session_ask_outcomes_overflowed = True
+            return "success"
+        return self.session_ask_outcomes.pop(0)
+
+    def _next_operation(self, operation: str) -> Any:
+        script = self.session_operations.get(operation)
+        if script is None:
+            return "success"
+        if not script:
+            self.session_operations_overflowed = True
+            return "success"
+        return script.pop(0)
+
+    def _operation_outcome(self, operation: str) -> str:
+        script = self.session_operations.get(operation)
+        if not script:
+            return "success"
+        return _outcome_name(script[0])
+
+    def _supports_operation(self, operation: str) -> bool:
+        return (
+            operation in self.session_capabilities
+            and self._operation_outcome(operation) != "unsupported"
+        )
+
+    def _consume_capability_rejection(self, operation: str) -> None:
+        if self._operation_outcome(operation) == "unsupported":
+            self._next_operation(operation)
+
+
+class _ScriptedSessionService:
+    """Record test-only session attempts while delegating behavior to ``SessionService``."""
+
+    def __init__(self, agent: ScriptedAgent) -> None:
+        self._agent = agent
+        self._service = SessionService(agent._new_session_backend)
+        self._sessions: dict[str, _ScriptedSession] = {}
+        self._backends: dict[str, _ScriptedSessionBackend] = {}
+        self._ephemeral_handles: set[str] = set()
+
+    def open(self, agent: object, transport: str, *, name: str = "") -> str:
+        handle = self._service.open(agent, transport, name=name)
+        self._sessions[handle] = self._agent.sessions[-1]
+        self._backends[handle] = self._agent.sessions[-1].backend
+        return handle
+
+    def open_ephemeral(self, agent: object, transport: str, *, single_prompt: bool = False) -> str:
+        handle = self._service.open(agent, transport, ephemeral=True, single_prompt=single_prompt)
+        self._sessions[handle] = self._agent.sessions[-1]
+        self._backends[handle] = self._agent.sessions[-1].backend
+        self._ephemeral_handles.add(handle)
+        return handle
+
+    def with_ephemeral(
+        self,
+        agent: object,
+        transport: str,
+        action: Callable[[str], Any],
+        *,
+        on_closed: Callable[[str], None] | None = None,
+        single_prompt: bool = False,
+    ) -> Any:
+        def register(handle: str) -> Any:
+            self._sessions[handle] = self._agent.sessions[-1]
+            self._backends[handle] = self._agent.sessions[-1].backend
+            self._ephemeral_handles.add(handle)
+            return action(handle)
+
+        def retire(handle: str) -> None:
+            self._retire_ephemeral(handle)
+            if on_closed is not None:
+                on_closed(handle)
+
+        return self._service.with_ephemeral(
+            agent, transport, register, on_closed=retire, single_prompt=single_prompt
+        )
+
+    def default(self, agent: object, transport: str, *, name: str = "") -> str:
+        handle = self._service.default(agent, transport, name=name)
+        if handle not in self._sessions:
+            self._sessions[handle] = self._agent.sessions[-1]
+            self._backends[handle] = self._agent.sessions[-1].backend
+        return handle
+
+    def ask(self, handle: str, request: Any) -> Any:
+        return self._service.ask(handle, request)
+
+    def compact(self, handle: str, instructions: str = "") -> None:
+        self._attempt(
+            handle, "compact", instructions, lambda: self._service.compact(handle, instructions)
+        )
+
+    def reset(self, handle: str) -> None:
+        self._attempt(handle, "reset", None, lambda: self._service.reset(handle))
+
+    def fork(self, handle: str) -> str:
+        forked = self._attempt(handle, "fork", None, lambda: self._service.fork(handle))
+        self._sessions[forked] = self._agent.sessions[-1]
+        self._backends[forked] = self._agent.sessions[-1].backend
+        return forked
+
+    def set_name(self, handle: str, name: str) -> None:
+        self._attempt(handle, "set-name", name, lambda: self._service.set_name(handle, name))
+
+    def stats(self, handle: str) -> Any:
+        return self._attempt(handle, "stats", None, lambda: self._service.stats(handle))
+
+    def close(self, handle: str) -> None:
+        self._service.close(handle)
+        self._retire_ephemeral(handle)
+
+    def close_all(self) -> None:
+        try:
+            self._service.close_all()
+        finally:
+            for handle in tuple(self._ephemeral_handles):
+                if not self._service.is_known(handle):
+                    self._retire_ephemeral(handle)
+
+    def _retire_ephemeral(self, handle: str) -> None:
+        if handle in self._ephemeral_handles:
+            self._ephemeral_handles.remove(handle)
+            del self._sessions[handle]
+            del self._backends[handle]
+
+    def _attempt(
+        self,
+        handle: str,
+        operation: str,
+        arg: str | None,
+        action: Callable[[], Any],
+    ) -> Any:
+        session = self._sessions.get(handle)
+        backend = self._backends.get(handle)
+        rejected = (
+            session is not None
+            and backend is not None
+            and operation != "reset"
+            and not backend.supports(operation)
+        )
+        if rejected:
+            session.operations.append((operation, arg, "unsupported"))
+        try:
+            return action()
+        except SessionHostError as error:
+            if rejected and error.operation == operation:
+                self._agent._consume_capability_rejection(operation)
+            raise
+
+
+class _ScenarioSessionHost:
+    """Route session requests to the scripted agent selected by an AgL value."""
+
+    def __init__(self, agents: dict[str, ScriptedAgent]) -> None:
+        self._services = {name: agent.session_service() for name, agent in agents.items()}
+        self._handles: dict[str, _ScriptedSessionService] = {}
+        self._snapshots: dict[str, tuple[Any, str]] = {}
+        self._default_handle: str | None = None
+
+    def open(self, agent: Any, transport: str, *, name: str = "") -> str:
+        service = self._service_for(agent)
+        try:
+            handle = service.open(agent, transport.lower(), name=name)
+        except SessionHostError as error:
+            self._raise_host_error(error)
+        self._handles[handle] = service
+        self._snapshots[handle] = (agent, transport)
+        return handle
+
+    def open_ephemeral(self, agent: Any, transport: str, *, single_prompt: bool = False) -> str:
+        service = self._service_for(agent)
+        try:
+            handle = service.open_ephemeral(agent, transport.lower(), single_prompt=single_prompt)
+        except SessionHostError as error:
+            self._raise_host_error(error)
+        self._handles[handle] = service
+        self._snapshots[handle] = (agent, transport)
+        return handle
+
+    def with_ephemeral(
+        self,
+        agent: Any,
+        transport: str,
+        action: Callable[[str], Any],
+        *,
+        single_prompt: bool = False,
+    ) -> Any:
+        service = self._service_for(agent)
+
+        def register(handle: str) -> Any:
+            self._handles[handle] = service
+            self._snapshots[handle] = (agent, transport)
+            return action(handle)
+
+        def retire(handle: str) -> None:
+            del self._handles[handle]
+            del self._snapshots[handle]
+
+        try:
+            return service.with_ephemeral(
+                agent, transport.lower(), register, on_closed=retire, single_prompt=single_prompt
+            )
+        except SessionHostError as error:
+            self._raise_host_error(error)
+
+    def default(self, agent: Any, transport: str, *, name: str = "") -> str:
+        if self._default_handle is not None:
+            return self._default_handle
+        service = self._service_for(agent)
+        try:
+            handle = service.default(agent, transport.lower(), name=name)
+        except SessionHostError as error:
+            self._raise_host_error(error)
+        self._handles[handle] = service
+        self._snapshots[handle] = (agent, transport)
+        self._default_handle = handle
+        return handle
+
+    def ask(self, handle: str, prompt: str) -> str:
+        from agm.agent.session import SessionAskRequest
+        from agm.agl.runtime.sessions import SessionAskError as AglSessionAskError
+
+        try:
+            return (
+                self._service_for_handle(handle, "ask")
+                .ask(handle, SessionAskRequest(prompt))
+                .content
+            )
+        except SessionHostError as error:
+            self._raise_host_error(error)
+        except Exception as error:
+            if hasattr(error, "cause"):
+                raise AglSessionAskError(
+                    cause=error.cause,
+                    exit_code=error.exit_code,
+                    stderr_tail=error.stderr_tail,
+                    elapsed=error.elapsed,
+                    call_info=None,
+                ) from error
+            raise
+
+    def ask_request(self, handle: str, request: Any) -> Any:
+        from agm.agl.runtime.request import AgentResponse
+
+        content = self.ask(handle, request.prompt)
+        service = self._service_for_handle(handle, "ask")
+        schema = None if request.output_contract is None else request.output_contract.json_schema
+        service._agent.prompt_events[-1] = (request.prompt, schema)
+        return AgentResponse(content)
+
+    def compact(self, handle: str, instructions: str = "") -> None:
+        self._operation(handle, "compact", instructions)
+
+    def reset(self, handle: str) -> None:
+        self._operation(handle, "reset")
+
+    def fork(self, handle: str) -> str:
+        service = self._service_for_handle(handle, "fork")
+        try:
+            forked = service.fork(handle)
+        except SessionHostError as error:
+            self._raise_host_error(error)
+        self._handles[forked] = service
+        self._snapshots[forked] = self._snapshots[handle]
+        return forked
+
+    def set_name(self, handle: str, name: str) -> None:
+        self._operation(handle, "set_name", name)
+
+    def stats(self, handle: str) -> Any:
+        try:
+            return self._service_for_handle(handle, "stats").stats(handle)
+        except SessionHostError as error:
+            self._raise_host_error(error)
+
+    def snapshot(self, handle: str) -> Any:
+        from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
+        from agm.agl.runtime.sessions import SessionSnapshot
+
+        try:
+            agent, transport = self._snapshots[handle]
+        except KeyError:
+            raise AglSessionHostError("unknown session", "snapshot") from None
+        return SessionSnapshot(agent, transport)
+
+    def close(self, handle: str) -> None:
+        service = self._service_for_handle(handle, "close")
+        try:
+            service.close(handle)
+        except SessionHostError as error:
+            self._raise_host_error(error)
+        if handle not in service._sessions:
+            del self._handles[handle]
+            del self._snapshots[handle]
+
+    def close_all(self) -> None:
+        failures: list[Exception] = []
+        for service in self._services.values():
+            try:
+                service.close_all()
+            except ExceptionGroup as error:
+                failures.extend(error.exceptions)
+        if failures:
+            raise ExceptionGroup("failed to close one or more scripted sessions", failures)
+
+    def _operation(self, handle: str, name: str, arg: str = "") -> None:
+        service = self._service_for_handle(handle, name.replace("_", "-"))
+        try:
+            if name == "compact":
+                service.compact(handle, arg)
+            elif name == "set_name":
+                service.set_name(handle, arg)
+            else:
+                service.reset(handle)
+        except SessionHostError as error:
+            self._raise_host_error(error)
+
+    def _service_for(self, agent: Any) -> _ScriptedSessionService:
+        from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
+
+        try:
+            return self._services[_scripted_agent_name(agent)]
+        except KeyError:
+            raise AglSessionHostError("unknown scripted agent", "open") from None
+
+    def _service_for_handle(self, handle: str, operation: str) -> _ScriptedSessionService:
+        try:
+            return self._handles[handle]
+        except KeyError:
+            from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
+
+            raise AglSessionHostError("unknown session", operation) from None
+
+    @staticmethod
+    def _raise_host_error(error: SessionHostError) -> None:
+        from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
+
+        raise AglSessionHostError(error.message, error.operation) from error
+
+
+class _ScriptedSessionBackend:
+    """In-memory backend constrained to one production transport's surface."""
+
+    def __init__(
+        self,
+        agent: ScriptedAgent,
+        session: _ScriptedSession,
+        native_capabilities: frozenset[SessionOperation],
+        *,
+        supports_name: bool,
+    ) -> None:
+        self._agent = agent
+        self._session = session
+        self._native_capabilities = native_capabilities
+        self._supports_name = supports_name
+        session.backend = self
+
+    @property
+    def capabilities(self) -> SessionCapabilities:
+        return SessionCapabilities(
+            frozenset(
+                operation
+                for operation in self._native_capabilities
+                if self._agent._supports_operation(operation.value)
+            )
+        )
+
+    def supports(self, operation: str) -> bool:
+        return self.capabilities.supports(SessionOperation(operation))
+
+    def open(self, request: Any) -> None:
+        if request.name and not self._supports_name:
+            self._agent.sessions.remove(self._session)
+            raise SessionHostError("scripted session does not support names", "set-name")
+        self._session.transport = request.transport
+        self._session.single_prompt = request.single_prompt
+        self._session.opened = True
+
+    def ask(self, request: Any) -> Any:
+        from agm.agent.session import SessionAskError, SessionAskResponse
+        from agm.agent.transport import AgentCallInfo
+
+        self._session.prompts.append(request.prompt)
+        self._agent.prompt_events.append((request.prompt, None))
+        outcome = self._agent._next_session_ask_outcome()
+        if isinstance(outcome, dict):
+            elapsed = float(outcome.get("elapsed", 0.0))
+            exit_code = outcome.get("exit_code")
+            if not isinstance(exit_code, int | None):
+                raise ValueError("session ask outcome exit_code must be an integer or null")
+            raise SessionAskError(
+                cause=outcome.get("cause", "timeout"),
+                exit_code=exit_code,
+                stderr_tail=str(outcome.get("stderr_tail", "")),
+                elapsed=elapsed,
+                call_info=AgentCallInfo(
+                    argv=[], prompt_via_stdin=False, elapsed=elapsed, exit_code=exit_code
+                ),
+            )
+        if outcome != "success":
+            raise ValueError("session ask outcome must be 'success' or a transport failure")
+        return SessionAskResponse(content=self._agent._next_response())
+
+    def compact(self, instructions: str) -> None:
+        self._apply_operation("compact", instructions)
+
+    def reset(self) -> None:
+        self._apply_operation("reset", None)
+
+    def fork(self) -> Any:
+        self._apply_operation("fork", None)
+        return self._agent._fork_session(self._session)
+
+    def set_name(self, name: str) -> None:
+        self._apply_operation("set-name", name)
+
+    def stats(self) -> Any:
+        from agm.agent.session import SessionStats
+
+        outcome = self._apply_operation("stats", None)
+        if not isinstance(outcome, dict):
+            return SessionStats(0, 0, Decimal("0"), Decimal("0"))
+        return SessionStats(
+            input_tokens=int(outcome.get("input_tokens", 0)),
+            output_tokens=int(outcome.get("output_tokens", 0)),
+            cost=Decimal(str(outcome.get("cost", "0"))),
+            context_percent=Decimal(str(outcome.get("context_percent", "0"))),
+        )
+
+    def close(self) -> None:
+        self._session.closed = True
+
+    def _apply_operation(self, operation: str, arg: str | None) -> Any:
+        outcome = self._agent._next_operation(operation)
+        outcome_name = _outcome_name(outcome)
+        self._session.operations.append((operation, arg, outcome_name))
+        if outcome_name == "unsupported":
+            from agm.agent.session import SessionHostError
+
+            raise SessionHostError(f"scripted session does not support {operation}", operation)
+        return outcome
+
+
+class _ScriptedPiRpcSessionBackend(_ScriptedSessionBackend):
+    """Native Pi RPC mock used by lifecycle scenarios without a real agent."""
+
+
+def _scripted_agent_name(agent: Any) -> str:
+    """Map an AgL agent value onto one scenario's scripted service."""
+    import shlex
+
+    command = agent.fields.get("command")
+    if command is not None:
+        try:
+            return shlex.split(command.value)[0]
+        except (TypeError, ValueError):
+            return command.value
+    provider = agent.fields.get("provider")
+    return provider.value if provider is not None else "ask"
+
 
 def _agent_from_spec(name: str, spec: Any) -> ScriptedAgent:
     if isinstance(spec, list):
         return ScriptedAgent(name=name, responses=[str(r) for r in spec])
+    session = spec.get("session", {})
+    capability_spec = session.get("capabilities")
+    capabilities = (
+        _SESSION_CAPABILITY_NAMES
+        if capability_spec is None
+        else frozenset(str(operation) for operation in capability_spec)
+    )
+    unknown_capabilities = capabilities - _SESSION_CAPABILITY_NAMES
+    if unknown_capabilities:
+        raise ValueError(f"unknown session capabilities: {sorted(unknown_capabilities)}")
+    operations = {
+        str(operation): list(outcomes)
+        for operation, outcomes in session.get("operations", {}).items()
+    }
+    ask_outcomes = session.get("ask")
+    if ask_outcomes is not None and not isinstance(ask_outcomes, list):
+        raise ValueError("session ask outcomes must be a list")
+    if capability_spec is not None:
+        for operation, outcomes in operations.items():
+            if any(_outcome_name(outcome) == "unsupported" for outcome in outcomes):
+                raise ValueError(
+                    "unsupported outcomes must be expressed through session capabilities"
+                )
     return ScriptedAgent(
         name=name,
         responses=[str(r) for r in spec["responses"]],
         repeat_last=bool(spec.get("repeat_last", False)),
+        session_capabilities=capabilities,
+        session_operations=operations,
+        session_ask_outcomes=None if ask_outcomes is None else list(ask_outcomes),
     )
 
 
@@ -150,19 +772,21 @@ def _run_program(
     shell = FakeShell(scenario.get("shell", []))
     runtime_options: dict[str, Any] = {}
     runtime_config = scenario.get("runtime", {})
+    if runtime_config.get("enforce_command_sessions") is True:
+        for agent in agents.values():
+            agent.require_session_id = True
     if "default_call_depth_limit" in runtime_config:
         runtime_options["default_call_depth_limit"] = runtime_config["default_call_depth_limit"]
     if "default_strict_json" in runtime_config:
         runtime_options["default_strict_json"] = runtime_config["default_strict_json"]
 
     def dispatch_agent(request: Any) -> str:
-        agent_value = request.agent
-        command = agent_value.fields.get("command")
-        name = command.value if command is not None else "ask"
-        return agents[name](request)
+        return agents[_scripted_agent_name(request.agent)](request)
 
     if agents:
         runtime_options["agent_dispatcher"] = dispatch_agent
+    if agents:
+        runtime_options["session_host"] = _ScenarioSessionHost(agents)
     runtime = PipelineDriver(**runtime_options)
     module_roots = scenario.get("module_roots", [])
     default_stdlib = not scenario.get("no_stdlib", False)
@@ -298,6 +922,17 @@ def test_schema_paths_assert_exact_nested_values() -> None:
     )
 
 
+def _assert_prompt_text(prompt: str, spec: dict[str, Any]) -> None:
+    if "equals" in spec:
+        assert prompt == spec["equals"]
+    if "starts_with" in spec:
+        assert prompt.startswith(spec["starts_with"])
+    for needle in spec.get("contains", []):
+        assert needle in prompt, f"{needle!r} not in prompt {prompt!r}"
+    for needle in spec.get("not_contains", []):
+        assert needle not in prompt, f"{needle!r} unexpectedly in prompt {prompt!r}"
+
+
 def _assert_calls(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> None:
     for name, agent in agents.items():
         assert not agent.overflowed, f"agent {name!r} was called more times than scripted"
@@ -308,7 +943,7 @@ def _assert_calls(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> N
     )
     for name, agent in agents.items():
         count = expected_calls[name]
-        actual = len(agent.prompts)
+        actual = len(agent.prompt_events) if "session_prompts" not in expect else len(agent.prompts)
         assert actual == count, f"agent {name!r}: expected {count} calls, got {actual}"
     for spec in expect.get("prompts", []):
         agent_spec = spec["agent"]
@@ -317,24 +952,449 @@ def _assert_calls(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> N
         else:
             name = agent_spec
         assert isinstance(name, str)
-        prompts = agents[name].prompts
+        prompt_events = agents[name].prompt_events
+        prompts = [prompt for prompt, _schema in prompt_events]
         call = spec["call"]
         assert call < len(prompts), (
             f"agent {spec['agent']!r} made only {len(prompts)} calls, no call {call}"
         )
-        prompt = prompts[call]
-        if "equals" in spec:
-            assert prompt == spec["equals"]
-        if "starts_with" in spec:
-            assert prompt.startswith(spec["starts_with"])
-        for needle in spec.get("contains", []):
-            assert needle in prompt, f"{needle!r} not in prompt {prompt!r}"
-        for needle in spec.get("not_contains", []):
-            assert needle not in prompt, f"{needle!r} unexpectedly in prompt {prompt!r}"
-        schema = agents[name].schemas[call]
+        _assert_prompt_text(prompts[call], spec)
+        schema = prompt_events[call][1]
         for needle in spec.get("schema_contains", []):
             assert _schema_contains(schema, needle), f"{needle!r} not in schema {schema!r}"
         _assert_schema_paths(schema, spec.get("schema_paths", []))
+
+
+def _assert_sessions(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> None:
+    for name, agent in agents.items():
+        assert not agent.session_operations_overflowed, (
+            f"session operation script for agent {name!r} was used more times than scripted"
+        )
+        assert not agent.session_ask_outcomes_overflowed, (
+            f"session ask script for agent {name!r} was used more times than scripted"
+        )
+        assert not agent.session_ask_outcomes, (
+            f"session ask script for agent {name!r} was not fully consumed"
+        )
+        unconsumed = {
+            operation: len(outcomes)
+            for operation, outcomes in agent.session_operations.items()
+            if outcomes
+        }
+        assert not unconsumed, (
+            f"session operation script for agent {name!r} was not fully consumed: {unconsumed}"
+        )
+
+    def session_for(spec: dict[str, Any]) -> _ScriptedSession:
+        agent_name = spec["agent"]
+        tag = spec.get("session", spec.get("tag"))
+        assert isinstance(agent_name, str)
+        assert isinstance(tag, str)
+        matches = [session for session in agents[agent_name].sessions if session.tag == tag]
+        assert len(matches) == 1, f"no unique session {tag!r} for agent {agent_name!r}"
+        return matches[0]
+
+    if "sessions" in expect:
+        expected_sessions = {
+            (spec["agent"], spec.get("session", spec.get("tag"))) for spec in expect["sessions"]
+        }
+        observed_sessions = {
+            (agent_name, session.tag)
+            for agent_name, agent in agents.items()
+            for session in agent.sessions
+        }
+        assert expected_sessions == observed_sessions, (
+            f"session set: expected {sorted(expected_sessions)}, got {sorted(observed_sessions)}"
+        )
+
+    for spec in expect.get("sessions", []):
+        session = session_for(spec)
+        for key in ("opened", "closed", "parent", "transport", "single_prompt"):
+            if key in spec:
+                assert getattr(session, key) == spec[key], (
+                    f"session {session.tag!r} {key}: expected {spec[key]!r}, "
+                    f"got {getattr(session, key)!r}"
+                )
+
+    prompt_specs: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for spec in expect.get("session_prompts", []):
+        agent_name = spec["agent"]
+        tag = spec.get("session", spec.get("tag"))
+        assert isinstance(agent_name, str)
+        assert isinstance(tag, str)
+        prompt_specs.setdefault((agent_name, tag), []).append(spec)
+
+    if "sessions" in expect or "session_prompts" in expect:
+        for agent_name, agent in agents.items():
+            for session in agent.sessions:
+                specs = prompt_specs.get((agent_name, session.tag), [])
+                assert len(specs) == len(session.prompts), (
+                    f"session {session.tag!r} prompt count: expected {len(specs)}, "
+                    f"got {len(session.prompts)}"
+                )
+                calls = sorted(spec["call"] for spec in specs)
+                assert calls == list(range(len(session.prompts))), (
+                    f"session {session.tag!r} prompt calls must cover each prompt exactly once"
+                )
+
+    for spec in expect.get("session_prompts", []):
+        session = session_for(spec)
+        call = spec["call"]
+        assert isinstance(call, int)
+        if "follow_up" in spec:
+            assert call > 0, "a follow-up must be later than the first session prompt"
+            follow_up = spec["follow_up"]
+            assert isinstance(follow_up, dict)
+            _assert_prompt_text(session.prompts[call], follow_up)
+        else:
+            _assert_prompt_text(session.prompts[call], spec)
+
+    if "session_operations" not in expect:
+        return
+
+    operation_specs: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for spec in expect["session_operations"]:
+        agent_name = spec["agent"]
+        tag = spec.get("session", spec.get("tag"))
+        operation = spec["operation"]
+        call = spec.get("call", 0)
+        assert isinstance(agent_name, str)
+        assert isinstance(tag, str)
+        assert isinstance(operation, str)
+        assert isinstance(call, int)
+        operation_specs.setdefault((agent_name, tag), []).append(spec)
+
+    for agent_name, agent in agents.items():
+        for session in agent.sessions:
+            specs = operation_specs.get((agent_name, session.tag), [])
+            assert len(specs) == len(session.operations), (
+                f"session {session.tag!r} operation count: expected {len(specs)}, "
+                f"got {len(session.operations)}"
+            )
+            operation_names = {operation for operation, _, _ in session.operations}
+            operation_names.update(spec["operation"] for spec in specs)
+            for operation in operation_names:
+                calls = [call for call in session.operations if call[0] == operation]
+                expected_calls = sorted(
+                    spec.get("call", 0) for spec in specs if spec["operation"] == operation
+                )
+                assert expected_calls == list(range(len(calls))), (
+                    f"session {session.tag!r} {operation!r} operation calls must cover each "
+                    "operation exactly once"
+                )
+
+    for spec in expect["session_operations"]:
+        session = session_for(spec)
+        operation = spec["operation"]
+        call = spec.get("call", 0)
+        assert isinstance(call, int)
+        calls = [recorded for recorded in session.operations if recorded[0] == operation]
+        _, arg, outcome = calls[call]
+        if "arg" in spec:
+            assert arg == spec["arg"]
+        if "outcome" in spec:
+            assert outcome == spec["outcome"]
+
+
+def test_scripted_sessions_observe_identity_operations_and_lifecycle() -> None:
+    from agm.agent.session import SessionAskRequest, SessionHostError
+
+    agent = _agent_from_spec(
+        "writer",
+        {
+            "responses": ["answer"],
+            "repeat_last": True,
+            "session": {
+                "operations": {
+                    "compact": ["success"],
+                    "reset": ["success"],
+                    "fork": ["success"],
+                    "stats": [
+                        {
+                            "input_tokens": 3,
+                            "output_tokens": 5,
+                            "cost": "0.12",
+                            "context_percent": "4.5",
+                        }
+                    ],
+                    "set-name": ["unsupported"],
+                },
+            },
+        },
+    )
+    service = agent.session_service()
+
+    parent = service.open(object(), "scripted", name="primary")
+    assert service.ask(parent, SessionAskRequest("first")).content == "answer"
+    service.compact(parent, "summarize")
+    service.reset(parent)
+    child = service.fork(parent)
+    assert service.ask(parent, SessionAskRequest("second")).content == "answer"
+    assert service.ask(child, SessionAskRequest("child prompt")).content == "answer"
+    stats = service.stats(parent)
+    with pytest.raises(SessionHostError) as raised:
+        service.set_name(parent, "renamed")
+    service.close(parent)
+    service.close(child)
+
+    assert stats.input_tokens == 3
+    assert raised.value.operation == "set-name"
+    _assert_sessions(
+        {"writer": agent},
+        {
+            "sessions": [
+                {"agent": "writer", "tag": "session-1", "opened": True, "closed": True},
+                {
+                    "agent": "writer",
+                    "tag": "session-2",
+                    "parent": "session-1",
+                    "closed": True,
+                },
+            ],
+            "session_prompts": [
+                {"agent": "writer", "session": "session-1", "call": 0, "equals": "first"},
+                {
+                    "agent": "writer",
+                    "session": "session-1",
+                    "call": 1,
+                    "follow_up": {"equals": "second"},
+                },
+                {"agent": "writer", "session": "session-2", "call": 0, "equals": "child prompt"},
+            ],
+            "session_operations": [
+                {
+                    "agent": "writer",
+                    "session": "session-1",
+                    "operation": "compact",
+                    "arg": "summarize",
+                    "outcome": "success",
+                },
+                {
+                    "agent": "writer",
+                    "session": "session-1",
+                    "operation": "reset",
+                    "outcome": "success",
+                },
+                {
+                    "agent": "writer",
+                    "session": "session-1",
+                    "operation": "fork",
+                    "outcome": "success",
+                },
+                {
+                    "agent": "writer",
+                    "session": "session-1",
+                    "operation": "stats",
+                    "outcome": "success",
+                },
+                {
+                    "agent": "writer",
+                    "session": "session-1",
+                    "operation": "set-name",
+                    "arg": "renamed",
+                    "outcome": "unsupported",
+                },
+            ],
+        },
+    )
+
+
+def test_scripted_sessions_record_capability_rejections_without_outcomes() -> None:
+    from agm.agent.session import SessionHostError
+
+    agent = _agent_from_spec(
+        "writer",
+        {
+            "responses": [],
+            "session": {"capabilities": ["compact"]},
+        },
+    )
+    service = agent.session_service()
+    handle = service.open(object(), "scripted")
+
+    with pytest.raises(SessionHostError) as raised:
+        service.set_name(handle, "renamed")
+
+    assert raised.value.operation == "set-name"
+    _assert_sessions(
+        {"writer": agent},
+        {
+            "session_operations": [
+                {
+                    "agent": "writer",
+                    "session": "session-1",
+                    "operation": "set-name",
+                    "arg": "renamed",
+                    "outcome": "unsupported",
+                }
+            ]
+        },
+    )
+
+
+def test_scripted_sessions_reconcile_ordered_operation_outcomes() -> None:
+    agent = _agent_from_spec(
+        "writer",
+        {
+            "responses": [],
+            "session": {"operations": {"compact": ["success", "success"]}},
+        },
+    )
+    service = agent.session_service()
+    handle = service.open(object(), "scripted")
+
+    service.compact(handle, "first")
+    with pytest.raises(AssertionError, match="not fully consumed"):
+        _assert_sessions({"writer": agent}, {})
+
+    service.compact(handle, "second")
+    _assert_sessions(
+        {"writer": agent},
+        {
+            "session_operations": [
+                {
+                    "agent": "writer",
+                    "session": "session-1",
+                    "operation": "compact",
+                    "call": 0,
+                    "arg": "first",
+                    "outcome": "success",
+                },
+                {
+                    "agent": "writer",
+                    "session": "session-1",
+                    "operation": "compact",
+                    "call": 1,
+                    "arg": "second",
+                    "outcome": "success",
+                },
+            ]
+        },
+    )
+
+
+def test_session_expectations_reject_unlisted_empty_sessions() -> None:
+    agent = _agent_from_spec("writer", {"responses": []})
+    service = agent.session_service()
+    service.open(object(), "scripted")
+    service.open(object(), "scripted")
+
+    with pytest.raises(AssertionError, match="session set"):
+        _assert_sessions(
+            {"writer": agent},
+            {
+                "sessions": [
+                    {"agent": "writer", "tag": "session-1", "opened": True, "closed": False}
+                ]
+            },
+        )
+
+
+def test_scenario_host_reports_unknown_handles_by_attempted_operation() -> None:
+    from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
+
+    host = _ScenarioSessionHost({})
+    operations: tuple[tuple[str, Callable[[], object]], ...] = (
+        ("ask", lambda: host.ask("unknown", "prompt")),
+        ("compact", lambda: host.compact("unknown")),
+        ("reset", lambda: host.reset("unknown")),
+        ("fork", lambda: host.fork("unknown")),
+        ("set-name", lambda: host.set_name("unknown", "name")),
+        ("stats", lambda: host.stats("unknown")),
+        ("snapshot", lambda: host.snapshot("unknown")),
+        ("close", lambda: host.close("unknown")),
+    )
+
+    for operation, attempt in operations:
+        with pytest.raises(AglSessionHostError) as raised:
+            attempt()
+        assert raised.value.operation == operation
+
+
+def test_scripted_sessions_reject_extra_capability_rejection_operation() -> None:
+    from agm.agent.session import SessionHostError
+
+    agent = _agent_from_spec(
+        "writer",
+        {
+            "responses": [],
+            "session": {"capabilities": ["compact"]},
+        },
+    )
+    service = agent.session_service()
+    handle = service.open(object(), "scripted")
+    service.compact(handle, "summarize")
+    _assert_sessions({"writer": agent}, {})
+    with pytest.raises(SessionHostError):
+        service.set_name(handle, "renamed")
+
+    with pytest.raises(AssertionError, match="operation count"):
+        _assert_sessions(
+            {"writer": agent},
+            {
+                "session_operations": [
+                    {
+                        "agent": "writer",
+                        "session": "session-1",
+                        "operation": "compact",
+                        "arg": "summarize",
+                        "outcome": "success",
+                    }
+                ]
+            },
+        )
+
+
+def test_scripted_sessions_reject_unsupported_reset_outcomes() -> None:
+    with pytest.raises(ValueError, match="reset"):
+        _agent_from_spec(
+            "writer",
+            {"responses": [], "session": {"operations": {"reset": ["unsupported"]}}},
+        )
+
+
+def test_scripted_sessions_detect_an_extra_retry_prompt() -> None:
+    from agm.agent.session import SessionAskRequest
+
+    agent = _agent_from_spec("writer", {"responses": ["answer"], "repeat_last": True})
+    service = agent.session_service()
+    handle = service.open(object(), "scripted")
+    service.ask(handle, SessionAskRequest("first"))
+    service.ask(handle, SessionAskRequest("retry"))
+
+    with pytest.raises(AssertionError, match="prompt count"):
+        _assert_sessions(
+            {"writer": agent},
+            {
+                "session_prompts": [
+                    {"agent": "writer", "session": "session-1", "call": 0, "equals": "first"}
+                ]
+            },
+        )
+
+
+def test_scripted_session_ask_closes_an_ephemeral_session() -> None:
+    from agm.agent.session import SessionAskRequest
+
+    agent = _agent_from_spec("writer", ["answer"])
+    service = agent.session_service()
+    response = service.with_ephemeral(
+        object(),
+        "scripted",
+        lambda handle: service.ask(handle, SessionAskRequest("one-off")),
+        single_prompt=True,
+    )
+
+    assert response.content == "answer"
+    _assert_sessions(
+        {"writer": agent},
+        {
+            "sessions": [{"agent": "writer", "tag": "session-1", "opened": True, "closed": True}],
+            "session_prompts": [
+                {"agent": "writer", "session": "session-1", "call": 0, "equals": "one-off"}
+            ],
+        },
+    )
 
 
 def _scenario_params() -> list[Any]:
@@ -368,6 +1428,7 @@ def test_program_scenario(
     _assert_outcome(result, expect)
     _assert_output(out, expect)
     _assert_calls(agents, expect)
+    _assert_sessions(agents, expect)
     shell.assert_complete()
 
 
@@ -444,6 +1505,7 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
         (REPO_STDLIB_ROOT / "std" / "core.agl")
         .read_text(encoding="utf-8")
         .replace("import std/config\n\n", "")
+        .replace(_SESSION_STATIC_DECLARATIONS, "")
         .replace("std/config::default-agent", 'AgentClaude("sonnet", "medium")')
     )
     scoped_stdlib_root = tmp_path / "scoped_stdlib"
@@ -459,8 +1521,8 @@ def test_scoped_stdlib_arrangement_runs_end_to_end(
 ) -> None:
     """A whole stdlib module wrapped in a named scope region works end to end.
 
-    Wraps the real ``stdlib/std/core.agl`` verbatim in a ``scope Std ... end
-    Std`` region under a throwaway module root (never the installed/repo
+    Wraps the runtime-lowerable subset of ``stdlib/std/core.agl`` in a
+    ``scope Std ... end Std`` region under a throwaway module root (never the installed/repo
     stdlib — the standard ``module_roots`` scenario mechanism always adds
     ``REPO_STDLIB_ROOT`` too, which would collide with this substitute
     ``std/core``, so this test builds its own ``RootSet`` instead), then runs

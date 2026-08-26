@@ -135,14 +135,13 @@ initializer exits, in which case it has bottom type. See
 <!-- agl-check: fragment -->
 ```agl
 try
-  let review: Review = ask(
+  let review: Review = reviewer.ask(
     "Review %{artifact}",
-    agent = reviewer,
     on_parse_error = Retry(n = 2)
   )
   print "reviewed: %{review}"
 catch AgentParseError as e =>
-  let report = ask("Explain invalid output:\n%{e.raw}", agent = critic)
+  let report = critic.ask("Explain invalid output:\n%{e.raw}")
   raise e
 catch _ as e =>
   print "unexpected: %{e.message}"
@@ -237,7 +236,7 @@ An agent **transport** failure: the agent could not run. Not eligible for
 
 ```text
 agent: Agent      # the selected backend
-cause: text       # "spawn_failure" | "nonzero_exit" | "timeout"
+cause: text       # "spawn_failure" | "nonzero_exit" | "timeout" | "interpolation_failure" | "protocol_failure" | "invalid_agent"
 metadata: json    # host details: exit code, stderr tail, elapsed seconds
 ```
 
@@ -271,6 +270,25 @@ stdout: text
 stderr: text
 timed_out: bool
 ```
+
+### `SessionError`
+
+A catchable session lifecycle or capability failure. It covers opening or
+obtaining the default session, use of a closed or unknown session, an
+unsupported transport or lifecycle operation, and a host failure while running
+`compact`, `reset`, `fork`, `stats`, `set-name`, or `close`. The backend
+capabilities for each agent/transport combination are listed in
+[Sessions](agent-calls.md#sessions).
+
+```text
+operation: text   # the host operation that failed, e.g. "open", "default",
+                  # "ask", "compact", "reset", "fork", "stats",
+                  # "set-name", or "close"
+```
+
+A prompt transport failure from `Session::ask` is instead `AgentCallError`;
+output received from a prompt that fails its requested contract is
+`AgentParseError`.
 
 ### `ExternError`
 
@@ -446,6 +464,8 @@ a cycle arises, which operations raise this and which tolerate a cycle instead
 | Failing shell command (parsed or unit form) | `ExecError` |
 | Timed-out shell command (any exec form) | `ExecError` |
 | Spawn failure (either exec form) | `ExecError` |
+| Session open/default failure; unsupported transport or lifecycle capability; closed or unknown session; or failed `compact`, `reset`, `fork`, `stats`, `set-name`, or `close` | `SessionError` (`operation` identifies the failed host operation) |
+| Session prompt transport failure | `AgentCallError` |
 | Extern (Python FFI) companion raised, or its return value violated the contract | `ExternError` |
 | Loop bound exhausted | `MaxIterationsExceeded` |
 | Non-positive range `for` step (`by k` with `k ≤ 0`) | `RangeError` |

@@ -1,0 +1,14 @@
+program def main() -> unit =
+  let session = Session::open(AgentPi("writer", "model", "high"))
+  let strict: int = session.ask(
+    "strict parser",
+    strict_json = true,
+    on_parse_error = Retry(n = 1),
+  )
+  let lenient: int = session.ask(
+    "lenient parser",
+    strict_json = false,
+    on_parse_error = Retry(n = 1),
+  )
+  print strict
+  print lenient

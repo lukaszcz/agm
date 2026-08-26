@@ -272,8 +272,8 @@ def test_composed_prompt_includes_retry_feedback_on_a_retry_attempt(
 
     prompt = fake_agent_transport.calls[0][0]
     assert "Your previous response did not match the required output format" in prompt
-    assert "- missing field 'name'" in prompt
-    assert "- type mismatch: expected int" in prompt
+    assert "- The response is missing required data." in prompt
+    assert "- The response contains a value with an incorrect type." in prompt
     assert "the-bad-output-xyz" in prompt
     assert "Return only valid JSON matching the schema." in prompt
 
@@ -442,11 +442,10 @@ def test_default_agent_value_is_read_at_each_call_and_errors_stay_typed() -> Non
     assert result.error is not None
     assert result.error.type_name == "AgentParseError"
     assert result.error.fields["agent"] == {
-        "$case": "AgentClaude",
-        "model": "sonnet",
-        "thinking": "medium",
+        "$case": "AgentCommand",
+        "command": "first",
     }
     assert [request.display_name.rsplit("::", maxsplit=1)[-1] for request in requests] == [
         "AgentCommand",
-        "AgentClaude",
+        "AgentCommand",
     ]

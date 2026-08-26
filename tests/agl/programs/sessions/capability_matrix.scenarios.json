@@ -1,0 +1,135 @@
+{
+  "scenarios": [
+    {
+      "name": "claude_supports_compact_and_fork_but_not_rename_or_stats",
+      "params": {"backend": 0},
+      "agents": {"ask": {"responses": ["before", "after"]}},
+      "expect": {
+        "stdout": "set-name\nmessage\nstats\nmessage\n",
+        "calls": {"ask": 0},
+        "sessions": [
+          {"agent": "ask", "tag": "session-1", "opened": true, "closed": true, "parent": null},
+          {"agent": "ask", "tag": "session-2", "opened": true, "closed": true, "parent": "session-1"}
+        ],
+        "session_prompts": [
+          {"agent": "ask", "session": "session-1", "call": 0, "equals": "before reset"},
+          {"agent": "ask", "session": "session-1", "call": 1, "follow_up": {"equals": "after reset"}}
+        ],
+        "session_operations": [
+          {"agent": "ask", "session": "session-1", "operation": "reset", "outcome": "success"},
+          {"agent": "ask", "session": "session-1", "operation": "compact", "arg": "keep decisions", "outcome": "success"},
+          {"agent": "ask", "session": "session-1", "operation": "fork", "outcome": "success"},
+          {"agent": "ask", "session": "session-1", "operation": "set-name", "arg": "renamed", "outcome": "unsupported"},
+          {"agent": "ask", "session": "session-1", "operation": "stats", "outcome": "unsupported"}
+        ]
+      }
+    },
+    {
+      "name": "codex_rejects_every_optional_operation_after_reset",
+      "params": {"backend": 1},
+      "agents": {"ask": {"responses": ["before", "after"]}},
+      "expect": {
+        "stdout": "set-name\nmessage\ncompact\nmessage\nfork\nmessage\nset-name\nmessage\nstats\nmessage\n",
+        "calls": {"ask": 0},
+        "sessions": [
+          {"agent": "ask", "tag": "session-1", "opened": true, "closed": true, "parent": null}
+        ],
+        "session_prompts": [
+          {"agent": "ask", "session": "session-1", "call": 0, "equals": "before reset"},
+          {"agent": "ask", "session": "session-1", "call": 1, "follow_up": {"equals": "after reset"}}
+        ],
+        "session_operations": [
+          {"agent": "ask", "session": "session-1", "operation": "reset", "outcome": "success"},
+          {"agent": "ask", "session": "session-1", "operation": "compact", "arg": "keep decisions", "outcome": "unsupported"},
+          {"agent": "ask", "session": "session-1", "operation": "fork", "outcome": "unsupported"},
+          {"agent": "ask", "session": "session-1", "operation": "set-name", "arg": "renamed", "outcome": "unsupported"},
+          {"agent": "ask", "session": "session-1", "operation": "stats", "outcome": "unsupported"}
+        ]
+      }
+    },
+    {
+      "name": "pi_cli_supports_fork_but_not_compaction_rename_or_stats",
+      "params": {"backend": 2},
+      "agents": {"pi": {"responses": ["before", "after"]}},
+      "expect": {
+        "stdout": "compact\nmessage\nset-name\nmessage\nstats\nmessage\n",
+        "calls": {"pi": 0},
+        "sessions": [
+          {"agent": "pi", "tag": "session-1", "opened": true, "closed": true, "parent": null},
+          {"agent": "pi", "tag": "session-2", "opened": true, "closed": true, "parent": "session-1"}
+        ],
+        "session_prompts": [
+          {"agent": "pi", "session": "session-1", "call": 0, "equals": "before reset"},
+          {"agent": "pi", "session": "session-1", "call": 1, "follow_up": {"equals": "after reset"}}
+        ],
+        "session_operations": [
+          {"agent": "pi", "session": "session-1", "operation": "reset", "outcome": "success"},
+          {"agent": "pi", "session": "session-1", "operation": "compact", "arg": "keep decisions", "outcome": "unsupported"},
+          {"agent": "pi", "session": "session-1", "operation": "fork", "outcome": "success"},
+          {"agent": "pi", "session": "session-1", "operation": "set-name", "arg": "renamed", "outcome": "unsupported"},
+          {"agent": "pi", "session": "session-1", "operation": "stats", "outcome": "unsupported"}
+        ]
+      }
+    },
+    {
+      "name": "pi_rpc_supports_every_native_operation_and_stats_payload",
+      "params": {"backend": 3},
+      "agents": {
+        "rpc": {
+          "responses": ["before", "after"],
+          "session": {
+            "operations": {
+              "reset": ["success"],
+              "compact": ["success"],
+              "fork": ["success"],
+              "set-name": ["success"],
+              "stats": [{"input_tokens": 11, "output_tokens": 7, "cost": "0.125", "context_percent": "3.5"}]
+            }
+          }
+        }
+      },
+      "expect": {
+        "stdout": "11/7/0.125/3.5\n",
+        "calls": {"rpc": 0},
+        "sessions": [
+          {"agent": "rpc", "tag": "session-1", "opened": true, "closed": true, "parent": null},
+          {"agent": "rpc", "tag": "session-2", "opened": true, "closed": true, "parent": "session-1"}
+        ],
+        "session_prompts": [
+          {"agent": "rpc", "session": "session-1", "call": 0, "equals": "before reset"},
+          {"agent": "rpc", "session": "session-1", "call": 1, "follow_up": {"equals": "after reset"}}
+        ],
+        "session_operations": [
+          {"agent": "rpc", "session": "session-1", "operation": "reset", "outcome": "success"},
+          {"agent": "rpc", "session": "session-1", "operation": "compact", "arg": "keep decisions", "outcome": "success"},
+          {"agent": "rpc", "session": "session-1", "operation": "fork", "outcome": "success"},
+          {"agent": "rpc", "session": "session-1", "operation": "set-name", "arg": "renamed", "outcome": "success"},
+          {"agent": "rpc", "session": "session-1", "operation": "stats", "outcome": "success"}
+        ]
+      }
+    },
+    {
+      "name": "command_sessions_only_reset_and_close_without_capability_errors",
+      "params": {"backend": 4},
+      "agents": {"command": {"responses": ["before", "after"]}},
+      "expect": {
+        "stdout": "set-name\nmessage\ncompact\nmessage\nfork\nmessage\nset-name\nmessage\nstats\nmessage\n",
+        "calls": {"command": 0},
+        "sessions": [
+          {"agent": "command", "tag": "session-1", "opened": true, "closed": true, "parent": null}
+        ],
+        "session_prompts": [
+          {"agent": "command", "session": "session-1", "call": 0, "equals": "before reset"},
+          {"agent": "command", "session": "session-1", "call": 1, "follow_up": {"equals": "after reset"}}
+        ],
+        "session_operations": [
+          {"agent": "command", "session": "session-1", "operation": "reset", "outcome": "success"},
+          {"agent": "command", "session": "session-1", "operation": "compact", "arg": "keep decisions", "outcome": "unsupported"},
+          {"agent": "command", "session": "session-1", "operation": "fork", "outcome": "unsupported"},
+          {"agent": "command", "session": "session-1", "operation": "set-name", "arg": "renamed", "outcome": "unsupported"},
+          {"agent": "command", "session": "session-1", "operation": "stats", "outcome": "unsupported"}
+        ]
+      }
+    }
+  ]
+}

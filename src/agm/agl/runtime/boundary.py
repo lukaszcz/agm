@@ -163,7 +163,7 @@ class _AglRecordView:
         return values_equal(self._agl_value, other._agl_value)
 
     def __repr__(self) -> str:
-        return f"{type(self).__name__}(...)"
+        return render_value(self._agl_value)
 
 
 class _AglEnum:

@@ -246,6 +246,26 @@ class TestValueDirectedBoundary:
         _, stdout = evaluate_ir_with_externs(source, companion, tmp_path)
         assert stdout == "caught: value contains a reference cycle\n"
 
+    def test_repr_of_a_cyclic_mutable_record_view_raises_cyclic_value_error(
+        self, tmp_path: Path
+    ) -> None:
+        source = (
+            "record Node(var children: array[Node])\n"
+            "extern def show(node: Node) -> unit\n"
+            "var node = Node(children = [])\n"
+            "node.children := [node]\n"
+            "try\n"
+            "  let _ = show(node)\n"
+            '  print "unreached"\n'
+            "catch CyclicValueError as e =>\n"
+            '  print "caught: %{e.message}"\n'
+        )
+        companion = "def show(node): repr(node)\n"
+
+        _, stdout = evaluate_ir_with_externs(source, companion, tmp_path)
+
+        assert stdout == "caught: value contains a reference cycle\n"
+
 
 def test_array_view_slice_getitem_returns_encoded_elements() -> None:
     view = AglArrayView(ArrayValue([IntValue(3), IntValue(1), IntValue(2)]))

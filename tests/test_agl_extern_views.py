@@ -80,7 +80,7 @@ def test_mutable_record_view_reads_current_values_and_writes_through() -> None:
     value.fields["value"] = IntValue(3)
     current = 3
     assert view.value == current
-    assert repr(view) == "Mutable(...)"
+    assert repr(view) == "Mutable(value = 3, fixed = 2)"
 
     view.value = 4
 

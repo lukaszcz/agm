@@ -21,18 +21,18 @@
       }
     },
     {
-      "name": "ask_request_uses_receiver_without_dispatch",
+      "name": "ask_request_is_agent_independent_without_dispatch",
       "params": {"mode": "request"},
       "expect": {
-        "stdout_contains": ["AgentCommand", "request"],
+        "stdout_contains": ["Prepare a count."],
         "calls": {}
       }
     },
     {
-      "name": "ask_request_free_function_uses_explicit_agent_without_dispatch",
+      "name": "ask_request_free_function_is_agent_independent_without_dispatch",
       "params": {"mode": "free"},
       "expect": {
-        "stdout_contains": ["AgentCommand", "request", "Prepare a count."],
+        "stdout_contains": ["Prepare a count."],
         "calls": {}
       }
     }

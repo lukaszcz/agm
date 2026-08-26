@@ -150,13 +150,14 @@ class TestDefaultAgentReconfiguration:
         write_file_program(
             agl_file,
             "import std/config::*\n"
-            'std/config::default-agent := AgentCommand("codex-runner")\n'
+            'std/config::default-agent := AgentCommand("codex-runner \\%{SESSION_ID}")\n'
             'ask("hi")\n',
         )
 
         exec_command.run(_exec_args(agl_file))
 
-        assert [argv for _, argv in fake_agent_transport.calls] == [["codex-runner"]]
+        assert fake_agent_transport.calls[0][1][0] == "codex-runner"
+        assert len(fake_agent_transport.calls[0][1]) == 2
 
     def test_no_default_agent_write_uses_the_stdlib_default_agent(
         self, tmp_path: Path, fake_agent_transport: FakeAgentTransport
@@ -167,9 +168,9 @@ class TestDefaultAgentReconfiguration:
 
         exec_command.run(_exec_args(agl_file))
 
-        assert [argv for _, argv in fake_agent_transport.calls] == [
-            ["claude", "-p", "--model", "sonnet", "--effort", "medium"]
-        ]
+        argv = fake_agent_transport.calls[0][1]
+        assert argv[:2] == ["claude", "-p"]
+        assert "--session-id" in argv
 
     def test_default_agent_write_does_not_change_explicit_agent_values(
         self, tmp_path: Path, fake_agent_transport: FakeAgentTransport
@@ -178,17 +179,17 @@ class TestDefaultAgentReconfiguration:
         write_file_program(
             agl_file,
             "import std/config::*\n"
-            'let fixed = AgentCommand("fixed-runner")\n'
-            'std/config::default-agent := AgentCommand("new-runner")\n'
-            'ask("one", agent = fixed)\n'
+            'let fixed = AgentCommand("fixed-runner \\%{SESSION_ID}")\n'
+            'std/config::default-agent := AgentCommand("new-runner \\%{SESSION_ID}")\n'
+            'fixed.ask("one")\n'
             'ask("two")\n',
         )
 
         exec_command.run(_exec_args(agl_file))
 
-        assert [argv for _, argv in fake_agent_transport.calls] == [
-            ["fixed-runner"],
-            ["new-runner"],
+        assert [argv[0] for _, argv in fake_agent_transport.calls] == [
+            "fixed-runner",
+            "new-runner",
         ]
 
 

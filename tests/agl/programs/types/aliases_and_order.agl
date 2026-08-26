@@ -14,7 +14,7 @@ program def main() -> unit =
 
   if initial is Status::Approved => print "approved input" else => print "not approved"
 
-  let next: Status = ask("Re-judge it.", agent = judge)
+  let next: Status = judge.ask("Re-judge it.")
 
   case next of
     | Approved() => print "ok"

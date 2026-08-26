@@ -1,0 +1,33 @@
+{
+  "scenarios": [
+    {
+      "name": "agent_method_retries_in_one_continuation_capable_cli_session",
+      "runtime": {"session_host": true},
+      "agents": {"writer": ["not a number", "7"]},
+      "expect": {
+        "stdout": "7\n",
+        "calls": {"writer": 0},
+        "sessions": [
+          {
+            "agent": "writer",
+            "tag": "session-1",
+            "transport": "cli",
+            "single_prompt": false,
+            "opened": true,
+            "closed": true,
+            "parent": null
+          }
+        ],
+        "session_prompts": [
+          {"agent": "writer", "session": "session-1", "call": 0, "starts_with": "calculate the total"},
+          {
+            "agent": "writer",
+            "session": "session-1",
+            "call": 1,
+            "follow_up": {"contains": ["Validation errors:"], "not_contains": ["calculate the total", "not a number"]}
+          }
+        ]
+      }
+    }
+  ]
+}

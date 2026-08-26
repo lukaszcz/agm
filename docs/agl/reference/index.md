@@ -8,7 +8,7 @@ agent outcomes.
 AgL is not a general-purpose programming language. It is a typed, expression-
 oriented orchestration language whose core ideas are:
 
-- **Agent calls are first-class expressions.** `ask("Review %{artifact}", agent = reviewer)`
+- **Agent calls are first-class expressions.** `reviewer.ask("Review %{artifact}")`
   calls a host-provided agent with a rendered prompt template; the result is
   a typed value usable in any expression position.
 - **Types are contracts at the LLM boundary.** Annotating an `ask` call's
@@ -50,24 +50,22 @@ let reviewer = AgentCommand("reviewer")
 let impl = AgentCommand("impl")
 
 def review_and_fix(artifact: text) -> text =
-  let r: Review = ask(
+  let r: Review = reviewer.ask(
     "Review the artifact for correctness:\n%{artifact}",
-    agent = reviewer,
     on_parse_error = Retry(n = 2)
   )
   case r of
     | Pass => artifact
-    | Fail(issues) => ask(
-        "Fix these issues:\n%{issues}\n\nCurrent:\n%{artifact}",
-        agent = impl
+    | Fail(issues) => impl.ask(
+        "Fix these issues:\n%{issues}\n\nCurrent:\n%{artifact}"
       )
 
 program def main() -> unit =
-  var artifact: text = ask("Implement %{spec}", agent = impl)
+  var artifact: text = impl.ask("Implement %{spec}")
 
   do[5]
     artifact := review_and_fix(artifact)
-    let final: Review = ask("Final review:\n%{artifact}", agent = reviewer)
+    let final: Review = reviewer.ask("Final review:\n%{artifact}")
   until final is Pass
 ```
 
@@ -79,7 +77,7 @@ program def main() -> unit =
 | [Program structure](program-structure.md) | Programs, blocks, items, binders, inline forms |
 | [Modules](modules.md) | File-based module system: module identity, import forms, qualified access, visibility, cyclic imports, REPL imports |
 | [Named scopes](scopes.md) | Nestable declaration namespaces, qualifier paths, visibility, and `use` |
-| [Types](types.md) | Built-in types (`unit`, `text`, `int`, `decimal`, `bool`, `json`, function types), `record`/`enum`/`type` declarations, standard library types (`Option`, `ExecResult`, `ParsePolicy`, `Agent`), assignability, casts and convertibility (`as`/`as?`), reference semantics, cycles, and copying (`copy`/`shallow_copy`) |
+| [Types](types.md) | Built-in types (`unit`, `text`, `int`, `decimal`, `bool`, `json`, function types), `record`/`enum`/`type` declarations, standard-library types (`Option`, `ExecResult`, `ParsePolicy`, `Agent`, `AgentRequest`, `SessionTransport`, `Session`, `SessionStats`), assignability, casts and convertibility (`as`/`as?`), reference semantics, cycles, and copying (`copy`/`shallow_copy`) |
 | [Bindings and scope](bindings-and-scope.md) | `let`, `var`, `:=`, `param`, `builtin var`, `def`, lexical scoping, shadowing |
 | [Expressions](expressions.md) | Literals, constructors, calls, operators, `as`/`as?` cast operators, `render`, JSON parsing, `case`/`if` expressions, `unit`-typed forms, expected-type propagation |
 | [Functions](functions.md) | `def` declarations, `fn` lambdas, optional/named arguments, function types, first-class values, recursion and depth limit |

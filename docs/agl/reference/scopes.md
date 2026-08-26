@@ -180,10 +180,11 @@ as part of its nominal identity, exactly like an ordinary scoped type; a
 scoped `builtin def` dispatches to the same host implementation as a root
 one, reached bare inside its region or after `use`, and by its exact path
 outside. A `builtin def` with first parameter `self` in a type scope is a
-builtin method: `Agent::ask` and `Agent::ask-request` use ordinary method
-selection and their receiver supplies the agent. `builtin var` remains
-restricted to standard-library modules regardless of scoping; `std/config`
-owns engine settings — see [Program structure](program-structure.md#declarations).
+builtin method: `Agent::ask`, `Agent::ask-request`, and the receiver-based
+`Session` operations use ordinary method selection, with the receiver supplying
+the target agent or session. `builtin var` remains restricted to standard-library
+modules regardless of scoping; `std/config` owns engine settings — see
+[Program structure](program-structure.md#declarations).
 
 ## Names and visibility
 

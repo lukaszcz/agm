@@ -100,6 +100,27 @@ class TestConfirmMode:
         assert confirm.calls == 1  # only the first call prompted
         assert len(underlying.requests) == 2
 
+    def test_session_value_confirmation_does_not_dispatch_an_agent_call(self) -> None:
+        underlying = RecordingAgent()
+        confirm = ScriptedConfirm("yes")
+        wrapper = ConfirmingAgent(underlying, AgentMode(mode="confirm"), confirm=confirm)
+        request = _request(agent="writer", prompt="continue")
+
+        wrapper.confirm_session_values(request.agent, request.prompt)
+
+        assert confirm.seen == [('Agent::AgentCommand(command = "writer")', "continue")]
+        assert underlying.requests == []
+
+    def test_session_confirmation_does_not_dispatch_an_agent_call(self) -> None:
+        underlying = RecordingAgent()
+        confirm = ScriptedConfirm("yes")
+        wrapper = ConfirmingAgent(underlying, AgentMode(mode="confirm"), confirm=confirm)
+
+        wrapper.confirm_session(_request(agent="writer", prompt="continue"))
+
+        assert confirm.seen == [('Agent::AgentCommand(command = "writer")', "continue")]
+        assert underlying.requests == []
+
 
 class TestAutoMode:
     def test_auto_never_prompts(self) -> None:

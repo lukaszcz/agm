@@ -1,0 +1,16 @@
+import std/config
+
+program def main() -> unit =
+  std/config::default-agent := AgentPi("writer", "model", "high")
+  let first = Session::default()
+  let second = Session::open(AgentPi("reviewer", "model", "high"))
+  let alias = copy(first)
+  let one: text = first.ask("write a draft")
+  let two: text = alias.ask("revise it")
+  second.ask("independent")
+  first.compact("retain decisions")
+  first.reset()
+  let child = first.fork()
+  child.set-name("child")
+  let usage = child.stats()
+  if usage.input-tokens == 3 => child.close()

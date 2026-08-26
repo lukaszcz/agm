@@ -499,6 +499,7 @@ def test_review_once_runs_prompt_and_cleans_temp_files(
         env: dict[str, str],
         stdout_callback: Callable[[str], None] | None = None,
         stderr_callback: Callable[[str], None] | None = None,
+        **_kwargs: object,
     ) -> str:
         assert command == ["fake-reviewer"]
         assert target.is_file()
@@ -548,6 +549,7 @@ def test_review_once_reuses_config_for_preparation(
         env: dict[str, str],
         stdout_callback: Callable[[str], None] | None = None,
         stderr_callback: Callable[[str], None] | None = None,
+        **_kwargs: object,
     ) -> str:
         del command, target, env, stdout_callback, stderr_callback
         return "review output\n"
@@ -577,6 +579,7 @@ def test_review_once_saves_output_to_default_review_file(
         env: dict[str, str],
         stdout_callback: Callable[[str], None] | None = None,
         stderr_callback: Callable[[str], None] | None = None,
+        **_kwargs: object,
     ) -> str:
         del command, target, env, stdout_callback, stderr_callback
         return "review output\n"
@@ -609,6 +612,7 @@ def test_review_once_honors_explicit_and_disabled_review_file(
         env: dict[str, str],
         stdout_callback: Callable[[str], None] | None = None,
         stderr_callback: Callable[[str], None] | None = None,
+        **_kwargs: object,
     ) -> str:
         del command, target, env, stdout_callback, stderr_callback
         return "review output\n"
@@ -641,6 +645,7 @@ def test_review_once_saves_to_configured_review_file(
         env: dict[str, str],
         stdout_callback: Callable[[str], None] | None = None,
         stderr_callback: Callable[[str], None] | None = None,
+        **_kwargs: object,
     ) -> str:
         del command, target, env, stdout_callback, stderr_callback
         return "review output\n"
@@ -673,6 +678,7 @@ def test_review_once_warns_before_overwriting_existing_review_file(
         env: dict[str, str],
         stdout_callback: Callable[[str], None] | None = None,
         stderr_callback: Callable[[str], None] | None = None,
+        **_kwargs: object,
     ) -> str:
         del command, target, env, stdout_callback, stderr_callback
         return "new review output\n"
@@ -701,6 +707,7 @@ def test_review_once_honors_none_and_absolute_review_file(
         env: dict[str, str],
         stdout_callback: Callable[[str], None] | None = None,
         stderr_callback: Callable[[str], None] | None = None,
+        **_kwargs: object,
     ) -> str:
         del command, target, env, stdout_callback, stderr_callback
         return "review output\n"
@@ -732,6 +739,50 @@ def test_revise_once_dry_run_prints_configuration_and_command(
     assert output == ""
     assert "dry-run" in captured.out
     assert "fake-reviser" in captured.out
+
+
+def test_legacy_review_and_revise_use_the_existing_prompt_command_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    review_file = tmp_path / "review.md"
+    review_file.write_text("review findings\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SESSION_ID", "legacy-review-session")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    commands: list[list[str]] = []
+    prompts: list[str] = []
+
+    def fake_run_capture(command: list[str], **kwargs: object) -> tuple[int, str, str]:
+        commands.append(command)
+        prompts.append(Path(command[-1][1:]).read_text(encoding="utf-8"))
+        return 0, "agent output\n", ""
+
+    monkeypatch.setattr("agm.agent.runner.run_capture", fake_run_capture)
+
+    assert (
+        review_pass.review_once(
+            _review_args(runner="fake-reviewer --session=%{SESSION_ID}", no_review_file=True)
+        )
+        == "agent output\n"
+    )
+    assert (
+        revise_pass.revise_once(
+            _revise_args("review.md", runner="fake-reviser --session=%{SESSION_ID}")
+        )
+        == "agent output\n"
+    )
+
+    assert [command[:2] for command in commands] == [
+        ["fake-reviewer", "--session=legacy-review-session"],
+        ["fake-reviser", "--session=legacy-review-session"],
+    ]
+    assert all(command[-1].startswith("@") for command in commands)
+    assert prompts[0] == (
+        f"review {review_pass.DEFAULT_REVIEW_SCOPE} for {DEFAULT_REVIEW_ASPECTS}\n"
+    )
+    assert prompts[1].startswith("revise @")
 
 
 def test_revise_once_runs_prepared_prompt_when_dry_run_disabled(

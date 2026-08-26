@@ -40,6 +40,22 @@ enum Agent
   | AgentPi(provider: text, model: text, thinking: text)
 
 builtin
+enum SessionTransport
+  | Cli
+  | Rpc
+
+builtin record Session(id: text, agent: Agent, transport: SessionTransport)
+
+builtin record SessionStats(
+  input-tokens: int,
+  output-tokens: int,
+  cost: decimal,
+  context-percent: decimal,
+)
+
+builtin exception SessionError extends Exception(operation: text)
+
+builtin
 record AgentRequest
   agent: Agent
   prompt: text
@@ -167,7 +183,6 @@ builtin def resource(path: text) -> text
 builtin def resource-dir() -> text
 builtin def ask[T](
   prompt: text,
-  agent: Agent = std/config::default-agent,
   format: text = "",
   strict_json: bool = false,
   on_parse_error: ParsePolicy = ParsePolicy::Abort,
@@ -179,11 +194,32 @@ builtin def Agent::ask[T](
   strict_json: bool = false,
   on_parse_error: ParsePolicy = ParsePolicy::Abort,
 ) -> T
+builtin def Agent::ask-request(
+  self,
+  prompt: text,
+) -> AgentRequest
 builtin def ask-request(
   prompt: text,
-  agent: Agent = std/config::default-agent,
 ) -> AgentRequest
-builtin def Agent::ask-request(self, prompt: text) -> AgentRequest
+builtin def Session::open(
+  agent: Agent,
+  transport: Option[SessionTransport] = Option[SessionTransport]::None,
+  name: text = "",
+) -> Session
+builtin def Session::default() -> Session
+builtin def Session::ask[T](
+  self,
+  prompt: text,
+  format: text = "",
+  strict_json: bool = false,
+  on_parse_error: ParsePolicy = ParsePolicy::Abort,
+) -> T
+builtin def Session::compact(self, instructions: text = "") -> unit
+builtin def Session::reset(self) -> unit
+builtin def Session::fork(self) -> Session
+builtin def Session::stats(self) -> SessionStats
+builtin def Session::set-name(self, name: text) -> unit
+builtin def Session::close(self) -> unit
 builtin def exec(
   command: text,
   env: Environ = std/env::environ,

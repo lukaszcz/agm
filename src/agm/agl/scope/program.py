@@ -59,6 +59,7 @@ from agm.agl.scope.symbols import (
     ScopeNode,
     ScopePath,
     alias_denotes_constructible_type,
+    builtin_type_static_kind,
     dedupe_constructor_candidates,
 )
 from agm.agl.scope.symbols import import_item_path as _item_path
@@ -521,6 +522,23 @@ def _member_record_constructor_refs(
     return result
 
 
+def _builtin_static_decl_node_ids(
+    functions: Mapping[QName, FuncDef],
+    types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
+) -> frozenset[int]:
+    """Return static declarations owned by a builtin record that registers statics."""
+    result: set[int] = set()
+    for (module_id, _atom_name), function in functions.items():
+        owner_path = tuple(segment.name for segment in function.scope_path)
+        if builtin_type_static_kind(module_id, owner_path, function.name) is None:
+            continue
+        owner_atom = _atom(owner_path)
+        owner = types.get((module_id, owner_atom))
+        if isinstance(owner, RecordDef) and owner.is_builtin:
+            result.add(function.node_id)
+    return frozenset(result)
+
+
 def _raise_reexport_conflict(
     exposed: NameAtom, existing: QName, origin: QName, decl: ExportDecl
 ) -> None:
@@ -906,6 +924,7 @@ def resolve_program(
                         False,
                     )
 
+    prelude_static_decl_node_ids = _builtin_static_decl_node_ids(all_public_funcs, all_public_types)
     cross_module_constructor_refs = _member_record_constructor_refs(all_public_types)
     referenced_member_constructor_refs: dict[tuple[ModuleId, int], tuple[ConstructorRef, ...]] = {}
     for mid, loaded in graph.modules.items():
@@ -961,6 +980,7 @@ def resolve_program(
             import_env=import_envs[mid],
             decl_info=decl_info,
             cross_module_constructor_refs=cross_module_constructor_refs,
+            builtin_static_decl_node_ids=prelude_static_decl_node_ids,
             referenced_member_constructor_refs=referenced_member_constructor_refs,
             cross_module_constructible_types=cross_module_constructible_types,
             cross_module_type_scopes=frozenset(all_public_types),

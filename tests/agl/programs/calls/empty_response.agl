@@ -6,5 +6,5 @@ program def main() -> unit =
   let blank = ask("Say nothing.", on_parse_error = Retry(n = 1))
   print blank
   print "after"
-  let typed: int = ask("Number, please.", agent = prompter)
+  let typed: int = prompter.ask("Number, please.")
   print typed

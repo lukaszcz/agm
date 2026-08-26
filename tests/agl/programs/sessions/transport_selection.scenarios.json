@@ -1,0 +1,32 @@
+{
+  "scenarios": [
+    {
+      "name": "pi_accepts_an_explicit_cli_transport",
+      "params": {"backend": 0},
+      "agents": {"pi": {"responses": ["done"]}},
+      "expect": {
+        "calls": {"pi": 0},
+        "sessions": [{"agent": "pi", "tag": "session-1", "opened": true, "closed": true, "parent": null}],
+        "session_prompts": [{"agent": "pi", "session": "session-1", "call": 0, "equals": "explicit cli"}]
+      }
+    },
+    {
+      "name": "claude_rejects_an_explicit_rpc_transport_at_open",
+      "params": {"backend": 1},
+      "agents": {"ask": {"responses": []}},
+      "expect": {"stdout": "open\nmessage\n", "calls": {"ask": 0}, "sessions": []}
+    },
+    {
+      "name": "codex_rejects_an_explicit_rpc_transport_at_open",
+      "params": {"backend": 2},
+      "agents": {"ask": {"responses": []}},
+      "expect": {"stdout": "open\nmessage\n", "calls": {"ask": 0}, "sessions": []}
+    },
+    {
+      "name": "command_rejects_an_explicit_rpc_transport_at_open",
+      "params": {"backend": 3},
+      "agents": {"command": {"responses": []}},
+      "expect": {"stdout": "open\nmessage\n", "calls": {"command": 0}, "sessions": []}
+    }
+  ]
+}

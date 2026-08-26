@@ -41,9 +41,8 @@ continuation that consumes the block. A block ending in a bare `let` has type
 
 <!-- agl-check: fragment -->
 ```agl
-let review: Review = ask(
+let review: Review = reviewer.ask(
   "Review %{artifact}",
-  agent = reviewer,
   on_parse_error = Retry(n = 2)
 )
 let count = 3
@@ -97,7 +96,7 @@ enclosing continuation:
 
 <!-- agl-check: fragment -->
 ```agl
-var artifact: text = ask("Implement %{spec}", agent = impl)
+var artifact: text = impl.ask("Implement %{spec}")
 ```
 
 ## `:=` — destructive assignment
@@ -118,8 +117,8 @@ read is; see [Named scopes](scopes.md#names-and-visibility) for a scoped
 
 <!-- agl-check: fragment -->
 ```agl
-var proposal: Turn = ask("Initial proposal.", agent = researcher)
-proposal := ask("Revise proposal.", agent = researcher)   # target type: Turn
+var proposal: Turn = researcher.ask("Initial proposal.")
+proposal := researcher.ask("Revise proposal.")   # target type: Turn
 ```
 
 `:=` can also update an element of an array or an existing key of a
@@ -332,7 +331,7 @@ program def main() -> unit =
   let reviewer = AgentClaude("sonnet", "medium")
   let impl = AgentCommand("claude -p")
   let agents: array[Agent] = [reviewer, impl]
-  let r: text = ask("Review the artifact", agent = reviewer)
+  let r: text = reviewer.ask("Review the artifact")
 ```
 
 ## Names, namespaces, and constructors
@@ -492,11 +491,11 @@ ask "Uses %{x}"      # outer
 
 <!-- agl-check: fragment -->
 ```agl
-var artifact: text = ask("Implement %{spec}", agent = impl)
+var artifact: text = impl.ask("Implement %{spec}")
 
 case review of
   | Fail(issues) =>
-      artifact := ask("Fix %{issues} in %{artifact}", agent = impl)
+      artifact := impl.ask("Fix %{issues} in %{artifact}")
   | Pass => ()
 ```
 
@@ -510,7 +509,7 @@ before the body and cannot see its bindings:
 <!-- agl-check: fragment -->
 ```agl
 do[5]
-  let review: Review = ask("Review %{artifact}", agent = reviewer)
+  let review: Review = reviewer.ask("Review %{artifact}")
 until review is Pass
 ```
 

@@ -43,7 +43,7 @@ program def main() -> unit =
   if probe is not Option::none => print "probe is not none"
 
   # An Option flowing in from an agent response, destructured by unqualified `case`.
-  let fetched: Option[int] = ask("Pick a number, or nothing.", agent = picker)
+  let fetched: Option[int] = picker.ask("Pick a number, or nothing.")
   case fetched of
     | none() => print "agent: nothing"
     | some(value) => print "agent: %{value}"

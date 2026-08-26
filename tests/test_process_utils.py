@@ -17,19 +17,19 @@ import pytest
 
 from agm.core import dry_run
 from agm.core.process import (
-    _kill_process_group,
     _read_pipe_chunks,
     _run_cleanup_command,
-    _terminate_process,
     _wait_for_process_group_exit,
     _write_stream,
     exit_with_output,
+    kill_process_group,
     require_capture,
     require_success,
     run_capture,
     run_capture_result,
     run_foreground,
     run_subprocess,
+    terminate_process,
 )
 
 
@@ -183,7 +183,7 @@ class TestExitWithOutput:
 
 
 # ---------------------------------------------------------------------------
-# _terminate_process
+# terminate_process
 # ---------------------------------------------------------------------------
 
 
@@ -196,7 +196,7 @@ class TestTerminateProcess:
         )
         try:
             assert proc.poll() is None
-            _terminate_process(proc)
+            terminate_process(proc)
             assert proc.poll() is not None
         finally:
             if proc.poll() is None:
@@ -212,7 +212,7 @@ class TestTerminateProcess:
         proc.wait()
         assert proc.poll() is not None
         # Should not raise
-        _terminate_process(proc)
+        terminate_process(proc)
 
     def test_handles_process_that_exits_quickly_after_sigterm(self) -> None:
         # A process that responds quickly to SIGTERM
@@ -226,7 +226,7 @@ class TestTerminateProcess:
         )
         try:
             assert proc.poll() is None
-            _terminate_process(proc)
+            terminate_process(proc)
             assert proc.poll() is not None
         finally:
             if proc.poll() is None:
@@ -253,7 +253,7 @@ class TestTerminateProcess:
                 self._killed = True
 
         fake = FakeProcess()
-        _terminate_process(cast(subprocess.Popen[bytes], fake))
+        terminate_process(cast(subprocess.Popen[bytes], fake))
         assert fake._killed
 
     def test_handles_process_lookup_error_on_terminate(self) -> None:
@@ -264,7 +264,7 @@ class TestTerminateProcess:
             def terminate(self) -> None:
                 raise ProcessLookupError
 
-        _terminate_process(cast(subprocess.Popen[bytes], FakeProcess()))
+        terminate_process(cast(subprocess.Popen[bytes], FakeProcess()))
 
     def test_handles_process_lookup_error_on_kill(self) -> None:
         class FakeProcess:
@@ -282,7 +282,7 @@ class TestTerminateProcess:
             def kill(self) -> None:
                 raise ProcessLookupError
 
-        _terminate_process(cast(subprocess.Popen[bytes], FakeProcess()))
+        terminate_process(cast(subprocess.Popen[bytes], FakeProcess()))
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +307,7 @@ class TestWaitForProcessGroupExit:
 
 
 # ---------------------------------------------------------------------------
-# _kill_process_group
+# kill_process_group
 # ---------------------------------------------------------------------------
 
 
@@ -321,7 +321,7 @@ class TestKillProcessGroup:
         )
         try:
             assert proc.poll() is None
-            _kill_process_group(proc)
+            kill_process_group(proc)
             assert proc.poll() is not None
         finally:
             if proc.poll() is None:
@@ -337,7 +337,28 @@ class TestKillProcessGroup:
         proc.wait()
         assert proc.poll() is not None
         # Should not raise
-        _kill_process_group(proc)
+        kill_process_group(proc)
+
+    def test_signals_an_explicit_process_group_instead_of_the_pid(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A caller that isolated the child under its own group names it explicitly."""
+        groups: list[int] = []
+
+        class FakeProcess:
+            pid = 99999
+
+            def poll(self) -> int | None:
+                return None
+
+        def fake_killpg(pgid: int, sig: signal.Signals) -> None:
+            groups.append(pgid)
+            raise ProcessLookupError
+
+        monkeypatch.setattr(os, "killpg", fake_killpg)
+        kill_process_group(cast(subprocess.Popen[bytes], FakeProcess()), pgid=4242)
+
+        assert groups == [4242]
 
     def test_handles_process_lookup_error_on_killpg(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class FakeProcess:
@@ -350,7 +371,7 @@ class TestKillProcessGroup:
             raise ProcessLookupError
 
         monkeypatch.setattr(os, "killpg", fake_killpg)
-        _kill_process_group(cast(subprocess.Popen[bytes], FakeProcess()))
+        kill_process_group(cast(subprocess.Popen[bytes], FakeProcess()))
 
     def test_sends_sigkill_when_process_survives_sigterm(
         self, monkeypatch: pytest.MonkeyPatch
@@ -372,7 +393,7 @@ class TestKillProcessGroup:
             signals_sent.append(sig)
 
         monkeypatch.setattr(os, "killpg", fake_killpg)
-        _kill_process_group(cast(subprocess.Popen[bytes], FakeProcess()))
+        kill_process_group(cast(subprocess.Popen[bytes], FakeProcess()))
 
         assert signal.SIGTERM in signals_sent
         assert signal.SIGKILL in signals_sent
@@ -398,7 +419,7 @@ class TestKillProcessGroup:
                 raise ProcessLookupError
 
         monkeypatch.setattr(os, "killpg", fake_killpg)
-        _kill_process_group(cast(subprocess.Popen[bytes], FakeProcess()))
+        kill_process_group(cast(subprocess.Popen[bytes], FakeProcess()))
 
     def test_handles_vanished_group_after_process_already_exited(
         self, monkeypatch: pytest.MonkeyPatch
@@ -418,7 +439,7 @@ class TestKillProcessGroup:
                 raise ProcessLookupError
 
         monkeypatch.setattr(os, "killpg", fake_killpg)
-        _kill_process_group(cast(subprocess.Popen[bytes], FakeProcess()))
+        kill_process_group(cast(subprocess.Popen[bytes], FakeProcess()))
 
         assert signals_sent == [signal.SIGTERM, 0, signal.SIGKILL]
 
@@ -447,9 +468,9 @@ class TestKillProcessGroup:
         except ProcessLookupError:
             pytest.skip("child already exited before test could verify")
 
-        _kill_process_group(proc)
+        kill_process_group(proc)
 
-        # After _kill_process_group, the orphaned child should be dead.
+        # After kill_process_group, the orphaned child should be dead.
         try:
             for _ in range(10):
                 try:
@@ -458,7 +479,7 @@ class TestKillProcessGroup:
                     break
                 time.sleep(0.01)
             else:
-                pytest.fail("orphaned child process still alive after _kill_process_group")
+                pytest.fail("orphaned child process still alive after kill_process_group")
         finally:
             try:
                 os.kill(child_pid, signal.SIGKILL)
@@ -474,7 +495,7 @@ class TestKillProcessGroup:
             start_new_session=True,
         )
         # Send SIGTERM — sleep exits quickly so the process should die promptly.
-        _kill_process_group(proc)
+        kill_process_group(proc)
 
 
 # ---------------------------------------------------------------------------
@@ -705,7 +726,7 @@ class TestRunSubprocess:
             terminated.append(proc)
 
         monkeypatch.setattr(process_module, "_run_cleanup_command", tracking_cleanup)
-        monkeypatch.setattr(process_module, "_terminate_process", tracking_terminate)
+        monkeypatch.setattr(process_module, "terminate_process", tracking_terminate)
         _patch_start_process(
             monkeypatch,
             process_module,
@@ -1083,7 +1104,7 @@ class TestRunSubprocessFinalDecoderCallback:
 
 class TestRunSubprocessIdleTimeoutNonIsolate:
     def test_idle_timeout_without_process_group(self) -> None:
-        """Idle timeout kills process via _terminate_process when not in process group."""
+        """Idle timeout kills process via terminate_process when not in process group."""
         with pytest.raises(SystemExit) as exc_info:
             run_subprocess(
                 [sys.executable, "-c", "import time; time.sleep(10)"],
@@ -1303,7 +1324,7 @@ class TestRunSubprocessBaseExceptionWithCapture:
             terminated.append(proc)
 
         monkeypatch.setattr(process_module, "_run_cleanup_command", tracking_cleanup)
-        monkeypatch.setattr(process_module, "_terminate_process", tracking_terminate)
+        monkeypatch.setattr(process_module, "terminate_process", tracking_terminate)
         _patch_start_process(
             monkeypatch,
             process_module,
@@ -1330,7 +1351,7 @@ class TestRunSubprocessBaseExceptionWithCapture:
     def test_interrupt_with_isolate_process_group_and_capture(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """BaseException path in _drain_process_streams calls _kill_process_group when isolated."""
+        """BaseException path in _drain_process_streams calls kill_process_group when isolated."""
         import agm.core.process as process_module
 
         killed: list[bool] = []
@@ -1338,7 +1359,7 @@ class TestRunSubprocessBaseExceptionWithCapture:
         def tracking_kill(proc: subprocess.Popen[bytes]) -> None:
             killed.append(True)
 
-        monkeypatch.setattr(process_module, "_kill_process_group", tracking_kill)
+        monkeypatch.setattr(process_module, "kill_process_group", tracking_kill)
         _patch_start_process(
             monkeypatch,
             process_module,
@@ -1354,7 +1375,7 @@ class TestRunSubprocessBaseExceptionWithCapture:
                 isolate_process_group=True,
             )
 
-        assert killed, "_kill_process_group must be called"
+        assert killed, "kill_process_group must be called"
 
 
 class TestRunSubprocessBaseExceptionIsolatedNoCapture:
@@ -1363,7 +1384,7 @@ class TestRunSubprocessBaseExceptionIsolatedNoCapture:
     def test_interrupt_with_isolated_process_group_no_capture(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """BaseException in no-capture mode with isolate_process_group calls _kill_process_group."""
+        """BaseException in no-capture mode with isolate_process_group calls kill_process_group."""
         import agm.core.process as process_module
 
         killed: list[bool] = []
@@ -1371,7 +1392,7 @@ class TestRunSubprocessBaseExceptionIsolatedNoCapture:
         def tracking_kill(proc: subprocess.Popen[bytes]) -> None:
             killed.append(True)
 
-        monkeypatch.setattr(process_module, "_kill_process_group", tracking_kill)
+        monkeypatch.setattr(process_module, "kill_process_group", tracking_kill)
         _patch_start_process(
             monkeypatch,
             process_module,
@@ -1381,7 +1402,7 @@ class TestRunSubprocessBaseExceptionIsolatedNoCapture:
         with pytest.raises(KeyboardInterrupt):
             run_subprocess(["sleeper"], isolate_process_group=True)
 
-        assert killed, "_kill_process_group must be called with isolate_process_group"
+        assert killed, "kill_process_group must be called with isolate_process_group"
 
 
 class TestRunCaptureSpawnError:

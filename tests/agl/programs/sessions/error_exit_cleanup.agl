@@ -1,0 +1,9 @@
+# Both failure and a clean return still close every opened session.
+param fail: bool
+
+program def main() -> unit =
+  let session = Session::open(AgentPi("writer", "model", "high"))
+  if fail =>
+    raise RangeError(message = "stop")
+  else =>
+    session.ask("continue")

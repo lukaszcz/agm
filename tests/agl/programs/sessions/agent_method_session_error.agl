@@ -1,0 +1,6 @@
+# Agent::ask lifecycle failures are catchable SessionErrors.
+program def main() -> unit =
+  try
+    let _: text = AgentCommand("writer").ask("calculate the total")
+  catch SessionError =>
+    print "session error"

@@ -1,4 +1,4 @@
-# Raw and call-form asks use the default agent; an explicit-agent call remains available.
+# Raw and call-form asks use the default agent alongside an explicit Agent call.
 record Review
   approved: bool
   summary: text
@@ -10,7 +10,7 @@ program def main() -> unit =
   let summary = ask! Summarize %{document} in one line.
   print summary
 
-  let explicit: Review = ask::[Review]("Explicit review for %{document}.", agent = reviewer)
+  let explicit: Review = reviewer.ask::[Review]("Explicit review for %{document}.")
   print explicit.summary
 
   try

@@ -72,7 +72,7 @@
               "command": "reviewer"
             },
             "call": 2,
-            "starts_with": "Second review."
+            "starts_with": "Validation errors:"
           },
           {
             "agent": {
@@ -80,7 +80,7 @@
               "command": "reviewer"
             },
             "call": 3,
-            "starts_with": "Second review."
+            "starts_with": "Validation errors:"
           }
         ]
       }

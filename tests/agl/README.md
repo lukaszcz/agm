@@ -28,7 +28,7 @@ Layout:
 | `errors/` | Exception types, field access in catch, rethrow |
 | `exec/` | Shell execution, `ExecResult` structured handle |
 | `exprs/` | Arithmetic, comparisons, string operations |
-| `functions/` | User-defined functions: recursion, default args, first-class values, lambdas, `ask(agent:)` in a `def` body |
+| `functions/` | User-defined functions: recursion, default args, first-class values, lambdas, `Agent::ask` in a `def` body |
 | `generics/` | Generic types/functions: inference, explicit `::[…]` overrides, erasure, HOFs, imported generics |
 | `inline/` | Single-expression programs and host-wrapped `inline_entry` sources |
 | `methods/` | Record and enum methods: direct and bound calls, generic receivers, partial application, and scope use |
@@ -49,7 +49,18 @@ Layout:
       "params": {"spec": "verbatim text", "rounds": 3},
       "agents": {
         "reviewer": ["first response", "second response"],
-        "impl": {"responses": ["fix"], "repeat_last": true}
+        "impl": {
+          "responses": ["fix"],
+          "repeat_last": true,
+          "session": {
+            "capabilities": ["ask", "compact", "fork", "stats"],
+            "operations": {
+              "compact": ["success"],
+              "stats": [{"input_tokens": 8, "output_tokens": 3,
+                         "cost": "0.02", "context_percent": "5"}]
+            }
+          }
+        }
       },
       "shell": [{"command": "printf done", "stdout": "done"}],
       "runtime": {"default_call_depth_limit": 20, "default_strict_json": true},
@@ -67,6 +78,19 @@ Layout:
            "schema_paths": [
              {"path": ["$ref"], "equals": "#/$defs/Task"}
            ]}
+        ],
+        "sessions": [
+          {"agent": "impl", "tag": "session-1", "opened": true, "closed": true},
+          {"agent": "impl", "tag": "session-2", "parent": "session-1"}
+        ],
+        "session_prompts": [
+          {"agent": "impl", "session": "session-1", "call": 0, "equals": "first"},
+          {"agent": "impl", "session": "session-1", "call": 1,
+           "follow_up": {"contains": ["correct"]}}
+        ],
+        "session_operations": [
+          {"agent": "impl", "session": "session-1", "operation": "compact",
+           "arg": "summarize"}
         ],
         "raises": {"type": "MaxIterationsExceeded",
                    "fields": {"limit": 3},
@@ -86,7 +110,20 @@ Field notes:
 - `agents` — response queues selected by the `Agent` value at each call site,
   consumed in call order. A list is a strict queue (a call past its end fails the
   test); the object form allows `repeat_last` for loop-exhaustion scenarios. The key
-  `ask` scripts the default non-command `Agent` variants.
+  `ask` scripts the default non-command `Agent` variants. An object may also
+  carry `session.capabilities`, a list of supported protocol operations (`ask`,
+  `compact`, `fork`, `set-name`, `stats`); when omitted, all are supported.
+  Omit an operation to script the service's capability rejection. Separately,
+  `session.operations` maps native operation names (`compact`, `reset`, `fork`,
+  `stats`, `set-name`) to ordered backend outcomes. `session.ask` can similarly
+  script each session prompt as `success` or a transport-failure object with a
+  `cause` (and optional `exit_code`, `stderr_tail`, and `elapsed`). Each supplied
+  outcome must be consumed; `success` is normal and a `stats` object may provide
+  `input_tokens`, `output_tokens`, `cost`, and `context_percent`. `reset` is
+  always dispatched by the service and cannot have an `unsupported` outcome.
+  Legacy `unsupported` outcomes remain accepted for optional operations, but
+  new scenarios should use `capabilities`. Session and ordinary asks consume the
+  same response queue.
 - `shell` — ordered scripted shell calls. Each object names the rendered
   `command` and may set `stdout`, `stderr`, `returncode`, `timed_out`, or
   `spawn_error`; omitted fields describe a successful command with empty output.
@@ -102,7 +139,9 @@ Field notes:
 - `inline_entry` — the program declares no `program def`: it runs through the
   same synthetic-entry transform as `agm exec -c`, which keeps root
   declarations and the bindings they read at the root.
-- `expect.calls` — exact number of calls per listed agent (retries count as calls).
+- `expect.calls` — exact number of ordinary (non-session) calls per listed agent;
+  ordinary retries count here. Session asks, including retries, are counted only
+  by `expect.session_prompts`.
 - `expect.prompts` — assertions on the rendered user prompt (`request.prompt`) an
   agent received on a given 0-based call index. `schema_contains` instead checks
   that call's output contract JSON Schema (the format-instructions/JSON Schema
@@ -110,6 +149,22 @@ Field notes:
   `runtime/agents.py`). `schema_paths` asserts exact values at dictionary-key
   paths in that schema, such as a recursive root and child `$ref` pointing to the
   same `$defs` entry.
+- `expect.sessions` — exact observed set of deterministic per-agent session
+  tags. `opened`, `closed`, `transport`, `single_prompt`, and (for a forked session)
+  `parent` are optional exact assertions. Tags are assigned in creation order as
+  `session-1`, `session-2`, and so on.
+- `expect.session_prompts` — assertions on a session prompt. `session` selects
+  its tag and `call` is its 0-based prompt number. For every created tag, the
+  entries must enumerate every received prompt exactly once, so an extra session
+  retry fails the scenario. Its prompt checks use the same `equals`,
+  `starts_with`, `contains`, and `not_contains` fields as `expect.prompts`;
+  `follow_up` contains those checks and requires a later call on that same
+  session.
+- `expect.session_operations` — assertions for native session operations;
+  `operation`, optional 0-based `call`, optional `arg`, and optional `outcome`
+  select and check each observation. When present, entries must enumerate every
+  operation on every created session exactly once, including an `unsupported`
+  capability rejection; omit the field to leave operation coverage unchecked.
 - `expect.raises` — the uncaught AgL exception ending the run: its type name, an
   exact-match subset of its fields, and substrings of its `message` field.
 - `expect.exit_code` — the program must terminate through `SystemExit` with this

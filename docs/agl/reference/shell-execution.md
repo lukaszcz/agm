@@ -215,7 +215,7 @@ named parameters as `ask`:
 ## Retries
 
 **Retries re-run the command.** Unlike an `ask` retry — which sends
-corrective feedback to the same conversation — an `exec` retry executes the
+corrective feedback in the same conversation — an `exec` retry executes the
 command again with the same evaluated spawn parameters; each invocation is
 traced separately. If every attempt fails to parse, `ExecError` is raised.
 

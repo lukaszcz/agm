@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.externs import ExternRegistry
     from agm.agl.runtime.host_settings import HostSettingsPolicy
+    from agm.agl.runtime.sessions import SessionHost
     from agm.agl.scope.program import ResolvedProgram
     from agm.agl.scope.symbols import ModuleResolution
     from agm.agl.semantics.type_table import TypeTable
@@ -310,6 +311,7 @@ class PipelineDriver:
         default_strict_json: bool = False,
         default_loop_limit: int | None = None,
         agent_dispatcher: AgentFn | None = None,
+        session_host: "SessionHost | None" = None,
         shell_exec_timeout: float | None = None,
         default_call_depth_limit: int | None = None,
         extern_registry: "ExternRegistry | None" = None,
@@ -317,6 +319,7 @@ class PipelineDriver:
         self._default_strict_json = default_strict_json
         self._default_loop_limit = default_loop_limit
         self._agent_dispatcher = agent_dispatcher
+        self._session_host = session_host
         self._shell_exec_timeout = shell_exec_timeout
         self._default_call_depth_limit = (
             default_call_depth_limit
@@ -375,6 +378,7 @@ class PipelineDriver:
             return self._host_env_cache
         self._host_env_cache = assemble_host_environment(
             agent_dispatcher=self._agent_dispatcher,
+            session_host=self._session_host,
             extra_codecs=self._extra_codecs,
             extern_registry=self._extern_registry,
         )
@@ -517,6 +521,7 @@ class PipelineDriver:
             interp = IrInterpreter(
                 executable,
                 agent_dispatcher=host_env.agent_dispatcher,
+                session_host=host_env.session_host,
                 strict_json=self._default_strict_json,
                 loop_limit=self._default_loop_limit,
                 shell_exec_timeout=self._shell_exec_timeout,
@@ -1910,6 +1915,7 @@ def _wire_extern_registry(
 def assemble_host_environment(
     *,
     agent_dispatcher: AgentFn | None,
+    session_host: "SessionHost | None",
     extra_codecs: dict[str, "OutputCodec"],
     extern_registry: "ExternRegistry | None" = None,
 ) -> HostEnvironment:
@@ -1940,6 +1946,7 @@ def assemble_host_environment(
     )
     return HostEnvironment(
         agent_dispatcher=agent_dispatcher,
+        session_host=session_host,
         capabilities=capabilities,
         codecs=all_codecs,
         extern_registry=extern_registry if extern_registry is not None else ExternRegistry(),

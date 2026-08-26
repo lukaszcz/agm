@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.repl.entry import EntryKind, EntryResult
 from agm.agl.repl.entry_pipeline import EntryPipeline
+from agm.agl.runtime.sessions import AgentDispatcherSessionHost
 from agm.agl.runtime.types import public_param_spelling
 from agm.agl.scope.symbols import dedupe_constructor_candidates
 from agm.agl.self_validation import self_validation_enabled
@@ -46,6 +47,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.host_settings import HostSettingsPolicy
+    from agm.agl.runtime.sessions import SessionHost
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import Frame, RecordValue, Value
@@ -188,6 +190,7 @@ class ReplSession:
         default_loop_limit: int | None = None,
         default_call_depth_limit: int | None = None,
         agent_dispatcher: "AgentFn | None" = None,
+        session_host: "SessionHost | None" = None,
         shell_exec_timeout: float | None = None,
         trace_path: "Path | None" = None,
         engine_base: "Mapping[str, Value] | None" = None,
@@ -303,9 +306,16 @@ class ReplSession:
         # of the three live engine settings: the session owns those (above) and
         # threads them into each per-entry interpreter directly (see
         # :mod:`agm.agl.repl.entry_pipeline`).
+        effective_session_host = (
+            session_host
+            if session_host is not None
+            else AgentDispatcherSessionHost(agent_dispatcher)
+        )
+        self._session_host = effective_session_host
         self._runtime = PipelineDriver(
             default_call_depth_limit=default_call_depth_limit,
             agent_dispatcher=agent_dispatcher,
+            session_host=effective_session_host,
         )
         # Reuse the driver's resolved (default-applied) limit for the per-entry
         # interpreters this session builds directly, so the canonical default
@@ -1949,6 +1959,7 @@ class ReplSession:
         # session-scoped binding: a companion resolves and imports again on
         # its next use, as though the session were new.
         self._runtime.reset_extern_registry()
+        self._session_host.reset_all()
 
     def load_file(self, path: "Path") -> list[EntryResult]:
         """Evaluate the contents of *path* incrementally.

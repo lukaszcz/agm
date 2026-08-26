@@ -1100,7 +1100,7 @@ class TestExecParsesSourceOnce:
         # static pipeline, the exact scenario that previously parsed twice.
         write_file_program(
             agl_file,
-            'let impl = AgentCommand("impl")\nask("do it", agent = impl)\n',
+            'let impl = AgentCommand("impl")\nimpl.ask("do it")\n',
         )
 
         real_build_repl_graph = loader_mod.build_repl_graph
@@ -1207,9 +1207,7 @@ class TestExecLowersGraphOnce:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            'let impl = AgentCommand("impl")\n'
-            'param task: text = "do it"\n'
-            "ask(task, agent = impl)\n",
+            'let impl = AgentCommand("impl")\nparam task: text = "do it"\nimpl.ask(task)\n',
         )
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
@@ -1499,6 +1497,13 @@ class TestExecCommandExitCodes:
             )
 
         monkeypatch.setattr(exec_engine, "value_driven_agent_factory", lambda **_: failing_agent)
+        from agm.agl.runtime.sessions import AgentDispatcherSessionHost
+
+        monkeypatch.setattr(
+            exec_engine,
+            "create_agl_session_host",
+            lambda **_: AgentDispatcherSessionHost(failing_agent),
+        )
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(args)
         assert exc_info.value.code == 2
@@ -1620,6 +1625,7 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
             default_loop_limit: int = 5,
             default_strict_json: bool = False,
             agent_dispatcher: Any | None = None,
+            session_host: Any | None = None,
             shell_exec_timeout: float | None = None,
             default_call_depth_limit: int | None = None,
         ) -> None:
@@ -1631,6 +1637,7 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
                 default_loop_limit=default_loop_limit,
                 default_strict_json=default_strict_json,
                 agent_dispatcher=agent_dispatcher,
+                session_host=session_host,
                 shell_exec_timeout=shell_exec_timeout,
                 default_call_depth_limit=default_call_depth_limit,
             )
@@ -1783,7 +1790,7 @@ def _exec_args_with_fallback_runtime(
     """Return ExecArgs for *agl_file* and patch PipelineDriver to have a fallback agent.
 
     In real use the CLI wires the runner-backed default agent; in tests we
-    patch the runtime to avoid the "no default agent" static error on prompt/named-agent calls.
+    patch the runtime to supply the default session host for free ``ask`` calls.
     """
     from agm.agl.pipeline import PipelineDriver as RealRuntime
     from agm.agl.runtime.agents import AgentFn
@@ -1799,6 +1806,7 @@ def _exec_args_with_fallback_runtime(
             default_loop_limit: int = 5,
             default_strict_json: bool = False,
             agent_dispatcher: AgentFn | None = None,
+            session_host: Any | None = None,
             shell_exec_timeout: float | None = None,
             default_call_depth_limit: int | None = None,
         ) -> None:
@@ -1807,6 +1815,7 @@ def _exec_args_with_fallback_runtime(
                 default_loop_limit=default_loop_limit,
                 default_strict_json=default_strict_json,
                 agent_dispatcher=stub_agent,
+                session_host=session_host,
                 shell_exec_timeout=shell_exec_timeout,
                 default_call_depth_limit=default_call_depth_limit,
             )
@@ -1850,7 +1859,7 @@ class TestDryRunInventory:
         capsys: pytest.CaptureFixture[str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Named agent call appears in the inventory."""
+        """An Agent-method call appears in the inventory."""
         from agm.core import dry_run
 
         monkeypatch.setattr(dry_run, "_ENABLED", True)
@@ -1858,14 +1867,13 @@ class TestDryRunInventory:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            'let reviewer = AgentCommand("reviewer")\nask("Review this", agent = reviewer)\n',
+            'let reviewer = AgentCommand("reviewer")\nreviewer.ask("Review this")\n',
         )
 
         args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
         assert exec_command.run(args) is None
         captured = capsys.readouterr()
-        # Named-agent calls use ask(..., agent: name); the inventory shows "ask"
-        # as the callee (the agent: arg is a routing hint, not the callee).
+        # Agent-method calls retain ``ask`` as the reported callee.
         assert "ask" in captured.out
 
     def test_dry_run_inventory_abort_policy(
@@ -1952,6 +1960,7 @@ class TestDryRunInventory:
                 default_loop_limit: int = 5,
                 default_strict_json: bool = False,
                 agent_dispatcher: AgentFn | None = None,
+                session_host: Any | None = None,
                 shell_exec_timeout: float | None = None,
                 default_call_depth_limit: int | None = None,
             ) -> None:
@@ -1960,6 +1969,7 @@ class TestDryRunInventory:
                     default_loop_limit=default_loop_limit,
                     default_strict_json=default_strict_json,
                     agent_dispatcher=spy_agent,
+                    session_host=session_host,
                     shell_exec_timeout=shell_exec_timeout,
                     default_call_depth_limit=default_call_depth_limit,
                 )
@@ -2395,8 +2405,8 @@ class TestExecAgentValues:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            'let impl = AgentCommand("value-runner")\n'
-            'let x = ask("do it", agent = impl)\n'
+            'let impl = AgentCommand("value-runner \\%{SESSION_ID}")\n'
+            'let x = impl.ask("do it")\n'
             "print x\n",
         )
         result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
@@ -2411,8 +2421,8 @@ class TestExecAgentValues:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            'let impl = AgentCommand("value-runner --file=\\%{PROMPT_FILE}")\n'
-            'let x = ask("do it", agent = impl)\nprint x\n',
+            'let impl = AgentCommand("value-runner --file=\\%{PROMPT_FILE} \\%{SESSION_ID}")\n'
+            'let x = impl.ask("do it")\nprint x\n',
         )
 
         result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
@@ -3235,7 +3245,7 @@ class TestExecModuleRoots:
         from agm.agl.runtime.request import AgentRequest, AgentResponse
 
         (tmp_path / "greeter.agl").write_text(
-            "def greet(prompt: text, bot: Agent) -> text =\n  ask(prompt, agent = bot)\n"
+            "def greet(prompt: text, bot: Agent) -> text =\n  bot.ask(prompt)\n"
         )
         entry = tmp_path / "entry.agl"
         write_file_program(
@@ -3253,6 +3263,13 @@ class TestExecModuleRoots:
                 return AgentResponse(content=response)
 
             monkeypatch.setattr(exec_engine, "value_driven_agent_factory", lambda **_: mock_agent)
+            from agm.agl.runtime.sessions import AgentDispatcherSessionHost
+
+            monkeypatch.setattr(
+                exec_engine,
+                "create_agl_session_host",
+                lambda **_: AgentDispatcherSessionHost(mock_agent),
+            )
             exec_command.run(_exec_args_no_log(entry))
             out, _ = capsys.readouterr()
             return out

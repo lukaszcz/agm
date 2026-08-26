@@ -13,8 +13,9 @@ Covers:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 import pytest
 from click.testing import CliRunner, Result
@@ -23,6 +24,8 @@ from typer.main import get_command
 import agm.cli as cli
 import agm.commands.repl as repl_command
 from agm.agl.repl import ReplSession
+from agm.agl.runtime.sessions import SessionSnapshot
+from agm.agl.semantics.values import RecordValue
 from agm.cli_support.args import ReplArgs
 
 
@@ -191,6 +194,183 @@ def _args(
 
 
 class TestReplRun:
+    def test_repl_exit_closes_the_injected_session_host_and_wires_confirmation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path)
+        closed: list[None] = []
+        confirmations: list[object] = []
+
+        class SessionHost:
+            def close_all(self) -> None:
+                closed.append(None)
+
+        host = SessionHost()
+
+        def create_host(**kwargs: object) -> SessionHost:
+            confirmations.append(kwargs["confirm_session"])
+            return host
+
+        monkeypatch.setattr(repl_command, "create_agl_session_host", create_host)
+        repl_command.run(_args())
+
+        assert closed == [None]
+        assert len(confirmations) == 1
+        assert callable(confirmations[0])
+
+    def test_repl_evaluates_sessions_through_the_injected_host_and_cleans_up_on_exit(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path)
+        confirmations: list[tuple[str, str]] = []
+
+        class SessionHost:
+            def __init__(self, confirm_session: Callable[[RecordValue, str], None]) -> None:
+                self._confirm_session = confirm_session
+                self._sessions: dict[str, tuple[RecordValue, str]] = {}
+                self._default_handle: str | None = None
+                self.opened: list[str] = []
+                self.prompts: list[tuple[str, str]] = []
+                self.close_calls = 0
+                self.closed_handles: set[str] = set()
+
+            def open(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
+                del name
+                handle = f"session-{len(self._sessions) + 1}"
+                self._sessions[handle] = (agent, transport)
+                self.opened.append(agent.fields["provider"].value)
+                return handle
+
+            def default(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
+                if self._default_handle is None:
+                    self._default_handle = self.open(agent, transport, name=name)
+                return self._default_handle
+
+            def ask(self, handle: str, prompt: str) -> str:
+                agent, _transport = self._sessions[handle]
+                self._confirm_session(agent, prompt)
+                self.prompts.append((handle, prompt))
+                return "answer"
+
+            def snapshot(self, handle: str) -> SessionSnapshot:
+                agent, transport = self._sessions[handle]
+                return SessionSnapshot(agent, transport)
+
+            def close_all(self) -> None:
+                self.close_calls += 1
+                self.closed_handles.update(self._sessions)
+
+        hosts: list[SessionHost] = []
+
+        def create_host(**kwargs: object) -> SessionHost:
+            confirm_session = cast(Callable[[RecordValue, str], None], kwargs["confirm_session"])
+            host = SessionHost(confirm_session)
+            hosts.append(host)
+            return host
+
+        def confirm(agent: str, prompt: str) -> str:
+            confirmations.append((agent, prompt))
+            return "yes"
+
+        def run_console(session: ReplSession, **_kwargs: object) -> None:
+            result = session.eval_entry(
+                "import std/config\n"
+                'std/config::default-agent := AgentPi("default", "model", "high")\n'
+                'let opened = Session::open(AgentPi("opened", "model", "high"))\n'
+                "let default = Session::default()\n"
+                'opened.ask("open prompt")\n'
+                'default.ask("default prompt")'
+            )
+            assert result.ok
+
+        import agm.agl.repl.console as console_mod
+
+        monkeypatch.setattr(console_mod, "make_console_confirm", lambda: confirm)
+        monkeypatch.setattr(console_mod, "run_console", run_console)
+        monkeypatch.setattr(repl_command, "create_agl_session_host", create_host)
+
+        repl_command.run(_args(confirm_agents=True))
+
+        assert len(hosts) == 1
+        host = hosts[0]
+        assert host.opened == ["opened", "default"]
+        assert host.prompts == [("session-1", "open prompt"), ("session-2", "default prompt")]
+        assert [prompt for _agent, prompt in confirmations] == ["open prompt", "default prompt"]
+        assert host.close_calls == 1
+        assert host.closed_handles == {"session-1", "session-2"}
+
+    def test_repl_session_ask_traverses_the_shared_confirmation_gate(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        from tests._agl_helpers import agent_value
+
+        _isolated_home(monkeypatch, tmp_path)
+        confirmations: list[tuple[str, str]] = []
+        session_confirmation: list[object] = []
+
+        class SessionHost:
+            def close_all(self) -> None:
+                pass
+
+        def confirm(agent: str, prompt: str) -> str:
+            confirmations.append((agent, prompt))
+            return "always"
+
+        import agm.agl.repl.console as console_mod
+
+        monkeypatch.setattr(console_mod, "make_console_confirm", lambda: confirm)
+
+        def create_host(**kwargs: object) -> SessionHost:
+            session_confirmation.append(kwargs["confirm_session"])
+            return SessionHost()
+
+        monkeypatch.setattr(repl_command, "create_agl_session_host", create_host)
+
+        repl_command.run(_args(confirm_agents=True))
+
+        callback = session_confirmation[0]
+        assert callable(callback)
+        callback(agent_value("AgentCommand", command="writer"), "continue")
+
+        assert confirmations == [('Agent::AgentCommand(command = "writer")', "continue")]
+        from agm.agl.repl.agentmode import AgentMode
+
+        mode = fake_console[0]["agent_mode"]
+        assert isinstance(mode, AgentMode)
+        assert mode.mode == "auto"
+
+    def test_repl_exit_preserves_keyboard_interrupt_when_cleanup_fails(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path)
+
+        class SessionHost:
+            def close_all(self) -> None:
+                raise RuntimeError("cleanup failed")
+
+        monkeypatch.setattr(
+            repl_command, "create_agl_session_host", lambda **_kwargs: SessionHost()
+        )
+
+        def interrupt(*_args: object, **_kwargs: object) -> None:
+            raise KeyboardInterrupt
+
+        import agm.agl.repl.console as console_mod
+
+        monkeypatch.setattr(console_mod, "run_console", interrupt)
+        with pytest.raises(KeyboardInterrupt) as interrupted:
+            repl_command.run(_args())
+        assert any("cleanup failed" in note for note in interrupted.value.__notes__)
+
     def test_builds_session_and_runs_console(
         self,
         monkeypatch: pytest.MonkeyPatch,

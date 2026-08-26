@@ -16,14 +16,14 @@ program def main() -> unit =
   }
   print document
 
-  let fetched: json = ask("Emit a JSON document about %{payload}.", agent = source)
+  let fetched: json = source.ask("Emit a JSON document about %{payload}.")
   print fetched
 
-  let n: int = ask("Emit a count.", agent = source)
-  let d: decimal = ask("Emit a ratio.", agent = source)
-  let flag: bool = ask("Emit a flag.", agent = source)
-  let names: array[text] = ask("Emit names.", agent = source)
-  let scores: dict[text, int] = ask("Emit scores.", agent = source)
+  let n: int = source.ask("Emit a count.")
+  let d: decimal = source.ask("Emit a ratio.")
+  let flag: bool = source.ask("Emit a flag.")
+  let names: array[text] = source.ask("Emit names.")
+  let scores: dict[text, int] = source.ask("Emit scores.")
   print n
   print d
   print flag

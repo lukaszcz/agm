@@ -1,0 +1,67 @@
+# Codex creates its underlying thread only on its first session ask.
+param reset_before_ask: bool
+
+def report(error: SessionError) -> unit =
+  print error.operation
+
+program def main() -> unit =
+  let agent = AgentCodex("model", "high")
+  let session = Session::open(agent)
+  try
+    let _ = Session::open(agent, name = "unsupported")
+  catch SessionError as error => report(error)
+  var compact_before: text = ""
+  try
+    session.compact()
+  catch SessionError as error =>
+    compact_before := error.message
+    report(error)
+  var fork_before: text = ""
+  try
+    let _ = session.fork()
+  catch SessionError as error =>
+    fork_before := error.message
+    report(error)
+  var set_name_before: text = ""
+  try
+    session.set-name("unsupported")
+  catch SessionError as error =>
+    set_name_before := error.message
+    report(error)
+  var stats_before: text = ""
+  try
+    let _ = session.stats()
+  catch SessionError as error =>
+    stats_before := error.message
+    report(error)
+  if reset_before_ask => session.reset()
+  session.ask("create the thread")
+  var compact_after: text = ""
+  try
+    session.compact()
+  catch SessionError as error =>
+    compact_after := error.message
+    report(error)
+  var fork_after: text = ""
+  try
+    let _ = session.fork()
+  catch SessionError as error =>
+    fork_after := error.message
+    report(error)
+  var set_name_after: text = ""
+  try
+    session.set-name("unsupported")
+  catch SessionError as error =>
+    set_name_after := error.message
+    report(error)
+  var stats_after: text = ""
+  try
+    let _ = session.stats()
+  catch SessionError as error =>
+    stats_after := error.message
+    report(error)
+  if compact_before != "" and compact_before == compact_after => print "compact-message"
+  if fork_before != "" and fork_before == fork_after => print "fork-message"
+  if set_name_before != "" and set_name_before == set_name_after => print "set-name-message"
+  if stats_before != "" and stats_before == stats_after => print "stats-message"
+  session.reset()

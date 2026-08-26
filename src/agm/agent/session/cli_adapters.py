@@ -379,7 +379,12 @@ class CodexCliSessionBackend(_CliPromptBackend):
         self._session = _CodexSession(request.agent, request.single_prompt)
 
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
-        """Start a Codex thread once, then resume its captured id."""
+        """Start a Codex thread once, then resume its captured id.
+
+        A failed turn is a recoverable agent failure: the ask still fails, but
+        the session stays usable, resuming the announced thread when the stream
+        named one and otherwise starting a fresh thread on the next ask.
+        """
         session = self._session_for("ask")
         if session.single_prompt:
             return self._run_prompt(
@@ -406,6 +411,10 @@ class CodexCliSessionBackend(_CliPromptBackend):
         try:
             thread_id, content = _parse_codex_jsonl(response.content)
         except _CodexTurnFailedError as exc:
+            if exc.thread_id is None:
+                session.started = False
+            else:
+                session.session_id = exc.thread_id
             raise _codex_ask_error(response, "nonzero_exit", exc) from exc
         except _CodexProtocolError as exc:
             raise _codex_ask_error(response, "protocol_failure", exc) from exc
@@ -525,7 +534,7 @@ def _parse_codex_jsonl(output: str) -> tuple[str, str]:
                 raise _CodexProtocolError("Codex reported an invalid thread id")
             thread_id = candidate
         elif event_type == "turn.failed":
-            raise _CodexTurnFailedError(_codex_turn_failure(event_object))
+            raise _CodexTurnFailedError(_codex_turn_failure(event_object), thread_id)
         elif event_type == "item.completed":
             item = event_object.get("item")
             if not isinstance(item, dict):
@@ -575,7 +584,15 @@ class _CodexProtocolError(Exception):
 
 
 class _CodexTurnFailedError(Exception):
-    """Codex reported a failed turn through its JSONL event stream."""
+    """Codex reported a failed turn through its JSONL event stream.
+
+    The thread id is the one the stream announced before the failure, if any;
+    it lets a recoverable turn failure leave the thread resumable.
+    """
+
+    def __init__(self, reason: str, thread_id: str | None) -> None:
+        super().__init__(reason)
+        self.thread_id = thread_id
 
 
 def _json_object(output: str, *, operation: SessionOperation) -> dict[str, object]:

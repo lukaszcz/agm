@@ -376,8 +376,11 @@ class PiRpcSessionBackend:
         try:
             return parser(response, _operation_name(operation))
         except _RpcProtocolError as exc:
-            child = self._live_child(operation)
-            self._kill_dead_child(child)
+            # The child is only needed as a handle to tear down here: a process that
+            # has already exited must not mask the violation that was diagnosed.
+            child = self._child
+            if child is not None:
+                self._kill_dead_child(child)
             raise SessionHostError(str(exc), _operation_name(operation)) from exc
 
     def _live_child(self, operation: _RpcOperation) -> _RpcChild:

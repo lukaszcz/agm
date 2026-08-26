@@ -58,6 +58,26 @@ def _child(process: object) -> rpc._RpcChild:
     )
 
 
+def _reap_child_after_send(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Close the exit race deterministically: settle each send, then reap the child."""
+    send = rpc.PiRpcSessionBackend._send
+
+    def send_then_await_exit(
+        self: rpc.PiRpcSessionBackend,
+        operation: rpc._RpcOperation,
+        payload: dict[str, object],
+        *,
+        wait_for_settled: bool = False,
+    ) -> tuple[dict[str, object], list[str]]:
+        result = send(self, operation, payload, wait_for_settled=wait_for_settled)
+        child = self._child
+        assert child is not None
+        child.process.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(rpc.PiRpcSessionBackend, "_send", send_then_await_exit)
+
+
 @pytest.mark.parametrize(
     "event",
     [
@@ -778,23 +798,7 @@ def test_answer_survives_a_child_that_exits_before_the_response_is_built(
         },
     )
     backend = open_backend()
-    send = rpc.PiRpcSessionBackend._send
-
-    def send_then_await_exit(
-        self: rpc.PiRpcSessionBackend,
-        operation: rpc._RpcOperation,
-        payload: dict[str, object],
-        *,
-        wait_for_settled: bool = False,
-    ) -> tuple[dict[str, object], list[str]]:
-        """Close the exit race deterministically: settle first, then reap the child."""
-        result = send(self, operation, payload, wait_for_settled=wait_for_settled)
-        child = self._child
-        assert child is not None
-        child.process.wait(timeout=5)
-        return result
-
-    monkeypatch.setattr(rpc.PiRpcSessionBackend, "_send", send_then_await_exit)
+    _reap_child_after_send(monkeypatch)
 
     response = backend.ask(SessionAskRequest("hello"))
 
@@ -802,3 +806,42 @@ def test_answer_survives_a_child_that_exits_before_the_response_is_built(
     assert response.call_info is not None
     assert response.call_info.exit_code == 0
     backend.close()
+
+
+@pytest.mark.parametrize("child_exits", [False, True])
+def test_malformed_payload_reports_the_protocol_violation_not_the_child_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, child_exits: bool
+) -> None:
+    """A malformed payload is reported as such even once Pi has already exited."""
+    events: list[object] = [
+        {
+            "id": "$id",
+            "type": "response",
+            "command": "$command",
+            "success": True,
+            "data": {"tokens": {}},
+        }
+    ]
+    if child_exits:
+        events.append({"exit": True})
+    RpcStub(tmp_path, monkeypatch, {"get_session_stats": events})
+    backend = open_backend()
+    if child_exits:
+        _reap_child_after_send(monkeypatch)
+
+    with pytest.raises(SessionHostError) as raised:
+        backend.stats()
+
+    assert isinstance(raised.value.__cause__, rpc._RpcProtocolError)
+    assert backend._child is None
+    backend.close()
+
+
+def test_malformed_payload_is_reported_when_no_child_remains() -> None:
+    """A closed session still reports why the payload was rejected."""
+    backend = rpc.PiRpcSessionBackend()
+
+    with pytest.raises(SessionHostError) as raised:
+        backend._parse_operation_response({}, "get_session_stats", rpc._required_session_id)
+
+    assert isinstance(raised.value.__cause__, rpc._RpcProtocolError)

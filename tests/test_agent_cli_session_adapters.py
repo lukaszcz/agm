@@ -1087,3 +1087,93 @@ def test_codex_tolerates_blank_lines_in_the_jsonl_stream(
     _open(backend, AgentCodex("", ""))
 
     assert backend.ask(SessionAskRequest("first")).content == "answer"
+
+
+def test_codex_resumes_the_started_thread_after_a_failed_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = CaptureTransport(
+        [
+            CaptureOutcome(
+                "\n".join(
+                    (
+                        '{"type":"thread.started","thread_id":"first"}',
+                        '{"type":"turn.started"}',
+                        '{"type":"turn.failed","error":{"message":"upstream rate limit"}}',
+                    )
+                )
+            ),
+            CaptureOutcome("later answer"),
+        ]
+    )
+    transport.install(monkeypatch)
+    backend = CodexCliSessionBackend()
+    _open(backend, AgentCodex("m", "t"))
+
+    with pytest.raises(SessionAskError) as raised:
+        backend.ask(SessionAskRequest("first"))
+    assert raised.value.cause == "nonzero_exit"
+
+    assert backend.ask(SessionAskRequest("later")).content == "later answer"
+    assert [argv for argv, _ in transport.calls] == [
+        ["codex", "exec", "--json", "--model", "m", "-c", "model_reasoning_effort=t", "-"],
+        ["codex", "exec", "resume", "first", "--model", "m", "-c", "model_reasoning_effort=t", "-"],
+    ]
+
+
+def test_codex_starts_a_fresh_thread_after_a_turn_failure_without_a_thread_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = CaptureTransport(
+        [
+            CaptureOutcome('{"type":"turn.failed","error":{"message":"model unavailable"}}'),
+            CaptureOutcome(
+                '{"type":"thread.started","thread_id":"second"}\n'
+                '{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}'
+            ),
+        ]
+    )
+    transport.install(monkeypatch)
+    backend = CodexCliSessionBackend()
+    _open(backend, AgentCodex("", ""))
+
+    with pytest.raises(SessionAskError) as raised:
+        backend.ask(SessionAskRequest("first"))
+    assert raised.value.cause == "nonzero_exit"
+
+    assert backend.ask(SessionAskRequest("retry")).content == "answer"
+    assert [argv for argv, _ in transport.calls] == [
+        ["codex", "exec", "--json", "-"],
+        ["codex", "exec", "--json", "-"],
+    ]
+
+
+def test_codex_keeps_a_malformed_stream_thread_unresumable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = CaptureTransport(
+        [
+            CaptureOutcome('{"type":"thread.started","thread_id":"first"}\n[]'),
+            CaptureOutcome(
+                '{"type":"thread.started","thread_id":"second"}\n'
+                '{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}'
+            ),
+        ]
+    )
+    transport.install(monkeypatch)
+    backend = CodexCliSessionBackend()
+    _open(backend, AgentCodex("", ""))
+
+    with pytest.raises(SessionAskError) as raised:
+        backend.ask(SessionAskRequest("first"))
+    assert raised.value.cause == "protocol_failure"
+    with pytest.raises(SessionHostError) as host_error:
+        backend.ask(SessionAskRequest("retry"))
+    assert host_error.value.operation == SessionOperation.ASK
+
+    backend.reset()
+    assert backend.ask(SessionAskRequest("after reset")).content == "answer"
+    assert [argv for argv, _ in transport.calls] == [
+        ["codex", "exec", "--json", "-"],
+        ["codex", "exec", "--json", "-"],
+    ]

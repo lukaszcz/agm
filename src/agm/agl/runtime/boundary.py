@@ -145,7 +145,8 @@ class _AglRecordView:
         if set(fields) != set(expected):
             raise TypeError(f"expected fields {expected!r}")
         descriptor = type(self)._agl_descriptor
-        object.__setattr__(self, "_function_encoder", None)
+        function_encoder = _FunctionProxyEncoder.from_values(fields.values())
+        object.__setattr__(self, "_function_encoder", function_encoder)
         object.__setattr__(
             self,
             "_agl_value",
@@ -167,11 +168,19 @@ class _AglRecordView:
         object.__setattr__(view, "_function_encoder", function_encoder)
         return view
 
+    def __getattribute__(self, name: str) -> object:
+        fields = type(self)._agl_fields
+        if name in fields:
+            record_value = cast(RecordValue, object.__getattribute__(self, "_agl_value"))
+            function_encoder = cast(
+                Callable[[IrClosureValue], object] | None,
+                object.__getattribute__(self, "_function_encoder"),
+            )
+            return encode_boundary_value(record_value.fields[name], function_encoder)
+        return cast(object, object.__getattribute__(self, name))
+
     def __getattr__(self, name: str) -> object:
-        try:
-            return encode_boundary_value(self._agl_value.fields[name], self._function_encoder)
-        except KeyError:
-            raise AttributeError(name) from None
+        raise AttributeError(name)
 
     def __setattr__(self, name: str, value: object) -> None:
         fields = type(self)._agl_fields
@@ -182,17 +191,66 @@ class _AglRecordView:
         if not type(self)._agl_descriptor.field_mutability[field_index]:
             raise AttributeError("AgL nominal values are immutable")
         try:
-            self._agl_value.fields[name] = decode_boundary_value(value)
+            decoded = decode_boundary_value(value)
         except BoundaryViolation as exc:
             raise BoundaryTypeError(str(exc)) from exc
+        function_encoder = cast(
+            Callable[[IrClosureValue], object] | None,
+            object.__getattribute__(self, "_function_encoder"),
+        )
+        if function_encoder is None:
+            function_encoder = _FunctionProxyEncoder.from_value(value)
+            if function_encoder is not None:
+                object.__setattr__(self, "_function_encoder", function_encoder)
+        elif isinstance(function_encoder, _FunctionProxyEncoder):
+            function_encoder.remember(value)
+        record_value = cast(RecordValue, object.__getattribute__(self, "_agl_value"))
+        record_value.fields[name] = decoded
 
     def __eq__(self, other: object) -> bool:
         if type(other) is not type(self):
             return NotImplemented
-        return values_equal(self._agl_value, other._agl_value)
+        return values_equal(
+            cast(RecordValue, object.__getattribute__(self, "_agl_value")),
+            cast(RecordValue, object.__getattribute__(other, "_agl_value")),
+        )
 
     def __repr__(self) -> str:
-        return render_value(self._agl_value)
+        return render_value(cast(RecordValue, object.__getattribute__(self, "_agl_value")))
+
+
+class _FunctionProxyEncoder:
+    """Re-encode closures from callback proxies supplied to a constructed view."""
+
+    __slots__ = ("_proxies",)
+
+    def __init__(self) -> None:
+        self._proxies: list[tuple[IrClosureValue, object]] = []
+
+    @classmethod
+    def from_values(cls, values: Iterable[object]) -> Self | None:
+        encoder = cls()
+        for value in values:
+            encoder.remember(value)
+        return encoder if encoder._proxies else None
+
+    @classmethod
+    def from_value(cls, value: object) -> Self | None:
+        return cls.from_values((value,))
+
+    def remember(self, value: object) -> None:
+        # Imported lazily because externs imports this module for the normal
+        # boundary conversion path.
+        from agm.agl.runtime.externs import AglCallableProxy
+
+        if isinstance(value, AglCallableProxy):
+            self._proxies.append((value._closure, value))
+
+    def __call__(self, closure: IrClosureValue) -> object:
+        for remembered_closure, proxy in self._proxies:
+            if closure is remembered_closure:
+                return proxy
+        raise BoundaryViolation("cannot encode an AgL function without an interpreter")
 
 
 class _AglEnum:
@@ -635,7 +693,7 @@ def decode_boundary_value(obj: object) -> Value:
     descriptor = cast(object, getattr(type(obj), "_agl_descriptor", None))
     if isinstance(descriptor, NominalDescriptor):
         if isinstance(obj, _AglRecordView):
-            return obj._agl_value
+            return cast(RecordValue, object.__getattribute__(obj, "_agl_value"))
         nominal_obj = cast(_AglNominal, obj)
         fields = {
             name: decode_boundary_value(nominal_obj._agl_values[name])

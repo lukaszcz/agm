@@ -7,18 +7,27 @@ from typing import Protocol, cast
 
 import pytest
 
-from agm.agl.ir.ids import NominalId
+from agm.agl.ir.ids import FunctionId, NominalId
 from agm.agl.ir.program import NominalDescriptor, NominalKind, VariantDescriptor
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.runtime.boundary import (
     AglArrayView,
     AglDictView,
     BoundaryTypeError,
+    BoundaryViolation,
     decode_boundary_value,
     encode_boundary_value,
     synthesize_nominal_classes,
 )
-from agm.agl.semantics.values import ArrayValue, DictValue, IntValue, RecordValue
+from agm.agl.runtime.externs import AglCallableProxy, ExternCallWindow
+from agm.agl.semantics.values import (
+    ArrayValue,
+    DictValue,
+    IntValue,
+    IrClosureValue,
+    RecordValue,
+    Value,
+)
 
 
 class _RecordCompanion(Protocol):
@@ -39,7 +48,9 @@ def _next_id() -> NominalId:
     return NominalId(next(_next_nominal))
 
 
-def _record_class(*, mutable: bool) -> tuple[NominalId, type[_RecordCompanion]]:
+def _record_class(
+    *, mutable: bool, fields: tuple[str, ...] = ("value", "fixed")
+) -> tuple[NominalId, type[_RecordCompanion]]:
     nominal = _next_id()
     descriptor = NominalDescriptor(
         nominal=nominal,
@@ -47,8 +58,8 @@ def _record_class(*, mutable: bool) -> tuple[NominalId, type[_RecordCompanion]]:
         scope_path=(),
         declared_name="Mutable" if mutable else "Snapshot",
         kind=NominalKind.RECORD,
-        fields=("value", "fixed"),
-        field_mutability=(mutable, False),
+        fields=fields,
+        field_mutability=(mutable, *(False for _ in fields[1:])),
     )
     return nominal, cast(type[_RecordCompanion], synthesize_nominal_classes((descriptor,))[nominal])
 
@@ -109,6 +120,60 @@ def test_mutable_record_view_round_trips_its_underlying_value_and_constructs_fre
     decoded = decode_boundary_value(constructed)
     assert decoded == RecordValue(nominal, "Mutable", {"value": IntValue(3), "fixed": IntValue(4)})
     assert decoded is not original
+
+
+def test_mutable_record_view_fields_do_not_shadow_its_runtime_storage() -> None:
+    nominal, _ = _record_class(mutable=True, fields=("_agl_value", "_function_encoder"))
+    value = RecordValue(
+        nominal,
+        "Mutable",
+        {"_agl_value": IntValue(1), "_function_encoder": IntValue(2)},
+    )
+    view = encode_boundary_value(value)
+
+    assert getattr(view, "_agl_value") == 1
+    assert getattr(view, "_function_encoder") == 2
+
+    setattr(view, "_agl_value", 3)
+
+    assert value.fields["_agl_value"] == IntValue(3)
+
+
+def test_mutable_record_view_preserves_a_callback_assigned_after_construction() -> None:
+    nominal = _next_id()
+    descriptor = NominalDescriptor(
+        nominal=nominal,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Box",
+        kind=NominalKind.RECORD,
+        fields=("value", "callback"),
+        field_mutability=(False, True),
+    )
+    record_cls = synthesize_nominal_classes((descriptor,))[nominal]
+    view = record_cls(value=0, callback=0)
+    window = ExternCallWindow()
+
+    def invoke(args: tuple[Value, ...]) -> Value:
+        assert args == (IntValue(2),)
+        return IntValue(3)
+
+    callback = AglCallableProxy(
+        arity=1,
+        closure=IrClosureValue(FunctionId(1), ()),
+        require_active_window=window.require_active,
+        invoke=invoke,
+        encode=encode_boundary_value,
+    )
+    setattr(view, "callback", callback)
+
+    with window.active():
+        assert getattr(view, "callback")(2) == 3
+
+    decode_boundary_value(view).fields["callback"] = IrClosureValue(FunctionId(2), ())
+
+    with pytest.raises(BoundaryViolation):
+        getattr(view, "callback")
 
 
 def test_mutable_record_views_compare_structurally_and_are_unhashable() -> None:

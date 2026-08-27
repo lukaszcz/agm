@@ -110,10 +110,12 @@ def active_function_encoder(encoder: "_FunctionEncoder") -> Iterator[None]:
         _ACTIVE_FUNCTION_ENCODER.reset(token)
 
 
-def _require_exact_fields(expected: tuple[str, ...], fields: dict[str, object]) -> None:
-    """Check a companion-side construction names exactly the declared fields."""
-    if fields.keys() != set(expected):
-        raise TypeError(f"expected fields {expected!r}")
+def _require_exact_fields(
+    cls: "type[_AglNominal | _AglRecordView]", fields: dict[str, object]
+) -> None:
+    """Check a companion-side construction names exactly *cls*'s declared fields."""
+    if fields.keys() != cls._agl_field_set:
+        raise TypeError(f"expected fields {cls._agl_fields!r}")
 
 
 def _decode_written_value(value: object) -> Value:
@@ -174,10 +176,11 @@ class _AglNominal:
     _agl_nominal: NominalId
     _agl_kind: NominalKind
     _agl_fields: tuple[str, ...]
+    _agl_field_set: frozenset[str]
     _agl_descriptor: NominalDescriptor
 
     def __init__(self, **fields: object) -> None:
-        _require_exact_fields(type(self)._agl_fields, fields)
+        _require_exact_fields(type(self), fields)
         object.__setattr__(self, "_agl_values", fields)
 
     def __getattr__(self, name: str) -> object:
@@ -236,11 +239,12 @@ class _AglRecordView:
     _agl_nominal: NominalId
     _agl_kind: NominalKind
     _agl_fields: tuple[str, ...]
+    _agl_field_set: frozenset[str]
     _agl_descriptor: NominalDescriptor
 
     def __init__(self, **fields: object) -> None:
         expected = type(self)._agl_fields
-        _require_exact_fields(expected, fields)
+        _require_exact_fields(type(self), fields)
         object.__setattr__(
             self,
             "_agl_value",
@@ -306,6 +310,9 @@ def _nominal_attrs(descriptor: NominalDescriptor) -> dict[str, object]:
         "_agl_nominal": descriptor.nominal,
         "_agl_kind": descriptor.kind,
         "_agl_fields": descriptor.fields,
+        # Kept alongside the ordered tuple so a companion-side construction
+        # checks its keyword names without building a set per instance.
+        "_agl_field_set": frozenset(descriptor.fields),
         "_agl_descriptor": descriptor,
         "__match_args__": descriptor.fields,
     }

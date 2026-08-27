@@ -207,7 +207,7 @@ class AglCallableProxy:
     Python argument/result conversion and the invocation-window guard.
     """
 
-    __slots__ = ("_arity", "_closure", "_require_active_window", "_invoke", "_encode")
+    __slots__ = ("_arity", "_closure", "_require_active_window", "_invoke")
 
     def __init__(
         self,
@@ -216,13 +216,11 @@ class AglCallableProxy:
         closure: IrClosureValue,
         require_active_window: Callable[[], None],
         invoke: _ClosureInvoker,
-        encode: Callable[[Value], object],
     ) -> None:
         self._arity = arity
         self._closure = closure
         self._require_active_window = require_active_window
         self._invoke = invoke
-        self._encode = encode
 
     def __call__(self, *args: object) -> object:
         self._require_active_window()
@@ -235,7 +233,7 @@ class AglCallableProxy:
         except BoundaryViolation as exc:
             raise BoundaryTypeError(str(exc)) from exc
         try:
-            return self._encode(self._invoke(values))
+            return encode_boundary_value(self._invoke(values))
         except AglRaise as exc:
             raise AglException(exc.exc) from exc
 

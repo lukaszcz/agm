@@ -166,7 +166,6 @@ def test_companion_constructed_view_encodes_any_closure_through_the_active_encod
             closure=closure,
             require_active_window=window.require_active,
             invoke=lambda _args: results[closure.function_id],
-            encode=encode_boundary_value,
         )
 
     with active_function_encoder(encode):

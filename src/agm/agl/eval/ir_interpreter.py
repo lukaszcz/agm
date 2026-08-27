@@ -140,7 +140,6 @@ from agm.agl.ir.program import (
 from agm.agl.ir.validate import InvalidIrError
 from agm.agl.modules.ids import STD_CONFIG_ID, STD_ENV_ID, ModuleId
 from agm.agl.runtime.agents import AgentFn
-from agm.agl.runtime.boundary import encode_boundary_value
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
 from agm.agl.runtime.externs import (
     AglCallableProxy,
@@ -951,7 +950,6 @@ class IrInterpreter:
             closure=closure,
             require_active_window=self._extern_call_window_guard.require_active,
             invoke=invoke,
-            encode=encode_boundary_value,
         )
 
     def _invoke_crossed_closure(self, closure: IrClosureValue, args: tuple[Value, ...]) -> Value:

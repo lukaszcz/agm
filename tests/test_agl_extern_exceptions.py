@@ -38,7 +38,6 @@ def _raising_proxy(window: ExternCallWindow, problem: ExceptionValue) -> AglCall
         closure=IrClosureValue(FunctionId(1), ()),
         require_active_window=window.require_active,
         invoke=invoke,
-        encode=lambda value: value,
     )
 
 

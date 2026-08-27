@@ -54,7 +54,7 @@ class BoundaryViolation(Exception):
 
 
 class BoundaryTypeError(TypeError):
-    """A value written through an AgL container view is unsupported."""
+    """A value written through an AgL live view is unsupported."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +116,48 @@ def _require_exact_fields(expected: tuple[str, ...], fields: dict[str, object]) 
         raise TypeError(f"expected fields {expected!r}")
 
 
+def _decode_written_value(value: object) -> Value:
+    """Decode a value a companion writes through a live view.
+
+    A write is the one direction where an unrepresentable value is the
+    companion's own type error rather than a boundary defect, so every view's
+    setter reports it as :class:`BoundaryTypeError`.
+    """
+    try:
+        return decode_boundary_value(value)
+    except BoundaryViolation as exc:
+        raise BoundaryTypeError(str(exc)) from exc
+
+
+def _nominal_value(
+    descriptor: NominalDescriptor, fields: dict[str, Value]
+) -> RecordValue | ExceptionValue:
+    """Build the AgL value one synthesized nominal instance stands for."""
+    if descriptor.kind is NominalKind.RECORD:
+        return RecordValue(descriptor.nominal, descriptor.display_name, fields)
+    # A descriptor reaches here only from :func:`_create_nominal`, which builds
+    # a class for a record or an exception declaration; an enum class is a pure
+    # namespace carrying no descriptor of its own.
+    return ExceptionValue(descriptor.nominal, descriptor.display_name, fields)
+
+
+class _AglNominalShape(Protocol):
+    """How one synthesized nominal class crosses the boundary, both directions.
+
+    Whether a nominal snapshots (:class:`_AglNominal`) or stays a live window
+    onto its AgL value (:class:`_AglRecordView`) is settled once, when its
+    class is synthesized. The generic encoder and decoder dispatch through
+    this pair rather than re-deciding the strategy per crossing value, so a
+    further strategy is a further base class, not another branch in the
+    walkers.
+    """
+
+    @classmethod
+    def _agl_encode(cls, value: RecordValue | ExceptionValue) -> object: ...
+
+    def _agl_decode(self) -> Value: ...
+
+
 def _view_value(view: object) -> RecordValue:
     """Return the live ``RecordValue`` a record view is a window onto.
 
@@ -169,6 +211,19 @@ class _AglNominal:
     def __repr__(self) -> str:
         return f"{type(self).__name__}(...)"
 
+    @classmethod
+    def _agl_encode(cls, value: RecordValue | ExceptionValue) -> Self:
+        """Snapshot *value*: encode every field once, up front."""
+        return cls(**{name: encode_boundary_value(field) for name, field in value.fields.items()})
+
+    def _agl_decode(self) -> Value:
+        """Rebuild the AgL value this snapshot stands for."""
+        cls = type(self)
+        return _nominal_value(
+            cls._agl_descriptor,
+            {name: decode_boundary_value(self._agl_values[name]) for name in cls._agl_fields},
+        )
+
 
 class _AglRecordView:
     """Base implementation for synthesized live views of mutable record values.
@@ -189,22 +244,25 @@ class _AglRecordView:
     def __init__(self, **fields: object) -> None:
         expected = type(self)._agl_fields
         _require_exact_fields(expected, fields)
-        descriptor = type(self)._agl_descriptor
         object.__setattr__(
             self,
             "_agl_value",
-            RecordValue(
-                descriptor.nominal,
-                descriptor.display_name,
+            _nominal_value(
+                type(self)._agl_descriptor,
                 {name: decode_boundary_value(fields[name]) for name in expected},
             ),
         )
 
     @classmethod
-    def _from_value(cls, value: RecordValue) -> Self:
+    def _agl_encode(cls, value: RecordValue | ExceptionValue) -> Self:
+        """Open a window onto *value*: nothing is copied and no field is read."""
         view = object.__new__(cls)
         object.__setattr__(view, "_agl_value", value)
         return view
+
+    def _agl_decode(self) -> Value:
+        """Return the live record this view is a window onto."""
+        return _view_value(self)
 
     def __getattribute__(self, name: str) -> object:
         # A declared field always wins over the storage slot, so a record whose
@@ -216,11 +274,7 @@ class _AglRecordView:
     def __setattr__(self, name: str, value: object) -> None:
         if name not in type(self)._agl_descriptor.mutable_fields:
             raise AttributeError(_IMMUTABLE_MESSAGE)
-        try:
-            decoded = decode_boundary_value(value)
-        except BoundaryViolation as exc:
-            raise BoundaryTypeError(str(exc)) from exc
-        _view_value(self).fields[name] = decoded
+        _view_value(self).fields[name] = _decode_written_value(value)
 
     def __eq__(self, other: object) -> bool:
         if type(other) is not type(self):
@@ -415,25 +469,19 @@ class AglArrayView(MutableSequence[object]):
     def __setitem__(
         self, index: SupportsIndex | slice[int | None, int | None, int | None], value: object
     ) -> None:
-        try:
-            if not isinstance(index, SupportsIndex):
-                slice_index = index
-                if not isinstance(value, Iterable):
-                    raise TypeError("can only assign an iterable to an array slice")
-                self._value.elements[slice_index] = [decode_boundary_value(item) for item in value]
-            else:
-                self._value.elements[operator.index(index)] = decode_boundary_value(value)
-        except BoundaryViolation as exc:
-            raise BoundaryTypeError(str(exc)) from exc
+        if not isinstance(index, SupportsIndex):
+            slice_index = index
+            if not isinstance(value, Iterable):
+                raise TypeError("can only assign an iterable to an array slice")
+            self._value.elements[slice_index] = [_decode_written_value(item) for item in value]
+        else:
+            self._value.elements[operator.index(index)] = _decode_written_value(value)
 
     def __delitem__(self, index: SupportsIndex | slice[int | None, int | None, int | None]) -> None:
         del self._value.elements[index]
 
     def insert(self, index: SupportsIndex, value: object) -> None:
-        try:
-            self._value.elements.insert(operator.index(index), decode_boundary_value(value))
-        except BoundaryViolation as exc:
-            raise BoundaryTypeError(str(exc)) from exc
+        self._value.elements.insert(operator.index(index), _decode_written_value(value))
 
     def extend(self, values: Iterable[object]) -> None:
         # Mirrors ``MutableSequence.extend``'s own self-aliasing guard: without
@@ -445,11 +493,7 @@ class AglArrayView(MutableSequence[object]):
         # mutated.
         if values is self:
             values = list(values)
-        try:
-            decoded = [decode_boundary_value(value) for value in values]
-        except BoundaryViolation as exc:
-            raise BoundaryTypeError(str(exc)) from exc
-        self._value.elements.extend(decoded)
+        self._value.elements.extend([_decode_written_value(value) for value in values])
 
     def clear(self) -> None:
         self._value.elements.clear()
@@ -545,10 +589,7 @@ class AglDictView(MutableMapping[str, object]):
     def __setitem__(self, key: str, value: object) -> None:
         if not isinstance(key, str):
             raise TypeError("AgL dict keys must be str")
-        try:
-            self._value.entries[key] = decode_boundary_value(value)
-        except BoundaryViolation as exc:
-            raise BoundaryTypeError(str(exc)) from exc
+        self._value.entries[key] = _decode_written_value(value)
 
     def __delitem__(self, key: str) -> None:
         del self._value.entries[key]
@@ -615,10 +656,7 @@ def encode_boundary_value(value: Value) -> object:
             cls = _NOMINAL_CLASSES[value.nominal]
         except KeyError as exc:
             raise BoundaryViolation(f"unknown AgL nominal {value.display_name!r}") from exc
-        if isinstance(value, RecordValue) and issubclass(cls, _AglRecordView):
-            return cls._from_value(value)
-        fields = {name: encode_boundary_value(field) for name, field in value.fields.items()}
-        return cls(**fields)
+        return cast("type[_AglNominalShape]", cls)._agl_encode(value)
     raise BoundaryViolation(f"cannot encode {type(value).__name__}")
 
 
@@ -656,17 +694,10 @@ def decode_boundary_value(obj: object) -> Value:
         return obj._closure
     descriptor = cast(object, getattr(type(obj), "_agl_descriptor", None))
     if isinstance(descriptor, NominalDescriptor):
-        if isinstance(obj, _AglRecordView):
-            return _view_value(obj)
-        nominal_obj = cast(_AglNominal, obj)
-        fields = {
-            name: decode_boundary_value(nominal_obj._agl_values[name])
-            for name in type(nominal_obj)._agl_fields
-        }
-        if descriptor.kind is NominalKind.RECORD:
-            return RecordValue(descriptor.nominal, descriptor.display_name, fields)
-        # A descriptor reaches here only from :func:`_create_nominal`, which
-        # builds a class for a record or an exception declaration; an enum
-        # class is a pure namespace carrying no descriptor of its own.
-        return ExceptionValue(descriptor.nominal, descriptor.display_name, fields)
+        # Looked up on the class, not the instance: a live view lets a declared
+        # field win over any same-named attribute, so an instance lookup would
+        # be shadowed by a record that happens to declare an `_agl_decode`
+        # field.
+        nominal = cast("_AglNominalShape", obj)
+        return type(nominal)._agl_decode(nominal)
     raise BoundaryViolation(f"unsupported Python extern value {type(obj).__name__}")

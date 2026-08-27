@@ -462,56 +462,57 @@ class ExternRegistry:
         caller (e.g. a direct unit test) that invokes without a program.
         *runtime_state* is the evaluator-owned companion state activated for
         this call; absent direct callers use detached host state instead.
+        *function_encoder* turns an AgL closure into a callable proxy and is
+        published for the call's extent, so every closure a companion reaches
+        -- through an argument, a retained view, or a nested container --
+        encodes through the interpreter it is running under.
         """
-        try:
-            encoded_args = [encode_boundary_value(arg, function_encoder) for arg in args]
-        except BoundaryViolation as exc:
-            raise _extern_error(
-                function_name,
-                f"argument cannot cross the boundary: {exc}",
-                python_type="",
-                nominals=nominals,
-            ) from exc
-
-        try:
-            with (
-                _COMPANION_RUNTIME.activate(runtime_state),
-                active_function_encoder(function_encoder),
-                decimal.localcontext(),
-            ):
-                result = fn(*encoded_args)
-        except AglException as exc:
-            raise AglRaise(exc.value) from exc
-        except AglCyclicValue as exc:
-            raise cyclic_value_raise(nominals=nominals) from exc
-        except Exception as exc:
+        with active_function_encoder(function_encoder):
             try:
-                message = str(exc) or type(exc).__name__
-            except AglCyclicValue as cyclic_exc:
-                raise cyclic_value_raise(nominals=nominals) from cyclic_exc
-            raise _extern_error(
-                function_name,
-                message,
-                python_type=type(exc).__name__,
-                nominals=nominals,
-            ) from exc
+                encoded_args = [encode_boundary_value(arg) for arg in args]
+            except BoundaryViolation as exc:
+                raise _extern_error(
+                    function_name,
+                    f"argument cannot cross the boundary: {exc}",
+                    python_type="",
+                    nominals=nominals,
+                ) from exc
 
-        try:
-            return decode_boundary_value(result)
-        except BoundaryViolation as exc:
-            raise _extern_error(
-                function_name,
-                f"return value cannot cross the boundary: {exc}",
-                python_type="",
-                nominals=nominals,
-            ) from exc
-        except Exception as exc:
-            raise _extern_error(
-                function_name,
-                f"return value validation failed: {exc}",
-                python_type=type(exc).__name__,
-                nominals=nominals,
-            ) from exc
+            try:
+                with _COMPANION_RUNTIME.activate(runtime_state), decimal.localcontext():
+                    result = fn(*encoded_args)
+            except AglException as exc:
+                raise AglRaise(exc.value) from exc
+            except AglCyclicValue as exc:
+                raise cyclic_value_raise(nominals=nominals) from exc
+            except Exception as exc:
+                try:
+                    message = str(exc) or type(exc).__name__
+                except AglCyclicValue as cyclic_exc:
+                    raise cyclic_value_raise(nominals=nominals) from cyclic_exc
+                raise _extern_error(
+                    function_name,
+                    message,
+                    python_type=type(exc).__name__,
+                    nominals=nominals,
+                ) from exc
+
+            try:
+                return decode_boundary_value(result)
+            except BoundaryViolation as exc:
+                raise _extern_error(
+                    function_name,
+                    f"return value cannot cross the boundary: {exc}",
+                    python_type="",
+                    nominals=nominals,
+                ) from exc
+            except Exception as exc:
+                raise _extern_error(
+                    function_name,
+                    f"return value validation failed: {exc}",
+                    python_type=type(exc).__name__,
+                    nominals=nominals,
+                ) from exc
 
 
 def _nominal_identity_path(descriptor: NominalDescriptor) -> tuple[str, ...]:

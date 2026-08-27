@@ -940,10 +940,6 @@ class IrInterpreter:
         """Open this interpreter's callback window for one extern invocation."""
         return self._extern_call_window_guard.active()
 
-    def _encode_extern_value(self, value: Value) -> object:
-        """Encode one value for an extern, preserving callable interpreter access."""
-        return encode_boundary_value(value, self._make_extern_callable_proxy)
-
     def _make_extern_callable_proxy(self, closure: IrClosureValue) -> AglCallableProxy:
         """Wrap one AgL closure for a companion's synchronous callback."""
 
@@ -955,7 +951,7 @@ class IrInterpreter:
             closure=closure,
             require_active_window=self._extern_call_window_guard.require_active,
             invoke=invoke,
-            encode=self._encode_extern_value,
+            encode=encode_boundary_value,
         )
 
     def _invoke_crossed_closure(self, closure: IrClosureValue, args: tuple[Value, ...]) -> Value:

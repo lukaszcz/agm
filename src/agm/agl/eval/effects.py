@@ -66,6 +66,7 @@ from agm.agl.semantics.values import (
     DictValue,
     ExceptionValue,
     IntValue,
+    IrClosureValue,
     JsonValue,
     RecordValue,
     TextValue,
@@ -92,7 +93,7 @@ class EffectCtx(Protocol):
 
     def _eval(self, expr: IrExpr) -> Value: ...
 
-    def _encode_extern_value(self, value: Value) -> object: ...
+    def _make_extern_callable_proxy(self, closure: IrClosureValue) -> object: ...
 
     def _extern_call_window(self) -> ContextManager[None]: ...
 
@@ -156,7 +157,7 @@ class EffectHandlers:
                 fn,
                 args,
                 nominals=self._ctx._program.builtin_nominals,
-                function_encoder=self._ctx._encode_extern_value,
+                function_encoder=self._ctx._make_extern_callable_proxy,
                 runtime_state=self._ctx._extern_runtime_state,
             )
 

@@ -123,16 +123,11 @@ def test_mutable_record_view_round_trips_its_underlying_value_and_constructs_fre
 
 
 def test_mutable_record_view_fields_do_not_shadow_its_runtime_storage() -> None:
-    nominal, _ = _record_class(mutable=True, fields=("_agl_value", "_function_encoder"))
-    value = RecordValue(
-        nominal,
-        "Mutable",
-        {"_agl_value": IntValue(1), "_function_encoder": IntValue(2)},
-    )
+    nominal, _ = _record_class(mutable=True, fields=("_agl_value",))
+    value = RecordValue(nominal, "Mutable", {"_agl_value": IntValue(1)})
     view = encode_boundary_value(value)
 
     assert getattr(view, "_agl_value") == 1
-    assert getattr(view, "_function_encoder") == 2
 
     setattr(view, "_agl_value", 3)
 

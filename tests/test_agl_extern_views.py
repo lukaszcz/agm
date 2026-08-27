@@ -122,16 +122,18 @@ def test_mutable_record_view_round_trips_its_underlying_value_and_constructs_fre
     assert decoded is not original
 
 
-def test_mutable_record_view_fields_do_not_shadow_its_runtime_storage() -> None:
+def test_mutable_record_view_storage_shadows_a_field_that_collides_with_it() -> None:
+    """Ordinary attribute lookup wins in both directions, as for a snapshot."""
     nominal, _ = _record_class(mutable=True, fields=("_agl_value",))
     value = RecordValue(nominal, "Mutable", {"_agl_value": IntValue(1)})
     view = encode_boundary_value(value)
 
-    assert getattr(view, "_agl_value") == 1
+    assert getattr(view, "_agl_value") is value
+    with pytest.raises(AttributeError):
+        setattr(view, "_agl_value", 3)
 
-    setattr(view, "_agl_value", 3)
-
-    assert value.fields["_agl_value"] == IntValue(3)
+    # The field itself stays reachable, just not by dot access.
+    assert decode_boundary_value(view).fields["_agl_value"] == IntValue(1)
 
 
 def _callback_box_class() -> tuple[NominalId, type[_RecordCompanion]]:

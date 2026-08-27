@@ -158,16 +158,6 @@ class _AglNominalShape(Protocol):
     def _agl_decode(self) -> Value: ...
 
 
-def _view_value(view: object) -> RecordValue:
-    """Return the live ``RecordValue`` a record view is a window onto.
-
-    Goes through ``object.__getattribute__`` because ``_AglRecordView``
-    overrides ``__getattribute__`` to let a field named ``_agl_value`` shadow
-    this slot for companion dot access.
-    """
-    return cast(RecordValue, object.__getattribute__(view, "_agl_value"))
-
-
 class _AglNominal:
     """Base implementation shared by synthesized record, exception, and enum-variant classes.
 
@@ -232,6 +222,13 @@ class _AglRecordView:
     already-encoded Python objects, a view keeps the underlying
     :class:`RecordValue` and encodes each field on read, so a companion sees
     AgL-side mutation and AgL sees the companion's writes.
+
+    Name collisions follow :class:`_AglNominal`'s rule: ordinary attribute
+    lookup wins, so a field sharing a name with an ``_agl_*`` class attribute
+    is reachable only through that attribute. Reads get that for free by
+    falling back through ``__getattr__``; writes, which a view also has to
+    serve, restate it rather than letting a companion reach a field reads
+    cannot.
     """
 
     __slots__ = ("_agl_value",)
@@ -262,27 +259,27 @@ class _AglRecordView:
 
     def _agl_decode(self) -> Value:
         """Return the live record this view is a window onto."""
-        return _view_value(self)
+        return self._agl_value
 
-    def __getattribute__(self, name: str) -> object:
-        # A declared field always wins over the storage slot, so a record whose
-        # own field is named `_agl_value` stays reachable by dot access.
-        if name in type(self)._agl_fields:
-            return encode_boundary_value(_view_value(self).fields[name])
-        return cast(object, object.__getattribute__(self, name))
+    def __getattr__(self, name: str) -> object:
+        try:
+            field = self._agl_value.fields[name]
+        except KeyError:
+            raise AttributeError(name) from None
+        return encode_boundary_value(field)
 
     def __setattr__(self, name: str, value: object) -> None:
-        if name not in type(self)._agl_descriptor.mutable_fields:
+        if hasattr(type(self), name) or name not in type(self)._agl_descriptor.mutable_fields:
             raise AttributeError(_IMMUTABLE_MESSAGE)
-        _view_value(self).fields[name] = _decode_written_value(value)
+        self._agl_value.fields[name] = _decode_written_value(value)
 
     def __eq__(self, other: object) -> bool:
         if type(other) is not type(self):
             return NotImplemented
-        return _view_value(self) == _view_value(other)
+        return self._agl_value == other._agl_value
 
     def __repr__(self) -> str:
-        return render_value(_view_value(self))
+        return render_value(self._agl_value)
 
 
 class _AglEnum:
@@ -694,10 +691,5 @@ def decode_boundary_value(obj: object) -> Value:
         return obj._closure
     descriptor = cast(object, getattr(type(obj), "_agl_descriptor", None))
     if isinstance(descriptor, NominalDescriptor):
-        # Looked up on the class, not the instance: a live view lets a declared
-        # field win over any same-named attribute, so an instance lookup would
-        # be shadowed by a record that happens to declare an `_agl_decode`
-        # field.
-        nominal = cast("_AglNominalShape", obj)
-        return type(nominal)._agl_decode(nominal)
+        return cast("_AglNominalShape", obj)._agl_decode()
     raise BoundaryViolation(f"unsupported Python extern value {type(obj).__name__}")

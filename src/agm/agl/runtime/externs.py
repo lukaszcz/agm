@@ -16,7 +16,7 @@ import importlib.util
 import sys
 import threading
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
 from types import ModuleType
 from typing import Protocol, cast
@@ -42,6 +42,7 @@ from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
 from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
 from agm.agl.semantics.values import ArrayValue, DictValue, IrClosureValue, TextValue, Value
+from agm.util.scoping import ScopedVar
 
 # These companion module attributes are APIs, never synthesized nominal aliases.
 _COMPANION_API_NAMES = frozenset({"AglException", "array", "dict", "json", "nominals", "runtime"})
@@ -75,17 +76,12 @@ class _CompanionRuntime:
         # and tools, but evaluation always supplies its interpreter-owned state.
         self._detached_state = ExternRuntimeState()
 
-    @contextmanager
-    def activate(self, state: ExternRuntimeState | None) -> Iterator[None]:
+    def activate(self, state: ExternRuntimeState | None) -> AbstractContextManager[None]:
         """Make *state* visible to a companion for the dynamic call extent."""
         if state is None:
-            yield
-            return
-        token = self._active_state.set(state)
-        try:
-            yield
-        finally:
-            self._active_state.reset(token)
+            # Absent evaluator state must not shadow an enclosing activation.
+            return nullcontext()
+        return ScopedVar(self._active_state, state)
 
     def state(self, key: str, factory: Callable[[], object]) -> object:
         """Get companion-local state scoped to the active interpreter call."""

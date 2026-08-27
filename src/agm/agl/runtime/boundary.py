@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextvars
 import operator
 from collections.abc import Callable, Iterable, Iterator, MutableMapping, MutableSequence
-from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Protocol, Self, SupportsIndex, cast, overload
@@ -30,6 +29,7 @@ from agm.agl.semantics.values import (
     Value,
     value_equal,
 )
+from agm.util.scoping import ScopedVar
 
 
 class _SortKey(Protocol):
@@ -100,14 +100,9 @@ _ACTIVE_FUNCTION_ENCODER: contextvars.ContextVar["_FunctionEncoder"] = contextva
 )
 
 
-@contextmanager
-def active_function_encoder(encoder: "_FunctionEncoder") -> Iterator[None]:
+def active_function_encoder(encoder: "_FunctionEncoder") -> ScopedVar["_FunctionEncoder | None"]:
     """Publish *encoder* as the ambient closure encoder for a call's extent."""
-    token = _ACTIVE_FUNCTION_ENCODER.set(encoder)
-    try:
-        yield
-    finally:
-        _ACTIVE_FUNCTION_ENCODER.reset(token)
+    return ScopedVar(_ACTIVE_FUNCTION_ENCODER, encoder)
 
 
 def _require_exact_fields(

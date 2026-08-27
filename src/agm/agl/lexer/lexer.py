@@ -74,6 +74,7 @@ from agm.agl.lexer.tokens import (
     WILDCARD,
 )
 from agm.agl.syntax.advisories import SpacedQualifier
+from agm.util.scoping import ScopedVar
 
 _GRAMMAR_TOKEN_UNMAP = {
     grammar_type: scanner_type for scanner_type, grammar_type in GRAMMAR_TOKEN_REMAP.items()
@@ -146,11 +147,8 @@ def tab_warning_collector() -> Iterator[list[Diagnostic]]:
     grammar is consulted), so callers get every TAB advisory on every path.
     """
     sink: list[Diagnostic] = []
-    token = _TAB_WARNING_SINK.set(sink)
-    try:
+    with ScopedVar(_TAB_WARNING_SINK, sink):
         yield sink
-    finally:
-        _TAB_WARNING_SINK.reset(token)
 
 
 # Ambient sink for spaced-qualifier advisories, mirroring the TAB sink above.
@@ -170,11 +168,8 @@ def spaced_qualifier_collector() -> Iterator[list[SpacedQualifier]]:
     reference that whitespace turned into an unrelated expression.
     """
     sink: list[SpacedQualifier] = []
-    token = _SPACED_QUALIFIER_SINK.set(sink)
-    try:
+    with ScopedVar(_SPACED_QUALIFIER_SINK, sink):
         yield sink
-    finally:
-        _SPACED_QUALIFIER_SINK.reset(token)
 
 
 def _remap(tokens: Iterator[Token]) -> Iterator[Token]:

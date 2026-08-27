@@ -15,6 +15,7 @@ from agm.agl.runtime.boundary import (
     AglDictView,
     BoundaryTypeError,
     BoundaryViolation,
+    active_function_encoder,
     decode_boundary_value,
     encode_boundary_value,
     synthesize_nominal_classes,
@@ -26,7 +27,6 @@ from agm.agl.semantics.values import (
     IntValue,
     IrClosureValue,
     RecordValue,
-    Value,
 )
 
 
@@ -139,7 +139,7 @@ def test_mutable_record_view_fields_do_not_shadow_its_runtime_storage() -> None:
     assert value.fields["_agl_value"] == IntValue(3)
 
 
-def test_mutable_record_view_preserves_a_callback_assigned_after_construction() -> None:
+def _callback_box_class() -> tuple[NominalId, type[_RecordCompanion]]:
     nominal = _next_id()
     descriptor = NominalDescriptor(
         nominal=nominal,
@@ -150,27 +150,45 @@ def test_mutable_record_view_preserves_a_callback_assigned_after_construction() 
         fields=("value", "callback"),
         mutable_fields=frozenset({"callback"}),
     )
-    record_cls = synthesize_nominal_classes((descriptor,))[nominal]
-    view = record_cls(value=0, callback=0)
+    return nominal, cast(type[_RecordCompanion], synthesize_nominal_classes((descriptor,))[nominal])
+
+
+def test_companion_constructed_view_encodes_any_closure_through_the_active_encoder() -> None:
+    """A view a companion built itself is a window onto every AgL function.
+
+    It has no encoder of its own, so it reads the one the active extern call
+    published -- which is what lets it encode a closure the companion never
+    handed it (here, one AgL wrote into the record afterwards).
+    """
+    _, record_cls = _callback_box_class()
     window = ExternCallWindow()
 
-    def invoke(args: tuple[Value, ...]) -> Value:
-        assert args == (IntValue(2),)
-        return IntValue(3)
+    results = {FunctionId(1): IntValue(10), FunctionId(2): IntValue(20)}
 
-    callback = AglCallableProxy(
-        arity=1,
-        closure=IrClosureValue(FunctionId(1), ()),
-        require_active_window=window.require_active,
-        invoke=invoke,
-        encode=encode_boundary_value,
-    )
-    setattr(view, "callback", callback)
+    def encode(closure: IrClosureValue) -> object:
+        return AglCallableProxy(
+            arity=1,
+            closure=closure,
+            require_active_window=window.require_active,
+            invoke=lambda _args: results[closure.function_id],
+            encode=encode_boundary_value,
+        )
 
-    with window.active():
-        assert getattr(view, "callback")(2) == 3
+    with active_function_encoder(encode):
+        view = record_cls(value=0, callback=encode(IrClosureValue(FunctionId(1), ())))
+        with window.active():
+            assert getattr(view, "callback")(2) == 10
 
-    decode_boundary_value(view).fields["callback"] = IrClosureValue(FunctionId(2), ())
+        # A closure the companion never saw, written straight into the record.
+        decode_boundary_value(view).fields["callback"] = IrClosureValue(FunctionId(2), ())
+        with window.active():
+            assert getattr(view, "callback")(2) == 20
+
+
+def test_companion_constructed_view_reports_a_closure_with_no_active_encoder() -> None:
+    _, record_cls = _callback_box_class()
+    view = record_cls(value=0, callback=1)
+    decode_boundary_value(view).fields["callback"] = IrClosureValue(FunctionId(1), ())
 
     with pytest.raises(BoundaryViolation):
         getattr(view, "callback")

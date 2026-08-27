@@ -29,6 +29,11 @@
       "name": "immutable_record_snapshot_behavior_is_unchanged",
       "params": {"mode": "immutable_snapshot"},
       "expect": {"stdout": "true\n"}
+    },
+    {
+      "name": "companion_constructed_view_encodes_a_closure_it_was_never_given",
+      "params": {"mode": "retained_view_encodes_new_closure"},
+      "expect": {"stdout": "15\n"}
     }
   ]
 }

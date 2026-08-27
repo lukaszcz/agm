@@ -4,6 +4,7 @@ param mode: text
 
 record Mutable(var value: int, fixed: text)
 record Snapshot(value: int)
+record Callbacks(var callback: (int) -> int)
 
 enum Event
   | Changed(var value: int, fixed: text)
@@ -14,6 +15,11 @@ extern def return_received(box: Mutable) -> Mutable
 extern def construct() -> Mutable
 extern def mutate_member(member: Event::Changed) -> unit
 extern def snapshot_behavior(box: Snapshot) -> bool
+extern def build_callbacks(seed: (int) -> int) -> Callbacks
+extern def call_retained_callback(box: Callbacks) -> int
+
+def double(n: int) -> int = n * 2
+def triple(n: int) -> int = n * 3
 
 program def main() -> unit =
   if mode == "write_through" =>
@@ -44,3 +50,10 @@ program def main() -> unit =
 
   if mode == "immutable_snapshot" =>
     print snapshot_behavior(Snapshot(value = 1))
+
+  # A view the companion constructed itself has no encoder of its own, so it
+  # reads the active call's -- and encodes a closure it was never handed.
+  if mode == "retained_view_encodes_new_closure" =>
+    let box = build_callbacks(double)
+    box.callback := triple
+    print call_retained_callback(box)

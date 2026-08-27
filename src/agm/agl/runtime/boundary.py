@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextvars
 import operator
 from collections.abc import Callable, Iterable, Iterator, MutableMapping, MutableSequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Protocol, Self, SupportsIndex, cast, overload
@@ -85,6 +87,26 @@ class AglException(Exception):
 _FunctionEncoder = Callable[[IrClosureValue], object] | None
 
 _IMMUTABLE_MESSAGE = "AgL nominal values are immutable"
+
+# The closure encoder published for the extent of one companion call. Encoding
+# a closure needs an interpreter, which this evaluator-independent module never
+# holds; a value that crosses carries whichever encoder its crossing supplied,
+# but a view a companion *constructs* has none of its own and reads this
+# instead. Scoped to the call rather than captured, so nothing here outlives
+# the interpreter that published it.
+_ACTIVE_FUNCTION_ENCODER: contextvars.ContextVar["_FunctionEncoder"] = contextvars.ContextVar(
+    "agl_active_function_encoder", default=None
+)
+
+
+@contextmanager
+def active_function_encoder(encoder: "_FunctionEncoder") -> Iterator[None]:
+    """Publish *encoder* as the ambient closure encoder for a call's extent."""
+    token = _ACTIVE_FUNCTION_ENCODER.set(encoder)
+    try:
+        yield
+    finally:
+        _ACTIVE_FUNCTION_ENCODER.reset(token)
 
 
 def _require_exact_fields(expected: tuple[str, ...], fields: dict[str, object]) -> None:
@@ -173,10 +195,10 @@ class _AglRecordView:
         expected = type(self)._agl_fields
         _require_exact_fields(expected, fields)
         descriptor = type(self)._agl_descriptor
-        encoder = _FunctionProxyEncoder()
-        for name in expected:
-            encoder.remember(name, fields[name])
-        object.__setattr__(self, "_function_encoder", encoder)
+        # No encoder of its own: a companion-built view reads the one its
+        # active extern call publishes, so it can encode any closure the
+        # record comes to hold, not only what was passed in here.
+        object.__setattr__(self, "_function_encoder", None)
         object.__setattr__(
             self,
             "_agl_value",
@@ -208,12 +230,6 @@ class _AglRecordView:
             decoded = decode_boundary_value(value)
         except BoundaryViolation as exc:
             raise BoundaryTypeError(str(exc)) from exc
-        encoder = _view_encoder(self)
-        if encoder is None:
-            encoder = _FunctionProxyEncoder()
-            object.__setattr__(self, "_function_encoder", encoder)
-        if isinstance(encoder, _FunctionProxyEncoder):
-            encoder.remember(name, value)
         _view_value(self).fields[name] = decoded
 
     def __eq__(self, other: object) -> bool:
@@ -223,38 +239,6 @@ class _AglRecordView:
 
     def __repr__(self) -> str:
         return render_value(_view_value(self))
-
-
-class _FunctionProxyEncoder:
-    """Re-encode closures from callback proxies supplied to a constructed view.
-
-    A companion-constructed view has no interpreter encoder of its own, so
-    each function-valued field's proxy is kept under that field's name: a
-    later write to the same field replaces (or, for a non-function value,
-    drops) the entry, so what is retained stays bounded by the record's own
-    field count rather than by how many times a field is assigned.
-    """
-
-    __slots__ = ("_proxies",)
-
-    def __init__(self) -> None:
-        self._proxies: dict[str, tuple[IrClosureValue, object]] = {}
-
-    def remember(self, name: str, value: object) -> None:
-        # Imported lazily because externs imports this module for the normal
-        # boundary conversion path.
-        from agm.agl.runtime.externs import AglCallableProxy
-
-        if isinstance(value, AglCallableProxy):
-            self._proxies[name] = (value._closure, value)
-        else:
-            self._proxies.pop(name, None)
-
-    def __call__(self, closure: IrClosureValue) -> object:
-        for remembered_closure, proxy in self._proxies.values():
-            if closure is remembered_closure:
-                return proxy
-        raise BoundaryViolation("cannot encode an AgL function without an interpreter")
 
 
 class _AglEnum:
@@ -650,9 +634,10 @@ def encode_boundary_value(
     if isinstance(value, DictValue):
         return AglDictView(value, function_encoder=function_encoder)
     if isinstance(value, IrClosureValue):
-        if function_encoder is None:
+        encoder = function_encoder or _ACTIVE_FUNCTION_ENCODER.get()
+        if encoder is None:
             raise BoundaryViolation("cannot encode an AgL function without an interpreter")
-        return function_encoder(value)
+        return encoder(value)
     if isinstance(value, (RecordValue, ExceptionValue)):
         try:
             cls = _NOMINAL_CLASSES[value.nominal]

@@ -1,4 +1,4 @@
-from agl import Mutable, Snapshot
+from agl import Callbacks, Mutable, Snapshot
 
 
 def mutate(record: Mutable) -> None:
@@ -32,3 +32,16 @@ def snapshot_behavior(record: Snapshot) -> bool:
     except AttributeError:
         return hash(record) == hash(Snapshot(value=1)) and record == Snapshot(value=1)
     return False
+
+
+_RETAINED: dict[str, object] = {}
+
+
+def build_callbacks(seed):
+    view = Callbacks(callback=seed)
+    _RETAINED["view"] = view
+    return view
+
+
+def call_retained_callback(box: Callbacks) -> int:
+    return _RETAINED["view"].callback(5)

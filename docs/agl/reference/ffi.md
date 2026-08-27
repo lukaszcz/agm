@@ -91,6 +91,7 @@ than an extern signature.
 | record | snapshot instance, or a live view when its declaration has a `var` field |
 | enum value | instance of its member record's class, live when that member has a `var` field |
 | exception | instance of its synthesized class |
+| function | a callback proxy, valid only inside the invocation window |
 
 `bool` is considered before `int` on return because Python makes `bool` an
 `int` subclass while AgL does not. A bare Python `list` or `dict` is never an
@@ -161,6 +162,8 @@ unmarked field raises `AttributeError`. The view is unhashable and compares by
 AgL value equality. Records without `var` fields remain immutable snapshots.
 Fields are encoded eagerly when a snapshot nominal object is built; a nested
 array, dictionary, or mutable record field is therefore already a live view.
+Reading a function-typed field yields a callback proxy under the window below,
+whichever closure the field currently holds and however the view was obtained.
 
 Constructors always use the original AgL field spelling. Python-compatible
 field names work with ordinary keyword arguments and dot access. For another

@@ -33,6 +33,7 @@ from agm.agl.runtime.boundary import (
     AglJson,
     BoundaryTypeError,
     BoundaryViolation,
+    active_function_encoder,
     decode_boundary_value,
     encode_boundary_value,
     synthesize_nominal_classes,
@@ -473,7 +474,11 @@ class ExternRegistry:
             ) from exc
 
         try:
-            with _COMPANION_RUNTIME.activate(runtime_state), decimal.localcontext():
+            with (
+                _COMPANION_RUNTIME.activate(runtime_state),
+                active_function_encoder(function_encoder),
+                decimal.localcontext(),
+            ):
                 result = fn(*encoded_args)
         except AglException as exc:
             raise AglRaise(exc.value) from exc

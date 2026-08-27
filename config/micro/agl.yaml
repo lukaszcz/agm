@@ -3,28 +3,65 @@ filetype: agl
 detect:
     filename: "\\.agl$"
 
+# Rule order is significant: micro paints the whole of each match and lets a
+# later rule overwrite an earlier one.  AgL identifiers are greedy -- they stop
+# only at the delimiters in `IDENT_STOP' (src/agm/util/ident.py), so `-', `?',
+# `!', `+', `*', `<' and `>' all continue a name.  Regexp `\b' does not know
+# that, so word rules alone would paint `resource' inside `resource-path'.  The
+# file is therefore layered: ambiguous operator characters first (word rules
+# override them inside a name), then word rules, then a repair rule that
+# repaints any name containing an operator character, then the spellings that
+# legitimately contain one, and finally the true delimiters -- which can never
+# occur inside a name, so repainting them last is always safe.
 rules:
+    # Operator characters that double as identifier characters.  Painted first
+    # so that `ask-request' faces as one name rather than two around a `-'.
+    - symbol.operator: "(=>|->|:=|==|!=|<=|>=|[-+*<>])"
+
+    # True delimiters.  These can never occur inside an identifier, so they are
+    # safe to paint at any point; they come before the numbers so that a
+    # decimal literal repaints over its own `.'.
+    - symbol.operator: "(::|[/=@])"
+    - symbol: "([:;,.|])"
+    - symbol.brackets: "([(){}]|\\[|\\])"
+
+    # Literals.
+    - constant.number: "\\b[0-9]+\\.[0-9]+\\b"
+    - constant.number: "\\b[0-9]+\\b"
+    - constant.bool: "\\b(true|false)\\b"
+    - constant: "\\b(null)\\b"
+
     # Module/scope headers and declaration modifiers.
     - preproc: "\\b(import|use|export|hiding|scope|end|builtin|extern)\\b"
     - statement: "\\b(record|enum|type|exception|extends|param|program|def|fn|let|var|infixl|infixr|prio)\\b"
 
     # Control flow and expression keywords.
     - statement: "\\b(for|while|do|until|done|if|else|case|of|try|catch|raise|break|continue|return)\\b"
-    - statement: "\\bas\\?|\\b(as|and|or|not|is|in|to|downto|by|with)\\b"
+    - statement: "\\b(as|and|or|not|is|in|to|downto|by|with)\\b"
 
     # Contextual built-ins and primitive type names.
-    - identifier: "\\b(print|render|exec|ask-request|ask|shallow_copy|copy|resource-dir|resource)\\b"
+    - identifier: "\\b(print|render|exec|ask|shallow_copy|copy|resource)\\b"
     - type: "\\b(unit|text|json|bool|int|decimal|array|dict)\\b"
 
-    # Literals.
-    - constant.bool: "\\b(true|false)\\b"
-    - constant: "\\b(null)\\b"
-    - constant.number: "\\b[0-9]+\\.[0-9]+\\b"
-    - constant.number: "\\b[0-9]+\\b"
+    # Boundary repair: a name containing an operator character is one
+    # identifier, not a keyword beside an operator.  Repainting the whole run
+    # undoes any rule that fired inside it, from either end -- this is what
+    # keeps `resource-path', `record-id', `do-it!', `x-1' and `x-resource' plain.
+    - default: "\\b[\\p{L}_][\\p{L}\\p{N}_]*[^\\]\\[(){}:,.|;/@=\\s\\p{L}\\p{N}_][^\\]\\[(){}:,.|;/@=\\s]*"
 
-    # Operators, punctuation, and zone markers.
-    - symbol.operator: "(=>|->|:=|==|!=|<=|>=|::|[-+*/=<>@])"
-    - symbol: "([:;,.|])"
+    # Spellings that legitimately contain an operator character, re-faced after
+    # the repair.  Each consumes the delimiter that has to follow it, so a
+    # longer name merely starting with one of them stays plain (`ask-request-x').
+    - identifier: "\\b(ask-request|resource-dir)($|[\\]\\[(){}:,.|;/@=\\s])"
+    - identifier: "\\b(exec|ask)!($|[\\]\\[(){}:,.|;/@=\\s])"
+    - statement: "\\bas\\?($|[\\]\\[(){}:,.|;/@=\\s])"
+
+    # Repaint the delimiter each re-face rule had to swallow.  `.' is left out
+    # on purpose: repainting it here would also re-split the `.' of a decimal
+    # literal, so a `.' directly after one of the spellings above keeps that
+    # spelling's colour instead.
+    - symbol.operator: "(::|[/=@])"
+    - symbol: "([:;|])"
     - symbol.brackets: "([(){}]|\\[|\\])"
 
     # Template strings. AgL strings may contain %{...}; this highlights the

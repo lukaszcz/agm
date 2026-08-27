@@ -48,6 +48,13 @@ test-emacs:
         $(for f in config/emacs/tests/*.el; do printf ' -l %s' "$f"; done) \
         -f ert-run-tests-batch-and-exit
 
+# Run the micro syntax rules' test suite (requires go)
+#
+# -count=1 defeats the test cache: agl.yaml is data the harness reads, not a Go
+# dependency, so a cached pass would otherwise survive editing the rules.
+test-micro:
+    cd config/micro/tests && go test -count=1 ./...
+
 # Type-check with mypy
 typecheck:
     MYPYPATH=src:stubs uv run mypy src/agm/ --strict --python-version 3.12

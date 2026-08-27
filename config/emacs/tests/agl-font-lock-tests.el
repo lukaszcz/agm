@@ -63,8 +63,14 @@
     (should (eq (agl-flt--face-of "to_slug") 'font-lock-function-name-face))))
 
 (ert-deftest agl-flt-builtin-def-name-is-function-face ()
+  ;; A declared name that is not itself one of `agl-contextual-builtins';
+  ;; those are faced by spelling wherever they appear, declaration included.
+  (agl-flt--with-buffer "builtin def clone[T](value: T) -> T\n"
+    (should (eq (agl-flt--face-of "clone") 'font-lock-function-name-face))))
+
+(ert-deftest agl-flt-builtin-def-name-keeps-builtin-face-when-it-is-a-builtin ()
   (agl-flt--with-buffer "builtin def copy[T](value: T) -> T\n"
-    (should (eq (agl-flt--face-of "copy") 'font-lock-function-name-face))))
+    (should (eq (agl-flt--face-of "copy") 'font-lock-builtin-face))))
 
 (ert-deftest agl-flt-qualified-def-name-faces-only-terminal-segment ()
   (agl-flt--with-buffer "def Box::get[E](self) -> E = self.value\n"
@@ -201,6 +207,44 @@
 (ert-deftest agl-flt-ask-bang-is-builtin-face ()
   (agl-flt--with-buffer "ask! Summarize this\n"
     (should (eq (agl-flt--face-of "ask!") 'font-lock-builtin-face))))
+
+(ert-deftest agl-flt-render-is-builtin-face ()
+  (agl-flt--with-buffer "let s = render(x)\n"
+    (should (eq (agl-flt--face-of "render") 'font-lock-builtin-face))))
+
+(ert-deftest agl-flt-ask-request-is-builtin-face ()
+  (agl-flt--with-buffer "let r = ask-request(\"hi\")\n"
+    (should (eq (agl-flt--face-of "ask-request") 'font-lock-builtin-face))))
+
+(ert-deftest agl-flt-copy-is-builtin-face ()
+  (agl-flt--with-buffer "let c = copy(x)\n"
+    (should (eq (agl-flt--face-of "copy") 'font-lock-builtin-face))))
+
+(ert-deftest agl-flt-shallow-copy-is-builtin-face ()
+  (agl-flt--with-buffer "let c = shallow_copy(x)\n"
+    (should (eq (agl-flt--face-of "shallow_copy") 'font-lock-builtin-face))))
+
+(ert-deftest agl-flt-resource-is-builtin-face ()
+  (agl-flt--with-buffer "let p = resource(\"data.txt\")\n"
+    (should (eq (agl-flt--face-of "resource") 'font-lock-builtin-face))))
+
+(ert-deftest agl-flt-resource-dir-is-builtin-face ()
+  (agl-flt--with-buffer "let d = resource-dir(\"assets\")\n"
+    (should (eq (agl-flt--face-of "resource-dir") 'font-lock-builtin-face))))
+
+;; A builtin whose spelling is a prefix of a longer builtin must not steal the
+;; longer one's match, and neither may light up inside an ordinary identifier
+;; that merely starts with one -- an AgL name swallows `-'.
+
+(ert-deftest agl-flt-resource-prefix-does-not-face-longer-identifier ()
+  (agl-flt--with-buffer "let resource-path = 1\n"
+    (should-not (eq (agl-flt--face-of "resource-path") 'font-lock-builtin-face))
+    (should (eq (agl-flt--face-of "resource-path") 'font-lock-variable-name-face))))
+
+(ert-deftest agl-flt-copy-does-not-face-inside-longer-identifier ()
+  (agl-flt--with-buffer "let copy-of = 1\n"
+    (should-not (eq (agl-flt--face-of "copy-of") 'font-lock-builtin-face))
+    (should (eq (agl-flt--face-of "copy-of") 'font-lock-variable-name-face))))
 
 ;; --- Primitive type-annotation positions (contextual) ---
 

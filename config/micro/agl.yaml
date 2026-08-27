@@ -5,15 +5,15 @@ detect:
 
 rules:
     # Module/scope headers and declaration modifiers.
-    - preproc: "\\b(import|use|export|hiding|scope|end|builtin)\\b"
-    - statement: "\\b(record|enum|type|exception|extends|param|program|agent|config|def|fn|let|var)\\b"
+    - preproc: "\\b(import|use|export|hiding|scope|end|builtin|extern)\\b"
+    - statement: "\\b(record|enum|type|exception|extends|param|program|def|fn|let|var|infixl|infixr|prio)\\b"
 
     # Control flow and expression keywords.
-    - statement: "\\b(for|while|do|until|done|if|else|case|of|try|catch|raise|break|continue)\\b"
-    - statement: "\\bas\\?|\\b(as|and|or|not|is|in|to|downto|by)\\b"
+    - statement: "\\b(for|while|do|until|done|if|else|case|of|try|catch|raise|break|continue|return)\\b"
+    - statement: "\\bas\\?|\\b(as|and|or|not|is|in|to|downto|by|with)\\b"
 
     # Contextual built-ins and primitive type names.
-    - identifier: "\\b(print|render|ask-request|ask|exec)\\b"
+    - identifier: "\\b(print|render|exec|ask-request|ask|shallow_copy|copy|resource-dir|resource)\\b"
     - type: "\\b(unit|text|json|bool|int|decimal|array|dict)\\b"
 
     # Literals.

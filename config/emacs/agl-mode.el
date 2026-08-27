@@ -77,11 +77,20 @@ source: the module/scope soft-keyword table in
 END).")
 
 (defconst agl-contextual-builtins
-  '("print" "ask" "exec")
-  "Contextual AgL builtins.
+  '("print" "render" "exec" "ask" "ask-request"
+    "copy" "shallow_copy" "resource" "resource-dir")
+  "The AgL builtin call names, highlighted by spelling.
 
-Ordinary NAME tokens given built-in meaning during scope resolution.
-Canonical source: `src/agm/agl/lexer/tokens.py'.")
+These lex as ordinary NAME tokens; the stdlib declares them as
+`builtin def' in `stdlib/std/core.agl'.  Canonical source:
+`src/agm/agl/scope/symbols.py' (the `BUILTIN_CALL_NAMES' mapping),
+mirrored here in full -- update this list with that one.
+
+`regexp-opt' folds shared prefixes into a greedy trie, so `ask-request'
+and `resource-dir' win over `ask' and `resource' at the same position,
+and `agl--search-ident-forward' rejects any match that does not end on
+an AgL identifier boundary -- `-' continues a name, so `resource-path'
+and `copy-of' stay unfaced.")
 
 (defconst agl-raw-tail-names
   '("exec!" "ask!")

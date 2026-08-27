@@ -19,6 +19,10 @@ Some tests guard architectural properties rather than feature behavior:
 - **Match/IR contracts.** Match-compilation and lowering suites cover shared member-record constructor keys, singleton decomposition, record-nominal case dispatch, static JSON encode plans, and member-record equality, copying, codec, agent, and FFI crossings independently of end-to-end programs.
 - **Coverage.** The project maintains 100% test coverage of `src/` and 100% command coverage in end-to-end tests.
 
+## Editor Mode Tests
+
+The Emacs AgL mode under `config/emacs/` carries its own ERT suite, run by `just test-emacs` (batch Emacs, no display). It sits outside `just check` on purpose, so the gate stays deterministic on machines without Emacs; run it by hand when touching the mode. It tests the mode's own behavior (syntax propertization, structural font-lock, indentation, navigation, flymake, and REPL wiring), not AgL semantics. Both editor modes mirror three inventories owned by the Python sources, in full: the reserved-keyword frozenset in `src/agm/agl/keywords.py`, the raw-tail openers in `src/agm/raw_tail_catalog.py`, and the builtin call names in `src/agm/agl/scope/symbols.py`. The mirrors are maintained by hand, so a change to any of those three inventories must be carried into `config/emacs/agl-mode.el` and `config/micro/agl.yaml`. Builtins are faced by spelling wherever they appear, their own `builtin def` declaration in the stdlib included.
+
 ## AgL Self-Validation
 
 AgL carries invariant self-checks that re-verify artifacts the compiler itself just produced: the typechecker's checked-output closure boundary (no solver-local inference variable escapes a checked module, program, or the shared whole-program tables) and its per-region inference-close checks; every compiled match site's matrix, occurrence ledger, decision DAG, semantic replay, and provenance; and the structural validation of the lowered IR (`validate_ir`). These re-check already-checked source, so they are defense-in-depth rather than production behavior and are disabled by default.
@@ -36,4 +40,5 @@ Real agents (claude, codex, and other runners) are never invoked in tests; agent
 - `tests/test_agl_self_validation.py` — the self-validation gating contract; `src/agm/agl/self_validation.py` — the toggle.
 - `tests/test_agl_e2e.py` and `tests/agl/programs/` — module end-to-end acceptance; `tests/test_agl_multifile.py` with `tests/agl/multi_file/` — multi-file acceptance.
 - `tests/conftest.py`, `tests/_agl_helpers.py`, `tests/_proc_helpers.py`, and `tests/_process_helpers.py` — shared fixtures and helpers; the latter provides reusable process-result builders and shell-boundary fakes.
-- `justfile` — the `test`, `lint`, `typecheck`, and `check` gates that run the suite.
+- `config/emacs/tests/` — the Emacs mode's ERT suite; `config/emacs/agl-mode.el` and `config/micro/agl.yaml` — the editor keyword mirrors.
+- `justfile` — the `test`, `lint`, `typecheck`, `test-emacs`, and `check` gates that run the suite.

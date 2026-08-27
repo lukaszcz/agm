@@ -254,6 +254,28 @@ def _builtin_method_receiver_key(receiver_type: RecordType | EnumType) -> _Built
     return NominalId(receiver_type.decl_id)
 
 
+def _no_member(
+    obj_type: RecordType | EnumType | ExceptionType, field: str, span: SourceSpan
+) -> AglTypeError:
+    """Return the diagnostic for a member the receiver declares neither way."""
+    return AglTypeError(
+        f"{obj_type.kind.capitalize()} '{obj_type.name}' has no field or method '{field}'.",
+        span=span,
+    )
+
+
+def _no_type_var_members(obj_type: TypeVarType, members: str, span: SourceSpan) -> AglTypeError:
+    """Return the diagnostic for selecting *members* from a bare type variable.
+
+    AgL has no type-variable bounds, so nothing at all can be selected from one;
+    *members* names only what the attempted operation would have selected.
+    """
+    return AglTypeError(
+        f"a value of type variable '{obj_type.name}' has no {members}.",
+        span=span,
+    )
+
+
 def _variant_not_in_enum(variant: str, enum_type: EnumType, span: SourceSpan) -> AglTypeError:
     """Return the diagnostic for a variant spelling the matched enum lacks."""
     return AglTypeError(
@@ -1589,6 +1611,8 @@ class _Checker:
                 f"Field assignment is not permitted on exception type '{receiver_type.name}'.",
                 span=target.span,
             )
+        if isinstance(receiver_type, TypeVarType):
+            raise _no_type_var_members(receiver_type, "fields", target.span)
         if not isinstance(receiver_type, RecordType):
             raise AglTypeError(
                 f"Field assignment requires a record value; got '{receiver_type!r}'.",
@@ -1602,10 +1626,7 @@ class _Checker:
                     f"Method '{target.field}' of record '{receiver_type.name}' is not assignable.",
                     span=target.span,
                 )
-            raise AglTypeError(
-                f"Record '{receiver_type.name}' has no field or method '{target.field}'.",
-                span=target.span,
-            )
+            raise _no_member(receiver_type, target.field, target.span)
         if target.field not in self._env.type_table.record_mutable_fields(receiver_type):
             raise AglTypeError(
                 f"Field '{target.field}' of record '{receiver_type.name}' is immutable; "
@@ -4566,13 +4587,8 @@ class _Checker:
         if self._candidate_session is not None and contains_inference_var(obj_type):
             return self._active_inference_engine().fresh("member result")
         try:
-            # AgL has no type-variable bounds, so neither a field nor a method
-            # can be selected from a bare type variable.
             if isinstance(obj_type, TypeVarType):
-                raise AglTypeError(
-                    f"a value of type variable '{obj_type.name}' has no fields or methods.",
-                    span=node.span,
-                )
+                raise _no_type_var_members(obj_type, "fields or methods", node.span)
 
             fields: Mapping[str, Type] | None = None
             if isinstance(obj_type, ExceptionType):
@@ -4651,11 +4667,7 @@ class _Checker:
                     )
                 ):
                     return _SelectedBuiltinMethod(name=node.field, receiver_type=obj_type)
-                raise AglTypeError(
-                    f"{obj_type.kind.capitalize()} '{obj_type.name}' has no field or method "
-                    f"'{node.field}'.",
-                    span=node.span,
-                )
+                raise _no_member(obj_type, node.field, node.span)
             raise AglTypeError(
                 f"Member access requires a record, enum, exception, or built-in receiver; "
                 f"got '{obj_type!r}'.",
@@ -4676,12 +4688,8 @@ class _Checker:
                 self._check_expr(update.value, expected=None)
             return obj_type
         try:
-            # Reject operations on bare type variables.
             if isinstance(obj_type, TypeVarType):
-                raise AglTypeError(
-                    f"a value of type variable '{obj_type.name}' has no fields.",
-                    span=node.span,
-                )
+                raise _no_type_var_members(obj_type, "fields", node.span)
             fields: Mapping[str, Type]
             if isinstance(obj_type, ExceptionType):
                 fields = self._env.type_table.exception_fields(obj_type)

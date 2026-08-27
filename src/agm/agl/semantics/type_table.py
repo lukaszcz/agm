@@ -608,14 +608,7 @@ class TypeTable:
             cached = bucket.get(handle)
             if cached is not None:
                 return cached
-        typedef = self._defs.get(decl_id)
-        if typedef is None:
-            raise KeyError(f"no TypeDef registered for record {handle!r}")
-        if typedef.kind != "record":
-            raise AssertionError(
-                f"record_fields called for {handle!r}, which is registered as kind "
-                f"{typedef.kind!r}, not 'record'"
-            )
+        typedef = self._require_record_def(handle, caller="record_fields")
         subst = dict(zip(typedef.type_params, handle.type_args))
         result: Mapping[str, Type] = {
             fname: substitute(ftype, subst) for fname, ftype in typedef.fields
@@ -634,15 +627,18 @@ class TypeTable:
         Raises the same errors as :meth:`record_fields` for an unregistered
         or non-record handle.
         """
+        return self._require_record_def(handle, caller="record_mutable_fields").mutable_fields
+
+    def _require_record_def(self, handle: RecordType, *, caller: str) -> TypeDef:
         typedef = self._defs.get(handle.decl_id)
         if typedef is None:
             raise KeyError(f"no TypeDef registered for record {handle!r}")
         if typedef.kind != "record":
             raise AssertionError(
-                f"record_mutable_fields called for {handle!r}, which is registered as kind "
+                f"{caller} called for {handle!r}, which is registered as kind "
                 f"{typedef.kind!r}, not 'record'"
             )
-        return typedef.mutable_fields
+        return typedef
 
     def enum_members(self, handle: EnumType) -> tuple[RecordType, ...]:
         """Return *handle*'s member record types with ``type_args`` substituted in.

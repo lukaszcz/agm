@@ -1381,16 +1381,20 @@ class IrInterpreter:
                 return VOID_VALUE
 
             case IrFieldSet(value=value_expr, nominal=nominal, field=field, new=new_expr):
-                # Evaluate the receiver before the replacement. The exact guard
-                # protects superseded same-named declarations from writes.
+                # Evaluate the receiver before the replacement. The identity
+                # guard protects superseded same-named declarations from
+                # writes; validation already proved the field is declared, so
+                # matching identity is all the store needs.
                 value = self._eval(value_expr)
                 if not isinstance(value, RecordValue):
                     raise InvalidIrError(
                         f"IrFieldSet: expected RecordValue, got {type(value).__name__}"
                     )
-                _project_nominal_field(value, nominal, field, IrFieldMode.EXACT)
-                new = self._eval(new_expr)
-                value.fields[field] = new
+                if value.nominal != nominal:
+                    raise InvalidIrError(
+                        f"IrFieldSet: expected nominal {nominal!r}, got {value.nominal!r}"
+                    )
+                value.fields[field] = self._eval(new_expr)
                 return VOID_VALUE
 
             # Plain left-to-right evaluation order: container, then index,

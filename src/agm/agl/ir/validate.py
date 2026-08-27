@@ -307,8 +307,10 @@ def _check_nominal_in_table(nominal: NominalId, ctx: _Context) -> None:
         )
 
 
-def _check_nominal_field(nominal: NominalId, field: str, mode: IrFieldMode, ctx: _Context) -> None:
-    """Reject a projection outside the declaring nominal's field shape.
+def _check_nominal_field(
+    nominal: NominalId, field: str, mode: IrFieldMode, ctx: _Context, node_name: str
+) -> None:
+    """Reject a field reference outside the declaring nominal's field shape.
 
     Exact and upper-bound projections use the same declaration descriptor for
     field existence. The mode changes runtime identity checking, not which
@@ -327,18 +329,8 @@ def _check_nominal_field(nominal: NominalId, field: str, mode: IrFieldMode, ctx:
     else:
         known_fields = set(desc.fields)
     if field not in known_fields:
-        raise InvalidIrError(f"IrField references unknown field {field!r} of nominal {nominal!r}")
-
-
-def _check_mutable_record_field(nominal: NominalId, field: str, ctx: _Context) -> None:
-    """Require a mutable field on the precise record declaration for a store."""
-    _check_nominal_field(nominal, field, IrFieldMode.EXACT, ctx)
-    desc = ctx.program.nominals[nominal]
-    if desc.kind is not NominalKind.RECORD:
-        raise InvalidIrError(f"IrFieldSet references non-record nominal {nominal!r}")
-    if field not in desc.mutable_fields:
         raise InvalidIrError(
-            f"IrFieldSet references immutable field {field!r} of nominal {nominal!r}"
+            f"{node_name} references unknown field {field!r} of nominal {nominal!r}"
         )
 
 
@@ -347,6 +339,16 @@ def _check_record_nominal(nominal: NominalId, ctx: _Context, node_name: str) -> 
     _check_nominal_in_table(nominal, ctx)
     if ctx.program.nominals[nominal].kind is not NominalKind.RECORD:
         raise InvalidIrError(f"{node_name} references non-record nominal {nominal!r}")
+
+
+def _check_mutable_record_field(nominal: NominalId, field: str, ctx: _Context) -> None:
+    """Require a mutable field on the precise record declaration for a store."""
+    _check_record_nominal(nominal, ctx, "IrFieldSet")
+    _check_nominal_field(nominal, field, IrFieldMode.EXACT, ctx, "IrFieldSet")
+    if field not in ctx.program.nominals[nominal].mutable_fields:
+        raise InvalidIrError(
+            f"IrFieldSet references immutable field {field!r} of nominal {nominal!r}"
+        )
 
 
 _DECODE_STRATEGIES = frozenset(
@@ -964,7 +966,7 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                 raise InvalidIrError("IrField field must be non-empty")
             if ctx.deep:
                 _check_nominal_in_table(nominal, ctx)
-                _check_nominal_field(nominal, field, mode, ctx)
+                _check_nominal_field(nominal, field, mode, ctx, "IrField")
             _validate_expr(val, ctx)
 
         case IrFieldSet(value=val, nominal=nominal, field=field, new=new):
@@ -972,7 +974,6 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             if not field:
                 raise InvalidIrError("IrFieldSet field must be non-empty")
             if ctx.deep:
-                _check_nominal_in_table(nominal, ctx)
                 _check_mutable_record_field(nominal, field, ctx)
             _validate_expr(val, ctx)
             _validate_expr(new, ctx)

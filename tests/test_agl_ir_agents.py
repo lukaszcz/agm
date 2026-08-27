@@ -1548,7 +1548,6 @@ def test_validate_contract_request_recursive_decode_defs() -> None:
                 "Node",
                 NominalKind.RECORD,
                 ("value", "left", "right"),
-                field_mutability=(False, False, False),
             ),
         },
         sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},

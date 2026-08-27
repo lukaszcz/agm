@@ -1409,8 +1409,8 @@ class TestGenericSubstitution:
 # ---------------------------------------------------------------------------
 
 
-class TestRecordFieldMutability:
-    def test_accessor_preserves_declaration_flags_across_generic_instantiations(self) -> None:
+class TestRecordMutableFields:
+    def test_accessor_preserves_declaration_names_across_generic_instantiations(self) -> None:
         table = TypeTable()
         table.register(
             TypeDef(
@@ -1419,7 +1419,7 @@ class TestRecordFieldMutability:
                 module_id=ENTRY_ID,
                 type_params=("T",),
                 fields=(("mutable", TypeVarType("T")), ("fixed", IntType())),
-                field_mutability=(True, False),
+                mutable_fields=frozenset({"mutable"}),
                 decl_node_id=700020,
             )
         )
@@ -1427,26 +1427,20 @@ class TestRecordFieldMutability:
             name="Pair", type_args=(TextType(),), module_id=ENTRY_ID, decl_id=700020
         )
 
-        first = table.record_field_mutability(handle)
-        second = table.record_field_mutability(handle)
-
-        assert first is second
-        assert first == (True, False)
-        assert table.record_field_mutability(
+        assert table.record_mutable_fields(handle) == frozenset({"mutable"})
+        assert table.record_mutable_fields(
             RecordType(name="Pair", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700020)
-        ) == (True, False)
+        ) == frozenset({"mutable"})
         assert dict(table.record_fields(handle)) == {"mutable": TextType(), "fixed": IntType()}
 
     def test_accessor_rejects_missing_and_non_record_definitions(self) -> None:
         table = TypeTable()
         with pytest.raises(KeyError):
-            table.record_field_mutability(RecordType(name="Missing", module_id=ENTRY_ID))
+            table.record_mutable_fields(RecordType(name="Missing", module_id=ENTRY_ID))
 
         table.register(TypeDef(kind="enum", name="Kind", module_id=ENTRY_ID, decl_node_id=700023))
         with pytest.raises(AssertionError):
-            table.record_field_mutability(
-                RecordType(name="Kind", module_id=ENTRY_ID, decl_id=700023)
-            )
+            table.record_mutable_fields(RecordType(name="Kind", module_id=ENTRY_ID, decl_id=700023))
 
     def test_builder_registers_standalone_and_enum_member_mutability(self) -> None:
         checked = _check(
@@ -1466,19 +1460,19 @@ class TestRecordFieldMutability:
         assert isinstance(standalone, RecordType)
         assert isinstance(referenced, RecordType)
         assert generic is not None
-        assert table.record_field_mutability(standalone) == (True, False)
-        assert table.record_field_mutability(referenced) == (True,)
+        assert table.record_mutable_fields(standalone) == frozenset({"value"})
+        assert table.record_mutable_fields(referenced) == frozenset({"value"})
         box = table.enum_member_names(generic.template)["Box"]
-        assert table.record_field_mutability(box) == (True,)
+        assert table.record_mutable_fields(box) == frozenset({"value"})
 
     def test_seeded_builtin_records_are_immutable(self) -> None:
         table = create_seeded_type_table()
         handle = BUILTIN_PRELUDE_TYPES["ExecResult"]
 
         assert isinstance(handle, RecordType)
-        assert table.record_field_mutability(handle) == (False, False, False, False)
+        assert table.record_mutable_fields(handle) == frozenset()
 
-    def test_merge_invalidates_cached_record_field_mutability(self) -> None:
+    def test_merge_replaces_record_mutable_fields(self) -> None:
         target = TypeTable()
         handle = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700021)
         target.register(
@@ -1487,11 +1481,10 @@ class TestRecordFieldMutability:
                 name="Point",
                 module_id=ENTRY_ID,
                 fields=(("value", IntType()),),
-                field_mutability=(False,),
                 decl_node_id=700021,
             )
         )
-        assert target.record_field_mutability(handle) == (False,)
+        assert target.record_mutable_fields(handle) == frozenset()
 
         source = TypeTable()
         source.register(
@@ -1500,13 +1493,13 @@ class TestRecordFieldMutability:
                 name="Point",
                 module_id=ENTRY_ID,
                 fields=(("value", IntType()),),
-                field_mutability=(True,),
+                mutable_fields=frozenset({"value"}),
                 decl_node_id=700021,
             )
         )
         target.merge_from(source)
 
-        assert target.record_field_mutability(handle) == (True,)
+        assert target.record_mutable_fields(handle) == frozenset({"value"})
 
     def test_mutability_participates_in_builtin_shape_validation(self) -> None:
         with pytest.raises(AglTypeError):
@@ -1526,10 +1519,9 @@ class TestRecordFieldMutability:
             name="Point",
             module_id=ENTRY_ID,
             fields=(("value", IntType()),),
-            field_mutability=(False,),
             decl_node_id=700022,
         )
-        mutable = replace(fixed, field_mutability=(True,))
+        mutable = replace(fixed, mutable_fields=frozenset({"value"}))
 
         assert fixed != mutable
 

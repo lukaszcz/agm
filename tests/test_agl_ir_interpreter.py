@@ -1198,7 +1198,7 @@ class TestIrField:
                     "Point",
                     NominalKind.RECORD,
                     ("x",),
-                    field_mutability=(True,),
+                    mutable_fields=frozenset({"x"}),
                 )
             },
         )

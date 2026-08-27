@@ -1563,68 +1563,72 @@ class _Checker:
         elem_type = self._check_index_operand(
             container_type, target.index, span=target.span, obj_expr=target.obj
         )
-        # Recorded so the lowerer can generically lower the target's own node
-        # (an IndexTarget is not an Expr, so it has no other node-type slot)
-        # to size the coercion of the assigned value, without a dedicated
-        # element-type-for-container helper of its own.
-        self._record_node_type(target.node_id, elem_type)
-        value_type = self._check_boundary_expr(stmt.value, expected=elem_type)
-        with self._frame_direct_candidate_use(exprs=(stmt.value, target.obj)):
-            self._assert_assignable(value_type, elem_type, stmt.span)
-        return self._binder_result(value_type)
+        return self._check_assigned_value(stmt, target.node_id, elem_type, target.obj)
 
     def _check_field_assign_stmt(self, stmt: AssignStmt, target: FieldTarget) -> Type:
+        # A field target has no binding of its own: `target.obj` is an ordinary
+        # expression that must produce a record, and the assignment mutates
+        # whatever record value it evaluates to.
         receiver_type = self._check_boundary_expr(target.obj, expected=None)
         try:
-            if isinstance(receiver_type, EnumType):
-                raise AglTypeError(
-                    f"Enum values expose no fields; narrow '{receiver_type.name}' directly "
-                    "through 'case' or 'as' before assigning.",
-                    span=target.span,
-                )
-            if isinstance(receiver_type, ExceptionType):
-                raise AglTypeError(
-                    f"Field assignment is not permitted on exception type '{receiver_type.name}'.",
-                    span=target.span,
-                )
-            if not isinstance(receiver_type, RecordType):
-                raise AglTypeError(
-                    f"Field assignment requires a record value; got '{receiver_type!r}'.",
-                    span=target.span,
-                )
-
-            fields = self._env.type_table.record_fields(receiver_type)
-            if target.field not in fields:
-                method = self._env.type_table.lookup_method(receiver_type, target.field)
-                if method is not None:
-                    raise AglTypeError(
-                        f"Method '{target.field}' of record '{receiver_type.name}' "
-                        "is not assignable.",
-                        span=target.span,
-                    )
-                raise AglTypeError(
-                    f"Record '{receiver_type.name}' has no field or method '{target.field}'.",
-                    span=target.span,
-                )
-
-            field_type = fields[target.field]
-            field_index = tuple(fields).index(target.field)
-            if not self._env.type_table.record_field_mutability(receiver_type)[field_index]:
-                raise AglTypeError(
-                    f"Field '{target.field}' of record '{receiver_type.name}' is immutable; "
-                    "declare it with 'var' to assign to it.",
-                    span=target.span,
-                )
-
-            # A field target is not an expression, so retain its field type for
-            # lowering's coercion sizing just as indexed assignment does.
-            self._record_node_type(target.node_id, field_type)
-            value_type = self._check_boundary_expr(stmt.value, expected=field_type)
-            with self._frame_direct_candidate_use(exprs=(stmt.value, target.obj)):
-                self._assert_assignable(value_type, field_type, stmt.span)
-            return self._binder_result(value_type)
+            field_type = self._mutable_field_type(receiver_type, target)
         except AglTypeError as exc:
             raise self._frame_inferred_return_error(exc, exprs=(target.obj,)) from exc
+        return self._check_assigned_value(stmt, target.node_id, field_type, target.obj)
+
+    def _mutable_field_type(self, receiver_type: Type, target: FieldTarget) -> Type:
+        """Return the type of the ``var`` field *target* names on *receiver_type*."""
+        if isinstance(receiver_type, EnumType):
+            raise AglTypeError(
+                f"Enum values expose no fields; narrow '{receiver_type.name}' directly "
+                "through 'case' or 'as' before assigning.",
+                span=target.span,
+            )
+        if isinstance(receiver_type, ExceptionType):
+            raise AglTypeError(
+                f"Field assignment is not permitted on exception type '{receiver_type.name}'.",
+                span=target.span,
+            )
+        if not isinstance(receiver_type, RecordType):
+            raise AglTypeError(
+                f"Field assignment requires a record value; got '{receiver_type!r}'.",
+                span=target.span,
+            )
+
+        fields = self._env.type_table.record_fields(receiver_type)
+        if target.field not in fields:
+            if self._env.type_table.lookup_method(receiver_type, target.field) is not None:
+                raise AglTypeError(
+                    f"Method '{target.field}' of record '{receiver_type.name}' is not assignable.",
+                    span=target.span,
+                )
+            raise AglTypeError(
+                f"Record '{receiver_type.name}' has no field or method '{target.field}'.",
+                span=target.span,
+            )
+        if target.field not in self._env.type_table.record_mutable_fields(receiver_type):
+            raise AglTypeError(
+                f"Field '{target.field}' of record '{receiver_type.name}' is immutable; "
+                "declare it with 'var' to assign to it.",
+                span=target.span,
+            )
+        return fields[target.field]
+
+    def _check_assigned_value(
+        self, stmt: AssignStmt, target_node_id: int, slot_type: Type, obj_expr: Expr
+    ) -> Type:
+        """Check an assignment's right-hand side against the target slot's type.
+
+        Shared by the indexed and field forms. Neither target is an ``Expr``,
+        so neither has a node-type slot of its own; recording *slot_type*
+        against the target's node lets the lowerer size the assigned value's
+        coercion generically, with no per-target-shape helper.
+        """
+        self._record_node_type(target_node_id, slot_type)
+        value_type = self._check_boundary_expr(stmt.value, expected=slot_type)
+        with self._frame_direct_candidate_use(exprs=(stmt.value, obj_expr)):
+            self._assert_assignable(value_type, slot_type, stmt.span)
+        return self._binder_result(value_type)
 
     # ------------------------------------------------------------------
     # Expression type inference

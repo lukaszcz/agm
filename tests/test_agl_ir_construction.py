@@ -830,7 +830,6 @@ def test_validate_accepts_valid_ir_make_record() -> None:
         kind=NominalKind.RECORD,
         fields=("x",),
         variants=(),
-        field_mutability=(False,),
     )
     node = IrMakeRecord(
         location=loc,
@@ -1041,7 +1040,6 @@ def test_validate_accepts_ir_make_constructor_for_a_record() -> None:
                 "Point",
                 NominalKind.RECORD,
                 fields=("x",),
-                field_mutability=(False,),
             )
         },
         sources={sid: SourceFile(display_name="<test>", normalized_text=" ")},

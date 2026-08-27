@@ -27,7 +27,6 @@ from agm.agl.semantics.values import (
     UnitValue,
     Value,
     value_equal,
-    values_equal,
 )
 
 
@@ -83,6 +82,32 @@ class AglException(Exception):
         self.value = decoded
 
 
+_FunctionEncoder = Callable[[IrClosureValue], object] | None
+
+_IMMUTABLE_MESSAGE = "AgL nominal values are immutable"
+
+
+def _require_exact_fields(expected: tuple[str, ...], fields: dict[str, object]) -> None:
+    """Check a companion-side construction names exactly the declared fields."""
+    if fields.keys() != set(expected):
+        raise TypeError(f"expected fields {expected!r}")
+
+
+def _view_value(view: object) -> RecordValue:
+    """Return the live ``RecordValue`` a record view is a window onto.
+
+    Goes through ``object.__getattribute__`` because ``_AglRecordView``
+    overrides ``__getattribute__`` to let a field named ``_agl_value`` shadow
+    this slot for companion dot access.
+    """
+    return cast(RecordValue, object.__getattribute__(view, "_agl_value"))
+
+
+def _view_encoder(view: object) -> "_FunctionEncoder":
+    """Return the closure encoder a record view re-encodes function fields with."""
+    return cast(_FunctionEncoder, object.__getattribute__(view, "_function_encoder"))
+
+
 class _AglNominal:
     """Base implementation shared by synthesized record, exception, and enum-variant classes.
 
@@ -102,9 +127,7 @@ class _AglNominal:
     _agl_descriptor: NominalDescriptor
 
     def __init__(self, **fields: object) -> None:
-        expected = type(self)._agl_fields
-        if set(fields) != set(expected):
-            raise TypeError(f"expected fields {expected!r}")
+        _require_exact_fields(type(self)._agl_fields, fields)
         object.__setattr__(self, "_agl_values", fields)
 
     def __getattr__(self, name: str) -> object:
@@ -114,7 +137,7 @@ class _AglNominal:
             raise AttributeError(name) from None
 
     def __setattr__(self, name: str, value: object) -> None:
-        raise AttributeError("AgL nominal values are immutable")
+        raise AttributeError(_IMMUTABLE_MESSAGE)
 
     def __eq__(self, other: object) -> bool:
         if type(other) is not type(self):
@@ -130,11 +153,17 @@ class _AglNominal:
 
 
 class _AglRecordView:
-    """Base implementation for synthesized live views of mutable record values."""
+    """Base implementation for synthesized live views of mutable record values.
+
+    Unlike :class:`_AglNominal`, which snapshots its fields into a dict of
+    already-encoded Python objects, a view keeps the underlying
+    :class:`RecordValue` and encodes each field on read, so a companion sees
+    AgL-side mutation and AgL sees the companion's writes.
+    """
 
     __slots__ = ("_agl_value", "_function_encoder")
     _agl_value: RecordValue
-    _function_encoder: Callable[[IrClosureValue], object] | None
+    _function_encoder: "_FunctionEncoder"
     _agl_nominal: NominalId
     _agl_kind: NominalKind
     _agl_fields: tuple[str, ...]
@@ -142,11 +171,12 @@ class _AglRecordView:
 
     def __init__(self, **fields: object) -> None:
         expected = type(self)._agl_fields
-        if set(fields) != set(expected):
-            raise TypeError(f"expected fields {expected!r}")
+        _require_exact_fields(expected, fields)
         descriptor = type(self)._agl_descriptor
-        function_encoder = _FunctionProxyEncoder.from_values(fields.values())
-        object.__setattr__(self, "_function_encoder", function_encoder)
+        encoder = _FunctionProxyEncoder()
+        for name in expected:
+            encoder.remember(name, fields[name])
+        object.__setattr__(self, "_function_encoder", encoder)
         object.__setattr__(
             self,
             "_agl_value",
@@ -158,96 +188,70 @@ class _AglRecordView:
         )
 
     @classmethod
-    def _from_value(
-        cls,
-        value: RecordValue,
-        function_encoder: Callable[[IrClosureValue], object] | None = None,
-    ) -> Self:
+    def _from_value(cls, value: RecordValue, function_encoder: "_FunctionEncoder" = None) -> Self:
         view = object.__new__(cls)
         object.__setattr__(view, "_agl_value", value)
         object.__setattr__(view, "_function_encoder", function_encoder)
         return view
 
     def __getattribute__(self, name: str) -> object:
-        fields = type(self)._agl_fields
-        if name in fields:
-            record_value = cast(RecordValue, object.__getattribute__(self, "_agl_value"))
-            function_encoder = cast(
-                Callable[[IrClosureValue], object] | None,
-                object.__getattribute__(self, "_function_encoder"),
-            )
-            return encode_boundary_value(record_value.fields[name], function_encoder)
+        # A declared field always wins over the two storage slots, so a record
+        # whose own field is named `_agl_value` stays reachable by dot access.
+        if name in type(self)._agl_fields:
+            return encode_boundary_value(_view_value(self).fields[name], _view_encoder(self))
         return cast(object, object.__getattribute__(self, name))
 
-    def __getattr__(self, name: str) -> object:
-        raise AttributeError(name)
-
     def __setattr__(self, name: str, value: object) -> None:
-        fields = type(self)._agl_fields
-        try:
-            field_index = fields.index(name)
-        except ValueError:
-            raise AttributeError("AgL nominal values are immutable") from None
-        if not type(self)._agl_descriptor.field_mutability[field_index]:
-            raise AttributeError("AgL nominal values are immutable")
+        if name not in type(self)._agl_descriptor.mutable_fields:
+            raise AttributeError(_IMMUTABLE_MESSAGE)
         try:
             decoded = decode_boundary_value(value)
         except BoundaryViolation as exc:
             raise BoundaryTypeError(str(exc)) from exc
-        function_encoder = cast(
-            Callable[[IrClosureValue], object] | None,
-            object.__getattribute__(self, "_function_encoder"),
-        )
-        if function_encoder is None:
-            function_encoder = _FunctionProxyEncoder.from_value(value)
-            if function_encoder is not None:
-                object.__setattr__(self, "_function_encoder", function_encoder)
-        elif isinstance(function_encoder, _FunctionProxyEncoder):
-            function_encoder.remember(value)
-        record_value = cast(RecordValue, object.__getattribute__(self, "_agl_value"))
-        record_value.fields[name] = decoded
+        encoder = _view_encoder(self)
+        if encoder is None:
+            encoder = _FunctionProxyEncoder()
+            object.__setattr__(self, "_function_encoder", encoder)
+        if isinstance(encoder, _FunctionProxyEncoder):
+            encoder.remember(name, value)
+        _view_value(self).fields[name] = decoded
 
     def __eq__(self, other: object) -> bool:
         if type(other) is not type(self):
             return NotImplemented
-        return values_equal(
-            cast(RecordValue, object.__getattribute__(self, "_agl_value")),
-            cast(RecordValue, object.__getattribute__(other, "_agl_value")),
-        )
+        return _view_value(self) == _view_value(other)
 
     def __repr__(self) -> str:
-        return render_value(cast(RecordValue, object.__getattribute__(self, "_agl_value")))
+        return render_value(_view_value(self))
 
 
 class _FunctionProxyEncoder:
-    """Re-encode closures from callback proxies supplied to a constructed view."""
+    """Re-encode closures from callback proxies supplied to a constructed view.
+
+    A companion-constructed view has no interpreter encoder of its own, so
+    each function-valued field's proxy is kept under that field's name: a
+    later write to the same field replaces (or, for a non-function value,
+    drops) the entry, so what is retained stays bounded by the record's own
+    field count rather than by how many times a field is assigned.
+    """
 
     __slots__ = ("_proxies",)
 
     def __init__(self) -> None:
-        self._proxies: list[tuple[IrClosureValue, object]] = []
+        self._proxies: dict[str, tuple[IrClosureValue, object]] = {}
 
-    @classmethod
-    def from_values(cls, values: Iterable[object]) -> Self | None:
-        encoder = cls()
-        for value in values:
-            encoder.remember(value)
-        return encoder if encoder._proxies else None
-
-    @classmethod
-    def from_value(cls, value: object) -> Self | None:
-        return cls.from_values((value,))
-
-    def remember(self, value: object) -> None:
+    def remember(self, name: str, value: object) -> None:
         # Imported lazily because externs imports this module for the normal
         # boundary conversion path.
         from agm.agl.runtime.externs import AglCallableProxy
 
         if isinstance(value, AglCallableProxy):
-            self._proxies.append((value._closure, value))
+            self._proxies[name] = (value._closure, value)
+        else:
+            self._proxies.pop(name, None)
 
     def __call__(self, closure: IrClosureValue) -> object:
-        for remembered_closure, proxy in self._proxies:
+        for remembered_closure, proxy in self._proxies.values():
             if closure is remembered_closure:
                 return proxy
         raise BoundaryViolation("cannot encode an AgL function without an interpreter")
@@ -296,12 +300,18 @@ def _create_nominal(descriptor: NominalDescriptor, name: str) -> type[object]:
     an identity's layout is fixed at its declaration, so there is never a
     reason to build a second class for the same ``NominalId``.
     """
-    attrs = _nominal_attrs(descriptor)
-    is_live_view = descriptor.kind is NominalKind.RECORD and any(descriptor.field_mutability)
-    base = _AglRecordView if is_live_view else _AglNominal
-    if is_live_view:
-        attrs["__hash__"] = None
-    return cast(type[object], type(name, (cast(type[object], base),), _class_namespace(attrs)))
+    # A record with a `var` field gets the live view base; every other nominal
+    # shape snapshots. `_AglRecordView` declares `__eq__` and no `__hash__`, so
+    # Python already makes it (and every subclass) unhashable.
+    base = (
+        _AglRecordView
+        if descriptor.kind is NominalKind.RECORD and descriptor.mutable_fields
+        else _AglNominal
+    )
+    return cast(
+        type[object],
+        type(name, (cast(type[object], base),), _class_namespace(_nominal_attrs(descriptor))),
+    )
 
 
 def _create_enum(
@@ -693,7 +703,7 @@ def decode_boundary_value(obj: object) -> Value:
     descriptor = cast(object, getattr(type(obj), "_agl_descriptor", None))
     if isinstance(descriptor, NominalDescriptor):
         if isinstance(obj, _AglRecordView):
-            return cast(RecordValue, object.__getattribute__(obj, "_agl_value"))
+            return _view_value(obj)
         nominal_obj = cast(_AglNominal, obj)
         fields = {
             name: decode_boundary_value(nominal_obj._agl_values[name])

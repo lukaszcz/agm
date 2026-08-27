@@ -59,7 +59,7 @@ def _record_class(
         declared_name="Mutable" if mutable else "Snapshot",
         kind=NominalKind.RECORD,
         fields=fields,
-        field_mutability=(mutable, *(False for _ in fields[1:])),
+        mutable_fields=frozenset({fields[0]}) if mutable else frozenset(),
     )
     return nominal, cast(type[_RecordCompanion], synthesize_nominal_classes((descriptor,))[nominal])
 
@@ -148,7 +148,7 @@ def test_mutable_record_view_preserves_a_callback_assigned_after_construction() 
         declared_name="Box",
         kind=NominalKind.RECORD,
         fields=("value", "callback"),
-        field_mutability=(False, True),
+        mutable_fields=frozenset({"callback"}),
     )
     record_cls = synthesize_nominal_classes((descriptor,))[nominal]
     view = record_cls(value=0, callback=0)
@@ -232,7 +232,7 @@ def test_mutable_enum_member_crosses_as_a_live_record_view() -> None:
             declared_name="Changed",
             kind=NominalKind.RECORD,
             fields=("value", "fixed"),
-            field_mutability=(True, False),
+            mutable_fields=frozenset({"value"}),
         ),
     )
     event_cls = cast(_EventCompanion, synthesize_nominal_classes(descriptors)[enum_nominal])

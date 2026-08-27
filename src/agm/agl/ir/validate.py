@@ -336,8 +336,7 @@ def _check_mutable_record_field(nominal: NominalId, field: str, ctx: _Context) -
     desc = ctx.program.nominals[nominal]
     if desc.kind is not NominalKind.RECORD:
         raise InvalidIrError(f"IrFieldSet references non-record nominal {nominal!r}")
-    field_index = desc.fields.index(field)
-    if not desc.field_mutability[field_index]:
+    if field not in desc.mutable_fields:
         raise InvalidIrError(
             f"IrFieldSet references immutable field {field!r} of nominal {nominal!r}"
         )
@@ -1316,14 +1315,15 @@ def _validate_program_tables(ctx: _Context) -> None:
                 f" nominal={nom_desc.nominal!r} (mismatch)"
             )
         if nom_desc.kind is NominalKind.RECORD:
-            if len(nom_desc.field_mutability) != len(nom_desc.fields):
+            unknown = nom_desc.mutable_fields - set(nom_desc.fields)
+            if unknown:
                 raise InvalidIrError(
-                    "record descriptor field_mutability length must equal fields length "
-                    f"for nominal {nom_key!r}"
+                    f"record descriptor declares mutable fields {sorted(unknown)!r} it does"
+                    f" not declare as fields for nominal {nom_key!r}"
                 )
-        elif nom_desc.field_mutability:
+        elif nom_desc.mutable_fields:
             raise InvalidIrError(
-                "enum and exception descriptors must have empty field_mutability "
+                "enum and exception descriptors must have empty mutable_fields "
                 f"for nominal {nom_key!r}"
             )
 

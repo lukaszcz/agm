@@ -160,8 +160,9 @@ class TypeDef:
                   the base chain (see :meth:`TypeTable.exception_fields`).
     ``members`` — record type templates for enums (empty for
                   records/exceptions).
-    ``field_mutability`` — per-field flags for records, in the same order as
-                  ``fields``; empty for enums and exceptions.
+    ``mutable_fields`` — names of the ``var`` fields a record declares (a
+                  subset of ``fields``); always empty for enums and
+                  exceptions, neither of which admits a mutable field.
     ``abstract`` — exception metadata: ``True`` for the hierarchy root
                    (catchable but not constructible); unused for
                    records/enums.
@@ -208,7 +209,7 @@ class TypeDef:
     scope_path: tuple[str, ...] = ()
     type_params: tuple[str, ...] = ()
     fields: tuple[tuple[str, Type], ...] = ()
-    field_mutability: tuple[bool, ...] = ()
+    mutable_fields: frozenset[str] = frozenset()
     members: tuple[RecordType, ...] = ()
     abstract: bool = False
     base: DeclId | None = None
@@ -216,10 +217,6 @@ class TypeDef:
     is_builtin: bool = field(default=False, compare=False)
     decl_node_id: int = field(default=NO_DECL_ID, compare=False)
     is_inline_enum_member: bool = field(default=False, compare=False)
-
-    def __post_init__(self) -> None:
-        if self.kind == "record" and self.fields and not self.field_mutability:
-            object.__setattr__(self, "field_mutability", (False,) * len(self.fields))
 
     def handle(self, type_args: tuple[Type, ...] = ()) -> RecordType | EnumType | ExceptionType:
         """Return the ``RecordType``/``EnumType``/``ExceptionType`` handle naming this ``TypeDef``.
@@ -286,7 +283,6 @@ class TypeTable:
         # excluded from every query about what the session actually declares.
         self._orphaned: set[DeclId] = set()
         self._record_fields_cache: dict[DeclId, dict[RecordType, Mapping[str, Type]]] = {}
-        self._record_field_mutability_cache: dict[DeclId, dict[RecordType, tuple[bool, ...]]] = {}
         self._enum_members_cache: dict[DeclId, dict[EnumType, tuple[RecordType, ...]]] = {}
         self._enum_member_names_cache: dict[DeclId, dict[EnumType, Mapping[str, RecordType]]] = {}
         self._enum_member_by_decl_cache: dict[
@@ -571,7 +567,6 @@ class TypeTable:
 
     def _invalidate_cache_for(self, decl_id: DeclId) -> None:
         self._record_fields_cache.pop(decl_id, None)
-        self._record_field_mutability_cache.pop(decl_id, None)
         self._enum_members_cache.pop(decl_id, None)
         self._enum_member_names_cache.pop(decl_id, None)
         self._enum_member_by_decl_cache.pop(decl_id, None)
@@ -628,30 +623,26 @@ class TypeTable:
         self._record_fields_cache.setdefault(decl_id, {})[handle] = result
         return result
 
-    def record_field_mutability(self, handle: RecordType) -> tuple[bool, ...]:
-        """Return *handle*'s declaration-level per-field mutability flags.
+    def record_mutable_fields(self, handle: RecordType) -> frozenset[str]:
+        """Return the names of *handle*'s ``var`` fields.
 
-        Mutability is not part of a record handle or generic instantiation, so
-        every handle for one declaration receives the same tuple. The result
-        is still memoized per handle alongside :meth:`record_fields`.
+        Mutability is declared, so it is neither substituted into nor varied
+        by a handle's ``type_args``: every handle for one declaration reads
+        the same set straight off its ``TypeDef``, and there is nothing per
+        handle to memoize (unlike :meth:`record_fields`).
+
+        Raises the same errors as :meth:`record_fields` for an unregistered
+        or non-record handle.
         """
-        decl_id = handle.decl_id
-        bucket = self._record_field_mutability_cache.get(decl_id)
-        if bucket is not None:
-            cached = bucket.get(handle)
-            if cached is not None:
-                return cached
-        typedef = self._defs.get(decl_id)
+        typedef = self._defs.get(handle.decl_id)
         if typedef is None:
             raise KeyError(f"no TypeDef registered for record {handle!r}")
         if typedef.kind != "record":
             raise AssertionError(
-                f"record_field_mutability called for {handle!r}, which is registered as kind "
+                f"record_mutable_fields called for {handle!r}, which is registered as kind "
                 f"{typedef.kind!r}, not 'record'"
             )
-        result = typedef.field_mutability
-        self._record_field_mutability_cache.setdefault(decl_id, {})[handle] = result
-        return result
+        return typedef.mutable_fields
 
     def enum_members(self, handle: EnumType) -> tuple[RecordType, ...]:
         """Return *handle*'s member record types with ``type_args`` substituted in.

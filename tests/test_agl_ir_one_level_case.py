@@ -83,7 +83,6 @@ def _color_nominals() -> dict[NominalId, NominalDescriptor]:
             "With",
             NominalKind.RECORD,
             ("value", "unused"),
-            field_mutability=(False, False),
         ),
     }
 
@@ -113,7 +112,6 @@ def test_validation_requires_enum_member_record() -> None:
         "Plain",
         NominalKind.RECORD,
         ("unexpected",),
-        field_mutability=(False,),
     )
     with pytest.raises(InvalidIrError, match="fields"):
         validate_ir(_program(enum_value, nominals=wrong_shape))

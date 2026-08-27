@@ -518,7 +518,7 @@ class _TypeBuilder:
             module_id=module_id,
             scope_path=scope_path,
             fields=tuple(fields.items()),
-            field_mutability=tuple(fd.mutable for fd in stmt.fields),
+            mutable_fields=frozenset(fd.name for fd in stmt.fields if fd.mutable),
             is_builtin=stmt.is_builtin,
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
         )
@@ -612,7 +612,7 @@ class _TypeBuilder:
                 scope_path=member_scope_path,
                 type_params=captured_params,
                 fields=tuple(fields.items()),
-                field_mutability=tuple(fd.mutable for fd in vd.fields),
+                mutable_fields=frozenset(fd.name for fd in vd.fields if fd.mutable),
                 decl_node_id=decl_id,
                 is_inline_enum_member=True,
             )
@@ -883,7 +883,7 @@ class _TypeBuilder:
             scope_path=scope_path,
             type_params=type_params,
             fields=tuple(fields.items()),
-            field_mutability=tuple(fd.mutable for fd in stmt.fields),
+            mutable_fields=frozenset(fd.name for fd in stmt.fields if fd.mutable),
             is_builtin=stmt.is_builtin,
             # Same identity as the handle template registered in phase 1
             # (:meth:`_register_record_or_enum_handle`), so the TypeDef and

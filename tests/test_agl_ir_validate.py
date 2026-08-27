@@ -248,7 +248,6 @@ def test_case_arm_cannot_bind_multiple_fields_to_one_symbol() -> None:
                 declared_name="Pair",
                 kind=NominalKind.RECORD,
                 fields=("left", "right"),
-                field_mutability=(False, False),
             )
         },
     )
@@ -301,7 +300,6 @@ def test_case_rejects_closure_capture_outside_payload_dominance() -> None:
                 declared_name="PayloadMember",
                 kind=NominalKind.RECORD,
                 fields=("value",),
-                field_mutability=(False,),
             ),
         },
         functions={FN0: _make_fn_desc(fn_sym=SYM0)},
@@ -356,7 +354,6 @@ def test_case_arm_cannot_bind_a_private_source_symbol() -> None:
                 declared_name="Box",
                 kind=NominalKind.RECORD,
                 fields=("value",),
-                field_mutability=(False,),
             )
         },
     )
@@ -864,9 +861,9 @@ class TestDeepTierNominalDescriptor:
         prog = _make_program(nominals={NOM0: nom_desc})
         validate_ir(prog, deep=False)
 
-    @pytest.mark.parametrize("field_mutability", ((True,), (True, False, True)))
-    def test_record_mutability_metadata_must_align_with_fields(
-        self, field_mutability: tuple[bool, ...]
+    @pytest.mark.parametrize("mutable_fields", (frozenset({"z"}), frozenset({"x", "z"})))
+    def test_record_mutable_fields_must_be_declared_fields(
+        self, mutable_fields: frozenset[str]
     ) -> None:
         descriptor = NominalDescriptor(
             nominal=NOM0,
@@ -875,22 +872,22 @@ class TestDeepTierNominalDescriptor:
             declared_name="Foo",
             kind=NominalKind.RECORD,
             fields=("x", "y"),
-            field_mutability=field_mutability,
+            mutable_fields=mutable_fields,
         )
-        with pytest.raises(InvalidIrError, match="field_mutability"):
+        with pytest.raises(InvalidIrError, match="mutable fields"):
             validate_ir(_make_program(nominals={NOM0: descriptor}))
 
     @pytest.mark.parametrize("kind", (NominalKind.ENUM, NominalKind.EXCEPTION))
-    def test_non_record_descriptor_cannot_declare_field_mutability(self, kind: NominalKind) -> None:
+    def test_non_record_descriptor_cannot_declare_mutable_fields(self, kind: NominalKind) -> None:
         descriptor = NominalDescriptor(
             nominal=NOM0,
             module_id=MOD_A,
             scope_path=(),
             declared_name="Foo",
             kind=kind,
-            field_mutability=(True,),
+            mutable_fields=frozenset({"x"}),
         )
-        with pytest.raises(InvalidIrError, match="field_mutability"):
+        with pytest.raises(InvalidIrError, match="mutable_fields"):
             validate_ir(_make_program(nominals={NOM0: descriptor}))
 
 
@@ -1332,7 +1329,6 @@ class TestIrFieldValidation:
                 declared_name="Foo",
                 kind=NominalKind.RECORD,
                 fields=("x",),
-                field_mutability=(False,),
             ),
             NominalDescriptor(
                 nominal=NOM0,
@@ -1358,7 +1354,6 @@ class TestIrFieldValidation:
                     "some",
                     NominalKind.RECORD,
                     ("x",),
-                    field_mutability=(False,),
                 ),
             },
         )
@@ -1374,7 +1369,6 @@ class TestIrFieldValidation:
                 declared_name="Foo",
                 kind=NominalKind.RECORD,
                 fields=("x",),
-                field_mutability=(False,),
             ),
             NominalDescriptor(
                 nominal=NOM0,
@@ -1413,7 +1407,6 @@ class TestIrFieldValidation:
                     "some",
                     NominalKind.RECORD,
                     ("x",),
-                    field_mutability=(False,),
                 ),
             },
         )
@@ -1444,7 +1437,6 @@ class TestIrFieldValidation:
                     declared_name="Foo",
                     kind=NominalKind.RECORD,
                     fields=("x",),
-                    field_mutability=(False,),
                 )
             },
         )
@@ -1466,7 +1458,6 @@ class TestIrFieldSetValidation:
         *,
         mutable: bool,
         nominal_kind: NominalKind = NominalKind.RECORD,
-        has_mutability_metadata: bool = True,
     ) -> ExecutableProgram:
         store = IrFieldSet(LOC, IrConstInt(LOC, 1), NOM0, "x", IrConstInt(LOC, 2))
         descriptor = NominalDescriptor(
@@ -1476,9 +1467,9 @@ class TestIrFieldSetValidation:
             declared_name="Foo",
             kind=nominal_kind,
             fields=("x",),
-            field_mutability=(mutable,)
-            if nominal_kind is NominalKind.RECORD and has_mutability_metadata
-            else (),
+            mutable_fields=frozenset({"x"})
+            if mutable and nominal_kind is NominalKind.RECORD
+            else frozenset(),
         )
         return _make_program(initializers=(store,), nominals={NOM0: descriptor})
 
@@ -1496,11 +1487,6 @@ class TestIrFieldSetValidation:
                 deep=True,
             )
 
-    def test_field_store_without_mutability_metadata_fails_deep_validation(self) -> None:
-        prog = self._program_with_store(mutable=True, has_mutability_metadata=False)
-        with pytest.raises(InvalidIrError, match="field_mutability"):
-            validate_ir(prog, deep=True)
-
     def test_unknown_field_store_fails_deep_validation(self) -> None:
         descriptor = NominalDescriptor(
             nominal=NOM0,
@@ -1509,7 +1495,7 @@ class TestIrFieldSetValidation:
             declared_name="Foo",
             kind=NominalKind.RECORD,
             fields=("x",),
-            field_mutability=(True,),
+            mutable_fields=frozenset({"x"}),
         )
         prog = _make_program(
             initializers=(

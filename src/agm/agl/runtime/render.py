@@ -178,38 +178,25 @@ def _render(
             active.discard(id(value))
         return _render_sequence("{", "}", items, level=level, pretty=pretty)
 
-    if isinstance(value, RecordValue):
+    if isinstance(value, (RecordValue, ExceptionValue)):
+        # A nullary constructor is an auto-value, so a fieldless record's bare
+        # spelling round-trips as written: every fieldless record renders bare,
+        # whether it is an enum member (`E::A`) or a standalone record (`Root`).
+        # A fieldless exception keeps its parens, and neither can be part of a
+        # cycle, so both answer before the guard is entered.
+        if not value.fields:
+            return (
+                value.display_name if isinstance(value, RecordValue) else f"{value.display_name}()"
+            )
         active = enter_container(id(value), active)
         try:
-            # A nullary constructor is an auto-value, so a fieldless record's bare
-            # spelling round-trips as written: every fieldless record renders bare,
-            # whether it is an enum member (`E::A`) or a standalone record (`Root`).
-            if not value.fields:
-                return value.display_name
             items = [
                 f"{name} = {_render_child(child, pretty=pretty, level=level + 1, active=active)}"
                 for name, child in value.fields.items()
             ]
-            return _render_sequence(
-                f"{value.display_name}(", ")", items, level=level, pretty=pretty
-            )
         finally:
             active.discard(id(value))
-
-    if isinstance(value, ExceptionValue):
-        active = enter_container(id(value), active)
-        try:
-            if not value.fields:
-                return f"{value.display_name}()"
-            items = [
-                f"{name} = {_render_child(child, pretty=pretty, level=level + 1, active=active)}"
-                for name, child in value.fields.items()
-            ]
-            return _render_sequence(
-                f"{value.display_name}(", ")", items, level=level, pretty=pretty
-            )
-        finally:
-            active.discard(id(value))
+        return _render_sequence(f"{value.display_name}(", ")", items, level=level, pretty=pretty)
 
     raise RuntimeError(f"render: unhandled value type {type(value).__name__}")  # pragma: no cover
 

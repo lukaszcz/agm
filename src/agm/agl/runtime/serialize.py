@@ -160,27 +160,20 @@ def _encode(
             }
         finally:
             active.discard(id(value))
-    if isinstance(schema, RecordEncode):
-        if not isinstance(value, RecordValue):
-            raise AssertionError(f"record encode plan received {type(value).__name__}")
+    if isinstance(schema, (RecordEncode, ExceptionEncode)):
+        # Records and exceptions encode identically -- an object keyed by the
+        # plan's declared fields -- so only the value kind the plan demands
+        # differs between them.
+        kind, expected = (
+            ("record", RecordValue)
+            if isinstance(schema, RecordEncode)
+            else ("exception", ExceptionValue)
+        )
+        if not isinstance(value, expected):
+            raise AssertionError(f"{kind} encode plan received {type(value).__name__}")
         if value.nominal != schema.nominal:
             raise AssertionError(
-                f"record encode plan received {value.nominal!r}, expected {schema.nominal!r}"
-            )
-        active = enter_container(id(value), active)
-        try:
-            return {
-                name: _encode(field, value.fields[name], definitions, arguments, active)
-                for name, field in schema.fields
-            }
-        finally:
-            active.discard(id(value))
-    if isinstance(schema, ExceptionEncode):
-        if not isinstance(value, ExceptionValue):
-            raise AssertionError(f"exception encode plan received {type(value).__name__}")
-        if value.nominal != schema.nominal:
-            raise AssertionError(
-                f"exception encode plan received {value.nominal!r}, expected {schema.nominal!r}"
+                f"{kind} encode plan received {value.nominal!r}, expected {schema.nominal!r}"
             )
         active = enter_container(id(value), active)
         try:
@@ -331,13 +324,7 @@ def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:
             return {k: value_to_json_obj(v, active) for k, v in value.entries.items()}
         finally:
             active.discard(id(value))
-    if isinstance(value, RecordValue):
-        active = enter_container(id(value), active)
-        try:
-            return {k: value_to_json_obj(v, active) for k, v in value.fields.items()}
-        finally:
-            active.discard(id(value))
-    if isinstance(value, ExceptionValue):
+    if isinstance(value, (RecordValue, ExceptionValue)):
         active = enter_container(id(value), active)
         try:
             return {k: value_to_json_obj(v, active) for k, v in value.fields.items()}

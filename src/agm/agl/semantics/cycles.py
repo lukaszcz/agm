@@ -29,7 +29,7 @@ __all__ = [
     "CYCLIC_VALUE_MARKER",
     "AglCyclicValue",
     "cyclic_value_raise",
-    "enter_container",
+    "enter_value",
 ]
 
 #: The single ``CyclicValueError`` message text, shared by every construction
@@ -46,31 +46,30 @@ CYCLIC_VALUE_MARKER = "<cyclic value>"
 class AglCyclicValue(Exception):
     """Sentinel: a structured-value walk re-entered an active value.
 
-    Raised by :func:`enter_container` when rendering or JSON serialization
+    Raised by :func:`enter_value` when rendering or JSON serialization
     revisits a value it has not yet finished visiting. A caller that can
     reach a cyclic value converts this into a catchable ``CyclicValueError``
     via :func:`cyclic_value_raise`.
     """
 
 
-def enter_container(container_id: int, active: "set[int] | None") -> "set[int]":
-    """Mark *container_id* active; raise :class:`AglCyclicValue` on re-entry.
+def enter_value(value_id: int, active: "set[int] | None") -> "set[int]":
+    """Mark *value_id* active; raise :class:`AglCyclicValue` on re-entry.
 
     Cheaper than a ``@contextmanager`` guard (an inline check plus explicit
     ``try``/``finally`` avoids the generator-based context-manager overhead).
-    *active* is allocated
-    lazily: every walker's entry point passes ``None``, so an acyclic value
-    with no structured values never allocates a set — one is created only the
-    first time this is called. The returned set must be threaded into every
-    further recursive call so sibling and nested values share the same active
-    path, and the caller must ``active.discard(container_id)`` in a
-    ``finally`` block once done walking *container_id*'s children.
+    *active* is allocated lazily: every walker's entry point passes ``None``,
+    so an acyclic value with no structured values never allocates a set — one
+    is created only the first time this is called. The returned set must be
+    threaded into every further recursive call so sibling and nested values
+    share the same active path, and the caller must ``active.discard(value_id)``
+    in a ``finally`` block once done walking *value_id*'s children.
     """
     if active is None:
         active = set()
-    elif container_id in active:
+    elif value_id in active:
         raise AglCyclicValue()
-    active.add(container_id)
+    active.add(value_id)
     return active
 
 

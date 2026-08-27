@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+from collections.abc import Iterator
 from contextlib import AbstractContextManager
 from unittest.mock import patch
 
@@ -25,7 +26,7 @@ import pytest
 from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
 from prompt_toolkit.history import FileHistory, InMemoryHistory
-from prompt_toolkit.input import create_pipe_input
+from prompt_toolkit.input import PipeInput, create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
 from agm.agl.repl import ReplSession as _ReplSession
@@ -75,17 +76,37 @@ class _CountingAgent:
 
 
 def _fail_on_hang() -> AbstractContextManager[None]:
-    """Convert a stuck REPL (e.g. Ctrl-D on a non-empty buffer) into a failure.
+    """Convert a REPL that never returns into a failure rather than a wedge.
 
-    Scripted keystrokes should always terminate the loop; if they leave the
-    prompt blocked on an exhausted pipe, this guard raises instead of hanging
-    the whole test session. The budget is wall-clock and these entries compile
-    against the prelude, so it is set well above the work involved: the whole
-    parallel suite shares the machine, and a deadline tight enough to trip on
-    a merely busy host would report load as a hang.
+    `_scripted_input` closes the pipe, so running out of keystrokes ends the
+    loop on its own and is no longer a way to hang.  What is left for this
+    guard is a loop that stops consuming its input at all -- spinning, or
+    waiting on something that is not the terminal -- which no amount of input
+    will resolve.  That is a distinction between finite and infinite, so any
+    finite budget makes it, and a generous one costs a passing run nothing
+    while a tight one would report a merely loaded machine as a hang.
     """
 
-    return fail_if_slow("REPL did not terminate — scripted keystrokes hung", seconds=60.0)
+    return fail_if_slow("REPL did not terminate — scripted keystrokes hung")
+
+
+@contextlib.contextmanager
+def _scripted_input(keystrokes: str) -> Iterator[PipeInput]:
+    """Yield a pipe holding *keystrokes* and already at its end of input.
+
+    Closing the write end leaves the buffered keystrokes readable but gives the
+    loop a real end of input after them, so a script that never asks to quit
+    ends rather than blocking on a pipe nothing will write to again.  Every
+    console-driving test goes through here so that none of them can reintroduce
+    that block by forgetting the close: the alternative backstop is the
+    wall-clock deadline below, which has to stay loose enough for a loaded
+    machine and so would turn a wedged loop into a slow, load-dependent
+    failure somewhere else in the suite.
+    """
+    with create_pipe_input() as pipe, _fail_on_hang():
+        pipe.send_text(keystrokes)
+        pipe.close()
+        yield pipe
 
 
 def drive(
@@ -102,8 +123,7 @@ def drive(
     # rather than a response to the scripted terminal input. Keep the hang
     # guard focused on the console loop it is meant to validate.
     assert repl_session.open() == ()
-    with create_pipe_input() as pipe, _fail_on_hang():
-        pipe.send_text(keystrokes)
+    with _scripted_input(keystrokes) as pipe:
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             run_console(
@@ -124,6 +144,19 @@ def drive(
 
 
 class TestLoop:
+    def test_exhausted_input_ends_the_loop(self) -> None:
+        """A script that never asks to quit still terminates, at end of input.
+
+        `drive` closes the write end of the pipe once the keystrokes are in it,
+        so the loop reaches a real end-of-input and stops. Without that close
+        the reader would block on a pipe that nothing will ever write to again,
+        and the only thing standing between a mistyped script and a wedged test
+        session would be a wall-clock deadline -- which has to be generous
+        enough for a loaded machine, and so is a poor way to notice this.
+        """
+        output = drive("let x = 1\r")
+        assert "AgL REPL" in output
+
     def test_banner_is_printed(self) -> None:
         output = drive("\x04")
         assert "AgL REPL" in output
@@ -705,8 +738,7 @@ class TestMetaThroughLoop:
         from agm.agl.repl.agentmode import AgentMode
 
         mode = AgentMode()
-        with create_pipe_input() as pipe, _fail_on_hang():
-            pipe.send_text(":agent auto\r\x04")
+        with _scripted_input(":agent auto\r\x04") as pipe:
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 run_console(
@@ -949,8 +981,7 @@ class TestThemeThroughLoop:
     ) -> tuple[str, list[str]]:
         """Run the loop, capture output and recorded on_theme_save calls."""
         saved: list[str] = []
-        with create_pipe_input() as pipe, _fail_on_hang():
-            pipe.send_text(keystrokes)
+        with _scripted_input(keystrokes) as pipe:
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 run_console(
@@ -989,8 +1020,7 @@ class TestThemeThroughLoop:
 
     def test_theme_switch_without_save_callback_does_not_raise(self) -> None:
         # on_theme_save=None (the default) — must not raise when theme changes.
-        with create_pipe_input() as pipe, _fail_on_hang():
-            pipe.send_text(":theme light\r\x04")
+        with _scripted_input(":theme light\r\x04") as pipe:
             with contextlib.redirect_stdout(io.StringIO()):
                 run_console(
                     ReplSession(),

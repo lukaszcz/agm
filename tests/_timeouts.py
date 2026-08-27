@@ -21,8 +21,16 @@ class DeadlineExceeded(BaseException):
 
 
 @contextmanager
-def fail_if_slow(message: str, *, seconds: float = 2.0) -> Iterator[None]:
-    """Fail the current main-thread test if its guarded block does not terminate."""
+def fail_if_slow(message: str, *, seconds: float = 60.0) -> Iterator[None]:
+    """Fail the current main-thread test if its guarded block does not terminate.
+
+    The guarded regressions fail by running forever, so the deadline only has
+    to tell finite from infinite -- a distinction any finite budget makes.  The
+    default is therefore generous rather than tight: it costs a passing run
+    nothing, while a budget close to the work involved would eventually report
+    a loaded machine as a hang.  The whole parallel suite shares one host, and
+    a starved block can take orders of magnitude longer than an idle one.
+    """
 
     def fail(_signum: int, _frame: FrameType | None) -> None:
         raise DeadlineExceeded(message)

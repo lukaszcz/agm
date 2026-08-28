@@ -59,6 +59,9 @@ program def main() -> unit =
           "é😀"[2] as text
         catch IndexError => "out of range caught"
         print(result)
-    | _ =>
+    | 6 =>
         let result = " alpha \n beta \n".lines() |> (fn(lines: array[text]) => lines.map(fn(line: text) => line.trim())) |> (fn(lines: array[text]) => array::join(lines, "|"))
         print(result)
+    | _ =>
+        let _ = "a,b".split("")
+        ()

@@ -49,8 +49,15 @@ def decimal::sign(self) -> int =
 def decimal::floor(self) -> int = DecimalInternals::floor(self)
 def decimal::ceil(self) -> int = DecimalInternals::ceil(self)
 def decimal::round(self, digits: int = 0) -> decimal = DecimalInternals::round(self, digits)
-def decimal::sqrt(self) -> decimal = DecimalInternals::sqrt(self)
-def decimal::pow(self, exponent: int) -> decimal = DecimalInternals::pow(self, exponent)
+def decimal::sqrt(self) -> decimal =
+  if self < 0 => raise RangeError(message = "square root requires a non-negative decimal") else =>
+    DecimalInternals::sqrt(self)
+def decimal::pow(self, exponent: int) -> decimal =
+  if
+    | exponent == 0 => 1.0
+    | self == 0 and exponent < 0 =>
+        raise RangeError(message = "zero decimal base requires a non-negative exponent")
+    | else => DecimalInternals::pow(self, exponent)
 
 def sum(values: array[int]) -> int =
   var total = 0

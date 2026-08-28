@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import signal
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -152,6 +152,41 @@ def pin_agm_stdlib_to_repo(
     current source tree, independent of whatever ``~/.agm`` happens to contain.
     """
     monkeypatch.setenv("AGM_STDLIB", str(_REPO_STDLIB_ROOT))
+
+
+@pytest.fixture(autouse=True)
+def detach_installed_agm_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hide any AGM installed at the test runner's own prefix from the suite.
+
+    ``agm_home_dir`` falls back to ``<installation prefix>/.agm`` whenever that
+    prefix holds a package activation index, and the prefix is derived from
+    ``sys.argv[0]``.  Launched as ``uv run pytest`` that prefix is the project's
+    ``.venv``, so a developer who had run ``uv run agm pkg install`` would make
+    the suite read — and write — a real installed package store instead of its
+    own temporary one.  ``AGM_HOME`` cannot prevent this, because most tests
+    pass an explicit ``env`` mapping that never sees the process environment.
+
+    Report no installation prefix instead, so an installed tree is invisible
+    regardless of how the suite was launched.  Tests that exercise the fallback
+    take the ``installed_agm_prefix`` fixture.
+    """
+    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: None)
+
+
+@pytest.fixture()
+def installed_agm_prefix(monkeypatch: pytest.MonkeyPatch) -> Callable[[Path], None]:
+    """Opt out of ``detach_installed_agm_prefix`` for one test.
+
+    Call the returned function with a staged temporary prefix to restore the
+    installed-prefix fallback for the rest of the test.  This is the documented
+    escape hatch for the tests that assert the fallback itself; it points at a
+    temporary directory, never at a real installation.
+    """
+
+    def pin(prefix: Path) -> None:
+        monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: prefix)
+
+    return pin
 
 
 @pytest.fixture()

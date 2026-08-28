@@ -854,3 +854,117 @@ class TestSessionExists:
         require_session_absent(session_name="proj/feature", cwd=tmp_path)
 
         assert calls == []
+
+
+# ===========================================================================
+# missing tmux binary
+# ===========================================================================
+
+
+class TestMissingTmuxBinary:
+    """Every tmux invocation reports a missing binary instead of a spawn traceback."""
+
+    @staticmethod
+    def _missing_tmux(*_args: Any, **_kwargs: Any) -> Any:
+        raise FileNotFoundError(2, "No such file or directory", "tmux")
+
+    def _assert_reports_missing_tmux(
+        self, capsys: pytest.CaptureFixture[str], exc_info: pytest.ExceptionInfo[SystemExit]
+    ) -> None:
+        assert exc_info.value.code == 1
+        assert "tmux" in capsys.readouterr().err
+
+    def test_open_precheck_reports_missing_tmux(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setattr(session_module, "run_capture", self._missing_tmux)
+
+        with pytest.raises(SystemExit) as exc_info:
+            require_session_absent(session_name="proj/feature", cwd=tmp_path, env={})
+
+        self._assert_reports_missing_tmux(capsys, exc_info)
+
+    def test_close_reports_missing_tmux(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setattr(session_module, "run_foreground", self._missing_tmux)
+
+        with pytest.raises(SystemExit) as exc_info:
+            close_tmux_session(session_name="proj/feature", cwd=tmp_path, env={})
+
+        self._assert_reports_missing_tmux(capsys, exc_info)
+
+    def test_focus_reports_missing_tmux(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setattr(session_module.subprocess, "run", self._missing_tmux)
+
+        with pytest.raises(SystemExit) as exc_info:
+            focus_tmux_session(session_name="proj/feature", cwd=tmp_path, env={})
+
+        self._assert_reports_missing_tmux(capsys, exc_info)
+
+    def test_interactive_open_reports_missing_tmux(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setattr(session_module.subprocess, "run", self._missing_tmux)
+
+        with pytest.raises(SystemExit) as exc_info:
+            create_tmux_session(
+                detach=False,
+                pane_count=None,
+                session_name="proj",
+                cwd=tmp_path,
+                env={},
+            )
+
+        self._assert_reports_missing_tmux(capsys, exc_info)
+
+    def test_detached_open_reports_missing_tmux(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setattr(session_module, "run_capture", self._missing_tmux)
+
+        with pytest.raises(SystemExit) as exc_info:
+            create_tmux_session(
+                detach=True,
+                pane_count=None,
+                session_name="proj",
+                cwd=tmp_path,
+                env={},
+            )
+
+        self._assert_reports_missing_tmux(capsys, exc_info)
+
+    def test_queued_command_reports_missing_tmux(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setattr(session_module, "run_foreground", self._missing_tmux)
+
+        with pytest.raises(SystemExit) as exc_info:
+            queue_command_in_session(
+                session_name="proj",
+                command=["agm", "workspace", "setup"],
+                cwd=tmp_path,
+                env={},
+            )
+
+        self._assert_reports_missing_tmux(capsys, exc_info)

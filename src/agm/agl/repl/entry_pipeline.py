@@ -638,6 +638,7 @@ class EntryPipeline:
             _wire_extern_registry,
             exception_value_to_run_error,
         )
+        from agm.agl.recursion import NestingTooDeepError, frontend_recursion_boundary
         from agm.agl.runtime.params import _materialize_ir_contracts
         from agm.agl.runtime.request import AgentCancelled
         from agm.agl.runtime.trace import TraceStore
@@ -663,13 +664,14 @@ class EntryPipeline:
         # regardless of what this entry did or did not promote.
         link_snapshot = self._ctx._link_image.snapshot_state()
         try:
-            lowered = lower_repl_program(
-                compiled,
-                image=self._ctx._link_image,
-                source_text=text,
-                contract_payloads=contract_payloads,
-            )
-        except ResourceError as exc:
+            with frontend_recursion_boundary():
+                lowered = lower_repl_program(
+                    compiled,
+                    image=self._ctx._link_image,
+                    source_text=text,
+                    contract_payloads=contract_payloads,
+                )
+        except (NestingTooDeepError, ResourceError) as exc:
             self._ctx._link_image.restore_state(link_snapshot)
             diagnostic = (
                 diagnostic_from_span(str(exc), exc.span)

@@ -67,12 +67,11 @@ def close_workspace(
 
     # --force implies force_delete as well (git branch -D semantics).
     effective_force_delete = force or force_delete
-    effective_keep_branch = keep_branch or keep_workspace
 
     if not keep_workspace:
         # Pre-check: verify the branch can be deleted before removing the Git worktree.
         # Uses default environment; project-specific env is not needed for git checks.
-        if not effective_keep_branch and not git_helpers.branch_can_delete(
+        if not keep_branch and not git_helpers.branch_can_delete(
             repo_dir, branch, force=effective_force_delete
         ):
             if not git_helpers.local_branch_exists(repo_dir, branch):
@@ -89,7 +88,7 @@ def close_workspace(
             force=force,
             branch=branch,
             force_delete=effective_force_delete,
-            delete_branch=not effective_keep_branch,
+            delete_branch=not keep_branch,
         )
     env = load_workspace_env(proj_dir, None, workspace_dir=repo_dir)
     if not keep_workspace:

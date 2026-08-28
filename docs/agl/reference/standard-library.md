@@ -206,8 +206,8 @@ repeat[T](value: T, count: int) -> array[T]
 range(start: int, end: int) -> array[int]
 ```
 
-`first`, `last`, and `pop` raise `IndexError` when empty. `index-of` returns
-`-1` when absent. Array positions support negative indexes; `slice` is
+`first`, `last`, and `pop` raise `IndexError` when empty, as does `index-of`
+for an absent value. Array positions support negative indexes; `slice` is
 half-open, `take` and `drop` clamp negative counts to zero, and `range` is
 inclusive in either direction. `zip` truncates to the shorter input.
 
@@ -367,7 +367,9 @@ pi: decimal                            e: decimal
 ```
 
 `compare` and `sign` return `-1`, `0`, or `1`. Integer powers require a
-non-negative exponent and otherwise raise `std/core`'s `RangeError`.
+non-negative exponent, `decimal::sqrt` requires a non-negative receiver, and
+`decimal::pow` requires a non-negative exponent on a zero base; each otherwise
+raises `std/core`'s `RangeError`. Any zero exponent yields `1`.
 
 ## `std/time`
 

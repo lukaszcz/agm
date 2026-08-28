@@ -24,6 +24,7 @@ from agm.agl.eval.ir_interpreter import (
     IrInterpreter,
     ParameterDefaultCycleError,
 )
+from agm.agl.recursion import NestingTooDeepError, frontend_recursion_boundary
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.params import _materialize_ir_contracts, _prepare_ir_params
 from agm.agl.runtime.types import (
@@ -632,7 +633,8 @@ class PipelineDriver:
 
         with tab_warning_collector() as tab_sink:
             try:
-                parsed_module = parse_entry_module(entry_source, entry_path=entry_path)
+                with frontend_recursion_boundary():
+                    parsed_module = parse_entry_module(entry_source, entry_path=entry_path)
             except AglSyntaxError as exc:
                 spaced_qualifiers = (
                     exc.spaced_qualifiers if isinstance(exc, EntryParseSyntaxError) else ()
@@ -769,17 +771,18 @@ class PipelineDriver:
 
         with tab_warning_collector() as tab_sink:
             try:
-                graph, next_id, newly_loaded_modules = build_repl_graph(
-                    parsed.program,
-                    parsed.next_id,
-                    path=entry_path,
-                    cached={},
-                    roots=roots,
-                    default_stdlib=default_stdlib,
-                    spaced_qualifiers=parsed.spaced_qualifiers,
-                    default_label="<command>",
-                    source_text=normalize_newlines(entry_source),
-                )
+                with frontend_recursion_boundary():
+                    graph, next_id, newly_loaded_modules = build_repl_graph(
+                        parsed.program,
+                        parsed.next_id,
+                        path=entry_path,
+                        cached={},
+                        roots=roots,
+                        default_stdlib=default_stdlib,
+                        spaced_qualifiers=parsed.spaced_qualifiers,
+                        default_label="<command>",
+                        source_text=normalize_newlines(entry_source),
+                    )
             except AglSyntaxError as exc:
                 return PreparedProgram(
                     entry_source,
@@ -842,7 +845,8 @@ class PipelineDriver:
                 )
 
         try:
-            resolved = resolve_program(graph)
+            with frontend_recursion_boundary():
+                resolved = resolve_program(graph)
         except AglScopeError as exc:
             return PreparedProgram(
                 entry_source, entry_path, roots, None, (exc.to_diagnostic(),), warnings
@@ -1360,8 +1364,9 @@ class PipelineDriver:
             from agm.agl.syntax.resources import ResourceError
 
             try:
-                executable = lower_program(compiled, contract_payloads=contract_payloads)
-            except ResourceError as exc:
+                with frontend_recursion_boundary():
+                    executable = lower_program(compiled, contract_payloads=contract_payloads)
+            except (NestingTooDeepError, ResourceError) as exc:
                 diagnostic = (
                     diagnostic_from_span(str(exc), exc.span)
                     if exc.span is not None
@@ -1769,7 +1774,8 @@ def _run_typecheck_program(
     from agm.agl.typecheck.program import check_program
 
     try:
-        return check_program(resolved, capabilities), ()
+        with frontend_recursion_boundary():
+            return check_program(resolved, capabilities), ()
     except AglError as exc:
         return None, (exc.to_diagnostic(),)
     except Exception as exc:

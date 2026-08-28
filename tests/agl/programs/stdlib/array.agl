@@ -3,6 +3,8 @@ import std/array
 
 param mode: int
 
+record Entry(key: int, tag: text)
+
 def by_order(left: int, right: int) -> int = left - right
 
 program def main() -> unit =
@@ -95,7 +97,43 @@ program def main() -> unit =
         let values = [1]
         let _ = values.insert(2, 3)
         ()
-    | _ =>
+    | 9 =>
         let values = [1]
         let _ = values.insert(-2, 0)
         ()
+    | 10 =>
+        let values = [1, 2, 3]
+        print(values.index-of?(9))
+        let _ = values.index-of(9)
+        ()
+    | 11 =>
+        let values = [1, 2, 3, 4]
+        print(values.take(-1))
+        print(values.take(0))
+        print(values.drop(-1))
+        print(values.slice(-2, 4))
+        print(values.slice(3, 1))
+        print(values.slice(-10, 10))
+        print(array::repeat("x", 0))
+        print(array::repeat("x", -3))
+        print(array::join([], ","))
+        print(array::range(5, 1))
+        print(array::range(3, 3))
+    | 12 =>
+        var values = [10, 20, 30, 40]
+        print(values.remove-at(2))
+        print(values)
+        print(values.remove-at(-1))
+        print(values)
+    | _ =>
+        let by_key = fn(left: Entry, right: Entry) => left.key - right.key
+        let entries = [
+          Entry(key = 1, tag = "a"),
+          Entry(key = 0, tag = "b"),
+          Entry(key = 1, tag = "c"),
+          Entry(key = 0, tag = "d"),
+        ]
+        print(entries.sort(by_key))
+        var mutable = entries.concat([])
+        mutable.sort!(by_key)
+        print(mutable)

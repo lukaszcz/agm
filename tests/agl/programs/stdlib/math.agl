@@ -58,8 +58,23 @@ program def main() -> unit =
     | 4 =>
         let _ = 2.pow(-1)
         ()
-    | _ =>
+    | 5 =>
         print(2.pow(1000000) > 0)
         print((-1).pow(10000000000000000000000000005000000000000) == 1)
         print(17.pow(0))
         print(0.pow(5))
+    | 6 =>
+        let no_ints: array[int] = []
+        let no_decimals: array[decimal] = []
+        print(math::sum(no_ints))
+        print(math::sum-decimal(no_decimals))
+        print(0.0.sqrt())
+        print(2.0.pow(-2))
+        print(0.0.pow(0))
+        print(0.0.pow(3))
+    | 7 =>
+        let _ = (-1.0).sqrt()
+        ()
+    | _ =>
+        let _ = 0.0.pow(-1)
+        ()

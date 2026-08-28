@@ -75,6 +75,39 @@
         "raises": {"type": "IndexError", "fields": {"index": -2, "length": 1}},
         "calls": {}
       }
+    },
+    {
+      "name": "absent_index_of_raises_while_the_option_form_reports_none",
+      "params": {"mode": 10},
+      "expect": {
+        "stdout": "Option::None\n",
+        "raises": {"type": "IndexError", "fields": {"index": -1, "length": 3}},
+        "calls": {}
+      }
+    },
+    {
+      "name": "take_drop_slice_repeat_join_and_range_cover_their_boundary_arguments",
+      "params": {"mode": 11},
+      "expect": {
+        "stdout": "[]\n[]\n[1, 2, 3, 4]\n[3, 4]\n[]\n[1, 2, 3, 4]\n[]\n[]\n\n[5, 4, 3, 2, 1]\n[3]\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "remove_at_removes_the_requested_interior_and_negative_positions",
+      "params": {"mode": 12},
+      "expect": {
+        "stdout": "30\n[10, 20, 40]\n40\n[10, 20]\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "sort_and_sort_in_place_are_stable_for_equal_keys",
+      "params": {"mode": 13},
+      "expect": {
+        "stdout": "[Entry(key = 0, tag = \"b\"), Entry(key = 0, tag = \"d\"), Entry(key = 1, tag = \"a\"), Entry(key = 1, tag = \"c\")]\n[Entry(key = 0, tag = \"b\"), Entry(key = 0, tag = \"d\"), Entry(key = 1, tag = \"a\"), Entry(key = 1, tag = \"c\")]\n",
+        "calls": {}
+      }
     }
   ]
 }

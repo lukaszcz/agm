@@ -49,6 +49,14 @@
         "stdout": "Option::Some(value = 1)\nOption::Some(value = 1)\n{\"two\": 20, \"three\": 3}\n{\"three\": 3}\ntrue\n",
         "calls": {}
       }
+    },
+    {
+      "name": "from_entries_keeps_the_last_value_for_a_duplicate_key",
+      "params": {"mode": 7},
+      "expect": {
+        "stdout": "{\"k\": 3, \"j\": 2}\n",
+        "calls": {}
+      }
     }
   ]
 }

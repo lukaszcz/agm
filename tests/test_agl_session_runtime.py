@@ -153,14 +153,20 @@ def test_dispatcher_session_host_snapshots_its_default_and_preserves_requests() 
     assert requests == [request]
     assert host.ask(handle, "another question") == "answer"
     host.close(handle)
-    assert host.active_session_count == 0
+    with pytest.raises(SessionHostError):
+        host.ask(handle, "released")
+
+    ephemeral_handles: list[str] = []
+
+    def _single_prompt(ephemeral: str) -> str:
+        ephemeral_handles.append(ephemeral)
+        return host.ask(ephemeral, "single prompt")
+
     assert (
-        with_ephemeral_session(
-            host, agent, "Cli", lambda handle: host.ask(handle, "single prompt"), single_prompt=True
-        )
-        == "answer"
+        with_ephemeral_session(host, agent, "Cli", _single_prompt, single_prompt=True) == "answer"
     )
-    assert host.active_session_count == 0
+    with pytest.raises(SessionHostError):
+        host.ask(ephemeral_handles[0], "released")
 
     no_dispatcher = AgentDispatcherSessionHost(None)
     unavailable_handle = no_dispatcher.open_ephemeral(agent, "Cli")

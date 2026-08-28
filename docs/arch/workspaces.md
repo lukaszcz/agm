@@ -35,7 +35,7 @@ All git work goes through one VCS module that wraps git as subprocess calls: rep
 
 ## Tmux
 
-Workspace sessions are realized as tmux sessions. The tmux module creates a session with a filtered environment (dropping terminal- and SSH-specific variables and unsafe names), handles attached vs. detached creation and nested-tmux detection, and applies a tiled pane layout. Session names are unique per workspace, so opening a workspace first requires its session name to be free and stops before any git work when it is not. The `tmux` command group exposes session open/close and layout directly.
+Workspace sessions are realized as tmux sessions. The tmux module creates a session with a filtered environment (dropping terminal- and SSH-specific variables and unsafe names), handles attached vs. detached creation and nested-tmux detection, and applies a tiled pane layout. Session names are unique per workspace, so opening a workspace first requires its session name to be free and stops before any git work when it is not. The `tmux` command group exposes session open/close and layout directly. Every tmux invocation goes through the module's own wrappers, so an unavailable tmux binary surfaces as a plain error rather than a spawn traceback.
 
 ## Code Entry Points
 

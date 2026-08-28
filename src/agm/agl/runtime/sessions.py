@@ -190,11 +190,6 @@ class AgentDispatcherSessionHost(SessionHost):
         self._default_handle: str | None = None
         self._next_handle = 0
 
-    @property
-    def active_session_count(self) -> int:
-        """Return the number of outstanding ephemeral sessions."""
-        return len(self._sessions) - len(self._closed)
-
     def open(self, _agent: RecordValue, _transport: str, *, name: str = "") -> str:
         del name
         self._unavailable("open")

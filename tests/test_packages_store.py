@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
 import pytest
 import semver
 
+from agm.core.env import agm_installation_prefix
 from agm.packages.manifest import DependencySpec, ManifestError, load_manifest
 from agm.packages.model import PackageInfo
 from agm.packages.record import write_record
@@ -46,15 +49,41 @@ def test_store_paths_use_the_agm_home_override(tmp_path: Path, env: dict[str, st
 
 
 def test_store_root_uses_the_installed_executable_prefix(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, installed_agm_prefix: Callable[[Path], None]
 ) -> None:
     prefix = tmp_path / "prefix"
     index = prefix / ".agm" / "packages" / "index.toml"
     index.parent.mkdir(parents=True)
     index.write_text("")
-    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: prefix)
+    installed_agm_prefix(prefix)
 
     assert store_root(home=tmp_path / "home", env={}) == prefix / ".agm" / "packages"
+
+
+def test_a_test_run_never_reaches_an_installed_prefix_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tests stay hermetic even when the running executable has its own package store.
+
+    The suite is routinely launched as ``uv run pytest``, whose ``sys.argv[0]``
+    names a ``bin`` directory, so an ``agm pkg install`` into the development
+    environment would otherwise redirect every ``env={}`` store lookup — reads
+    and writes alike — into that real installation.
+    """
+    prefix = tmp_path / "prefix"
+    (prefix / "bin").mkdir(parents=True)
+    installed_store = prefix / ".agm" / "packages"
+    installed_store.mkdir(parents=True)
+    (installed_store / "index.toml").write_text("", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", [str(prefix / "bin" / "agm"), "pkg", "list"])
+    home = tmp_path / "home"
+
+    assert agm_installation_prefix() == prefix
+    assert store_root(home=home, env={}) == home / ".agm" / "packages"
+
+    _write_store_package(home, "alpha", "1.0.0")
+
+    assert list(installed_store.iterdir()) == [installed_store / "index.toml"]
 
 
 def test_store_root_identity_supports_relocation_without_matching_editable_source(

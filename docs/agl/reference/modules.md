@@ -362,7 +362,7 @@ keeps free functions qualified, for example `math::sum([1, 2, 3])` and
 | `decimal` | `compare(other)`, `sign()` | `-1`, `0`, or `1`. |
 | `decimal` | `floor()`, `ceil()` | Greatest integer at or below / least integer at or above the value. |
 | `decimal` | `round(digits = 0)` | Decimal rounded to `digits` fractional places using the language decimal context. |
-| `decimal` | `sqrt()`, `pow(exponent)` | Square root or integer-exponent power under the language decimal context. |
+| `decimal` | `sqrt()`, `pow(exponent)` | Square root or integer-exponent power under the language decimal context. A negative receiver for `sqrt`, or a negative exponent on a zero base for `pow`, raises `RangeError`; every zero exponent yields `1`. |
 
 `sum(values: array[int]) -> int` and
 `sum-decimal(values: array[decimal]) -> decimal` add their values using their
@@ -453,10 +453,10 @@ import keeps free functions qualified, while `import std/array::*` also makes
 them bare.
 
 See [Standard-library conventions](standard-library.md#conventions) for the
-`?`/`!` naming rules. `first`, `last`, and `pop` raise `IndexError` when no
-element is available. `index-of` instead returns `-1` when absent, while
-`index-of?` returns `Option::None`. `append`, `insert`, `pop`, `remove-at`,
-`clear`, and `extend` are inherently mutating. `remove-at(i)` accepts the same
+`?`/`!` naming rules. `first`, `last`, `pop`, and `index-of` raise `IndexError`
+when no element is available, while `index-of?` returns `Option::None`.
+`append`, `insert`, `pop`, `remove-at`, `clear`, and `extend` are inherently
+mutating. `remove-at(i)` accepts the same
 negative positions as normal array indexing. `insert` accepts insertion
 boundaries from `-size()` (the start) through `size()` (the end) and raises
 `IndexError` outside that
@@ -470,7 +470,7 @@ and descends when `a > b`.
 | `first()` / `first?()` / `last()` / `last?()` | First or last element, raising or as `Option`. |
 | `append(x)` / `insert(i, x)` / `clear()` / `extend(other)` | Mutate the receiver and return `unit`. |
 | `pop()` / `pop?()` / `remove-at(i)` | Remove and return an element, raising or optional where provided. |
-| `contains(x)` / `index-of(x)` / `index-of?(x)` | Membership and the first index (`-1` or `Option::None` when absent); all use AgL equality. |
+| `contains(x)` / `index-of(x)` / `index-of?(x)` | Membership and the first index (raising `IndexError` or `Option::None` when absent); all use AgL equality. |
 | `count(p)` / `any(p)` / `all(p)` | Count matching elements, or test whether any/all match. |
 | `map(f)` / `map!(f)` | Transform every element into a new array (possibly with a new element type) / mutate the receiver while preserving its element type. |
 | `filter(p)` / `filter!(p)` | Keep matching elements in a new array / mutate the receiver. |

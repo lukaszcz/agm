@@ -53,7 +53,7 @@ program def main() -> unit =
         var values = {"one": 1}
         let _ = values.remove("missing")
         ()
-    | _ =>
+    | 6 =>
         var values = {"one": 1, "two": 2}
         let alias = values
         print(values.get?("one"))
@@ -64,3 +64,10 @@ program def main() -> unit =
         print(alias)
         values.clear()
         print(alias.is-empty())
+    | _ =>
+        let duplicated = dict::from-entries([
+          Pair(first = "k", second = 1),
+          Pair(first = "j", second = 2),
+          Pair(first = "k", second = 3),
+        ])
+        print(duplicated)

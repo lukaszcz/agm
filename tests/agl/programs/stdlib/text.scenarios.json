@@ -41,6 +41,18 @@
       "name": "text_and_array_methods_compose_in_a_pipeline",
       "params": {"mode": 6},
       "expect": {"stdout": "alpha|beta\n", "calls": {}}
+    },
+    {
+      "name": "split_on_an_empty_separator_surfaces_a_typed_extern_error",
+      "params": {"mode": 7},
+      "expect": {
+        "stdout": "",
+        "raises": {
+          "type": "ExternError",
+          "fields": {"function": "split", "python_type": "ValueError"}
+        },
+        "calls": {}
+      }
     }
   ]
 }

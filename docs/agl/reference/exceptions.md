@@ -377,7 +377,7 @@ environment](host-environment.md#engine-settings)).
 ### `IndexError`
 
 Raised by out-of-range array or text indexing, indexed array assignment, or
-`text::index-of` when a substring is absent.
+`array::index-of`/`text::index-of` when the searched value is absent.
 
 ```text
 index: int
@@ -469,9 +469,10 @@ pattern: text   # the pattern that failed to compile
 
 ### `RangeError`
 
-Raised when `int.pow` receives a negative exponent or a range `for` step
-(`by k`) evaluates to a non-positive `int` (`k ≤ 0`) at loop entry. Carries
-only the base fields. It is catchable.
+Raised when `int.pow` receives a negative exponent, `decimal.sqrt` receives a
+negative receiver, `decimal.pow` receives a negative exponent on a zero base,
+or a range `for` step (`by k`) evaluates to a non-positive `int` (`k ≤ 0`) at
+loop entry. Carries only the base fields. It is catchable.
 
 ```text
 (base fields only)
@@ -504,7 +505,7 @@ how equality and tracing treat one.
 
 | Source | Exception |
 | ------ | --------- |
-| Out-of-range array/text index access, array indexed assignment, or absent `text::index-of` substring | `IndexError` |
+| Out-of-range array/text index access, array indexed assignment, or an absent `array::index-of`/`text::index-of` search | `IndexError` |
 | Missing dictionary key access or assignment | `KeyError` |
 | Agent transport failure | `AgentCallError` |
 | Invalid structured output after all attempts | `AgentParseError` |
@@ -515,7 +516,7 @@ how equality and tracing treat one.
 | Session prompt transport failure | `AgentCallError` |
 | Extern (Python FFI) companion raised, or its return value violated the contract | `ExternError` |
 | Loop bound exhausted | `MaxIterationsExceeded` |
-| Negative `int.pow` exponent or non-positive range `for` step (`by k` with `k ≤ 0`) | `RangeError` |
+| Negative `int.pow` exponent, negative `decimal.sqrt` receiver, negative `decimal.pow` exponent on a zero base, or non-positive range `for` step (`by k` with `k ≤ 0`) | `RangeError` |
 | Call-depth limit exceeded | `RecursionError` |
 | Explicit `raise MatchError(...)` | `MatchError` |
 | Division by zero | `ArithmeticError` |

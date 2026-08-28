@@ -35,6 +35,10 @@ One toggle (`agm.agl.self_validation`) gates all of them. `tests/conftest.py` tu
 
 Real agents (claude, codex, and other runners) are never invoked in tests; agent and shell boundaries are always mocked. This keeps the suite deterministic and offline. The command e2e harness installs AGM into a temporary venv through `uv` in offline mode, so missing cached package artifacts fail as local setup problems instead of reaching the network. Tests are also written to survive concurrent and cross-worktree runs — no hardcoded temp paths, and interrupt tests restore default signal handling.
 
+## Hermeticity
+
+A test run never reads or writes installed AGM files, whatever the developer's machine holds. Autouse fixtures in `tests/conftest.py` enforce this on three seams: every `AGM_*` variable inherited from a workspace shell is stripped, `AGM_STDLIB` is pinned to the in-repo `stdlib/`, and the installation prefix is reported as absent so the `<prefix>/.agm` home fallback never fires. That last one matters because the prefix comes from `sys.argv[0]`: launched as `uv run pytest` it is the project's own `.venv`, which `uv run agm pkg install` populates with a real package store. Environment pinning alone cannot cover it, since most tests pass an explicit `env` mapping that never consults the process environment. Tests asserting the fallback itself take the `installed_agm_prefix` fixture and point it at a temporary directory; `tests/test_packages_store.py` also carries the proof that a populated prefix store stays unreachable and unwritten.
+
 ## Code Entry Points
 
 - `tests/` — all tests; AgL pass suites are `tests/test_agl_*.py`, command suites are named per command.

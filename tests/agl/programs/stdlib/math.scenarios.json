@@ -40,6 +40,32 @@
         "stdout": "true\ntrue\n1\n0\n",
         "calls": {}
       }
+    },
+    {
+      "name": "empty_sums_and_decimal_power_edges_stay_representable",
+      "params": {"mode": 6},
+      "expect": {
+        "stdout": "0\n0\n0\n0.25\n1\n0\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "decimal_square_root_rejects_a_negative_receiver",
+      "params": {"mode": 7},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "RangeError"},
+        "calls": {}
+      }
+    },
+    {
+      "name": "decimal_power_rejects_a_negative_exponent_on_a_zero_base",
+      "params": {"mode": 8},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "RangeError"},
+        "calls": {}
+      }
     }
   ]
 }

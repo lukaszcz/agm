@@ -17,8 +17,8 @@ class _Comparator(Protocol):
     def __call__(self, left: object, right: object, /) -> int: ...
 
 
-def _index_error(index: int, length: int) -> None:
-    raise AglException(IndexError(message="array index out of range", index=index, length=length))
+def _index_error(index: int, length: int, message: str = "array index out of range") -> None:
+    raise AglException(IndexError(message=message, index=index, length=length))
 
 
 def _element_at(values: object, index: int) -> object:
@@ -97,15 +97,23 @@ def contains(values: object, value: object) -> bool:
     return value in values
 
 
-def index_of(values: object, value: object) -> int:
+def _search(values: object, value: object) -> int:
+    """Return the first index of *value*, or ``-1`` when it is absent."""
     try:
         return values.index(value)
     except ValueError:
         return -1
 
 
+def index_of(values: object, value: object) -> int:
+    index = _search(values, value)
+    if index < 0:
+        _index_error(-1, len(values), "array value not found")
+    return index
+
+
 def index_of_option(values: object, value: object) -> object:
-    index = index_of(values, value)
+    index = _search(values, value)
     return _option(index, index >= 0)
 
 

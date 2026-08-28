@@ -115,6 +115,19 @@ func TestRawTailOpenersAreFaced(t *testing.T) {
 	assertFace(t, "let x = ask(p)", "ask", "identifier")
 }
 
+// A raw-tail opener that merely ends a longer name is part of that name, so
+// it must not open the verbatim region: `-' continues an AgL identifier
+// (IDENT_STOP in src/agm/util/ident.py) even though `\b' sees a boundary
+// there. A region's start delimiter cannot be repainted by a later rule, so
+// the boundary has to be in the delimiter itself.
+func TestRawTailOpenerInsideANameStaysCode(t *testing.T) {
+	assertFace(t, "let x = do-exec! + 1", "do-exec!", "default")
+	assertFace(t, "let x = do-exec! + 1", "+", "symbol.operator")
+	assertFace(t, "let y = an-ask! + 1", "an-ask!", "default")
+	// A spelling inside a string literal is string content, not an opener.
+	assertFace(t, `print("exec! ls")`, "print", "identifier")
+}
+
 // `-', `?' and `!' continue an AgL name (IDENT_STOP in
 // src/agm/util/ident.py), so a keyword or builtin spelling that merely starts
 // or ends a longer name must not be faced. Regexp `\b' does not know that;

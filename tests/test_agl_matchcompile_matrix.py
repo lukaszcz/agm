@@ -397,7 +397,17 @@ def test_qba_prefers_lower_total_introduced_arity() -> None:
     assert selection.score.introduced_arity == 0
 
 
-def test_qba_breaks_complete_ties_by_occurrence_creation_order_then_id() -> None:
+def _two_bool_columns(source: str) -> PatternMatrix:
+    """Specialize a single-variant enum subject into its two-column field matrix."""
+    checked = _check(source)
+    normalized = normalize_case(_only_case(checked), checked)
+    outer = matrix_from_normalized(normalized)
+    head = head_constructors(outer, 0)[0]
+    return specialize(outer, 0, head, OccurrenceAllocator.for_case(normalized)).matrix
+
+
+def _tied_columns() -> PatternMatrix:
+    """A two-column matrix whose columns tie on every semantic qba component."""
     _, _, outer, pair, allocator = _pair_case()
     matrix = specialize(outer, 0, pair, allocator).matrix
     rows = tuple(
@@ -418,34 +428,83 @@ def test_qba_breaks_complete_ties_by_occurrence_creation_order_then_id() -> None
         )
         for row in matrix.rows[:2]
     )
-    tied = replace(matrix, rows=rows)
+    return replace(matrix, rows=rows)
+
+
+def _with_occurrence_identities(
+    matrix: PatternMatrix, identities: tuple[tuple[int, int], ...]
+) -> PatternMatrix:
+    """Rebuild *matrix* with the given ``(creation_order, occurrence id)`` per column."""
+    occurrences = tuple(
+        replace(occurrence, creation_order=creation_order, id=OccurrenceId(occurrence_id))
+        for occurrence, (creation_order, occurrence_id) in zip(
+            matrix.occurrences, identities, strict=True
+        )
+    )
+    return PatternMatrix(
+        occurrences,
+        matrix.rows,
+        (matrix.available_occurrences[0], *occurrences),
+        matrix.type_table,
+        (replace(matrix.path_decompositions[0], children=occurrences),),
+    )
+
+
+def test_qba_ranks_prefix_length_above_branch_head_count() -> None:
+    """A longer constructor prefix outranks a smaller branch-head count."""
+    matrix = _two_bool_columns(
+        "enum Pair\n  | pair(left: bool, right: bool)\n"
+        "let subject: Pair = pair(left = false, right = false)\n"
+        "case subject of\n"
+        "  | pair(left = false, right = false) => 1\n"
+        "  | pair(left = true) => 2\n"
+        "  | pair(left = false) => 3\n"
+    )
+    left, right = matrix.column_profiles
+
+    # The two components disagree, so only their relative rank decides the winner.
+    assert left.leading_constructor_prefix > right.leading_constructor_prefix
+    assert len(left.heads) > len(right.heads)
+
+    assert select_qba_column(matrix).index == 0
+
+
+def test_qba_ranks_branch_head_count_above_introduced_arity() -> None:
+    """A smaller branch-head count outranks a smaller introduced arity."""
+    matrix = _two_bool_columns(
+        "enum Box\n  | boxed(value: bool)\n"
+        "enum Mark\n  | one\n  | two\n"
+        "enum Pair\n  | pair(left: Box, right: Mark)\n"
+        "let subject: Pair = pair(left = boxed(value = true), right = one())\n"
+        "case subject of\n"
+        "  | pair(left = boxed(value = true), right = one()) => 1\n"
+        "  | pair(left = boxed(value = false), right = two()) => 2\n"
+    )
+    left, right = matrix.column_profiles
+
+    # Prefix length ties; head count and introduced arity point at opposite columns.
+    assert left.leading_constructor_prefix == right.leading_constructor_prefix
+    assert len(left.heads) < len(right.heads)
+    assert sum(head.arity for head in left.heads) > sum(head.arity for head in right.heads)
+
+    assert select_qba_column(matrix).index == 0
+
+
+def test_qba_breaks_complete_ties_by_occurrence_creation_order_then_id() -> None:
+    tied = _tied_columns()
     assert select_qba_column(tied).index == 0
 
-    right_occurrences = (
-        replace(tied.occurrences[0], creation_order=8, id=OccurrenceId(8)),
-        replace(tied.occurrences[1], creation_order=7, id=OccurrenceId(9)),
-    )
-    right_first = PatternMatrix(
-        right_occurrences,
-        tied.rows,
-        (tied.available_occurrences[0], *right_occurrences),
-        tied.type_table,
-        (replace(tied.path_decompositions[0], children=right_occurrences),),
-    )
+    # Creation order and occurrence id disagree: creation order decides.
+    right_first = _with_occurrence_identities(tied, ((8, 8), (7, 9)))
     assert select_qba_column(right_first).index == 1
 
-    lower_id_occurrences = (
-        replace(tied.occurrences[0], creation_order=7, id=OccurrenceId(8)),
-        replace(tied.occurrences[1], creation_order=7, id=OccurrenceId(9)),
-    )
-    lower_id_first = PatternMatrix(
-        lower_id_occurrences,
-        tied.rows,
-        (tied.available_occurrences[0], *lower_id_occurrences),
-        tied.type_table,
-        (replace(tied.path_decompositions[0], children=lower_id_occurrences),),
-    )
+    # Creation order ties, so the lower occurrence id decides.
+    lower_id_first = _with_occurrence_identities(tied, ((7, 8), (7, 9)))
     assert select_qba_column(lower_id_first).index == 0
+
+    # Occurrence id and column position disagree: the id decides.
+    higher_id_first = _with_occurrence_identities(tied, ((7, 9), (7, 8)))
+    assert select_qba_column(higher_id_first).index == 1
 
 
 def test_qba_selection_validates_its_matrix_once(monkeypatch: pytest.MonkeyPatch) -> None:

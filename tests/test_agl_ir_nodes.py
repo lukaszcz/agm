@@ -24,7 +24,6 @@ from agm.agl.ir import (
     ArithOp,
     BuiltinNominals,
     CmpOp,
-    Coercion,
     CompareKind,
     ContainsKind,
     ContractId,
@@ -334,19 +333,6 @@ class TestContainsKind:
 
 
 class TestCoercion:
-    def test_int_to_decimal(self) -> None:
-        c = IntToDecimal()
-        assert isinstance(c, IntToDecimal)
-
-    def test_int_to_decimal_frozen(self) -> None:
-        c = IntToDecimal()
-        # no fields to mutate, but verify it's a frozen dataclass
-        assert dataclasses.is_dataclass(c)
-
-    def test_to_json(self) -> None:
-        c = ToJson()
-        assert isinstance(c, ToJson)
-
     def test_coercion_equality(self) -> None:
         assert IntToDecimal() == IntToDecimal()
         assert ToJson() == ToJson()
@@ -354,14 +340,6 @@ class TestCoercion:
     def test_coercion_hash(self) -> None:
         s = {IntToDecimal(), IntToDecimal(), ToJson()}
         assert len(s) == 2
-
-    def test_coercion_type_alias(self) -> None:
-        # Coercion is a type alias — each member is an instance of its class
-        c: Coercion = IntToDecimal()
-        assert isinstance(c, IntToDecimal)
-
-        c2: Coercion = ToJson()
-        assert isinstance(c2, ToJson)
 
 
 # ---------------------------------------------------------------------------

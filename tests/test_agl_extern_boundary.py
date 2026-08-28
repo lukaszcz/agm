@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import itertools
-import time
 from decimal import Decimal
 from pathlib import Path
 
@@ -39,6 +38,7 @@ from agm.agl.semantics.values import (
     TextValue,
     Value,
 )
+from tests._timeouts import fail_if_slow
 from tests.agl.ir_harness import (
     _prepare_extern_program,
     evaluate_ir_raises_with_externs,
@@ -892,7 +892,13 @@ def test_synthesized_nominals_support_non_python_field_names() -> None:
     )
 
 
-def test_deep_recursive_nominal_construction_completes_quickly() -> None:
+def test_deep_recursive_nominal_construction_terminates() -> None:
+    """Decoding a deeply nested boundary value must not degrade into nontermination.
+
+    The failure mode this guards is an unbounded or superlinear walk of the
+    nesting, so the deadline only has to tell finite from infinite; a tight
+    wall-clock budget would instead report a loaded machine as a regression.
+    """
     nominal = _fresh_nominal()
     descriptor = NominalDescriptor(
         nominal=nominal,
@@ -905,14 +911,12 @@ def test_deep_recursive_nominal_construction_completes_quickly() -> None:
     classes = synthesize_nominal_classes((descriptor,))
     box_cls = classes[nominal]
 
-    start = time.monotonic()
     node: object = None
     for value in range(300):
         node = box_cls(value=value, inner=node)
-    decoded = decode_boundary_value(node)
-    elapsed = time.monotonic() - start
+    with fail_if_slow("decoding a deeply nested boundary value did not terminate"):
+        decoded = decode_boundary_value(node)
 
-    assert elapsed < 2.0
     depth = 0
     current: Value = decoded
     while isinstance(current, RecordValue) and isinstance(current.fields["inner"], RecordValue):

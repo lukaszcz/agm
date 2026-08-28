@@ -3014,3 +3014,66 @@ class TestHostConsumedSettingRegister:
 
         with pytest.raises(InvalidIrError):
             IrInterpreter(program).run()
+
+
+class TestCallDepthBoundary:
+    """The ``max_call_depth`` guard trips at an exact, off-by-one-free boundary.
+
+    A chain of exactly ``max_call_depth`` nested AgL calls completes; adding one
+    more link raises the catchable AgL ``RecursionError``.
+    """
+
+    @staticmethod
+    def _call_chain(length: int) -> ExecutableProgram:
+        """Build ``f0 -> f1 -> ... -> f{length-1}``; the last link returns ``0``.
+
+        Every link is a zero-argument, zero-capture function, so the program's
+        only nesting is the call chain itself.
+        """
+        first_fn_sym = 700
+        functions: dict[FunctionId, FunctionDescriptor] = {}
+        symbols: dict[SymbolId, SymbolDescriptor] = {}
+        for index in range(length):
+            fn_sym = SymbolId(first_fn_sym + index)
+            body: IrExpr = (
+                IrConstInt(_LOC, 0)
+                if index == length - 1
+                else IrDirectCall(_LOC, FunctionId(index + 1), ())
+            )
+            functions[FunctionId(index)] = FunctionDescriptor(
+                function_id=FunctionId(index),
+                function_symbol=fn_sym,
+                module_id=ENTRY_ID,
+                params=(),
+                impl=IrFunctionBody(body=body),
+            )
+            symbols[fn_sym] = SymbolDescriptor(
+                symbol_id=fn_sym, mutable=False, public_name=None, owner=ENTRY_ID
+            )
+        result_sym, result_desc = _let_sym(first_fn_sym - 1, "result")
+        symbols[result_sym] = result_desc
+        closures = tuple(
+            IrBind(_LOC, SymbolId(first_fn_sym + index), IrMakeClosure(_LOC, FunctionId(index), ()))
+            for index in range(length)
+        )
+        return _make_program(
+            initializers=(
+                *closures,
+                IrBind(_LOC, result_sym, IrDirectCall(_LOC, FunctionId(0), ())),
+            ),
+            symbols=symbols,
+            functions=functions,
+        )
+
+    def test_chain_of_exactly_max_call_depth_completes(self) -> None:
+        program = self._call_chain(4)
+        assert IrInterpreter(program, max_call_depth=4).run() == {"result": IntValue(0)}
+
+    def test_one_call_past_max_call_depth_raises_recursion_error(self) -> None:
+        from agm.agl.semantics.exceptions import AglRaise
+
+        program = self._call_chain(5)
+        with pytest.raises(AglRaise) as exc:
+            IrInterpreter(program, max_call_depth=4).run()
+        assert exc.value.exc.display_name == "RecursionError"
+        assert exc.value.exc.fields["limit"] == IntValue(4)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import decimal
-from dataclasses import replace
 from typing import cast
 
 import pytest
@@ -21,11 +20,13 @@ from agm.agl.matchcompile.matrix import (
 )
 from agm.agl.matchcompile.model import (
     BinderAssignment,
+    BinderProvenance,
     Constructor,
     ConstructorCell,
     DecisionDecompose,
     MatrixRow,
     NominalConstructor,
+    PatternCell,
     WildcardCell,
 )
 from agm.agl.matchcompile.normalize import normalize_case
@@ -39,7 +40,7 @@ from agm.agl.semantics.values import (
     TextValue,
     Value,
 )
-from agm.agl.syntax.nodes import Case
+from agm.agl.syntax.nodes import Case, VarPattern
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import CheckedModule
 from tests.agl.match_reference import (
@@ -90,18 +91,45 @@ def _constructor_by_variant(matrix: PatternMatrix, column: int) -> dict[str, Nom
     }
 
 
-def _migrated(row: MatrixRow, matrix: PatternMatrix, column: int) -> tuple[BinderAssignment, ...]:
-    wildcard = cast(WildcardCell, row.cells[column])
-    assert wildcard.binders
-    return (
-        *row.binder_assignments,
-        BinderAssignment(matrix.occurrences[column].id, wildcard.binders[0]),
+def _source_binder(case: Case, source_index: int, name: str) -> BinderProvenance:
+    """Build the provenance of a source branch's *name* binder from the AST alone."""
+    binders: list[VarPattern] = []
+
+    def collect(node: object) -> None:
+        if isinstance(node, VarPattern) and node.name == name:
+            binders.append(node)
+
+    walk(case.branches[source_index].pattern, collect)
+    assert len(binders) == 1
+    binder = binders[0]
+    return BinderProvenance(node_id=binder.node_id, name=binder.name, span=binder.span)
+
+
+def _expected_row(
+    case: Case,
+    source_index: int,
+    cells: tuple[PatternCell, ...],
+    binder_assignments: tuple[BinderAssignment, ...] = (),
+) -> MatrixRow:
+    """Build an expected row whose identity comes from the source branch, not the matrix.
+
+    Deriving ``action_id``/``source_index``/``source_pattern_id`` from the case
+    AST keeps the expectation independent of the rows under test, so a
+    decomposition that consistently corrupts a row identity cannot satisfy it.
+    """
+    branch = case.branches[source_index]
+    return MatrixRow(
+        cells=cells,
+        action_id=branch.node_id,
+        source_index=source_index,
+        source_pattern_id=branch.pattern.node_id,
+        binder_assignments=binder_assignments,
     )
 
 
 def test_paper_specializations_preserve_complete_rows_and_priority() -> None:
     """Adapt Maranget's P, S(::, P), and S([], P) matrices to AgL enums."""
-    _, _, root, allocator = _matrix(
+    _, case, root, allocator = _matrix(
         "enum List\n"
         "  | nil\n"
         "  | cons(head: int, tail: List)\n"
@@ -123,37 +151,28 @@ def test_paper_specializations_preserve_complete_rows_and_priority() -> None:
     row_nil, row_wildcard, row_cons = columns.rows
     wildcard = cast(WildcardCell, row_wildcard.cells[0])
     explicit_cons = cast(ConstructorCell, row_cons.cells[0])
+    # The second branch binds ``left``; specializing away column 0 must migrate
+    # that binder onto the occurrence the column stood for.
+    migrated_left = (BinderAssignment(columns.occurrences[0].id, _source_binder(case, 1, "left")),)
 
     expected_nil = (
-        replace(row_nil, cells=(row_nil.cells[1],)),
-        replace(
-            row_wildcard,
-            cells=(row_wildcard.cells[1],),
-            binder_assignments=_migrated(row_wildcard, columns, 0),
-        ),
+        _expected_row(case, 0, (row_nil.cells[1],)),
+        _expected_row(case, 1, (row_wildcard.cells[1],), migrated_left),
     )
     expected_cons = (
-        replace(
-            row_wildcard,
-            cells=(
+        _expected_row(
+            case,
+            1,
+            (
                 WildcardCell(wildcard.provenance),
                 WildcardCell(wildcard.provenance),
                 row_wildcard.cells[1],
             ),
-            binder_assignments=_migrated(row_wildcard, columns, 0),
+            migrated_left,
         ),
-        replace(
-            row_cons,
-            cells=(*explicit_cons.arguments, row_cons.cells[1]),
-        ),
+        _expected_row(case, 2, (*explicit_cons.arguments, row_cons.cells[1])),
     )
-    expected_default = (
-        replace(
-            row_wildcard,
-            cells=(row_wildcard.cells[1],),
-            binder_assignments=_migrated(row_wildcard, columns, 0),
-        ),
-    )
+    expected_default = (_expected_row(case, 1, (row_wildcard.cells[1],), migrated_left),)
 
     decompositions = (
         ("S(nil, P)", nil_result.matrix.rows, expected_nil),
@@ -166,7 +185,7 @@ def test_paper_specializations_preserve_complete_rows_and_priority() -> None:
 
 def test_paper_default_retains_and_migrates_all_wildcard_rows() -> None:
     """Adapt Maranget's Q and D(Q), retaining both wildcard-leading rows."""
-    _, _, root, allocator = _matrix(
+    _, case, root, allocator = _matrix(
         "enum List\n"
         "  | nil\n"
         "  | cons(head: int, tail: List)\n"
@@ -182,17 +201,20 @@ def test_paper_default_retains_and_migrates_all_wildcard_rows() -> None:
     matrix = specialize(root, 0, subject, allocator).matrix
     defaulted = default_matrix(matrix, 0)
     _, second, third = matrix.rows
+    dropped_column = matrix.occurrences[0].id
 
     assert defaulted.rows == (
-        replace(
-            second,
-            cells=(second.cells[1],),
-            binder_assignments=_migrated(second, matrix, 0),
+        _expected_row(
+            case,
+            1,
+            (second.cells[1],),
+            (BinderAssignment(dropped_column, _source_binder(case, 1, "left")),),
         ),
-        replace(
-            third,
-            cells=(third.cells[1],),
-            binder_assignments=_migrated(third, matrix, 0),
+        _expected_row(
+            case,
+            2,
+            (third.cells[1],),
+            (BinderAssignment(dropped_column, _source_binder(case, 2, "left")),),
         ),
     )
 

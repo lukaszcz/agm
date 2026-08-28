@@ -3209,13 +3209,6 @@ class TestCodecSupportedKinds:
 class TestRegisterCodec:
     """register_codec adds a custom codec to the runtime."""
 
-    def _make_custom_codec(self) -> TextCodec:
-        """A minimal custom codec (reuses TextCodec but with a different name for testing)."""
-        import copy
-
-        codec = copy.copy(TextCodec())
-        return codec
-
     def test_register_codec_accepted(self, capsys: pytest.CaptureFixture[str]) -> None:
         from agm.agl.runtime.codec import TextCodec as TC
 

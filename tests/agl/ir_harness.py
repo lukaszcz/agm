@@ -302,18 +302,6 @@ def evaluate_ir(
     return result
 
 
-def evaluate_file_ir(
-    source: str,
-    param_values: dict[str, Value] | None = None,
-    *,
-    default_stdlib: bool = True,
-) -> dict[str, Value]:
-    """Run a raw file-style static-root program and return its module bindings."""
-    executable = lower_ir(source, default_stdlib=default_stdlib)
-    params = _build_ir_param_values(executable, param_values) if param_values else None
-    return IrInterpreter(executable, param_values=params).run()
-
-
 def evaluate_ir_output(
     source: str,
     param_values: dict[str, Value] | None = None,
@@ -595,18 +583,6 @@ def evaluate_ir_with_agents(
     agent_dispatcher = _make_scripted_registry(scripts, default_responses=default_responses)
     result, _ = _run_ir(source, caps=caps, agent_dispatcher=agent_dispatcher)
     return result
-
-
-def evaluate_file_ir_with_agents(
-    source: str,
-    scripts: dict[str, list[str]],
-    *,
-    default_responses: list[str] | None = None,
-) -> dict[str, Value]:
-    """Run a raw file-style program with scripted agent calls."""
-    executable = lower_ir(source, caps=agent_caps())
-    dispatcher = _make_scripted_registry(scripts, default_responses=default_responses)
-    return IrInterpreter(executable, agent_dispatcher=dispatcher).run()
 
 
 def evaluate_ir_raises_with_agents(

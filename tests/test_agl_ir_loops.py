@@ -286,6 +286,27 @@ def test_valve_caps_unbounded_do_until_loop() -> None:
     raise AssertionError("expected MaxIterationsExceeded")
 
 
+def test_valve_counts_a_continued_iteration() -> None:
+    """A `continue` counts toward the host valve, just as it does toward a `[n]` bound.
+
+    The body continues on its first four passes and would exit on the fifth, so a
+    valve that ignored continued iterations would let the loop finish normally.
+    """
+    source = "var seen = 0\ndo\n  seen := seen + 1\n  if seen < 5 => continue\nuntil true\nseen\n"
+    executable = _lower(source)
+    interp = IrInterpreter(executable, loop_limit=3)
+    with pytest.raises(AglRaise) as exc:
+        interp.run(program_symbol=executable.synthetic_main_symbol)
+    assert exc.value.exc.display_name == "MaxIterationsExceeded"
+    assert exc.value.exc.fields.get("limit") == IntValue(3)
+
+
+def test_unvalved_loop_with_continue_runs_to_its_own_exit() -> None:
+    """Without a host valve the same loop exits on its own terms."""
+    source = "var seen = 0\ndo\n  seen := seen + 1\n  if seen < 5 => continue\nuntil true\nseen\n"
+    assert evaluate_ir(source)["seen"] == IntValue(5)
+
+
 def test_crlf_loop_exhaustion_condition_field() -> None:
     """With CRLF source, the MaxIterationsExceeded condition field is the clean source slice."""
     source = "var i = 0\r\ndo[3]\r\n  i := i + 1\r\nuntil i > 100\r\n"
@@ -680,6 +701,23 @@ def test_for_loop_array_empty_skips_body() -> None:
     assert result["total"] == IntValue(0)
 
 
+def test_for_loop_dict_empty_skips_body() -> None:
+    """for k in empty dict do body done — body never executes."""
+    source = (
+        "let d: dict[text, int] = {}\nvar total = 0\n"
+        "for k in d do\n  total := total + 1\ndone\ntotal\n"
+    )
+    result = evaluate_ir(source)
+    assert result["total"] == IntValue(0)
+
+
+def test_for_loop_text_empty_skips_body() -> None:
+    """for c in empty text do body done — body never executes."""
+    source = 'var total = 0\nfor c in "" do\n  total := total + 1\ndone\ntotal\n'
+    result = evaluate_ir(source)
+    assert result["total"] == IntValue(0)
+
+
 def test_for_loop_dict_iterates_keys() -> None:
     """for k in dict do body done — iterates over dict keys."""
     source = (
@@ -687,6 +725,29 @@ def test_for_loop_dict_iterates_keys() -> None:
     )
     result = evaluate_ir(source)
     assert result["count"] == IntValue(3)
+
+
+def test_for_loop_dict_binds_keys_not_values() -> None:
+    """The loop variable is bound to each key, in dict order — never to the value."""
+    source = (
+        'var seen = ""\nfor k in {"a": 10, "b": 20, "c": 30} do\n  seen := seen + k\ndone\nseen\n'
+    )
+    result = evaluate_ir(source)
+    assert result["seen"] == TextValue("abc")
+
+
+def test_for_loop_dict_key_indexes_back_into_the_dict() -> None:
+    """Each bound key reads its own value back out of the dict being iterated."""
+    source = (
+        'let d: dict[text, int] = {"a": 10, "b": 20, "c": 30}\n'
+        "var total = 0\n"
+        "for k in d do\n"
+        "  total := total + d[k]\n"
+        "done\n"
+        "total\n"
+    )
+    result = evaluate_ir(source)
+    assert result["total"] == IntValue(60)
 
 
 def test_for_loop_text_iterates_characters() -> None:

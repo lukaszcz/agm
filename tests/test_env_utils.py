@@ -11,6 +11,7 @@ from agm.core.env import (
     agm_installation_prefix,
     is_safe_shell_env_assignment_name,
     is_shell_identifier,
+    source_env_files,
 )
 
 
@@ -136,3 +137,43 @@ def test_is_safe_shell_env_assignment_name_rejects_shell_managed_names() -> None
     assert not is_safe_shell_env_assignment_name("SHELLOPTS")
     assert not is_safe_shell_env_assignment_name("BAD-NAME")
     assert is_safe_shell_env_assignment_name("PROJECT_ENV")
+
+
+def test_source_env_files_lets_a_later_file_override_an_earlier_one(tmp_path: Path) -> None:
+    """Files are sourced in the order given, so the last assignment wins."""
+    first = tmp_path / "first.sh"
+    first.write_text("export AGM_TEST_ORDER=first\nexport AGM_TEST_ONLY_FIRST=yes\n")
+    second = tmp_path / "second.sh"
+    second.write_text("export AGM_TEST_ORDER=second\n")
+
+    forwards = source_env_files([first, second], env={})
+    backwards = source_env_files([second, first], env={})
+
+    assert forwards["AGM_TEST_ORDER"] == "second"
+    assert forwards["AGM_TEST_ONLY_FIRST"] == "yes"
+    assert backwards["AGM_TEST_ORDER"] == "first"
+
+
+def test_source_env_files_shares_shell_state_between_files(tmp_path: Path) -> None:
+    """A single shell sources every file, so a later file sees earlier shell variables."""
+    first = tmp_path / "first.sh"
+    first.write_text("AGM_TEST_SHELL_LOCAL=shared\n")
+    second = tmp_path / "second.sh"
+    second.write_text('export AGM_TEST_DERIVED="$AGM_TEST_SHELL_LOCAL"\n')
+
+    result = source_env_files([first, second], env={})
+
+    assert result["AGM_TEST_DERIVED"] == "shared"
+
+
+def test_source_env_files_skips_a_missing_file_between_existing_ones(tmp_path: Path) -> None:
+    first = tmp_path / "first.sh"
+    first.write_text("export AGM_TEST_FIRST=1\nexport AGM_TEST_ORDER=first\n")
+    last = tmp_path / "last.sh"
+    last.write_text("export AGM_TEST_LAST=1\nexport AGM_TEST_ORDER=last\n")
+
+    result = source_env_files([first, tmp_path / "absent.sh", last], env={})
+
+    assert result["AGM_TEST_FIRST"] == "1"
+    assert result["AGM_TEST_LAST"] == "1"
+    assert result["AGM_TEST_ORDER"] == "last"

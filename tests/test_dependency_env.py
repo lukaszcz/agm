@@ -1263,6 +1263,47 @@ class TestDependencyConfigCheckoutNameFallback:
         assert result is None
 
 
+class TestMainDependencyCheckoutDepth:
+    def test_shallowest_checkout_wins_over_a_deeper_one(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Depth beats name: a nested checkout never outranks a top-level one."""
+        dep_dir = tmp_path / "dep"
+        dep_dir.mkdir()
+        shallow = dep_dir / "zzz"
+        shallow.mkdir()
+        (shallow / ".git").mkdir()
+        deep = dep_dir / "aaa" / "nested"
+        deep.mkdir(parents=True)
+        (deep / ".git").mkdir()
+
+        monkeypatch.setattr(
+            dep_env_module.git_helpers,
+            "is_git_repo",
+            lambda p: p in {shallow, deep},
+        )
+
+        # "unknown" has no checkout of its own, so the main checkout is chosen.
+        assert _dependency_config_checkout_name(dep_dir, "unknown") == "zzz"
+
+    def test_deeper_checkout_is_used_when_it_is_the_only_one(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        dep_dir = tmp_path / "dep"
+        dep_dir.mkdir()
+        deep = dep_dir / "aaa" / "nested"
+        deep.mkdir(parents=True)
+        (deep / ".git").mkdir()
+
+        monkeypatch.setattr(
+            dep_env_module.git_helpers,
+            "is_git_repo",
+            lambda p: p == deep,
+        )
+
+        assert _dependency_config_checkout_name(dep_dir, "unknown") == "aaa/nested"
+
+
 class TestEnsureConfigTomlFileCoverage:
     def test_does_not_overwrite_existing_file(self, tmp_path: Path) -> None:
         project_dir = tmp_path / "proj"

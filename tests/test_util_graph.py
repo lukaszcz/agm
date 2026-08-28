@@ -118,6 +118,22 @@ class TestSccs:
         result = sccs(adj, key=lambda x: x)
         assert result == ((3,), (2,), (1,))
 
+    def test_component_order_is_independent_of_mapping_insertion_order(self) -> None:
+        """Unconstrained components come back in key order, not in adj's own order."""
+        listed_backwards = sccs({"b": [], "a": []}, key=str)
+        listed_forwards = sccs({"a": [], "b": []}, key=str)
+
+        assert listed_backwards == (("a",), ("b",))
+        assert listed_backwards == listed_forwards
+
+    def test_component_order_follows_the_supplied_key(self) -> None:
+        """The outer visit order uses *key*, so a custom key reorders the result."""
+        adj = {"ax": [], "bw": []}
+
+        assert sccs(adj, key=str) == (("ax",), ("bw",))
+        # Reversed spellings order as "wb" < "xa", flipping the two components.
+        assert sccs(adj, key=lambda s: s[::-1]) == (("bw",), ("ax",))
+
 
 # ---------------------------------------------------------------------------
 # toposort

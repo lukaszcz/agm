@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -993,24 +992,17 @@ class TestConfigureProjectDirAlternatives:
 
 
 class TestConfigureProjectDirRealGit:
-    def test_split_layout_creates_real_git_repos(self, tmp_path: Path, env: dict[str, str]) -> None:
-        old_env: dict[str, str | None] = {}
-        for k, v in env.items():
-            old_env[k] = os.environ.get(k)
-            os.environ[k] = v
+    def test_split_layout_creates_real_git_repos(
+        self, tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
 
-        try:
-            project_dir = tmp_path / "proj"
-            configure_project_dir(project_dir, embedded=False)
+        project_dir = tmp_path / "proj"
+        configure_project_dir(project_dir, embedded=False)
 
-            # config and notes should be real git repos
-            config_dir = project_dir / "config"
-            notes_dir = project_dir / "notes"
-            assert (config_dir / ".git").exists()
-            assert (notes_dir / ".git").exists()
-        finally:
-            for k, v in old_env.items():
-                if v is None:
-                    os.environ.pop(k, None)
-                else:
-                    os.environ[k] = v
+        # config and notes should be real git repos
+        config_dir = project_dir / "config"
+        notes_dir = project_dir / "notes"
+        assert (config_dir / ".git").exists()
+        assert (notes_dir / ".git").exists()

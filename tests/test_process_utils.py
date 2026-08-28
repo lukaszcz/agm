@@ -33,6 +33,42 @@ from agm.core.process import (
 )
 
 
+def _process_alive(pid: int) -> bool:
+    """Return whether *pid* names a process that has not yet died.
+
+    A reaped-but-not-yet-collected zombie counts as dead: it holds no resources
+    and can no longer run, which is what process-group teardown is asked to
+    guarantee.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return stat.rpartition(")")[2].split()[0] != "Z"
+
+
+def _wait_until_dead(pid: int, *, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _process_alive(pid):
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def _wait_for_file(path: Path, *, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists():
+            return
+        time.sleep(0.005)
+    raise AssertionError(f"{path.name} was never created")
+
+
 class _FakeProcess:
     returncode: int | None = None
 
@@ -462,40 +498,82 @@ class TestKillProcessGroup:
 
         # The parent shell exited, but the background sleep child is alive.
         child_pid = int(child_pid_file.read_text().strip())
-        try:
-            # The child should still be alive (it's an orphaned group member).
-            os.kill(child_pid, 0)
-        except ProcessLookupError:
-            pytest.skip("child already exited before test could verify")
+        # The orphan sleeps far longer than the test, so it is alive by construction.
+        assert _process_alive(child_pid)
 
-        kill_process_group(proc)
-
-        # After kill_process_group, the orphaned child should be dead.
         try:
-            for _ in range(10):
-                try:
-                    os.kill(child_pid, 0)
-                except ProcessLookupError:
-                    break
-                time.sleep(0.01)
-            else:
-                pytest.fail("orphaned child process still alive after kill_process_group")
+            kill_process_group(proc)
+
+            assert _wait_until_dead(child_pid), "orphaned group member survived teardown"
         finally:
             try:
                 os.kill(child_pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
 
-    def test_sends_sigkill_to_group_after_prompt_exit(self) -> None:
-        """When the process exits promptly after SIGTERM, still SIGKILL the group."""
+    def test_sends_sigkill_to_group_after_prompt_exit(self, tmp_path: Path) -> None:
+        """A straggler that survives SIGTERM is still reaped after the leader exits.
+
+        The leader honours SIGTERM but takes a moment to go, so teardown follows
+        the "process exited promptly" path; the straggler ignores SIGTERM
+        outright, so only the follow-up SIGKILL can remove it.
+        """
+        child_pid_file = tmp_path / "child.pid"
+        child_ready = tmp_path / "child.ready"
+        leader_ready = tmp_path / "leader.ready"
+
+        straggler_source = (
+            "import os, signal, sys, time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "open(sys.argv[1], 'w').close()\n"
+            "time.sleep(60)\n"
+        )
+        leader_source = (
+            "import os, signal, subprocess, sys, time\n"
+            "child = subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]])\n"
+            "while not os.path.exists(sys.argv[2]):\n"
+            "    time.sleep(0.005)\n"
+            "open(sys.argv[3], 'w').write(str(child.pid))\n"
+            "signal.signal(signal.SIGTERM, lambda *_a: (time.sleep(0.05), os._exit(0)))\n"
+            "open(sys.argv[4], 'w').close()\n"
+            "time.sleep(60)\n"
+        )
+
         proc = subprocess.Popen(
-            ["sleep", "0.01"],
+            [
+                sys.executable,
+                "-c",
+                leader_source,
+                straggler_source,
+                str(child_ready),
+                str(child_pid_file),
+                str(leader_ready),
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        # Send SIGTERM — sleep exits quickly so the process should die promptly.
-        kill_process_group(proc)
+        child_pid = -1
+        try:
+            # Once the leader is ready its SIGTERM handler is installed and the
+            # straggler is already ignoring SIGTERM — no timing assumptions left.
+            _wait_for_file(leader_ready)
+            child_pid = int(child_pid_file.read_text().strip())
+            assert proc.poll() is None
+            assert _process_alive(child_pid)
+
+            kill_process_group(proc)
+
+            assert not _process_alive(proc.pid)
+            assert _wait_until_dead(child_pid), "straggler survived process-group teardown"
+        finally:
+            for pid in (child_pid, proc.pid):
+                if pid > 0:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+            proc.wait()
 
 
 # ---------------------------------------------------------------------------

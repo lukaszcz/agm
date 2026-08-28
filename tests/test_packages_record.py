@@ -285,3 +285,22 @@ def test_verify_record_rejects_tampered_files_and_records(
 
     with pytest.raises(RecordError):
         verify_record(root)
+
+
+def test_read_record_rejects_an_entry_naming_the_record_itself(tmp_path: Path) -> None:
+    root = tmp_path / "package"
+    root.mkdir()
+    (root / "RECORD").write_text("RECORD,sha256=" + "0" * 64 + "\n", encoding="utf-8")
+
+    with pytest.raises(RecordError):
+        read_record(root)
+
+
+def test_write_record_omits_itself_when_a_previous_record_exists(tmp_path: Path) -> None:
+    root = _package_tree(tmp_path)
+    write_record(root)
+
+    record_path = write_record(root)
+
+    lines = record_path.read_text(encoding="utf-8").splitlines()
+    assert [line.split(",")[0] for line in lines] == ["package.toml", "review-tools/main.agl"]

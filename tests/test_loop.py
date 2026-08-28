@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +47,58 @@ def _setup_home_with_prompts(tmp_path: Path, prompts: list[str] | None = None) -
 def _which_always_found(name: str) -> str | None:
     """Stub for shutil.which: always reports the binary as found."""
     return "/bin/fake"
+
+
+class _AgentBudgetExceeded(Exception):
+    """The loop asked for more agent calls than the test scripted."""
+
+
+@dataclass(slots=True)
+class _AgentCall:
+    """One dispatch that reached the (mocked) agent boundary."""
+
+    command: list[str]
+    prompt: str
+
+
+def _script_agent_calls(
+    monkeypatch: pytest.MonkeyPatch, responses: Sequence[str | BaseException]
+) -> list[_AgentCall]:
+    """Answer the loop's agent calls from *responses*, one entry per call.
+
+    Each entry is either that call's output text or an exception to raise for
+    it.  The loop repeats until the agent reports completion, so the script
+    doubles as a hard call budget: a loop that runs past it raises instead of
+    spinning forever, which turns a regression in completion detection into an
+    immediate failure rather than a hanging test.
+
+    Returns the list recording each call's runner argv and prompt text.
+    """
+    calls: list[_AgentCall] = []
+    remaining = list(responses)
+
+    def fake_run_prompt_command(
+        command: list[str],
+        target: Path,
+        *,
+        env: dict[str, str],
+        stdout_callback: object = None,
+        stderr_callback: object = None,
+        idle_timeout: float | None = None,
+    ) -> str:
+        del env, stdout_callback, stderr_callback, idle_timeout
+        calls.append(_AgentCall(command=list(command), prompt=target.read_text(encoding="utf-8")))
+        if not remaining:
+            raise _AgentBudgetExceeded(
+                f"the loop ran past its budget of {len(responses)} agent calls"
+            )
+        response = remaining.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+    monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_prompt_command)
+    return calls
 
 
 def test_selector_result_accepts_relative_path_from_current_working_directory(
@@ -2731,6 +2785,11 @@ class TestLoopRunIntegration:
 
         def fake_run_capture(command: list[str], **kwargs: object) -> tuple[int, str, str]:
             commands.append(command)
+            if len(commands) > 1:
+                # The loop is otherwise unbounded; refuse a second call so a
+                # regression in completion detection fails here instead of
+                # spinning forever.
+                raise _AgentBudgetExceeded("the loop ran past its budget of 1 agent call")
             return 0, "COMPLETE\n", ""
 
         monkeypatch.setattr("agm.agent.runner.run_capture", fake_run_capture)
@@ -2778,25 +2837,7 @@ class TestLoopRunIntegration:
         tasks_dir_path.mkdir(parents=True)
         (tasks_dir_path / "PROGRESS.md").write_text("done\n", encoding="utf-8")
 
-        call_count = 0
-
-        def fake_run_command(
-            command: list[str],
-            target: Path,
-            *,
-            env: dict[str, str],
-            stdout_callback: object = None,
-            stderr_callback: object = None,
-            idle_timeout: float | None = None,
-        ) -> str:
-            del command, target, env, stdout_callback, stderr_callback, idle_timeout
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise AgentCallTimeout(1.0)
-            return "COMPLETE\n"
-
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
+        calls = _script_agent_calls(monkeypatch, [AgentCallTimeout(1.0), "COMPLETE\n"])
 
         args = LoopArgs(
             command_name=None,
@@ -2819,7 +2860,7 @@ class TestLoopRunIntegration:
         )
         loop_run(args)
 
-        assert call_count == 2
+        assert len(calls) == 2
 
     def test_non_selector_two_iterations_ending_complete(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2839,24 +2880,7 @@ class TestLoopRunIntegration:
         tasks_dir_path.mkdir(parents=True)
         (tasks_dir_path / "PROGRESS.md").write_text("done\n", encoding="utf-8")
 
-        call_count = 0
-
-        def fake_run_command(
-            command: list[str],
-            target: Path,
-            *,
-            env: dict[str, str],
-            stdout_callback: object = None,
-            stderr_callback: object = None,
-            idle_timeout: float | None = None,
-        ) -> str:
-            nonlocal call_count
-            call_count += 1
-            if call_count < 2:
-                return "still working\n"
-            return "all done\n COMPLETE \n"
-
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
+        calls = _script_agent_calls(monkeypatch, ["still working\n", "all done\n COMPLETE \n"])
 
         args = LoopArgs(
             command_name=None,
@@ -2879,7 +2903,94 @@ class TestLoopRunIntegration:
         )
         loop_run(args)  # Must not raise SystemExit
 
-        assert call_count == 2
+        assert len(calls) == 2
+
+    def test_extra_prompt_reaches_the_prompt_handed_to_the_agent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``--extra-prompt`` text must be part of the prompt the agent receives."""
+        home = _setup_home_with_prompts(tmp_path, ["loop.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", _which_always_found)
+        monkeypatch.chdir(tmp_path)
+
+        tasks_dir_path = tmp_path / ".agent-files" / "tasks"
+        tasks_dir_path.mkdir(parents=True)
+        (tasks_dir_path / "PROGRESS.md").write_text("done\n", encoding="utf-8")
+
+        calls = _script_agent_calls(monkeypatch, ["COMPLETE\n"])
+
+        loop_run(
+            LoopArgs(
+                command_name=None,
+                runner="fake-runner",
+                runner_args=[],
+                selector=None,
+                no_selector=True,
+                tasks_dir=None,
+                no_log=True,
+                log_file=None,
+                prompt=None,
+                prompt_file=None,
+                selector_prompt=None,
+                selector_prompt_file=None,
+                extra_prompt="always run the linter afterwards",
+                extra_prompt_file=None,
+                extra_selector_prompt=None,
+                extra_selector_prompt_file=None,
+                timeout=None,
+            )
+        )
+
+        assert len(calls) == 1
+        # The base prompt is still there, with the extra prompt added to it.
+        assert "# loop.md" in calls[0].prompt
+        assert "always run the linter afterwards" in calls[0].prompt
+
+    def test_a_never_completing_agent_does_not_spin_the_loop_forever(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The loop must stop as soon as the agent reports completion.
+
+        ``agm loop`` repeats until an agent call reports completion, so a
+        regression in completion detection makes it run without end.  Budgeting
+        the agent calls turns that into an immediate failure: the agent answers
+        two calls, the second of which completes, and refuses a third.
+        """
+        home = _setup_home_with_prompts(tmp_path, ["loop.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", _which_always_found)
+        monkeypatch.chdir(tmp_path)
+
+        tasks_dir_path = tmp_path / ".agent-files" / "tasks"
+        tasks_dir_path.mkdir(parents=True)
+        (tasks_dir_path / "PROGRESS.md").write_text("done\n", encoding="utf-8")
+
+        calls = _script_agent_calls(monkeypatch, ["working\n", "COMPLETE\n"])
+
+        loop_run(
+            LoopArgs(
+                command_name=None,
+                runner="fake-runner",
+                runner_args=[],
+                selector=None,
+                no_selector=True,
+                tasks_dir=None,
+                no_log=True,
+                log_file=None,
+                prompt=None,
+                prompt_file=None,
+                selector_prompt=None,
+                selector_prompt_file=None,
+                extra_prompt=None,
+                extra_prompt_file=None,
+                extra_selector_prompt=None,
+                extra_selector_prompt_file=None,
+                timeout=None,
+            )
+        )
+
+        assert len(calls) == 2
 
     def test_selector_mode_two_iterations_real_selector_result_ends_complete(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

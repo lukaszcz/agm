@@ -209,6 +209,60 @@ let x = "{\\"$case\\": \\"Purple\\"}" as Color
 
 
 # ---------------------------------------------------------------------------
+# IR evaluation tests — JSON-Schema validation rejects undeclared properties
+#
+# Record and enum-variant schemas are closed (``additionalProperties: false``).
+# The decode walk itself only reads the fields it knows about, so a payload
+# carrying an undeclared property is caught by schema validation alone.
+# ---------------------------------------------------------------------------
+
+
+_UNDECLARED_PROPERTY_SOURCES = {
+    "record": """\
+record Foo
+  a: int
+let x = "{\\"a\\": 1, \\"extra\\": 9}" as Foo
+()
+""",
+    "nested_record": """\
+record Inner
+  n: int
+record Outer
+  inner: Inner
+let x = "{\\"inner\\": {\\"n\\": 1, \\"extra\\": 9}}" as Outer
+()
+""",
+    "record_in_array": """\
+record Foo
+  a: int
+let x = "[{\\"a\\": 1, \\"extra\\": 9}]" as array[Foo]
+()
+""",
+    "enum_variant": """\
+enum Shape
+  | Circle(radius: int)
+  | Square(side: int)
+let x = "{\\"$case\\": \\"Circle\\", \\"radius\\": 1, \\"extra\\": 9}" as Shape
+()
+""",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_UNDECLARED_PROPERTY_SOURCES))
+def test_cast_rejects_undeclared_property(shape: str) -> None:
+    """An undeclared JSON property fails the cast rather than being silently dropped."""
+    ir_exc = evaluate_ir_raises(_UNDECLARED_PROPERTY_SOURCES[shape])
+    assert ir_exc.display_name == "CastError"
+
+
+@pytest.mark.parametrize("shape", sorted(_UNDECLARED_PROPERTY_SOURCES))
+def test_as_question_is_false_for_undeclared_property(shape: str) -> None:
+    """The total form of the same cast reports failure instead of raising."""
+    source = _UNDECLARED_PROPERTY_SOURCES[shape].replace(" as ", " as? ", 1)
+    assert evaluate_ir(source)["x"] == BoolValue(False)
+
+
+# ---------------------------------------------------------------------------
 # IR evaluation tests — boolean `as?`
 # ---------------------------------------------------------------------------
 

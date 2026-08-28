@@ -698,8 +698,8 @@ class TestClashDeferred:
         with pytest.raises(AglScopeError, match="ambiguous"):
             resolve_program(graph)
 
-    def test_clash_error_names_qualifiers(self, tmp_path: Path) -> None:
-        """Ambiguous error mentions at least one disambiguation qualifier."""
+    def test_clash_error_points_at_the_use_site(self, tmp_path: Path) -> None:
+        """The ambiguity is reported at the bare use, not at either import."""
         graph = _make_graph_from_files(
             tmp_path,
             {
@@ -710,8 +710,10 @@ class TestClashDeferred:
         )
         with pytest.raises(AglScopeError) as exc_info:
             resolve_program(graph)
-        msg = str(exc_info.value)
-        assert "libA" in msg or "libB" in msg or "ambiguous" in msg.lower()
+        span = exc_info.value.span
+        assert span is not None
+        # ``foo`` on the third entry line, columns 9..12 -- the reference itself.
+        assert (span.start_line, span.start_col, span.end_line, span.end_col) == (3, 9, 3, 12)
 
     def test_renamed_scope_collision_is_ambiguous_when_used(self, tmp_path: Path) -> None:
         files = {
@@ -3242,3 +3244,86 @@ def test_scoped_invalid_referenced_member_does_not_create_a_constructor_candidat
 
     result = resolve_program(graph)
     assert result.modules[ENTRY_ID].resolved.constructor_candidates.get("NotRecord") is None
+
+
+# ---------------------------------------------------------------------------
+# Test: diagnostic source locations
+# ---------------------------------------------------------------------------
+
+
+class TestDiagnosticSpans:
+    """Scope diagnostics must point at the offending construct, not the file start.
+
+    Every source below puts the offence past the first line and past the first
+    column of that line, so a diagnostic that lost its location cannot pass by
+    defaulting to the start of the module.
+    """
+
+    @pytest.mark.parametrize(
+        ("files", "expected"),
+        (
+            pytest.param(
+                {
+                    "entry": "import libA::*\nimport libB::*\nlet x = foo()",
+                    "libA": "def foo() -> int = 1",
+                    "libB": "def foo() -> int = 2",
+                },
+                (3, 9, 3, 12),
+                id="ambiguous-bare-use",
+            ),
+            pytest.param(
+                {"entry": "let a = 1\nlet b = notdefined\n()"},
+                (2, 9, 2, 19),
+                id="undefined-name",
+            ),
+            pytest.param(
+                {
+                    "entry": "import lib\nlet y = lib::missing()",
+                    "lib": "def foo() -> int = 1",
+                },
+                (2, 9, 2, 21),
+                id="unknown-qualified-member",
+            ),
+            pytest.param(
+                {"entry": "def foo() -> int = 1\ndef foo() -> int = 2\n()"},
+                (2, 1, 2, 21),
+                id="duplicate-declaration",
+            ),
+            pytest.param(
+                {
+                    "entry": (
+                        "import mylib\nscope mylib\ndef foo() -> int = 1\nend mylib\nmylib::foo()"
+                    ),
+                    "mylib": "def foo() -> int = 2",
+                },
+                (5, 1, 5, 11),
+                id="scope-and-route-clash",
+            ),
+            pytest.param(
+                {"entry": "let a = 1\nimport lib\n()", "lib": "def foo() -> int = 1"},
+                (2, 1, 2, 11),
+                id="import-after-declaration",
+            ),
+        ),
+    )
+    def test_scope_diagnostic_points_at_the_offending_construct(
+        self,
+        tmp_path: Path,
+        files: dict[str, str],
+        expected: tuple[int, int, int, int],
+    ) -> None:
+        graph = _make_graph_from_files(tmp_path, files)
+        with pytest.raises(AglScopeError) as exc_info:
+            resolve_program(graph)
+        span = exc_info.value.span
+        assert span is not None
+        assert (span.start_line, span.start_col, span.end_line, span.end_col) == expected
+
+    def test_scope_diagnostic_survives_conversion_to_a_diagnostic(self, tmp_path: Path) -> None:
+        """The rendered diagnostic keeps the coordinates the error carried."""
+        graph = _make_graph_from_files(tmp_path, {"entry": "let a = 1\nlet b = notdefined\n()"})
+        with pytest.raises(AglScopeError) as exc_info:
+            resolve_program(graph)
+        diagnostic = exc_info.value.to_diagnostic()
+        assert (diagnostic.line, diagnostic.column) == (2, 9)
+        assert (diagnostic.end_line, diagnostic.end_column) == (2, 19)

@@ -33,6 +33,14 @@ from agm.agl.syntax.types import TypeExpr, render_type_expr
         ("::Thing", "::Thing"),
         ("module::Thing[int]", "module::Thing[int]"),
         ("Outer[int]::Thing", "Outer[int]::Thing"),
+        # Multi-segment qualifiers: every segment is rendered, in source order,
+        # each keeping its own type arguments.
+        ("alpha::beta::Thing", "alpha::beta::Thing"),
+        ("alpha::beta::gamma::Thing", "alpha::beta::gamma::Thing"),
+        ("::alpha::beta::Thing", "::alpha::beta::Thing"),
+        ("/alpha/beta::gamma::Thing", "/alpha/beta::gamma::Thing"),
+        ("Outer[int]::Inner[text]::Thing", "Outer[int]::Inner[text]::Thing"),
+        ("alpha::Inner[text]::beta::Thing[bool]", "alpha::Inner[text]::beta::Thing[bool]"),
     ),
 )
 def test_render_type_expr_uses_a_canonical_source_spelling(source: str, expected: str) -> None:

@@ -1256,9 +1256,12 @@ class TestExecuteSingleStep:
             implement_prompt_file=tmp_path / "implement.md",
         )
 
+        # The step retries the selector until it resolves, so the script also
+        # bounds the retries: an unscripted call raises instead of looping.
+        scripted = iter(["COMPLETE"])
         monkeypatch.setattr(
             "agm.commands.loop.step.run_prompt_command",
-            lambda *a, **kw: "COMPLETE",
+            lambda *a, **kw: next(scripted),
         )
         # Real selector_result: "COMPLETE" on the last line → returns None → done.
         result = execute_single_step(runtime, step_number=1)
@@ -1278,15 +1281,19 @@ class TestExecuteSingleStep:
             selector_command=["fake-selector"],
         )
         runtime = _make_runtime(tmp_path, select_invocation=invocation, loop_prompt=None)
+        # The step retries the selector until it resolves, so the script also
+        # bounds the retries: an unscripted call raises instead of looping.
+        scripted: list[str | BaseException] = [AgentCallTimeout(1.0), "COMPLETE\n"]
         calls = 0
 
         def fake_run_command(*args: object, **kwargs: object) -> str:
             del args, kwargs
             nonlocal calls
             calls += 1
-            if calls == 1:
-                raise AgentCallTimeout(1.0)
-            return "COMPLETE\n"
+            response = scripted.pop(0)
+            if isinstance(response, BaseException):
+                raise response
+            return response
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
 
@@ -2406,6 +2413,11 @@ class TestExecuteSingleStepSelectorStringResult:
             env={},
         )
 
+        # 1st selector call: non-resolvable text → real selector_result → str → retry.
+        # 2nd selector call: COMPLETE → real selector_result → None → done.
+        # The script also bounds the retries: an unscripted call raises instead
+        # of looping.
+        scripted = ["not-a-file-path\n", "COMPLETE\n"]
         call_count = 0
 
         def fake_run_command(
@@ -2419,11 +2431,7 @@ class TestExecuteSingleStepSelectorStringResult:
         ) -> str:
             nonlocal call_count
             call_count += 1
-            # 1st selector call: non-resolvable text → real selector_result → str → retry.
-            # 2nd selector call: COMPLETE → real selector_result → None → done.
-            if call_count == 1:
-                return "not-a-file-path\n"
-            return "COMPLETE\n"
+            return scripted.pop(0)
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
         # Real selector_result: "not-a-file-path" is not a file → str (retry);

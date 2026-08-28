@@ -7,6 +7,9 @@ from pathlib import Path
 import pytest
 import semver
 
+import agm.commands.pkg.check as check_command
+from agm.cli_support.args import PkgCheckArgs
+from agm.config.context import ConfigContext
 from agm.packages.discipline import (
     DisciplineError,
     validate_archive_package,
@@ -546,3 +549,66 @@ class TestPackageDiscipline:
     def test_rejects_invalid_utf8_referenced_source_fixture(self) -> None:
         with pytest.raises(DisciplineError):
             validate_package(_package("invalid_utf8_source"))
+
+
+class TestPackageCheckCommand:
+    """``agm pkg check`` must apply full package discipline, not only structure."""
+
+    @staticmethod
+    def _use_temp_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(
+            check_command,
+            "current_config_context",
+            lambda: ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path),
+        )
+
+    def test_accepts_a_package_that_satisfies_discipline(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "package"
+        (root / "custom").mkdir(parents=True)
+        (root / "package.toml").write_text(
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\nlaunch = { program = "custom/main::main" }\n',
+            encoding="utf-8",
+        )
+        (root / "custom" / "main.agl").write_text(
+            "program def main() -> unit = ()\n", encoding="utf-8"
+        )
+        self._use_temp_home(monkeypatch, tmp_path)
+
+        check_command.run(PkgCheckArgs(directory=str(root)))
+
+    def test_rejects_a_command_program_the_package_does_not_define(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        package = _custom_package(tmp_path, command_path="launch")
+        (package.root / "package.toml").write_text(
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\nlaunch = { program = "custom/main::main" }\n',
+            encoding="utf-8",
+        )
+        (package.module_root / "main.agl").write_text(
+            "program def other() -> unit = ()\n", encoding="utf-8"
+        )
+        self._use_temp_home(monkeypatch, tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            check_command.run(PkgCheckArgs(directory=str(package.root)))
+
+        assert exc_info.value.code == 1
+
+    def test_rejects_a_module_importing_a_package_module_that_is_absent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        package = _custom_package(tmp_path)
+        (package.root / "package.toml").write_text(
+            '[package]\nname = "custom"\nversion = "1.0.0"\n', encoding="utf-8"
+        )
+        (package.module_root / "main.agl").write_text("import custom/missing\n", encoding="utf-8")
+        self._use_temp_home(monkeypatch, tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            check_command.run(PkgCheckArgs(directory=str(package.root)))
+
+        assert exc_info.value.code == 1

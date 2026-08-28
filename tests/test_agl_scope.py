@@ -266,10 +266,6 @@ def _make_boollit(val: bool = True, line: int = 1) -> BoolLit:
     return BoolLit(value=val, span=_sp(line), node_id=_nid())
 
 
-def _make_strlit(val: str = "s", line: int = 1) -> StringLit:
-    return StringLit(value=val, span=_sp(line), node_id=_nid())
-
-
 def _make_unitlit(line: int = 1) -> UnitLit:
     return UnitLit(span=_sp(line), node_id=_nid())
 

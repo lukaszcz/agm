@@ -1453,3 +1453,118 @@ def test_verify_archive_rejects_a_non_normalized_manifest_with_a_matching_record
 
     with pytest.raises(ArchiveError, match="not normalized"):
         verify_archive(archive_path)
+
+
+def _entry_sizes(archive_path: Path) -> list[int]:
+    """Return the uncompressed size of every entry in a written archive."""
+    with zipfile.ZipFile(archive_path) as archive:
+        return [info.file_size for info in archive.infolist()]
+
+
+def _central_directory_size(archive_path: Path) -> int:
+    """Return the central-directory byte size recorded in an archive's end record."""
+    raw = archive_path.read_bytes()
+    end = raw.rindex(b"PK\x05\x06")
+    return int.from_bytes(raw[end + 12 : end + 16], "little")
+
+
+def test_archive_entry_count_limit_admits_exactly_the_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _package_tree(tmp_path)
+    baseline = tmp_path / "baseline.agmpkg"
+    expected = write_archive(root, baseline)
+    entries = len(_entry_sizes(baseline))
+
+    monkeypatch.setattr(package_archive, "MAX_ARCHIVE_ENTRIES", entries)
+    accepted = tmp_path / "accepted.agmpkg"
+    assert write_archive(root, accepted) == expected
+    assert read_archive_metadata(accepted) == expected
+
+    monkeypatch.setattr(package_archive, "MAX_ARCHIVE_ENTRIES", entries - 1)
+    rejected = tmp_path / "rejected.agmpkg"
+    with pytest.raises(ArchiveError):
+        write_archive(root, rejected)
+    with pytest.raises(ArchiveError):
+        read_archive_metadata(baseline)
+    assert not rejected.exists()
+
+
+def test_archive_entry_size_limit_admits_exactly_the_largest_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _package_tree(tmp_path)
+    (root / "review_tools" / "payload.bin").write_bytes(b"x" * 4096)
+    baseline = tmp_path / "baseline.agmpkg"
+    expected = write_archive(root, baseline)
+    largest = max(_entry_sizes(baseline))
+    assert largest == 4096
+
+    monkeypatch.setattr(package_archive, "MAX_ARCHIVE_ENTRY_SIZE", largest)
+    accepted = tmp_path / "accepted.agmpkg"
+    assert write_archive(root, accepted) == expected
+    assert verify_archive(accepted) == expected
+
+    monkeypatch.setattr(package_archive, "MAX_ARCHIVE_ENTRY_SIZE", largest - 1)
+    rejected = tmp_path / "rejected.agmpkg"
+    with pytest.raises(ArchiveError):
+        write_archive(root, rejected)
+    with pytest.raises(ArchiveError):
+        verify_archive(baseline)
+    assert not rejected.exists()
+
+
+def test_archive_total_size_limit_admits_exactly_the_expanded_total(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _package_tree(tmp_path)
+    baseline = tmp_path / "baseline.agmpkg"
+    expected = write_archive(root, baseline)
+    total = sum(_entry_sizes(baseline))
+
+    monkeypatch.setattr(package_archive, "MAX_ARCHIVE_TOTAL_SIZE", total)
+    accepted = tmp_path / "accepted.agmpkg"
+    assert write_archive(root, accepted) == expected
+    assert verify_archive(accepted) == expected
+
+    monkeypatch.setattr(package_archive, "MAX_ARCHIVE_TOTAL_SIZE", total - 1)
+    rejected = tmp_path / "rejected.agmpkg"
+    with pytest.raises(ArchiveError):
+        write_archive(root, rejected)
+    with pytest.raises(ArchiveError):
+        verify_archive(baseline)
+    assert not rejected.exists()
+
+
+def test_archive_central_directory_limit_admits_exactly_the_recorded_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _package_tree(tmp_path)
+    archive_path = tmp_path / "package.agmpkg"
+    expected = write_archive(root, archive_path)
+    directory_size = _central_directory_size(archive_path)
+
+    monkeypatch.setattr(package_archive, "MAX_ARCHIVE_CENTRAL_DIRECTORY_SIZE", directory_size)
+    assert read_archive_metadata(archive_path) == expected
+
+    monkeypatch.setattr(package_archive, "MAX_ARCHIVE_CENTRAL_DIRECTORY_SIZE", directory_size - 1)
+    with pytest.raises(ArchiveError):
+        read_archive_metadata(archive_path)
+
+
+def test_archive_path_depth_limit_admits_exactly_the_deepest_component_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _package_tree(tmp_path)
+    monkeypatch.setattr(package_archive, "MAX_ARCHIVE_PATH_COMPONENTS", 3)
+    accepted = tmp_path / "accepted.agmpkg"
+    expected = write_archive(root, accepted)
+    assert read_archive_metadata(accepted) == expected
+
+    nested = root / "one" / "two"
+    nested.mkdir(parents=True)
+    (nested / "value.txt").write_text("deep", encoding="utf-8")
+    rejected = tmp_path / "rejected.agmpkg"
+    with pytest.raises(ArchiveError):
+        write_archive(root, rejected)
+    assert not rejected.exists()

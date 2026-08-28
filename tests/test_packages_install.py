@@ -10,10 +10,13 @@ from pathlib import Path
 import pytest
 import semver
 
+import agm.commands.pkg.install as install_command
 import agm.packages.archive as package_archive
 import agm.packages.install as package_install
 import agm.packages.model as package_model
 import agm.stdlib_locator as stdlib_locator
+from agm.cli_support.args import PkgInstallArgs
+from agm.config.context import ConfigContext
 from agm.core import dry_run
 from agm.packages.activation import (
     ActivationIndex,
@@ -28,6 +31,7 @@ from agm.packages.archive import write_archive
 from agm.packages.install import (
     PackageInstallError,
     install_archive,
+    install_archive_with_plan,
     install_directory,
     install_directory_with_plan,
     installed_packages,
@@ -1804,6 +1808,67 @@ def test_archive_command_lifecycle_restores_the_remaining_owner(tmp_path: Path) 
     uninstall_package("bravo", home=home, env={})
     assert load_activation_index(home=home, env={}).commands == {
         "launch": CommandRegistration("alpha", "alpha/main::main")
+    }
+
+
+def test_archive_shadow_install_plan_reports_the_displaced_command_owner(tmp_path: Path) -> None:
+    alpha = _package(
+        tmp_path / "alpha-source",
+        "alpha",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "alpha/main::main" }\n',
+    )
+    bravo = _package(
+        tmp_path / "bravo-source",
+        "bravo",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "bravo/main::main" }\n',
+    )
+    archive = tmp_path / "bravo.agmpkg"
+    write_archive(bravo, archive)
+    home = tmp_path / "home"
+    install_directory(alpha, home=home, env={})
+
+    plan = install_archive_with_plan(archive, home=home, env={}, shadow=True)
+
+    assert [(shadow.path_name, shadow.displaced_packages) for shadow in plan.command_shadows] == [
+        ("launch", ("alpha",))
+    ]
+    assert load_activation_index(home=home, env={}).commands == {
+        "launch": CommandRegistration("bravo", "bravo/main::main")
+    }
+
+
+def test_pkg_install_shadow_activates_a_conflicting_archive_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``agm pkg install --shadow`` displaces a command when the source is an archive."""
+    alpha = _package(
+        tmp_path / "alpha-source",
+        "alpha",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "alpha/main::main" }\n',
+    )
+    bravo = _package(
+        tmp_path / "bravo-source",
+        "bravo",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "bravo/main::main" }\n',
+    )
+    archive = tmp_path / "bravo.agmpkg"
+    write_archive(bravo, archive)
+    home = tmp_path / "home"
+    install_directory(alpha, home=home, env={})
+    monkeypatch.setattr(
+        install_command,
+        "current_config_context",
+        lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+    )
+
+    install_command.run(PkgInstallArgs(str(archive), editable=False, shadow=True))
+
+    assert load_activation_index(home=home, env={}).commands == {
+        "launch": CommandRegistration("bravo", "bravo/main::main")
     }
 
 

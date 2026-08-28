@@ -1,166 +1,189 @@
-"""Tests for agm.commands.dep.new."""
+"""Behavior tests for agm.commands.dep.new over real git repositories."""
 
 from __future__ import annotations
 
+import subprocess
+import tomllib
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 import pytest
 
 import agm.commands.dep.new as dep_new
 from agm.cli_support.args import DepNewArgs
+from tests._git_helpers import init_repo
+
+_GIT_ENV_NAMES = (
+    "HOME",
+    "GIT_AUTHOR_NAME",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_COMMITTER_EMAIL",
+    "GIT_CONFIG_NOSYSTEM",
+)
 
 
-class TestDepNewRun:
-    """Tests for dep new run()."""
+def _isolate_git_environment(monkeypatch: pytest.MonkeyPatch, env: dict[str, str]) -> None:
+    """Give in-process git calls the isolated identity/home of the ``env`` fixture.
 
-    def test_exits_when_dep_already_exists(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ``dep new`` shells out without an explicit environment, so the process
+    environment is what its ``git`` invocations see.
+    """
+    for name in _GIT_ENV_NAMES:
+        monkeypatch.setenv(name, env[name])
+
+
+def _bare_repo(
+    parent: Path, name: str, env: dict[str, str], *, extra_branch: str | None = None
+) -> Path:
+    """Create a bare repo named *name* whose default branch is ``main``."""
+    source = init_repo(parent / f"{name}-source", env)
+    if extra_branch is not None:
+        subprocess.run(
+            ["git", "checkout", "-b", extra_branch, "-q"], cwd=source, env=env, check=True
+        )
+        (source / f"{extra_branch}.txt").write_text("side branch\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=source, env=env, check=True)
+        subprocess.run(["git", "commit", "-m", "side", "-q"], cwd=source, env=env, check=True)
+        subprocess.run(["git", "checkout", "main", "-q"], cwd=source, env=env, check=True)
+    bare = parent / f"{name}.git"
+    subprocess.run(["git", "clone", "--bare", "-q", str(source), str(bare)], env=env, check=True)
+    return bare
+
+
+def _make_project(tmp_path: Path, env: dict[str, str]) -> Path:
+    """Create a split-layout AGM project whose ``repo/`` is a real checkout."""
+    origin = _bare_repo(tmp_path, "proj-origin", env)
+    project = tmp_path / "proj"
+    for name in ("worktrees", "deps", "config", "notes"):
+        (project / name).mkdir(parents=True)
+    subprocess.run(["git", "clone", "-q", str(origin), str(project / "repo")], env=env, check=True)
+    return project
+
+
+def _deps_config(project: Path) -> dict[str, object]:
+    """Return the ``[deps]`` table recorded in the project's main config file."""
+    config_file = project / "config" / "config.toml"
+    if not config_file.is_file():
+        return {}
+    with config_file.open("rb") as handle:
+        parsed = cast(dict[str, object], tomllib.load(handle))
+    deps = parsed.get("deps")
+    return cast(dict[str, object], deps) if isinstance(deps, dict) else {}
+
+
+class TestDepNew:
+    """``agm dep new`` clones a dependency and records it in the project config."""
+
+    def test_clones_the_remote_default_branch_when_no_branch_is_given(
+        self, tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        project_dir = tmp_path / "proj"
-        deps_dir = project_dir / "deps"
-        dep_dir = deps_dir / "mylib"
-        dep_dir.mkdir(parents=True)
+        _isolate_git_environment(monkeypatch, env)
+        project = _make_project(tmp_path, env)
+        dep_origin = _bare_repo(tmp_path, "mylib", env)
+        monkeypatch.chdir(project / "repo")
 
-        monkeypatch.setattr(dep_new, "require_current_project_dir", lambda: project_dir)
-        monkeypatch.setattr(dep_new, "derive_dep_name", lambda url: "mylib")
-        monkeypatch.setattr(dep_new, "exists", lambda p: p == dep_dir)
+        dep_new.run(DepNewArgs(branch=None, repo_url=str(dep_origin)))
+
+        checkout = project / "deps" / "mylib" / "main"
+        assert (checkout / "README.md").is_file()
+        assert _deps_config(project) == {"mylib": "main"}
+
+    def test_clones_the_requested_branch(
+        self, tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _isolate_git_environment(monkeypatch, env)
+        project = _make_project(tmp_path, env)
+        dep_origin = _bare_repo(tmp_path, "mylib", env, extra_branch="v2")
+        monkeypatch.chdir(project / "repo")
+
+        dep_new.run(DepNewArgs(branch="v2", repo_url=str(dep_origin)))
+
+        checkout = project / "deps" / "mylib" / "v2"
+        assert (checkout / "v2.txt").is_file()
+        assert not (project / "deps" / "mylib" / "main").exists()
+        assert _deps_config(project) == {"mylib": "v2"}
+
+    def test_derives_the_dependency_name_from_the_url(
+        self, tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _isolate_git_environment(monkeypatch, env)
+        project = _make_project(tmp_path, env)
+        dep_origin = _bare_repo(tmp_path, "some-lib", env)
+        monkeypatch.chdir(project / "repo")
+
+        dep_new.run(DepNewArgs(branch=None, repo_url=str(dep_origin)))
+
+        assert (project / "deps" / "some-lib" / "main").is_dir()
+
+    def test_keeps_unrelated_config_entries(
+        self, tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _isolate_git_environment(monkeypatch, env)
+        project = _make_project(tmp_path, env)
+        (project / "config" / "config.toml").write_text(
+            '[run]\nrunner = "existing"\n', encoding="utf-8"
+        )
+        dep_origin = _bare_repo(tmp_path, "mylib", env)
+        monkeypatch.chdir(project / "repo")
+
+        dep_new.run(DepNewArgs(branch=None, repo_url=str(dep_origin)))
+
+        with (project / "config" / "config.toml").open("rb") as handle:
+            parsed = cast(dict[str, object], tomllib.load(handle))
+        assert parsed.get("run") == {"runner": "existing"}
+        assert parsed.get("deps") == {"mylib": "main"}
+
+    def test_exits_without_cloning_when_the_dependency_already_exists(
+        self, tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _isolate_git_environment(monkeypatch, env)
+        project = _make_project(tmp_path, env)
+        dep_origin = _bare_repo(tmp_path, "mylib", env)
+        existing = project / "deps" / "mylib"
+        existing.mkdir()
+        monkeypatch.chdir(project / "repo")
 
         with pytest.raises(SystemExit):
-            dep_new.run(DepNewArgs(branch=None, repo_url="https://github.com/org/mylib"))
+            dep_new.run(DepNewArgs(branch=None, repo_url=str(dep_origin)))
 
-    def test_clones_with_provided_branch(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        assert list(existing.iterdir()) == []
+        assert _deps_config(project) == {}
+
+    def test_removes_the_dependency_directory_when_the_clone_fails(
+        self, tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        project_dir = tmp_path / "proj"
-
-        monkeypatch.setattr(dep_new, "require_current_project_dir", lambda: project_dir)
-        monkeypatch.setattr(dep_new, "derive_dep_name", lambda url: "mylib")
-        monkeypatch.setattr(dep_new, "exists", lambda p: False)
-        monkeypatch.setattr(dep_new, "mkdir", lambda p, parents=False, exist_ok=False: None)
-
-        require_success_calls: list[list[str]] = []
-        monkeypatch.setattr(
-            dep_new, "require_success", lambda cmd: require_success_calls.append(cmd)
-        )
-
-        update_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            dep_new,
-            "update_dependency_config",
-            lambda *, project_dir, dep_name, dep_branch, config_branch: update_calls.append(
-                {"dep_name": dep_name, "dep_branch": dep_branch, "config_branch": config_branch}
-            ),
-        )
-        monkeypatch.setattr(dep_new, "current_config_branch", lambda pd: None)
-
-        dep_new.run(DepNewArgs(branch="main", repo_url="https://github.com/org/mylib"))
-
-        assert len(require_success_calls) == 1
-        clone_cmd = require_success_calls[0]
-        assert "clone" in clone_cmd
-        assert "--branch" in clone_cmd
-        assert "main" in clone_cmd
-        assert str(project_dir / "deps" / "mylib" / "main") in clone_cmd
-        assert len(update_calls) == 1
-        assert update_calls[0]["dep_branch"] == "main"
-
-    def test_resolves_default_branch_when_none_provided(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir = tmp_path / "proj"
-
-        monkeypatch.setattr(dep_new, "require_current_project_dir", lambda: project_dir)
-        monkeypatch.setattr(dep_new, "derive_dep_name", lambda url: "mylib")
-        monkeypatch.setattr(dep_new, "exists", lambda p: False)
-        monkeypatch.setattr(dep_new, "mkdir", lambda p, parents=False, exist_ok=False: None)
-
-        default_branch_calls: list[str] = []
-        monkeypatch.setattr(
-            dep_new.git_helpers,
-            "default_branch_from_remote",
-            lambda url: (default_branch_calls.append(url), "develop")[1],
-        )
-
-        require_success_calls: list[list[str]] = []
-        monkeypatch.setattr(
-            dep_new, "require_success", lambda cmd: require_success_calls.append(cmd)
-        )
-
-        update_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            dep_new,
-            "update_dependency_config",
-            lambda *, project_dir, dep_name, dep_branch, config_branch: update_calls.append(
-                {"dep_name": dep_name, "dep_branch": dep_branch, "config_branch": config_branch}
-            ),
-        )
-        monkeypatch.setattr(dep_new, "current_config_branch", lambda pd: None)
-
-        # No branch provided — should call default_branch_from_remote
-        dep_new.run(DepNewArgs(branch=None, repo_url="https://github.com/org/mylib"))
-
-        assert len(default_branch_calls) == 1
-        assert default_branch_calls[0] == "https://github.com/org/mylib"
-        clone_cmd = require_success_calls[0]
-        assert "--branch" in clone_cmd
-        assert "develop" in clone_cmd
-        assert update_calls[0]["dep_branch"] == "develop"
-
-    def test_cleans_up_dep_dir_on_failure(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir = tmp_path / "proj"
-
-        monkeypatch.setattr(dep_new, "require_current_project_dir", lambda: project_dir)
-        monkeypatch.setattr(dep_new, "derive_dep_name", lambda url: "mylib")
-        monkeypatch.setattr(dep_new, "exists", lambda p: False)
-        monkeypatch.setattr(dep_new, "mkdir", lambda p, parents=False, exist_ok=False: None)
-        monkeypatch.setattr(dep_new.git_helpers, "default_branch_from_remote", lambda url: "main")
-
-        def fail_require_success(cmd: list[str]) -> None:
-            raise SystemExit(1)
-
-        monkeypatch.setattr(dep_new, "require_success", fail_require_success)
-
-        rmdir_calls: list[Path] = []
-        monkeypatch.setattr(dep_new, "rmdir", lambda p: rmdir_calls.append(p))
+        _isolate_git_environment(monkeypatch, env)
+        project = _make_project(tmp_path, env)
+        dep_origin = _bare_repo(tmp_path, "mylib", env)
+        monkeypatch.chdir(project / "repo")
 
         with pytest.raises(SystemExit):
-            dep_new.run(DepNewArgs(branch=None, repo_url="https://github.com/org/mylib"))
+            dep_new.run(DepNewArgs(branch="no-such-branch", repo_url=str(dep_origin)))
 
-        assert len(rmdir_calls) == 1
+        assert not (project / "deps" / "mylib").exists()
+        assert _deps_config(project) == {}
 
-    def test_clones_to_correct_target_dir(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_records_the_dependency_against_the_current_workspace_branch(
+        self, tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        project_dir = tmp_path / "proj"
-        deps_dir = project_dir / "deps"
-
-        monkeypatch.setattr(dep_new, "require_current_project_dir", lambda: project_dir)
-        monkeypatch.setattr(dep_new, "derive_dep_name", lambda url: "mylib")
-        monkeypatch.setattr(dep_new, "exists", lambda p: False)
-
-        mkdir_calls: list[Path] = []
-        monkeypatch.setattr(
-            dep_new, "mkdir", lambda p, parents=False, exist_ok=False: mkdir_calls.append(p)
+        """Run from a branch workspace: the branch's config file gets the entry."""
+        _isolate_git_environment(monkeypatch, env)
+        project = _make_project(tmp_path, env)
+        workspace = project / "worktrees" / "feat"
+        subprocess.run(
+            ["git", "worktree", "add", "-b", "feat", str(workspace), "-q"],
+            cwd=project / "repo",
+            env=env,
+            check=True,
         )
+        dep_origin = _bare_repo(tmp_path, "mylib", env)
+        monkeypatch.chdir(workspace)
 
-        require_success_calls: list[list[str]] = []
-        monkeypatch.setattr(
-            dep_new, "require_success", lambda cmd: require_success_calls.append(cmd)
-        )
-        monkeypatch.setattr(
-            dep_new,
-            "update_dependency_config",
-            lambda *, project_dir, dep_name, dep_branch, config_branch: None,
-        )
-        monkeypatch.setattr(dep_new, "current_config_branch", lambda pd: None)
+        dep_new.run(DepNewArgs(branch=None, repo_url=str(dep_origin)))
 
-        dep_new.run(DepNewArgs(branch="feat", repo_url="https://github.com/org/mylib"))
-
-        # mkdir should have been called for the dep parent directory
-        assert any(p == deps_dir / "mylib" for p in mkdir_calls)
-        # Clone target is deps/mylib/feat
-        clone_cmd = require_success_calls[0]
-        assert str(deps_dir / "mylib" / "feat") in clone_cmd
+        assert (project / "deps" / "mylib" / "main" / "README.md").is_file()
+        with (project / "config" / "feat" / "config.toml").open("rb") as handle:
+            parsed = cast(dict[str, object], tomllib.load(handle))
+        assert parsed.get("deps") == {"mylib": "main"}
+        assert _deps_config(project) == {}

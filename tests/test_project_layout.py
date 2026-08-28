@@ -1148,6 +1148,31 @@ def test_discover_current_project_dir_prefers_cwd_project_over_stale_proj_dir_en
     assert result == current_project
 
 
+def test_current_workspace_or_project_root_prefers_a_nested_cwd_project_over_proj_dir_env(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    """A directory buried inside a checkout still resolves to its own project."""
+    stale_project = tmp_path / "stale"
+    stale_repo = stale_project / "repo"
+    stale_repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=stale_repo, env=env, check=True)
+
+    current_project = tmp_path / "current"
+    current_repo = current_project / "repo"
+    current_repo.mkdir(parents=True)
+    (current_project / "worktrees").mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=current_repo, env=env, check=True)
+    nested = current_repo / "src" / "deep"
+    nested.mkdir(parents=True)
+
+    result = current_workspace_or_project_root(nested, env={"PROJ_DIR": str(stale_project)})
+
+    assert result == current_project
+    assert discover_current_project_dir(nested, env={"PROJ_DIR": str(stale_project)}) == (
+        current_project
+    )
+
+
 def test_current_workspace_or_project_root_uses_proj_dir_env_with_agm_dir(
     tmp_path: Path,
 ) -> None:

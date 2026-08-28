@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from agm.agl.semantics.exceptions import AglRaise
 from agm.core.process import ProcessCaptureResult
 from tests._agl_helpers import let_root_capture
 from tests.agl.ir_harness import (
@@ -294,6 +295,33 @@ def test_t8_retry_exhaustion() -> None:
     commands = {"cmd": _ok("not_a_number\n")}
     ir_exc = evaluate_ir_raises_with_shell(source, commands)
     assert ir_exc.display_name == "ExecError"
+
+
+@pytest.mark.parametrize("retries,expected_runs", [(0, 1), (1, 2), (2, 3)])
+def test_retry_reruns_the_shell_exactly_once_per_attempt(retries: int, expected_runs: int) -> None:
+    """Retry(n) spends exactly n + 1 attempts, each one re-running the command."""
+    runs: list[str] = []
+
+    def fake_shell(
+        args: list[str],
+        *,
+        idle_timeout: float | None = None,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        isolate_process_group: bool = False,
+    ) -> ProcessCaptureResult:
+        del idle_timeout, cwd, env, isolate_process_group
+        runs.append(" ".join(args))
+        return _ok("not_a_number\n")
+
+    source = f'let n: int = exec("cmd", on_parse_error = Retry(n = {retries}))\nn'
+    from tests.agl.ir_harness import _run_ir_exec
+
+    with pytest.raises(AglRaise) as exc:
+        _run_ir_exec(source, fake_shell, shell_caps())
+
+    assert exc.value.exc.display_name == "ExecError"
+    assert len(runs) == expected_runs
 
 
 # ---------------------------------------------------------------------------

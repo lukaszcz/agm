@@ -1274,6 +1274,62 @@ class TestPipeContinuation:
         for pipe_idx in pipe_indices:
             assert types[pipe_idx + 1] != "_INDENT"
 
+    def test_continuation_keeps_levels_at_its_own_column_open(self) -> None:
+        # The second ``|`` sits at exactly the column of the enclosing ``if``
+        # body's indent level.  A continuation line pops only levels strictly
+        # deeper than its own column, so that level stays open and the two
+        # branches remain one flat branch list inside the ``if`` body.
+        source = "if a =>\n  case b of\n    | y => 1\n  | z => 2\n"
+        assert [t for t, _ in tok(source)] == [
+            "if",
+            "NAME",
+            "ARROW",
+            "_INDENT",
+            "case",
+            "NAME",
+            "of",
+            "PIPE",
+            "NAME",
+            "ARROW",
+            "INT",
+            "PIPE",
+            "NAME",
+            "ARROW",
+            "INT",
+            "_DEDENT",
+            "_NEWLINE",
+        ]
+
+    def test_nested_continuations_pop_only_the_levels_they_close(self) -> None:
+        # The inner ``else`` closes just the inner branch body; the outer
+        # ``else`` closes both the outer branch body and the level the inner
+        # ``if`` opened.
+        source = "if a =>\n  if b =>\n    1\n  else =>\n    2\nelse =>\n  3\n"
+        assert [t for t, _ in tok(source)] == [
+            "if",
+            "NAME",
+            "ARROW",
+            "_INDENT",
+            "if",
+            "NAME",
+            "ARROW",
+            "_INDENT",
+            "INT",
+            "_DEDENT",
+            "else",
+            "ARROW",
+            "_INDENT",
+            "INT",
+            "_DEDENT",
+            "_DEDENT",
+            "else",
+            "ARROW",
+            "_INDENT",
+            "INT",
+            "_DEDENT",
+            "_NEWLINE",
+        ]
+
     def test_pipe_continuation_inline_branches(self) -> None:
         # All branches inline: no _NEWLINE anywhere
         source = "if a => pass | else => pass"
@@ -1398,76 +1454,54 @@ class TestTokenPositions:
 # ---------------------------------------------------------------------------
 
 
+def lex_error_span(source: str) -> tuple[int, int, int, int]:
+    """Return the ``(start_line, start_col, end_line, end_col)`` of *source*'s lex error."""
+    with pytest.raises(LexError) as exc_info:
+        tok(source)
+    span = exc_info.value.span
+    assert span is not None
+    return (span.start_line, span.start_col, span.end_line, span.end_col)
+
+
 class TestLexErrorSpan:
-    def test_unknown_escape_span_line(self) -> None:
-        with pytest.raises(LexError) as exc_info:
-            tok(r'"\q"')
-        err = exc_info.value
-        assert err.span is not None
-        assert err.span.start_line == 1
+    # Every source puts the offending construct on the second line and past the
+    # start of that line, so an error that lost its location cannot pass by
+    # defaulting to the start of the file.
+    @pytest.mark.parametrize(
+        ("source", "expected"),
+        (
+            pytest.param('let a = 1\nlet b = "xy\\q"', (2, 13, 2, 14), id="unknown-escape"),
+            pytest.param('let a = 1\nlet b = "hello', (2, 15, 2, 15), id="unterminated-string"),
+            pytest.param(
+                'let a = 1\nlet b = "hello\nworld"', (2, 15, 2, 15), id="newline-in-string"
+            ),
+            pytest.param('let a = 1\nlet b = "%{', (2, 12, 2, 12), id="unterminated-interp"),
+            pytest.param('let a = 1\nlet b = """hello', (2, 17, 2, 17), id="unterminated-triple"),
+            pytest.param('let a = 1\nlet b = "\\', (2, 11, 2, 11), id="backslash-at-eof"),
+            pytest.param('let a = 1\nlet b = "\\u00', (2, 11, 2, 14), id="incomplete-unicode"),
+            pytest.param('let a = 1\nlet b = "\\uXXXX"', (2, 11, 2, 13), id="invalid-hex-digit"),
+            pytest.param("let a = 1\nlet b = \u200b", (2, 9, 2, 10), id="unknown-character"),
+        ),
+    )
+    def test_lex_error_spans_the_offending_source_text(
+        self, source: str, expected: tuple[int, int, int, int]
+    ) -> None:
+        assert lex_error_span(source) == expected
 
     def test_misaligned_dedent_span(self) -> None:
-        with pytest.raises(LexError) as exc_info:
-            tok("a\n    b\n  c")
-        err = exc_info.value
-        assert err.span is not None
         # The diagnostic is positioned at the first token on the offending line
         # (the lookahead ``sig`` token) so that the reported line matches the
-        # line the user actually misindented — line 3 in this case ("  c").
-        assert err.span.start_line == 3
+        # line the user actually misindented -- line 3 in this case ("  c").
+        assert lex_error_span("a\n    b\n  c") == (3, 3, 3, 4)
 
-    def test_lex_error_message_not_empty(self) -> None:
+    def test_lex_error_diagnostic_keeps_the_error_span(self) -> None:
+        # Converting the error into a diagnostic must not drop its location.
         with pytest.raises(LexError) as exc_info:
-            tok(r'"\q"')
-        assert str(exc_info.value) != ""
-
-    def test_unterminated_string_at_eof(self) -> None:
-        # Single-quoted string without closing quote
-        with pytest.raises(LexError) as exc_info:
-            tok('"hello')
-        assert exc_info.value.span is not None
-
-    def test_newline_inside_single_quoted_string(self) -> None:
-        # Newline inside a single-quoted string is a lex error
-        with pytest.raises(LexError) as exc_info:
-            tok('"hello\nworld"')
-        assert exc_info.value.span is not None
-
-    def test_unterminated_interpolation(self) -> None:
-        # %{ without any closing } — EOF inside interp
-        with pytest.raises(LexError) as exc_info:
-            tok('"%{')
-        assert exc_info.value.span is not None
-
-    def test_unterminated_triple_quoted_string(self) -> None:
-        # triple-quoted without closing triple-quote
-        with pytest.raises(LexError) as exc_info:
-            tok('"""hello')
-        assert exc_info.value.span is not None
-
-    def test_backslash_at_end_of_string(self) -> None:
-        # \\ at EOF inside a string
-        with pytest.raises(LexError) as exc_info:
-            tok('"\\')  # starts a template, sees \, then EOF
-        assert exc_info.value.span is not None
-
-    def test_incomplete_unicode_escape(self) -> None:
-        # \u followed by only 2 hex digits then EOF (no closing quote)
-        with pytest.raises(LexError) as exc_info:
-            tok('"\\u00')
-        assert exc_info.value.span is not None
-
-    def test_invalid_unicode_escape_hex_digit(self) -> None:
-        # \u followed by a non-hex character
-        with pytest.raises(LexError) as exc_info:
-            tok('"\\uXXXX"')
-        assert exc_info.value.span is not None
-
-    def test_unknown_character_raises_lex_error(self) -> None:
-        # Format/control characters are not valid AgL code tokens.
-        with pytest.raises(LexError) as exc_info:
-            tok("\u200b")
-        assert exc_info.value.span is not None
+            tok('let a = 1\nlet b = "xy\\q"')
+        diagnostic = exc_info.value.to_diagnostic()
+        assert isinstance(diagnostic, Diagnostic)
+        assert (diagnostic.line, diagnostic.column) == (2, 13)
+        assert (diagnostic.end_line, diagnostic.end_column) == (2, 14)
 
     @pytest.mark.parametrize("source", ['"""\\%hello"""', "'''\\%hello'''"])
     def test_triple_quoted_with_escaped_percent(self, source: str) -> None:

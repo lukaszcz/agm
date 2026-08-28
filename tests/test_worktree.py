@@ -1,8 +1,14 @@
-"""Tests for agm.project.worktree."""
+"""Behavior tests for agm.project.worktree over real git repositories.
+
+Every test builds real repositories in a temporary directory and asserts the
+resulting git state — worktrees, branches, upstreams, checked-out content and
+copied config — rather than which helper happened to be called.
+"""
 
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -10,945 +16,559 @@ import pytest
 import agm.project.worktree as worktree_mod
 from agm.project.worktree import (
     branch_exists,
+    branch_sync,
     ensure_worktree,
     has_expected_worktree,
+    remove_worktree,
+    sync_remote_tracking_branches,
 )
-from agm.vcs.git import WorktreeInfo
-from tests._git_helpers import clone_with_fork_remote
+from tests._git_helpers import clone_with_fork_remote, init_repo
 
 
-class TestProjectWorktreeHelpers:
-    def test_has_expected_worktree_returns_true_for_matching_path(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        expected = tmp_path / "project" / "worktrees" / "feature"
-        expected.mkdir(parents=True)
-        monkeypatch.setattr(worktree_mod, "project_repo_dir", lambda project: project / "repo")
-        monkeypatch.setattr(
-            worktree_mod,
-            "expected_branch_worktree_path",
-            lambda project, branch: expected,
-        )
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "worktree_list",
-            lambda repo, env=None: [WorktreeInfo(path=expected, branch="feature")],
-        )
+def _git(*args: str, cwd: Path, env: dict[str, str]) -> str:
+    """Run a git command in *cwd* and return its stdout."""
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
 
-        assert has_expected_worktree(tmp_path / "project", "feature")
 
-    def test_has_expected_worktree_returns_false_without_match(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        expected = tmp_path / "project" / "worktrees" / "feature"
-        expected.mkdir(parents=True)
-        monkeypatch.setattr(worktree_mod, "project_repo_dir", lambda project: project / "repo")
-        monkeypatch.setattr(
-            worktree_mod,
-            "expected_branch_worktree_path",
-            lambda project, branch: expected,
-        )
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "worktree_list",
-            lambda repo, env=None: [WorktreeInfo(path=expected, branch="other")],
-        )
+def _bare_origin(
+    parent: Path, env: dict[str, str], *, name: str = "origin", branches: Sequence[str] = ()
+) -> Path:
+    """Create a bare origin named *name* whose default branch is ``main``.
 
-        assert not has_expected_worktree(tmp_path / "project", "feature")
+    Each entry in *branches* becomes a published branch carrying its own commit,
+    so it is not merged into ``main``.
+    """
+    source = init_repo(parent / f"{name}-source", env)
+    for branch in branches:
+        _git("checkout", "-b", branch, "-q", cwd=source, env=env)
+        (source / f"{branch}.txt").write_text(f"{branch}\n", encoding="utf-8")
+        _git("add", ".", cwd=source, env=env)
+        _git("commit", "-m", f"add {branch}", "-q", cwd=source, env=env)
+        _git("checkout", "main", "-q", cwd=source, env=env)
+    origin = parent / f"{name}.git"
+    subprocess.run(["git", "clone", "--bare", "-q", str(source), str(origin)], env=env, check=True)
+    return origin
 
-    def test_branch_exists_checks_local_and_remote(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            worktree_mod.git_helpers, "local_branch_exists", lambda repo, branch, env=None: False
-        )
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "unique_remote_branch_ref",
-            lambda repo, branch, env=None: f"origin/{branch}",
-        )
 
-        assert branch_exists(tmp_path, "feature")
+def _make_project(tmp_path: Path, env: dict[str, str], *, branches: Sequence[str] = ()) -> Path:
+    """Create a split-layout AGM project whose ``repo/`` is a real checkout."""
+    origin = _bare_origin(tmp_path, env, branches=branches)
+    project = tmp_path / "proj"
+    for name in ("worktrees", "deps", "config"):
+        (project / name).mkdir(parents=True)
+    subprocess.run(["git", "clone", "-q", str(origin), str(project / "repo")], env=env, check=True)
+    return project
+
+
+def _plain_repo(tmp_path: Path, env: dict[str, str]) -> Path:
+    """Create a standalone checkout that belongs to no AGM project."""
+    origin = _bare_origin(tmp_path, env, name="plain-origin")
+    repo = tmp_path / "plain"
+    subprocess.run(["git", "clone", "-q", str(origin), str(repo)], env=env, check=True)
+    return repo
+
+
+def _local_branches(repo: Path, env: dict[str, str]) -> list[str]:
+    """Return the repository's local branch names, sorted."""
+    output = _git("for-each-ref", "--format=%(refname:short)", "refs/heads", cwd=repo, env=env)
+    return sorted(line for line in output.splitlines() if line)
+
+
+def _upstream(repo: Path, branch: str, env: dict[str, str]) -> str:
+    """Return the upstream ref configured for *branch*."""
+    return _git("rev-parse", "--abbrev-ref", f"{branch}@{{upstream}}", cwd=repo, env=env).strip()
+
+
+def _head_branch(checkout: Path, env: dict[str, str]) -> str:
+    """Return the branch checked out in *checkout*."""
+    return _git("rev-parse", "--abbrev-ref", "HEAD", cwd=checkout, env=env).strip()
+
+
+def _worktree_paths(repo: Path, env: dict[str, str]) -> list[Path]:
+    """Return the paths git currently lists as worktrees of *repo*."""
+    output = _git("worktree", "list", "--porcelain", cwd=repo, env=env)
+    return [
+        Path(line.removeprefix("worktree ")).resolve()
+        for line in output.splitlines()
+        if line.startswith("worktree ")
+    ]
 
 
 class TestSyncRemoteTrackingBranches:
-    """Tests for sync_remote_tracking_branches."""
+    """Local tracking branches are created for unmerged remote branches."""
 
-    def test_creates_tracking_branch_for_unmerged_remote(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_creates_tracking_branches_for_unmerged_remote_branches(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        repo_dir = tmp_path / "repo"
-        repo_dir.mkdir()
+        project = _make_project(tmp_path, env, branches=["feat-a", "feat-b"])
+        repo = project / "repo"
 
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "default_remote_branch_ref",
-            lambda p, env=None: "origin/main",
-        )
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "remote_unmerged_branches",
-            lambda p, base_ref, env=None: ["origin/feature"],
-        )
-        monkeypatch.setattr(
-            worktree_mod.git_helpers, "local_branch_exists", lambda p, b, env=None: False
-        )
+        sync_remote_tracking_branches(repo, env=env)
 
-        created: list[tuple[str, str]] = []
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "create_tracking_branch",
-            lambda p, local, remote, env=None: created.append((local, remote)),
-        )
+        assert _local_branches(repo, env) == ["feat-a", "feat-b", "main"]
+        assert _upstream(repo, "feat-a", env) == "origin/feat-a"
+        assert _upstream(repo, "feat-b", env) == "origin/feat-b"
 
-        worktree_mod.sync_remote_tracking_branches(repo_dir)
-
-        assert created == [("feature", "origin/feature")]
-
-    def test_skips_branch_when_local_exists(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_ignores_remote_branches_already_merged_into_the_default_branch(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        repo_dir = tmp_path / "repo"
-        repo_dir.mkdir()
+        project = _make_project(tmp_path, env)
+        repo = project / "repo"
+        # A published branch pointing at main's own commit is already merged.
+        _git("push", "-q", "origin", "main:refs/heads/released", cwd=repo, env=env)
+        _git("fetch", "-q", "origin", cwd=repo, env=env)
 
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "default_remote_branch_ref",
-            lambda p, env=None: "origin/main",
-        )
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "remote_unmerged_branches",
-            lambda p, base_ref, env=None: ["origin/feature"],
-        )
-        monkeypatch.setattr(
-            worktree_mod.git_helpers, "local_branch_exists", lambda p, b, env=None: True
-        )
+        sync_remote_tracking_branches(repo, env=env)
 
-        created: list[tuple[str, str]] = []
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "create_tracking_branch",
-            lambda p, local, remote, env=None: created.append((local, remote)),
-        )
+        assert _local_branches(repo, env) == ["main"]
 
-        worktree_mod.sync_remote_tracking_branches(repo_dir)
-
-        assert created == []
-
-    def test_skips_origin_head(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        repo_dir = tmp_path / "repo"
-        repo_dir.mkdir()
-
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "default_remote_branch_ref",
-            lambda p, env=None: "origin/main",
-        )
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "remote_unmerged_branches",
-            lambda p, base_ref, env=None: ["origin/HEAD", "origin/feature"],
-        )
-        monkeypatch.setattr(
-            worktree_mod.git_helpers, "local_branch_exists", lambda p, b, env=None: False
-        )
-
-        created: list[tuple[str, str]] = []
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "create_tracking_branch",
-            lambda p, local, remote, env=None: created.append((local, remote)),
-        )
-
-        worktree_mod.sync_remote_tracking_branches(repo_dir)
-
-        # origin/HEAD is skipped; only feature is created
-        assert created == [("feature", "origin/feature")]
-
-    def test_handles_multiple_unmerged_branches(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_leaves_an_existing_local_branch_untouched(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        repo_dir = tmp_path / "repo"
-        repo_dir.mkdir()
+        project = _make_project(tmp_path, env, branches=["feat-a"])
+        repo = project / "repo"
+        # A local branch of the same name that points somewhere else entirely.
+        _git("branch", "feat-a", "main", cwd=repo, env=env)
+        before = _git("rev-parse", "feat-a", cwd=repo, env=env).strip()
 
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "default_remote_branch_ref",
-            lambda p, env=None: "origin/main",
-        )
+        sync_remote_tracking_branches(repo, env=env)
+
+        assert _git("rev-parse", "feat-a", cwd=repo, env=env).strip() == before
+
+    def test_skips_the_remote_head_pointer(
+        self, tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``origin/HEAD`` names the default branch, not a branch to track.
+
+        Git's own ref listing never spells the pointer that way, so the listing
+        is stubbed at the git boundary; the assertion is still on the branches
+        the repository ends up with.
+        """
+        project = _make_project(tmp_path, env, branches=["feat-a"])
+        repo = project / "repo"
         monkeypatch.setattr(
             worktree_mod.git_helpers,
             "remote_unmerged_branches",
-            lambda p, base_ref, env=None: ["origin/feat-a", "origin/feat-b"],
-        )
-        monkeypatch.setattr(
-            worktree_mod.git_helpers, "local_branch_exists", lambda p, b, env=None: False
+            lambda repo_dir, *, base_ref, env=None: ["origin/HEAD", "origin/feat-a"],
         )
 
-        created: list[tuple[str, str]] = []
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "create_tracking_branch",
-            lambda p, local, remote, env=None: created.append((local, remote)),
-        )
+        sync_remote_tracking_branches(repo, env=env)
 
-        worktree_mod.sync_remote_tracking_branches(repo_dir)
-
-        assert ("feat-a", "origin/feat-a") in created
-        assert ("feat-b", "origin/feat-b") in created
+        assert _local_branches(repo, env) == ["feat-a", "main"]
 
 
 class TestBranchSync:
-    """Tests for branch_sync."""
+    """``branch_sync`` fetches first, then creates the missing tracking branches."""
 
-    def test_fetches_prune_and_syncs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        repo_dir = tmp_path / "repo"
-        repo_dir.mkdir()
+    def test_fetches_before_creating_tracking_branches(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_project(tmp_path, env)
+        repo = project / "repo"
+        # Publish a branch after the project clone, so only a fetch reveals it.
+        publisher = tmp_path / "publisher"
+        subprocess.run(
+            ["git", "clone", "-q", str(tmp_path / "origin.git"), str(publisher)],
+            env=env,
+            check=True,
+        )
+        _git("checkout", "-b", "late", "-q", cwd=publisher, env=env)
+        (publisher / "late.txt").write_text("late\n", encoding="utf-8")
+        _git("add", ".", cwd=publisher, env=env)
+        _git("commit", "-m", "late", "-q", cwd=publisher, env=env)
+        _git("push", "-q", "origin", "late", cwd=publisher, env=env)
 
-        monkeypatch.setattr(
-            worktree_mod.git_helpers, "checkout_root", lambda cwd=None, env=None: repo_dir
+        branch_sync(cwd=repo, env=env)
+
+        assert _local_branches(repo, env) == ["late", "main"]
+
+    def test_finds_the_checkout_from_the_project_root(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_project(tmp_path, env, branches=["feat-a"])
+
+        branch_sync(cwd=project, env=env)
+
+        assert _local_branches(project / "repo", env) == ["feat-a", "main"]
+
+
+class TestHasExpectedWorktree:
+    """A branch counts as checked out only at the path the project expects."""
+
+    def test_true_when_the_branch_sits_at_the_expected_path(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_project(tmp_path, env)
+        _git(
+            "worktree",
+            "add",
+            "-b",
+            "feat",
+            str(project / "worktrees" / "feat"),
+            "-q",
+            cwd=project / "repo",
+            env=env,
         )
 
-        fetched: list[Path] = []
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "fetch_prune_origin",
-            lambda p, env=None: fetched.append(p),
+        assert has_expected_worktree(project, "feat", env=env)
+
+    def test_false_when_the_branch_sits_somewhere_else(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_project(tmp_path, env)
+        _git(
+            "worktree",
+            "add",
+            "-b",
+            "feat",
+            str(tmp_path / "elsewhere"),
+            "-q",
+            cwd=project / "repo",
+            env=env,
         )
 
-        synced: list[Path] = []
-        monkeypatch.setattr(
-            worktree_mod,
-            "sync_remote_tracking_branches",
-            lambda p, env=None: synced.append(p),
-        )
+        assert not has_expected_worktree(project, "feat", env=env)
 
-        worktree_mod.branch_sync(cwd=tmp_path)
+    def test_false_when_the_branch_is_not_checked_out_at_all(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_project(tmp_path, env)
 
-        assert fetched == [repo_dir]
-        assert synced == [repo_dir]
+        assert not has_expected_worktree(project, "feat", env=env)
+
+
+class TestBranchExists:
+    """A branch exists when it is local, or carried by exactly one remote."""
+
+    def test_finds_a_local_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
+        project = _make_project(tmp_path, env)
+        _git("branch", "local-only", cwd=project / "repo", env=env)
+
+        assert branch_exists(project / "repo", "local-only", env=env)
+
+    def test_finds_a_branch_carried_only_by_a_remote(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_project(tmp_path, env, branches=["feat-a"])
+
+        assert "feat-a" not in _local_branches(project / "repo", env)
+        assert branch_exists(project / "repo", "feat-a", env=env)
+
+    def test_rejects_an_unknown_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
+        project = _make_project(tmp_path, env)
+
+        assert not branch_exists(project / "repo", "ghost", env=env)
 
 
 class TestEnsureWorktree:
-    """Tests for ensure_worktree."""
+    """``ensure_worktree`` leaves a usable checkout at the project's worktree path."""
 
-    def _setup_mocks(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        project_dir: Path,
-        repo_dir: Path,
-        *,
-        repo_branch: str = "main",
-        existing_worktrees: list[WorktreeInfo] | None = None,
-        local_branch: bool = True,
-        remote_branch_ref: str | None = None,
-    ) -> list[dict[str, object]]:
-        """Patch common dependencies; return list to accumulate worktree_add calls."""
-        if existing_worktrees is None:
-            existing_worktrees = []
-        monkeypatch.setattr(
-            worktree_mod.git_helpers, "checkout_root", lambda cwd=None, env=None: repo_dir
-        )
-        monkeypatch.setattr(
-            worktree_mod.git_helpers, "current_branch", lambda p, env=None: repo_branch
-        )
-        monkeypatch.setattr(
-            worktree_mod, "discover_current_project_dir", lambda cwd=None, env=None: project_dir
-        )
-        monkeypatch.setattr(worktree_mod.git_helpers, "fetch", lambda p, env=None: None)
-        monkeypatch.setattr(
-            worktree_mod.git_helpers, "local_branch_exists", lambda p, b, env=None: local_branch
-        )
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "unique_remote_branch_ref",
-            lambda p, b, env=None: remote_branch_ref,
-        )
-        monkeypatch.setattr(
-            worktree_mod.git_helpers, "worktree_list", lambda p, env=None: existing_worktrees
-        )
-        monkeypatch.setattr(
-            worktree_mod,
-            "ensure_dependency_configs_for_branch",
-            lambda *, project_dir, branch: None,
-        )
-        monkeypatch.setattr(
-            worktree_mod,
-            "copy_config",
-            lambda *, project_dir=None, target, branch=None, cwd=None: None,
-        )
-
-        add_calls: list[dict[str, object]] = []
-
-        def fake_worktree_add(
-            repo: Path,
-            path: Path,
-            branch: str,
-            *,
-            create: bool = False,
-            track: bool = False,
-            start_point: str | None = None,
-            env: dict[str, str] | None = None,
-        ) -> None:
-            add_calls.append(
-                {
-                    "repo": repo,
-                    "path": path,
-                    "branch": branch,
-                    "create": create,
-                    "track": track,
-                    "start_point": start_point,
-                }
-            )
-
-        monkeypatch.setattr(worktree_mod.git_helpers, "worktree_add", fake_worktree_add)
-        return add_calls
-
-    def test_creates_new_branch_worktree(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_creates_a_new_branch_and_its_worktree(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        project_dir.mkdir()
-        repo_dir.mkdir()
+        project = _make_project(tmp_path, env)
 
-        add_calls = self._setup_mocks(monkeypatch, project_dir, repo_dir)
-
-        result = worktree_mod.ensure_worktree(
+        result = ensure_worktree(
             new_branch="feat",
             worktrees_dir=None,
             branch=None,
-            cwd=project_dir,
+            cwd=project / "repo",
+            env=env,
         )
 
-        assert len(add_calls) == 1
-        assert add_calls[0]["branch"] == "feat"
-        assert add_calls[0]["create"] is True
-        assert result.name == "feat"
+        assert result.resolve() == (project / "worktrees" / "feat").resolve()
+        assert _head_branch(result, env) == "feat"
+        assert "feat" in _local_branches(project / "repo", env)
+        assert result.resolve() in _worktree_paths(project / "repo", env)
 
-    def test_checks_out_existing_branch(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        project_dir.mkdir()
-        repo_dir.mkdir()
+    def test_checks_out_an_existing_local_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
+        project = _make_project(tmp_path, env, branches=["feat-a"])
+        repo = project / "repo"
+        _git("branch", "--track", "feat-a", "origin/feat-a", cwd=repo, env=env)
 
-        add_calls = self._setup_mocks(monkeypatch, project_dir, repo_dir)
-
-        result = worktree_mod.ensure_worktree(
+        result = ensure_worktree(
             new_branch=None,
             worktrees_dir=None,
-            branch="existing",
-            cwd=project_dir,
+            branch="feat-a",
+            cwd=repo,
+            env=env,
         )
 
-        assert len(add_calls) == 1
-        assert add_calls[0]["branch"] == "existing"
-        assert add_calls[0]["create"] is False
-        assert result.name == "existing"
+        assert _head_branch(result, env) == "feat-a"
+        # The existing branch was checked out, not recreated off main.
+        assert (result / "feat-a.txt").is_file()
 
-    def test_exits_without_branch_or_new_branch(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_checks_out_a_branch_carried_only_by_the_remote(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        project_dir.mkdir()
-        repo_dir.mkdir()
+        project = _make_project(tmp_path, env, branches=["feat-a"])
+        repo = project / "repo"
 
-        self._setup_mocks(monkeypatch, project_dir, repo_dir)
+        result = ensure_worktree(
+            new_branch=None,
+            worktrees_dir=None,
+            branch="feat-a",
+            cwd=repo,
+            env=env,
+        )
+
+        assert (result / "feat-a.txt").is_file()
+        assert _upstream(repo, "feat-a", env) == "origin/feat-a"
+
+    def test_exits_when_the_branch_exists_nowhere(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_project(tmp_path, env)
 
         with pytest.raises(SystemExit):
-            worktree_mod.ensure_worktree(
+            ensure_worktree(
+                new_branch=None,
+                worktrees_dir=None,
+                branch="ghost",
+                cwd=project / "repo",
+                env=env,
+            )
+
+        assert not (project / "worktrees" / "ghost").exists()
+
+    def test_exits_without_a_branch_name(self, tmp_path: Path, env: dict[str, str]) -> None:
+        project = _make_project(tmp_path, env)
+
+        with pytest.raises(SystemExit):
+            ensure_worktree(
                 new_branch=None,
                 worktrees_dir=None,
                 branch=None,
-                cwd=project_dir,
+                cwd=project / "repo",
+                env=env,
             )
 
-    def test_returns_existing_worktree_when_existing_ok(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        worktrees_dir = project_dir / "worktrees"
-        worktree_path = worktrees_dir / "feat"
-        project_dir.mkdir()
-        repo_dir.mkdir()
-        worktree_path.mkdir(parents=True)
+        assert list((project / "worktrees").iterdir()) == []
 
-        existing = [WorktreeInfo(path=worktree_path, branch="feat")]
-        add_calls = self._setup_mocks(
-            monkeypatch, project_dir, repo_dir, existing_worktrees=existing
+    def test_exits_when_the_branch_is_the_main_workspace(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_project(tmp_path, env)
+
+        with pytest.raises(SystemExit):
+            ensure_worktree(
+                new_branch=None,
+                worktrees_dir=None,
+                branch="main",
+                cwd=project / "repo",
+                env=env,
+            )
+
+        assert list((project / "worktrees").iterdir()) == []
+
+    def test_returns_the_existing_worktree_when_allowed(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_project(tmp_path, env)
+        first = ensure_worktree(
+            new_branch="feat", worktrees_dir=None, branch=None, cwd=project / "repo", env=env
         )
 
-        result = worktree_mod.ensure_worktree(
+        second = ensure_worktree(
             new_branch=None,
             worktrees_dir=None,
             branch="feat",
             existing_ok=True,
-            cwd=project_dir,
+            cwd=project / "repo",
+            env=env,
         )
 
-        assert add_calls == []
-        assert result == worktree_path
+        assert second.resolve() == first.resolve()
+        assert len(_worktree_paths(project / "repo", env)) == 2
 
-    def test_exits_when_worktree_exists_and_not_existing_ok(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_exits_when_the_worktree_already_exists(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        worktrees_dir = project_dir / "worktrees"
-        worktree_path = worktrees_dir / "feat"
-        project_dir.mkdir()
-        repo_dir.mkdir()
-        worktree_path.mkdir(parents=True)
-
-        existing = [WorktreeInfo(path=worktree_path, branch="feat")]
-        self._setup_mocks(monkeypatch, project_dir, repo_dir, existing_worktrees=existing)
+        project = _make_project(tmp_path, env)
+        ensure_worktree(
+            new_branch="feat", worktrees_dir=None, branch=None, cwd=project / "repo", env=env
+        )
 
         with pytest.raises(SystemExit):
-            worktree_mod.ensure_worktree(
+            ensure_worktree(
                 new_branch=None,
                 worktrees_dir=None,
                 branch="feat",
                 existing_ok=False,
-                cwd=project_dir,
+                cwd=project / "repo",
+                env=env,
             )
 
-    def test_reuse_existing_branch_switches_to_checkout_mode(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_ignores_worktrees_belonging_to_other_branches(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        project_dir.mkdir()
-        repo_dir.mkdir()
-
-        add_calls = self._setup_mocks(monkeypatch, project_dir, repo_dir)
-
-        # Simulate that the branch exists locally
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "local_branch_exists",
-            lambda p, b, env=None: True,
-        )
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "remote_branch_exists",
-            lambda p, b, env=None: False,
-        )
-
-        worktree_mod.ensure_worktree(
-            new_branch="feat",
-            worktrees_dir=None,
-            branch=None,
-            reuse_existing_branch=True,
-            cwd=project_dir,
-        )
-
-        assert len(add_calls) == 1
-        # create should be False because branch already exists
-        assert add_calls[0]["create"] is False
-
-    def test_reuse_existing_branch_keeps_create_when_branch_not_found(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """When reuse_existing_branch=True but the branch does not exist
-        locally or remotely, create_branch stays True."""
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        project_dir.mkdir()
-        repo_dir.mkdir()
-
-        add_calls = self._setup_mocks(monkeypatch, project_dir, repo_dir)
-
-        # Branch does not exist anywhere
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "local_branch_exists",
-            lambda p, b, env=None: False,
-        )
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "remote_branch_exists",
-            lambda p, b, env=None: False,
-        )
-
-        worktree_mod.ensure_worktree(
-            new_branch="brand-new",
-            worktrees_dir=None,
-            branch=None,
-            reuse_existing_branch=True,
-            cwd=project_dir,
-        )
-
-        assert len(add_calls) == 1
-        # Branch didn't exist so create_branch was NOT flipped to False
-        assert add_calls[0]["create"] is True
-
-    def test_skips_non_matching_worktrees_in_existing_list(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """When existing_worktrees contains entries that don't match the target,
-        the for-loop continues to the next entry (no match, skip)."""
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        other_path = project_dir / "worktrees" / "other"
-        project_dir.mkdir()
-        repo_dir.mkdir()
-        other_path.mkdir(parents=True)
-
-        # Provide an existing worktree that does NOT match the target branch+path
-        non_matching = WorktreeInfo(path=other_path, branch="other")
-        add_calls = self._setup_mocks(
-            monkeypatch, project_dir, repo_dir, existing_worktrees=[non_matching]
-        )
-
-        worktree_mod.ensure_worktree(
-            new_branch="brand-new",
-            worktrees_dir=None,
-            branch=None,
-            cwd=project_dir,
-        )
-
-        assert len(add_calls) == 1
-        assert add_calls[0]["create"] is True
-        assert add_calls[0]["branch"] == "brand-new"
-
-    def test_passes_start_point_to_worktree_add(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        project_dir.mkdir()
-        repo_dir.mkdir()
-
-        add_calls = self._setup_mocks(monkeypatch, project_dir, repo_dir)
-
+        project = _make_project(tmp_path, env)
         ensure_worktree(
-            new_branch="feat",
-            worktrees_dir=None,
-            branch=None,
-            start_point="parent-branch",
-            cwd=project_dir,
+            new_branch="other", worktrees_dir=None, branch=None, cwd=project / "repo", env=env
         )
 
-        assert len(add_calls) == 1
-        assert add_calls[0]["start_point"] == "parent-branch"
-        assert add_calls[0]["create"] is True
-
-    def test_no_start_point_defaults_to_none(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        project_dir.mkdir()
-        repo_dir.mkdir()
-
-        add_calls = self._setup_mocks(monkeypatch, project_dir, repo_dir)
-
-        ensure_worktree(
-            new_branch="feat",
-            worktrees_dir=None,
-            branch=None,
-            cwd=project_dir,
-        )
-
-        assert len(add_calls) == 1
-        assert add_calls[0]["start_point"] is None
-
-    def test_plain_git_repo_skips_agm_project_steps(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        repo_dir = tmp_path / "repo"
-        repo_dir.mkdir()
-        monkeypatch.setattr(
-            worktree_mod.git_helpers, "checkout_root", lambda cwd=None, env=None: repo_dir
-        )
-        monkeypatch.setattr(
-            worktree_mod, "discover_current_project_dir", lambda cwd=None, env=None: None
-        )
-        monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
-        monkeypatch.setattr(worktree_mod.git_helpers, "fetch", lambda p, env=None: None)
-        monkeypatch.setattr(worktree_mod.git_helpers, "worktree_list", lambda p, env=None: [])
-        monkeypatch.setattr(
-            worktree_mod,
-            "exit_if_main_workspace_branch",
-            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected check")),
-        )
-        monkeypatch.setattr(
-            worktree_mod,
-            "ensure_dependency_configs_for_branch",
-            lambda **kwargs: (_ for _ in ()).throw(AssertionError("unexpected deps")),
-        )
-        monkeypatch.setattr(
-            worktree_mod,
-            "copy_config",
-            lambda **kwargs: (_ for _ in ()).throw(AssertionError("unexpected config")),
-        )
-
-        add_calls: list[Path] = []
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "worktree_add",
-            lambda repo, path, branch, create=False, track=False, start_point=None, env=None: (
-                add_calls.append(path)
-            ),
-        )
-
-        result = worktree_mod.ensure_worktree(
-            new_branch="feat",
-            worktrees_dir=None,
-            branch=None,
-            cwd=repo_dir,
-        )
-
-        assert result == repo_dir / "worktrees" / "feat"
-        assert add_calls == [repo_dir / "worktrees" / "feat"]
-        assert "warning: no AGM project found" in capsys.readouterr().err
-
-
-class TestRemoveWorktree:
-    """Tests for remove_worktree."""
-
-    def test_removes_worktree_and_deletes_branch(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        worktree_path = project_dir / "worktrees" / "feat"
-        project_dir.mkdir()
-        repo_dir.mkdir()
-        worktree_path.mkdir(parents=True)
-
-        monkeypatch.setattr(
-            worktree_mod, "discover_current_project_dir", lambda cwd=None, env=None: project_dir
-        )
-        monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "worktree_list",
-            lambda p, env=None: [WorktreeInfo(path=worktree_path, branch="feat")],
-        )
-
-        removed: list[Path] = []
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "worktree_remove",
-            lambda p, path, force=False, env=None: removed.append(path),
-        )
-
-        deleted: list[tuple[str, bool]] = []
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "branch_delete",
-            lambda p, b, force=False, env=None: deleted.append((b, force)),
-        )
-
-        worktree_mod.remove_worktree(repo_dir=repo_dir, force=False, branch="feat")
-
-        assert removed == [worktree_path]
-        assert deleted == [("feat", False)]
-
-    def test_exits_when_worktree_not_found(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        project_dir.mkdir()
-        repo_dir.mkdir()
-
-        monkeypatch.setattr(
-            worktree_mod, "discover_current_project_dir", lambda cwd=None, env=None: project_dir
-        )
-        monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
-        monkeypatch.setattr(worktree_mod.git_helpers, "worktree_list", lambda p, env=None: [])
-
-        require_calls: list[list[str]] = []
-        monkeypatch.setattr(
-            worktree_mod,
-            "require_success",
-            lambda cmd, env=None: require_calls.append(cmd),
-        )
-
-        with pytest.raises(SystemExit):
-            worktree_mod.remove_worktree(repo_dir=repo_dir, force=False, branch="nonexistent")
-
-    def test_exits_when_worktree_list_has_entries_but_no_branch_match(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The worktree loop iterates over entries but finds no match;
-        worktree_path stays None and the function exits."""
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        other_path = project_dir / "worktrees" / "other"
-        project_dir.mkdir()
-        repo_dir.mkdir()
-        other_path.mkdir(parents=True)
-
-        monkeypatch.setattr(
-            worktree_mod, "discover_current_project_dir", lambda cwd=None, env=None: project_dir
-        )
-        monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
-        # List has one entry, but it's for "other", not "missing"
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "worktree_list",
-            lambda p, env=None: [WorktreeInfo(path=other_path, branch="other")],
-        )
-        monkeypatch.setattr(
-            worktree_mod,
-            "require_success",
-            lambda cmd, env=None: None,
-        )
-
-        with pytest.raises(SystemExit):
-            worktree_mod.remove_worktree(repo_dir=repo_dir, force=False, branch="missing")
-
-    def test_exits_when_branch_is_main_checkout(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        project_dir.mkdir()
-        repo_dir.mkdir()
-
-        monkeypatch.setattr(
-            worktree_mod, "discover_current_project_dir", lambda cwd=None, env=None: project_dir
-        )
-        # current branch is "main" — trying to remove "main" should exit
-        monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
-
-        with pytest.raises(SystemExit):
-            worktree_mod.remove_worktree(repo_dir=repo_dir, force=False, branch="main")
-
-    def test_passes_force_flag_to_worktree_remove(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        worktree_path = project_dir / "worktrees" / "feat"
-        project_dir.mkdir()
-        repo_dir.mkdir()
-        worktree_path.mkdir(parents=True)
-
-        monkeypatch.setattr(
-            worktree_mod, "discover_current_project_dir", lambda cwd=None, env=None: project_dir
-        )
-        monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "worktree_list",
-            lambda p, env=None: [WorktreeInfo(path=worktree_path, branch="feat")],
-        )
-
-        force_values: list[bool] = []
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "worktree_remove",
-            lambda p, path, force=False, env=None: force_values.append(force),
-        )
-        deleted: list[tuple[str, bool]] = []
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "branch_delete",
-            lambda p, b, force=False, env=None: deleted.append((b, force)),
-        )
-
-        worktree_mod.remove_worktree(repo_dir=repo_dir, force=True, branch="feat")
-
-        assert force_values == [True]
-        assert deleted == [("feat", False)]
-
-    def test_passes_force_delete_to_branch_delete(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        worktree_path = project_dir / "worktrees" / "feat"
-        project_dir.mkdir()
-        repo_dir.mkdir()
-        worktree_path.mkdir(parents=True)
-
-        monkeypatch.setattr(
-            worktree_mod, "discover_current_project_dir", lambda cwd=None, env=None: project_dir
-        )
-        monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "worktree_list",
-            lambda p, env=None: [WorktreeInfo(path=worktree_path, branch="feat")],
-        )
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "worktree_remove",
-            lambda p, path, force=False, env=None: None,
-        )
-
-        deleted: list[tuple[str, bool]] = []
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "branch_delete",
-            lambda p, b, force=False, env=None: deleted.append((b, force)),
-        )
-
-        worktree_mod.remove_worktree(
-            repo_dir=repo_dir, force=False, branch="feat", force_delete=True
-        )
-
-        assert deleted == [("feat", True)]
-
-    def test_can_skip_branch_delete(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        worktree_path = project_dir / "worktrees" / "feat"
-        project_dir.mkdir()
-        repo_dir.mkdir()
-        worktree_path.mkdir(parents=True)
-
-        monkeypatch.setattr(
-            worktree_mod, "discover_current_project_dir", lambda cwd=None, env=None: project_dir
-        )
-        monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "worktree_list",
-            lambda p, env=None: [WorktreeInfo(path=worktree_path, branch="feat")],
-        )
-
-        removed: list[Path] = []
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "worktree_remove",
-            lambda p, path, force=False, env=None: removed.append(path),
-        )
-        deleted: list[str] = []
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "branch_delete",
-            lambda p, b, force=False, env=None: deleted.append(b),
-        )
-
-        worktree_mod.remove_worktree(
-            repo_dir=repo_dir, force=False, branch="feat", delete_branch=False
-        )
-
-        assert removed == [worktree_path]
-        assert deleted == []
-
-    def test_plain_git_repo_skips_agm_main_branch_check(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        repo_dir = tmp_path / "repo"
-        worktree_path = tmp_path / "worktrees" / "main"
-        repo_dir.mkdir()
-        worktree_path.mkdir(parents=True)
-        monkeypatch.setattr(
-            worktree_mod, "discover_current_project_dir", lambda cwd=None, env=None: None
-        )
-        monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
-        monkeypatch.setattr(
-            worktree_mod,
-            "exit_if_main_workspace_branch",
-            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected check")),
-        )
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "worktree_list",
-            lambda p, env=None: [WorktreeInfo(path=worktree_path, branch="main")],
-        )
-
-        removed: list[Path] = []
-        deleted: list[str] = []
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "worktree_remove",
-            lambda p, path, force=False, env=None: removed.append(path),
-        )
-        monkeypatch.setattr(
-            worktree_mod.git_helpers,
-            "branch_delete",
-            lambda p, b, force=False, env=None: deleted.append(b),
-        )
-
-        worktree_mod.remove_worktree(repo_dir=repo_dir, force=False, branch="main")
-
-        assert removed == [worktree_path]
-        assert deleted == ["main"]
-        assert "warning: no AGM project found" in capsys.readouterr().err
-
-
-class TestEnsureWorktreeRelativePath:
-    def test_relative_worktrees_path_resolved_against_cwd(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """When worktrees_dir is relative, it's resolved against cwd."""
-        import agm.project.worktree as worktree_module
-
-        project = tmp_path / "proj"
-        repo = project / "repo"
-        repo.mkdir(parents=True)
-        (project / "worktrees").mkdir()
-
-        relative_dir = "custom_worktrees"
-        monkeypatch.setattr(
-            worktree_module.git_helpers,
-            "checkout_root",
-            lambda cwd=None, env=None: repo,
-        )
-        monkeypatch.setattr(
-            worktree_module.git_helpers,
-            "current_branch",
-            lambda p, env=None: "main",
-        )
-        monkeypatch.setattr(worktree_module.git_helpers, "fetch", lambda p, env=None: None)
-        monkeypatch.setattr(
-            worktree_module.git_helpers,
-            "worktree_list",
-            lambda p, env=None: [],
-        )
-        monkeypatch.setattr(
-            worktree_module.git_helpers,
-            "worktree_add",
-            lambda p, dirname, branch, create=False, track=False, start_point=None, env=None: None,
-        )
-        monkeypatch.setattr(
-            worktree_module.git_helpers, "local_branch_exists", lambda p, b, env=None: True
-        )
-        monkeypatch.setattr(
-            worktree_module,
-            "ensure_dependency_configs_for_branch",
-            lambda project_dir, branch: None,
-        )
-        monkeypatch.setattr(
-            worktree_module,
-            "copy_config",
-            lambda project_dir=None, target=None, branch=None, cwd=None: None,
-        )
-        monkeypatch.setattr(
-            worktree_module, "discover_current_project_dir", lambda cwd=None, env=None: project
-        )
-        monkeypatch.setattr(
-            worktree_module, "exit_if_main_workspace_branch", lambda pd, b, repo_branch=None: None
-        )
-
-        # Pass a relative worktrees_dir
         result = ensure_worktree(
-            new_branch=None,
-            worktrees_dir=relative_dir,
-            branch="feat",
-            cwd=repo,
+            new_branch="feat", worktrees_dir=None, branch=None, cwd=project / "repo", env=env
         )
-        # The result should be absolute (resolved against cwd=repo)
+
+        assert _head_branch(result, env) == "feat"
+        assert len(_worktree_paths(project / "repo", env)) == 3
+
+    def test_reuse_existing_branch_checks_out_the_branch_that_is_there(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_project(tmp_path, env, branches=["feat-a"])
+        repo = project / "repo"
+        _git("branch", "--track", "feat-a", "origin/feat-a", cwd=repo, env=env)
+
+        result = ensure_worktree(
+            new_branch="feat-a",
+            worktrees_dir=None,
+            branch=None,
+            reuse_existing_branch=True,
+            cwd=repo,
+            env=env,
+        )
+
+        # The branch's own commit is present: it was reused, not recreated.
+        assert (result / "feat-a.txt").is_file()
+
+    def test_reuse_existing_branch_still_creates_a_missing_branch(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_project(tmp_path, env)
+        repo = project / "repo"
+
+        result = ensure_worktree(
+            new_branch="brand-new",
+            worktrees_dir=None,
+            branch=None,
+            reuse_existing_branch=True,
+            cwd=repo,
+            env=env,
+        )
+
+        assert _head_branch(result, env) == "brand-new"
+        assert "brand-new" in _local_branches(repo, env)
+
+    def test_reuse_existing_branch_accepts_a_worktree_that_is_already_there(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_project(tmp_path, env)
+        repo = project / "repo"
+        first = ensure_worktree(
+            new_branch="feat", worktrees_dir=None, branch=None, cwd=repo, env=env
+        )
+
+        second = ensure_worktree(
+            new_branch="feat",
+            worktrees_dir=None,
+            branch=None,
+            reuse_existing_branch=True,
+            cwd=repo,
+            env=env,
+        )
+
+        assert second.resolve() == first.resolve()
+
+    def test_starts_a_new_branch_at_the_requested_start_point(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_project(tmp_path, env, branches=["feat-a"])
+        repo = project / "repo"
+
+        result = ensure_worktree(
+            new_branch="derived",
+            worktrees_dir=None,
+            branch=None,
+            start_point="feat-a",
+            cwd=repo,
+            env=env,
+        )
+
+        assert _head_branch(result, env) == "derived"
+        assert (result / "feat-a.txt").is_file()
+
+    def test_a_new_branch_without_a_start_point_begins_at_the_checked_out_branch(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_project(tmp_path, env, branches=["feat-a"])
+        repo = project / "repo"
+
+        result = ensure_worktree(
+            new_branch="derived", worktrees_dir=None, branch=None, cwd=repo, env=env
+        )
+
+        assert not (result / "feat-a.txt").exists()
+        assert (
+            _git("rev-parse", "derived", cwd=repo, env=env).strip()
+            == _git("rev-parse", "main", cwd=repo, env=env).strip()
+        )
+
+    def test_uses_an_explicit_absolute_worktrees_directory(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_project(tmp_path, env)
+        custom = tmp_path / "custom"
+
+        result = ensure_worktree(
+            new_branch="feat",
+            worktrees_dir=str(custom),
+            branch=None,
+            cwd=project / "repo",
+            env=env,
+        )
+
+        assert result.resolve() == (custom / "feat").resolve()
+        assert _head_branch(result, env) == "feat"
+
+    def test_resolves_a_relative_worktrees_directory_against_the_current_directory(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_project(tmp_path, env)
+        repo = project / "repo"
+
+        result = ensure_worktree(
+            new_branch="feat",
+            worktrees_dir="custom_worktrees",
+            branch=None,
+            cwd=repo,
+            env=env,
+        )
+
         assert result.is_absolute()
-        assert result == repo / relative_dir / "feat"
+        assert result.resolve() == (repo / "custom_worktrees" / "feat").resolve()
+        assert _head_branch(result, env) == "feat"
+
+    def test_copies_the_project_config_into_the_new_worktree(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_project(tmp_path, env)
+        (project / "config" / ".env").write_text("SHARED=1\n", encoding="utf-8")
+
+        result = ensure_worktree(
+            new_branch="feat", worktrees_dir=None, branch=None, cwd=project / "repo", env=env
+        )
+
+        assert (result / ".env").read_text(encoding="utf-8") == "SHARED=1\n"
+
+    def test_works_outside_an_agm_project(self, tmp_path: Path, env: dict[str, str]) -> None:
+        repo = _plain_repo(tmp_path, env)
+
+        result = ensure_worktree(
+            new_branch="feat", worktrees_dir=None, branch=None, cwd=repo, env=env
+        )
+
+        # No project, so the worktrees directory defaults next to the checkout.
+        assert result.resolve() == (repo / "worktrees" / "feat").resolve()
+        assert _head_branch(result, env) == "feat"
 
 
 class TestEnsureWorktreeRemoteBranches:
@@ -980,15 +600,7 @@ class TestEnsureWorktreeRemoteBranches:
         assert result == worktrees / "branch-x"
         # The workspace holds the fork's commit, not a fresh branch off main.
         assert (result / "fork.txt").exists()
-        upstream = subprocess.run(
-            ["git", "config", "--get", "branch.branch-x.remote"],
-            cwd=repo,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        assert upstream.stdout.strip() == "fork"
+        assert _upstream(repo, "branch-x", env) == "fork/branch-x"
 
     def test_exits_when_the_branch_is_carried_by_several_remotes(
         self, tmp_path: Path, env: dict[str, str], capsys: pytest.CaptureFixture[str]
@@ -1010,3 +622,129 @@ class TestEnsureWorktreeRemoteBranches:
         err = capsys.readouterr().err
         assert "fork" in err
         assert "origin" in err
+
+
+class TestRemoveWorktree:
+    """``remove_worktree`` takes the checkout away and, by default, the branch too."""
+
+    def _project_with_worktree(
+        self, tmp_path: Path, env: dict[str, str], branch: str = "feat"
+    ) -> tuple[Path, Path]:
+        project = _make_project(tmp_path, env)
+        worktree = ensure_worktree(
+            new_branch=branch, worktrees_dir=None, branch=None, cwd=project / "repo", env=env
+        )
+        return project, worktree
+
+    def test_removes_the_worktree_and_deletes_its_branch(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project, worktree = self._project_with_worktree(tmp_path, env)
+        repo = project / "repo"
+
+        remove_worktree(repo_dir=repo, force=False, branch="feat", env=env)
+
+        assert not worktree.exists()
+        assert _worktree_paths(repo, env) == [repo.resolve()]
+        assert _local_branches(repo, env) == ["main"]
+
+    def test_can_keep_the_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
+        project, worktree = self._project_with_worktree(tmp_path, env)
+        repo = project / "repo"
+
+        remove_worktree(repo_dir=repo, force=False, branch="feat", delete_branch=False, env=env)
+
+        assert not worktree.exists()
+        assert _local_branches(repo, env) == ["feat", "main"]
+
+    def test_refuses_to_remove_a_dirty_worktree_without_force(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project, worktree = self._project_with_worktree(tmp_path, env)
+        (worktree / "scratch.txt").write_text("uncommitted\n", encoding="utf-8")
+
+        with pytest.raises(SystemExit):
+            remove_worktree(repo_dir=project / "repo", force=False, branch="feat", env=env)
+
+        assert worktree.is_dir()
+
+    def test_force_removes_a_dirty_worktree(self, tmp_path: Path, env: dict[str, str]) -> None:
+        project, worktree = self._project_with_worktree(tmp_path, env)
+        (worktree / "scratch.txt").write_text("uncommitted\n", encoding="utf-8")
+
+        remove_worktree(repo_dir=project / "repo", force=True, branch="feat", env=env)
+
+        assert not worktree.exists()
+        assert _local_branches(project / "repo", env) == ["main"]
+
+    def test_refuses_to_delete_an_unmerged_branch_without_force_delete(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project, worktree = self._project_with_worktree(tmp_path, env)
+        (worktree / "work.txt").write_text("work\n", encoding="utf-8")
+        _git("add", ".", cwd=worktree, env=env)
+        _git("commit", "-m", "work", "-q", cwd=worktree, env=env)
+
+        with pytest.raises(SystemExit):
+            remove_worktree(repo_dir=project / "repo", force=False, branch="feat", env=env)
+
+        assert "feat" in _local_branches(project / "repo", env)
+
+    def test_force_delete_removes_an_unmerged_branch(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project, worktree = self._project_with_worktree(tmp_path, env)
+        (worktree / "work.txt").write_text("work\n", encoding="utf-8")
+        _git("add", ".", cwd=worktree, env=env)
+        _git("commit", "-m", "work", "-q", cwd=worktree, env=env)
+
+        remove_worktree(
+            repo_dir=project / "repo", force=False, branch="feat", force_delete=True, env=env
+        )
+
+        assert not worktree.exists()
+        assert _local_branches(project / "repo", env) == ["main"]
+
+    def test_exits_when_no_worktree_exists_for_the_branch(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_project(tmp_path, env)
+        repo = project / "repo"
+        _git("branch", "feat", cwd=repo, env=env)
+
+        with pytest.raises(SystemExit):
+            remove_worktree(repo_dir=repo, force=False, branch="feat", env=env)
+
+        assert "feat" in _local_branches(repo, env)
+
+    def test_exits_when_other_worktrees_exist_but_none_match(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project, worktree = self._project_with_worktree(tmp_path, env, branch="other")
+        repo = project / "repo"
+
+        with pytest.raises(SystemExit):
+            remove_worktree(repo_dir=repo, force=False, branch="missing", env=env)
+
+        assert worktree.is_dir()
+
+    def test_exits_when_the_branch_is_the_main_workspace(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project, worktree = self._project_with_worktree(tmp_path, env)
+
+        with pytest.raises(SystemExit):
+            remove_worktree(repo_dir=project / "repo", force=False, branch="main", env=env)
+
+        assert worktree.is_dir()
+
+    def test_works_outside_an_agm_project(self, tmp_path: Path, env: dict[str, str]) -> None:
+        repo = _plain_repo(tmp_path, env)
+        worktree = ensure_worktree(
+            new_branch="feat", worktrees_dir=None, branch=None, cwd=repo, env=env
+        )
+
+        remove_worktree(repo_dir=repo, force=False, branch="feat", env=env)
+
+        assert not worktree.exists()
+        assert _local_branches(repo, env) == ["main"]

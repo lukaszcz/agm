@@ -193,6 +193,46 @@ class TestSourceSpan:
 
 
 # ---------------------------------------------------------------------------
+# Nullary nodes
+# ---------------------------------------------------------------------------
+
+# Every AST node kind whose whole content is its position: a type expression, a
+# literal, a jump, or a pattern.  They share one contract, so they are checked
+# together rather than one construction at a time.
+_NULLARY_NODES = [
+    TextT,
+    JsonT,
+    BoolT,
+    IntT,
+    DecimalT,
+    UnitT,
+    UnitLit,
+    NullLit,
+    Break,
+    Continue,
+    WildcardPattern,
+]
+
+
+@pytest.mark.parametrize("node_type", _NULLARY_NODES, ids=lambda t: t.__name__)
+def test_nullary_node_equality_ignores_span_and_node_id(node_type: type) -> None:
+    """Two nullary nodes of a kind are the same node wherever they were written."""
+    first = node_type(span=span(1, 0, 1, 5), node_id=1)
+    second = node_type(span=span(9, 2, 9, 7), node_id=99)
+
+    assert first == second
+
+
+@pytest.mark.parametrize("node_type", _NULLARY_NODES, ids=lambda t: t.__name__)
+def test_nullary_node_is_frozen(node_type: type) -> None:
+    """No pass may retag a node in place; artifacts wrap the AST instead."""
+    node = node_type(span=span(), node_id=1)
+
+    with pytest.raises((FrozenInstanceError, AttributeError)):
+        setattr(node, "span", span(2, 0, 2, 4))
+
+
+# ---------------------------------------------------------------------------
 # TypeExpr hierarchy
 # ---------------------------------------------------------------------------
 
@@ -200,26 +240,6 @@ class TestSourceSpan:
 class TestTypeExprs:
     def _s(self) -> SourceSpan:
         return span()
-
-    def test_text_t(self) -> None:
-        t = TextT(span=self._s(), node_id=1)
-        assert isinstance(t, TextT)
-
-    def test_json_t(self) -> None:
-        t = JsonT(span=self._s(), node_id=1)
-        assert isinstance(t, JsonT)
-
-    def test_bool_t(self) -> None:
-        t = BoolT(span=self._s(), node_id=1)
-        assert isinstance(t, BoolT)
-
-    def test_int_t(self) -> None:
-        t = IntT(span=self._s(), node_id=1)
-        assert isinstance(t, IntT)
-
-    def test_decimal_t(self) -> None:
-        t = DecimalT(span=self._s(), node_id=1)
-        assert isinstance(t, DecimalT)
 
     def test_name_t(self) -> None:
         t = NameT(name="MyType", span=self._s(), node_id=1)
@@ -234,10 +254,6 @@ class TestTypeExprs:
         val = IntT(span=self._s(), node_id=2)
         t = DictT(value=val, span=self._s(), node_id=1)
         assert t.value is val
-
-    def test_unit_t(self) -> None:
-        t = UnitT(span=self._s(), node_id=1)
-        assert isinstance(t, UnitT)
 
     def test_func_t_no_params(self) -> None:
         result = IntT(span=self._s(), node_id=2)
@@ -254,18 +270,6 @@ class TestTypeExprs:
         assert len(t.params) == 2
         assert t.params[0] is p1
         assert t.params[1] is p2
-
-    def test_func_t_params_is_tuple(self) -> None:
-        result = UnitT(span=self._s(), node_id=2)
-        t = FuncT(params=(), result=result, span=self._s(), node_id=1)
-        assert isinstance(t.params, tuple)
-
-    def test_type_equality_ignores_span_and_node_id(self) -> None:
-        s1 = span(1, 0, 1, 5)
-        s2 = span(2, 0, 2, 5)
-        t1 = TextT(span=s1, node_id=1)
-        t2 = TextT(span=s2, node_id=99)
-        assert t1 == t2
 
     def test_name_t_equality(self) -> None:
         t1 = NameT(name="Foo", span=span(1, 0, 1, 3), node_id=1)
@@ -309,15 +313,6 @@ class TestLiterals:
     def _s(self) -> SourceSpan:
         return span()
 
-    def test_unit_lit(self) -> None:
-        node = UnitLit(span=self._s(), node_id=1)
-        assert isinstance(node, UnitLit)
-
-    def test_unit_lit_equality_ignores_span_node_id(self) -> None:
-        a = UnitLit(span=span(1, 0, 1, 2), node_id=1)
-        b = UnitLit(span=span(5, 0, 5, 2), node_id=99)
-        assert a == b
-
     def test_int_lit(self) -> None:
         node = IntLit(value=42, span=self._s(), node_id=1)
         assert node.value == 42
@@ -327,10 +322,6 @@ class TestLiterals:
         node = DecimalLit(value=d, span=self._s(), node_id=1)
         assert node.value == d
 
-    def test_decimal_lit_holds_decimal_type(self) -> None:
-        node = DecimalLit(value=decimal.Decimal("1.0"), span=self._s(), node_id=1)
-        assert isinstance(node.value, decimal.Decimal)
-
     def test_bool_lit_true(self) -> None:
         node = BoolLit(value=True, span=self._s(), node_id=1)
         assert node.value is True
@@ -338,10 +329,6 @@ class TestLiterals:
     def test_bool_lit_false(self) -> None:
         node = BoolLit(value=False, span=self._s(), node_id=1)
         assert node.value is False
-
-    def test_null_lit(self) -> None:
-        node = NullLit(span=self._s(), node_id=1)
-        assert isinstance(node, NullLit)
 
     def test_string_lit(self) -> None:
         node = StringLit(value="hello", span=self._s(), node_id=1)
@@ -971,43 +958,6 @@ class TestBreakContinueNodes:
     def _s(self) -> SourceSpan:
         return span()
 
-    def test_break_construction(self) -> None:
-        node = Break(span=self._s(), node_id=1)
-        assert isinstance(node, Break)
-
-    def test_continue_construction(self) -> None:
-        node = Continue(span=self._s(), node_id=1)
-        assert isinstance(node, Continue)
-
-    def test_break_equality_ignores_span_node_id(self) -> None:
-        a = Break(span=span(1, 0, 1, 5), node_id=1)
-        b = Break(span=span(9, 0, 9, 5), node_id=99)
-        assert a == b
-
-    def test_continue_equality_ignores_span_node_id(self) -> None:
-        a = Continue(span=span(1, 0, 1, 8), node_id=1)
-        b = Continue(span=span(9, 0, 9, 8), node_id=99)
-        assert a == b
-
-    def test_break_frozen(self) -> None:
-        node = Break(span=self._s(), node_id=1)
-        with pytest.raises((FrozenInstanceError, AttributeError)):
-            setattr(node, "span", self._s())
-
-    def test_continue_frozen(self) -> None:
-        node = Continue(span=self._s(), node_id=1)
-        with pytest.raises((FrozenInstanceError, AttributeError)):
-            setattr(node, "span", self._s())
-
-    def test_break_in_expr_union(self) -> None:
-        # Break is a member of the Expr union (BottomType — assignable anywhere).
-        node: Expr = Break(span=self._s(), node_id=1)
-        assert isinstance(node, Break)
-
-    def test_continue_in_expr_union(self) -> None:
-        node: Expr = Continue(span=self._s(), node_id=1)
-        assert isinstance(node, Continue)
-
     def test_walk_visits_break_as_leaf(self) -> None:
         from agm.agl.syntax.visitor import walk
 
@@ -1362,10 +1312,6 @@ class TestDeclarations:
 class TestPatterns:
     def _s(self) -> SourceSpan:
         return span()
-
-    def test_wildcard_pattern(self) -> None:
-        p = WildcardPattern(span=self._s(), node_id=1)
-        assert isinstance(p, WildcardPattern)
 
     def test_literal_pattern(self) -> None:
         lit = IntLit(value=42, span=self._s(), node_id=2)

@@ -7,6 +7,8 @@ of the checker and lowerer.
 
 from __future__ import annotations
 
+import itertools
+
 import pytest
 
 from agm.agl.syntax.nodes import ParamKind, VarPattern, WildcardPattern
@@ -23,7 +25,12 @@ STANDARD = ParamKind.STANDARD
 NAMED_ONLY = ParamKind.NAMED_ONLY
 
 _SPAN = SourceSpan(1, 1, 1, 10, 0, 10)
-_CALL_SPAN = SourceSpan(2, 1, 2, 20, 11, 30)
+_CALL_SPAN = SourceSpan(1, 1, 1, 80, 0, 80)
+
+# Every test item gets its own span on its own line, so a diagnostic that is
+# attached to the wrong argument -- or to the whole call instead of to one
+# argument -- lands on coordinates no other item can produce.
+_next_item_line = itertools.count(10)
 
 
 class _Item:
@@ -34,6 +41,8 @@ class _Item:
         # label: display string for repr
         self.name = name
         self.label = label or (name if name else "<expr>")
+        line = next(_next_item_line)
+        self.span = SourceSpan(line, 1, line, 1 + len(self.label), 0, len(self.label))
 
     def __repr__(self) -> str:
         return f"_Item({self.label!r})"
@@ -53,8 +62,8 @@ def _bare_name(item: _Item) -> str | None:
     return item.name
 
 
-def _span_of(_item: _Item) -> SourceSpan:
-    return _SPAN
+def _span_of(item: _Item) -> SourceSpan:
+    return item.span
 
 
 def _bind(
@@ -64,7 +73,7 @@ def _bind(
     context_desc: str = "call to 'f'",
 ) -> tuple[_Item | None, ...]:
     """Helper to call bind_arguments with a simple named arg format."""
-    bound_named = [BoundName(name=n, value=v, span=_SPAN) for n, v in named]
+    bound_named = [BoundName(name=n, value=v, span=v.span) for n, v in named]
     return bind_arguments(
         params,
         positional,
@@ -289,8 +298,11 @@ def test_empty_params_empty_args() -> None:
 def test_too_many_positional_all_standard() -> None:
     """Opaque extra positional arg past all-standard params (no named-only) → too-many error."""
     params = [BindParam("x", STANDARD, False)]
-    with pytest.raises(AglTypeError, match="[Tt]oo many positional"):
-        _bind(params, [_item("1"), _item("2")], [])
+    accepted, extra = _item("1"), _item("2")
+    with pytest.raises(AglTypeError, match="[Tt]oo many positional") as exc_info:
+        _bind(params, [accepted, extra], [])
+    assert exc_info.value.span == extra.span
+    assert exc_info.value.span != accepted.span
 
 
 def test_too_many_positional_with_named_only() -> None:
@@ -300,21 +312,28 @@ def test_too_many_positional_with_named_only() -> None:
         BindParam("z", NAMED_ONLY, False),
     ]
     # Second positional is opaque (not bare) → "positional in named-only position"
-    with pytest.raises(AglTypeError, match="named-only position"):
-        _bind(params, [_item("1"), _item("2+3")], [])
+    accepted, extra = _item("1"), _item("2+3")
+    with pytest.raises(AglTypeError, match="named-only position") as exc_info:
+        _bind(params, [accepted, extra], [])
+    assert exc_info.value.span == extra.span
+    assert exc_info.value.span != accepted.span
 
 
 def test_too_many_positional_all_named_only() -> None:
     """No pos-capable params but there IS a named-only: opaque positional → named-only-position."""
     params = [BindParam("x", NAMED_ONLY, False)]
-    with pytest.raises(AglTypeError, match="named-only position"):
-        _bind(params, [_item("42")], [])
+    offender = _item("42")
+    with pytest.raises(AglTypeError, match="named-only position") as exc_info:
+        _bind(params, [offender], [])
+    assert exc_info.value.span == offender.span
 
 
 def test_too_many_positional_no_named_only_zero_params() -> None:
     """No params at all; opaque positional → too-many-positional error (no named-only context)."""
-    with pytest.raises(AglTypeError, match="[Tt]oo many positional"):
-        _bind([], [_item("1")], [])
+    offender = _item("1")
+    with pytest.raises(AglTypeError, match="[Tt]oo many positional") as exc_info:
+        _bind([], [offender], [])
+    assert exc_info.value.span == offender.span
 
 
 def test_pos_only_by_name_rejected() -> None:
@@ -323,15 +342,21 @@ def test_pos_only_by_name_rejected() -> None:
         BindParam("x", POSITIONAL_ONLY, False),
         BindParam("y", STANDARD, False),
     ]
-    with pytest.raises(AglTypeError, match="positional-only"):
-        _bind(params, [_item("1")], [("x", _item("99"))])
+    accepted, offender = _item("1"), _item("99")
+    with pytest.raises(AglTypeError, match="positional-only") as exc_info:
+        _bind(params, [accepted], [("x", offender)])
+    assert exc_info.value.span == offender.span
+    assert exc_info.value.span != accepted.span
 
 
 def test_unknown_named_arg() -> None:
     """Named arg that doesn't match any param name → error."""
     params = [BindParam("x", STANDARD, False)]
-    with pytest.raises(AglTypeError, match="Unknown"):
-        _bind(params, [_item("1")], [("oops", _item("2"))])
+    accepted, offender = _item("1"), _item("2")
+    with pytest.raises(AglTypeError, match="Unknown") as exc_info:
+        _bind(params, [accepted], [("oops", offender)])
+    assert exc_info.value.span == offender.span
+    assert exc_info.value.span != accepted.span
 
 
 def test_duplicate_positional_and_named() -> None:
@@ -340,8 +365,11 @@ def test_duplicate_positional_and_named() -> None:
         BindParam("x", STANDARD, False),
         BindParam("y", STANDARD, True),
     ]
-    with pytest.raises(AglTypeError, match="Duplicate"):
-        _bind(params, [_item("1")], [("x", _item("again"))])
+    accepted, offender = _item("1"), _item("again")
+    with pytest.raises(AglTypeError, match="Duplicate") as exc_info:
+        _bind(params, [accepted], [("x", offender)])
+    assert exc_info.value.span == offender.span
+    assert exc_info.value.span != accepted.span
 
 
 def test_duplicate_shorthand_and_named() -> None:
@@ -350,16 +378,22 @@ def test_duplicate_shorthand_and_named() -> None:
         BindParam("x", STANDARD, False),
         BindParam("z", NAMED_ONLY, False),
     ]
-    with pytest.raises(AglTypeError, match="Duplicate"):
-        _bind(params, [_item("1"), _bare("z")], [("z", _item("also"))])
+    shorthand, offender = _bare("z"), _item("also")
+    with pytest.raises(AglTypeError, match="Duplicate") as exc_info:
+        _bind(params, [_item("1"), shorthand], [("z", offender)])
+    assert exc_info.value.span == offender.span
+    assert exc_info.value.span != shorthand.span
 
 
 def test_duplicate_bare_shorthands_for_same_named_only() -> None:
     """Two bare-name shorthands targeting the same named-only slot → duplicate."""
     params = [BindParam("z", NAMED_ONLY, False)]
     # Both positional args are bare "z" shorthands trying to fill the same slot.
-    with pytest.raises(AglTypeError, match="Duplicate"):
-        _bind(params, [_bare("z"), _bare("z")], [])
+    first, second = _bare("z"), _bare("z")
+    with pytest.raises(AglTypeError, match="Duplicate") as exc_info:
+        _bind(params, [first, second], [])
+    assert exc_info.value.span == second.span
+    assert exc_info.value.span != first.span
 
 
 def test_missing_required_standard() -> None:
@@ -368,22 +402,28 @@ def test_missing_required_standard() -> None:
         BindParam("x", STANDARD, False),
         BindParam("y", STANDARD, False),
     ]
-    with pytest.raises(AglTypeError, match="Missing"):
-        _bind(params, [_item("1")], [])
+    supplied = _item("1")
+    with pytest.raises(AglTypeError, match="Missing") as exc_info:
+        _bind(params, [supplied], [])
+    # A missing argument has no argument of its own, so it lands on the call.
+    assert exc_info.value.span == _CALL_SPAN
+    assert exc_info.value.span != supplied.span
 
 
 def test_missing_required_named_only() -> None:
     """Required named-only param not supplied → missing error."""
     params = [BindParam("z", NAMED_ONLY, False)]
-    with pytest.raises(AglTypeError, match="Missing"):
+    with pytest.raises(AglTypeError, match="Missing") as exc_info:
         _bind(params, [], [])
+    assert exc_info.value.span == _CALL_SPAN
 
 
 def test_missing_required_pos_only() -> None:
     """Required positional-only param not supplied → missing error."""
     params = [BindParam("x", POSITIONAL_ONLY, False)]
-    with pytest.raises(AglTypeError, match="Missing"):
+    with pytest.raises(AglTypeError, match="Missing") as exc_info:
         _bind(params, [], [])
+    assert exc_info.value.span == _CALL_SPAN
 
 
 def test_bare_shorthand_unknown_named_only() -> None:
@@ -394,8 +434,11 @@ def test_bare_shorthand_unknown_named_only() -> None:
     ]
     # Positional-capable slots exhausted, then bare "w" lands in named-only territory
     # but there's no param named "w".
-    with pytest.raises(AglTypeError, match="Unknown"):
-        _bind(params, [_item("1"), _bare("w")], [])
+    accepted, offender = _item("1"), _bare("w")
+    with pytest.raises(AglTypeError, match="Unknown") as exc_info:
+        _bind(params, [accepted, offender], [])
+    assert exc_info.value.span == offender.span
+    assert exc_info.value.span != accepted.span
 
 
 def test_bare_shorthand_already_filled() -> None:
@@ -407,5 +450,8 @@ def test_bare_shorthand_already_filled() -> None:
     # z is filled by named arg first (z=something), then bare "z" as positional
     # But note: positional args are processed BEFORE named args in bind_arguments.
     # So the bare "z" is processed first and fills z, then the named arg "z=..." is a duplicate.
-    with pytest.raises(AglTypeError, match="Duplicate"):
-        _bind(params, [_item("1"), _bare("z")], [("z", _item("also"))])
+    shorthand, offender = _bare("z"), _item("also")
+    with pytest.raises(AglTypeError, match="Duplicate") as exc_info:
+        _bind(params, [_item("1"), shorthand], [("z", offender)])
+    assert exc_info.value.span == offender.span
+    assert exc_info.value.span != shorthand.span

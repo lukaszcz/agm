@@ -245,7 +245,7 @@ class _AglRecordView:
             "_agl_value",
             _nominal_value(
                 type(self)._agl_descriptor,
-                {name: decode_boundary_value(fields[name]) for name in expected},
+                {name: _decode_written_value(fields[name]) for name in expected},
             ),
         )
 
@@ -268,9 +268,16 @@ class _AglRecordView:
         return encode_boundary_value(field)
 
     def __setattr__(self, name: str, value: object) -> None:
-        if hasattr(type(self), name) or name not in type(self)._agl_descriptor.mutable_fields:
+        cls = type(self)
+        # A shadowed field is a field dot access cannot reach in either
+        # direction, so it reports as unwritable rather than as unknown.
+        shadowed = hasattr(cls, name)
+        if not shadowed and name in cls._agl_descriptor.mutable_fields:
+            self._agl_value.fields[name] = _decode_written_value(value)
+        elif shadowed or name in cls._agl_field_set:
             raise AttributeError(_IMMUTABLE_MESSAGE)
-        self._agl_value.fields[name] = _decode_written_value(value)
+        else:
+            raise AttributeError(name)
 
     def __eq__(self, other: object) -> bool:
         if type(other) is not type(self):
@@ -625,9 +632,13 @@ def encode_boundary_value(value: Value) -> object:
     An ``array``/``dict`` crosses as a live view (mutating it mutates the AgL
     value). A closure needs an interpreter to become a callable proxy, which
     the active extern call supplies through :func:`active_function_encoder`;
-    the runtime boundary itself remains evaluator-independent. A ``json``
-    payload crosses uncopied and unchecked: the companion is trusted to treat
-    what it receives as read-only.
+    the runtime boundary itself remains evaluator-independent. A closure
+    therefore crosses only inside a call, matching the window a proxy may be
+    invoked in: reading one through a view that outlived its call -- or from
+    a thread that did not inherit the call's context -- reports rather than
+    minting a proxy nothing could invoke. A ``json`` payload crosses uncopied
+    and unchecked: the companion is trusted to treat what it receives as
+    read-only.
     """
     if isinstance(value, UnitValue):
         return None
@@ -648,7 +659,10 @@ def encode_boundary_value(value: Value) -> object:
     if isinstance(value, IrClosureValue):
         encoder = _ACTIVE_FUNCTION_ENCODER.get()
         if encoder is None:
-            raise BoundaryViolation("cannot encode an AgL function without an interpreter")
+            raise BoundaryViolation(
+                "an AgL function crosses the boundary only during its extern call, "
+                "on the interpreter's own thread"
+            )
         return encoder(value)
     if isinstance(value, (RecordValue, ExceptionValue)):
         try:

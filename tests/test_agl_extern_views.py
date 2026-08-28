@@ -260,3 +260,64 @@ def test_mutable_enum_member_crosses_as_a_live_record_view() -> None:
 
     assert value.fields["value"] == IntValue(3)
     assert decode_boundary_value(view) is value
+
+
+def test_view_retained_past_a_call_reads_plain_fields_but_not_a_function_field() -> None:
+    """A retained view stays live; the functions it holds stay call-scoped.
+
+    Encoding a closure needs the interpreter the active extern call
+    publishes, so a function field is readable during a call (a later one
+    included) and reports outside every call, while every other field keeps
+    reading through.
+    """
+    nominal, record_cls = _callback_box_class()
+    window = ExternCallWindow()
+
+    def encode(closure: IrClosureValue) -> object:
+        return AglCallableProxy(
+            arity=0,
+            closure=closure,
+            require_active_window=window.require_active,
+            invoke=lambda _args: IntValue(7),
+        )
+
+    view = cast(
+        _RecordCompanion,
+        encode_boundary_value(
+            RecordValue(
+                nominal,
+                "Box",
+                {"value": IntValue(1), "callback": IrClosureValue(FunctionId(1), ())},
+            )
+        ),
+    )
+
+    with active_function_encoder(encode):
+        assert getattr(view, "callback") is not None
+
+    assert view.value == 1
+    with pytest.raises(BoundaryViolation):
+        getattr(view, "callback")
+
+
+def test_companion_construction_reports_an_unsupported_field_as_a_type_error() -> None:
+    """A companion's own bad value is a type error wherever it is written."""
+    _, record_cls = _record_class(mutable=True)
+
+    with pytest.raises(BoundaryTypeError):
+        record_cls(value=object(), fixed=1)
+
+
+def test_mutable_record_view_separates_an_unknown_name_from_an_immutable_field() -> None:
+    nominal, record_cls = _record_class(mutable=True)
+    view = cast(
+        _RecordCompanion,
+        encode_boundary_value(
+            RecordValue(nominal, "Mutable", {"value": IntValue(1), "fixed": IntValue(2)})
+        ),
+    )
+
+    with pytest.raises(AttributeError, match=r"^valu$"):
+        setattr(view, "valu", 3)
+    with pytest.raises(AttributeError, match="immutable"):
+        view.fixed = 3

@@ -449,7 +449,8 @@ class ExternRegistry:
         runs, or while this builds an ``ExternError`` message from an
         exception *fn* raised -- raises ``AglCyclicValue``, which becomes
         ``CyclicValueError`` instead. Retained views remain live after the
-        call.
+        call, except for reads of a function-valued field or element, which
+        need the encoder this call publishes.
 
         *nominals* resolves the ``ExternError``/``CyclicValueError`` nominal;
         it defaults to the shipped standard library's own identities for a
@@ -459,7 +460,10 @@ class ExternRegistry:
         *function_encoder* turns an AgL closure into a callable proxy and is
         published for the call's extent, so every closure a companion reaches
         -- through an argument, a retained view, or a nested container --
-        encodes through the interpreter it is running under.
+        encodes through the interpreter it is running under. Like the
+        companion runtime state activated here, it is scoped to this call's
+        context: a thread the companion spawns sees it only if it runs in a
+        copy of that context.
         """
         with active_function_encoder(function_encoder):
             try:

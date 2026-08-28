@@ -182,8 +182,11 @@ Mutating a view mutates the caller's value, including a view stored inside a
 nominal field. Mutable-record views have the same write-through behavior for
 their `var` fields. Views hold only their container and remain usable after an
 extern call returns; retaining one is therefore part of the companion's
-contract. Two views over the same AgL container compare equal and hash alike,
-but they need not be the same Python object.
+contract. The one exception is a function value: reading one out of a view
+needs the extern call that owns it, as described in
+[Callback invocation window](#callback-invocation-window). Two views over the
+same AgL container compare equal and hash alike, but they need not be the same
+Python object.
 
 Views are not built-in `list` or `dict`. Use `list(view)` or `dict(view)` for a
 detached Python snapshot. A view encodes and decodes elements lazily, so a
@@ -226,6 +229,13 @@ active. A companion may retain a callback and invoke it during a later extern
 call on that thread, including a nested extern call. Calling it after the
 outermost extern call returns, or from another thread, raises a Python-side
 error before AgL execution resumes.
+
+Obtaining a callback follows the same window: an AgL function crosses only
+inside an extern call, so reading a function out of a retained view outside
+every call raises rather than yielding a callback nothing could invoke. Per-call
+context — the callback encoder and `runtime` state alike — belongs to the
+calling thread's context; a thread the companion spawns sees it only when it
+runs in a copy of that context (`contextvars.copy_context()`).
 
 ## Transparent callback exceptions
 

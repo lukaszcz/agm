@@ -161,3 +161,13 @@ func TestStringsAndComments(t *testing.T) {
 	// Interpolation delimiters stay visible inside a template.
 	assertFace(t, `let s = "hi %{name}"`, "%{", "special")
 }
+
+// `::' and `:=' are single tokens whose `:' would otherwise be repainted as a
+// plain delimiter, splitting the token across two faces.
+func TestColonOperatorsFaceAsOneToken(t *testing.T) {
+	assertFace(t, "count := 1", ":=", "symbol.operator")
+	assertFace(t, "meter.value := 7", ":=", "symbol.operator")
+	assertFace(t, "let o = Point::origin", "::", "symbol.operator")
+	// A lone `:' introducing an annotation stays a plain delimiter.
+	assertFace(t, "def f(a: int)", ":", "symbol")
+}

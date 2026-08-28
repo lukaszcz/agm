@@ -64,6 +64,11 @@ rules:
     - symbol: "([:;|])"
     - symbol.brackets: "([(){}]|\\[|\\])"
 
+    # `::' and `:=' are single operator tokens, but the delimiter rules above
+    # repaint the `:' of each.  Restoring them last is safe: `:' is a true
+    # delimiter, so neither spelling can ever occur inside a name.
+    - symbol.operator: "(::|:=)"
+
     # Template strings. AgL strings may contain %{...}; this highlights the
     # interpolation delimiters without trying to parse nested AgL expressions.
     - constant.string:

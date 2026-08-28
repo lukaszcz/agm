@@ -13,7 +13,8 @@
           "Option::Some(value = \".txt\")",
           "draft.bak",
           "\nfalse\ntrue\n",
-          "[\"work\", \"notes\", \"draft.txt\"]"
+          "[\"work\", \"notes\", \"draft.txt\"]",
+          "true\n/abs/b\narchive.tar\nOption::None\n../c\n../..\n[\"/\", \"one\", \"two\"]\ntrue\n"
         ]
       }
     },
@@ -30,7 +31,8 @@
           "Option::None",
           "notes.bak",
           "\nfalse\ntrue\n",
-          "[\"work\", \"notes\"]"
+          "[\"work\", \"notes\"]",
+          "true\n/abs/b\narchive.tar\nOption::None\n../c\n../..\n[\"/\", \"one\", \"two\"]\ntrue\n"
         ]
       }
     },
@@ -46,7 +48,8 @@
           "Option::None",
           "notes.bak",
           "\nfalse\ntrue\n",
-          "[\"work\", \"notes\"]"
+          "[\"work\", \"notes\"]",
+          "true\n/abs/b\narchive.tar\nOption::None\n../c\n../..\n[\"/\", \"one\", \"two\"]\ntrue\n"
         ]
       }
     }

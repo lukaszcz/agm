@@ -17,6 +17,7 @@ Tests deliberately do *not* pin internal implementation details.
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -27,6 +28,7 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.parser import parse_program
 from agm.agl.scope import AglScopeError
+from agm.agl.scope.program import ResolvedProgram
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind, ScopeNode
 from agm.agl.scope.symbols import ModuleResolution as _ModuleResolution
 from agm.agl.semantics.type_table import (
@@ -132,7 +134,9 @@ from agm.agl.typecheck.env import (
     OutputContractSpec,
 )
 from agm.agl.typecheck.function_inference import resolve_function_header
+from agm.agl.typecheck.program import CheckedProgram
 from tests._agl_helpers import all_node_ids, enum_typedef, register_typedef, strip_decl_ids
+from tests.agl import module_graph
 from tests.agl.module_graph import (
     check_resolved,
     resolve_and_check_entry,
@@ -140,6 +144,71 @@ from tests.agl.module_graph import (
     resolve_and_check_repl_entry,
     resolve_inline_entry,
 )
+
+# ---------------------------------------------------------------------------
+# Shared standard-library checking
+# ---------------------------------------------------------------------------
+
+
+def _capability_key(capabilities: HostCapabilities) -> tuple[object, ...]:
+    """Hashable identity of a capability catalog (``codec_kinds`` is a dict)."""
+    return (
+        capabilities.supports_shell_exec,
+        capabilities.supports_extern,
+        tuple(sorted(capabilities.codec_kinds.items())),
+    )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def share_checked_library_modules() -> Iterator[None]:
+    """Type-check the standard library once per capability catalog, not per test.
+
+    Every helper in :mod:`tests.agl.module_graph` builds a real module graph
+    over the process-cached ``std/*`` modules, so the entry differs from test to
+    test while the library modules — the overwhelming majority of the graph —
+    are the same immutable ``LoadedModule`` objects with the same checked
+    result.  ``check_program`` already accepts that reuse through its
+    ``cached_checked_modules`` parameter, the same seam the REPL uses for its
+    bootstrap image, and honors a cached module only when its resolved
+    ``Program`` is the very object the current graph holds; anything else is
+    re-checked normally.  Checking is capability-sensitive, so the shared
+    library is keyed by the capability catalog the test asked for.
+
+    Nothing observable changes: the entry module is always checked afresh,
+    against a whole-program declaration and signature context this call
+    rebuilds either way.
+    """
+    real_check_program = module_graph.check_program
+    library_by_capabilities: dict[tuple[object, ...], dict[ModuleId, CheckedModule]] = {}
+
+    def check_program_with_shared_library(
+        resolved: ResolvedProgram,
+        capabilities: HostCapabilities,
+        entry_seed_env: TypeEnvironment | None = None,
+        cached_checked_modules: Mapping[ModuleId, CheckedModule] | None = None,
+    ) -> CheckedProgram:
+        key = _capability_key(capabilities)
+        checked = real_check_program(
+            resolved,
+            capabilities,
+            entry_seed_env=entry_seed_env,
+            cached_checked_modules=(
+                cached_checked_modules
+                if cached_checked_modules is not None
+                else library_by_capabilities.get(key)
+            ),
+        )
+        library_by_capabilities.setdefault(key, {}).update(
+            {mid: module for mid, module in checked.modules.items() if mid != checked.entry_id}
+        )
+        return checked
+
+    module_graph.check_program = check_program_with_shared_library
+    try:
+        yield
+    finally:
+        module_graph.check_program = real_check_program
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1112,56 +1181,49 @@ class TestTypeEnvironment:
         )
         assert env.resolve_binding(ref) is None
 
-    def test_renamed_scoped_enum_import_owner_form_resolves(self, tmp_path: object) -> None:
-        """Owner-form construction must keep a renamed import's scope path.
+    _SCOPED_ENUM_LIB_SOURCE = "scope A\nenum Status\n  | Good\n  | Bad\nend A\n"
 
-        An ``import lib::{A::Status as S}`` tail selects a QName whose declaration
-        path is ``("A",)``; enum-owner-form construction used to discard that
-        path before asking the shared type table for the source template,
+    def _check_scoped_enum_import(self, root: Path, entry: str) -> CheckedProgram:
+        """Check a real two-module graph whose entry renames a scoped enum.
+
+        Both cases below guard the same regression: an
+        ``import lib::{A::Status as S}`` tail selects a QName whose declaration
+        path is ``("A",)``, and enum-owner-form construction used to discard
+        that path before asking the shared type table for the source template,
         so it asked for a root ``lib::Status`` template instead and hit an
-        internal consistency check -- even when the import was never used,
-        because owner forms are enumerated for every checked module.
+        internal consistency check.
         """
-        from pathlib import Path
-
-        from agm.agl.matchcompile import compile_program_matches
         from agm.agl.scope.program import resolve_program
         from agm.agl.typecheck.program import check_program
         from tests.agl.ir_harness import make_graph_from_files
 
-        lib_source = "scope A\nenum Status\n  | Good\n  | Bad\nend A\n"
+        graph = make_graph_from_files(root, {"entry": entry, "lib": self._SCOPED_ENUM_LIB_SOURCE})
+        return check_program(resolve_program(graph), default_capabilities())
 
-        unused_modules = {
-            "entry": "import lib::{A::Status as S}\nprint(3)",
-            "lib": lib_source,
-        }
-        unused_checked = check_program(
-            resolve_program(make_graph_from_files(Path(tmp_path) / "unused", unused_modules)),
-            default_capabilities(),
-        )
+    def test_renamed_scoped_enum_import_resolves_when_never_used(self, tmp_path: Path) -> None:
+        """Owner forms are enumerated even for an import no expression references."""
+        from agm.agl.matchcompile import compile_program_matches
+
+        checked = self._check_scoped_enum_import(tmp_path, "import lib::{A::Status as S}\nprint(3)")
         # enum_owner_forms() is enumerated for every checked module regardless
         # of whether an enum constructor is actually referenced; this must not
         # raise even though 'S' is never used.
-        unused_checked.modules[ENTRY_ID].type_env.enum_owner_forms()
-        unused_match = compile_program_matches(unused_checked)
-        assert unused_match.compiled is not None
+        checked.modules[ENTRY_ID].type_env.enum_owner_forms()
+        assert compile_program_matches(checked).compiled is not None
 
-        used_modules = {
-            "entry": (
-                "import lib::{A::Status as S}\n"
-                "let s: S = S::Good\n"
-                "print(case s of\n"
-                "  | S::Good => 1\n"
-                "  | S::Bad => 2)"
-            ),
-            "lib": lib_source,
-        }
-        used_checked = check_program(
-            resolve_program(make_graph_from_files(Path(tmp_path) / "used", used_modules)),
-            default_capabilities(),
+    def test_renamed_scoped_enum_import_owner_form_resolves(self, tmp_path: Path) -> None:
+        """Constructing and matching through the renamed owner form resolves."""
+        from agm.agl.matchcompile import compile_program_matches
+
+        checked = self._check_scoped_enum_import(
+            tmp_path,
+            "import lib::{A::Status as S}\n"
+            "let s: S = S::Good\n"
+            "print(case s of\n"
+            "  | S::Good => 1\n"
+            "  | S::Bad => 2)",
         )
-        used_match = compile_program_matches(used_checked)
-        assert used_match.compiled is not None
+        assert compile_program_matches(checked).compiled is not None
 
 
 class TestCheckedOutputClosure:
@@ -4599,21 +4661,20 @@ class TestPartialConstructorAndValueCalls:
             params=(TextType(),), result=checked.type_env.instantiate_nominal("Box", (TextType(),))
         )
 
-    def test_partial_constructor_type_arg_errors_and_abstract_exception(self) -> None:
-        non_generic_err = reject_type("record Point\n  x: int\nlet make = Point::[int](?)\nmake")
-        assert "type argument" in str(non_generic_err).lower()
-        arity_err = reject_type(
-            "record Box[T]\n  value: T\nlet make = Box::[int, text](value = ?)\nmake"
-        )
-        assert "type argument" in str(arity_err).lower()
-        qualified_err = reject_type("enum E\n  | v(x: int)\nlet make = E[int]::v(x = ?)\nmake")
-        assert "type argument" in str(qualified_err).lower()
-        qualified_call_arg_err = reject_type(
-            "enum E\n  | v(x: int)\nlet make = E::v::[int](x = ?)\nmake"
-        )
-        assert "type argument" in str(qualified_call_arg_err).lower()
-        abstract_err = reject_type("let make = Exception(message = ?)\nmake")
-        assert "abstract" in str(abstract_err).lower()
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "record Point\n  x: int\nlet make = Point::[int](?)\nmake",
+            "record Box[T]\n  value: T\nlet make = Box::[int, text](value = ?)\nmake",
+            "enum E\n  | v(x: int)\nlet make = E[int]::v(x = ?)\nmake",
+            "enum E\n  | v(x: int)\nlet make = E::v::[int](x = ?)\nmake",
+        ],
+    )
+    def test_partial_constructor_rejects_bad_type_arguments(self, source: str) -> None:
+        assert "type argument" in str(reject_type(source)).lower()
+
+    def test_partial_abstract_exception_constructor_rejected(self) -> None:
+        assert "abstract" in str(reject_type("let make = Exception(message = ?)\nmake")).lower()
 
     def test_cross_module_constructor_partial(self, tmp_path: object) -> None:
         from pathlib import Path
@@ -12190,13 +12251,21 @@ class TestNoFiniteSchemaUseSites:
         r = accept_type(_TREE_SRC + "param t: Tree\nt")
         assert r.resolved.program is not None
 
-    def test_phantom_growing_recursive_type_accepted_at_schema_boundaries(self) -> None:
+    @pytest.mark.parametrize(
+        "use_site",
+        [
+            'ask::[R[int]]("Q")',
+            'exec::[R[int]]("cmd")',
+            'let raw: text = "{}"\nraw as R[int]',
+            "param r: R[int]\nr",
+        ],
+    )
+    def test_phantom_growing_recursive_type_accepted_at_schema_boundary(
+        self, use_site: str
+    ) -> None:
         # R's T parameter never affects its wire shape, so recursively
         # mentioning R[array[T]] still closes to one schema definition.
-        assert accept_type(_PHANTOM_GROWING_TYPE_SRC + 'ask::[R[int]]("Q")')
-        assert accept_type(_PHANTOM_GROWING_TYPE_SRC + 'exec::[R[int]]("cmd")')
-        assert accept_type(_PHANTOM_GROWING_TYPE_SRC + 'let raw: text = "{}"\nraw as R[int]')
-        assert accept_type(_PHANTOM_GROWING_TYPE_SRC + "param r: R[int]\nr")
+        assert accept_type(_PHANTOM_GROWING_TYPE_SRC + use_site)
 
 
 class TestCopyAndShallowCopyCall:

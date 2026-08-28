@@ -21,7 +21,6 @@ from shutil import copyfile
 import pytest
 
 from agm.agl.repl import EntryResult, ReplSession
-from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.params import build_engine_config_seeds
 from agm.agl.runtime.request import AgentRequest, AgentResponse
@@ -60,22 +59,45 @@ class _FencedAgent:
         return AgentResponse(content="```json\n42\n```")
 
 
-def _session(
-    *,
-    agent_dispatcher: AgentFn | None = None,
-    engine_base: dict[str, Value] | None = None,
-    setting_overrides: dict[str, SettingOverride] | None = None,
-    host_settings_policy: HostSettingsPolicy | None = None,
-    trace_path: Path | None = None,
-) -> ReplSession:
-    return ReplSession(
-        stdlib_root=_STDLIB_ROOT,
-        agent_dispatcher=agent_dispatcher,
-        engine_base=engine_base,
-        setting_overrides=setting_overrides,
-        host_settings_policy=host_settings_policy,
-        trace_path=trace_path,
-    )
+def _unopened_session(**kwargs: object) -> ReplSession:
+    """Build a session over the repository standard library, left unopened.
+
+    For the tests that must observe the initial ``std/config`` load from the
+    entry that triggers it -- notably the ``setting_overrides`` splice, which
+    is deliberately deferred to that entry.
+    """
+    kwargs.setdefault("stdlib_root", _STDLIB_ROOT)
+    return ReplSession(**kwargs)
+
+
+def _session(**kwargs: object) -> ReplSession:
+    """Build a session over the repository standard library and open it.
+
+    ``agm.commands.repl`` opens a session before accepting an entry, which
+    loads and type-checks the initial library image; going through
+    :meth:`ReplSession.open` here exercises that same startup and lets the
+    session reuse the process-wide bootstrap image instead of re-checking the
+    standard library once per test.
+    """
+    session = _unopened_session(**kwargs)
+    session.open()
+    return session
+
+
+def _assert_setting(value: Value, expected: object) -> None:
+    """Assert a read engine setting equals *expected*.
+
+    A scalar setting compares directly.  An ``Option``/``Agent`` setting is
+    given as a ``(variant, field, payload)`` triple, compared against the
+    value's terminal variant name and that field.
+    """
+    if isinstance(expected, tuple):
+        variant, field_name, payload = expected
+        assert isinstance(value, RecordValue)
+        assert value.display_name.rsplit("::", maxsplit=1)[-1] == variant
+        assert value.fields[field_name] == payload
+    else:
+        assert value == expected
 
 
 def _ok(session: ReplSession, text: str) -> EntryResult:
@@ -96,61 +118,38 @@ def _read(session: ReplSession, key: str) -> Value:
 # ---------------------------------------------------------------------------
 
 
+_PERSISTED_WRITES = [
+    pytest.param("max-iters", "7", IntValue(7), id="max-iters"),
+    pytest.param("strict-json", "true", BoolValue(True), id="strict-json"),
+    pytest.param("timeout", 'Some("45s")', ("Some", "value", TextValue("45s")), id="timeout"),
+    pytest.param("log", "true", BoolValue(True), id="log"),
+    pytest.param(
+        "log-file",
+        'Some("trace.jsonl")',
+        ("Some", "value", TextValue("trace.jsonl")),
+        id="log-file",
+    ),
+    pytest.param(
+        "default-agent",
+        'AgentCommand("scripted")',
+        ("AgentCommand", "command", TextValue("scripted")),
+        id="default-agent",
+    ),
+]
+
+
 class TestCrossEntryPersistence:
     """A write in entry N is visible to a read two entries later (N+2)."""
 
-    def test_max_iters_write_persists_two_entries_later(self) -> None:
+    @pytest.mark.parametrize(("key", "written", "expected"), _PERSISTED_WRITES)
+    def test_write_persists_two_entries_later(
+        self, key: str, written: str, expected: object
+    ) -> None:
         s = _session()
         _ok(s, "import std/config")
-        _ok(s, "std/config::max-iters := 7")
+        _ok(s, f"std/config::{key} := {written}")
         _ok(s, "let unrelated = 1")
-        assert _read(s, "max-iters") == IntValue(7)
-
-    def test_strict_json_write_persists_two_entries_later(self) -> None:
-        s = _session()
-        _ok(s, "import std/config")
-        _ok(s, "std/config::strict-json := true")
-        _ok(s, "let unrelated = 1")
-        assert _read(s, "strict-json") == BoolValue(True)
-
-    def test_timeout_write_persists_two_entries_later(self) -> None:
-        s = _session()
-        _ok(s, "import std/config")
-        _ok(s, 'std/config::timeout := Some("45s")')
-        _ok(s, "let unrelated = 1")
-        value = _read(s, "timeout")
-        assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "Some"
-        assert value.fields["value"] == TextValue("45s")
-        # The written timeout is retained as the live shell-exec timeout.
-        assert s._shell_exec_timeout == 45.0
-
-    def test_log_write_persists_two_entries_later(self) -> None:
-        s = _session()
-        _ok(s, "import std/config")
-        _ok(s, "std/config::log := true")
-        _ok(s, "let unrelated = 1")
-        assert _read(s, "log") == BoolValue(True)
-
-    def test_log_file_write_persists_two_entries_later(self) -> None:
-        s = _session()
-        _ok(s, "import std/config")
-        _ok(s, 'std/config::log-file := Some("trace.jsonl")')
-        _ok(s, "let unrelated = 1")
-        value = _read(s, "log-file")
-        assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "Some"
-        assert value.fields["value"] == TextValue("trace.jsonl")
-
-    def test_default_agent_write_persists_two_entries_later(self) -> None:
-        s = _session()
-        _ok(s, "import std/config")
-        _ok(s, 'std/config::default-agent := AgentCommand("scripted")')
-        _ok(s, "let unrelated = 1")
-        value = _read(s, "default-agent")
-        assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
-        assert value.fields["command"] == TextValue("scripted")
+        _assert_setting(_read(s, key), expected)
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +159,14 @@ class TestCrossEntryPersistence:
 
 class TestRuntimeLiveEffectCarryForward:
     """The loop cap and strict-json parsing effects apply in later entries."""
+
+    def test_timeout_write_retains_the_live_shell_exec_timeout(self) -> None:
+        s = _session()
+        _ok(s, "import std/config")
+        _ok(s, 'std/config::timeout := Some("45s")')
+        _ok(s, "let unrelated = 1")
+        # The written timeout is retained as the live shell-exec timeout.
+        assert s._shell_exec_timeout == 45.0
 
     def test_max_iters_write_caps_later_unguarded_loop(self) -> None:
         s = _session()
@@ -245,7 +252,7 @@ class TestDefaultsAndSeeding:
         assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentClaude"
 
     def test_host_timeout_seed_round_trips_without_disabling_live_timeout(self) -> None:
-        s = ReplSession(stdlib_root=_STDLIB_ROOT, shell_exec_timeout=0.0000001)
+        s = _session(stdlib_root=_STDLIB_ROOT, shell_exec_timeout=0.0000001)
         _ok(s, "import std/config")
 
         value = _read(s, "timeout")
@@ -292,7 +299,7 @@ def _host_seeded_session(
     engine_base = build_engine_config_seeds(raw)
     if default_agent is not None:
         engine_base["default-agent"] = agent_value("AgentCommand", command=default_agent)
-    return ReplSession(
+    return _session(
         stdlib_root=stdlib_root,
         default_strict_json=strict_json if strict_json is not None else False,
         default_loop_limit=max_iters,
@@ -300,14 +307,16 @@ def _host_seeded_session(
     )
 
 
-def _declared_defaults_session(tmp_path: Path) -> ReplSession:
-    """Build a session whose ``std/config`` declares a distinct default per key.
+@pytest.fixture(scope="module")
+def declared_defaults_stdlib(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A standard library whose ``std/config`` declares a distinct default per key.
 
-    No key is host-seeded, so every key's effective value comes from the
-    ``builtin var`` initializer evaluated the first time an entry imports
-    ``std/config``.
+    Built once and never written to afterwards, so every test that opens a
+    session over it reads the same declarations and reuses the same checked
+    bootstrap image.  Each test still gets its own session, so no session
+    state crosses between them.
     """
-    stdlib_root = tmp_path / "stdlib"
+    stdlib_root = tmp_path_factory.mktemp("declared-defaults") / "stdlib"
     config_path = stdlib_root / "std" / "config.agl"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(
@@ -321,7 +330,34 @@ def _declared_defaults_session(tmp_path: Path) -> ReplSession:
         encoding="utf-8",
     )
     _copy_core_and_option(config_path.parent)
-    return ReplSession(stdlib_root=stdlib_root)
+    return stdlib_root
+
+
+_HOST_SEED_PRECEDENCE = [
+    pytest.param({"max_iters": 5}, "max-iters", "9", IntValue(5), id="max-iters"),
+    pytest.param(
+        {"timeout": "3s"},
+        "timeout",
+        'Some("99s")',
+        ("Some", "value", TextValue("3s")),
+        id="timeout",
+    ),
+    pytest.param({"log": True}, "log", "false", BoolValue(True), id="log"),
+    pytest.param(
+        {"log_file": "host.jsonl"},
+        "log-file",
+        'Some("written.jsonl")',
+        ("Some", "value", TextValue("host.jsonl")),
+        id="log-file",
+    ),
+    pytest.param(
+        {"default_agent": "host"},
+        "default-agent",
+        'AgentCommand("written")',
+        ("AgentCommand", "command", TextValue("host")),
+        id="default-agent",
+    ),
+]
 
 
 class TestResetHostSeedPrecedence:
@@ -329,69 +365,31 @@ class TestResetHostSeedPrecedence:
 
     ``strict-json`` (including a falsy ``False`` host seed) is pinned in
     :class:`TestDefaultsAndSeeding` above; this class covers the remaining
-    five keys.
+    five keys.  The ``timeout`` case seeds through ``engine_base`` (e.g.
+    CLI/config); the driver-argument channel gets its own test below.
     """
 
-    def test_max_iters_host_seed_survives_a_source_write(self) -> None:
-        s = _host_seeded_session(_STDLIB_ROOT, max_iters=5)
+    @pytest.mark.parametrize(("seed", "key", "written", "expected"), _HOST_SEED_PRECEDENCE)
+    def test_host_seed_survives_a_source_write(
+        self, seed: dict[str, object], key: str, written: str, expected: object
+    ) -> None:
+        s = _host_seeded_session(_STDLIB_ROOT, **seed)
         _ok(s, "import std/config")
-        _ok(s, "std/config::max-iters := 9")
+        _ok(s, f"std/config::{key} := {written}")
         s.reset()
         _ok(s, "import std/config")
-        assert _read(s, "max-iters") == IntValue(5)
-
-    def test_timeout_engine_base_host_seed_survives_a_source_write(self) -> None:
-        # The host seed arrives through ``engine_base`` (e.g. CLI/config), not
-        # through the ``shell_exec_timeout`` driver argument.
-        s = _host_seeded_session(_STDLIB_ROOT, timeout="3s")
-        _ok(s, "import std/config")
-        _ok(s, 'std/config::timeout := Some("99s")')
-        s.reset()
-        _ok(s, "import std/config")
-        value = _read(s, "timeout")
-        assert isinstance(value, RecordValue)
-        assert value.fields["value"] == TextValue("3s")
+        _assert_setting(_read(s, key), expected)
 
     def test_timeout_driver_synthesized_host_seed_survives_a_source_write(self) -> None:
         # No ``engine_base["timeout"]``: the host seed is synthesized from the
         # ``shell_exec_timeout`` driver argument instead.
-        s = ReplSession(stdlib_root=_STDLIB_ROOT, shell_exec_timeout=0.0000001)
+        s = _session(shell_exec_timeout=0.0000001)
         _ok(s, "import std/config")
         _ok(s, 'std/config::timeout := Some("99s")')
         s.reset()
         _ok(s, "import std/config")
-        value = _read(s, "timeout")
-        assert isinstance(value, RecordValue)
-        assert value.fields["value"] == TextValue("0.0000001s")
+        _assert_setting(_read(s, "timeout"), ("Some", "value", TextValue("0.0000001s")))
         assert s._shell_exec_timeout == 0.0000001
-
-    def test_log_host_seed_survives_a_source_write(self) -> None:
-        s = _host_seeded_session(_STDLIB_ROOT, log=True)
-        _ok(s, "import std/config")
-        _ok(s, "std/config::log := false")
-        s.reset()
-        _ok(s, "import std/config")
-        assert _read(s, "log") == BoolValue(True)
-
-    def test_log_file_host_seed_survives_a_source_write(self) -> None:
-        s = _host_seeded_session(_STDLIB_ROOT, log_file="host.jsonl")
-        _ok(s, "import std/config")
-        _ok(s, 'std/config::log-file := Some("written.jsonl")')
-        s.reset()
-        _ok(s, "import std/config")
-        value = _read(s, "log-file")
-        assert isinstance(value, RecordValue)
-        assert value.fields["value"] == TextValue("host.jsonl")
-
-    def test_default_agent_host_seed_survives_a_source_write(self) -> None:
-        s = _host_seeded_session(_STDLIB_ROOT, default_agent="host")
-        _ok(s, "import std/config")
-        _ok(s, 'std/config::default-agent := AgentCommand("written")')
-        s.reset()
-        _ok(s, "import std/config")
-        value = _read(s, "default-agent")
-        assert isinstance(value, RecordValue)
-        assert value.fields["command"] == TextValue("host")
 
 
 class TestMaxItersEngineBaseSeed:
@@ -403,7 +401,7 @@ class TestMaxItersEngineBaseSeed:
     """
 
     def test_engine_base_seed_survives_a_source_write_across_reset(self) -> None:
-        s = ReplSession(
+        s = _session(
             stdlib_root=_STDLIB_ROOT,
             engine_base=build_engine_config_seeds({"max-iters": 5}),
         )
@@ -417,7 +415,7 @@ class TestMaxItersEngineBaseSeed:
         # The two seed channels deliberately disagree: an explicit
         # ``engine_base`` entry must win, mirroring every other key's
         # seed-over-driver-argument precedence (``TestResetSeedWinsOverDriverArgument``).
-        s = ReplSession(
+        s = _session(
             stdlib_root=_STDLIB_ROOT,
             default_loop_limit=30,
             engine_base=build_engine_config_seeds({"max-iters": 5}),
@@ -438,7 +436,7 @@ class TestTimeoutSeedWinsOverDriverArgument:
     """
 
     def test_engine_base_seed_wins_over_the_shell_exec_timeout_argument(self) -> None:
-        s = ReplSession(
+        s = _session(
             stdlib_root=_STDLIB_ROOT,
             shell_exec_timeout=30.0,
             engine_base=build_engine_config_seeds({"timeout": "5s"}),
@@ -448,7 +446,7 @@ class TestTimeoutSeedWinsOverDriverArgument:
     def test_engine_base_seed_of_none_wins_over_the_shell_exec_timeout_argument(self) -> None:
         # An explicit empty ``Option`` (a "no timeout" host control) must win
         # over a disagreeing non-``None`` scalar, same as every other case.
-        s = ReplSession(
+        s = _session(
             stdlib_root=_STDLIB_ROOT,
             shell_exec_timeout=30.0,
             engine_base=build_engine_config_seeds({"timeout": None}),
@@ -472,7 +470,7 @@ class TestSeedGovernsRuntimeEffectOverDriverArgument:
         self,
     ) -> None:
         # No seed: the argument alone makes the fenced reply unparseable.
-        argument_only = ReplSession(
+        argument_only = _session(
             stdlib_root=_STDLIB_ROOT,
             agent_dispatcher=_FencedAgent(),
             default_strict_json=True,
@@ -483,7 +481,7 @@ class TestSeedGovernsRuntimeEffectOverDriverArgument:
         assert "AgentParseError" in strict_result.error.type_name
 
         # The same argument, now contradicted by a lenient seed: the reply parses.
-        s = ReplSession(
+        s = _session(
             stdlib_root=_STDLIB_ROOT,
             agent_dispatcher=_FencedAgent(),
             default_strict_json=True,
@@ -496,11 +494,11 @@ class TestSeedGovernsRuntimeEffectOverDriverArgument:
     ) -> None:
         loop = "var i = 0\ndo\n  i := i + 1\nuntil i >= 10\ni"
         # No seed: the argument's cap is loose enough for the loop to finish.
-        argument_only = ReplSession(stdlib_root=_STDLIB_ROOT, default_loop_limit=30)
+        argument_only = _session(stdlib_root=_STDLIB_ROOT, default_loop_limit=30)
         assert _ok(argument_only, loop).value == IntValue(10)
 
         # The same argument, now contradicted by a tighter seed: the loop is cut off.
-        s = ReplSession(
+        s = _session(
             stdlib_root=_STDLIB_ROOT,
             default_loop_limit=30,
             engine_base=build_engine_config_seeds({"max-iters": 5}),
@@ -523,13 +521,13 @@ class TestMaxItersRegisterIsolation:
     """
 
     def test_default_loop_limit_seed_is_absent_from_the_host_settings_register(self) -> None:
-        s = ReplSession(stdlib_root=_STDLIB_ROOT, default_loop_limit=5)
+        s = _session(stdlib_root=_STDLIB_ROOT, default_loop_limit=5)
         assert "max-iters" not in s._persisted_host_settings
         s.reset()
         assert "max-iters" not in s._persisted_host_settings
 
     def test_engine_base_seed_is_absent_from_the_host_settings_register(self) -> None:
-        s = ReplSession(
+        s = _session(
             stdlib_root=_STDLIB_ROOT,
             engine_base=build_engine_config_seeds({"max-iters": 5}),
         )
@@ -549,7 +547,7 @@ class TestExplicitZeroLoopLimit:
     """
 
     def test_zero_survives_construction_and_reset_with_no_declared_default(self) -> None:
-        s = ReplSession(stdlib_root=_STDLIB_ROOT, default_loop_limit=0)
+        s = _session(stdlib_root=_STDLIB_ROOT, default_loop_limit=0)
         assert s._default_loop_limit == 0
         s.reset()
         assert s._default_loop_limit == 0
@@ -576,67 +574,44 @@ class TestExplicitZeroLoopLimit:
         assert result.value == IntValue(10)
 
 
+_DECLARED_DEFAULT_PRECEDENCE = [
+    pytest.param("strict-json", "false", BoolValue(True), id="strict-json"),
+    pytest.param("max-iters", "99", IntValue(3), id="max-iters"),
+    pytest.param("timeout", 'Some("99s")', ("Some", "value", TextValue("2s")), id="timeout"),
+    pytest.param("log", "false", BoolValue(True), id="log"),
+    pytest.param(
+        "log-file",
+        'Some("written.jsonl")',
+        ("Some", "value", TextValue("declared.jsonl")),
+        id="log-file",
+    ),
+    pytest.param(
+        "default-agent",
+        'AgentCommand("written")',
+        ("AgentCommand", "command", TextValue("declared")),
+        id="default-agent",
+    ),
+]
+
+
 class TestResetDeclaredDefaultPrecedence:
     """An unseeded key's ``:reset`` restores ``std/config``'s declared default.
 
-    Each test writes a value that differs from BOTH the declared default and
+    Each case writes a value that differs from BOTH the declared default and
     any host-side floor, so a wrong precedence (falling through to a host
     floor instead of the declaration) would be caught.
     """
 
-    def test_strict_json_declared_default_survives_a_source_write(self, tmp_path: Path) -> None:
-        s = _declared_defaults_session(tmp_path)
+    @pytest.mark.parametrize(("key", "written", "expected"), _DECLARED_DEFAULT_PRECEDENCE)
+    def test_declared_default_survives_a_source_write(
+        self, declared_defaults_stdlib: Path, key: str, written: str, expected: object
+    ) -> None:
+        s = _session(stdlib_root=declared_defaults_stdlib)
         _ok(s, "import std/config")
-        _ok(s, "std/config::strict-json := false")
+        _ok(s, f"std/config::{key} := {written}")
         s.reset()
         _ok(s, "import std/config")
-        assert _read(s, "strict-json") == BoolValue(True)
-
-    def test_max_iters_declared_default_survives_a_source_write(self, tmp_path: Path) -> None:
-        s = _declared_defaults_session(tmp_path)
-        _ok(s, "import std/config")
-        _ok(s, "std/config::max-iters := 99")
-        s.reset()
-        _ok(s, "import std/config")
-        assert _read(s, "max-iters") == IntValue(3)
-
-    def test_timeout_declared_default_survives_a_source_write(self, tmp_path: Path) -> None:
-        s = _declared_defaults_session(tmp_path)
-        _ok(s, "import std/config")
-        _ok(s, 'std/config::timeout := Some("99s")')
-        s.reset()
-        _ok(s, "import std/config")
-        value = _read(s, "timeout")
-        assert isinstance(value, RecordValue)
-        assert value.fields["value"] == TextValue("2s")
-
-    def test_log_declared_default_survives_a_source_write(self, tmp_path: Path) -> None:
-        s = _declared_defaults_session(tmp_path)
-        _ok(s, "import std/config")
-        _ok(s, "std/config::log := false")
-        s.reset()
-        _ok(s, "import std/config")
-        assert _read(s, "log") == BoolValue(True)
-
-    def test_log_file_declared_default_survives_a_source_write(self, tmp_path: Path) -> None:
-        s = _declared_defaults_session(tmp_path)
-        _ok(s, "import std/config")
-        _ok(s, 'std/config::log-file := Some("written.jsonl")')
-        s.reset()
-        _ok(s, "import std/config")
-        value = _read(s, "log-file")
-        assert isinstance(value, RecordValue)
-        assert value.fields["value"] == TextValue("declared.jsonl")
-
-    def test_default_agent_declared_default_survives_a_source_write(self, tmp_path: Path) -> None:
-        s = _declared_defaults_session(tmp_path)
-        _ok(s, "import std/config")
-        _ok(s, 'std/config::default-agent := AgentCommand("written")')
-        s.reset()
-        _ok(s, "import std/config")
-        value = _read(s, "default-agent")
-        assert isinstance(value, RecordValue)
-        assert value.fields["command"] == TextValue("declared")
+        _assert_setting(_read(s, key), expected)
 
 
 class TestResetSeedWinsOverDriverArgument:
@@ -656,7 +631,7 @@ class TestResetSeedWinsOverDriverArgument:
     """
 
     def test_strict_json_seed_wins_over_the_driver_argument(self) -> None:
-        s = ReplSession(
+        s = _session(
             stdlib_root=_STDLIB_ROOT,
             default_strict_json=True,
             engine_base=build_engine_config_seeds({"strict-json": False}),
@@ -669,7 +644,7 @@ class TestResetSeedWinsOverDriverArgument:
         assert _read(s, "strict-json") == BoolValue(False)
 
     def test_timeout_seed_wins_over_the_driver_argument(self) -> None:
-        s = ReplSession(
+        s = _session(
             stdlib_root=_STDLIB_ROOT,
             shell_exec_timeout=30.0,
             engine_base=build_engine_config_seeds({"timeout": "5s"}),
@@ -686,7 +661,7 @@ class TestResetSeedWinsOverDriverArgument:
     def test_timeout_seeded_as_none_disables_the_timeout_across_reset(self) -> None:
         # An empty ``Option`` is an explicit "no timeout" control, so it must
         # not fall back to the ``shell_exec_timeout`` driver argument.
-        s = ReplSession(
+        s = _session(
             stdlib_root=_STDLIB_ROOT,
             shell_exec_timeout=30.0,
             engine_base=build_engine_config_seeds({"timeout": None}),
@@ -731,7 +706,7 @@ class TestResetRestoresMixedSeedOrigins:
             encoding="utf-8",
         )
         _copy_core_and_option(config_path.parent)
-        s = ReplSession(
+        s = _session(
             stdlib_root=stdlib_root,
             engine_base=build_engine_config_seeds({"max-iters": 5}),
         )
@@ -881,7 +856,7 @@ class TestSettingOverrideThreading:
     """
 
     def test_override_is_observed_on_the_first_entry_that_loads_std_config(self) -> None:
-        s = _session(
+        s = _unopened_session(
             setting_overrides={
                 "default-agent": SettingOverride(
                     source='AgentCommand("overridden")', origin="--agent"
@@ -895,7 +870,7 @@ class TestSettingOverrideThreading:
         assert value.fields["command"] == TextValue("overridden")
 
     def test_source_write_still_overrides_it_afterward(self) -> None:
-        s = _session(
+        s = _unopened_session(
             setting_overrides={
                 "default-agent": SettingOverride(
                     source='AgentCommand("overridden")', origin="--agent"
@@ -1007,7 +982,7 @@ class TestSettingOverrideThreading:
         pre-splice id would let a later entry's declaration collide with an
         identity the spliced override expression already claimed.
         """
-        s = _session(
+        s = _unopened_session(
             setting_overrides={
                 "default-agent": SettingOverride(
                     source='AgentCommand("overridden")', origin="--agent"
@@ -1021,7 +996,7 @@ class TestSettingOverrideThreading:
         assert result.value == IntValue(3)
 
     def test_reset_reapplies_the_override_after_a_fresh_std_config_load(self) -> None:
-        s = _session(
+        s = _unopened_session(
             setting_overrides={
                 "default-agent": SettingOverride(
                     source='AgentCommand("overridden")', origin="--agent"
@@ -1064,7 +1039,7 @@ class TestSettingOverrideThreading:
 
         monkeypatch.setattr(loader_mod, "build_repl_graph", spy)
 
-        s = _session(
+        s = _unopened_session(
             setting_overrides={
                 "default-agent": SettingOverride(
                     source='AgentCommand("overridden")', origin="--agent"

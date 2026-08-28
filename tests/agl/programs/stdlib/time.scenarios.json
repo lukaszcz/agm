@@ -11,9 +11,9 @@
       "expect": {"stdout": "not an instant\nnot a date\n", "calls": {}}
     },
     {
-      "name": "clock_operations_have_stable_shape_without_asserting_wall_time",
+      "name": "clock_operations_have_stable_shape_and_a_monotonic_elapsed_clock",
       "params": {"mode": 3},
-      "expect": {"stdout": "true\ntrue\ntrue\n", "calls": {}}
+      "expect": {"stdout": "true\ntrue\ntrue\ntrue\ntrue\n", "calls": {}}
     }
   ]
 }

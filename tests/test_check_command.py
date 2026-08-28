@@ -27,6 +27,11 @@ import agm.cli as cli
 import agm.commands.check as check_command
 from agm.cli_support.args import CheckArgs
 
+# Building the Typer app's Click command tree costs more than the assertions in
+# the parser-contract tests below; it is derived from module-level definitions
+# only, so it is built once here instead of on every invocation.
+_AGM_COMMAND = get_command(cli.app)
+
 
 @pytest.fixture()
 def runner() -> CliRunner:
@@ -34,7 +39,7 @@ def runner() -> CliRunner:
 
 
 def invoke(runner: CliRunner, argv: list[str]) -> Result:
-    return runner.invoke(get_command(cli.app), argv, prog_name="agm", catch_exceptions=False)
+    return runner.invoke(_AGM_COMMAND, argv, prog_name="agm", catch_exceptions=False)
 
 
 @pytest.fixture()

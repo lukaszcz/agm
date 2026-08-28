@@ -128,6 +128,18 @@ class TestResolveModuleNotFound:
         with pytest.raises(ModuleNotFound):
             resolve_module(ModuleId.from_path("demo"), roots)
 
+    def test_not_found_lists_only_the_roots_the_mount_scope_admitted(self, tmp_path: Path) -> None:
+        # A package-only root is out of scope for a foreign top-level segment,
+        # so it is never searched -- and must not be named as if it had been.
+        roots = _mounted_package_roots(tmp_path)
+
+        with pytest.raises(ModuleNotFound) as exc_info:
+            resolve_module(ModuleId.from_path("assets/absent"), roots)
+
+        searched = exc_info.value.searched_roots
+        assert (tmp_path / "package").resolve() not in searched
+        assert searched == ((tmp_path / "invocation").resolve(),)
+
     def test_not_found_raises_module_not_found(self, tmp_path: Path) -> None:
         root = tmp_path / "lib"
         root.mkdir()

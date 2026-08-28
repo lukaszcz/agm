@@ -27,6 +27,18 @@ from agm.agl.semantics.types import IntType, TextType, Type
 from agm.agl.semantics.values import IntValue, TextValue, Value
 
 
+def _open_session(**kwargs: object) -> ReplSession:
+    """Build a session and open it, exactly as a REPL host does.
+
+    ``agm.commands.repl`` opens a session before accepting an entry, which
+    loads and type-checks the initial library image once per session instead
+    of leaving every entry to re-check the standard library.
+    """
+    session = ReplSession(**kwargs)
+    session.open()
+    return session
+
+
 class _CountingAgent:
     """Fake ``AgentFn`` returning scripted replies and counting invocations."""
 
@@ -294,7 +306,7 @@ class TestRenderEntryResult:
 
 
 def _ctx() -> meta_mod.MetaContext:
-    return meta_mod.MetaContext(session=ReplSession())
+    return meta_mod.MetaContext(session=_open_session())
 
 
 class TestDispatchMeta:
@@ -432,7 +444,7 @@ class TestDispatchMeta:
 
 class TestSetOptions:
     def test_set_non_option_gives_usage(self) -> None:
-        s = ReplSession()
+        s = _open_session()
         outcome = meta_mod.dispatch_meta(":set count=5", _session_ctx(s))
         assert outcome.text is not None
         assert "usage" in outcome.text.lower()
@@ -488,14 +500,14 @@ def _session_ctx(
     agent_mode: AgentMode | None = None,
 ) -> meta_mod.MetaContext:
     return meta_mod.MetaContext(
-        session=session if session is not None else ReplSession(),
+        session=session if session is not None else _open_session(),
         agent_mode=agent_mode if agent_mode is not None else AgentMode(),
     )
 
 
 class TestReset:
     def test_reset_clears_bindings(self) -> None:
-        s = ReplSession()
+        s = _open_session()
         s.eval_entry("let x = 1")
         assert s.bindings()
         outcome = meta_mod.dispatch_meta(":reset", _session_ctx(s))
@@ -505,13 +517,13 @@ class TestReset:
 
 class TestType:
     def test_type_of_valid_expr(self) -> None:
-        s = ReplSession()
+        s = _open_session()
         s.eval_entry("let x = 5")
         outcome = meta_mod.dispatch_meta(":type x + 1", _session_ctx(s))
         assert outcome.text == "int"
 
     def test_type_of_record_expr_shows_fields(self) -> None:
-        s = ReplSession()
+        s = _open_session()
         s.eval_entry("record Point\n  x: int\n  y: text")
         s.eval_entry('let p = Point(x = 1, y = "north")')
         outcome = meta_mod.dispatch_meta(":type p", _session_ctx(s))
@@ -562,7 +574,7 @@ class TestBindings:
             assert outcome.text == "No bindings."
 
     def test_bindings_lists_with_types_and_values(self) -> None:
-        s = ReplSession()
+        s = _open_session()
         s.eval_entry("let x = 5")
         s.eval_entry('let g = "hi"')
         outcome = meta_mod.dispatch_meta(":bindings", _session_ctx(s))
@@ -571,7 +583,7 @@ class TestBindings:
         assert 'g : text = "hi"' in outcome.text
 
     def test_env_alias_same_as_bindings(self) -> None:
-        s = ReplSession()
+        s = _open_session()
         s.eval_entry("let x = 5")
         out_b = meta_mod.dispatch_meta(":bindings", _session_ctx(s)).text
         out_e = meta_mod.dispatch_meta(":env", _session_ctx(s)).text
@@ -584,7 +596,7 @@ class TestInputs:
         assert outcome.text == "No params declared."
 
     def test_inputs_shows_unset_then_set(self) -> None:
-        s = ReplSession()
+        s = _open_session()
         s.eval_entry('param name: text = "World"')
         out_set = meta_mod.dispatch_meta(":params", _session_ctx(s)).text
         assert out_set is not None
@@ -593,7 +605,7 @@ class TestInputs:
 
 class TestSet:
     def test_set_declared_input(self) -> None:
-        s = ReplSession()
+        s = _open_session()
         outcome = meta_mod.dispatch_meta(":set count=42", _session_ctx(s))
         assert "usage" in (outcome.text or "").lower()
 
@@ -603,7 +615,7 @@ class TestSet:
         assert "usage" in outcome.text.lower()
 
     def test_set_bad_value_clean_error(self) -> None:
-        s = ReplSession()
+        s = _open_session()
         s.eval_entry("param count: int")
         outcome = meta_mod.dispatch_meta(":set count=oops", _session_ctx(s))
         assert outcome.text is not None
@@ -660,7 +672,7 @@ class TestLoad:
     def test_load_runs_file_into_session(self, tmp_path: Path) -> None:
         src = tmp_path / "prog.agl"
         src.write_text("let x = 7\n")
-        s = ReplSession()
+        s = _open_session()
         outcome = meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
         assert outcome.text is not None
         assert "x : int = 7" in outcome.text
@@ -671,7 +683,7 @@ class TestLoad:
         src = tmp_path / "agent.agl"
         src.write_text('let r = ask """do it"""\n')
         agent = _CountingAgent("done")
-        s = ReplSession(agent_dispatcher=agent)
+        s = _open_session(agent_dispatcher=agent)
         meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
         assert agent.calls == 1
 
@@ -689,7 +701,7 @@ class TestLoad:
         # Multiple statements load incrementally; each statement's echo surfaces.
         src = tmp_path / "multi.agl"
         src.write_text("let a = 1\nlet b = 2\n")
-        s = ReplSession()
+        s = _open_session()
         outcome = meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
         assert outcome.text is not None
         assert "a : int = 1" in outcome.text
@@ -698,7 +710,7 @@ class TestLoad:
     def test_load_halts_at_first_error(self, tmp_path: Path) -> None:
         src = tmp_path / "halt.agl"
         src.write_text("let a = 1\nlet z: decimal = 1 / 0\nlet b = 99\n")
-        s = ReplSession()
+        s = _open_session()
         outcome = meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
         assert outcome.text is not None
         # The failing statement's error surfaced; the unreached one did not run.
@@ -709,7 +721,7 @@ class TestLoad:
     def test_load_empty_file_benign_note(self, tmp_path: Path) -> None:
         src = tmp_path / "empty.agl"
         src.write_text("# only a comment\n")
-        s = ReplSession()
+        s = _open_session()
         outcome = meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
         assert outcome.text is not None
         assert "no statements" in outcome.text.lower()
@@ -718,7 +730,7 @@ class TestLoad:
 
 class TestSave:
     def test_save_round_trips_source(self, tmp_path: Path) -> None:
-        s = ReplSession()
+        s = _open_session()
         s.eval_entry("let x = 1")
         s.eval_entry("let y = 2")
         out = tmp_path / "out.agl"
@@ -726,20 +738,20 @@ class TestSave:
         assert str(out) in (outcome.text or "")
         assert out.read_text() == s.dump_source()
         # The saved source replays into a fresh session.
-        s2 = ReplSession()
+        s2 = _open_session()
         assert all(r.ok for r in s2.load_file(out))
 
     def test_save_load_round_trips_redefinition(self, tmp_path: Path) -> None:
         # A transcript containing a redefinition must round-trip through
         # :save -> :load (each statement loads as its own entry, so the second
         # `let x` shadows rather than being a duplicate-declaration error).
-        s = ReplSession()
+        s = _open_session()
         s.eval_entry("let x = 1")
         s.eval_entry("let x = 2")
         out = tmp_path / "redef.agl"
         meta_mod.dispatch_meta(f":save {out}", _session_ctx(s))
 
-        s2 = ReplSession()
+        s2 = _open_session()
         outcome = meta_mod.dispatch_meta(f":load {out}", _session_ctx(s2))
         # No error surfaced and x reloaded as the shadowed value 2.
         assert "line" not in (outcome.text or "")
@@ -811,7 +823,7 @@ class TestNominalRenderingEcho:
     """Verify REPL echo renders records and enums in AgL form / declaration order."""
 
     def test_record_binding_keeps_declaration_order(self) -> None:
-        s = ReplSession()
+        s = _open_session()
         s.eval_entry("record Point\n  y: int\n  x: int")
         r = s.eval_entry("let p = Point(x = 1, y = 2)")
 
@@ -824,7 +836,7 @@ class TestNominalRenderingEcho:
         assert "p : Point = Point(\n  y = 2,\n  x = 1\n)" in outcome.text
 
     def test_enum_binding_echoes_qualified_value(self) -> None:
-        s = ReplSession()
+        s = _open_session()
         s.eval_entry("enum Outcome\n  | Partial(left: int)\n  | Done")
         r = s.eval_entry("let o = Outcome::Partial(left = 7)")
 
@@ -837,7 +849,7 @@ class TestNominalRenderingEcho:
         assert "Outcome::Partial(\n  left = 7\n)" in outcome.text
 
     def test_percent_interpolation_marker_in_text_binding_renders_in_bindings(self) -> None:
-        s = ReplSession()
+        s = _open_session()
         r = s.eval_entry(r'let t = "a\%{b}"')
 
         assert r.ok
@@ -847,7 +859,7 @@ class TestNominalRenderingEcho:
 
     def test_bindings_meta_renders_record_nominal(self) -> None:
         # :bindings must render a record binding in AgL form (not JSON).
-        s = ReplSession()
+        s = _open_session()
         s.eval_entry("record Point\n  y: int\n  x: int")
         s.eval_entry("let p = Point(x = 3, y = 5)")
         outcome = meta_mod.dispatch_meta(":bindings", _session_ctx(s))
@@ -856,7 +868,7 @@ class TestNominalRenderingEcho:
 
     def test_params_meta_renders_record_nominal(self) -> None:
         # :params must render a record param in AgL form (not JSON).
-        s = ReplSession()
+        s = _open_session()
         s.eval_entry("record Cfg\n  retries: int\n  timeout: int")
         s.eval_entry("param cfg: Cfg = Cfg(retries = 3, timeout = 30)")
         outcome = meta_mod.dispatch_meta(":params", _session_ctx(s))
@@ -866,7 +878,7 @@ class TestNominalRenderingEcho:
     def test_load_persists_record_binding_for_bindings_rendering(self, tmp_path: Path) -> None:
         src = tmp_path / "rec.agl"
         src.write_text("record Point\n  y: int\n  x: int\nlet p = Point(x = 1, y = 2)\n")
-        s = ReplSession()
+        s = _open_session()
         outcome = meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
 
         assert outcome.text == "Point declared\np : Point = Point(\n  y = 2,\n  x = 1\n)"
@@ -879,14 +891,14 @@ class TestScopedDeclarationEcho:
     """Verify scoped declarations echo the scope they landed in."""
 
     def test_scope_region_entry_echoes_its_path(self) -> None:
-        s = ReplSession()
+        s = _open_session()
         r = s.eval_entry("scope Tools\ndef twice(x: int) -> int = x * 2\nend Tools")
 
         assert r.ok, r.diagnostics
         assert render_mod.render_entry_result(r, echo=True) == "Tools declared"
 
     def test_check_only_scope_region_entry_echoes_its_path(self) -> None:
-        s = ReplSession()
+        s = _open_session()
         r = s.eval_entry(
             "scope Tools\ndef twice(x: int) -> int = x * 2\nend Tools", check_only=True
         )
@@ -895,21 +907,21 @@ class TestScopedDeclarationEcho:
         assert render_mod.render_entry_result(r, echo=True, check_only=True) == "Tools declared"
 
     def test_empty_scope_region_entry_echoes_its_path(self) -> None:
-        s = ReplSession()
+        s = _open_session()
         r = s.eval_entry("scope Tools\nend Tools")
 
         assert r.ok, r.diagnostics
         assert render_mod.render_entry_result(r, echo=True) == "Tools declared"
 
     def test_multi_segment_scope_region_entry_echoes_the_full_path(self) -> None:
-        s = ReplSession()
+        s = _open_session()
         r = s.eval_entry("scope Outer::Inner\ndef value() -> int = 1\nend Outer::Inner")
 
         assert r.ok, r.diagnostics
         assert render_mod.render_entry_result(r, echo=True) == "Outer::Inner declared"
 
     def test_region_with_its_own_member_echoes_only_the_outer_path(self) -> None:
-        s = ReplSession()
+        s = _open_session()
         r = s.eval_entry(
             "scope Outer\ndef value() -> int = 1\nscope Inner\nend Inner\nend Outer",
         )
@@ -918,7 +930,7 @@ class TestScopedDeclarationEcho:
         assert render_mod.render_entry_result(r, echo=True) == "Outer declared"
 
     def test_scoped_shorthand_declaration_echoes_its_full_path(self) -> None:
-        s = ReplSession()
+        s = _open_session()
         func = s.eval_entry("def Tools::twice(x: int) -> int = x * 2")
         rec = s.eval_entry("record Tools::Pair(left: int, right: int)")
 
@@ -928,21 +940,21 @@ class TestScopedDeclarationEcho:
         assert render_mod.render_entry_result(rec, echo=True) == "Tools::Pair declared"
 
     def test_root_declaration_echo_stays_unqualified(self) -> None:
-        s = ReplSession()
+        s = _open_session()
         r = s.eval_entry("record Pair(left: int, right: int)")
 
         assert r.ok, r.diagnostics
         assert render_mod.render_entry_result(r, echo=True) == "Pair declared"
 
     def test_exception_declaration_echoes_its_name(self) -> None:
-        s = ReplSession()
+        s = _open_session()
         r = s.eval_entry("exception Boom extends Exception\n  code: int")
 
         assert r.ok, r.diagnostics
         assert render_mod.render_entry_result(r, echo=True) == "Boom declared"
 
     def test_use_declaration_entry_echoes_nothing(self) -> None:
-        s = ReplSession()
+        s = _open_session()
         assert s.eval_entry("def Tools::twice(x: int) -> int = x * 2").ok
         r = s.eval_entry("use Tools::*")
 

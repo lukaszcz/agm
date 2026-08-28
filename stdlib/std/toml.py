@@ -100,10 +100,7 @@ def render(value: object) -> str:
     if not isinstance(raw, dict):
         _render_error("TOML documents must have a table root.")
     _validate_renderable(raw)
-    try:
-        return tomlkit.dumps(_toml_value(raw))
-    except Exception:
-        _render_error("Could not render TOML.")
+    return tomlkit.dumps(_toml_value(raw))
 
 
 __all__ = ["parse", "parse_option", "render"]

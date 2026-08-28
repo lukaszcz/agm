@@ -80,6 +80,21 @@ def test_entry_evaluation_and_rendering() -> None:
     assert any("3" in line for line in written)
 
 
+def test_blank_and_comment_only_entries_are_never_evaluated() -> None:
+    # A blank line (or a comment-only entry) has nothing to run: the loop must
+    # give a fresh prompt without handing the entry to the evaluator, whose
+    # parser rejects it.  Anything the evaluator produced would reach the
+    # writer, so the banner must remain the only output.
+    session = ReplSession()
+    written: list[str] = []
+    reader = _scripted_reader(["", "   ", "\t", "# just a comment", "  # indented"])
+
+    run_repl_loop(session, reader=reader, writer=written.append)
+
+    assert len(written) == 1
+    assert written[0].startswith("AgL REPL")
+
+
 def test_keyboard_interrupt_cancels_entry_without_exiting() -> None:
     session = ReplSession()
     written: list[str] = []

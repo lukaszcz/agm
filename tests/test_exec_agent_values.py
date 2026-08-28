@@ -15,9 +15,14 @@ from agm.config.context import ConfigContext
 from tests._agl_helpers import write_file_program
 from tests.conftest import FakeAgentTransport
 
+# Building the Typer app's Click command tree costs more than the assertions in
+# some of these tests; it is derived from module-level definitions only, so it is
+# built once here instead of on every invocation.
+_AGM_COMMAND = get_command(cli.app)
+
 
 def _invoke(runner: CliRunner, argv: list[str]):
-    return runner.invoke(get_command(cli.app), argv, prog_name="agm", catch_exceptions=False)
+    return runner.invoke(_AGM_COMMAND, argv, prog_name="agm", catch_exceptions=False)
 
 
 def test_exec_agent_method_single_attempt_accepts_command_without_session_id(

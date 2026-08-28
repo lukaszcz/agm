@@ -52,6 +52,33 @@ from tests._agl_helpers import agent_value, strip_decl_ids
 from tests._process_helpers import FakeShell
 
 # ---------------------------------------------------------------------------
+# Session construction
+# ---------------------------------------------------------------------------
+
+
+def open_session(**kwargs: object) -> ReplSession:
+    """Build a session and open it, exactly as a REPL host does.
+
+    ``agm.commands.repl`` constructs a session and immediately calls
+    :meth:`ReplSession.open`, which loads and type-checks the initial library
+    image before the first entry is accepted.  Tests that only care about
+    entry behaviour go through this helper so they exercise the same startup
+    the real host does.
+
+    ``open`` also serves the initial image from (and populates) the
+    process-wide bootstrap image cache, so the standard library is loaded once
+    per test process instead of once per session.  Tests of ``open`` itself,
+    of the bootstrap cache, of a failure that must be observed on the very
+    first entry, and tests that supply their own module search roots (whose
+    entries pull in modules outside the initial image anyway) construct
+    :class:`ReplSession` directly.
+    """
+    session = ReplSession(**kwargs)
+    session.open()
+    return session
+
+
+# ---------------------------------------------------------------------------
 # Fake agents
 # ---------------------------------------------------------------------------
 
@@ -101,14 +128,14 @@ def _constructor_args(fields: dict[str, Type]) -> str:
 
 class TestPersistence:
     def test_scope_only_entry_is_a_declaration_without_an_initializer(self) -> None:
-        result = ReplSession().eval_entry("scope A\nend A")
+        result = open_session().eval_entry("scope A\nend A")
 
         assert result.ok, result.diagnostics
         assert result.kind == "declaration"
         assert result.value is None
 
     def test_scoped_type_persists_with_a_same_named_root_type(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("scope A\nrecord Token()\nend A").ok
         assert s.eval_entry("record Token()").ok
 
@@ -121,7 +148,7 @@ class TestPersistence:
         assert not mismatch.ok
 
     def test_later_entry_extends_a_retained_scope_with_a_generic_type(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("scope A\nend A").ok
         assert s.eval_entry("scope A\nrecord Box[T]\n  value: T\nend A").ok
 
@@ -131,7 +158,7 @@ class TestPersistence:
 
     def test_builtin_agent_method_is_callable_across_entries(self) -> None:
         agent = CountingAgent("42")
-        session = ReplSession(agent_dispatcher=agent)
+        session = open_session(agent_dispatcher=agent)
         assert session.eval_entry('let worker: Agent = AgentCommand("worker")').ok
 
         result = session.eval_entry('worker.ask::[int]("How many?")')
@@ -142,7 +169,7 @@ class TestPersistence:
 
     def test_shell_timeout_seed_matches_loaded_option_members(self) -> None:
         """A REPL timeout seed remains matchable after loading ``std/core``."""
-        session = ReplSession(shell_exec_timeout=2.0)
+        session = open_session(shell_exec_timeout=2.0)
 
         result = session.eval_entry(
             "import std/config\n"
@@ -155,7 +182,7 @@ class TestPersistence:
         assert result.value == TextValue("2.0s")
 
     def test_method_declared_after_its_type_is_callable_in_a_later_entry(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("record Meter(value: int)").ok
         assert session.eval_entry(
             "def Meter::add(self, amount: int) -> int = self.value + amount"
@@ -167,7 +194,7 @@ class TestPersistence:
         assert result.value == IntValue(42)
 
     def test_later_method_cannot_collide_with_a_retained_owner_field(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("record Meter(value: int)").ok
 
         rejected = session.eval_entry("def Meter::value(self) -> int = 0")
@@ -179,7 +206,7 @@ class TestPersistence:
         assert "method" in message
 
     def test_later_base_method_cannot_collide_with_a_retained_descendant_member(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("exception Base extends Exception\n  code: int").ok
         assert session.eval_entry("exception Child extends Base\n  detail: text").ok
         assert session.eval_entry('def Child::label(self) -> text = "child"').ok
@@ -192,7 +219,7 @@ class TestPersistence:
         assert "method" in message
 
     def test_later_base_method_cannot_collide_with_a_retained_descendant_field(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("exception Base extends Exception\n  code: int").ok
         assert session.eval_entry("exception Child extends Base\n  detail: text").ok
 
@@ -204,7 +231,7 @@ class TestPersistence:
         assert "field" in message
 
     def test_bound_method_binding_persists_across_entries(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("record Meter(value: int)").ok
         assert session.eval_entry(
             "def Meter::add(self, amount: int) -> int = self.value + amount"
@@ -217,7 +244,7 @@ class TestPersistence:
         assert result.value == IntValue(42)
 
     def test_exception_method_declared_in_a_later_entry_is_callable(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("exception Fault extends Exception\n  code: int").ok
         assert session.eval_entry('def Fault::label(self) -> text = "fault %{self.code}"').ok
 
@@ -227,7 +254,7 @@ class TestPersistence:
         assert result.value == TextValue("fault 7")
 
     def test_generic_receiver_method_declared_in_a_later_entry_is_callable(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("record Box[T](value: T)").ok
         assert session.eval_entry("def Box::get[T](self) -> T = self.value").ok
 
@@ -237,7 +264,7 @@ class TestPersistence:
         assert result.value == IntValue(42)
 
     def test_redeclaring_a_method_replaces_its_prior_member_entry(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("record Meter(value: int)").ok
         assert session.eval_entry("def Meter::read(self) -> int = self.value").ok
         assert session.eval_entry("def Meter::read(self) -> int = self.value + 1").ok
@@ -248,7 +275,7 @@ class TestPersistence:
         assert result.value == IntValue(42)
 
     def test_retained_alias_scope_rejects_a_method_with_its_structural_target(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("type Callback = (int) -> bool").ok
 
         rejected = session.eval_entry("def Callback::bad(self) -> int = 1")
@@ -262,7 +289,7 @@ class TestPersistence:
     def test_retained_alias_redeclared_as_a_record_accepts_a_method_in_a_later_entry(
         self,
     ) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("type Alias = int").ok
         assert session.eval_entry("record Alias\n  x: int\ndef Alias::m(self) -> int = self.x").ok
 
@@ -272,7 +299,7 @@ class TestPersistence:
         assert result.value == IntValue(1)
 
     def test_retained_record_redeclared_as_an_alias_still_rejects_a_method(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("record Alias\n  x: int").ok
 
         rejected = session.eval_entry("type Alias = int\ndef Alias::m(self) -> int = 1")
@@ -286,7 +313,7 @@ class TestPersistence:
     def test_method_named_after_a_builtin_call_does_not_shadow_the_builtin(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry(
             "record Point\n  x: int\n"
             "def Point::print(self) -> int =\n"
@@ -301,7 +328,7 @@ class TestPersistence:
         assert capsys.readouterr().out.strip() == "x = 7"
 
     def test_scope_region_must_close_in_the_same_entry(self) -> None:
-        s = ReplSession()
+        s = open_session()
 
         unclosed = s.eval_entry("scope Point\ndef distance() -> int = 1")
         stray_closer = s.eval_entry("end Point")
@@ -312,7 +339,7 @@ class TestPersistence:
         assert ordinary_entry.ok, ordinary_entry.diagnostics
 
     def test_scoped_members_accumulate_by_path_across_block_and_shorthand_entries(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("def Shape::area() -> int = 1").ok
         assert s.eval_entry("scope Shape\ndef perimeter() -> int = 2\nend Shape").ok
 
@@ -322,7 +349,7 @@ class TestPersistence:
         assert result.value == IntValue(3)
 
     def test_replacing_scoped_member_keeps_siblings_at_the_same_path(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry(
             "scope Shape\ndef area() -> int = 1\ndef perimeter() -> int = 2\nend Shape"
         ).ok
@@ -334,7 +361,7 @@ class TestPersistence:
         assert result.value == IntValue(5)
 
     def test_replacing_one_scoped_path_does_not_replace_a_same_named_sibling_path(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("def Left::measure() -> int = 1").ok
         assert s.eval_entry("def Right::measure() -> int = 2").ok
         assert s.eval_entry("scope Left\ndef measure() -> int = 3\nend Left").ok
@@ -345,7 +372,7 @@ class TestPersistence:
         assert result.value == IntValue(5)
 
     def test_use_exposes_scope_members_in_later_entries(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("scope Tools\ndef twice(x: int) -> int = x * 2\nend Tools").ok
         assert s.eval_entry("use Tools::*").ok
 
@@ -355,7 +382,7 @@ class TestPersistence:
         assert result.value == IntValue(6)
 
     def test_use_exposes_scope_members_in_later_scope_extensions(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("def Source::value() -> int = 2").ok
         assert s.eval_entry("scope Target\nuse Source::*\nend Target").ok
         assert s.eval_entry("scope Target\ndef doubled() -> int = value() * 2\nend Target").ok
@@ -366,13 +393,13 @@ class TestPersistence:
         assert result.value == IntValue(4)
 
     def test_type_of_scoped_record_displays_its_qualified_name(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("scope Geometry\nrecord Point(x: int)\nend Geometry").ok
 
         assert s.type_of("Geometry::Point(x = 1)") == "record Geometry::Point\n  x: int"
 
     def test_simple_let_uses_one_frame_slot_per_entry(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("()").ok
 
         initial_frame_size = len(session._ir_base_frame)
@@ -388,7 +415,7 @@ class TestPersistence:
         assert session.bindings() == [("value", IntType(), IntValue(2))]
 
     def test_lambda_binding_initializes_repl_parameter_default(self) -> None:
-        session = ReplSession()
+        session = open_session()
 
         result = session.eval_entry("let f = fn() -> int => 7\nparam value: int = f()")
 
@@ -399,7 +426,7 @@ class TestPersistence:
         assert session.eval_entry("f()").value == IntValue(7)
 
     def test_top_level_return_rejected_and_session_continues(self) -> None:
-        s = ReplSession()
+        s = open_session()
         bad = s.eval_entry("return 1")
         assert not bad.ok
         assert bad.diagnostics
@@ -411,7 +438,7 @@ class TestPersistence:
         assert later.value == IntValue(1)
 
     def test_binding_persists_into_next_entry(self) -> None:
-        s = ReplSession()
+        s = open_session()
         r1 = s.eval_entry("let x = 1 + 2")
         assert r1.ok
         r2 = s.eval_entry("let y = x * 10")
@@ -427,7 +454,7 @@ class TestPersistence:
         related = SourceSpan(2, 1, 2, 2, 2, 3)
         error = AglError("load failed", related=(("constraint", related),))
         with patch("agm.agl.modules.loader.build_repl_graph", side_effect=error):
-            result = ReplSession().eval_entry("1")
+            result = open_session().eval_entry("1")
 
         assert not result.ok
         assert result.diagnostics[0].related[0].message == "constraint"
@@ -436,14 +463,14 @@ class TestPersistence:
         # Two entries that each declare a distinct binding must both survive —
         # which only works if node ids stay globally unique (binding-type table
         # is keyed by decl node id).
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("let a = 1")
         s.eval_entry("let b = 2")
         vals = {n: v for n, _t, v in s.bindings()}
         assert vals["a"] != vals["b"]
 
     def test_expression_reads_prior_binding(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("let n = 7")
         r = s.eval_entry("n + 1")
         assert r.kind == "expression"
@@ -455,7 +482,7 @@ class TestPersistence:
         assignment through the same binding is visible when that binding is
         read again -- the REPL's cross-entry persistence shares the array
         object, not a copy of it."""
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("var xs = [1, 2]").ok
 
         assign = s.eval_entry("xs[0] := 9")
@@ -475,7 +502,7 @@ class TestPersistence:
         crashing the session."""
         from agm.agl.repl.render import render_entry_result
 
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("record Node(children: array[Node])").ok
         assert s.eval_entry("var xs: array[Node] = [Node(children = [])]").ok
         assert s.eval_entry("let n = Node(children = xs)").ok
@@ -490,7 +517,7 @@ class TestPersistence:
 
     def test_assign_to_prior_immutable_binding_is_rejected(self) -> None:
         """A later entry cannot reassign an earlier ``let``, and it survives."""
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("let k = 1").ok
 
         result = s.eval_entry("k := 2")
@@ -500,7 +527,7 @@ class TestPersistence:
         assert _int(dict((n, v) for n, _t, v in s.bindings())["k"]) == 1
 
     def test_new_constructor_does_not_shadow_persisted_value(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("let on = 7").ok
 
         result = s.eval_entry(
@@ -512,7 +539,7 @@ class TestPersistence:
 
     def test_new_record_colliding_with_persisted_binding_is_rejected(self) -> None:
         """A record's constructor name is its root declaration, so nothing else can claim it."""
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("let Widget = 1").ok
 
         result = s.eval_entry("let other = 2\nrecord Widget\n  x: int")
@@ -523,7 +550,7 @@ class TestPersistence:
         assert result.diagnostics[0].line == 2
 
     def test_selected_pattern_slots_lower_in_repl_entries(self) -> None:
-        s = ReplSession()
+        s = open_session()
 
         binder_result = s.eval_entry(
             "enum Flag\n  | on\n"
@@ -534,7 +561,7 @@ class TestPersistence:
             "  on\n"
             "result"
         )
-        constructor_session = ReplSession()
+        constructor_session = open_session()
         constructor_result = constructor_session.eval_entry(
             "enum Flag\n  | on\n"
             "enum Packet\n  | packet(flag: Flag)\n"
@@ -548,7 +575,7 @@ class TestPersistence:
         assert constructor_result.value == BoolValue(True)
 
     def test_program_func_def_is_callable_across_entries(self) -> None:
-        session = ReplSession()
+        session = open_session()
 
         declared = session.eval_entry("program def answer() -> unit = ()")
         result = session.eval_entry("answer()")
@@ -559,7 +586,7 @@ class TestPersistence:
         assert result.value == UnitValue()
 
     def test_partial_application_closure_persists_into_next_entry(self) -> None:
-        s = ReplSession()
+        s = open_session()
 
         r1 = s.eval_entry("def add(x: int, y: int) -> int = x + y\nlet add1 = add(1, ?)")
         assert r1.ok, r1.diagnostics
@@ -571,7 +598,7 @@ class TestPersistence:
         assert _int(r2.value) == 3
 
     def test_recursive_candidate_signature_promotes_only_after_validation(self) -> None:
-        s = ReplSession()
+        s = open_session()
 
         defined = s.eval_entry(
             "def fib(n: int) = if n < 2 => n else => fib(n - 1) + fib(n - 2)\nfib(8)"
@@ -585,7 +612,7 @@ class TestPersistence:
         assert s.type_of("fib") == "int -> int"
 
     def test_partial_promotion_tracks_lazy_initializers_by_identity(self) -> None:
-        session = ReplSession()
+        session = open_session()
 
         failed = session.eval_entry(
             "let broken: decimal = 1 / 0\nlet later = 7\nparam p: int = later"
@@ -599,7 +626,7 @@ class TestPersistence:
         assert not session.eval_entry("p").ok
 
     def test_failed_recursive_candidate_entry_promotes_nothing(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("let stable = 1").ok
 
         failed = s.eval_entry("let transient = 2\ndef loop() = loop()")
@@ -630,7 +657,7 @@ class TestScopedBindingRetention:
     """
 
     def test_region_form_binding_visible_bare_and_by_path_in_a_later_entry(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("scope A\nlet x = 1\nend A").ok
 
         bare = s.eval_entry("scope A\ndef read() -> int = x\nend A")
@@ -644,7 +671,7 @@ class TestScopedBindingRetention:
         assert call.value == IntValue(1)
 
     def test_shorthand_form_binding_visible_bare_and_by_path_in_a_later_entry(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("let A::y = 2").ok
 
         bare = s.eval_entry("scope A\ndef read() -> int = y\nend A")
@@ -658,11 +685,11 @@ class TestScopedBindingRetention:
         assert call.value == IntValue(2)
 
     def test_region_and_shorthand_forms_retain_identically(self) -> None:
-        region = ReplSession()
+        region = open_session()
         assert region.eval_entry("scope A\nlet x = 1\nend A").ok
         region_result = region.eval_entry("A::x")
 
-        shorthand = ReplSession()
+        shorthand = open_session()
         assert shorthand.eval_entry("let A::x = 1").ok
         shorthand_result = shorthand.eval_entry("A::x")
 
@@ -671,7 +698,7 @@ class TestScopedBindingRetention:
         assert region_result.value == shorthand_result.value == IntValue(1)
 
     def test_redeclaring_a_retained_scoped_binding_replaces_it(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("let A::x = 1").ok
 
         replaced = s.eval_entry("let A::x = 99")
@@ -682,14 +709,14 @@ class TestScopedBindingRetention:
         assert result.value == IntValue(99)
 
     def test_same_entry_duplicate_scoped_binding_is_still_an_error(self) -> None:
-        s = ReplSession()
+        s = open_session()
 
         result = s.eval_entry("scope A\nlet z = 1\nlet z = 2\nend A")
 
         assert not result.ok
 
     def test_same_entry_duplicate_still_errors_after_a_prior_entry_retained_it(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("let A::x = 1").ok
 
         result = s.eval_entry("scope A\nlet z = 2\nlet z = 3\nend A")
@@ -698,7 +725,7 @@ class TestScopedBindingRetention:
 
     def test_shorthand_scoped_let_does_not_leak_into_the_bare_root_name(self) -> None:
         """A shorthand ``let A::x`` must not promote as a root binding named ``x``."""
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("let A::x = 2").ok
 
         bare = s.eval_entry("x")
@@ -706,7 +733,7 @@ class TestScopedBindingRetention:
         assert not bare.ok
 
     def test_shorthand_scoped_let_does_not_replace_an_existing_root_binding(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("let x = 1").ok
         assert s.eval_entry("let A::x = 2").ok
 
@@ -719,7 +746,7 @@ class TestScopedBindingRetention:
         assert scoped.value == IntValue(2)
 
     def test_region_form_redeclaration_across_entries_replaces_the_retained_member(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("scope A\nlet x = 1\nend A").ok
 
         replaced = s.eval_entry("scope A\nlet x = 99\nend A")
@@ -730,7 +757,7 @@ class TestScopedBindingRetention:
         assert result.value == IntValue(99)
 
     def test_cross_kind_replacement_from_binding_to_declaration(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("let A::x = 1").ok
 
         replaced = s.eval_entry("def A::x() -> int = 2")
@@ -741,7 +768,7 @@ class TestScopedBindingRetention:
         assert result.value == IntValue(2)
 
     def test_cross_kind_replacement_from_declaration_to_binding(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("def A::x() -> int = 2").ok
 
         replaced = s.eval_entry("let A::x = 1")
@@ -752,7 +779,7 @@ class TestScopedBindingRetention:
         assert result.value == IntValue(1)
 
     def test_retained_member_cannot_be_reopened_as_a_nested_scope(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("scope A\nlet B = 1\nend A").ok
 
         reopened = s.eval_entry("scope A::B\nlet x = 2\nend A::B")
@@ -763,7 +790,7 @@ class TestScopedBindingRetention:
         assert original.value == IntValue(1)
 
     def test_same_named_bindings_at_different_paths_coexist_and_stay_distinct(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("let A::x = 1").ok
         assert s.eval_entry("let B::x = 2").ok
 
@@ -776,7 +803,7 @@ class TestScopedBindingRetention:
         assert b.value == IntValue(2)
 
     def test_redeclaring_one_path_does_not_disturb_a_same_named_sibling_path(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("let A::x = 1").ok
         assert s.eval_entry("let B::x = 2").ok
         assert s.eval_entry("let A::x = 100").ok
@@ -790,7 +817,7 @@ class TestScopedBindingRetention:
         assert b.value == IntValue(2)
 
     def test_retained_scoped_var_assignable_by_path_in_a_later_entry(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("scope A\nvar counter = 0\nend A").ok
 
         assign = s.eval_entry("A::counter := A::counter + 1")
@@ -801,7 +828,7 @@ class TestScopedBindingRetention:
         assert result.value == IntValue(1)
 
     def test_retained_scoped_var_assignable_bare_after_use_in_a_later_entry(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("scope A\nvar counter = 0\nend A").ok
         assert s.eval_entry("A::counter := 5").ok
 
@@ -814,13 +841,13 @@ class TestScopedBindingRetention:
 
     @pytest.mark.parametrize("binding", ["let", "var"])
     def test_use_selects_scoped_binding_declared_in_same_entry(self, binding: str) -> None:
-        result = ReplSession().eval_entry(f"use A::{{x}}\n{binding} A::x = 1\nx")
+        result = open_session().eval_entry(f"use A::{{x}}\n{binding} A::x = 1\nx")
 
         assert result.ok, result.diagnostics
         assert result.value == IntValue(1)
 
     def test_retained_use_exposes_a_retained_scoped_type_alias(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("type A::Meters = int").ok
         assert session.eval_entry("use A::*").ok
 
@@ -830,7 +857,7 @@ class TestScopedBindingRetention:
         assert result.value == IntValue(1)
 
     def test_retained_use_exposes_a_retained_scoped_generic_type_alias(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("type A::Items[T] = array[T]").ok
         assert session.eval_entry("use A::*").ok
 
@@ -840,7 +867,7 @@ class TestScopedBindingRetention:
         assert result.value == ArrayValue([IntValue(1)])
 
     def test_retained_relative_use_keeps_its_resolved_scope_target(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("scope Source\ndef value() -> int = 1\nend Source").ok
         assert session.eval_entry("scope Outer\nuse Source::*\nend Outer").ok
         assert session.eval_entry(
@@ -856,7 +883,7 @@ class TestScopedBindingRetention:
 
     def test_retained_use_sees_a_member_promoted_by_a_later_entry(self) -> None:
         """A retained use resolves a member a later entry adds to its target."""
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("scope A\nvar x = 1\nend A").ok
         assert s.eval_entry("use A::*").ok
         assert s.eval_entry("scope A\nvar y = 2\nend A").ok
@@ -867,7 +894,7 @@ class TestScopedBindingRetention:
         assert result.value == IntValue(2)
 
     def test_replacing_a_scoped_use_discards_its_empty_prior_region(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("scope A\ndef member() -> int = 1\nend A").ok
         assert s.eval_entry("scope B\nuse A::*\nend B").ok
 
@@ -876,7 +903,7 @@ class TestScopedBindingRetention:
         assert replacement.ok, replacement.diagnostics
 
     def test_scoped_declarations_and_bindings_coexist_at_one_path(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("let A::x = 1").ok
 
         added = s.eval_entry("scope A\ndef doubled() -> int = x * 2\nend A")
@@ -887,7 +914,7 @@ class TestScopedBindingRetention:
         assert result.value == IntValue(2)
 
     def test_reset_clears_retained_scoped_bindings(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("let A::x = 1").ok
 
         s.reset()
@@ -900,7 +927,7 @@ class TestScopedBindingRetention:
         assert redeclared.value == IntValue(7)
 
     def test_echo_distinguishes_a_root_binding_from_a_scoped_one(self) -> None:
-        s = ReplSession()
+        s = open_session()
 
         root = s.eval_entry("let x = 10")
         scoped = s.eval_entry("let A::x = 20")
@@ -927,7 +954,7 @@ class TestCrossEntryScopeCollision:
     """
 
     def test_shorthand_let_cannot_claim_a_retained_nested_scopes_path(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("scope A\nscope B\ndef q() -> int = 2\nend B\nend A").ok
 
         result = s.eval_entry("let A::B = 1")
@@ -938,7 +965,7 @@ class TestCrossEntryScopeCollision:
         assert still_reachable.value == IntValue(2)
 
     def test_shorthand_def_cannot_claim_a_retained_nested_scopes_path(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("scope A\nscope B\ndef q() -> int = 2\nend B\nend A").ok
 
         result = s.eval_entry("def A::B() -> int = 1")
@@ -956,7 +983,7 @@ class TestCrossEntryScopeCollision:
         ``A::B`` shares the namespace position with a function ``A::B::q``
         declared there earlier, rather than colliding with or displacing it.
         """
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("scope A\nscope B\ndef q() -> int = 2\nend B\nend A").ok
         assert s.eval_entry("record A::B()").ok
 
@@ -970,7 +997,7 @@ class TestCrossEntryScopeCollision:
     ) -> None:
         """A qualified reference into a retained type path for a name the type
         does not own must be a normal diagnostic, not an internal crash."""
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("record A::B()").ok
 
         result = s.eval_entry("A::B::x")
@@ -988,7 +1015,7 @@ class TestBareConstructorVisibilityAcrossEntries:
     """
 
     def test_record_in_a_named_scope_is_not_bare_across_entries(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("scope S\nrecord Inner(v: int)\nend S").ok
 
         bare = s.eval_entry("Inner(v = 1)")
@@ -998,14 +1025,14 @@ class TestBareConstructorVisibilityAcrossEntries:
         assert qualified.ok, qualified.diagnostics
 
     def test_record_in_a_named_scope_is_not_bare_within_one_entry(self) -> None:
-        s = ReplSession()
+        s = open_session()
 
         result = s.eval_entry("scope S\nrecord Inner(v: int)\nend S\nInner(v = 1)")
 
         assert not result.ok
 
     def test_constructible_alias_in_a_named_scope_is_not_bare_across_entries(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("scope S\nrecord Inner(v: int)\ntype Wrap = Inner\nend S").ok
 
         bare = s.eval_entry("Wrap(v = 1)")
@@ -1015,7 +1042,7 @@ class TestBareConstructorVisibilityAcrossEntries:
         assert qualified.ok, qualified.diagnostics
 
     def test_constructible_alias_in_a_named_scope_is_not_bare_within_one_entry(self) -> None:
-        s = ReplSession()
+        s = open_session()
 
         result = s.eval_entry(
             "scope S\nrecord Inner(v: int)\ntype Wrap = Inner\nend S\nWrap(v = 1)"
@@ -1024,7 +1051,7 @@ class TestBareConstructorVisibilityAcrossEntries:
         assert not result.ok
 
     def test_root_enum_inline_member_stays_bare_across_entries(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("enum E\n  | Foo(v: int)").ok
 
         bare = s.eval_entry("Foo(v = 1)")
@@ -1034,7 +1061,7 @@ class TestBareConstructorVisibilityAcrossEntries:
         assert bare.value.fields["v"] == IntValue(1)
 
     def test_root_enum_inline_member_stays_bare_within_one_entry(self) -> None:
-        s = ReplSession()
+        s = open_session()
 
         result = s.eval_entry("enum E\n  | Foo(v: int)\nFoo(v = 1)")
 
@@ -1043,7 +1070,7 @@ class TestBareConstructorVisibilityAcrossEntries:
         assert result.value.fields["v"] == IntValue(1)
 
     def test_root_enum_reference_to_a_scoped_record_stays_bare_across_entries(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("scope M\nrecord Go(amount: int)\nend M\nenum Step\n  | M::Go").ok
 
         bare = s.eval_entry("Go(amount = 1)")
@@ -1053,7 +1080,7 @@ class TestBareConstructorVisibilityAcrossEntries:
         assert bare.value.fields["amount"] == IntValue(1)
 
     def test_root_enum_reference_to_a_scoped_record_stays_bare_within_one_entry(self) -> None:
-        s = ReplSession()
+        s = open_session()
 
         result = s.eval_entry(
             "scope M\nrecord Go(amount: int)\nend M\nenum Step\n  | M::Go\nGo(amount = 1)"
@@ -1069,9 +1096,21 @@ class TestBareConstructorVisibilityAcrossEntries:
 # ---------------------------------------------------------------------------
 
 
+# Every public prelude type a REPL entry can name a constructor for: the
+# compatibility aliases and ``Session`` are excluded (they have no constructor
+# surface of their own), as are prelude types that are neither records nor
+# enums.
+_CONSTRUCTIBLE_PRELUDE_TYPE_NAMES = sorted(
+    name
+    for name, typ in BUILTIN_PRELUDE_TYPES.items()
+    if name not in COMPATIBILITY_PRELUDE_TYPE_NAMES | {"Session"}
+    and isinstance(typ, RecordType | EnumType)
+)
+
+
 class TestStdlib:
     def test_implicit_core_import_makes_names_available_unqualified(self) -> None:
-        s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
 
         some_result = s.eval_entry("let present: Option[int] = Some(value = 1)")
         none_result = s.eval_entry("let missing: Option[int] = None")
@@ -1080,19 +1119,19 @@ class TestStdlib:
         assert none_result.ok, none_result.diagnostics
 
     def test_type_of_uses_implicit_core_import(self) -> None:
-        s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
 
         assert "Option::Some[int]" in s.type_of("Some(value = 1)")
 
     def test_retained_explicit_core_import_suppresses_later_preludes(self) -> None:
-        s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
 
         assert s.eval_entry("import std/core").ok
         assert not s.eval_entry("Some(value = 1)").ok
         assert s.eval_entry("std/core::Option::Some(value = 1)").ok
 
     def test_no_stdlib_requires_explicit_core_import_after_reset(self) -> None:
-        s = ReplSession(
+        s = open_session(
             default_stdlib=False,
             stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
         )
@@ -1105,14 +1144,14 @@ class TestStdlib:
         assert not s.eval_entry("Some(value = 1)").ok
 
     def test_core_stdlib_qualified_generic_type_resolves_in_type_definition(self) -> None:
-        s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
 
         result = s.eval_entry("enum E = A(x: std/core::Option[int])")
 
         assert result.ok, result.diagnostics
 
     def test_prelude_record_name_echoes_as_constructor(self) -> None:
-        s = ReplSession()
+        s = open_session()
 
         result = s.eval_entry("ExecResult")
 
@@ -1123,7 +1162,7 @@ class TestStdlib:
         assert "ExecResult" in repr(result.value_type)
 
     def test_prelude_record_constructor_is_available(self) -> None:
-        s = ReplSession()
+        s = open_session()
 
         result = s.eval_entry(
             'ExecResult(stdout = "ok", exit_code = 0, stderr = "", timed_out = false)'
@@ -1134,45 +1173,47 @@ class TestStdlib:
         assert result.value_type is not None
         assert result.value_type.name == "ExecResult"
 
-    def test_all_public_builtin_prelude_constructors_are_available(self) -> None:
-        s = ReplSession()
+    @pytest.mark.parametrize("name", _CONSTRUCTIBLE_PRELUDE_TYPE_NAMES)
+    def test_public_builtin_prelude_constructors_are_available(self, name: str) -> None:
+        s = open_session()
         table = create_seeded_type_table()
+        typ = BUILTIN_PRELUDE_TYPES[name]
+        typedef = BUILTIN_PRELUDE_TYPE_DEFS[name]
 
-        for name, typ in BUILTIN_PRELUDE_TYPES.items():
-            if name in COMPATIBILITY_PRELUDE_TYPE_NAMES | {"Session"}:
-                continue
-            typedef = BUILTIN_PRELUDE_TYPE_DEFS[name]
-            if isinstance(typ, RecordType):
-                result = s.eval_entry(f"{name}({_constructor_args(dict(typedef.fields))})")
-                assert result.ok, (name, result.diagnostics)
-                assert result.value_type is not None
-                assert result.value_type.name == name
-            elif isinstance(typ, EnumType):
-                for member in typedef.members:
-                    variant = member.name
-                    args = _constructor_args(dict(table.record_fields(member)))
-                    call = f"{name}::{variant}({args})" if args else f"{name}::{variant}"
-                    result = s.eval_entry(call)
-                    assert result.ok, (name, variant, result.diagnostics)
-                    assert result.value_type is not None
-                    assert result.value_type.name == variant
-
-    def test_all_concrete_builtin_exceptions_are_available(self) -> None:
-        s = ReplSession()
-        table = create_seeded_type_table()
-
-        for name, typ in BUILTIN_EXCEPTIONS.items():
-            assert isinstance(typ, ExceptionType)
-            if table.exception_def(typ).abstract:
-                result = s.eval_entry(f'{name}(message = "x")')
-                assert not result.ok
-                assert any("abstract" in diagnostic.message for diagnostic in result.diagnostics)
-                continue
-            fields = table.exception_fields(typ)
-            result = s.eval_entry(f"{name}({_constructor_args(fields)})")
+        if isinstance(typ, RecordType):
+            result = s.eval_entry(f"{name}({_constructor_args(dict(typedef.fields))})")
             assert result.ok, (name, result.diagnostics)
             assert result.value_type is not None
             assert result.value_type.name == name
+            return
+
+        assert isinstance(typ, EnumType)
+        for member in typedef.members:
+            variant = member.name
+            args = _constructor_args(dict(table.record_fields(member)))
+            call = f"{name}::{variant}({args})" if args else f"{name}::{variant}"
+            result = s.eval_entry(call)
+            assert result.ok, (name, variant, result.diagnostics)
+            assert result.value_type is not None
+            assert result.value_type.name == variant
+
+    @pytest.mark.parametrize("name", sorted(BUILTIN_EXCEPTIONS))
+    def test_concrete_builtin_exception_is_available(self, name: str) -> None:
+        s = open_session()
+        table = create_seeded_type_table()
+        typ = BUILTIN_EXCEPTIONS[name]
+        assert isinstance(typ, ExceptionType)
+
+        if table.exception_def(typ).abstract:
+            result = s.eval_entry(f'{name}(message = "x")')
+            assert not result.ok
+            assert any("abstract" in diagnostic.message for diagnostic in result.diagnostics)
+            return
+
+        result = s.eval_entry(f"{name}({_constructor_args(table.exception_fields(typ))})")
+        assert result.ok, (name, result.diagnostics)
+        assert result.value_type is not None
+        assert result.value_type.name == name
 
 
 # ---------------------------------------------------------------------------
@@ -1223,7 +1264,7 @@ def _session_with_import_root(root: Path) -> ReplSession:
         cwd=root,
     )
     s = ReplSession()
-    s._roots = roots  # inject roots directly
+    s._roots = roots
     return s
 
 
@@ -1244,7 +1285,7 @@ class TestBuiltinIdentityAcrossEntries:
         its own text -- mints a value of that type; it must not fall back to the
         shipped standard library's identity just because the later entry itself
         declares nothing."""
-        s = ReplSession(default_stdlib=False)
+        s = open_session(default_stdlib=False)
         declare = s.eval_entry(
             "scope Stdlib\n"
             f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
@@ -1269,7 +1310,7 @@ class TestBuiltinIdentityAcrossEntries:
         resolve to the LIVE (most recently registered) declaration, not the
         oldest surviving one, when two entries each declare their own scoped
         ``builtin record ExecResult``."""
-        s = ReplSession(default_stdlib=False)
+        s = open_session(default_stdlib=False)
         first = s.eval_entry(
             "scope A\n"
             f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
@@ -1312,7 +1353,7 @@ class TestBuiltinIdentityAcrossEntries:
         bare reserved one), so only a root declaration without the standard
         library actually exercises the skip this audit fixed.
         """
-        s = ReplSession(default_stdlib=False)
+        s = open_session(default_stdlib=False)
         failed = s.eval_entry(
             'let stop: int = raise Abort(message = "stop")\n'
             "builtin exception RangeError extends Exception()"
@@ -1349,7 +1390,7 @@ class TestBuiltinIdentityAcrossEntries:
         redeclaration holding the name, and the session then reports two
         identically-spelled ``ExecResult`` types as incomparable.
         """
-        s = ReplSession(default_stdlib=False)
+        s = open_session(default_stdlib=False)
         declare = s.eval_entry(
             f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
             "builtin def exec(command: text) -> ExecResult\n"
@@ -1421,7 +1462,7 @@ class TestBuiltinIdentityWithStandardLibrary:
         root with the standard library loaded" is a rejection, not a
         success, for every ``builtin`` kind (record/enum/exception share one
         uniqueness namespace)."""
-        s = ReplSession()
+        s = open_session()
         declare = s.eval_entry(f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}")
         assert not declare.ok
         assert any("ExecResult" in d.message for d in declare.diagnostics)
@@ -1433,7 +1474,7 @@ class TestBuiltinIdentityWithStandardLibrary:
         bare-name race, ``a.field`` raised an internal nominal-mismatch error
         and ``a == b`` was wrongly ``False`` even though ``a`` and ``b`` name
         the identical declaration."""
-        s = ReplSession()
+        s = open_session()
         declare = s.eval_entry(f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n")
         assert declare.ok, declare.diagnostics
 
@@ -1459,7 +1500,7 @@ class TestBuiltinIdentityWithStandardLibrary:
     def test_root_builtin_record_declared_without_stdlib_types_and_mints_consistently(
         self,
     ) -> None:
-        s = ReplSession(default_stdlib=False)
+        s = open_session(default_stdlib=False)
         declare = s.eval_entry(
             f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
             "builtin def exec(command: text) -> ExecResult\n"
@@ -1492,7 +1533,7 @@ class TestBuiltinIdentityWithStandardLibrary:
         exception-catching code would be -- while the RAISED value's
         identity still comes from the host's scope-agnostic bare-name mint,
         which is what this fix keeps in agreement with it."""
-        s = ReplSession()
+        s = open_session()
         declare = s.eval_entry(
             "scope A\n"
             "builtin exception RangeError extends Exception()\n"
@@ -1519,7 +1560,7 @@ class TestBuiltinIdentityWithStandardLibrary:
         AFTER the declaration picks up the program's own one, and the two
         are unrelated nominal types -- the same supersession semantics an
         ordinary record redeclaration already has."""
-        s = ReplSession()
+        s = open_session()
         shell = FakeShell(stdout="hi")
         with patch("agm.core.process.run_capture_result", side_effect=shell):
             before = s.eval_entry('let a = exec("echo hi")')
@@ -1646,7 +1687,7 @@ class TestAgentRequestBuiltinIdentity:
         """The reported crash: with the scoped declaration losing the
         bare-name race, ``q.prompt`` raised an internal nominal-mismatch
         error even though ``q`` was minted against that very declaration."""
-        s = ReplSession()
+        s = open_session()
         declare = s.eval_entry(
             f"scope A\nbuiltin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}end A\n"
         )
@@ -1662,7 +1703,7 @@ class TestAgentRequestBuiltinIdentity:
         assert field.value == TextValue("hi")
 
     def test_agent_request_declared_in_the_same_entry_as_the_ask_request_call(self) -> None:
-        s = ReplSession()
+        s = open_session()
         result = s.eval_entry(
             f"scope A\nbuiltin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}end A\n"
             'let q = ask-request("hi")'
@@ -1680,7 +1721,7 @@ class TestAgentRequestBuiltinIdentity:
         field statically typed as this scope's own ``Agent`` -- the contract
         is incoherent whether or not a value is explicitly supplied for the
         argument that field holds."""
-        s = ReplSession()
+        s = open_session()
         declare = s.eval_entry(
             f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}"
             f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}end A\n"
@@ -1700,7 +1741,7 @@ class TestAgentRequestBuiltinIdentity:
         whatever declaration the contract's own field type happens to name,
         so the call is rejected rather than minting a value whose identity
         disagrees with its static field type."""
-        s = ReplSession(default_stdlib=False)
+        s = open_session(default_stdlib=False)
         declare = s.eval_entry(
             f"{_OPTION_DECL}"
             f"builtin\nenum Agent\n{_AGENT_VARIANTS}"
@@ -1722,7 +1763,7 @@ class TestAgentRequestBuiltinIdentity:
         """Regression: a program that declares none of its own builtin types
         keeps ``ask-request``'s canonical (root) ``AgentRequest`` identity
         exactly as before this fix."""
-        s = ReplSession()
+        s = open_session()
         result = s.eval_entry('let q = ask-request("hi")')
         assert result.ok, result.diagnostics
         assert isinstance(result.value_type, RecordType)
@@ -1768,7 +1809,7 @@ class TestAgentArgumentBuiltinIdentity:
         the internal crash that accepting the mismatched value used to lead
         to at evaluation.
         """
-        s = ReplSession()
+        s = open_session()
         declare = s.eval_entry(f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}end A\n")
         assert declare.ok, declare.diagnostics
 
@@ -1787,7 +1828,7 @@ class TestAgentArgumentBuiltinIdentity:
         resolves to that same scoped ``Agent``, not the standard identity the
         host actually fills the field with, so the call is rejected rather
         than minting a field whose static type disagrees with its value."""
-        s = ReplSession()
+        s = open_session()
         declare = s.eval_entry(
             f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}"
             f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}end A\n"
@@ -1805,7 +1846,7 @@ class TestAgentArgumentBuiltinIdentity:
         """``ask`` shares ``_validate_ask_like_arguments`` with ``ask-request``,
         so it rejects the same scoped ``Agent`` value the same way; checked
         only (an actual agent dispatch is out of scope here)."""
-        s = ReplSession()
+        s = open_session()
         declare = s.eval_entry(f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}end A\n")
         assert declare.ok, declare.diagnostics
 
@@ -1821,7 +1862,7 @@ class TestAgentArgumentBuiltinIdentity:
         ``agent`` field types to this program's own root ``Agent`` is
         incoherent regardless of which value is supplied for ``agent``: the
         contract itself is rejected before its argument is even checked."""
-        s = ReplSession(default_stdlib=False)
+        s = open_session(default_stdlib=False)
         declare = s.eval_entry(
             f"{_OPTION_DECL}"
             f"builtin\nenum Agent\n{_AGENT_VARIANTS}"
@@ -1841,7 +1882,7 @@ class TestAgentArgumentBuiltinIdentity:
         """Regression: passing a value of an unrelated type as ``agent`` is
         still a static rejection -- the shape-mismatch direction of this fix,
         confirmed with the program's own scoped ``Agent`` also live."""
-        s = ReplSession()
+        s = open_session()
         declare = s.eval_entry(f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}end A\n")
         assert declare.ok, declare.diagnostics
 
@@ -1882,7 +1923,7 @@ class TestAgentArgumentBuiltinIdentity:
         a differently-scoped ``Agent`` receiver instead mints a request whose
         ``agent`` field value disagrees with its static type, which an
         exhaustive ``case q.agent of`` then cannot dispatch."""
-        s = ReplSession()
+        s = open_session()
         declare = s.eval_entry(
             f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}"
             "builtin def Agent::ask-request(self, prompt: text) -> AgentRequest\n"
@@ -1900,7 +1941,7 @@ class TestAgentArgumentBuiltinIdentity:
     def test_canonical_agent_receiver_still_builds_a_request(self) -> None:
         """Regression: the ordinary receiver form still works and still mints
         a request whose ``agent`` field is readable."""
-        s = ReplSession()
+        s = open_session()
         result = s.eval_entry(
             'let agent: Agent = AgentCommand("echo")\nlet q = agent.ask-request("hi")'
         )
@@ -1927,7 +1968,7 @@ class TestHostRaisedExceptionContractIdentity:
         while the host always raises with the standard one -- rejected at the
         ``catch`` clause rather than left to fail dispatching a ``case`` over
         the field at evaluation."""
-        s = ReplSession()
+        s = open_session()
         declare = s.eval_entry(
             f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}{self._AGENT_CALL_ERROR}"
             "def trigger() -> text =\n"
@@ -1951,7 +1992,7 @@ class TestHostRaisedExceptionContractIdentity:
         ``builtin exception AgentCallError`` keeps the standard identity in
         its own ``agent`` field, so it is caught by its own declaration and
         its field is dispatched over successfully."""
-        s = ReplSession()
+        s = open_session()
         declare = s.eval_entry(
             f"scope A\n{self._AGENT_CALL_ERROR}"
             "def trigger() -> text =\n"
@@ -1983,7 +2024,7 @@ class TestParsePolicyBuiltinIdentity:
         scoped ``ParsePolicy``, written at its own qualified path
         (``A::ParsePolicy::Retry``), was rejected because the qualifier
         check only ever accepted the bare root spelling."""
-        s = ReplSession()
+        s = open_session()
         declare = s.eval_entry(
             f"scope A\nbuiltin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}end A\n"
         )
@@ -1998,7 +2039,7 @@ class TestParsePolicyBuiltinIdentity:
         assert result.value == IntValue(2)
 
     def test_scoped_parse_policy_abort_constructor_accepted_by_exec(self) -> None:
-        s = ReplSession()
+        s = open_session()
         declare = s.eval_entry(
             f"scope A\nbuiltin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}end A\n"
         )
@@ -2013,7 +2054,7 @@ class TestParsePolicyBuiltinIdentity:
         assert result.value == IntValue(2)
 
     def test_root_parse_policy_without_stdlib_accepted_by_exec(self) -> None:
-        s = ReplSession(default_stdlib=False)
+        s = open_session(default_stdlib=False)
         declare = s.eval_entry(
             f"builtin\nrecord ExecResult\n{_EXEC_RESULT_FIELDS}"
             f"builtin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}"
@@ -2033,7 +2074,7 @@ class TestParsePolicyBuiltinIdentity:
         """Regression: a program that declares none of its own builtin types
         keeps every canonical ``on_parse_error`` spelling accepted exactly as
         before this fix."""
-        s = ReplSession()
+        s = open_session()
         shell = FakeShell(stdout="2")
         with patch("agm.core.process.run_capture_result", side_effect=shell):
             bare = s.eval_entry('let a = exec::[int]("echo hi", on_parse_error = Retry(n = 2))')
@@ -2051,7 +2092,7 @@ class TestParsePolicyBuiltinIdentity:
         resolution rather than matching the raw spelling ``Abort`` -- a
         shadowing local binding is not a constructor at all and is rejected
         exactly like any other non-constructor expression there."""
-        s = ReplSession()
+        s = open_session()
         result = s.eval_entry(
             "let Abort = ParsePolicy::Retry(n = 3)\n"
             'let n: int = exec::[int]("echo 7", on_parse_error = Abort)\nn',
@@ -2064,7 +2105,7 @@ class TestParsePolicyBuiltinIdentity:
         """The call-form (``Abort()``) counterpart of the shadowing bug:
         it bypassed real resolution the same way the bare-spelling form
         did, and is rejected the same way."""
-        s = ReplSession()
+        s = open_session()
         result = s.eval_entry(
             "let Abort = ParsePolicy::Retry(n = 3)\n"
             'let n: int = exec::[int]("echo 7", on_parse_error = Abort())\nn',
@@ -2077,7 +2118,7 @@ class TestParsePolicyBuiltinIdentity:
         """The ``Retry`` counterpart: a local binding shadowing ``Retry``'s
         bare spelling is rejected rather than silently reinterpreted as a
         ``ParsePolicy::Retry`` call spelled the same way."""
-        s = ReplSession()
+        s = open_session()
         result = s.eval_entry(
             'let Retry = 5\nlet n: int = exec::[int]("echo 7", on_parse_error = Retry(n = 3))\nn',
             check_only=True,
@@ -2089,7 +2130,7 @@ class TestParsePolicyBuiltinIdentity:
         """Regression: an unrelated enum's constructor is still rejected as
         ``on_parse_error``, with the program's own scoped ``ParsePolicy``
         also live -- the shape-mismatch direction of this fix."""
-        s = ReplSession()
+        s = open_session()
         declare = s.eval_entry(
             f"scope A\nbuiltin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}end A\n"
         )
@@ -2135,7 +2176,7 @@ class TestParsePolicyBuiltinIdentity:
 
 class TestRedefinition:
     def test_let_redefined_with_new_type_shadows(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("let x = 1")
         r = s.eval_entry('let x = "hello"')
         assert r.ok
@@ -2146,7 +2187,7 @@ class TestRedefinition:
         assert isinstance(typ, TextType)
 
     def test_record_redefinition_shadows(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("record R\n  a: int")
         r = s.eval_entry("record R\n  b: text")
         assert r.ok
@@ -2167,7 +2208,7 @@ enum Agent
   | AgentCodex(model: text, thinking: text)
   | AgentPi(provider: text, model: text, thinking: text)
 """
-        session = ReplSession(default_stdlib=False)
+        session = open_session(default_stdlib=False)
         assert session.eval_entry(declaration).ok
         assert session.eval_entry('let stale = AgentClaude("sonnet", "medium")').ok
         assert session.eval_entry(declaration).ok
@@ -2186,7 +2227,7 @@ enum Agent
         self,
     ) -> None:
         """A retained enum selects its member by handle, not its record's current name."""
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("record R(old: int)").ok
         assert session.eval_entry("type OldR = R").ok
         assert session.eval_entry("enum E = ::R").ok
@@ -2207,7 +2248,7 @@ enum Agent
         assert not not_a_member.ok
 
     def test_referenced_enum_does_not_match_a_redeclared_record_member(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("record R(old: int)").ok
         assert session.eval_entry("enum E = ::R").ok
         assert session.eval_entry("record R(fresh: text)").ok
@@ -2220,7 +2261,7 @@ enum Agent
 
     def test_referenced_generic_member_preserves_its_applied_field_for_json_casts(self) -> None:
         """A referenced member applies the enum's arguments to its own fields."""
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("record Box[A](value: A)").ok
         assert session.eval_entry("enum Result[T] = ::Box[T]").ok
         assert session.eval_entry("let box = Box(value = 1)").ok
@@ -2236,7 +2277,7 @@ enum Agent
 
     def test_enum_supersession_remints_inline_members_without_invalidating_old_ones(self) -> None:
         """Old and new enum-member handles remain independently matchable and castable."""
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("enum E\n  | A(old: int)").ok
         assert session.eval_entry("type OldA = E::A").ok
         assert session.eval_entry("let old: E = A(old = 1)").ok
@@ -2269,7 +2310,7 @@ enum Agent
         self,
     ) -> None:
         """A reused enum/member spelling never bridges its old and new identities."""
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("enum E\n  | A(old: int)").ok
         assert session.eval_entry("type OldE = E").ok
         assert session.eval_entry("type OldA = E::A").ok
@@ -2292,7 +2333,7 @@ enum Agent
         assert not new_case_against_old_member.ok
 
     def test_record_redefinition_clears_generic_metadata(self) -> None:
-        s = ReplSession()
+        s = open_session()
         first = s.eval_entry("record Box[T]\n  x: T")
         assert first.ok
         second = s.eval_entry("record Box\n  x: int")
@@ -2313,7 +2354,7 @@ enum Agent
         value of the superseded generic declaration is a type error, because
         the two declarations are unrelated types.
         """
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("record Box[T]\n  x: T").ok
         assert s.eval_entry("let old = Box(x = 1)").ok
         assert s.eval_entry("record Box\n  x: int").ok
@@ -2334,7 +2375,7 @@ enum Agent
         is reported as a diagnostic rather than routed into the enum's
         variant-constructor path, which has no variant to build.
         """
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("record R(a: int)").ok
         assert s.eval_entry("enum R\n  | V(b: int)").ok
 
@@ -2345,7 +2386,7 @@ enum Agent
         assert fresh.ok, fresh.diagnostics
 
     def test_redeclaring_an_enum_as_a_record_drops_stale_variants(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("enum Color | Red").ok
         assert session.eval_entry("record Color(value: int)").ok
 
@@ -2356,7 +2397,7 @@ enum Agent
         assert fresh.ok, fresh.diagnostics
 
     def test_redeclaring_an_enum_preserves_unrelated_retained_static_members(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("enum Color | Red").ok
         assert session.eval_entry("def Color::code() -> int = 42").ok
 
@@ -2371,7 +2412,7 @@ enum Agent
         assert not obsolete.ok
 
     def test_redeclaring_a_type_preserves_nested_constructor_members(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("enum Color | Old").ok
         assert session.eval_entry("record Color::Meta(value: int)").ok
         assert session.eval_entry("use Color::*").ok
@@ -2384,7 +2425,7 @@ enum Agent
         assert nested.value.display_name == "Color::Meta"
 
     def test_redeclaring_an_enum_retires_types_nested_under_an_old_member(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("enum Color | Old").ok
         assert session.eval_entry("record Color::Old::Meta(value: int)").ok
 
@@ -2398,7 +2439,7 @@ enum Agent
     def test_redeclaring_a_used_enum_drops_its_stale_bare_variant(self) -> None:
         """A local use recorded before the enum is redeclared must not
         resurrect a variant the redeclaration's fresh member layer dropped."""
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("enum Color\n  | Red\n  | Green").ok
         assert s.eval_entry("use Color::*").ok
         assert s.eval_entry("enum Color\n  | Blue").ok
@@ -2415,7 +2456,7 @@ enum Agent
         The previous declaration, its methods, and a binding built against it
         all remain in effect exactly as before the failed entry.
         """
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("record R(value: int)").ok
         assert session.eval_entry("def R::get(self) -> int = self.value").ok
         assert session.eval_entry("let existing = R(value = 7)").ok
@@ -2442,7 +2483,7 @@ enum Agent
         field it has is rejected, and one named after a field only the
         rolled-back declaration had is accepted and callable.
         """
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("record R(a: int)").ok
 
         failed = session.eval_entry(
@@ -2467,7 +2508,7 @@ enum Agent
         must be accepted rather than rejected against a type the session
         cannot even name.
         """
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("exception Base extends Exception\n  a: int").ok
 
         failed = session.eval_entry(
@@ -2491,7 +2532,7 @@ enum Agent
         the entry never promoted is not one, so the call keeps the type the
         surviving declaration gives it — the same one the host actually mints.
         """
-        session = ReplSession(default_stdlib=False)
+        session = open_session(default_stdlib=False)
         declared = session.eval_entry(
             f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
             "builtin def exec(command: text) -> ExecResult\n"
@@ -2525,7 +2566,7 @@ class TestRecursiveTypesAcrossEntries:
     """
 
     def test_recursive_enum_constructed_and_matched_in_later_entries(self) -> None:
-        s = ReplSession()
+        s = open_session()
         declare = s.eval_entry("enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)")
         assert declare.ok
 
@@ -2543,7 +2584,7 @@ class TestRecursiveTypesAcrossEntries:
         # Redefinition semantics are unaffected: a later entry redeclaring
         # the same name with a different (still recursive) shape shadows it,
         # exactly like any other record redefinition.
-        s = ReplSession()
+        s = open_session()
         first = s.eval_entry("record Category\n  name: text\n  subcategories: array[Category]")
         assert first.ok
         second = s.eval_entry("record Category\n  label: text\n  kids: array[Category]")
@@ -2561,7 +2602,7 @@ class TestRecursiveTypesAcrossEntries:
         under the same name uses the new shape; accessing a field the old
         declaration never had still fails, exactly as it always would.
         """
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("record R\n  old: int").ok
         assert s.eval_entry("let stale = R(old = 1)").ok
         old_render = s.eval_entry("stale")
@@ -2583,7 +2624,7 @@ class TestRecursiveTypesAcrossEntries:
     def test_old_declarations_methods_still_resolve_new_declaration_starts_with_none(
         self,
     ) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("record R(value: int)").ok
         assert s.eval_entry("def R::get(self) -> int = self.value").ok
         assert s.eval_entry("let old = R(value = 1)").ok
@@ -2600,7 +2641,7 @@ class TestRecursiveTypesAcrossEntries:
         """Two values of the same (old) declaration compare equal; across
         declarations, equality is a static type error even when both share
         one display name — the two are unrelated nominal types."""
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("record R(value: int)").ok
         assert s.eval_entry("let a = R(value = 1)").ok
         assert s.eval_entry("let b = R(value = 1)").ok
@@ -2615,7 +2656,7 @@ class TestRecursiveTypesAcrossEntries:
         assert not cross.ok
 
     def test_catch_clause_matches_the_declaration_in_scope_where_it_is_written(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("exception E extends Exception()").ok
         assert s.eval_entry('let old_exc = E(message = "old")').ok
         assert s.eval_entry(
@@ -2641,7 +2682,7 @@ class TestRecursiveTypesAcrossEntries:
         assert still_catches_old.value == TextValue("caught-old")
 
     def test_enum_variant_on_an_old_typed_value_survives_redeclaration(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("enum Color\n  | Red(shade: int)\n  | Green").ok
         assert s.eval_entry("let old: Color = Color::Red(shade = 1)").ok
         assert s.eval_entry("enum Color\n  | Blue").ok
@@ -2657,7 +2698,7 @@ class TestRecursiveTypesAcrossEntries:
 
     def test_phantom_generic_member_on_a_retained_value_survives_enum_redeclaration(self) -> None:
         """A fieldless member remains matchable without recovering its enum arguments."""
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("enum E[T]\n  | A").ok
         assert s.eval_entry("let old = A").ok
         assert s.eval_entry("enum E[T]\n  | B").ok
@@ -2669,7 +2710,7 @@ class TestRecursiveTypesAcrossEntries:
 
     def test_superseded_enum_members_do_not_suggest_the_reused_enum_annotation(self) -> None:
         """An old enum's members cannot be joined through its reused name."""
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("enum Choice\n  | Yes\n  | No").ok
 
         current = s.eval_entry("[Choice::Yes, Choice::No]", check_only=True)
@@ -2699,7 +2740,7 @@ class TestRecursiveTypesAcrossEntries:
         pattern that spells the enum out qualifies against the enum the name
         means now — which is not the subject's — and is rejected.
         """
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("enum E\n  | A(x: int)").ok
         assert s.eval_entry("let old: E = E::A(x = 1)").ok
         assert s.eval_entry("enum E\n  | A(x: int)").ok
@@ -2721,7 +2762,7 @@ class TestRecursiveTypesAcrossEntries:
         is redeclared keeps returning a value of the OLD declaration —
         readable through its own (old) field — after the redeclaration.
         """
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("scope A\nrecord R(n: int)\nend A").ok
         assert s.eval_entry("scope A\ndef make() -> A::R = A::R(1)\nend A").ok
         call = s.eval_entry("A::make().n")
@@ -2750,7 +2791,7 @@ class TestRecursiveTypesAcrossEntries:
         agent = CountingAgent(
             '{"$case": "Node", "value": 1, "left": {"$case": "Leaf"}, "right": {"$case": "Leaf"}}'
         )
-        s = ReplSession(agent_dispatcher=agent)
+        s = open_session(agent_dispatcher=agent)
         declare = s.eval_entry("enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)")
         assert declare.ok
         asked = s.eval_entry('let t: Tree = ask """build a tree"""')
@@ -2768,7 +2809,7 @@ class TestRecursiveTypesAcrossEntries:
 
 class TestEchoData:
     def test_expression_echo_value_type_kind(self) -> None:
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("3 * 4")
         assert r.kind == "expression"
         assert r.name is None
@@ -2799,7 +2840,7 @@ class TestEchoData:
         """REPL echoes every qualified built-in Agent constructor unambiguously."""
         from agm.agl.repl.render import render_entry_result
 
-        result = ReplSession().eval_entry(source)
+        result = open_session().eval_entry(source)
 
         assert result.ok, result.diagnostics
         assert render_entry_result(result, echo=True) == rendered
@@ -2808,7 +2849,7 @@ class TestEchoData:
     def test_trailing_binder_echoes_declared_value(self, binder: str) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry(f"{binder} total = 5")
 
         assert r.kind == "binding"
@@ -2826,7 +2867,7 @@ class TestEchoData:
         scoped ``let``/``var``, so ``A::total`` and a root ``total`` were
         indistinguishable in the echo.
         """
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry(f"{binder} A::total = 5")
 
         assert r.kind == "binding"
@@ -2837,7 +2878,7 @@ class TestEchoData:
     def test_trailing_discard_binder_evaluates_and_echoes_nothing(self, binder: str) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry(f"{binder} _ = 6")
 
         assert r.ok, r.diagnostics
@@ -2846,14 +2887,14 @@ class TestEchoData:
         assert s.bindings() == []
 
     def test_multi_item_entry_keeps_normal_block_discard_strictness(self) -> None:
-        result = ReplSession().eval_entry("let first = 1\nfirst\nlet second = 2")
+        result = open_session().eval_entry("let first = 1\nfirst\nlet second = 2")
 
         assert not result.ok
 
     def test_trailing_pattern_let_echoes_whole_value_and_promotes_every_binder(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("record Pair\n  left: int\n  right: int").ok
 
         live = session.eval_entry("let Pair(left, right) = Pair(left = 2, right = 3)")
@@ -2883,7 +2924,7 @@ class TestEchoData:
     def test_constructor_pattern_without_binders_echoes_but_discard_does_not(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("record Pair\n  left: int\n  right: int").ok
 
         constructor = session.eval_entry("let Pair() = Pair(left = 2, right = 3)")
@@ -2903,7 +2944,7 @@ class TestEchoData:
         assert session.bindings() == []
 
     def test_declaration_echo_kind(self) -> None:
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("type Age = int")
         assert r.kind == "declaration"
         assert r.name == "Age"
@@ -2912,7 +2953,7 @@ class TestEchoData:
     def test_assign_stmt_echo_kind(self) -> None:
         # In AgL, ``:=`` is the only binder-kind that maps to "statement"
         # (it mutates an existing binding, has no new name, yields unit).
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("var v = 0")
         r = s.eval_entry("v := 1")
         assert r.kind == "statement"
@@ -2921,7 +2962,7 @@ class TestEchoData:
 
     def test_print_call_echo_kind(self) -> None:
         # ``print`` is a function call, but it yields void so REPL echo suppresses it.
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("print 1")
         assert r.kind == "expression"
         assert r.ok
@@ -2930,7 +2971,7 @@ class TestEchoData:
         assert not r.value.printable_in_repl
 
     def test_unit_literal_echoes_printable_unit(self) -> None:
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("()")
         assert r.kind == "expression"
         assert r.ok
@@ -2938,7 +2979,7 @@ class TestEchoData:
         assert r.value.printable_in_repl
 
     def test_loop_echo_value_is_void(self) -> None:
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("do[0] () done")
         assert r.kind == "expression"
         assert r.ok
@@ -2954,32 +2995,32 @@ class TestEchoData:
 
 class TestTypeOf:
     def test_type_of_returns_canonical_type(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("let x = 1")
         assert s.type_of("x + 1") == repr(IntType())
 
     def test_type_of_displays_record_fields(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("record Point\n  x: int\n  y: text")
         s.eval_entry('let p = Point(x = 1, y = "north")')
 
         assert s.type_of("p") == "record Point\n  x: int\n  y: text"
 
     def test_type_of_scoped_nominal_displays_its_path(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("scope Left\nrecord Token()\nend Left\nlet token = Left::Token()").ok
 
         assert s.type_of("token") == "record Left::Token()"
 
     def test_type_of_displays_enum_constructors(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("enum Result\n  | Ok(value: int)\n  | Err(message: text)\n  | Unknown")
         s.eval_entry("let r = Ok(value = 1)")
 
         assert s.type_of("r") == "record Result::Ok\n  value: int"
 
     def test_type_of_resolves_prior_entry_constructor(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("enum Result\n  | Ok(value: int)\n  | Err(message: text)").ok
 
         expected = "record Result::Ok\n  value: int"
@@ -2987,7 +3028,7 @@ class TestTypeOf:
         assert s.type_of("Result::Ok(value = 1)") == expected
 
     def test_type_of_does_not_promote_or_advance(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("let x = 1")
         before = [(n, repr(t)) for n, t, _v in s.bindings()]
         source_before = s.dump_source()
@@ -3001,26 +3042,26 @@ class TestTypeOf:
 
     def test_type_of_fires_no_agent(self) -> None:
         agent = CountingAgent("RESULT")
-        s = ReplSession(agent_dispatcher=agent)
+        s = open_session(agent_dispatcher=agent)
         # type_of an agent-calling expression must NOT dispatch.
         assert s.type_of('ask """ask"""') == repr(TextType())
         assert agent.calls == 0
 
     def test_type_of_rejects_non_expression(self) -> None:
-        s = ReplSession()
+        s = open_session()
         with pytest.raises(AglError):
             s.type_of("let q = 1")
 
     def test_type_of_propagates_type_error(self) -> None:
         from agm.agl.typecheck import AglTypeError
 
-        s = ReplSession()
+        s = open_session()
         s.eval_entry('let s = "x"')
         with pytest.raises(AglTypeError):
             s.type_of("s + 1")
 
     def test_type_of_propagates_match_compilation_error(self) -> None:
-        s = ReplSession()
+        s = open_session()
         with pytest.raises(AglError, match="Non-exhaustive"):
             s.type_of("case true of | true => 1")
 
@@ -3034,7 +3075,7 @@ class TestInferenceBoundaries:
     def test_generic_entry_infers_concrete_result_in_graph_and_type_sessions(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("def id[T](x: T) -> T = x").ok
         assert s.eval_entry("def app[T](f: T -> T, x: T) -> T = f(x)").ok
 
@@ -3053,7 +3094,7 @@ class TestInferenceBoundaries:
     ) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("def id[T](x: T) -> T = x").ok
         assert s.eval_entry("def app[T](f: T -> T, x: T) -> T = f(x)").ok
         assert s.eval_entry("def same[T](left: T, right: T) -> T = left").ok
@@ -3075,7 +3116,7 @@ class TestInferenceBoundaries:
         assert s.eval_entry("app(id, 7)").value_type == IntType()
 
     def test_failed_entry_does_not_persist_a_generic_declaration(self) -> None:
-        s = ReplSession()
+        s = open_session()
 
         failed = s.eval_entry("def transient[T](x: T) -> T = x\ntransient")
 
@@ -3093,7 +3134,7 @@ class TestInferenceBoundaries:
 
 class TestFailureEffects:
     def test_type_error_leaves_bindings_unchanged(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("let a = 10")
         before = _snapshot(s)
         r = s.eval_entry('let b = a + "oops"')
@@ -3103,7 +3144,7 @@ class TestFailureEffects:
         assert _snapshot(s) == before
 
     def test_runtime_raise_preserves_completed_binding(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("let a = 10")
         r = s.eval_entry("let before = 20\nlet z: decimal = 1 / 0")
         assert not r.ok
@@ -3115,7 +3156,7 @@ class TestFailureEffects:
         assert use.value is not None and _int(use.value) == 30
 
     def test_runtime_raise_promotes_complete_pattern_let_but_not_later_bindings(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("record Pair\n  left: int\n  right: int").ok
 
         failed = session.eval_entry(
@@ -3138,7 +3179,7 @@ class TestFailureEffects:
         # that build ``installed``, so it used to be silently dropped from the
         # "Installed before failure" report even though it fully survived and a
         # later entry could use it.
-        session = ReplSession()
+        session = open_session()
 
         failed = session.eval_entry("record Point\n  x: int\nlet z = [1, 2][9]")
 
@@ -3149,7 +3190,7 @@ class TestFailureEffects:
     def test_completed_pattern_initializer_and_function_metadata_survive_called_failure(
         self,
     ) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("record Pair\n  left: int\n  right: int").ok
 
         failed = session.eval_entry(
@@ -3165,7 +3206,7 @@ class TestFailureEffects:
         assert session.eval_entry("fail()").error is not None
 
     def test_runtime_failure_excludes_function_with_uninitialized_value_dependency(self) -> None:
-        session = ReplSession()
+        session = open_session()
 
         failed = session.eval_entry(
             'def needs_value() -> int = value\nlet value: int = raise Abort(message = "stop")'
@@ -3176,7 +3217,7 @@ class TestFailureEffects:
         assert not session.eval_entry("needs_value()").ok
 
     def test_runtime_failure_excludes_function_with_unpromoted_nominal_dependency(self) -> None:
-        session = ReplSession()
+        session = open_session()
 
         failed = session.eval_entry(
             "type Delayed = Later\n"
@@ -3195,7 +3236,7 @@ class TestFailureEffects:
     def test_runtime_failure_promotes_generic_function_independent_of_same_named_nominal(
         self,
     ) -> None:
-        session = ReplSession()
+        session = open_session()
 
         failed = session.eval_entry(
             "def identity[T](value: T) -> T = value\n"
@@ -3212,7 +3253,7 @@ class TestFailureEffects:
     def test_runtime_failure_distinguishes_same_named_scoped_nominal_dependencies(
         self,
     ) -> None:
-        session = ReplSession()
+        session = open_session()
 
         failed = session.eval_entry(
             "scope A\n"
@@ -3234,7 +3275,7 @@ class TestFailureEffects:
     def test_runtime_failure_retains_independent_completed_function_and_pattern_binders(
         self,
     ) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("record Pair\n  left: int\n  right: int").ok
 
         failed = session.eval_entry(
@@ -3250,7 +3291,7 @@ class TestFailureEffects:
         assert session.eval_entry("fail()").error is not None
 
     def test_runtime_raise_in_else_branch_returns_entry_error(self) -> None:
-        s = ReplSession()
+        s = open_session()
 
         result = s.eval_entry('let x = if 0 == 1 => 1 else => raise Abort(message = "a")')
 
@@ -3261,7 +3302,7 @@ class TestFailureEffects:
         assert s.eval_entry("1").ok
 
     def test_runtime_raise_does_not_install_failing_binding_from_prior_function(self) -> None:
-        s = ReplSession()
+        s = open_session()
         declare = s.eval_entry('def f[T]() -> T = raise Abort(message = "A")')
         assert declare.ok
 
@@ -3274,7 +3315,7 @@ class TestFailureEffects:
         assert not s.eval_entry("x").ok
 
     def test_runtime_raise_preserves_completed_param(self) -> None:
-        s = ReplSession()
+        s = open_session()
         result = s.eval_entry("param p: int = 7\nlet z: decimal = 1 / 0")
         assert not result.ok
         assert [(name, _int(value)) for name, _type, value in s.declared_params()] == [("p", 7)]
@@ -3286,7 +3327,7 @@ class TestFailureEffects:
         # ``symbol in base frame`` check would record the later param even though
         # the scope-promotion loop excluded its binding by source position —
         # leaving ``declared_params()`` to raise ``KeyError``.
-        s = ReplSession()
+        s = open_session()
         result = s.eval_entry("let z: decimal = 1 / 0\nparam q: int = 5")
         assert not result.ok
         assert s.declared_params() == []
@@ -3294,7 +3335,7 @@ class TestFailureEffects:
         assert not s.eval_entry("q").ok
 
     def test_runtime_raise_does_not_install_failing_param_default(self) -> None:
-        s = ReplSession()
+        s = open_session()
         result = s.eval_entry("param p: decimal = 1 / 0")
         assert not result.ok
         assert s.declared_params() == []
@@ -3305,7 +3346,7 @@ class TestFailureEffects:
         # entry, including a record type that fully completed before the param
         # was reached — an accidental gate on whether the entry happened to
         # declare a function, not on what actually finished.
-        s = ReplSession()
+        s = open_session()
 
         result = s.eval_entry("record Point\n  x: int\nparam p: int = [1, 2][9]")
 
@@ -3314,7 +3355,7 @@ class TestFailureEffects:
         assert followup.ok, followup.diagnostics
 
     def test_runtime_raise_does_not_promote_param_with_unpromoted_self_qualified_type(self) -> None:
-        s = ReplSession()
+        s = open_session()
 
         result = s.eval_entry(
             'param p: ::R\nlet stop: int = raise Abort(message = "stop")\nrecord R\n  value: int'
@@ -3327,7 +3368,7 @@ class TestFailureEffects:
     def test_runtime_raise_promotes_preinstalled_function_before_failing_param_default(
         self,
     ) -> None:
-        s = ReplSession()
+        s = open_session()
 
         result = s.eval_entry("def f() -> int = 1\nparam p: decimal = 1 / 0")
 
@@ -3336,7 +3377,7 @@ class TestFailureEffects:
         assert s.eval_entry("f()").value == IntValue(1)
 
     def test_runtime_raise_does_not_promote_later_type(self) -> None:
-        s = ReplSession()
+        s = open_session()
         result = s.eval_entry("let z: decimal = 1 / 0\nrecord After\n  value: int")
         assert not result.ok
         assert not s.eval_entry("After").ok
@@ -3345,7 +3386,7 @@ class TestFailureEffects:
     def test_runtime_raise_does_not_promote_enum_without_its_later_referenced_member(
         self,
     ) -> None:
-        s = ReplSession()
+        s = open_session()
 
         failed = s.eval_entry("enum E = ::R\nlet z: decimal = 1 / 0\nrecord R()")
 
@@ -3355,7 +3396,7 @@ class TestFailureEffects:
         assert "R" not in s.type_names()
 
     def test_runtime_raise_tracks_applied_referenced_member_dependencies(self) -> None:
-        s = ReplSession()
+        s = open_session()
 
         failed = s.eval_entry(
             "enum E = ::R[Payload]\nlet z: decimal = 1 / 0\nrecord Payload()\nrecord R[T]()"
@@ -3367,7 +3408,7 @@ class TestFailureEffects:
     def test_runtime_raise_does_not_promote_function_typed_with_later_inline_member(
         self,
     ) -> None:
-        s = ReplSession()
+        s = open_session()
 
         failed = s.eval_entry(
             "def read(value: E::A) -> int = value.value\n"
@@ -3381,14 +3422,14 @@ class TestFailureEffects:
         assert not s.eval_entry("read").ok
 
     def test_runtime_raise_retains_completed_function_initializer_metadata(self) -> None:
-        s = ReplSession()
+        s = open_session()
         failed = s.eval_entry("let z: decimal = 1 / 0\ndef later[T](x: T) -> T = x")
 
         assert not failed.ok
         assert s.eval_entry("later(1)").value_type == IntType()
 
     def test_runtime_failure_promotes_function_declared_after_failing_source_item(self) -> None:
-        s = ReplSession()
+        s = open_session()
         failed = s.eval_entry(
             'let before = 1\nlet stop: int = raise Abort(message = "stop")\ndef later() -> int = 4'
         )
@@ -3399,7 +3440,7 @@ class TestFailureEffects:
         assert not s.eval_entry("stop").ok
 
     def test_runtime_raise_does_not_promote_later_exception_type(self) -> None:
-        s = ReplSession()
+        s = open_session()
         result = s.eval_entry(
             "let z: decimal = 1 / 0\nexception Later extends Exception\n  code: int"
         )
@@ -3408,7 +3449,7 @@ class TestFailureEffects:
         assert not s.eval_entry('Later(message = "m", code = 3)').ok
 
     def test_runtime_raise_promotes_prior_exception_constructor(self) -> None:
-        s = ReplSession()
+        s = open_session()
         result = s.eval_entry(
             "exception Before extends Exception\n"
             "  code: int\n"
@@ -3421,7 +3462,7 @@ class TestFailureEffects:
         assert s.eval_entry('Child(message = "m", code = 3, detail = 4)').ok
 
     def test_runtime_raise_preserves_prior_type_but_not_later_binding(self) -> None:
-        s = ReplSession()
+        s = open_session()
         result = s.eval_entry(
             "record Box\n  value: int\nlet z: decimal = 1 / 0\nlet after = 9\nafter"
         )
@@ -3430,7 +3471,7 @@ class TestFailureEffects:
         assert not s.eval_entry("after").ok
 
     def test_runtime_raise_preserves_assign_to_prior_var(self) -> None:
-        s = ReplSession()
+        s = open_session()
         r1 = s.eval_entry("var v = 1")
         assert r1.ok
         r2 = s.eval_entry("v := 99\nlet z: decimal = 1 / 0")
@@ -3442,7 +3483,7 @@ class TestFailureEffects:
     def test_runtime_raise_preserves_indexed_assign_to_prior_var(self) -> None:
         from agm.agl.semantics.values import ArrayValue, IntValue
 
-        s = ReplSession()
+        s = open_session()
         r1 = s.eval_entry("var xs = [1, 2, 3]")
         assert r1.ok
         r2 = s.eval_entry("xs[0] := 99\nlet z: decimal = 1 / 0")
@@ -3454,7 +3495,7 @@ class TestFailureEffects:
     def test_successful_assign_to_prior_var_persists(self) -> None:
         # The positive counterpart: a successful ``:=`` in a later entry DOES
         # persist into the session.
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("var v = 1")
         r = s.eval_entry("v := 5")
         assert r.ok
@@ -3462,7 +3503,7 @@ class TestFailureEffects:
         assert vals["v"] == 5
 
     def test_syntax_error_does_not_advance_state(self) -> None:
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("let = = =")
         assert not r.ok
         assert r.diagnostics
@@ -3479,7 +3520,7 @@ class TestFailureEffects:
 class TestExactlyOnce:
     def test_agent_fires_exactly_once(self) -> None:
         agent = CountingAgent("the-answer")
-        s = ReplSession(agent_dispatcher=agent)
+        s = open_session(agent_dispatcher=agent)
         r1 = s.eval_entry('let g = ask """say something"""')
         assert r1.ok
         assert agent.calls == 1
@@ -3491,7 +3532,7 @@ class TestExactlyOnce:
 
     def test_dispatcher_session_handle_survives_across_entries(self) -> None:
         agent = CountingAgent("the-answer")
-        session = ReplSession(agent_dispatcher=agent)
+        session = open_session(agent_dispatcher=agent)
 
         opened = session.eval_entry("let saved = Session::default()")
         asked = session.eval_entry('saved.ask("later")')
@@ -3505,7 +3546,7 @@ class TestExactlyOnce:
         from agm.agl.repl.render import render_entry_result
 
         agent = CountingAgent("the-answer")
-        s = ReplSession(agent_dispatcher=agent)
+        s = open_session(agent_dispatcher=agent)
         result = s.eval_entry('ask """say something"""')
 
         assert result.ok
@@ -3516,7 +3557,7 @@ class TestExactlyOnce:
         from agm.agl.repl.render import render_entry_result
 
         agent = CountingAgent("the-answer")
-        s = ReplSession(agent_dispatcher=agent)
+        s = open_session(agent_dispatcher=agent)
         first = s.eval_entry('let txt: text = ask """say something"""')
         second = s.eval_entry("txt")
 
@@ -3528,7 +3569,7 @@ class TestExactlyOnce:
 
     def test_distinct_agent_responses_across_entries(self) -> None:
         agent = CountingAgent("first", "second", "third")
-        s = ReplSession(agent_dispatcher=agent)
+        s = open_session(agent_dispatcher=agent)
         s.eval_entry('let a = ask """q1"""')
         s.eval_entry('let b = ask """q2"""')
         s.eval_entry('let c = ask """q3"""')
@@ -3538,7 +3579,7 @@ class TestExactlyOnce:
 
     def test_agent_value_dispatch(self) -> None:
         named = CountingAgent("named-reply")
-        s = ReplSession(agent_dispatcher=named)
+        s = open_session(agent_dispatcher=named)
         r = s.eval_entry(
             'let reviewer = AgentCommand("reviewer")\n'
             'let out = ask("""review this""", agent = reviewer)'
@@ -3555,7 +3596,7 @@ class TestExactlyOnce:
 
 class TestAgentDeclarations:
     def test_agent_value_dispatches_without_a_declaration(self) -> None:
-        s = ReplSession(agent_dispatcher=CountingAgent("ok"))
+        s = open_session(agent_dispatcher=CountingAgent("ok"))
         r = s.eval_entry(
             'let reviewer = AgentCommand("reviewer")\nask("""look""", agent = reviewer)'
         )
@@ -3564,13 +3605,13 @@ class TestAgentDeclarations:
     def test_undeclared_unregistered_agent_call_errors(self) -> None:
         # A call to an agent that is neither registered nor declared in source is
         # still a static scope binding error.
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry('ghost "hi"')
         assert not r.ok
         assert r.diagnostics
 
     def test_cross_entry_agent_value_resolves(self) -> None:
-        s = ReplSession(agent_dispatcher=CountingAgent("done"))
+        s = open_session(agent_dispatcher=CountingAgent("done"))
         r1 = s.eval_entry('let helper = AgentCommand("helper")')
         assert r1.ok
         r2 = s.eval_entry('let out = ask("""go""", agent = helper)')
@@ -3579,7 +3620,7 @@ class TestAgentDeclarations:
 
     def test_scoped_declaration_retains_its_handle_across_entries(self) -> None:
         agent = CountingAgent("done")
-        s = ReplSession(agent_dispatcher=agent)
+        s = open_session(agent_dispatcher=agent)
 
         declared = s.eval_entry('scope Tools\nlet helper = AgentCommand("helper")\nend Tools')
         assert declared.ok, declared.diagnostics
@@ -3597,7 +3638,7 @@ class TestAgentDeclarations:
     def test_failed_entry_declaration_does_not_persist(self) -> None:
         # A declaration in an entry that fails to promote must NOT leak into the
         # ambient set: a later call relying on it is still a scope error.
-        s = ReplSession()
+        s = open_session()
         # The entry declares ``maybe`` but then has a type error, so it fails and
         # rolls back; the declaration must not persist.
         bad = s.eval_entry('agent maybe\nlet x: int = "oops"')
@@ -3607,14 +3648,14 @@ class TestAgentDeclarations:
         assert r.diagnostics
 
     def test_type_of_allows_agent_value_call(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry('let reviewer = AgentCommand("reviewer")')
         assert s.type_of('ask("""ask""", agent = reviewer)') == repr(TextType())
 
     def test_reset_clears_declared_agents(self) -> None:
         # After reset, a previously source-declared agent is gone: a call to it
         # (without re-registration/re-declaration) is a scope error again.
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("agent transient")
         s.reset()
         r = s.eval_entry('transient "hi"')
@@ -3628,7 +3669,7 @@ class TestAgentDeclarations:
 
 class TestParams:
     def test_declared_param_listed_unset(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry('param name: text = "World"')
         ins = s.declared_params()
         assert len(ins) == 1
@@ -3638,7 +3679,7 @@ class TestParams:
         assert _text(val) == "World"
 
     def test_unset_param_reference_is_clean_error(self) -> None:
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("param name: text")
         assert not r.ok
         assert r.diagnostics
@@ -3651,7 +3692,7 @@ class TestParams:
         The entry module's internal sentinel is not a spelling a user can type
         and must never reach a diagnostic.
         """
-        s = ReplSession()
+        s = open_session()
 
         r = s.eval_entry("param name: text")
 
@@ -3660,7 +3701,7 @@ class TestParams:
         assert "<entry>" not in r.diagnostics[0].message
 
     def test_declared_param_then_reference(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry('param name: text = "World"')
         r = s.eval_entry("name")
         assert r.ok
@@ -3672,7 +3713,7 @@ class TestParams:
         self, tmp_path: Path
     ) -> None:
         (tmp_path / "settings.agl").write_text("param token: text\n")
-        session = ReplSession(lib_root=tmp_path, default_stdlib=False)
+        session = open_session(lib_root=tmp_path, default_stdlib=False)
 
         result = session.eval_entry("import settings\n()")
 
@@ -3689,7 +3730,7 @@ class TestParams:
         (tmp_path / "b.agl").write_text(
             "import a\nparam b_value: int = a::read()\ndef read() -> int = b_value\n"
         )
-        session = ReplSession(lib_root=tmp_path, default_stdlib=False)
+        session = open_session(lib_root=tmp_path, default_stdlib=False)
 
         result = session.eval_entry("import a\n()")
 
@@ -3714,7 +3755,7 @@ class TestParams:
             seen_inventories.append(tuple(param.qualified_public_name for param in params))
             return {"settings::items": [1, 2]}
 
-        session = ReplSession(
+        session = open_session(
             lib_root=tmp_path,
             default_stdlib=False,
             params_config_loader=load_config,
@@ -3746,7 +3787,7 @@ class TestParams:
             seen_inventories.append(tuple(param.qualified_public_name for param in params))
             return {"settings::token": ["configured"]}
 
-        session = ReplSession(
+        session = open_session(
             lib_root=tmp_path,
             default_stdlib=False,
             params_config_loader=load_config,
@@ -3790,7 +3831,7 @@ class TestParams:
             seen_inventories.append(tuple(param.qualified_public_name for param in params))
             return {}
 
-        session = ReplSession(
+        session = open_session(
             lib_root=tmp_path,
             default_stdlib=False,
             params_config_loader=load_config,
@@ -3805,14 +3846,14 @@ class TestParams:
         assert session._link_image._linked_modules == set()
 
     def test_declared_param_typed_value(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("param count: int = 42")
         r = s.eval_entry("count + 1")
         assert r.ok
         assert _int(r.value) == 43
 
     def test_param_default_is_in_bindings(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry('param name: text = "hi"')
         assert any(n == "name" for n, _t, _v in s.bindings())
 
@@ -3820,7 +3861,7 @@ class TestParams:
         # A required scoped param must report the same clean diagnostic as a
         # root param and leave the session alive for later entries, not crash
         # with an unhandled IR error.
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("scope A\nparam p: int\nend A\nprint(A::p)")
         assert not r.ok
         assert r.diagnostics
@@ -3831,7 +3872,7 @@ class TestParams:
         assert _text(after.value) == "still alive"
 
     def test_declared_params_lists_scoped_param_by_full_path(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("scope A\nparam p: int = 5\nend A")
         ins = s.declared_params()
         assert len(ins) == 1
@@ -3841,7 +3882,7 @@ class TestParams:
         assert _int(val) == 5
 
     def test_scoped_param_metadata_is_removed_when_another_member_replaces_it(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("scope A\nparam x: int = 1\nend A").ok
 
         replacement = s.eval_entry("scope A\nlet x = 2\nend A")
@@ -3853,7 +3894,7 @@ class TestParams:
         assert value.value == IntValue(2)
 
     def test_let_binding_displaces_same_named_root_param_in_later_entry(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("param count: int = 1").ok
 
         result = s.eval_entry("let count = 5")
@@ -3865,7 +3906,7 @@ class TestParams:
         assert value.value == IntValue(5)
 
     def test_let_binding_displaces_same_keyed_scoped_param_in_later_entry(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry('scope Deploy\nparam region: text = "eu"\nend Deploy').ok
 
         result = s.eval_entry('scope Deploy\nlet region = "us"\nend Deploy')
@@ -3877,7 +3918,7 @@ class TestParams:
         assert value.value == TextValue("us")
 
     def test_single_entry_displaces_root_and_scoped_param_together(self) -> None:
-        s = ReplSession()
+        s = open_session()
         setup = s.eval_entry(
             'param count: int = 1\nscope Deploy\nparam region: text = "eu"\nend Deploy'
         )
@@ -3890,7 +3931,7 @@ class TestParams:
         assert s.declared_params() == []
 
     def test_undisplaced_param_remains_listed_after_sibling_displacement(self) -> None:
-        s = ReplSession()
+        s = open_session()
         setup = s.eval_entry("param count: int = 1\nparam other: int = 2")
         assert setup.ok, setup.diagnostics
 
@@ -3902,7 +3943,7 @@ class TestParams:
     def test_scoped_param_failing_default_does_not_corrupt_next_entry(self) -> None:
         # A scoped param whose default raises must not be promoted; the next
         # entry must degrade gracefully rather than crash on an unbound symbol.
-        s = ReplSession()
+        s = open_session()
         first = s.eval_entry('scope A\nparam p: int = "x" as int\nend A')
         assert not first.ok
         assert s.declared_params() == []
@@ -3921,14 +3962,14 @@ class TestReset:
         host = AgentDispatcherSessionHost(None)
         agent = agent_value("AgentCommand", command="worker")
         first = host.default(agent, "Cli")
-        session = ReplSession(session_host=host)
+        session = open_session(session_host=host)
 
         session.reset()
 
         assert host.default(agent, "Cli") != first
 
     def test_reset_clears_all_state(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("let x = 1")
         s.eval_entry("param n: int")
         s.reset()
@@ -3940,7 +3981,7 @@ class TestReset:
         assert not r.ok
 
     def test_reset_restarts_node_ids(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("let a = 1")
         s.reset()
         r = s.eval_entry("let a = 2")
@@ -3948,7 +3989,7 @@ class TestReset:
         assert _int({name: value for name, _typ, value in s.bindings()}["a"]) == 2
 
     def test_reset_clears_retained_uses(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("scope Tools\ndef twice(x: int) -> int = x * 2\nend Tools").ok
         assert s.eval_entry("use Tools::*").ok
         assert s.eval_entry("twice(3)").ok
@@ -3985,7 +4026,7 @@ class TestLoadFile:
     def test_load_file_executes_into_session(self, tmp_path: Path) -> None:
         f = tmp_path / "prog.agl"
         f.write_text("let a = 1\nlet b = a + 2\n")
-        s = ReplSession()
+        s = open_session()
         results = s.load_file(f)
         assert all(r.ok for r in results)
         assert len(results) == 2
@@ -3996,7 +4037,7 @@ class TestLoadFile:
         agent = CountingAgent("loaded")
         f = tmp_path / "p.agl"
         f.write_text('let g = ask """hi"""\n')
-        s = ReplSession(agent_dispatcher=agent)
+        s = open_session(agent_dispatcher=agent)
         s.load_file(f)
         assert agent.calls == 1
         # Referencing it later does not re-run.
@@ -4013,7 +4054,7 @@ class TestLoadFile:
             encoding="utf-8",
         )
 
-        session = ReplSession()
+        session = open_session()
         results = session.load_file(transcript)
 
         assert len(results) == 2
@@ -4024,25 +4065,25 @@ class TestLoadFile:
     def test_load_file_incremental_redefinition_round_trips(self, tmp_path: Path) -> None:
         # Redefinition across entries is supported; a saved transcript containing
         # a redefinition must reload because :load runs one statement per entry.
-        a = ReplSession()
+        a = open_session()
         a.eval_entry("let x = 1")
         a.eval_entry("let x = 2")
         f = tmp_path / "redef.agl"
         f.write_text(a.dump_source())
 
-        b = ReplSession()
+        b = open_session()
         results = b.load_file(f)
         assert all(r.ok for r in results)
         vals = {n: _int(v) for n, _t, v in b.bindings()}
         assert vals == {"x": 2}
 
     def test_load_file_round_trips_a_forward_resolved_use_entry(self, tmp_path: Path) -> None:
-        original = ReplSession()
+        original = open_session()
         assert original.eval_entry("use S::*\ndef S::value() -> int = 1").ok
         transcript = tmp_path / "session.agl"
         transcript.write_text(original.dump_source(), encoding="utf-8")
 
-        loaded = ReplSession()
+        loaded = open_session()
         results = loaded.load_file(transcript)
 
         assert all(result.ok for result in results)
@@ -4051,13 +4092,13 @@ class TestLoadFile:
         assert value.value == IntValue(1)
 
     def test_load_file_round_trips_a_use_after_a_declaration(self, tmp_path: Path) -> None:
-        original = ReplSession()
+        original = open_session()
         assert original.eval_entry("scope S\ndef value() -> int = 1\nend S").ok
         assert original.eval_entry("use S::*").ok
         transcript = tmp_path / "session.agl"
         transcript.write_text(original.dump_source(), encoding="utf-8")
 
-        loaded = ReplSession()
+        loaded = open_session()
         results = loaded.load_file(transcript)
 
         assert all(result.ok for result in results)
@@ -4074,7 +4115,7 @@ class TestLoadFile:
             "def increment(n: int) = n + 1\n"
             "def reset(_: Counter) = Counter::zero\n"
         )
-        session = ReplSession()
+        session = open_session()
 
         first = session.load_file(f)
         second = session.load_file(f)
@@ -4085,13 +4126,13 @@ class TestLoadFile:
         assert _int(result.value) == 3
 
     def test_load_file_multi_binding_round_trips(self, tmp_path: Path) -> None:
-        a = ReplSession()
+        a = open_session()
         a.eval_entry("let a = 1")
         a.eval_entry("let b = a + 1")
         f = tmp_path / "multi.agl"
         f.write_text(a.dump_source())
 
-        b = ReplSession()
+        b = open_session()
         results = b.load_file(f)
         assert all(r.ok for r in results)
         vals = {n: _int(v) for n, _t, v in b.bindings()}
@@ -4110,7 +4151,7 @@ class TestLoadFile:
             '  label := "many"\n'
             "label\n"
         )
-        s = ReplSession()
+        s = open_session()
         results = s.load_file(f)
         assert all(r.ok for r in results), [r.diagnostics for r in results if not r.ok]
         vals = {n: v for n, _t, v in s.bindings()}
@@ -4119,7 +4160,7 @@ class TestLoadFile:
     def test_load_file_record_block_slices_correctly(self, tmp_path: Path) -> None:
         f = tmp_path / "rec.agl"
         f.write_text("record Point\n    x: int\n    y: int\nlet p = Point(x = 1, y = 2)\np.x\n")
-        s = ReplSession()
+        s = open_session()
         results = s.load_file(f)
         assert all(r.ok for r in results), [r.diagnostics for r in results if not r.ok]
         assert results[-1].value is not None
@@ -4132,7 +4173,7 @@ class TestLoadFile:
             "let z: decimal = 1 / 0\n"  # runtime raise — halts the load here
             "let b = 99\n"  # never reached
         )
-        s = ReplSession()
+        s = open_session()
         results = s.load_file(f)
         # The load halted at the failing statement; nothing after it ran.
         assert len(results) == 2
@@ -4145,7 +4186,7 @@ class TestLoadFile:
     def test_load_file_syntax_error_single_failed_result(self, tmp_path: Path) -> None:
         f = tmp_path / "syntax.agl"
         f.write_text("let = oops\n")
-        s = ReplSession()
+        s = open_session()
         results = s.load_file(f)
         assert len(results) == 1
         assert not results[0].ok
@@ -4154,7 +4195,7 @@ class TestLoadFile:
     def test_load_file_empty_file_no_results(self, tmp_path: Path) -> None:
         f = tmp_path / "empty.agl"
         f.write_text("")
-        s = ReplSession()
+        s = open_session()
         results = s.load_file(f)
         assert results == []
         assert s.bindings() == []
@@ -4162,7 +4203,7 @@ class TestLoadFile:
     def test_load_file_comment_only_no_results(self, tmp_path: Path) -> None:
         f = tmp_path / "comments.agl"
         f.write_text("# just a comment\n# and another\n")
-        s = ReplSession()
+        s = open_session()
         results = s.load_file(f)
         assert results == []
         assert s.bindings() == []
@@ -4175,7 +4216,7 @@ class TestLoadFile:
 
 class TestDumpSource:
     def test_dump_source_accumulates_successful_entries(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("let a = 1")
         s.eval_entry("let b = 2")
         assert s.dump_source() == (
@@ -4183,7 +4224,7 @@ class TestDumpSource:
         )
 
     def test_dump_source_excludes_failed_entries(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("let a = 1")
         s.eval_entry("let z: decimal = 1 / 0")  # runtime fail
         s.eval_entry('let b = a + "x"')  # type fail
@@ -4197,7 +4238,7 @@ class TestDumpSource:
 
 class TestWarnings:
     def test_non_exhaustive_case_error_surfaced(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("enum R\n  | Pass\n  | Fail")
         s.eval_entry("let r: R = Pass")
         r = s.eval_entry("case r of\n  | Pass() => ()")
@@ -4209,13 +4250,13 @@ class TestWarnings:
     def test_tab_warning_surfaced(self) -> None:
         # A TAB character in the entry source surfaces a per-entry advisory
         # warning (mirroring ``PipelineDriver.run``), without failing the entry.
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("let x =\t1")
         assert r.ok
         assert any("TAB" in w.message or "tab" in w.message for w in r.warnings)
 
     def test_match_error_on_check_only_path(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("enum R\n  | Pass\n  | Fail")
         s.eval_entry("let r: R = Pass")
         r = s.eval_entry("case r of\n  | Pass() => ()", check_only=True)
@@ -4232,7 +4273,7 @@ class TestWarnings:
 class TestCheckOnly:
     def test_check_only_types_expression_without_eval(self) -> None:
         agent = CountingAgent("nope")
-        s = ReplSession(agent_dispatcher=agent)
+        s = open_session(agent_dispatcher=agent)
         r = s.eval_entry('ask """ask"""', check_only=True)
         assert r.ok
         assert r.kind == "expression"
@@ -4241,7 +4282,7 @@ class TestCheckOnly:
         assert agent.calls == 0
 
     def test_check_only_does_not_promote(self) -> None:
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("let x = 1", check_only=True)
         assert r.ok
         assert r.kind == "binding"
@@ -4253,7 +4294,7 @@ class TestCheckOnly:
         assert not s.eval_entry("x").ok
 
     def test_check_only_trailing_binder_reports_bottom_initializer(self) -> None:
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry('let x: int = raise Abort(message = "x")', check_only=True)
 
         assert r.ok
@@ -4263,14 +4304,14 @@ class TestCheckOnly:
         assert r.value is None
 
     def test_check_only_does_not_advance_node_ids(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("check_only", check_only=True)  # statement-ish; ignored result
         # A real binding after a check_only still works.
         r = s.eval_entry("let a = 1")
         assert r.ok
 
     def test_check_only_declaration_kind(self) -> None:
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("record P\n  x: int", check_only=True)
         assert r.ok
         assert r.kind == "declaration"
@@ -4279,7 +4320,7 @@ class TestCheckOnly:
         assert not s.eval_entry("let p = P(x = 1)").ok
 
     def test_check_only_type_error_still_fails(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry('let t = "x"')
         r = s.eval_entry("t + 1", check_only=True)
         assert not r.ok
@@ -4295,7 +4336,7 @@ class TestRegistrationAndAgents:
     def test_register_codec_validation(self) -> None:
         from agm.agl.runtime.codec import JsonCodec
 
-        s = ReplSession()
+        s = open_session()
         with pytest.raises(ValueError):
             s.register_codec(JsonCodec())  # reserved built-in name
 
@@ -4322,7 +4363,7 @@ class TestContractError:
             def name(self) -> str:
                 return "bad"
 
-        s = ReplSession(agent_dispatcher=CountingAgent("ok"))
+        s = open_session(agent_dispatcher=CountingAgent("ok"))
         s.register_codec(BadCodec())
         r = s.eval_entry('let x = ask("hi", format = "bad")')
         assert not r.ok
@@ -4333,7 +4374,7 @@ class TestContractError:
 
 class TestEntryResultShape:
     def test_result_is_frozen_dataclass(self) -> None:
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("let x = 1")
         assert isinstance(r, EntryResult)
         assert r.trace_path is None  # no --log-file → no trace path
@@ -4374,7 +4415,7 @@ class _InterruptAgent:
 
 class TestAgentCancellation:
     def test_interrupt_without_agent_reports_interrupted_entry(self) -> None:
-        session = ReplSession()
+        session = open_session()
         with patch("agm.agl.eval.ir_interpreter.IrInterpreter.run", side_effect=KeyboardInterrupt):
             result = session.eval_entry("1 + 1")
 
@@ -4387,7 +4428,7 @@ class TestAgentCancellation:
         assert session.eval_entry("2 + 2").ok
 
     def test_declined_agent_aborts_entry_with_diagnostic(self) -> None:
-        s = ReplSession(agent_dispatcher=_CancellingAgent())
+        s = open_session(agent_dispatcher=_CancellingAgent())
         r = s.eval_entry('let g = ask """do it"""')
         assert not r.ok
         assert r.error is None
@@ -4395,7 +4436,7 @@ class TestAgentCancellation:
         assert "cancelled" in r.diagnostics[0].message.lower()
 
     def test_declined_agent_leaves_bindings_unchanged(self) -> None:
-        s = ReplSession(agent_dispatcher=_CancellingAgent())
+        s = open_session(agent_dispatcher=_CancellingAgent())
         s.eval_entry("let keep = 7")
         before = _snapshot(s)
         r = s.eval_entry('let g = ask """do it"""')
@@ -4405,7 +4446,7 @@ class TestAgentCancellation:
         assert all(n != "g" for n, _t, _v in s.bindings())
 
     def test_keyboard_interrupt_aborts_entry(self) -> None:
-        s = ReplSession(agent_dispatcher=_InterruptAgent())
+        s = open_session(agent_dispatcher=_InterruptAgent())
         s.eval_entry("let x = 1")
         before = _snapshot(s)
         r = s.eval_entry('let g = ask """slow"""')
@@ -4414,7 +4455,7 @@ class TestAgentCancellation:
         assert _snapshot(s) == before
 
     def test_cancellation_preserves_prior_assignment(self) -> None:
-        s = ReplSession(agent_dispatcher=_CancellingAgent())
+        s = open_session(agent_dispatcher=_CancellingAgent())
         s.eval_entry("var v = 1")
         r = s.eval_entry('v := 2\nlet g = ask """x"""')
         assert not r.ok
@@ -4426,14 +4467,14 @@ class TestAgentCancellation:
         # before a cancelled agent call must be promoted, mirroring the
         # partial-effects behavior for runtime raises. Previously cancellation
         # carried no failure span, so every type declaration was dropped.
-        s = ReplSession(agent_dispatcher=_CancellingAgent())
+        s = open_session(agent_dispatcher=_CancellingAgent())
         r = s.eval_entry('record Box\n  value: int\nlet g = ask """x"""')
         assert not r.ok
         assert s.eval_entry("Box(value = 3)").ok
 
     def test_cancellation_excludes_record_declared_after_call(self) -> None:
         # A type declared after the cancelled call is not promoted.
-        s = ReplSession(agent_dispatcher=_CancellingAgent())
+        s = open_session(agent_dispatcher=_CancellingAgent())
         r = s.eval_entry('let g = ask """x"""\nrecord After\n  value: int')
         assert not r.ok
         assert not s.eval_entry("After(value: 1)").ok
@@ -4446,7 +4487,7 @@ class TestAgentCancellation:
 
 class TestTraceLogging:
     def test_no_trace_path_writes_nothing(self, tmp_path: Path) -> None:
-        s = ReplSession(agent_dispatcher=CountingAgent("ok"))
+        s = open_session(agent_dispatcher=CountingAgent("ok"))
         r = s.eval_entry('let g = ask """hi"""')
         assert r.ok
         assert r.trace_path is None
@@ -4455,7 +4496,7 @@ class TestTraceLogging:
         import json
 
         trace = tmp_path / "repl.log"
-        s = ReplSession(agent_dispatcher=CountingAgent("reply"), trace_path=trace)
+        s = open_session(agent_dispatcher=CountingAgent("reply"), trace_path=trace)
         r = s.eval_entry('let g = ask """ask"""')
         assert r.ok
         assert r.trace_path == trace
@@ -4471,7 +4512,7 @@ class TestTraceLogging:
         import json
 
         trace = tmp_path / "repl.log"
-        s = ReplSession(agent_dispatcher=CountingAgent("a", "b"), trace_path=trace)
+        s = open_session(agent_dispatcher=CountingAgent("a", "b"), trace_path=trace)
         s.eval_entry('let x = ask """one"""')
         s.eval_entry('let y = ask """two"""')
         records = [json.loads(line) for line in trace.read_text().splitlines() if line]
@@ -4481,7 +4522,7 @@ class TestTraceLogging:
 
     def test_check_only_writes_no_trace(self, tmp_path: Path) -> None:
         trace = tmp_path / "repl.log"
-        s = ReplSession(agent_dispatcher=CountingAgent("ok"), trace_path=trace)
+        s = open_session(agent_dispatcher=CountingAgent("ok"), trace_path=trace)
         r = s.eval_entry('let g = ask """hi"""', check_only=True)
         assert r.ok
         assert r.trace_path is None
@@ -4491,7 +4532,7 @@ class TestTraceLogging:
         import json
 
         trace = tmp_path / "repl.log"
-        s = ReplSession(agent_dispatcher=_CancellingAgent(), trace_path=trace)
+        s = open_session(agent_dispatcher=_CancellingAgent(), trace_path=trace)
         r = s.eval_entry('let g = ask """x"""')
         assert not r.ok
         records = [json.loads(line) for line in trace.read_text().splitlines() if line]
@@ -4509,7 +4550,7 @@ class TestTraceLogging:
         import json
 
         trace = tmp_path / "repl.log"
-        session = ReplSession(
+        session = open_session(
             trace_path=trace,
             stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
         )
@@ -4530,7 +4571,7 @@ class TestTraceLogging:
         from agm.core import log as core_log
 
         trace = tmp_path / "repl.log"
-        s = ReplSession(agent_dispatcher=CountingAgent("a", "b"), trace_path=trace)
+        s = open_session(agent_dispatcher=CountingAgent("a", "b"), trace_path=trace)
         real_append = core_log.append_jsonl
         calls = {"n": 0}
 
@@ -4559,7 +4600,7 @@ class TestTraceLogging:
 
 class TestRemovedPresetParam:
     def test_reset_keeps_declared_params_empty(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("param count: int = 42")
         s.reset()
         assert s.declared_params() == []
@@ -4572,7 +4613,7 @@ class TestRemovedPresetParam:
 
 class TestParamRedeclaration:
     def test_redeclare_param_purges_stale_value_from_bindings(self) -> None:
-        s = ReplSession()
+        s = open_session()
         r1 = s.eval_entry("param x: int = 5")
         assert r1.ok
         r2 = s.eval_entry("param x: int = 10")
@@ -4581,7 +4622,7 @@ class TestParamRedeclaration:
         assert _int(ins2["x"]) == 10
 
     def test_redeclare_param_then_reference_raises_unset_guard(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("param x: int = 5")
         s.eval_entry("param x: int = 10")
         r = s.eval_entry("x + 1")
@@ -4589,7 +4630,7 @@ class TestParamRedeclaration:
         assert _int(r.value) == 11
 
     def test_redeclare_param_then_reset_works(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("param x: int = 5")
         s.eval_entry("param x: int = 10")
         r = s.eval_entry("x + 1")
@@ -4604,7 +4645,7 @@ class TestParamRedeclaration:
 
 class TestSnapshotOptimisation:
     def test_assign_to_prior_binding_in_raising_entry_persists(self) -> None:
-        s = ReplSession()
+        s = open_session()
         r1 = s.eval_entry("var counter = 0")
         assert r1.ok
         # This entry assigns counter=99 then raises (division by zero).
@@ -4621,7 +4662,7 @@ class TestSnapshotOptimisation:
         This guards that the optimisation (no snapshot for assignment-free entries) does
         not accidentally allow prior bindings to be mutated on success.
         """
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("var a = 1")
         s.eval_entry("let b = 2")
         # An entry that only reads a and b, with no assignment.
@@ -4633,7 +4674,7 @@ class TestSnapshotOptimisation:
 
     def test_entry_with_only_new_bindings_does_not_disturb_prior(self) -> None:
         """Adding new bindings in an entry that raises leaves old bindings clean."""
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("let x = 10")
         # Entry raises; it tries to add a new binding (no assignment to prior state).
         r = s.eval_entry("let _fail: decimal = 1 / 0")
@@ -4651,7 +4692,7 @@ class TestIfExpr:
     def test_parenthesized_if_expr_echoes_value(self) -> None:
         # A parenthesized if-expression at the prompt wraps into an ExprStmt,
         # so _classify returns "expression" and the evaluated value is echoed.
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("(if true => 1 | else => 2)")
         assert r.ok
         assert r.kind == "expression"
@@ -4660,7 +4701,7 @@ class TestIfExpr:
 
     def test_parenthesized_if_expr_else_branch_taken(self) -> None:
         # Verify the else branch is taken when the condition is false.
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("(if false => 1 | else => 2)")
         assert r.ok
         assert r.kind == "expression"
@@ -4669,7 +4710,7 @@ class TestIfExpr:
 
     def test_parenthesized_if_expr_leading_pipe_echoes_value(self) -> None:
         # The leading-pipe form inside parens also works as an expression echo.
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("(if | true => 10 | else => 20)")
         assert r.ok
         assert r.kind == "expression"
@@ -4680,7 +4721,7 @@ class TestIfExpr:
         # In AgL, ``if`` is a value-producing expression.  A bare ``if`` entry
         # at the prompt is classified as "expression" (it yields a value).
         # The value is void when the branches are statement-like (e.g. ``:=``).
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("var x = 0")
         r = s.eval_entry("if true =>\n    x := 42\n| else =>\n    x := 0")
         assert r.ok
@@ -4693,7 +4734,7 @@ class TestIfExpr:
     def test_if_expr_in_let_binding_echoes_value(self) -> None:
         # An if-expression used in a let binding produces a binding echo with
         # the correct value and type.
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("let result = if true => 7 | else => 3")
         assert r.ok
         assert r.kind == "binding"
@@ -4714,7 +4755,7 @@ class TestDoExpr:
         # as "expression" (not statement), and the ``:=`` side-effect must be
         # visible in the session after promotion.  This exercises the Do branch
         # in ``_assign_targets_in_program`` (session.py lines 80-81).
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("var counter = 0")
         r = s.eval_entry("do\n  counter := counter + 1\nuntil counter >= 3\ncounter")
         assert r.ok
@@ -4725,7 +4766,7 @@ class TestDoExpr:
     def test_do_loop_assignment_rolls_back_on_error(self) -> None:
         # A ``:=`` inside a failing do-loop entry rolls back atomically: the
         # var is restored to its pre-entry value.
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("var x = 0")
         # The loop mutates x but the trailing type error kills the entry.
         r = s.eval_entry('do\n  x := x + 1\nuntil x >= 2\nlet bad: int = "oops"')
@@ -4736,7 +4777,7 @@ class TestDoExpr:
 
 class TestIndexedAssignTargets:
     def test_nested_indexed_assign_rolls_back_on_error(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("var xs = [[1, 2]]")
         r = s.eval_entry('xs[0][1] := 9\nlet bad: int = "oops"')
         assert not r.ok
@@ -4754,7 +4795,7 @@ class TestTryExpr:
         # A ``try`` expression containing a ``:=`` in its body must have the
         # ``:=`` target detected by ``_assign_targets_in_program``
         # so the var is included in atomic rollback tracking.
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("var x = 0")
         r = s.eval_entry("try\n  x := 1\ncatch _ =>\n  x := 99\nx")
         assert r.ok
@@ -4764,7 +4805,7 @@ class TestTryExpr:
     def test_try_assign_target_detected_in_handler(self) -> None:
         # A ``:=`` inside a catch handler must also be detected so
         # the var snapshot is captured before the entry runs.
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("var x = 0")
         # The handler assignment path requires the try body to raise, which is tricky
         # to trigger without a real exception; we just verify that an assignment inside
@@ -4777,7 +4818,7 @@ class TestTryExpr:
     def test_try_assignment_rolls_back_on_type_error(self) -> None:
         # A type error in the same entry causes the whole entry to roll back,
         # including any ``:=`` in a try body.
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("var x = 0")
         r = s.eval_entry('try\n  x := 5\ncatch _ =>\n  ()\nlet bad: int = "oops"')
         assert not r.ok
@@ -4794,7 +4835,7 @@ class TestFuncDef:
     def test_funcdef_classified_as_declaration(self) -> None:
         # A bare ``def`` entry must be classified as "declaration" with the
         # function name as the declared name.
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("def double(x: int) -> int = x * 2")
         assert r.ok
         assert r.kind == "declaration"
@@ -4804,7 +4845,7 @@ class TestFuncDef:
         # A function defined in one REPL entry must be callable in a later entry
         # (cross-entry callability via TypeEnvironment.seed_from + closure
         # promotion into session scope).
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("def add(a: int, b: int) -> int = a + b")
         r = s.eval_entry("add(3, 4)")
         assert r.ok
@@ -4812,7 +4853,7 @@ class TestFuncDef:
         assert _int(r.value) == 7
 
     def test_typed_nullary_constructor_call_as_juxt_arg(self) -> None:
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry(
             "enum Opt[T]\n  | None\ndef f(x: Opt[int]) -> bool = false\nf Opt[int]::None()"
         )
@@ -4822,7 +4863,7 @@ class TestFuncDef:
 
     def test_funcdef_result_used_in_binding(self) -> None:
         # A function defined in entry 1 can be used in a let-binding in entry 2.
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("def square(n: int) -> int = n * n")
         r = s.eval_entry("let result = square(5)")
         assert r.ok
@@ -4834,7 +4875,7 @@ class TestFuncDef:
     def test_funcdef_failed_entry_does_not_persist(self) -> None:
         # A function in a failing entry (type error) must not be callable in
         # the next entry — atomic rollback must erase the definition.
-        s = ReplSession()
+        s = open_session()
         bad = s.eval_entry('def broken(x: int) -> int = x\nlet y: int = "oops"')
         assert not bad.ok
         r = s.eval_entry("broken(1)")
@@ -4846,7 +4887,7 @@ class TestFuncDef:
         The region completed before the failing statement, so its member stays
         usable; a region after the failure never took effect.
         """
-        s = ReplSession()
+        s = open_session()
         before = s.eval_entry("scope A\nrecord Token()\nend A\n1 / 0")
         assert not before.ok
         assert s.eval_entry("A::Token()").ok
@@ -4862,7 +4903,7 @@ class TestFuncDef:
         only ``a`` may be promoted — a failed sibling binder in the same region
         must not be treated as completed merely because it shares the region.
         """
-        s = ReplSession()
+        s = open_session()
         failed = s.eval_entry("scope A\nlet a = 1\nvar b = 1 / 0\nend A")
         assert not failed.ok
         assert s.eval_entry("A::a").value == IntValue(1)
@@ -4877,7 +4918,7 @@ class TestFuncDef:
         as unconditionally promoted and later lookup crashes the session
         instead of diagnosing cleanly.
         """
-        s = ReplSession()
+        s = open_session()
         failed = s.eval_entry("scope A\nlet a = 1\nvar c = 1 / 0\nlet d = 4\nend A")
         assert not failed.ok
         r = s.eval_entry("A::d")
@@ -4887,7 +4928,7 @@ class TestFuncDef:
         self,
     ) -> None:
         """The region-form ``let`` fix also holds across nested regions."""
-        s = ReplSession()
+        s = open_session()
         failed = s.eval_entry(
             "scope A\nlet a = 1\nscope B\nvar c = 1 / 0\nlet d = 4\nend B\nlet e = 5\nend A"
         )
@@ -4899,21 +4940,21 @@ class TestFuncDef:
         self,
     ) -> None:
         """The region-form ``let`` fix also holds when the same scope is reopened."""
-        s = ReplSession()
+        s = open_session()
         failed = s.eval_entry("scope A\nlet a = 1\nend A\nscope A\nvar b = 1 / 0\nlet c = 4\nend A")
         assert not failed.ok
         assert not s.eval_entry("A::c").ok
 
     def test_runtime_failure_after_scoped_var_in_region_gives_clean_diagnostic(self) -> None:
         """Control: a ``var`` past a failing sibling was already handled correctly."""
-        s = ReplSession()
+        s = open_session()
         failed = s.eval_entry("scope A\nlet a = 1\nvar c = 1 / 0\nvar d = 4\nend A")
         assert not failed.ok
         assert not s.eval_entry("A::d").ok
 
     def test_runtime_failure_after_shorthand_scoped_let_gives_clean_diagnostic(self) -> None:
         """Control: the declaration-path shorthand form was already handled correctly."""
-        s = ReplSession()
+        s = open_session()
         failed = s.eval_entry("let A::a = 1\nvar A::c = 1 / 0\nlet A::d = 4")
         assert not failed.ok
         assert not s.eval_entry("A::d").ok
@@ -4930,7 +4971,7 @@ class TestInfixDecl:
     def test_infixl_usable_in_subsequent_entry(self) -> None:
         # ``infixl`` declared in one entry must make the operator usable in a
         # later entry (the fixity persists across entries for parsing).
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("infixl +++ at 5")
         s.eval_entry("def +++(x: int, y: int) -> int = x + y")
         r = s.eval_entry("1 +++ 2")
@@ -4939,7 +4980,7 @@ class TestInfixDecl:
         assert _int(r.value) == 3
 
     def test_infixr_usable_in_subsequent_entry(self) -> None:
-        s = ReplSession(default_stdlib=False)
+        s = open_session(default_stdlib=False)
         s.eval_entry("infixr << at 40")
         s.eval_entry('def <<(x: text, y: text) -> text = "(" + x + y + ")"')
         r = s.eval_entry('"a" << "b" << "c"')
@@ -4950,7 +4991,7 @@ class TestInfixDecl:
     def test_infix_relative_priority_persists(self) -> None:
         # A relative priority (``at prio > + 1``) declared in one entry must
         # keep binding correctly when the operator is used in a later entry.
-        s = ReplSession(default_stdlib=False)
+        s = open_session(default_stdlib=False)
         s.eval_entry("infixl |> at prio > + 1")
         s.eval_entry("def |>(x: int, y: int) -> int = x * 10 + y")
         r = s.eval_entry("1 + 2 |> 3 > 20")
@@ -4963,7 +5004,7 @@ class TestInfixDecl:
     def test_infix_redefinition_shadows(self) -> None:
         # Redeclaring an infix operator in a later entry updates its fixity
         # (mirrors how ``let``/``record`` redefinitions shadow in the REPL).
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("infixl +++ at 5")
         s.eval_entry("def +++(x: int, y: int) -> int = x + y")
         # Redeclare with a different priority; the operator is still usable.
@@ -4976,7 +5017,7 @@ class TestInfixDecl:
     def test_infix_relative_priority_to_user_operator_persists(self) -> None:
         # A relative priority may reference a user operator declared in an earlier
         # entry; the reference resolves against the accumulated fixity.
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("infixl +++ at 5")
         s.eval_entry("infixl *** at prio +++ + 1")
         s.eval_entry("def +++(x: int, y: int) -> int = x + y")
@@ -5067,7 +5108,7 @@ class TestInfixDecl:
 
     def test_infix_decl_survives_reset(self) -> None:
         # ``:reset`` clears ALL session state, including accumulated fixity.
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("infixl +++ at 5")
         s.eval_entry("def +++(x: int, y: int) -> int = x + y")
         s.reset()
@@ -5076,7 +5117,7 @@ class TestInfixDecl:
 
     def test_type_of_uses_accumulated_infix(self) -> None:
         # ``:type`` parses with the session's accumulated fixity too.
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("infixl +++ at 5")
         s.eval_entry("def +++(x: int, y: int) -> int = x + y")
         assert s.type_of("1 +++ 2") == "int"
@@ -5087,19 +5128,7 @@ class TestImports:
 
     def _make_session_with_root(self, root: Path) -> ReplSession:
         """Create a ReplSession with *root* as the only module search root."""
-        from agm.agl.modules.roots import assemble_roots
-
-        roots = assemble_roots(
-            invocation_root=root,
-            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
-            lib_root=None,
-            configured=[],
-            cli=[],
-            cwd=root,
-        )
-        s = ReplSession()
-        s._roots = roots  # inject roots directly
-        return s
+        return _session_with_import_root(root)
 
     def test_import_basic_function_call(self, tmp_path: Path) -> None:
         lib = tmp_path / "mylib.agl"
@@ -5146,13 +5175,13 @@ class TestImports:
         assert _int(r2.value) == 10
 
     def test_current_module_use_is_retained(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("def Source::value() -> int = 1").ok
         assert s.eval_entry("use ::Source::*").ok
         assert s.eval_entry("value()").value == IntValue(1)
 
     def test_same_target_use_is_replaced_and_failed_entries_preserve_it(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("def Source::original() -> int = 1").ok
         assert s.eval_entry("def Source::replacement() -> int = 2").ok
         assert s.eval_entry("use Source::{original}").ok
@@ -5168,7 +5197,7 @@ class TestImports:
         assert s.eval_entry("replacement()").value == IntValue(2)
 
     def test_single_member_alias_use_is_replaced_by_parent_target(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("def Source::old() -> int = 1").ok
         assert session.eval_entry("def Source::new() -> int = 2").ok
         assert session.eval_entry("use Source::old as selected").ok
@@ -5182,7 +5211,7 @@ class TestImports:
     def test_single_member_alias_replacement_applies_to_its_entry_transactionally(
         self,
     ) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("def Source::old() -> int = 1").ok
         assert session.eval_entry("def Source::new() -> int = 2").ok
         assert session.eval_entry("use Source::{old}").ok
@@ -5199,7 +5228,7 @@ class TestImports:
         assert not session.eval_entry("old()").ok
 
     def test_single_member_alias_replacement_can_reuse_the_exposed_name(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("def Source::old() -> int = 1").ok
         assert session.eval_entry("def Source::new() -> int = 2").ok
         assert session.eval_entry("use Source::old as selected").ok
@@ -5210,7 +5239,7 @@ class TestImports:
         assert replacement.value == IntValue(2)
 
     def test_nested_whole_target_alias_does_not_replace_its_parent_use(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("def Source::old() -> int = 1").ok
         assert session.eval_entry("def Source::Nested::value() -> int = 2").ok
         assert session.eval_entry("use Source::{old}").ok
@@ -5262,7 +5291,7 @@ class TestImports:
         assert not session.eval_entry("old()").ok
 
     def test_nested_relative_and_current_module_use_targets_replace_each_other(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("def Outer::Source::old() -> int = 1").ok
         assert session.eval_entry("def Outer::Source::new() -> int = 2").ok
         assert session.eval_entry("scope Outer\nuse Source::{old}\nend Outer").ok
@@ -5277,7 +5306,7 @@ class TestImports:
     def test_relative_use_does_not_replace_retained_target_after_nearer_scope_appears(
         self,
     ) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("def Source::old() -> int = 1").ok
         assert session.eval_entry("scope Outer\nuse Source::{old}\nend Outer").ok
         assert session.eval_entry("def Outer::Source::new() -> int = 2").ok
@@ -5294,7 +5323,7 @@ class TestImports:
         assert result.value == IntValue(3)
 
     def test_replacing_nested_relative_use_hides_old_names_in_replacement_entry(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("def Source::old() -> int = 1").ok
         assert session.eval_entry("def Source::new() -> int = 2").ok
         assert session.eval_entry("scope Outer\nuse Source::{old}\nend Outer").ok
@@ -5655,7 +5684,7 @@ class TestImports:
         assert not session.eval_entry("use Facade::*").ok
 
     def test_local_and_current_module_use_spellings_replace_each_other(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("def Source::old() -> int = 1").ok
         assert session.eval_entry("def Source::new() -> int = 2").ok
         assert session.eval_entry("use Source::{old}").ok
@@ -5695,7 +5724,7 @@ class TestImports:
         assert not s.eval_entry("old()").ok
 
     def test_distinct_use_targets_with_clashing_bare_names_remain_ambiguous(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("def First::value() -> int = 1").ok
         assert s.eval_entry("def Second::value() -> int = 2").ok
         assert s.eval_entry("use First::*").ok
@@ -5706,7 +5735,7 @@ class TestImports:
         assert s.eval_entry("Second::value()").value == IntValue(2)
 
     def test_same_target_uses_in_different_regions_remain_independent(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("def Source::value() -> int = 3").ok
         assert s.eval_entry("scope Left\nuse Source::*\nend Left").ok
         assert s.eval_entry("scope Right\nuse Source::*\nend Right").ok
@@ -5810,7 +5839,7 @@ class TestImports:
 
     def test_no_roots_set_but_import_attempted(self) -> None:
         # With only the stdlib root, an unrelated import should fail gracefully.
-        s = ReplSession()
+        s = open_session()
         from agm.agl.modules.roots import RootSet
 
         s._roots = RootSet(roots=frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
@@ -6123,7 +6152,7 @@ class TestImports:
         # _ensure_roots() builds the root set lazily on first import.
         lib = tmp_path / "lazylib.agl"
         lib.write_text("def val() -> int = 42\n")
-        s = ReplSession(cwd=tmp_path)
+        s = open_session(cwd=tmp_path)
         r = s.eval_entry("import lazylib::*\nval()")
         assert r.ok, r.diagnostics
         assert _int(r.value) == 42
@@ -6402,7 +6431,7 @@ class TestImports:
 
 class TestUnpromotedNominalDeclarationEffects:
     def test_runtime_failure_leaves_the_previous_record_declaration_in_effect(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("record R\n  x: int").ok
 
         failed = s.eval_entry("let z: decimal = 1 / 0\nrecord R\n  y: int")
@@ -6417,7 +6446,7 @@ class TestUnpromotedNominalDeclarationEffects:
         assert match.value == IntValue(2)
 
     def test_runtime_failure_leaves_the_previous_enum_declaration_in_effect(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("enum Color\n  | Red\n  | Green").ok
 
         failed = s.eval_entry("let z: decimal = 1 / 0\nenum Color\n  | Blue")
@@ -6435,7 +6464,7 @@ class TestUnpromotedNominalDeclarationEffects:
         assert not stale_variant.ok
 
     def test_failed_enum_with_inline_members_leaves_no_scope_or_member_behind(self) -> None:
-        s = ReplSession()
+        s = open_session()
 
         failed = s.eval_entry("let z: decimal = 1 / 0\nenum Tree\n  | Node(value: int)")
         assert not failed.ok
@@ -6448,7 +6477,7 @@ class TestUnpromotedNominalDeclarationEffects:
         assert later.value == IntValue(42)
 
     def test_failed_enum_with_inline_members_preserves_same_named_prior_state(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("enum Tree\n  | Leaf(value: int)").ok
 
         failed = s.eval_entry("let z: decimal = 1 / 0\nenum Tree\n  | Node(value: int)")
@@ -6463,7 +6492,7 @@ class TestUnpromotedNominalDeclarationEffects:
         assert not unpromoted.ok
 
     def test_runtime_failure_leaves_the_previous_exception_declaration_in_effect(self) -> None:
-        s = ReplSession()
+        s = open_session()
         assert s.eval_entry("exception E extends Exception\n  code: int").ok
 
         failed = s.eval_entry(
@@ -6482,7 +6511,7 @@ class TestUnpromotedNominalDeclarationEffects:
         """A declaration with no PREVIOUS declaration to fall back to is simply
         absent -- not resurrected in some intermediate state -- once its own
         entry fails before promoting it."""
-        s = ReplSession()
+        s = open_session()
 
         failed = s.eval_entry("let z: decimal = 1 / 0\nrecord R\n  x: int")
         assert not failed.ok
@@ -6497,7 +6526,7 @@ class TestUnpromotedNominalDeclarationEffects:
         program declaration exists) still landing on the canonical identity
         and remaining catchable, exactly as an ordinary nominal falls back to
         whatever preceded the failed entry."""
-        s = ReplSession(default_stdlib=False)
+        s = open_session(default_stdlib=False)
 
         failed = s.eval_entry(
             "let z: decimal = 1 / 0\n"
@@ -6540,7 +6569,7 @@ class TestUnpromotedNominalDeclarationEffects:
         lowering and that table still carries the earlier declaration under
         its own identity.
         """
-        s = ReplSession(default_stdlib=False)
+        s = open_session(default_stdlib=False)
         declared = s.eval_entry("builtin exception RangeError extends Exception()")
         assert declared.ok, declared.diagnostics
 
@@ -6598,13 +6627,13 @@ class TestExternRepl:
     # -- Placement: a direct REPL entry has no backing file -----------------
 
     def test_direct_entry_extern_def_rejected(self) -> None:
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("extern def f(x: int) -> int")
         assert not r.ok
         assert r.diagnostics
 
     def test_session_usable_after_rejected_extern_entry(self) -> None:
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("extern def f(x: int) -> int")
         r = s.eval_entry("let x = 1 + 1")
         assert r.ok
@@ -6698,7 +6727,7 @@ class TestExternRepl:
         # registry itself is a new object afterward — NOT whether the
         # underlying Python module object happens to still exist somewhere in
         # the process (an implementation detail this test does not pin down).
-        s = ReplSession()
+        s = open_session()
         registry_before = s._runtime.host_environment().extern_registry
         s.reset()
         registry_after = s._runtime.host_environment().extern_registry
@@ -6821,7 +6850,7 @@ class TestFunctionAgentValueEcho:
 
     def test_bare_lambda_echo_does_not_crash(self) -> None:
         """A bare lambda expression echoes its surface form without crashing."""
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("fn(x: int) -> int => x + 1")
         assert r.ok
         assert r.kind == "expression"
@@ -6836,7 +6865,7 @@ class TestFunctionAgentValueEcho:
 
     def test_bare_def_name_echo_does_not_crash(self) -> None:
         """A bare function-name entry after a ``def`` echoes the surface form."""
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("def dbl(x: int) -> int = x * 2")
         # Evaluating bare ``dbl`` returns the Closure.
         r = s.eval_entry("dbl")
@@ -6852,7 +6881,7 @@ class TestFunctionAgentValueEcho:
 
     def test_bindings_after_def_does_not_crash(self) -> None:
         """:bindings() after a ``def`` must not crash (Closure has a surface form)."""
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("def dbl(x: int) -> int = x * 2")
         # bindings() returns Closure values; the meta-command renders them.
         binds = s.bindings()
@@ -6883,7 +6912,7 @@ class TestBareTypeEntry:
     def test_builtin_primitive_type_echoes_as_type(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("int")
         assert r.ok
         assert r.kind == "type"
@@ -6894,7 +6923,7 @@ class TestBareTypeEntry:
     def test_builtin_container_types_echo_as_type(self) -> None:
         from agm.agl.semantics.types import ArrayType, DictType
 
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("array[int]")
         assert r.ok
         assert r.kind == "type"
@@ -6909,7 +6938,7 @@ class TestBareTypeEntry:
     def test_function_type_echoes_as_type(self) -> None:
         from agm.agl.semantics.types import FunctionType
 
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("(int) -> bool")
         assert r.ok
         assert r.kind == "type"
@@ -6919,7 +6948,7 @@ class TestBareTypeEntry:
         from agm.agl.repl.render import render_entry_result
         from agm.agl.semantics.types import EnumType
 
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("enum Color = Red | Green | Blue")
         r = s.eval_entry("Color")
         assert r.ok
@@ -6933,7 +6962,7 @@ class TestBareTypeEntry:
     def test_generic_type_application_echoes_as_type(self) -> None:
         from agm.agl.semantics.types import ArrayType
 
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("type Pair[A, B] = array[A]")
         # The alias resolves transparently to its target: array[int].
         r = s.eval_entry("Pair[int, text]")
@@ -6945,7 +6974,7 @@ class TestBareTypeEntry:
     def test_bare_generic_enum_name_echoes_definition(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("enum Option[T]\n  | none\n  | some(value: T)")
         r = s.eval_entry("Option")
         assert r.ok
@@ -6959,7 +6988,7 @@ class TestBareTypeEntry:
     def test_bare_generic_record_name_echoes_definition(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("record Box[T]\n  value: T")
         r = s.eval_entry("Box")
         assert r.ok
@@ -6970,7 +6999,7 @@ class TestBareTypeEntry:
     def test_use_exposed_generic_record_name_echoes_definition(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("scope S\nrecord Box[T](value: T)\nend S").ok
         assert session.eval_entry("use S::*").ok
 
@@ -6991,7 +7020,7 @@ class TestBareTypeEntry:
     ) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("scope S\nrecord Box[T](value: T)\nend S").ok
         assert session.eval_entry(use_decl).ok
 
@@ -7004,7 +7033,7 @@ class TestBareTypeEntry:
         )
 
     def test_hidden_use_generic_record_name_does_not_echo_definition(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("scope S\nrecord Box[T](value: T)\nend S").ok
         assert session.eval_entry("use S::* hiding Box").ok
 
@@ -7013,7 +7042,7 @@ class TestBareTypeEntry:
     def test_use_alias_qualified_generic_record_name_echoes_definition(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("scope S\nrecord Box[T](value: T)\nend S").ok
         assert session.eval_entry("use S as Alias").ok
 
@@ -7025,7 +7054,7 @@ class TestBareTypeEntry:
         )
 
     def test_use_alias_does_not_expose_another_qualifier(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("scope S\nrecord Box[T](value: T)\nend S").ok
         assert session.eval_entry("use S as Alias").ok
 
@@ -7042,7 +7071,7 @@ class TestBareTypeEntry:
         self, tmp_path: Path, local_route: str
     ) -> None:
         (tmp_path / "a.agl").write_text("record Box[T](value: T)\n")
-        session = ReplSession(
+        session = open_session(
             cwd=tmp_path,
             stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
         )
@@ -7058,7 +7087,7 @@ class TestBareTypeEntry:
         from agm.agl.repl.render import render_entry_result
 
         (tmp_path / "a.agl").write_text("record Box[T](value: T)\n")
-        session = ReplSession(
+        session = open_session(
             cwd=tmp_path,
             stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
         )
@@ -7071,7 +7100,7 @@ class TestBareTypeEntry:
         assert render_entry_result(result, echo=True) == "<type:\nrecord a::Box[T]\n  value: T\n>"
 
     def test_use_alias_nested_generic_record_name_echoes_definition(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry(
             "scope S\nscope Nested\nrecord Box[T](value: T)\nend Nested\nend S"
         ).ok
@@ -7083,7 +7112,7 @@ class TestBareTypeEntry:
         assert result.kind == "type"
 
     def test_use_alias_non_generic_enum_falls_back_to_type_display(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("scope S\nenum Status | ready\nend S").ok
         assert session.eval_entry("use S as Alias").ok
 
@@ -7101,7 +7130,7 @@ class TestBareTypeEntry:
         """
         from agm.agl.repl.render import render_entry_result
 
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("scope A\nrecord Box[T]\n  value: T\nend A")
         r = s.eval_entry("A::Box")
         assert r.ok
@@ -7112,7 +7141,7 @@ class TestBareTypeEntry:
     def test_bare_generic_type_entry_in_check_only_mode(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("enum Option[T]\n  | none\n  | some(value: T)")
         r = s.eval_entry("Option", check_only=True)
         assert r.ok
@@ -7125,7 +7154,7 @@ class TestBareTypeEntry:
     def test_implicit_core_import_bare_generic_type_echoes_definition(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
         r = s.eval_entry("Option")
         assert r.ok
         assert r.kind == "type"
@@ -7138,7 +7167,7 @@ class TestBareTypeEntry:
     def test_implicit_core_import_qualified_generic_type_echoes_definition(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
         r = s.eval_entry("std/core::Option")
         assert r.ok
         assert r.kind == "type"
@@ -7150,7 +7179,7 @@ class TestBareTypeEntry:
     def test_builtin_type_entry_works_when_graph_env_is_unavailable(self, tmp_path: Path) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        s = ReplSession(stdlib_root=tmp_path / "missing-stdlib")
+        s = open_session(stdlib_root=tmp_path / "missing-stdlib")
         r = s.eval_entry("int")
         assert r.ok
         assert r.kind == "type"
@@ -7182,7 +7211,7 @@ class TestBareTypeEntry:
                 unqualified={"Box": frozenset({(left, "Box"), (right, "Box")})},
             ),
         )
-        s = ReplSession()
+        s = open_session()
         assert s._try_generic_type_entry(parse_type_expr("Box"), env) is None
 
     def test_qualified_unapplied_generic_resolution_edges(self) -> None:
@@ -7323,7 +7352,7 @@ class TestBareTypeEntry:
         # evaluating normally (the type fallback only triggers on failure).
         from agm.agl.semantics.values import ConstructorValue
 
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("record Point(x: int, y: int)")
         r = s.eval_entry("Point")
         assert r.ok
@@ -7333,7 +7362,7 @@ class TestBareTypeEntry:
     def test_binding_name_not_intercepted_as_type(self) -> None:
         # ``x`` parses as a type expression (a NameT), but it is a live value
         # binding that evaluates successfully, so it must NOT be intercepted.
-        s = ReplSession()
+        s = open_session()
         s.eval_entry("let x = 5")
         r = s.eval_entry("x")
         assert r.ok
@@ -7343,7 +7372,7 @@ class TestBareTypeEntry:
 
     def test_expression_not_intercepted_as_type(self) -> None:
         # ``1 + 2`` does not parse as a type expression; it evaluates normally.
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("1 + 2")
         assert r.ok
         assert r.kind == "expression"
@@ -7353,7 +7382,7 @@ class TestBareTypeEntry:
     def test_truly_undefined_name_keeps_original_error(self) -> None:
         # ``nope`` parses as a type expression but does not resolve to a known
         # type, so the original "is not defined" error is preserved.
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("nope")
         assert not r.ok
         assert r.kind != "type"
@@ -7362,7 +7391,7 @@ class TestBareTypeEntry:
     def test_type_entry_does_not_mutate_session_state(self) -> None:
         # Like ``:type``, a bare type entry must not promote, advance node ids,
         # or install any binding.
-        s = ReplSession()
+        s = open_session()
         before = s._next_node_id
         s.eval_entry("int")
         assert s._next_node_id == before
@@ -7372,7 +7401,7 @@ class TestBareTypeEntry:
     def test_type_entry_echo_respects_echo_off(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("int")
         assert r.ok
         assert render_entry_result(r, echo=False) is None
@@ -7380,7 +7409,7 @@ class TestBareTypeEntry:
     def test_type_entry_in_check_only_mode(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        s = ReplSession()
+        s = open_session()
         r = s.eval_entry("int", check_only=True)
         assert r.ok
         assert r.kind == "type"
@@ -7401,7 +7430,7 @@ class TestLocalUseNarrowing:
     """
 
     def test_narrowing_local_use_retracts_a_member_exposed_by_an_earlier_glob_use(self) -> None:
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("scope S\ndef foo() -> int = 1\ndef bar() -> int = 2\nend S").ok
         assert session.eval_entry("use S::*").ok
         assert session.eval_entry("use S::{bar}").ok
@@ -7419,7 +7448,7 @@ class TestLocalUseNarrowing:
         its own, and even though type resolution has no live fallback and
         depends entirely on the retained static bare-contribution table.
         """
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("type Source::Meters = int").ok
         assert session.eval_entry("type Source::Seconds = int").ok
         assert session.eval_entry("scope Outer\nuse Source::{Meters}\nend Outer").ok
@@ -7439,7 +7468,7 @@ class TestLocalUseNarrowing:
         SAME entry -- the earlier declaration is retained from a prior entry,
         so the narrowing here must see it as superseded mid-entry, not only
         once the next entry rebuilds the scope from scratch."""
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry(
             "scope A\nscope B\ndef value() -> int = 1\nend B\ndef direct() -> int = 5\nend A"
         ).ok
@@ -7461,7 +7490,7 @@ class TestLocalUseNarrowing:
         current-module-anchored spelling, so retraction sees an atom already
         cleared by an earlier contribution, one a later contribution still
         shares, and one a contribution owns outright."""
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry(
             "scope SourceA\nrecord Point\n  x: int\ndef onlyA() -> int = 11\nend SourceA\n"
             "scope SourceB\nrecord Point\n  y: int\ndef onlyB() -> int = 22\nend SourceB\n"
@@ -7496,7 +7525,7 @@ class TestLocalUseNarrowing:
         the SAME entry that declared it (first declaration, runtime failure)
         must not be replayed on a later entry -- there is no promoted source
         scope left to resolve it against."""
-        session = ReplSession()
+        session = open_session()
         assert session.eval_entry("scope Outer\nend Outer").ok
 
         failed = session.eval_entry(

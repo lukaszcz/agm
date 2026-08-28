@@ -48,7 +48,7 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 - Test only main app Python code under `src/agm/`, NOT build/install scripts, `justfile` commands or config file content. Do NOT test exact help, warning or error messages.
 - Do NOT add heavy ungated validation or defensive assertions (defense-in-depth) to the code. Write appropriate tests instead. Defense-in-depth assertions are allowed ONLY if they are trivial preconditions or gated behind a test-only flag.
 - Make sure tests are not flaky.
-- Maintain 100% test coverage of `src/`.
+- Maintain 100% test coverage of `src/` and of the standard library's Python companions in `stdlib/std/`.
 - Maintain 100% command coverage in e2e tests.
 - Group the tests in `tests/` by meaningful categories and name the files meaningfully.
 - NEVER run real agents (claude, codex, pi, ...) in the tests - ALWAYS mock agent calls.

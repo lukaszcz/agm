@@ -40,7 +40,9 @@ class FakeShell:
     ``command`` and yields that spec's scripted result; :meth:`assert_complete`
     then checks every response was consumed (an empty list therefore asserts
     that no command ran).  With *responses* left ``None``, every command
-    succeeds with *stdout* and nothing is asserted about which commands ran.
+    succeeds with *stdout* and nothing is asserted about which commands ran;
+    such a fake has nothing to complete, so :meth:`assert_complete` rejects the
+    call outright rather than passing vacuously.
     """
 
     responses: Sequence[Mapping[str, Any]] | None = None
@@ -84,8 +86,15 @@ class FakeShell:
         )
 
     def assert_complete(self) -> None:
-        """Assert every scripted response was consumed (no-op when accepting any)."""
-        if self.responses is not None:
-            assert len(self.commands) == len(self.responses), (
-                f"expected {len(self.responses)} shell commands, got {len(self.commands)}"
-            )
+        """Assert every scripted response was consumed.
+
+        An unscripted fake (``responses=None``) accepts any command, so there
+        is nothing for this to check: the call is a test bug and fails loudly
+        instead of passing for free.
+        """
+        assert self.responses is not None, (
+            "assert_complete() needs a scripted FakeShell; this one accepts any command"
+        )
+        assert len(self.commands) == len(self.responses), (
+            f"expected {len(self.responses)} shell commands, got {len(self.commands)}"
+        )

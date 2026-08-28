@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import errno
 import shutil
-from collections.abc import Generator, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 import semver
@@ -69,6 +70,116 @@ def _package(root: Path, name: str, version: str, dependencies: str = "") -> Pat
     return root
 
 
+def _stdlib_source() -> Path:
+    """Return the repository's own standard library, the shipped std package."""
+    return Path(__file__).resolve().parent.parent / "stdlib"
+
+
+def _store_root(home: Path, name: str, version: str) -> Path:
+    """Return the store path an installed *name* at *version* occupies under *home*."""
+    return home / ".agm" / "packages" / name / version
+
+
+class _Preinstalled(NamedTuple):
+    """One package to install while building a prebuilt store."""
+
+    name: str
+    version: str
+    manifest_tail: str = ""
+    shadow: bool = False
+
+
+# Spec selecting the repository's own standard library rather than a generated package.
+_SHIPPED_STDLIB = "shipped-stdlib"
+
+
+_StoreSpecs = tuple["_Preinstalled | str", ...]
+
+# The stores more than one test starts from. Each is installed once for the
+# whole session; a test that needs a store nobody else needs simply installs
+# it itself, since there is nothing to amortize.
+_ALPHA_LAUNCH_COMMAND = '\n[commands]\nlaunch = { program = "alpha/main::main" }\n'
+
+_SHARED_STORE_SPECS: tuple[_StoreSpecs, ...] = (
+    (_SHIPPED_STDLIB,),
+    (_Preinstalled("alpha", "1.0.0"),),
+    (_Preinstalled("alpha", "1.0.0"), _Preinstalled("alpha", "2.0.0")),
+    (_Preinstalled("alpha", "1.0.0", _ALPHA_LAUNCH_COMMAND),),
+)
+
+
+def _build_store(root: Path, specs: _StoreSpecs) -> Path:
+    """Install *specs* into a fresh store under *root* and return its home."""
+    home = root / "home"
+    for index, spec in enumerate(specs):
+        if spec == _SHIPPED_STDLIB:
+            install_directory(_stdlib_source(), home=home, env={})
+            continue
+        assert isinstance(spec, _Preinstalled)
+        source = _package(
+            root / f"{index}-{spec.name}", spec.name, spec.version, spec.manifest_tail
+        )
+        install_directory(source, home=home, env={}, shadow=spec.shadow)
+    return home
+
+
+@pytest.fixture(scope="session")
+def _prebuilt_stores(tmp_path_factory: pytest.TempPathFactory) -> dict[_StoreSpecs, Path]:
+    """Build the stores several tests start from, once for the whole session."""
+    return {
+        specs: _build_store(tmp_path_factory.mktemp("prebuilt-store"), specs)
+        for specs in _SHARED_STORE_SPECS
+    }
+
+
+@pytest.fixture
+def prebuilt_store(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    _prebuilt_stores: dict[_StoreSpecs, Path],
+) -> Callable[..., Path]:
+    """Return a factory for an AGM home whose store already holds the given packages.
+
+    Every install runs package-discipline validation over a freshly loaded
+    module graph, so setup installs that several tests share dominate this
+    module's runtime. A shared store is installed once per session into a
+    directory no test is ever handed; every call copies that directory into
+    the calling test's own ``tmp_path``, so each test operates on a private,
+    writable home and can mutate it freely.
+    """
+    handed_out = 0
+
+    def build(*specs: _Preinstalled | str) -> Path:
+        nonlocal handed_out
+        cached = _prebuilt_stores.get(specs)
+        if cached is None:
+            cached = _build_store(tmp_path_factory.mktemp("prebuilt-store"), specs)
+            _prebuilt_stores[specs] = cached
+        handed_out += 1
+        home = tmp_path / ("home" if handed_out == 1 else f"home-{handed_out}")
+        shutil.copytree(cached, home)
+        return home
+
+    return build
+
+
+def test_prebuilt_store_hands_every_caller_an_isolated_copy(
+    prebuilt_store: Callable[..., Path],
+) -> None:
+    """Mutating a prebuilt store must not reach the session cache behind it."""
+    first = prebuilt_store(_Preinstalled("alpha", "1.0.0"))
+    uninstall_package("alpha", home=first, env={})
+    (_store_root(first, "bravo", "1.0.0")).mkdir(parents=True)
+
+    second = prebuilt_store(_Preinstalled("alpha", "1.0.0"))
+
+    assert first != second
+    assert load_activation_index(home=first, env={}).packages == {}
+    assert set(load_activation_index(home=second, env={}).packages) == {"alpha"}
+    assert not _store_root(second, "bravo", "1.0.0").exists()
+    assert _store_root(second, "alpha", "1.0.0").is_dir()
+
+
 def test_refresh_registers_stdlib_package_under_an_isolated_agm_home(tmp_path: Path) -> None:
     source = Path(__file__).resolve().parent.parent / "stdlib"
     agm_home = tmp_path / "agm-home"
@@ -123,23 +234,23 @@ def test_managed_stdlib_refresh_deactivates_packages_from_an_incompatible_releas
 
 
 def test_managed_stdlib_refresh_stages_under_the_store_lock(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    prebuilt_store: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source = Path(__file__).resolve().parent.parent / "stdlib"
-    home = tmp_path / "home"
-    installed = install_directory(source, home=home, env={})
-    core = installed.root / "std" / "core.agl"
-    stale = installed.root / "std" / "stale.agl"
+    source = _stdlib_source()
+    home = prebuilt_store(_SHIPPED_STDLIB)
+    installed_root = _store_root(home, "std", AGM_VERSION)
+    core = installed_root / "std" / "core.agl"
+    stale = installed_root / "std" / "stale.agl"
     core.write_text("old complete tree\n", encoding="utf-8")
     stale.write_text("stale\n", encoding="utf-8")
-    write_record(installed.root)
+    write_record(installed_root)
     original_materialize = package_install.materialize_distribution
     observed_staging: Path | None = None
 
     def observe_staging(source_root: Path, manifest: PackageManifest, staging: Path) -> None:
         nonlocal observed_staging
         observed_staging = staging
-        assert staging != installed.root
+        assert staging != installed_root
         assert core.read_text(encoding="utf-8") == "old complete tree\n"
         assert stale.is_file()
         with (home / ".agm" / "packages" / ".lock").open("a+", encoding="utf-8") as lock:
@@ -153,7 +264,7 @@ def test_managed_stdlib_refresh_stages_under_the_store_lock(
 
     refreshed = refresh_managed_stdlib(source, home=home, env={})
 
-    assert refreshed.root == installed.root
+    assert refreshed.root == installed_root
     assert observed_staging is not None
     assert not observed_staging.exists()
     assert core.read_bytes() == (source / "std" / "core.agl").read_bytes()
@@ -164,11 +275,11 @@ def test_managed_stdlib_refresh_stages_under_the_store_lock(
 
 
 def test_managed_stdlib_refresh_retries_post_commit_cleanup(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    prebuilt_store: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source = Path(__file__).resolve().parent.parent / "stdlib"
-    home = tmp_path / "home"
-    installed = install_directory(source, home=home, env={})
+    source = _stdlib_source()
+    home = prebuilt_store(_SHIPPED_STDLIB)
+    installed_root = _store_root(home, "std", AGM_VERSION)
     original_rmtree = package_install.fs.rmtree
 
     def fail_previous_cleanup(path: Path) -> None:
@@ -179,19 +290,19 @@ def test_managed_stdlib_refresh_retries_post_commit_cleanup(
     monkeypatch.setattr(package_install.fs, "rmtree", fail_previous_cleanup)
     refreshed = refresh_managed_stdlib(source, home=home, env={})
 
-    assert refreshed.root == installed.root
+    assert refreshed.root == installed_root
     assert verify_record(refreshed.root)
     assert (
         load_activation_index(home=home, env={}).packages["std"].version
         == refreshed.manifest.version
     )
-    assert tuple(installed.root.parent.glob(".agm-previous-*"))
+    assert tuple(installed_root.parent.glob(".agm-previous-*"))
 
     monkeypatch.setattr(package_install.fs, "rmtree", original_rmtree)
     original_glob = Path.glob
 
     def fail_cleanup_glob(path: Path, pattern: str, **kwargs: object) -> Iterator[Path]:
-        if path == installed.root.parent and pattern == ".agm-previous-*":
+        if path == installed_root.parent and pattern == ".agm-previous-*":
             raise OSError("blocked")
         return original_glob(path, pattern, **kwargs)
 
@@ -200,18 +311,18 @@ def test_managed_stdlib_refresh_retries_post_commit_cleanup(
     monkeypatch.setattr(Path, "glob", original_glob)
     refresh_managed_stdlib(source, home=home, env={})
 
-    assert not tuple(installed.root.parent.glob(".agm-previous-*"))
+    assert not tuple(installed_root.parent.glob(".agm-previous-*"))
 
 
 def test_managed_stdlib_refresh_restores_the_complete_tree_when_activation_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    prebuilt_store: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source = Path(__file__).resolve().parent.parent / "stdlib"
-    home = tmp_path / "home"
-    installed = install_directory(source, home=home, env={})
-    core = installed.root / "std" / "core.agl"
+    source = _stdlib_source()
+    home = prebuilt_store(_SHIPPED_STDLIB)
+    installed_root = _store_root(home, "std", AGM_VERSION)
+    core = installed_root / "std" / "core.agl"
     core.write_text("old complete tree\n", encoding="utf-8")
-    write_record(installed.root)
+    write_record(installed_root)
 
     def fail_activation(*_args: object, **_kwargs: object) -> None:
         raise PackageInstallError("activation failed")
@@ -222,9 +333,9 @@ def test_managed_stdlib_refresh_restores_the_complete_tree_when_activation_fails
         refresh_managed_stdlib(source, home=home, env={})
 
     assert core.read_text(encoding="utf-8") == "old complete tree\n"
-    assert verify_record(installed.root)
-    assert not tuple(installed.root.parent.glob(".agm-package-*"))
-    assert not tuple(installed.root.parent.glob(".agm-previous-*"))
+    assert verify_record(installed_root)
+    assert not tuple(installed_root.parent.glob(".agm-package-*"))
+    assert not tuple(installed_root.parent.glob(".agm-previous-*"))
 
 
 def test_initial_managed_stdlib_refresh_removes_publication_when_activation_fails(
@@ -287,18 +398,18 @@ def test_initial_managed_stdlib_refresh_cleans_staging_when_publication_fails(
 
 
 def test_managed_stdlib_refresh_restores_the_complete_tree_when_publication_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    prebuilt_store: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source = Path(__file__).resolve().parent.parent / "stdlib"
-    home = tmp_path / "home"
-    installed = install_directory(source, home=home, env={})
-    core = installed.root / "std" / "core.agl"
+    source = _stdlib_source()
+    home = prebuilt_store(_SHIPPED_STDLIB)
+    installed_root = _store_root(home, "std", AGM_VERSION)
+    core = installed_root / "std" / "core.agl"
     core.write_text("old complete tree\n", encoding="utf-8")
-    write_record(installed.root)
+    write_record(installed_root)
     original_replace = Path.replace
 
     def fail_publication(path: Path, target: Path) -> Path:
-        if target == installed.root and path.name.startswith(".agm-package-"):
+        if target == installed_root and path.name.startswith(".agm-package-"):
             assert verify_record(path)
             raise OSError("publication failed")
         return original_replace(path, target)
@@ -309,9 +420,9 @@ def test_managed_stdlib_refresh_restores_the_complete_tree_when_publication_fail
         refresh_managed_stdlib(source, home=home, env={})
 
     assert core.read_text(encoding="utf-8") == "old complete tree\n"
-    assert verify_record(installed.root)
-    assert not tuple(installed.root.parent.glob(".agm-package-*"))
-    assert not tuple(installed.root.parent.glob(".agm-previous-*"))
+    assert verify_record(installed_root)
+    assert not tuple(installed_root.parent.glob(".agm-package-*"))
+    assert not tuple(installed_root.parent.glob(".agm-previous-*"))
 
 
 def test_managed_stdlib_refresh_dry_run_only_reports_the_planned_refresh(
@@ -890,22 +1001,15 @@ def test_install_refuses_builtin_and_alias_command_prefixes(
 
 
 def test_shadow_diagnostics_are_computed_from_the_locked_prepublication_plan(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, prebuilt_store: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    alpha = _package(
-        tmp_path / "alpha",
-        "alpha",
-        "1.0.0",
-        '\n[commands]\nlaunch = { program = "alpha/main::main" }\n',
-    )
     bravo = _package(
         tmp_path / "bravo",
         "bravo",
         "1.0.0",
         '\n[commands]\nlaunch = { program = "bravo/main::main" }\n',
     )
-    home = tmp_path / "home"
-    install_directory(alpha, home=home, env={})
+    home = prebuilt_store(_Preinstalled("alpha", "1.0.0", _ALPHA_LAUNCH_COMMAND))
     previous_index = load_activation_index(home=home, env={})
     original_diagnostics = package_install.command_shadow_diagnostics
 
@@ -947,22 +1051,15 @@ def test_shadow_diagnostic_failure_prevents_activation_and_rolls_back_install(
 
 
 def test_shadowed_command_is_restored_when_the_winning_package_is_uninstalled(
-    tmp_path: Path,
+    tmp_path: Path, prebuilt_store: Callable[..., Path]
 ) -> None:
-    alpha = _package(
-        tmp_path / "alpha",
-        "alpha",
-        "1.0.0",
-        '\n[commands]\nlaunch = { program = "alpha/main::main" }\n',
-    )
     bravo = _package(
         tmp_path / "bravo",
         "bravo",
         "1.0.0",
         '\n[commands]\nlaunch = { program = "bravo/main::main" }\n',
     )
-    home = tmp_path / "home"
-    install_directory(alpha, home=home, env={})
+    home = prebuilt_store(_Preinstalled("alpha", "1.0.0", _ALPHA_LAUNCH_COMMAND))
 
     with pytest.raises(PackageInstallError, match="launch"):
         install_directory(bravo, home=home, env={})
@@ -981,11 +1078,9 @@ def test_shadowed_command_is_restored_when_the_winning_package_is_uninstalled(
 
 
 def test_install_allocates_after_inactive_provenance_so_rebuild_stays_unambiguous(
-    tmp_path: Path,
+    tmp_path: Path, prebuilt_store: Callable[..., Path]
 ) -> None:
-    home = tmp_path / "home"
-    install_directory(_package(tmp_path / "alpha-one", "alpha", "1.0.0"), home=home, env={})
-    install_directory(_package(tmp_path / "alpha-two", "alpha", "2.0.0"), home=home, env={})
+    home = prebuilt_store(_Preinstalled("alpha", "1.0.0"), _Preinstalled("alpha", "2.0.0"))
     uninstall_package("alpha", home=home, env={})
 
     install_directory(_package(tmp_path / "bravo", "bravo", "1.0.0"), home=home, env={})
@@ -1399,15 +1494,15 @@ def test_uninstall_refuses_a_store_tree_with_unrecorded_package_content(tmp_path
         uninstall_package("alpha", home=home, env={})
 
 
-def test_uninstall_verifies_record_then_removes_only_the_requested_version(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    one = install_directory(_package(tmp_path / "one", "alpha", "1.0.0"), home=home, env={})
-    two = install_directory(_package(tmp_path / "two", "alpha", "2.0.0"), home=home, env={})
+def test_uninstall_verifies_record_then_removes_only_the_requested_version(
+    prebuilt_store: Callable[..., Path],
+) -> None:
+    home = prebuilt_store(_Preinstalled("alpha", "1.0.0"), _Preinstalled("alpha", "2.0.0"))
 
     uninstall_package("alpha", home=home, env={})
 
-    assert not two.root.exists()
-    assert one.root.exists()
+    assert not _store_root(home, "alpha", "2.0.0").exists()
+    assert _store_root(home, "alpha", "1.0.0").exists()
     assert "alpha" not in load_activation_index(home=home, env={}).packages
 
 

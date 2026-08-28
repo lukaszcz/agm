@@ -3,7 +3,7 @@
     {
       "name": "seed_reproduces_bounded_inclusive_and_uniform_sequences",
       "params": {"mode": 1},
-      "expect": {"stdout": "true\ntrue\ntrue\ntrue\n", "calls": {}}
+      "expect": {"stdout": "true\ntrue\ntrue\ntrue\n7\ntrue\ntrue\n", "calls": {}}
     },
     {
       "name": "choice_and_optional_choice_handle_populated_and_empty_arrays",

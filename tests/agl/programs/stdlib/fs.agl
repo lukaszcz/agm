@@ -19,6 +19,8 @@ program def main() -> unit =
     print(fs::list(at("nested")).size())
     print(fs::glob(path::join([root, "nested", "*.txt"])).size())
     print(fs::glob(path::join([root, "missing", "*.txt"])).size())
+    print(fs::glob(path::join([root, "nested", "**", "*.txt"])).size())
+    print(fs::glob(path::join([root, "nested", "**"])).size())
     fs::remove(at("nested"))
     print(fs::exists(at("nested")))
   if scenario == "missing_file" =>

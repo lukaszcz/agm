@@ -401,7 +401,41 @@ def test_default_session_snapshots_agent_and_closed_use_is_catchable() -> None:
     assert host.prompts["s1"] == ["one"]
 
 
-def test_session_ask_retries_with_corrective_follow_ups_and_maps_transport_errors() -> None:
+class _AskCancelledHost(_Host):
+    """A host whose every ``ask`` is declined by the user."""
+
+    def ask(self, handle: str, prompt: str) -> str:
+        del handle, prompt
+        raise AgentCancelled("worker", "declined")
+
+
+class _AskInterruptedHost(_Host):
+    """A host whose every ``ask`` is interrupted."""
+
+    def ask(self, handle: str, prompt: str) -> str:
+        del handle, prompt
+        raise KeyboardInterrupt
+
+
+def _ask_program(prompt: str, *, catching: str = "") -> str:
+    """A one-session program that asks *prompt*, optionally inside a ``try``."""
+    if not catching:
+        return (
+            "program def main() -> unit =\n"
+            '  let session = Session::open(AgentCommand("worker"))\n'
+            f'  session.ask("{prompt}")\n'
+        )
+    return (
+        "program def main() -> unit =\n"
+        '  let session = Session::open(AgentCommand("worker"))\n'
+        "  try\n"
+        f'    session.ask("{prompt}")\n'
+        f"  catch {catching} =>\n"
+        "    ()\n"
+    )
+
+
+def test_session_ask_retries_with_corrective_follow_ups() -> None:
     class RetryingHost(_Host):
         def ask(self, handle: str, prompt: str) -> str:
             super().ask(handle, prompt)
@@ -426,89 +460,51 @@ def test_session_ask_retries_with_corrective_follow_ups_and_maps_transport_error
     assert "Return only valid JSON matching the schema." in host.prompts["s1"][1]
     assert host.prompts["s1"][2] == "what did I ask?"
 
+
+@pytest.mark.parametrize(
+    "call_info",
+    [
+        pytest.param(
+            AgentCallInfo(argv=("worker",), prompt_via_stdin=True, elapsed=1.0, exit_code=2),
+            id="with-call-info",
+        ),
+        pytest.param(None, id="without-call-info"),
+    ],
+)
+def test_session_ask_transport_failure_is_catchable_as_an_agent_call_error(
+    call_info: AgentCallInfo | None,
+) -> None:
     class AskingFailure(_Host):
         def ask(self, handle: str, prompt: str) -> str:
             del handle, prompt
             raise SessionAskError(
                 cause="failed",
-                exit_code=2,
-                stderr_tail="tail",
-                elapsed=1.0,
-                call_info=AgentCallInfo(
-                    argv=("worker",), prompt_via_stdin=True, elapsed=1.0, exit_code=2
-                ),
+                exit_code=2 if call_info is not None else None,
+                stderr_tail="tail" if call_info is not None else "",
+                elapsed=1.0 if call_info is not None else 0.0,
+                call_info=call_info,
             )
 
-    failed = _run(
-        "program def main() -> unit =\n"
-        '  let session = Session::open(AgentCommand("worker"))\n'
-        "  try\n"
-        '    session.ask("fail")\n'
-        "  catch AgentCallError =>\n"
-        "    ()\n",
-        AskingFailure(),
-    )
-    assert failed.ok
+    assert _run(_ask_program("fail", catching="AgentCallError"), AskingFailure()).ok
 
-    class NoCallInfoFailure(_Host):
-        def ask(self, handle: str, prompt: str) -> str:
-            del handle, prompt
-            raise SessionAskError(
-                cause="failed", exit_code=None, stderr_tail="", elapsed=0.0, call_info=None
-            )
 
-    no_call_info = _run(
-        "program def main() -> unit =\n"
-        '  let session = Session::open(AgentCommand("worker"))\n'
-        "  try\n"
-        '    session.ask("fail")\n'
-        "  catch AgentCallError =>\n"
-        "    ()\n",
-        NoCallInfoFailure(),
-    )
-    assert no_call_info.ok
-
+def test_session_ask_host_failure_is_catchable_as_a_session_error() -> None:
     class HostFailure(_Host):
         def ask(self, handle: str, prompt: str) -> str:
             del handle, prompt
             raise SessionHostError("unavailable", "ask")
 
-    host_failure = _run(
-        "program def main() -> unit =\n"
-        '  let session = Session::open(AgentCommand("worker"))\n'
-        "  try\n"
-        '    session.ask("fail")\n'
-        "  catch SessionError =>\n"
-        "    ()\n",
-        HostFailure(),
-    )
-    assert host_failure.ok
+    assert _run(_ask_program("fail", catching="SessionError"), HostFailure()).ok
 
-    class CancelledHost(_Host):
-        def ask(self, handle: str, prompt: str) -> str:
-            del handle, prompt
-            raise AgentCancelled("worker", "declined")
 
+def test_session_ask_cancellation_reaches_the_caller() -> None:
     with pytest.raises(AgentCancelled):
-        _run(
-            "program def main() -> unit =\n"
-            '  let session = Session::open(AgentCommand("worker"))\n'
-            '  session.ask("cancel")\n',
-            CancelledHost(),
-        )
+        _run(_ask_program("cancel"), _AskCancelledHost())
 
-    class InterruptedHost(_Host):
-        def ask(self, handle: str, prompt: str) -> str:
-            del handle, prompt
-            raise KeyboardInterrupt
 
+def test_session_ask_interrupt_becomes_an_interrupted_cancellation() -> None:
     with pytest.raises(AgentCancelled) as interrupted:
-        _run(
-            "program def main() -> unit =\n"
-            '  let session = Session::open(AgentCommand("worker"))\n'
-            '  session.ask("interrupt")\n',
-            InterruptedHost(),
-        )
+        _run(_ask_program("interrupt"), _AskInterruptedHost())
     assert interrupted.value.reason == "interrupted"
 
 
@@ -534,32 +530,39 @@ def test_session_retry_redacts_schema_invalid_output_from_corrective_feedback() 
     )
 
 
-def test_session_parse_policies_exhaustion_and_transport_failures_stop_retrying() -> None:
+@pytest.mark.parametrize(
+    ("options", "expected_attempts"),
+    [
+        pytest.param("", 1, id="default"),
+        pytest.param(", on_parse_error = Abort", 1, id="abort"),
+        pytest.param(", on_parse_error = Retry(n = 2)", 3, id="retry"),
+    ],
+)
+def test_session_parse_policies_stop_retrying_when_exhausted(
+    options: str, expected_attempts: int
+) -> None:
     class AlwaysInvalidHost(_Host):
         def ask(self, handle: str, prompt: str) -> str:
             super().ask(handle, prompt)
             return "invalid"
 
-    for options, expected_attempts in [
-        ("", 1),
-        (", on_parse_error = Abort", 1),
-        (", on_parse_error = Retry(n = 2)", 3),
-    ]:
-        host = AlwaysInvalidHost()
-        result = _run(
-            "program def main() -> unit =\n"
-            '  let session = Session::open(AgentCommand("worker"))\n'
-            "  try\n"
-            f'    let number: int = session.ask("parse me"{options})\n'
-            "    ()\n"
-            "  catch AgentParseError =>\n"
-            "    session.close()\n",
-            host,
-        )
+    host = AlwaysInvalidHost()
+    result = _run(
+        "program def main() -> unit =\n"
+        '  let session = Session::open(AgentCommand("worker"))\n'
+        "  try\n"
+        f'    let number: int = session.ask("parse me"{options})\n'
+        "    ()\n"
+        "  catch AgentParseError =>\n"
+        "    session.close()\n",
+        host,
+    )
 
-        assert result.ok
-        assert len(host.prompts["s1"]) == expected_attempts
+    assert result.ok
+    assert len(host.prompts["s1"]) == expected_attempts
 
+
+def test_session_retry_stops_at_a_transport_failure() -> None:
     class FailingRetryHost(_Host):
         def ask(self, handle: str, prompt: str) -> str:
             super().ask(handle, prompt)
@@ -622,59 +625,52 @@ def test_dead_rpc_sessions_map_ask_failures_and_later_operations_to_distinct_err
     assert capsys.readouterr().out == "compact\nmessage\n"
 
 
-def test_missing_host_and_lifecycle_errors_become_session_errors() -> None:
-    unavailable = PipelineDriver().run(
-        "program def main() -> unit =\n"
-        "  try\n"
-        '    let session = Session::open(AgentCommand("worker"))\n'
-        "    session.close()\n"
-        "  catch SessionError =>\n"
-        "    ()\n"
-    )
-    assert unavailable.ok
+_CLOSE_AFTER_OPEN = (
+    "program def main() -> unit =\n"
+    "  try\n"
+    '    let session = Session::open(AgentCommand("worker"))\n'
+    "    session.close()\n"
+    "  catch SessionError =>\n"
+    "    ()\n"
+)
 
-    default_unavailable = PipelineDriver().run(
-        "program def main() -> unit =\n"
-        "  try\n"
-        "    let session = Session::default()\n"
-        "    session.close()\n"
-        "  catch SessionError =>\n"
-        "    ()\n"
-    )
-    assert default_unavailable.ok
+_CLOSE_AFTER_DEFAULT = (
+    "program def main() -> unit =\n"
+    "  try\n"
+    "    let session = Session::default()\n"
+    "    session.close()\n"
+    "  catch SessionError =>\n"
+    "    ()\n"
+)
 
+
+@pytest.mark.parametrize(
+    "source",
+    [pytest.param(_CLOSE_AFTER_OPEN, id="open"), pytest.param(_CLOSE_AFTER_DEFAULT, id="default")],
+)
+def test_a_missing_session_host_becomes_a_catchable_session_error(source: str) -> None:
+    assert PipelineDriver().run(source).ok
+
+
+def test_a_failing_default_becomes_a_catchable_session_error() -> None:
     class FailingDefaultHost(_Host):
         def default(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
             del agent, transport, name
             raise SessionHostError("unavailable", "default")
 
-    default_failed = _run(
-        "program def main() -> unit =\n"
-        "  try\n"
-        "    let session = Session::default()\n"
-        "    session.close()\n"
-        "  catch SessionError =>\n"
-        "    ()\n",
-        FailingDefaultHost(),
-    )
-    assert default_failed.ok
+    assert _run(_CLOSE_AFTER_DEFAULT, FailingDefaultHost()).ok
 
+
+def test_a_failing_open_becomes_a_catchable_session_error() -> None:
     class FailingOpenHost(_Host):
         def open(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
             del agent, transport, name
             raise SessionHostError("unavailable", "open")
 
-    opening_failed = _run(
-        "program def main() -> unit =\n"
-        "  try\n"
-        '    let session = Session::open(AgentCommand("worker"))\n'
-        "    session.close()\n"
-        "  catch SessionError =>\n"
-        "    ()\n",
-        FailingOpenHost(),
-    )
-    assert opening_failed.ok
+    assert _run(_CLOSE_AFTER_OPEN, FailingOpenHost()).ok
 
+
+def test_a_failing_lifecycle_operation_becomes_a_catchable_session_error() -> None:
     class FailingLifecycleHost(_Host):
         def compact(self, handle: str, instructions: str = "") -> None:
             del handle, instructions
@@ -692,60 +688,52 @@ def test_missing_host_and_lifecycle_errors_become_session_errors() -> None:
     assert failed.ok
 
 
-def test_session_cleanup_preserves_program_and_interrupt_errors() -> None:
-    class FailingCloseHost(_Host):
-        def close_all(self) -> None:
-            super().close_all()
-            raise RuntimeError("cleanup failed")
+class _FailingCloseHost(_Host):
+    """A host whose end-of-run session cleanup itself fails."""
 
+    def close_all(self) -> None:
+        super().close_all()
+        raise RuntimeError("cleanup failed")
+
+
+class _CancelledFailingCloseHost(_FailingCloseHost, _AskCancelledHost):
+    """Declines every ``ask``, then fails cleanup."""
+
+
+class _InterruptedFailingCloseHost(_FailingCloseHost, _AskInterruptedHost):
+    """Interrupts every ``ask``, then fails cleanup."""
+
+
+def test_session_cleanup_failure_preserves_a_program_error() -> None:
     program_failure = _run(
         "program def main() -> unit =\n"
         '  let session = Session::open(AgentCommand("worker"))\n'
         '  raise RangeError(message = "primary")\n',
-        FailingCloseHost(),
+        _FailingCloseHost(),
     )
     assert program_failure.error is not None
     assert program_failure.error.type_name == "RangeError"
 
-    class CancelledHost(FailingCloseHost):
-        def ask(self, handle: str, prompt: str) -> str:
-            del handle, prompt
-            raise AgentCancelled("worker", "declined")
 
+@pytest.mark.parametrize(
+    ("host", "prompt", "reason"),
+    [
+        pytest.param(_CancelledFailingCloseHost, "cancel", "declined", id="declined"),
+        pytest.param(_InterruptedFailingCloseHost, "interrupt", "interrupted", id="interrupted"),
+    ],
+)
+def test_session_cleanup_failure_preserves_a_cancellation(
+    host: type[_Host], prompt: str, reason: str
+) -> None:
     with pytest.raises(AgentCancelled) as cancelled:
-        _run(
-            "program def main() -> unit =\n"
-            '  let session = Session::open(AgentCommand("worker"))\n'
-            '  session.ask("cancel")\n',
-            CancelledHost(),
-        )
-    assert cancelled.value.reason == "declined"
+        _run(_ask_program(prompt), host())
+    assert cancelled.value.reason == reason
     assert any("cleanup failed" in note for note in cancelled.value.__notes__)
-
-    class InterruptedHost(FailingCloseHost):
-        def ask(self, handle: str, prompt: str) -> str:
-            del handle, prompt
-            raise KeyboardInterrupt
-
-    with pytest.raises(AgentCancelled) as interrupted:
-        _run(
-            "program def main() -> unit =\n"
-            '  let session = Session::open(AgentCommand("worker"))\n'
-            '  session.ask("interrupt")\n',
-            InterruptedHost(),
-        )
-    assert interrupted.value.reason == "interrupted"
-    assert any("cleanup failed" in note for note in interrupted.value.__notes__)
 
 
 def test_session_cleanup_error_surfaces_after_a_clean_program() -> None:
-    class FailingCloseHost(_Host):
-        def close_all(self) -> None:
-            super().close_all()
-            raise RuntimeError("cleanup failed")
-
     with pytest.raises(RuntimeError, match="cleanup failed"):
-        _run("program def main() -> unit = ()\n", FailingCloseHost())
+        _run("program def main() -> unit = ()\n", _FailingCloseHost())
 
 
 def test_default_transport_is_rpc_for_pi_and_host_errors_are_session_errors() -> None:

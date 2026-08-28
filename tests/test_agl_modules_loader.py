@@ -1182,6 +1182,34 @@ class TestErrorsCarrySpan:
         else:
             pytest.fail("Expected ModuleNotFound")
 
+    def test_malformed_imported_module_is_reported_against_that_module(
+        self, tmp_path: Path
+    ) -> None:
+        # ``load_graph`` is the whole-program (``agm exec``) loading path: a
+        # library module that fails to parse must be rejected there, and the
+        # diagnostic must name the module's own file rather than the entry the
+        # user invoked.
+        from agm.agl.modules.loader import EntryParseSyntaxError
+        from agm.agl.parser import AglSyntaxError
+
+        root = tmp_path / "r"
+        root.mkdir()
+        broken = _module_path(root, "broken")
+        _write_agl(broken, "def f(x: int) -> int =\n")
+
+        with pytest.raises(AglSyntaxError) as exc_info:
+            load_graph(
+                "import broken\n()",
+                entry_path=None,
+                roots=_roots(root),
+                default_stdlib=False,
+            )
+
+        # Not the entry-parse wrapper: the entry itself parsed fine.
+        assert not isinstance(exc_info.value, EntryParseSyntaxError)
+        assert exc_info.value.source_span.source.label == str(broken.resolve())
+        assert exc_info.value.to_diagnostic().source_label == str(broken.resolve())
+
     def test_import_entry_error_has_span(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
         root.mkdir()

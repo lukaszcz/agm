@@ -34,6 +34,7 @@ _IDENTITY_LIB_PY = "def identity(x):\n    return x\n"
 
 
 def _make_session_with_root(root: Path) -> ReplSession:
+    """Build a session whose only module search root is *root*."""
     from agm.agl.modules.roots import assemble_roots
 
     roots = assemble_roots(

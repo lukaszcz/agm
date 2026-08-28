@@ -72,10 +72,10 @@
       }
     },
     {
-      "name": "kind_distinguishes_every_json_value_category",
+      "name": "kind_names_every_value_category_and_size_counts_only_containers",
       "params": {"mode": 10},
       "expect": {
-        "stdout": "null\nbool\nint\ndecimal\ntext\narray\nobject\n",
+        "stdout": "null\nbool\nint\ndecimal\ntext\narray\nobject\n0\n3\n2\n",
         "calls": {}
       }
     }

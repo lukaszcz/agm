@@ -16,9 +16,12 @@
       "expect": {"stdout": "2\none\n7\nitem[42]\n", "calls": {}}
     },
     {
-      "name": "split_preserves_boundary_empty_fields_and_captured_separators",
+      "name": "split_preserves_boundary_fields_captured_separators_and_absent_groups",
       "params": {"mode": 4},
-      "expect": {"stdout": "[\"\", \"a\", \"\", \"b\", \"\"]\n[\"a\", \",\", \"b\", \";\", \"c\", \",\", \"\"]\n", "calls": {}}
+      "expect": {
+        "stdout": "[\"\", \"a\", \"\", \"b\", \"\"]\n[\"a\", \",\", \"b\", \";\", \"c\", \",\", \"\"]\n[\"a\", \",\", \"\", \"b\", \"\", \";\", \"c\"]\n[\"\", \"\", \"a\", \"\", \"b\", \"\", \"\"]\n",
+        "calls": {}
+      }
     },
     {
       "name": "escape_produces_a_pattern_that_matches_the_original_literal",

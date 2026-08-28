@@ -14,6 +14,10 @@ program def main() -> unit =
         print(first[0] >= 0 and first[0] < 100)
         print(first[1] >= -10 and first[1] <= 10)
         print(first[2] >= 0.0 and first[2] < 1.0)
+        print(random::between(7, 7))
+        let draws = array::range(1, 100).map(fn(_: int) => random::between(0, 1))
+        print(draws.all(fn(value: int) => value >= 0 and value <= 1))
+        print(draws.contains(0) and draws.contains(1))
     | 2 =>
         let values = ["one", "two", "three"]
         random::seed(9)

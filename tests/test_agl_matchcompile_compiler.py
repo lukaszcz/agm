@@ -5,7 +5,7 @@ from __future__ import annotations
 import decimal
 import itertools
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -96,7 +96,16 @@ _CAPS = HostCapabilities(
 )
 
 
-def _compile(source: str) -> tuple[CheckedModule, Case, CompiledMatchSite]:
+def _compiled_cases(
+    source: str,
+) -> tuple[CheckedModule, tuple[tuple[Case, CompiledMatchSite], ...]]:
+    """Compile every ``case`` site in *source* against one checked module.
+
+    The frontend (parse, resolve, type-check) costs orders of magnitude more
+    than compiling one match site, so a test covering many matrices states
+    them as many ``case`` sites in a single program and compiles each site
+    independently, exactly as it would one matrix per program.
+    """
     checked = resolve_and_check_inline_entry(source, _CAPS)
     cases: list[Case] = []
 
@@ -105,9 +114,26 @@ def _compile(source: str) -> tuple[CheckedModule, Case, CompiledMatchSite]:
             cases.append(node)
 
     walk(checked.resolved.program, collect)
-    assert len(cases) == 1
-    case = cases[0]
-    return checked, case, compile_match_site(normalize_case(case, checked))
+    return checked, tuple(
+        (case, compile_match_site(normalize_case(case, checked))) for case in cases
+    )
+
+
+def _compile(source: str) -> tuple[CheckedModule, Case, CompiledMatchSite]:
+    checked, compiled_cases = _compiled_cases(source)
+    assert len(compiled_cases) == 1
+    case, compiled = compiled_cases[0]
+    return checked, case, compiled
+
+
+def _matrix_batch_source(declarations: str, matrices: Sequence[Sequence[str]]) -> str:
+    """Spell one discarded ``case value of`` site per matrix under *declarations*."""
+    blocks = [
+        "let _ = case value of\n"
+        + "\n".join(f"  | {pattern} => {action}" for action, pattern in enumerate(patterns))
+        for patterns in matrices
+    ]
+    return declarations + "\n".join(blocks) + "\n"
 
 
 def test_compiler_marks_a_refutable_let_with_its_decision_witness() -> None:
@@ -125,7 +151,11 @@ def test_compiler_marks_a_refutable_let_with_its_decision_witness() -> None:
     assert isinstance(compiled.issues[0], RefutableLetIssue)
     assert isinstance(compiled.issues[0].witness, BoolWitness)
     assert compiled.issues[0].witness.value is False
-    checked_case, _, irrefutable = _compile("case true of | _ => 1")
+    _checked, ((_, irrefutable), (_, decomposed)) = _compiled_cases(
+        "record Pair\n  left: int\n  right: int\nlet value = Pair(left = 1, right = 2)\n"
+        "let _ = case true of | _ => 1\n"
+        "let _ = case value of | Pair(left = _, right = _) => 1\n"
+    )
     with pytest.raises(MatchCompileInvariantError, match="begin with"):
         compiler_module._validate_occurrence_ledger(irrefutable.normalized, ())
     ledger, groups = compiler_module._validate_occurrence_ledger(
@@ -137,14 +167,9 @@ def test_compiler_marks_a_refutable_let_with_its_decision_witness() -> None:
         )
     with pytest.raises(MatchCompileInvariantError, match="irrefutable"):
         compiler_module._validate_semantic_replay(replace(irrefutable, root=DecisionFail()))
-    _, _, decomposed = _compile(
-        "record Pair\n  left: int\n  right: int\nlet value = Pair(left = 1, right = 2)\n"
-        "case value of | Pair(left = _, right = _) => 1"
-    )
     root = cast(DecisionDecompose, decomposed.root)
     assert root.constructor.arity == 2
     assert isinstance(root.child, DecisionLeaf)
-    del checked_case
 
 
 def test_issue_kind_is_selected_by_the_sealed_source_payload() -> None:
@@ -789,22 +814,38 @@ def test_decision_oracle_distinguishes_same_named_enum_members() -> None:
     assert _decision_action(compiled, subject) == compiled.normalized.rows[1].action_id
 
 
-def test_generated_finite_matrices_match_reference_reachability_and_failure() -> None:
-    row_patterns = (
-        "pair(left = false, right = false)",
-        "pair(left = false)",
-        "pair(right = true)",
-        "pair(left = true, right = true)",
-        "_",
-    )
-    for indices in itertools.product(range(len(row_patterns)), repeat=3):
-        patterns = [row_patterns[index] for index in indices]
-        source = (
-            "enum Pair\n  | pair(left: bool, right: bool)\n"
-            "let value: Pair = pair(left = false, right = false)\ncase value of\n"
-            + "\n".join(f"  | {pattern} => {action}" for action, pattern in enumerate(patterns))
-        )
-        checked, case, compiled = _compile(source)
+_FINITE_ROW_PATTERNS = (
+    "pair(left = false, right = false)",
+    "pair(left = false)",
+    "pair(right = true)",
+    "pair(left = true, right = true)",
+    "_",
+)
+
+_FINITE_DECLARATIONS = (
+    "enum Pair\n  | pair(left: bool, right: bool)\n"
+    "let value: Pair = pair(left = false, right = false)\n"
+)
+
+
+@pytest.mark.parametrize("leading_row", range(len(_FINITE_ROW_PATTERNS)))
+def test_generated_finite_matrices_match_reference_reachability_and_failure(
+    leading_row: int,
+) -> None:
+    """Check every three-row matrix over the pattern alphabet against the oracle.
+
+    The parameter partitions the full ``len(_FINITE_ROW_PATTERNS) ** 3``
+    product by its first row, so the parameters together still cover the whole
+    product while each one stays bounded.
+    """
+    matrices = [
+        [_FINITE_ROW_PATTERNS[index] for index in (leading_row, *rest)]
+        for rest in itertools.product(range(len(_FINITE_ROW_PATTERNS)), repeat=2)
+    ]
+    checked, compiled_cases = _compiled_cases(_matrix_batch_source(_FINITE_DECLARATIONS, matrices))
+
+    assert len(compiled_cases) == len(matrices)
+    for case, compiled in compiled_cases:
         pair_type = cast(EnumType, compiled.normalized.root.type)
         pair_nominal = NominalId(
             compiled.normalized.type_table.enum_member_names(pair_type)["pair"].decl_id
@@ -827,38 +868,56 @@ def test_generated_finite_matrices_match_reference_reachability_and_failure() ->
         assert _has_fail(compiled.root) is unmatched
 
 
-def test_generated_nested_multi_column_matrices_match_the_reference() -> None:
-    row_patterns = (
-        "pair(left = zero, right = zero)",
-        "pair(left = zero)",
-        "pair(right = one)",
-        "pair(left = one, right = one)",
-        "pair(left = left)",
-        "pair(right = right)",
-        "missing",
-        "_",
-    )
+_NESTED_ROW_PATTERNS = (
+    "pair(left = zero, right = zero)",
+    "pair(left = zero)",
+    "pair(right = one)",
+    "pair(left = one, right = one)",
+    "pair(left = left)",
+    "pair(right = right)",
+    "missing",
+    "_",
+)
+
+# Three-row matrices that pair rows alone cannot express: a nested column that
+# stays live past two tests, a wildcard tail after a nullary row, and a
+# binder-only row followed by a complementary binder-only row.
+_NESTED_THREE_ROW_INDICES = (
+    (0, 2, 7),
+    (1, 2, 7),
+    (2, 1, 7),
+    (1, 3, 6),
+    (4, 5, 6),
+    (0, 0, 7),
+    (7, 0, 6),
+)
+
+_NESTED_DECLARATIONS = (
+    "enum Bit\n  | zero\n  | one\n"
+    "enum Subject\n"
+    "  | pair(left: Bit, right: Bit)\n"
+    "  | missing\n"
+    "let value: Subject = missing\n"
+)
+
+
+@pytest.mark.parametrize("leading_row", range(len(_NESTED_ROW_PATTERNS)))
+def test_generated_nested_multi_column_matrices_match_the_reference(leading_row: int) -> None:
+    """Check nested two-column matrices against the oracle, grouped by first row.
+
+    The parameter partitions both generated families — every two-row matrix
+    over the pattern alphabet and the explicit three-row matrices — by their
+    first row, so the parameters together still cover both families in full.
+    """
     generated_indices = (
-        *itertools.product(range(len(row_patterns)), repeat=2),
-        (0, 2, 7),
-        (1, 2, 7),
-        (2, 1, 7),
-        (1, 3, 6),
-        (4, 5, 6),
-        (0, 0, 7),
-        (7, 0, 6),
+        *((leading_row, second) for second in range(len(_NESTED_ROW_PATTERNS))),
+        *(indices for indices in _NESTED_THREE_ROW_INDICES if indices[0] == leading_row),
     )
-    for indices in generated_indices:
-        patterns = [row_patterns[index] for index in indices]
-        source = (
-            "enum Bit\n  | zero\n  | one\n"
-            "enum Subject\n"
-            "  | pair(left: Bit, right: Bit)\n"
-            "  | missing\n"
-            "let value: Subject = missing\ncase value of\n"
-            + "\n".join(f"  | {pattern} => {action}" for action, pattern in enumerate(patterns))
-        )
-        checked, case, compiled = _compile(source)
+    matrices = [[_NESTED_ROW_PATTERNS[index] for index in indices] for indices in generated_indices]
+    checked, compiled_cases = _compiled_cases(_matrix_batch_source(_NESTED_DECLARATIONS, matrices))
+
+    assert len(compiled_cases) == len(matrices)
+    for case, compiled in compiled_cases:
         pair_type = cast(EnumType, compiled.normalized.root.type)
         pair_constructor = cast(
             NominalConstructor,
@@ -2019,12 +2078,33 @@ def test_private_compiler_guards_reject_malformed_internal_states() -> None:
 
 
 def test_strong_compiled_case_validator_rejects_internal_corruption() -> None:
-    _, _, pair_compiled = _compile(
+    _checked, sites = _compiled_cases(
         "enum Pair\n"
         "  | pair(left: bool, right: bool)\n"
-        "let value = pair(left = false, right = false)\n"
-        "case value of | pair(left = false, right = false) => 1 | _ => 2"
+        "enum Box\n"
+        "  | box(value: int)\n"
+        "  | empty\n"
+        "enum IntPair\n"
+        "  | intpair(left: int, right: int)\n"
+        "let pair_value = pair(left = false, right = false)\n"
+        "let int_value = 1\n"
+        "let box_value: Box = box(value = 1)\n"
+        "let int_pair_value = intpair(left = 1, right = 2)\n"
+        "let _ = case pair_value of | pair(left = false, right = false) => 1 | _ => 2\n"
+        "let _ = case int_value of | _ as captured => captured\n"
+        "let _ = case box_value of | box(value = _ as captured) => captured\n"
+        "let _ = case int_pair_value of | intpair(left = left, right = right) => left\n"
+        "let _ = case true of | true => 1 | false => 2\n"
+        "let _ = case 1 of | 1 => 1 | _ => 2\n"
     )
+    (
+        (_, pair_compiled),
+        (_, binder_compiled),
+        (_, nested_binder_compiled),
+        (_, two_binder_compiled),
+        (_, bool_compiled),
+        (_, open_compiled),
+    ) = sites
     normalized = pair_compiled.normalized
     root_occurrence, left_occurrence, right_occurrence = pair_compiled.occurrences
     left_provenance = cast(FieldOccurrenceProvenance, left_occurrence.provenance)
@@ -2120,7 +2200,6 @@ def test_strong_compiled_case_validator_rejects_internal_corruption() -> None:
             normalized.type_table,
         )
 
-    _, _, binder_compiled = _compile("let value = 1\ncase value of | _ as captured => captured")
     binder_leaf = cast(DecisionLeaf, binder_compiled.root)
     binder_assignment = binder_leaf.binder_assignments[0]
     binder_ledger, binder_groups = compiler_module._validate_occurrence_ledger(
@@ -2158,13 +2237,6 @@ def test_strong_compiled_case_validator_rejects_internal_corruption() -> None:
                 binder_groups,
             )
 
-    _, _, nested_binder_compiled = _compile(
-        "enum Box\n"
-        "  | box(value: int)\n"
-        "  | empty\n"
-        "let value: Box = box(value = 1)\n"
-        "case value of | box(value = _ as captured) => captured"
-    )
     nested_root = cast(DecisionSwitch, nested_binder_compiled.root)
     nested_leaf = cast(DecisionLeaf, nested_root.keyed_children[0].decision)
     nested_assignment = nested_leaf.binder_assignments[0]
@@ -2188,12 +2260,6 @@ def test_strong_compiled_case_validator_rejects_internal_corruption() -> None:
             nested_groups,
         )
 
-    _, _, two_binder_compiled = _compile(
-        "enum Pair\n"
-        "  | pair(left: int, right: int)\n"
-        "let value = pair(left = 1, right = 2)\n"
-        "case value of | pair(left = left, right = right) => left"
-    )
     two_root = cast(DecisionDecompose, two_binder_compiled.root)
     two_leaf = cast(DecisionLeaf, two_root.child)
     two_ledger, two_groups = compiler_module._validate_occurrence_ledger(
@@ -2211,7 +2277,6 @@ def test_strong_compiled_case_validator_rejects_internal_corruption() -> None:
             two_groups,
         )
 
-    bool_compiled = _compile("case true of | true => 1 | false => 2")[2]
     bool_root = cast(DecisionSwitch, bool_compiled.root)
     forged_occurrence = replace(bool_root.occurrence)
     switch_corruptions = (
@@ -2231,7 +2296,6 @@ def test_strong_compiled_case_validator_rejects_internal_corruption() -> None:
                 bool_groups,
             )
 
-    open_compiled = _compile("case 1 of | 1 => 1 | _ => 2")[2]
     open_switch = cast(DecisionSwitch, open_compiled.root)
     open_ledger, open_groups = compiler_module._validate_occurrence_ledger(
         open_compiled.normalized,

@@ -275,15 +275,18 @@ class TestMultiline:
         # A raw-tail header opens an interactive block. Enter after each content
         # line must keep collecting the payload; the blank continuation line
         # closes it and runs one shell call.
-        shell = FakeShell()
+        shell = FakeShell([{"command": "echo one\necho two", "stdout": "one\ntwo\n"}])
         with patch("agm.core.process.run_capture_result", side_effect=shell):
             output = drive(
                 "exec$\r  echo one\r  echo two\r\r\x04", session=ReplSession(default_stdlib=True)
             )
 
         assert ": error:" not in output.lower()
-        assert shell.commands == ["echo one\necho two"]
+        # Exactly one shell call, carrying the whole payload, whose scripted
+        # output comes back through the console as the entry's value.
         shell.assert_complete()
+        assert "one" in output
+        assert "two" in output
 
     def test_raw_tail_ask_block_continues_and_uses_mocked_default_agent(self) -> None:
         agent = _CountingAgent("mocked reply")
@@ -623,13 +626,14 @@ class TestCompleter:
 
 class TestEvalOutput:
     def test_inline_raw_tail_exec_evaluates_through_the_console(self) -> None:
-        shell = FakeShell()
+        shell = FakeShell([{"command": "echo hi", "stdout": "hi\n"}])
         with patch("agm.core.process.run_capture_result", side_effect=shell):
             output = drive("exec$ echo hi\r\x04", session=ReplSession(default_stdlib=True))
 
         assert ": error:" not in output.lower()
-        assert shell.commands == ["echo hi"]
+        # Exactly one shell call, and its scripted output is echoed as the value.
         shell.assert_complete()
+        assert "hi" in output
 
     def test_binding_echo_shows_name_type_value(self) -> None:
         output = drive("let x = 5\r\x04")

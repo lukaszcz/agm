@@ -191,21 +191,25 @@ def test_cast_raises_cast_error(source: str) -> None:
     assert ir_exc.display_name == "CastError"
 
 
-def test_cast_missing_field_and_unknown_variant_raise() -> None:
-    missing = """\
+_MISSING_MEMBER_SOURCES = (
+    """\
 record Foo
   a: int
 let x = "{}" as Foo
 ()
-"""
-    unknown = """\
+""",
+    """\
 enum Color | Red | Blue
 let x = "{\\"$case\\": \\"Purple\\"}" as Color
 ()
-"""
-    for src in (missing, unknown):
-        ir_exc = evaluate_ir_raises(src)
-        assert ir_exc.display_name == "CastError"
+""",
+)
+
+
+@pytest.mark.parametrize("source", _MISSING_MEMBER_SOURCES)
+def test_cast_missing_field_and_unknown_variant_raise(source: str) -> None:
+    ir_exc = evaluate_ir_raises(source)
+    assert ir_exc.display_name == "CastError"
 
 
 # ---------------------------------------------------------------------------
@@ -300,8 +304,13 @@ let r = x as? text
 # ---------------------------------------------------------------------------
 
 
-def _bound_value(source: str, name: str):
-    prog = _lower(source)
+def _program_bound_value(prog, name: str):
+    """Return the lowered value bound to *name* in an already lowered program.
+
+    Taking the program rather than the source lets one test read several
+    bindings out of a single lowering instead of re-running the whole
+    frontend once per name.
+    """
     prog.modules[prog.entry_module]
     for node in inline_main_items(prog):
         if isinstance(node, IrBind):
@@ -320,6 +329,10 @@ def _bound_value(source: str, name: str):
             if desc is not None and desc.public_name == name:
                 return root_capture.value
     raise AssertionError(f"no let root capture for {name!r}")
+
+
+def _bound_value(source: str, name: str):
+    return _program_bound_value(_lower(source), name)
 
 
 def test_golden_as_lowers_to_ir_convert_raise() -> None:
@@ -347,15 +360,16 @@ let is_square = shape as? Shape::Square
 let upcast = Circle(radius = 3) as? Shape
 ()
 """
-    circle = _bound_value(source, "circle")
-    is_circle = _bound_value(source, "is_circle")
-    is_square = _bound_value(source, "is_square")
-    upcast = _bound_value(source, "upcast")
+    program = _lower(source)
+    circle = _program_bound_value(program, "circle")
+    is_circle = _program_bound_value(program, "is_circle")
+    is_square = _program_bound_value(program, "is_square")
+    upcast = _program_bound_value(program, "upcast")
     assert isinstance(circle, IrNominalCast) and circle.test_only is False
     assert isinstance(is_circle, IrNominalCast) and is_circle.test_only is True
     assert isinstance(is_square, IrNominalCast) and is_square.test_only is True
     assert isinstance(upcast, IrConvert)
-    validate_ir(_lower(source), deep=True)
+    validate_ir(program, deep=True)
     values = evaluate_ir(source)
     assert values["circle"] == RecordValue(circle.nominal, "Shape::Circle", {"radius": IntValue(2)})
     assert values["is_circle"] == BoolValue(True)
@@ -370,19 +384,25 @@ def test_golden_total_as_question_lowers_to_ir_convert() -> None:
     assert value.recipe.strategy is ConversionStrategy.WIDEN_INT_TO_DECIMAL
 
 
-def _strategy_of(source: str, name: str) -> ConversionStrategy:
-    value = _bound_value(source, name)
+def _strategy_of(program, name: str) -> ConversionStrategy:
+    value = _program_bound_value(program, name)
     assert isinstance(value, IrConvert)
     return value.recipe.strategy
 
 
 def test_golden_widen_and_render_and_tojson_strategies() -> None:
-    assert _strategy_of("let x = 3 as decimal\n()\n", "x") is (
-        ConversionStrategy.WIDEN_INT_TO_DECIMAL
+    program = _lower(
+        "let widened = 3 as decimal\n"
+        "let identity = 42 as int\n"
+        "let rendered = 42 as text\n"
+        "let encoded = 42 as json\n"
+        "()\n"
     )
-    assert _strategy_of("let x = 42 as int\n()\n", "x") is ConversionStrategy.NOOP
-    assert _strategy_of("let x = 42 as text\n()\n", "x") is ConversionStrategy.RENDER_TO_TEXT
-    assert _strategy_of("let x = 42 as json\n()\n", "x") is ConversionStrategy.TO_JSON
+
+    assert _strategy_of(program, "widened") is ConversionStrategy.WIDEN_INT_TO_DECIMAL
+    assert _strategy_of(program, "identity") is ConversionStrategy.NOOP
+    assert _strategy_of(program, "rendered") is ConversionStrategy.RENDER_TO_TEXT
+    assert _strategy_of(program, "encoded") is ConversionStrategy.TO_JSON
 
 
 def test_golden_finite_scalar_json_cast_uses_a_static_plan() -> None:

@@ -68,3 +68,9 @@ program def main() -> unit =
         print(text_value.kind())
         print(array_value.kind())
         print(object_value.kind())
+        print(
+          null_value.size() + bool_value.size() + int_value.size()
+            + decimal_value.size() + text_value.size()
+        )
+        print(json::parse("[1, 2, 3]").size())
+        print(json::parse('{"a": 1, "b": 2}').size())

@@ -11,6 +11,29 @@ from agm.packages.manifest import load_manifest
 from agm.packages.model import PackageInfo
 
 
+def _package_with_a_rogue_module(tmp_path: Path, name: str = "demo") -> PackageInfo:
+    """Mount a package whose root also holds a module outside its module tree."""
+    root = tmp_path / "package"
+    (root / name).mkdir(parents=True)
+    (root / "package.toml").write_text(f'[package]\nname = "{name}"\nversion = "1.0.0"\n')
+    (root / name / "main.agl").write_text("")
+    (root / "assets").mkdir()
+    (root / "assets" / "rogue.agl").write_text("")
+    return PackageInfo(root, load_manifest(root / "package.toml"))
+
+
+def _roots_for(tmp_path: Path, package: PackageInfo, *, loose: bool) -> RootSet:
+    """Mount *package*, optionally also supplying its root as an ordinary root."""
+    return assemble_roots(
+        invocation_root=None,
+        lib_root=None,
+        configured=[],
+        cli=[str(package.root)] if loose else [],
+        cwd=tmp_path,
+        package_roots=(package,),
+    )
+
+
 class TestRootSet:
     def test_construction(self, tmp_path: Path) -> None:
         roots: frozenset[Path] = frozenset([tmp_path])
@@ -39,6 +62,67 @@ class TestRootSet:
     def test_sorted_roots_empty(self) -> None:
         rs = RootSet(roots=frozenset())
         assert rs.sorted_roots() == ()
+
+
+class TestMountScoping:
+    """A package-only root admits only its own module tree; a loose root admits all."""
+
+    def test_package_only_root_is_scoped_to_its_declared_module_segment(
+        self, tmp_path: Path
+    ) -> None:
+        package = _package_with_a_rogue_module(tmp_path)
+        roots = _roots_for(tmp_path, package, loose=False)
+
+        assert roots.sorted_roots_for(("demo",)) == (package.root,)
+        assert roots.sorted_roots_for(("assets",)) == ()
+
+    def test_package_only_root_rejects_a_file_outside_its_module_tree(self, tmp_path: Path) -> None:
+        package = _package_with_a_rogue_module(tmp_path)
+        roots = _roots_for(tmp_path, package, loose=False)
+
+        assert roots.admits_path(package.root, package.module_root / "main.agl")
+        assert not roots.admits_path(package.root, package.root / "assets" / "rogue.agl")
+
+    def test_supplying_the_same_path_as_an_ordinary_root_keeps_it_loose(
+        self, tmp_path: Path
+    ) -> None:
+        package = _package_with_a_rogue_module(tmp_path)
+        roots = _roots_for(tmp_path, package, loose=True)
+
+        assert roots.sorted_roots_for(("assets",)) == (package.root,)
+        assert roots.admits_path(package.root, package.root / "assets" / "rogue.agl")
+
+    def test_a_root_with_no_package_mount_admits_everything(self, tmp_path: Path) -> None:
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        roots = assemble_roots(
+            invocation_root=plain,
+            lib_root=None,
+            configured=[],
+            cli=[],
+            cwd=tmp_path,
+        )
+
+        assert roots.sorted_roots_for(("anything",)) == (plain.resolve(),)
+        assert roots.admits_path(plain.resolve(), plain / "anything.agl")
+
+
+class TestLooseRootsAreDistinguishing:
+    def test_root_sets_differing_only_in_loose_roots_are_not_equal(self, tmp_path: Path) -> None:
+        # The two root sets search the same directories, carry the same package,
+        # and share the same standard library -- they differ only in whether the
+        # package root is also loose, which is exactly what decides the files
+        # they expose.  Anything that identifies a root set (a cached compiled
+        # image, say) must therefore see them as different.
+        package = _package_with_a_rogue_module(tmp_path)
+        scoped = _roots_for(tmp_path, package, loose=False)
+        loose = _roots_for(tmp_path, package, loose=True)
+
+        assert scoped.roots == loose.roots
+        assert scoped.packages == loose.packages
+        assert scoped.stdlib_roots == loose.stdlib_roots
+        assert scoped.loose_roots != loose.loose_roots
+        assert scoped != loose
 
 
 class TestAssembleRoots:
@@ -201,11 +285,19 @@ class TestAssembleRoots:
         )
         assert cli_lib.resolve() in rs.roots
 
-    def test_tilde_expansion_in_lib_root(self, tmp_path: Path) -> None:
+    def test_tilde_expansion_in_lib_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A fake home keeps the expansion checkable: the directory `~` names
+        # really exists, so the expanded root must be mounted rather than
+        # silently dropped as missing.
+        home = tmp_path / "home"
+        lib = home / ".agm" / "lib"
+        lib.mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(home))
         inv_root = tmp_path / "inv"
         inv_root.mkdir()
-        # Use a real tilde path — we can only test expansion doesn't break things
-        # We won't assert it exists (it may not), just that it's expanded + canonical
+
         rs = assemble_roots(
             invocation_root=inv_root,
             lib_root=Path("~/.agm/lib"),
@@ -213,22 +305,51 @@ class TestAssembleRoots:
             cli=[],
             cwd=tmp_path,
         )
+
+        assert lib.resolve() in rs.roots
         for root in rs.roots:
             assert "~" not in str(root)
 
-    def test_tilde_expansion_in_configured(self, tmp_path: Path) -> None:
+    def test_tilde_expansion_in_configured(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        configured_lib = home / "agl-lib"
+        configured_lib.mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(home))
         inv_root = tmp_path / "inv"
         inv_root.mkdir()
-        origin = tmp_path
+
         rs = assemble_roots(
             invocation_root=inv_root,
             lib_root=None,
-            configured=[("~/nonexistent_agm_test_lib_xyz", origin)],
+            configured=[("~/agl-lib", tmp_path)],
             cli=[],
             cwd=tmp_path,
         )
+
+        assert configured_lib.resolve() in rs.roots
         for root in rs.roots:
             assert "~" not in str(root)
+
+    def test_tilde_path_that_does_not_exist_under_home_is_dropped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        inv_root = tmp_path / "inv"
+        inv_root.mkdir()
+
+        rs = assemble_roots(
+            invocation_root=inv_root,
+            lib_root=None,
+            configured=[("~/absent-lib", tmp_path)],
+            cli=["~/absent-cli-lib"],
+            cwd=tmp_path,
+        )
+
+        assert rs.roots == frozenset({inv_root.resolve()})
 
     def test_nonexistent_roots_dropped_silently(self, tmp_path: Path) -> None:
         inv_root = tmp_path / "inv"

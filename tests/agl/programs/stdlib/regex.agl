@@ -28,6 +28,8 @@ program def main() -> unit =
     | 4 =>
         print(regex::split(",", ",a,,b,"))
         print(regex::split("([,;])", "a,b;c,"))
+        print(regex::split("(,)|(;)", "a,b;c"))
+        print(regex::split("(x)?", "ab"))
     | 5 =>
         let literal = "a+b?."
         print(regex::test(regex::escape(literal), literal))

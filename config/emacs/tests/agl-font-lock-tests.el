@@ -108,6 +108,25 @@
   (agl-flt--with-buffer "param retries: int = 3\n"
     (should (eq (agl-flt--face-of "retries") 'font-lock-variable-name-face))))
 
+;; A `var' field marker is a declaration position too, so the field it marks
+;; is faced like any other mutable binding, in every form that declares one.
+
+(ert-deftest agl-flt-var-field-in-record-body-is-variable-face ()
+  (agl-flt--with-buffer "record Meter\n  var value: int\n"
+    (should (eq (agl-flt--face-of "var") 'font-lock-keyword-face))
+    (should (eq (agl-flt--face-of "value") 'font-lock-variable-name-face))
+    (should (eq (agl-flt--face-of "int") 'font-lock-type-face))))
+
+(ert-deftest agl-flt-var-field-in-inline-field-list-is-variable-face ()
+  (agl-flt--with-buffer "record Counter(var value: int)\n"
+    (should (eq (agl-flt--face-of "value") 'font-lock-variable-name-face))
+    (should (eq (agl-flt--face-of "int") 'font-lock-type-face))))
+
+(ert-deftest agl-flt-var-field-in-enum-member-is-variable-face ()
+  (agl-flt--with-buffer "enum Cell\n  Full(var payload: text)\n"
+    (should (eq (agl-flt--face-of "payload") 'font-lock-variable-name-face))
+    (should (eq (agl-flt--face-of "text") 'font-lock-type-face))))
+
 (ert-deftest agl-flt-catch-as-alias-is-variable-face ()
   (agl-flt--with-buffer
       (concat "try\n"
@@ -344,6 +363,12 @@
 
 (ert-deftest agl-flt-assignment-operator-is-operator-faced ()
   (agl-flt--with-buffer "r := 1\n"
+    (should (eq (agl-flt--face-of ":=") agl--operator-face))))
+
+(ert-deftest agl-flt-field-assignment-operator-is-operator-faced ()
+  ;; A `var' field is assigned through a receiver, so the `.' of the target
+  ;; must not break the `:=' token apart.
+  (agl-flt--with-buffer "meter.value := 7\n"
     (should (eq (agl-flt--face-of ":=") agl--operator-face))))
 
 (ert-deftest agl-flt-unspaced-plus-is-part-of-identifier ()

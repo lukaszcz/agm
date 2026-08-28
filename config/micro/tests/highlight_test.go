@@ -120,6 +120,7 @@ func TestLongerIdentifiersStayPlain(t *testing.T) {
 		"ask-request-later", // starts with the whole builtin `ask-request'
 		"x-resource",        // ends with a builtin
 		"record-id",         // starts with a keyword
+		"var-limit",         // starts with the field-marker keyword
 		"and-then",          // starts with a keyword
 		"not-found",         // starts with a keyword
 		"do-it!",            // starts with a keyword, ends in `!'
@@ -160,6 +161,17 @@ func TestStringsAndComments(t *testing.T) {
 	assertFace(t, "# let x", "let x", "comment")
 	// Interpolation delimiters stay visible inside a template.
 	assertFace(t, `let s = "hi %{name}"`, "%{", "special")
+}
+
+// A `var' marker declares a mutable record or enum-member field, so the
+// keyword has to face wherever a field is declared -- in a layout body, in an
+// inline field list, and in an enum member's payload.
+func TestMutableFieldMarkerIsFaced(t *testing.T) {
+	assertFace(t, "record Counter(var value: int)", "var", "statement")
+	assertFace(t, "record Counter\n  var value: int", "var", "statement")
+	assertFace(t, "enum Cell\n  Full(var payload: text)", "var", "statement")
+	// The declared type still faces as a type through the marker.
+	assertFace(t, "record Counter(var value: int)", "int", "type")
 }
 
 // `::' and `:=' are single tokens whose `:' would otherwise be repainted as a

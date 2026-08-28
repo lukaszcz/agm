@@ -43,6 +43,12 @@ indented; the resulting indentation column is returned."
 (ert-deftest agl-ind-body-after-record-header-is-indented ()
   (should (= (agl-ind--indent-of "record R\nx: int\n" 2) 2)))
 
+(ert-deftest agl-ind-var-field-indents-like-a-plain-field ()
+  ;; A `var' field marker declares a field, not a nested block, so the line
+  ;; after it stays at the field level.
+  (should (= (agl-ind--indent-of "record R\nvar x: int\n" 2) 2))
+  (should (= (agl-ind--indent-of "record R\n  var x: int\ny: int\n" 3) 2)))
+
 (ert-deftest agl-ind-body-after-arrow-is-indented ()
   (should (= (agl-ind--indent-of "let v = if\n  | a =>\nb\n" 3) 4)))
 
@@ -164,7 +170,7 @@ indented; the resulting indentation column is returned."
   (let ((text (concat "import std/core\n"
                       "\n"
                       "record Point\n"
-                      "  x: int\n"
+                      "  var x: int\n"
                       "  y: int\n"
                       "\n"
                       "def describe(p: Point) -> text =\n"
@@ -173,7 +179,9 @@ indented; the resulting indentation column is returned."
                       "    | else => \"point\"\n"
                       "\n"
                       "program def main() -> unit =\n"
-                      "  print describe(Point(x = 0, y = 0))\n")))
+                      "  let p = Point(x = 0, y = 0)\n"
+                      "  p.x := 1\n"
+                      "  print describe(p)\n")))
     (should (equal (agl-ind--reindented text) text))))
 
 (ert-deftest agl-ind-pipe-operator-is-not-a-branch-marker ()

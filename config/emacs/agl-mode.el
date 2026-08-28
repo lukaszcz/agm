@@ -579,19 +579,28 @@ which is what makes that rule contextual rather than case-based .")
 (defconst agl--number-re "[0-9]+\\(?:\\.[0-9]+\\)?"
   "Regexp matching an AgL `INT' or `DECIMAL' literal.")
 
-(defconst agl--operator-re
-  (regexp-opt '("=>" "->" ":=" "==" "!=" "<=" ">=" "::"
-                "+" "-" "*" "/" "<" ">" "=" "|" "@"))
-  "Regexp matching one AgL operator token, multi- or single-character.")
+(defconst agl--operator-name-excluded-chars "()[]{}:,.;\"'@#_"
+  "The characters an AgL operator name may never contain.
 
-(defconst agl--single-char-operator-strings '("+" "-" "*" "/" "<" ">" "=" "|" "@")
-  "The single-character AgL operator spellings.
+Mirrors `_OPERATOR_NAME_EXCLUDED_CHARS' in
+`src/agm/agl/lexer/scanner.py'.")
 
-Unlike the fixed multi-character tokens (`:: -> => := == != <= >='),
-these share characters with identifier continuations -- `a+b' is one
-identifier, not `a', `+', `b' (see `agl--ident-continue-skip') -- so a
-match must still pass the identifier-boundary predicates; see
-`agl--match-operator'.")
+(defconst agl--colon-operator-re (regexp-opt '("::" ":="))
+  "Regexp matching an AgL operator token that contains `:'.
+
+`:' is excluded from operator names (`agl--operator-name-excluded-chars'),
+so `::' and `:=' are fixed spellings rather than operator-name runs.  A
+`:' always terminates an identifier, so neither can occur inside a name
+and both are matched without an identifier-boundary check.")
+
+(defconst agl--merged-operator-chars '(?/ ?@)
+  "Operator characters the lexer merges into a longer token when unspaced.
+
+`/' joins the segments of a module path (`std/text', `foo/bar::Point'),
+and `@' opens a zone marker (`@pos'), each of which the lexer scans as
+one token rather than as an operator beside a name.  A lone `/' or `@'
+is therefore faced only where an identifier does not abut it; every
+other operator character is faced by position alone.")
 
 (defconst agl--zone-marker-re "@\\(?:pos\\|std\\|named\\)"
   "Regexp matching one zone marker (`@pos', `@std', `@named').")
@@ -799,32 +808,92 @@ group 1 covers the terminal segment.  Return non-nil on success."
   "`font-lock-keywords' MATCHER for an `INT'/`DECIMAL' literal, up to LIMIT."
   (agl--search-ident-forward agl--number-re limit))
 
-(defun agl--match-operator (limit)
-  "`font-lock-keywords' MATCHER for an AgL operator token, up to LIMIT.
+(defun agl--operator-name-char-p (char)
+  "Return non-nil when CHAR may take part in an AgL operator name.
 
-The fixed multi-character tokens (`:: -> => := == != <= >=') are exempt
-from the identifier-boundary predicates: each is either a structural
-delimiter or contains `:'/`=', both `IDENT_STOP' characters (see
-`agl--ident-continue-skip'), so none of them can occur embedded inside
-a `NAME' -- e.g. `Point::distance' would otherwise never get an
-operator face, because the boundary check (correctly) treats `::' as
-continuing the identifier `Point' when it only looks at what precedes a
-candidate match, not at whether the match's own first character could
-itself extend that identifier.  The single-character operators
-\(`agl--single-char-operator-strings') share characters with identifier
-continuations (`a+b' is one identifier) and so must still pass the
-boundary check.  As in `agl--search-ident-forward', `match-data' is
-saved and restored around the boundary checks, which call
-`looking-at' internally and would otherwise clobber it."
-  (let (found)
-    (while (and (not found) (re-search-forward agl--operator-re limit t))
-      (let ((saved (match-data)) (mbeg (match-beginning 0)) (mend (match-end 0))
-            (token (match-string-no-properties 0)))
-        (if (if (member token agl--single-char-operator-strings)
-                (and (agl--ident-boundary-before-p mbeg) (agl--ident-boundary-after-p mend))
-              t)
-            (progn (set-match-data saved) (setq found t))
-          (goto-char (1+ mbeg)))))
+Mirrors `_is_operator_name_char' in `src/agm/agl/lexer/scanner.py': a
+Unicode punctuation or symbol character that is not one of
+`agl--operator-name-excluded-chars'.  Whitespace is neither punctuation
+nor a symbol, so it is excluded by the category test itself."
+  (and char
+       (not (memq char (append agl--operator-name-excluded-chars nil)))
+       (memq (aref (symbol-name (get-char-code-property char 'general-category)) 0)
+             '(?P ?S))))
+
+(defun agl--operator-token-start-p (pos)
+  "Return non-nil when POS begins a token rather than continuing a name.
+
+An identifier consumes every character outside `IDENT_STOP' (see
+`agl--ident-continue-skip'), so an operator character in the middle of
+such a run belongs to the name: `a+b' is one identifier, not `a', `+',
+`b'.  POS begins a token when its own character terminates an identifier
+\(`=', `|' and `/' are operator characters that are also `IDENT_STOP'
+members), when the run POS sits in starts at POS, or when that run began
+with a digit and its number token ends exactly at POS -- the `+' of
+`1+2' follows a complete `INT'."
+  (or (memq (char-after pos) agl--ident-stop-char-list)
+      (save-excursion
+        (goto-char pos)
+        (skip-chars-backward agl--ident-continue-skip)
+        (or (= (point) pos)
+            (and (looking-at-p "[0-9]")
+                 (progn (skip-chars-forward "0-9") (= (point) pos)))))))
+
+(defun agl--operator-run-end (start limit)
+  "Return the end of the operator-name run beginning at START, before LIMIT.
+
+The run is maximal, which is what makes a multi-character operator name
+-- `|>', `<|', `>>', or any spelling a program declares with `infixl' /
+`infixr' -- one match rather than one match per character.  A lone `?'
+followed by ASCII digits is extended over them, mirroring the scanner's
+`PLACEHOLDER_NUM': `?1' is a single placeholder token, not `?' beside
+the number 1."
+  (let ((end start))
+    (while (and (< end limit) (agl--operator-name-char-p (char-after end)))
+      (setq end (1+ end)))
+    (when (and (= end (1+ start)) (eq (char-after start) ??))
+      (save-excursion
+        (goto-char end)
+        (skip-chars-forward "0-9" limit)
+        (setq end (point))))
+    end))
+
+(defun agl--match-operator (limit)
+  "`font-lock-keywords' MATCHER for one AgL operator token, up to LIMIT.
+
+Two shapes are recognized.  `::' and `:=' contain `:', which no operator
+name may (`agl--colon-operator-re'), so they are matched as fixed
+spellings.  Every other operator token is an operator name: a maximal
+run of operator characters (`agl--operator-run-end') that begins a token
+\(`agl--operator-token-start-p').  Scanning the whole run is what keeps a
+multi-character spelling one match, and the token-start test is what
+keeps the `+' of the single identifier `a+b' unfaced.
+
+A run that is only `/' or `@' is faced solely when no identifier abuts
+it: unspaced, the lexer merges those into a module path or a zone marker
+rather than emitting an operator -- see `agl--merged-operator-chars'."
+  (let ((found nil))
+    (while (and (not found) (< (point) limit))
+      (let ((pos (point)))
+        (cond
+         ((and (looking-at agl--colon-operator-re) (<= (match-end 0) limit))
+          (goto-char (match-end 0))
+          (set-match-data (list pos (point)))
+          (setq found t))
+         ((and (agl--operator-name-char-p (char-after pos))
+               (agl--operator-token-start-p pos))
+          (let ((end (agl--operator-run-end pos limit)))
+            (if (and (= end (1+ pos))
+                     (memq (char-after pos) agl--merged-operator-chars)
+                     (not (and (agl--ident-boundary-before-p pos)
+                               (agl--ident-boundary-after-p end))))
+                (goto-char end)
+              (goto-char end)
+              (set-match-data (list pos end))
+              (setq found t))))
+         (t
+          (forward-char 1)
+          (skip-chars-forward "[:alnum:] \t\n_" limit)))))
     found))
 
 (defun agl--match-zone-marker (limit)
@@ -929,6 +998,27 @@ opened in.  Return non-nil on success."
           (goto-char open-end))))
     found))
 
+(defun agl--decl-head-segment-start-p ()
+  "Return non-nil when point is at the start of a `decl_head' segment.
+
+A `name' is a `NAME' or an `OP_NAME' (see docs/agl/reference/grammar.md's
+`name'), so a segment begins at an identifier character or at an operator
+character -- the stdlib declares `def |>[A, B](...)' and its siblings that
+way."
+  (or (looking-at-p agl--ident-start-re)
+      (agl--operator-name-char-p (char-after))))
+
+(defun agl--decl-head-segment-end ()
+  "Consume the `decl_head' segment at point and return its end position.
+
+An identifier runs to the next `IDENT_STOP' character; an operator name
+runs to the end of its operator-character run (`agl--operator-run-end'),
+which is what stops `def |>[A, B]' at the type-argument bracket."
+  (if (looking-at-p agl--ident-start-re)
+      (skip-chars-forward agl--ident-continue-skip)
+    (goto-char (agl--operator-run-end (point) (point-max))))
+  (point))
+
 (defun agl--parse-decl-head-chain ()
   "Parse a `decl_head'-shaped qualifier chain at point, consuming it.
 
@@ -936,18 +1026,17 @@ The shape is `[scope_path \"::\"] name' (see
 docs/agl/reference/grammar.md's `decl_head'); point moves to its end.
 Return a list (FULL-START SEG-START SEG-END), where FULL-START begins
 the first segment and SEG-START/SEG-END bound only the terminal
-segment, or nil if point is not at a NAME."
+segment, or nil if point is not at a `name'."
   (skip-chars-forward " \t\n")
-  (when (looking-at agl--ident-start-re)
+  (when (agl--decl-head-segment-start-p)
     (let ((full-start (point)) seg-start seg-end)
       (setq seg-start (point))
-      (skip-chars-forward agl--ident-continue-skip)
-      (setq seg-end (point))
-      (while (looking-at "::[[:alpha:]_]")
+      (setq seg-end (agl--decl-head-segment-end))
+      (while (and (looking-at-p "::")
+                  (save-excursion (forward-char 2) (agl--decl-head-segment-start-p)))
         (forward-char 2)
         (setq seg-start (point))
-        (skip-chars-forward agl--ident-continue-skip)
-        (setq seg-end (point)))
+        (setq seg-end (agl--decl-head-segment-end)))
       (list full-start seg-start seg-end))))
 
 (defun agl--decl-head-pattern-p (chain-end)
@@ -1052,8 +1141,11 @@ success."
    (list #'agl--match-interpolation-delims
          '(1 'agl-interpolation-face t)
          '(2 'agl-interpolation-face t))
-   (cons #'agl--match-number 'agl--number-face)
+   ;; The operator rule precedes the number rule so that a `?N' placeholder
+   ;; faces as the one token it is; otherwise its digits would already carry
+   ;; the number face, which font-lock's default OVERRIDE never replaces.
    (cons #'agl--match-operator 'agl--operator-face)
+   (cons #'agl--match-number 'agl--number-face)
    (cons #'agl--match-zone-marker ''font-lock-keyword-face))
   "Font-lock keyword rules for `agl-mode'.
 

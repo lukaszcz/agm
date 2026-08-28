@@ -56,6 +56,13 @@
       (should (member "greet" (agl-nav--category-names index "Functions")))
       (should (member "to_slug" (agl-nav--category-names index "Functions"))))))
 
+(ert-deftest agl-nav-imenu-operator-named-def-is-indexed ()
+  ;; A declaration may name an operator; the index has to reach it under the
+  ;; name it is spelled with.
+  (agl-nav--with-buffer "def |>[A, B](x: A, f: fn(A) -> B) -> B = f(x)\n"
+    (let ((index (agl-imenu-create-index)))
+      (should (member "|>" (agl-nav--category-names index "Functions"))))))
+
 (ert-deftest agl-nav-imenu-types-category ()
   (agl-nav--with-buffer
       (concat "record Point(x: int, y: int)\n"

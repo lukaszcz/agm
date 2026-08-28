@@ -48,6 +48,14 @@
   "Return the `face' text property of the first character of NEEDLE."
   (agl-flt--face-at (agl-flt--pos-before needle)))
 
+(defun agl-flt--wholly-faced-p (needle face)
+  "Return non-nil when every character of NEEDLE carries FACE."
+  (let ((start (agl-flt--pos-before needle))
+        (ok t))
+    (dotimes (i (length needle) ok)
+      (unless (eq (agl-flt--face-at (+ start i)) face)
+        (setq ok nil)))))
+
 ;; --- Declaration forms: the declared name gets the right face ---
 
 (ert-deftest agl-flt-def-name-is-function-face ()
@@ -375,6 +383,61 @@
   ;; `a+b' is a single identifier, so its `+' is not an operator.
   (agl-flt--with-buffer "let s = a+b\n"
     (should-not (eq (agl-flt--face-of "+") agl--operator-face))))
+
+(ert-deftest agl-flt-symbolic-operator-name-is-one-operator-token ()
+  ;; `std/core' declares `|>', `<|', `>>' and `<<'; a program may declare any
+  ;; other spelling.  However many characters an operator name has, all of them
+  ;; carry the operator face -- none is split off as a delimiter.
+  (dolist (op '("|>" "<|" ">>" "<<" "<$>"))
+    (agl-flt--with-buffer (format "let y = a %s b\n" op)
+      (should (agl-flt--wholly-faced-p op agl--operator-face)))))
+
+(ert-deftest agl-flt-operator-fixity-declaration-operator-is-operator-faced ()
+  (agl-flt--with-buffer "infixl |> at 5\n"
+    (should (agl-flt--wholly-faced-p "|>" agl--operator-face))))
+
+(ert-deftest agl-flt-unspaced-equals-is-operator-faced ()
+  ;; `=' is an identifier stop, so it is an operator even without surrounding
+  ;; space.
+  (agl-flt--with-buffer "let x=1\n"
+    (should (eq (agl-flt--face-of "=") agl--operator-face))))
+
+(ert-deftest agl-flt-branch-bar-is-operator-faced ()
+  (agl-flt--with-buffer "case v of\n| A => 1\n"
+    (should (eq (agl-flt--face-of "|") agl--operator-face))))
+
+(ert-deftest agl-flt-unary-minus-is-operator-faced ()
+  ;; The `-' opens the token here, so it is an operator and the digits after it
+  ;; remain a numeric literal.
+  (agl-flt--with-buffer "let n = -3\n"
+    (should (eq (agl-flt--face-of "-") agl--operator-face))
+    (should (eq (agl-flt--face-of "3") agl--number-face))))
+
+(ert-deftest agl-flt-module-path-slash-is-not-operator-faced ()
+  ;; `/' separates the segments of a module path, not two expressions.
+  (agl-flt--with-buffer "import std/text\n"
+    (should-not (eq (agl-flt--face-of "/") agl--operator-face))))
+
+(ert-deftest agl-flt-placeholder-is-one-operator-token ()
+  ;; `?' and `?N' are partial-application placeholders: whole tokens, so the
+  ;; digits of `?1' belong to the placeholder rather than to a literal.
+  (agl-flt--with-buffer "let g = f(?)\n"
+    (should (eq (agl-flt--face-of "?") agl--operator-face)))
+  (agl-flt--with-buffer "let g = f(?1, ?2)\n"
+    (should (agl-flt--wholly-faced-p "?1" agl--operator-face))
+    (should-not (eq (agl-flt--face-at (agl-flt--pos-before "1,")) agl--number-face))))
+
+(ert-deftest agl-flt-question-mark-ending-a-name-is-not-an-operator ()
+  ;; `?' continues an identifier, so the one closing `is-ready?' is part of the
+  ;; name rather than a placeholder.
+  (agl-flt--with-buffer "let u = is-ready?\n"
+    (should-not (eq (agl-flt--face-of "?") agl--operator-face))))
+
+(ert-deftest agl-flt-operator-named-def-is-function-face ()
+  ;; A declaration may name an operator, and the declared name is faced the same
+  ;; way whatever it is spelled with.
+  (agl-flt--with-buffer "def |>[A, B](x: A, f: fn(A) -> B) -> B = f(x)\n"
+    (should (agl-flt--wholly-faced-p "|>" 'font-lock-function-name-face))))
 
 ;; --- Zone markers `@pos'/`@std'/`@named' ---
 

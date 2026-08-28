@@ -31,6 +31,9 @@
 ;; `agl-mode.el' requires this file after defining the mode, so requiring it
 ;; back would be circular; the few helpers used from it are declared instead.
 (declare-function agl--ident-boundary-after-p "agl-mode" (pos))
+(declare-function agl--ident-boundary-before-p "agl-mode" (pos))
+(declare-function agl--operator-name-char-p "agl-mode" (char))
+(declare-function agl--operator-token-start-p "agl-mode" (pos))
 
 (defcustom agl-indent-offset 2
   "Number of columns AgL indents a nested block, matching stdlib style."
@@ -49,22 +52,37 @@
 The markers are `|', `else', `catch', `until', and `done' (see the
 layout rules in docs/agl/reference/lexical-structure.md).")
 
-(defconst agl--block-opener-tail-re
-  (concat "\\(?:"
-          "[=:]\\|=>\\|->\\|"
-          (regexp-opt '("of" "do" "try" "else" "then" "if"))
-          "\\)[ \t]*$")
-  "Regexp matching the tail of a line that opens a nested block.
+(defconst agl--block-opener-symbol-re
+  "\\(?:=>\\|->\\|[=:]\\)[ \t]*$"
+  "Regexp matching a symbolic suite introducer ending a line's code.
 
-A line ending in `=', `=>', `of', `do', `if', `try', or `else' has its
-body on the following lines.")
+A line ending in `=', `:', `=>', or `->' has its body on the following
+lines.  The spelling alone does not settle it: `a->' is a single AgL
+identifier and the `=' of `>=' belongs to that comparison operator, so
+`agl--block-opener-symbol-p' accepts a match only where it is a whole
+operator token.")
+
+(defconst agl--block-opener-keyword-re
+  (concat (regexp-opt '("of" "do" "try" "else" "then" "if")) "[ \t]*$")
+  "Regexp matching a keyword suite introducer ending a line's code.
+
+As with `agl--block-opener-symbol-re' the spelling must be a whole token:
+`registry', `undo', and `motif' end in these letters without being them,
+which is what `agl--block-opener-keyword-p' checks.")
+
+(defconst agl--raw-tail-opener-re
+  "\\(?:exec!\\|ask!\\)\\(?:::\\[[^]]*\\]\\)?[ \t]*$"
+  "Regexp matching a raw-tail opener that carries no inline payload.")
 
 (defconst agl--block-header-re
-  (concat "[ \t]*\\(?:"
+  (concat "\\`[ \t]*\\(?:"
           (regexp-opt '("record" "enum" "exception" "scope" "program" "def"
                         "extern" "builtin" "for" "while" "do" "if" "case" "try"))
-          "\\)\\_>")
-  "Regexp matching a line that starts a declaration or compound statement.")
+          "\\)")
+  "Regexp matching a line that starts a declaration or compound statement.
+
+Anchored at the line start: one of these keywords further along the line
+is an argument or string content (`print(\"do it\")'), not a header.")
 
 (defun agl--line-empty-p ()
   "Return non-nil when the current line has only whitespace on it."
@@ -87,12 +105,6 @@ body on the following lines.")
 Blank lines and comment-only lines do not participate in layout."
   (or (agl--line-empty-p) (agl--line-comment-p)))
 
-(defun agl--line-text ()
-  "Return the current line's text with no leading or trailing whitespace."
-  (let ((raw (buffer-substring-no-properties
-              (line-beginning-position) (line-end-position))))
-    (string-trim raw)))
-
 (defun agl--line-code-end ()
   "Return the position where the current line's code ends.
 
@@ -111,11 +123,6 @@ end of line when the line carries no comment."
             (setq found (point))
           (forward-char 1)))
       (or found limit))))
-
-(defun agl--line-code-text ()
-  "Return the current line's code, without any trailing comment."
-  (string-trim (buffer-substring-no-properties
-                (line-beginning-position) (agl--line-code-end))))
 
 (defun agl--opaque-line-p ()
   "Return non-nil if the current line lies inside a verbatim region.
@@ -236,19 +243,61 @@ align with its header."
                  (eq (char-after) ?|))))
     (if (and pipe opens) (+ indent agl-indent-offset) indent)))
 
+(defun agl--block-opener-symbol-p (code start)
+  "Return non-nil when CODE ends with a symbolic suite introducer.
+
+CODE is the current line\='s code text taken from buffer position START, so
+a match\='s index in CODE is also its position in the buffer.  The
+introducer must be an operator token of its own: `a->' is one identifier
+whose `->' never lexes apart, and the `=' ending `>=' or `!=' continues
+that operator instead of assigning."
+  (and (string-match agl--block-opener-symbol-re code)
+       (let ((pos (+ start (match-beginning 0))))
+         (and (agl--operator-token-start-p pos)
+              (not (agl--operator-name-char-p (char-before pos)))))))
+
+(defun agl--block-opener-keyword-p (code start)
+  "Return non-nil when CODE ends with a keyword suite introducer.
+
+CODE and START are as in `agl--block-opener-symbol-p'.  An identifier
+consumes the keyword\='s letters when they merely end a longer name, so the
+match counts only where it begins a token (`registry' is not `try')."
+  (and (string-match agl--block-opener-keyword-re code)
+       (agl--ident-boundary-before-p (+ start (match-beginning 0)))))
+
+(defun agl--raw-tail-opener-p (code start)
+  "Return non-nil when CODE is a raw-tail opener carrying no inline payload.
+
+CODE and START are as in `agl--block-opener-symbol-p'; such an opener owns
+the indented block that follows it.  `do-exec!' is one identifier rather
+than the `exec!' opener, so the same token-boundary check applies."
+  (and (string-match agl--raw-tail-opener-re code)
+       (agl--ident-boundary-before-p (+ start (match-beginning 0)))))
+
+(defun agl--block-header-p (code start)
+  "Return non-nil when CODE is a declaration or compound-statement header.
+
+CODE and START are as in `agl--block-opener-symbol-p'.  A header owns a
+block only when its body is not written inline on the same line."
+  (and (string-match agl--block-header-re code)
+       (agl--ident-boundary-after-p (+ start (match-end 0)))
+       (not (string-match-p "=[ \t]*[^ \t]" code))))
+
 (defun agl--opens-block-p ()
   "Return non-nil if the current line opens a nested block.
 
 A line opens a block when its code ends with a suite introducer, or when
-it is a declaration or compound-statement header with no inline body."
-  (let ((code (agl--line-code-text)))
-    (and (not (string-empty-p code))
-         (or (string-match-p agl--block-opener-tail-re code)
-             ;; A raw-tail opener with no inline payload owns the following
-             ;; indented block.
-             (string-match-p "\\(?:exec!\\|ask!\\)\\(?:::\\[[^]]*\\]\\)?[ \t]*$" code)
-             (and (string-match-p agl--block-header-re code)
-                  (not (string-match-p "=[ \t]*[^ \t]" code)))))))
+it is a declaration or compound-statement header with no inline body.
+The code text is taken unshortened from the line\='s start, so each
+predicate can map a match back to its buffer position and settle there
+whether the spelling it found is a whole AgL token."
+  (let* ((start (line-beginning-position))
+         (code (buffer-substring-no-properties start (agl--line-code-end))))
+    (and (string-match-p "[^ \t]" code)
+         (or (agl--block-opener-symbol-p code start)
+             (agl--block-opener-keyword-p code start)
+             (agl--raw-tail-opener-p code start)
+             (agl--block-header-p code start)))))
 
 (defun agl-calculate-indent ()
   "Return the column `agl-indent-line' should indent the current line to."

@@ -60,6 +60,45 @@ indented; the resulting indentation column is returned."
   ;; sibling declaration rather than a nested block.
   (should (= (agl-ind--indent-of "def f() -> int = 1\ndef g() -> int = 2\n" 2) 0)))
 
+(ert-deftest agl-ind-name-ending-in-a-keyword-does-not-open-a-block ()
+  ;; `registry' ends in the letters of `try', `undo' in `do', and `motif'
+  ;; in `if'; none of them is that keyword, so the next line is a sibling.
+  (should (= (agl-ind--indent-of "let r = registry\nlet s = 1\n" 2) 0))
+  (should (= (agl-ind--indent-of "let r = undo\nlet s = 1\n" 2) 0))
+  (should (= (agl-ind--indent-of "let g = motif\nlet s = 1\n" 2) 0)))
+
+(ert-deftest agl-ind-keyword-after-an-operator-still-opens-a-block ()
+  ;; An operator run never begins an identifier, so `=>do' lexes as the
+  ;; arrow and the keyword; `a->do', by contrast, is one whole name.
+  (should (= (agl-ind--indent-of "let f = if | a =>do\n  step()\n" 2) 2))
+  (should (= (agl-ind--indent-of "let f = a->do\nlet s = 1\n" 2) 0)))
+
+(ert-deftest agl-ind-header-keyword-inside-a-line-does-not-open-a-block ()
+  ;; A header keyword is only a header as the line's first token: here `do'
+  ;; is string content passed to `print'.
+  (should (= (agl-ind--indent-of "print(\"do it\")\nprint(\"next\")\n" 2) 0))
+  (should (= (agl-ind--indent-of "print(\"case it\")\nprint(\"next\")\n" 2) 0)))
+
+(ert-deftest agl-ind-trailing-comparison-does-not-open-a-block ()
+  ;; `>=' is one operator token, so its `=' is not the assignment that
+  ;; introduces a suite.
+  (should (= (agl-ind--indent-of "let ok = a >=\nlet s = 1\n" 2) 0))
+  (should (= (agl-ind--indent-of "let ok = a !=\nlet s = 1\n" 2) 0)))
+
+(ert-deftest agl-ind-trailing-assignment-opens-a-block ()
+  ;; `:=' is destructive assignment, and `=' preceded by a name is the
+  ;; ordinary one; both introduce a suite.
+  (should (= (agl-ind--indent-of "count :=\n  1\n" 2) 2))
+  (should (= (agl-ind--indent-of "let v =\n  1\n" 2) 2)))
+
+(ert-deftest agl-ind-name-ending-in-an-arrow-does-not-open-a-block ()
+  ;; `a->' is a single AgL identifier: `-' and `>' both continue a name.
+  (should (= (agl-ind--indent-of "let f = a->\nlet s = 1\n" 2) 0)))
+
+(ert-deftest agl-ind-name-ending-in-a-raw-tail-keyword-does-not-open-a-block ()
+  ;; `do-exec!' is one identifier, not the `exec!' raw-tail opener.
+  (should (= (agl-ind--indent-of "let x = do-exec!\nlet s = 1\n" 2) 0)))
+
 ;; --- Continuation of the previous line's level ---
 
 (ert-deftest agl-ind-sibling-statement-keeps-indentation ()

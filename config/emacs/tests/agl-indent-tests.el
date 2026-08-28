@@ -110,6 +110,61 @@ indented; the resulting indentation column is returned."
 (ert-deftest agl-ind-bracket-opened-at-end-of-line-indents-one-level ()
   (should (= (agl-ind--indent-of "let xs = [\n1,\n]\n" 2) 2)))
 
+(ert-deftest agl-ind-region-dedenting-its-last-line-terminates ()
+  ;; Re-indenting a line to a shorter column shrinks the buffer, so a region
+  ;; walk bounded by the original end position would never reach it again.
+  (should (equal (agl-ind--reindented "def f() -> int =\n  let a = 1\n   let b = 2\n")
+                 "def f() -> int =\n  let a = 1\n  let b = 2\n")))
+
+(ert-deftest agl-ind-region-dedenting-an-inner-line-indents-the-rest ()
+  ;; The lines after the shortened one still have to be visited.
+  (should (equal (agl-ind--reindented
+                  "def f() -> int =\n  let a = 1\n   let b = 2\n   let c = 3\n")
+                 "def f() -> int =\n  let a = 1\n  let b = 2\n  let c = 3\n")))
+
+(ert-deftest agl-ind-region-keeps-a-body-indented-by-more-than-one-level ()
+  ;; A block body takes its level from its own first line, so a four-column
+  ;; body under a two-column header is well-formatted and must survive.
+  (let ((text (concat "program def main() -> unit =\n"
+                      "  case mode of\n"
+                      "    | 1 =>\n"
+                      "        let empty = \"\"\n"
+                      "        print(empty)\n")))
+    (should (equal (agl-ind--reindented text) text))))
+
+(ert-deftest agl-ind-region-keeps-else-aligned-with-its-if ()
+  ;; Moving only one of the two would leave the `else' orphaned, which is the
+  ;; damage a level model derived arithmetically from the offset does.
+  (let ((text (concat "program def main() -> unit =\n"
+                      "  case first of\n"
+                      "    | Failed(reason) =>\n"
+                      "        if fatal => print reason\n"
+                      "        else => print reason\n")))
+    (should (equal (agl-ind--reindented text) text))))
+
+(ert-deftest agl-ind-region-still-corrects-an-illegal-column ()
+  ;; Leniency about deeper bodies must not become leniency about a column that
+  ;; belongs to no enclosing block.
+  (should (equal (agl-ind--reindented "def f() -> int =\n  let a = 1\n let b = 2\n")
+                 "def f() -> int =\n  let a = 1\n  let b = 2\n")))
+
+(ert-deftest agl-ind-region-keeps-guard-markers-aligned-under-an-inline-marker ()
+  ;; The markers of an inline guard line up under the first one, which sits
+  ;; wherever `if | \=' put it rather than at a multiple of the offset.
+  (let ((text (concat "def classify(v: int) -> text =\n"
+                      "  if | v < 1 => \"below\"\n"
+                      "     | v > 9 => \"above\"\n"
+                      "     | else => \"inside\"\n")))
+    (should (equal (agl-ind--reindented text) text))))
+
+(ert-deftest agl-ind-region-keeps-a-guard-marker-at-its-own-column ()
+  ;; Any column deeper than the header opens the branch, so a continuation
+  ;; marker that does not line up with the inline one is still well-formed.
+  (let ((text (concat "def banner() -> text =\n"
+                      "  if | decorate => \"a\"\n"
+                      "    | else => \"b\"\n")))
+    (should (equal (agl-ind--reindented text) text))))
+
 ;; --- Verbatim regions are never re-indented ---
 
 (ert-deftest agl-ind-raw-tail-payload-is-untouched ()

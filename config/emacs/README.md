@@ -75,7 +75,11 @@ the directory directly:
   classified lexically.
 - Indentation offers the levels a line could legally take rather than
   guessing one: `TAB` cycles through them, and `indent-region` leaves a
-  line that already sits at a valid level.
+  line that already sits at a valid level. The levels are the columns
+  enclosing lines actually sit at, not multiples of
+  `agl-indent-offset` — a body or a `|` branch takes its column from the
+  line that starts it, so a wider body and guard markers aligned under
+  an inline `if | …` both survive a region re-indent.
 
 ## Tests
 

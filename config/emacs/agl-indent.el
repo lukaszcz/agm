@@ -269,25 +269,64 @@ it is a declaration or compound-statement header with no inline body."
                 (+ previous agl-indent-offset)
               previous))))))))
 
+(defun agl--enclosing-levels ()
+  "Return the columns of the blocks enclosing the current line, deepest first.
+
+These are the strictly decreasing indentations of the preceding code
+lines: each is a column some enclosing line actually sits at, which is
+what makes it a column this line may legally return to.  A layout
+language takes each body\='s level from that body\='s first line, so a body
+may be indented by more than `agl-indent-offset\=' and the enclosing
+levels cannot be derived arithmetically from it."
+  (save-excursion
+    (beginning-of-line)
+    (let ((levels nil)
+          (deepest nil))
+      (while (and (or (null deepest) (> deepest 0))
+                  (agl--goto-previous-code-line))
+        (let ((column (current-indentation)))
+          (when (or (null deepest) (< column deepest))
+            (setq deepest column)
+            (push column levels))))
+      (nreverse levels))))
+
 (defun agl--indent-levels ()
   "Return the candidate indentation columns for the current line.
 
 The computed target comes first, then each enclosing level down to
 column zero: an indentation-sensitive language cannot know which level a
 line belongs to once a block has ended, so TAB offers them in turn."
-  (let* ((target (agl-calculate-indent))
-         (levels (list target))
-         (previous
-          (save-excursion
-            (beginning-of-line)
-            (when (agl--goto-previous-code-line) (current-indentation)))))
-    (when previous
-      (let ((level previous))
-        (while (> level 0)
-          (unless (memq level levels) (setq levels (append levels (list level))))
-          (setq level (max 0 (- level agl-indent-offset))))))
+  (let ((levels (list (agl-calculate-indent))))
+    (dolist (level (agl--enclosing-levels))
+      (unless (memq level levels) (setq levels (append levels (list level)))))
     (unless (memq 0 levels) (setq levels (append levels (list 0))))
     levels))
+
+(defun agl--indentation-settled-p ()
+  "Return non-nil when the current line\='s indentation is already legal.
+
+A line may sit at any enclosing level (`agl--indent-levels\='), and a line
+that starts a nested body may sit at any column deeper than that body\='s
+header: the first line is what chooses the level, so re-indenting it to
+the one computed target would rewrite well-formatted source.  That holds
+for a block body and equally for a `|\=' branch, whose markers commonly
+align under an inline first marker (`if | a => x\=').  The terminators
+`else\=', `catch\=', `until\=' and `done\=' continue the construct itself rather
+than opening a body, so they stay subject to the levels above."
+  (let ((column (current-indentation)))
+    (or (memq column (agl--indent-levels))
+        (save-excursion
+          (beginning-of-line)
+          (and (agl--goto-previous-code-line)
+               (not agl--crossed-verbatim-region)
+               (agl--opens-block-p)
+               (> column (current-indentation))))
+        (save-excursion
+          (beginning-of-line)
+          (and (agl--branch-marker-line-p)
+               (progn (skip-chars-forward " \t") (eq (char-after) ?|))
+               (let ((owner (agl--branch-owner)))
+                 (and owner (> column (car owner)))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Commands
@@ -341,18 +380,25 @@ on `match-data' surviving another call."
 
 A line whose indentation is already one of the valid levels is left
 alone.  Significant indentation means a line that ends a block has
-several legal columns, so re-indenting every line to one computed target
-would rewrite well-formatted source; `agl-indent-line' still applies
-that target when the user asks for it on a single line."
-  (save-excursion
-    (goto-char start)
-    (beginning-of-line)
-    (while (< (point) end)
-      (unless (or (agl--opaque-line-p) (agl--line-empty-p))
-        (let ((levels (agl--indent-levels)))
-          (unless (memq (current-indentation) levels)
-            (indent-line-to (car levels)))))
-      (forward-line 1))))
+several legal columns, and a block body may be indented by more than one
+level, so re-indenting every line to one computed target would rewrite
+well-formatted source; `agl-indent-line' still applies that target when
+the user asks for it on a single line.
+
+END is tracked with a marker because re-indenting a line changes how
+long it is: shortening one moves every later position, and a fixed END
+would then sit past the end of the buffer, leaving the walk unable to
+reach it."
+  (let ((limit (copy-marker end)))
+    (save-excursion
+      (goto-char start)
+      (beginning-of-line)
+      (while (< (point) limit)
+        (unless (or (agl--opaque-line-p) (agl--line-empty-p)
+                    (agl--indentation-settled-p))
+          (indent-line-to (agl-calculate-indent)))
+        (forward-line 1)))
+    (set-marker limit nil)))
 
 (provide 'agl-indent)
 ;;; agl-indent.el ends here

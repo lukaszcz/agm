@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "unlink_head",
+      "params": {"seed": 10, "target": "head"},
+      "expect": {"stdout": "11\ntrue\n13\n"}
+    },
+    {
+      "name": "unlink_middle",
+      "params": {"seed": 20, "target": "middle"},
+      "expect": {"stdout": "21\n23\n21\n"}
+    },
+    {
+      "name": "unlink_tail",
+      "params": {"seed": 30, "target": "tail"},
+      "expect": {"stdout": "31\ntrue\n32\n"}
+    }
+  ]
+}

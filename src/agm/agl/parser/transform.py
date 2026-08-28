@@ -731,7 +731,7 @@ class AstBuilder(Transformer):
         )
 
     def builtin_var_def(self, meta: Meta, args: _Args) -> syntax.BuiltinVarDecl:
-        """builtin_var_def: "builtin" _NEWLINE? "var" name type_ann (EQ expr)?"""
+        """builtin_var_def: "builtin" _NEWLINE? VAR name type_ann (EQ expr)?"""
         name_tok = _find_name_token(args)
         type_expr = _find_type_expr(args[1:])
         default = cast(
@@ -868,13 +868,12 @@ class AstBuilder(Transformer):
     record_inline_body = record_paren_body
 
     def field_def(self, meta: Meta, args: _Args) -> syntax.Param:
-        # Grammar: field_name COLON type_expr
+        # Grammar: VAR? field_name COLON type_expr
         # Build with a provisional STANDARD kind; the owner builder
         # (record_indent_body, record_paren_body, variant_payload, exception bodies)
         # reassigns the kind via _resolve_params().
-        name_tok = args[0]
-        assert isinstance(name_tok, Token)
-        type_expr = _find_type_expr(args[1:])
+        name_tok = _find_name_token(args)
+        type_expr = _find_type_expr(args)
         return syntax.Param(
             name=str(name_tok),
             type_expr=type_expr,
@@ -882,6 +881,7 @@ class AstBuilder(Transformer):
             default=None,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
+            mutable=any(isinstance(arg, Token) and arg.type == "VAR" for arg in args),
         )
 
     # ------------------------------------------------------------------
@@ -983,7 +983,7 @@ class AstBuilder(Transformer):
         # Return the raw interleaving; zone resolution happens in the owning builder.
         return tuple(a for a in args if isinstance(a, (syntax.Param, _ParamMarker)))
 
-    # Grammar: field_name COLON type_expr — identical shape to ``field_def``.
+    # Grammar: VAR? field_name COLON type_expr — identical shape to ``field_def``.
     field_inline = field_def
 
     # ------------------------------------------------------------------
@@ -1238,7 +1238,7 @@ class AstBuilder(Transformer):
         )
 
     def var_decl(self, meta: Meta, args: _Args) -> syntax.VarDecl:
-        """var_decl: "var" decl_head type_ann? EQ expr"""
+        """var_decl: VAR decl_head type_ann? EQ expr"""
         name, scope_path = self._declaration_head(args)
         ann, value = _extract_ann_and_value(args[1:])
         span = self._span_from_meta(meta)
@@ -1273,9 +1273,16 @@ class AstBuilder(Transformer):
                 span=lhs.span,
                 node_id=self._next_id(),
             )
+        elif isinstance(lhs, syntax.FieldAccess):
+            target = syntax.FieldTarget(
+                obj=lhs.obj,
+                field=lhs.field,
+                span=lhs.span,
+                node_id=self._next_id(),
+            )
         else:
             raise AglSyntaxError(
-                "assignment target must be a variable or an indexed expression.",
+                "assignment target must be a variable, indexed expression, or field.",
                 span=lhs.span,
             )
         span = self._span_from_meta(meta)
@@ -3853,6 +3860,8 @@ def _rewrite_assign_target(
             obj=_rewrite_expr(target.obj, table, builder),
             index=_rewrite_expr(target.index, table, builder),
         )
+    if isinstance(target, syntax.FieldTarget):
+        return replace(target, obj=_rewrite_expr(target.obj, table, builder))
     return target
 
 

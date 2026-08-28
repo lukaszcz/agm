@@ -1440,6 +1440,30 @@ class TestRenderValue:
         assert out == 'Abort(message = "fatal")'
         assert "<dsl-value" not in out
 
+    def test_record_and_exception_cycles_raise_the_walk_sentinel(self) -> None:
+        from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.cycles import AglCyclicValue
+        from agm.agl.semantics.values import ExceptionValue, RecordValue
+
+        record = RecordValue(NominalId(1), "Node", {})
+        record.fields["next"] = record
+        exception = ExceptionValue(NominalId(2), "Problem", {})
+        exception.fields["cause"] = exception
+
+        with pytest.raises(AglCyclicValue):
+            render_value(record)
+        with pytest.raises(AglCyclicValue):
+            render_value(exception)
+
+    def test_record_diamond_renders_each_shared_child(self) -> None:
+        from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import IntValue, RecordValue
+
+        shared = RecordValue(NominalId(1), "Leaf", {"value": IntValue(1)})
+        pair = RecordValue(NominalId(2), "Pair", {"left": shared, "right": shared})
+
+        assert render_value(pair) == "Pair(left = Leaf(value = 1), right = Leaf(value = 1))"
+
     # ------------------------------------------------------------------
     # Nested text escaping including % → \%
     # ------------------------------------------------------------------
@@ -1678,6 +1702,30 @@ class TestSerialize:
             )
         )
         assert result == {"message": "oops"}
+
+    def test_record_and_exception_cycles_raise_the_walk_sentinel(self) -> None:
+        from agm.agl.runtime.serialize import value_to_json_obj
+        from agm.agl.semantics.cycles import AglCyclicValue
+        from agm.agl.semantics.values import ExceptionValue, RecordValue
+
+        record = RecordValue(NominalId(1), "Node", {})
+        record.fields["next"] = record
+        exception = ExceptionValue(NominalId(2), "Problem", {})
+        exception.fields["cause"] = exception
+
+        with pytest.raises(AglCyclicValue):
+            value_to_json_obj(record)
+        with pytest.raises(AglCyclicValue):
+            value_to_json_obj(exception)
+
+    def test_record_diamond_serializes_each_shared_child(self) -> None:
+        from agm.agl.runtime.serialize import value_to_json_obj
+        from agm.agl.semantics.values import IntValue, RecordValue
+
+        shared = RecordValue(NominalId(1), "Leaf", {"value": IntValue(1)})
+        pair = RecordValue(NominalId(2), "Pair", {"left": shared, "right": shared})
+
+        assert value_to_json_obj(pair) == {"left": {"value": 1}, "right": {"value": 1}}
 
     def test_dumps_exact_bool_true(self) -> None:
         from agm.agl.runtime.serialize import dumps_exact
@@ -1967,6 +2015,8 @@ class TestRuntimeErrorPaths:
             TextValue,
         )
 
+        cyclic_record = RecordValue(nominal=NominalId(5), display_name="Node", fields={})
+        cyclic_record.fields["next"] = cyclic_record
         exc_val = ExceptionValue(
             nominal=NominalId(1),
             display_name="AgentParseError",
@@ -1989,6 +2039,7 @@ class TestRuntimeErrorPaths:
                 "enum_val": RecordValue(
                     nominal=NominalId(3), display_name=f"{'E'}::{'V'}", fields={}
                 ),
+                "cyclic_record": cyclic_record,
                 "exc_val": ExceptionValue(nominal=NominalId(4), display_name="Inner", fields={}),
                 "none_val": JsonValue(None),
             },
@@ -2006,6 +2057,7 @@ class TestRuntimeErrorPaths:
         assert error.fields["dict_val"] == {"x": 2}
         assert error.fields["rec_val"] == {"f": "v"}
         assert error.fields["enum_val"] == {}
+        assert error.fields["cyclic_record"] == "<cyclic value>"
         assert isinstance(error.fields["exc_val"], dict)
 
     def test_convert_param_value_json_type_accepts_any(self) -> None:

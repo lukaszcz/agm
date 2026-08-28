@@ -160,6 +160,9 @@ class TypeDef:
                   the base chain (see :meth:`TypeTable.exception_fields`).
     ``members`` — record type templates for enums (empty for
                   records/exceptions).
+    ``mutable_fields`` — names of the ``var`` fields a record declares (a
+                  subset of ``fields``); always empty for enums and
+                  exceptions, neither of which admits a mutable field.
     ``abstract`` — exception metadata: ``True`` for the hierarchy root
                    (catchable but not constructible); unused for
                    records/enums.
@@ -206,6 +209,7 @@ class TypeDef:
     scope_path: tuple[str, ...] = ()
     type_params: tuple[str, ...] = ()
     fields: tuple[tuple[str, Type], ...] = ()
+    mutable_fields: frozenset[str] = frozenset()
     members: tuple[RecordType, ...] = ()
     abstract: bool = False
     base: DeclId | None = None
@@ -604,20 +608,37 @@ class TypeTable:
             cached = bucket.get(handle)
             if cached is not None:
                 return cached
-        typedef = self._defs.get(decl_id)
-        if typedef is None:
-            raise KeyError(f"no TypeDef registered for record {handle!r}")
-        if typedef.kind != "record":
-            raise AssertionError(
-                f"record_fields called for {handle!r}, which is registered as kind "
-                f"{typedef.kind!r}, not 'record'"
-            )
+        typedef = self._require_record_def(handle, caller="record_fields")
         subst = dict(zip(typedef.type_params, handle.type_args))
         result: Mapping[str, Type] = {
             fname: substitute(ftype, subst) for fname, ftype in typedef.fields
         }
         self._record_fields_cache.setdefault(decl_id, {})[handle] = result
         return result
+
+    def record_mutable_fields(self, handle: RecordType) -> frozenset[str]:
+        """Return the names of *handle*'s ``var`` fields.
+
+        Mutability is declared, so it is neither substituted into nor varied
+        by a handle's ``type_args``: every handle for one declaration reads
+        the same set straight off its ``TypeDef``, and there is nothing per
+        handle to memoize (unlike :meth:`record_fields`).
+
+        Raises the same errors as :meth:`record_fields` for an unregistered
+        or non-record handle.
+        """
+        return self._require_record_def(handle, caller="record_mutable_fields").mutable_fields
+
+    def _require_record_def(self, handle: RecordType, *, caller: str) -> TypeDef:
+        typedef = self._defs.get(handle.decl_id)
+        if typedef is None:
+            raise KeyError(f"no TypeDef registered for record {handle!r}")
+        if typedef.kind != "record":
+            raise AssertionError(
+                f"{caller} called for {handle!r}, which is registered as kind "
+                f"{typedef.kind!r}, not 'record'"
+            )
+        return typedef
 
     def enum_members(self, handle: EnumType) -> tuple[RecordType, ...]:
         """Return *handle*'s member record types with ``type_args`` substituted in.

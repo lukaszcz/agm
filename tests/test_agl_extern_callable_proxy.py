@@ -30,7 +30,6 @@ def _proxy(window: ExternCallWindow) -> AglCallableProxy:
         closure=IrClosureValue(FunctionId(1), ()),
         require_active_window=window.require_active,
         invoke=invoke,
-        encode=encode_boundary_value,
     )
 
 

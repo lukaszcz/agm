@@ -16,7 +16,7 @@ import importlib.util
 import sys
 import threading
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
 from types import ModuleType
 from typing import Protocol, cast
@@ -33,6 +33,7 @@ from agm.agl.runtime.boundary import (
     AglJson,
     BoundaryTypeError,
     BoundaryViolation,
+    active_function_encoder,
     decode_boundary_value,
     encode_boundary_value,
     synthesize_nominal_classes,
@@ -41,6 +42,7 @@ from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
 from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
 from agm.agl.semantics.values import ArrayValue, DictValue, IrClosureValue, TextValue, Value
+from agm.util.scoping import ScopedVar
 
 # These companion module attributes are APIs, never synthesized nominal aliases.
 _COMPANION_API_NAMES = frozenset({"AglException", "array", "dict", "json", "nominals", "runtime"})
@@ -74,17 +76,12 @@ class _CompanionRuntime:
         # and tools, but evaluation always supplies its interpreter-owned state.
         self._detached_state = ExternRuntimeState()
 
-    @contextmanager
-    def activate(self, state: ExternRuntimeState | None) -> Iterator[None]:
+    def activate(self, state: ExternRuntimeState | None) -> AbstractContextManager[None]:
         """Make *state* visible to a companion for the dynamic call extent."""
         if state is None:
-            yield
-            return
-        token = self._active_state.set(state)
-        try:
-            yield
-        finally:
-            self._active_state.reset(token)
+            # Absent evaluator state must not shadow an enclosing activation.
+            return nullcontext()
+        return ScopedVar(self._active_state, state)
 
     def state(self, key: str, factory: Callable[[], object]) -> object:
         """Get companion-local state scoped to the active interpreter call."""
@@ -206,7 +203,7 @@ class AglCallableProxy:
     Python argument/result conversion and the invocation-window guard.
     """
 
-    __slots__ = ("_arity", "_closure", "_require_active_window", "_invoke", "_encode")
+    __slots__ = ("_arity", "_closure", "_require_active_window", "_invoke")
 
     def __init__(
         self,
@@ -215,13 +212,11 @@ class AglCallableProxy:
         closure: IrClosureValue,
         require_active_window: Callable[[], None],
         invoke: _ClosureInvoker,
-        encode: Callable[[Value], object],
     ) -> None:
         self._arity = arity
         self._closure = closure
         self._require_active_window = require_active_window
         self._invoke = invoke
-        self._encode = encode
 
     def __call__(self, *args: object) -> object:
         self._require_active_window()
@@ -234,7 +229,7 @@ class AglCallableProxy:
         except BoundaryViolation as exc:
             raise BoundaryTypeError(str(exc)) from exc
         try:
-            return self._encode(self._invoke(values))
+            return encode_boundary_value(self._invoke(values))
         except AglRaise as exc:
             raise AglException(exc.exc) from exc
 
@@ -454,59 +449,68 @@ class ExternRegistry:
         runs, or while this builds an ``ExternError`` message from an
         exception *fn* raised -- raises ``AglCyclicValue``, which becomes
         ``CyclicValueError`` instead. Retained views remain live after the
-        call.
+        call, except for reads of a function-valued field or element, which
+        need the encoder this call publishes.
 
         *nominals* resolves the ``ExternError``/``CyclicValueError`` nominal;
         it defaults to the shipped standard library's own identities for a
         caller (e.g. a direct unit test) that invokes without a program.
         *runtime_state* is the evaluator-owned companion state activated for
         this call; absent direct callers use detached host state instead.
+        *function_encoder* turns an AgL closure into a callable proxy and is
+        published for the call's extent, so every closure a companion reaches
+        -- through an argument, a retained view, or a nested container --
+        encodes through the interpreter it is running under. Like the
+        companion runtime state activated here, it is scoped to this call's
+        context: a thread the companion spawns sees it only if it runs in a
+        copy of that context.
         """
-        try:
-            encoded_args = [encode_boundary_value(arg, function_encoder) for arg in args]
-        except BoundaryViolation as exc:
-            raise _extern_error(
-                function_name,
-                f"argument cannot cross the boundary: {exc}",
-                python_type="",
-                nominals=nominals,
-            ) from exc
-
-        try:
-            with _COMPANION_RUNTIME.activate(runtime_state), decimal.localcontext():
-                result = fn(*encoded_args)
-        except AglException as exc:
-            raise AglRaise(exc.value) from exc
-        except AglCyclicValue as exc:
-            raise cyclic_value_raise(nominals=nominals) from exc
-        except Exception as exc:
+        with active_function_encoder(function_encoder):
             try:
-                message = str(exc) or type(exc).__name__
-            except AglCyclicValue as cyclic_exc:
-                raise cyclic_value_raise(nominals=nominals) from cyclic_exc
-            raise _extern_error(
-                function_name,
-                message,
-                python_type=type(exc).__name__,
-                nominals=nominals,
-            ) from exc
+                encoded_args = [encode_boundary_value(arg) for arg in args]
+            except BoundaryViolation as exc:
+                raise _extern_error(
+                    function_name,
+                    f"argument cannot cross the boundary: {exc}",
+                    python_type="",
+                    nominals=nominals,
+                ) from exc
 
-        try:
-            return decode_boundary_value(result)
-        except BoundaryViolation as exc:
-            raise _extern_error(
-                function_name,
-                f"return value cannot cross the boundary: {exc}",
-                python_type="",
-                nominals=nominals,
-            ) from exc
-        except Exception as exc:
-            raise _extern_error(
-                function_name,
-                f"return value validation failed: {exc}",
-                python_type=type(exc).__name__,
-                nominals=nominals,
-            ) from exc
+            try:
+                with _COMPANION_RUNTIME.activate(runtime_state), decimal.localcontext():
+                    result = fn(*encoded_args)
+            except AglException as exc:
+                raise AglRaise(exc.value) from exc
+            except AglCyclicValue as exc:
+                raise cyclic_value_raise(nominals=nominals) from exc
+            except Exception as exc:
+                try:
+                    message = str(exc) or type(exc).__name__
+                except AglCyclicValue as cyclic_exc:
+                    raise cyclic_value_raise(nominals=nominals) from cyclic_exc
+                raise _extern_error(
+                    function_name,
+                    message,
+                    python_type=type(exc).__name__,
+                    nominals=nominals,
+                ) from exc
+
+            try:
+                return decode_boundary_value(result)
+            except BoundaryViolation as exc:
+                raise _extern_error(
+                    function_name,
+                    f"return value cannot cross the boundary: {exc}",
+                    python_type="",
+                    nominals=nominals,
+                ) from exc
+            except Exception as exc:
+                raise _extern_error(
+                    function_name,
+                    f"return value validation failed: {exc}",
+                    python_type=type(exc).__name__,
+                    nominals=nominals,
+                ) from exc
 
 
 def _nominal_identity_path(descriptor: NominalDescriptor) -> tuple[str, ...]:

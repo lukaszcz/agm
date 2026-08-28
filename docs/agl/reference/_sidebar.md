@@ -2,7 +2,7 @@
 - [Program structure](program-structure.md)
 - [Modules](modules.md)
 - [Named scopes](scopes.md)
-- [Types](types.md)
+- [Types and values](types.md)
 - [Bindings and scope](bindings-and-scope.md)
 - [Expressions](expressions.md)
 - [Functions](functions.md)

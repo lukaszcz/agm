@@ -43,6 +43,10 @@ def test_session_statics_type_as_session_with_defaults_and_named_arguments() -> 
         "  transport = Option[SessionTransport]::Some(SessionTransport::Rpc),\n"
         '  name = "rpc",\n'
         ")\n"
+        "let member_transport = Session::open(\n"
+        "  agent,\n"
+        "  transport = Option[SessionTransport::Rpc]::Some(SessionTransport::Rpc),\n"
+        ")\n"
         "let default_session = Session::default()"
     )
 
@@ -54,7 +58,7 @@ def test_session_statics_type_as_session_with_defaults_and_named_arguments() -> 
     session = checked.type_env.type_table.builtin_declaration("Session")
     assert session is not None
     session_calls = [call for call in calls if checked.node_types[call.node_id] == session.handle()]
-    assert len(session_calls) == 4
+    assert len(session_calls) == 5
 
 
 @pytest.mark.parametrize(

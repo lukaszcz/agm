@@ -556,6 +556,47 @@ def test_golden_template_lowers_to_ir_render_template() -> None:
     assert found, "Expected IrBind(value=IrRenderTemplate) in initializers"
 
 
+def test_golden_field_assign_lowers_to_ir_field_set() -> None:
+    """Field assignment lowers to an exact nominal mutable-field store."""
+    from agm.agl.ir.nodes import IrFieldSet, IrLoad
+
+    source = """\
+record Point(var x: int)
+let point = Point(x = 1)
+point.x := 2
+()
+"""
+    prog = _lower(source)
+    nominal = next(
+        nominal for nominal, desc in prog.nominals.items() if desc.display_name == "Point"
+    )
+    stores = [node for node in inline_main_items(prog) if isinstance(node, IrFieldSet)]
+    assert len(stores) == 1
+    store = stores[0]
+    assert isinstance(store.value, IrLoad)
+    assert store.nominal == nominal
+    assert store.field == "x"
+
+
+def test_golden_field_assign_coerces_rhs_to_declared_field_type() -> None:
+    """A field store lowers its replacement against the selected field type."""
+    from agm.agl import ir
+    from agm.agl.ir.nodes import IrCoerce, IrFieldSet
+
+    prog = _lower(
+        """\
+record Point(var x: decimal)
+let point = Point(x = 1.0)
+point.x := 2
+()
+"""
+    )
+    stores = [node for node in inline_main_items(prog) if isinstance(node, IrFieldSet)]
+    assert len(stores) == 1
+    assert isinstance(stores[0].new, IrCoerce)
+    assert isinstance(stores[0].new.operation, ir.IntToDecimal)
+
+
 def test_golden_indexed_assign_lowers_to_ir_index_set() -> None:
     """Indexed assignment lowers to IrIndexSet with a container reference."""
     from agm.agl.ir.nodes import IrIndexSet, IrLoad

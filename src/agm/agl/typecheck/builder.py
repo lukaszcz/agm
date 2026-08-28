@@ -46,7 +46,7 @@ to anchor a cycle — by the existing alias-cycle check in
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
 from typing import cast
 
@@ -120,6 +120,11 @@ def _decl_identity(
     is loaded.
     """
     return source_nominal_decl_id(module_id, scope_path, bare_name, node_id)
+
+
+def _mutable_field_names(fields: Sequence[Param]) -> frozenset[str]:
+    """Return the names of the ``var`` fields among a declaration's *fields*."""
+    return frozenset(field.name for field in fields if field.mutable)
 
 
 def _bare_name(name: str) -> str:
@@ -518,6 +523,7 @@ class _TypeBuilder:
             module_id=module_id,
             scope_path=scope_path,
             fields=tuple(fields.items()),
+            mutable_fields=_mutable_field_names(stmt.fields),
             is_builtin=stmt.is_builtin,
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
         )
@@ -611,6 +617,7 @@ class _TypeBuilder:
                 scope_path=member_scope_path,
                 type_params=captured_params,
                 fields=tuple(fields.items()),
+                mutable_fields=_mutable_field_names(vd.fields),
                 decl_node_id=decl_id,
                 is_inline_enum_member=True,
             )
@@ -693,6 +700,11 @@ class _TypeBuilder:
         fields: dict[str, Type] = {}
         seen_fields: dict[str, SourceSpan] = {}
         for fd in stmt.fields:
+            if fd.mutable:
+                raise AglTypeError(
+                    f"Exception field '{fd.name}' in '{stmt.name}' cannot be mutable.",
+                    span=fd.span,
+                )
             if fd.name in seen_fields:
                 raise AglTypeError(
                     f"Duplicate field '{fd.name}' in exception '{stmt.name}'.",
@@ -876,6 +888,7 @@ class _TypeBuilder:
             scope_path=scope_path,
             type_params=type_params,
             fields=tuple(fields.items()),
+            mutable_fields=_mutable_field_names(stmt.fields),
             is_builtin=stmt.is_builtin,
             # Same identity as the handle template registered in phase 1
             # (:meth:`_register_record_or_enum_handle`), so the TypeDef and

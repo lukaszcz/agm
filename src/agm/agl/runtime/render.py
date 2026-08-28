@@ -17,7 +17,7 @@ already, so rendering walks ``value.fields`` directly.
 from __future__ import annotations
 
 from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
-from agm.agl.semantics.cycles import enter_container
+from agm.agl.semantics.cycles import enter_value
 from agm.agl.semantics.text_literal import quote_text
 from agm.agl.semantics.values import (
     ArrayValue,
@@ -156,7 +156,7 @@ def _render(
         return _shift_after_first(rendered, level=level) if pretty else rendered
 
     if isinstance(value, ArrayValue):
-        active = enter_container(id(value), active)
+        active = enter_value(id(value), active)
         try:
             items = [
                 _render_child(element, pretty=pretty, level=level + 1, active=active)
@@ -167,7 +167,7 @@ def _render(
         return _render_sequence("[", "]", items, level=level, pretty=pretty)
 
     if isinstance(value, DictValue):
-        active = enter_container(id(value), active)
+        active = enter_value(id(value), active)
         try:
             items = [
                 f"{quote_text(key)}: "
@@ -178,25 +178,24 @@ def _render(
             active.discard(id(value))
         return _render_sequence("{", "}", items, level=level, pretty=pretty)
 
-    if isinstance(value, RecordValue):
+    if isinstance(value, (RecordValue, ExceptionValue)):
         # A nullary constructor is an auto-value, so a fieldless record's bare
         # spelling round-trips as written: every fieldless record renders bare,
         # whether it is an enum member (`E::A`) or a standalone record (`Root`).
+        # A fieldless exception keeps its parens, and neither can be part of a
+        # cycle, so both answer before the guard is entered.
         if not value.fields:
-            return value.display_name
-        items = [
-            f"{name} = {_render_child(child, pretty=pretty, level=level + 1, active=active)}"
-            for name, child in value.fields.items()
-        ]
-        return _render_sequence(f"{value.display_name}(", ")", items, level=level, pretty=pretty)
-
-    if isinstance(value, ExceptionValue):
-        if not value.fields:
-            return f"{value.display_name}()"
-        items = [
-            f"{name} = {_render_child(child, pretty=pretty, level=level + 1, active=active)}"
-            for name, child in value.fields.items()
-        ]
+            return (
+                value.display_name if isinstance(value, RecordValue) else f"{value.display_name}()"
+            )
+        active = enter_value(id(value), active)
+        try:
+            items = [
+                f"{name} = {_render_child(child, pretty=pretty, level=level + 1, active=active)}"
+                for name, child in value.fields.items()
+            ]
+        finally:
+            active.discard(id(value))
         return _render_sequence(f"{value.display_name}(", ")", items, level=level, pretty=pretty)
 
     raise RuntimeError(f"render: unhandled value type {type(value).__name__}")  # pragma: no cover

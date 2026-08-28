@@ -230,6 +230,52 @@ class TestValueDirectedBoundary:
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
         assert result["result"] == IntValue(2)
 
+    def test_function_field_in_mutable_record_crosses_as_callable(self, tmp_path: Path) -> None:
+        source = (
+            "record Box\n  var callback: (int) -> int\n"
+            "extern def apply(box: Box) -> int\n"
+            "let result = apply(Box(callback = fn(value: int) -> int => value + 1))\n"
+            "result\n"
+        )
+        companion = "def apply(box): return box.callback(2)\n"
+
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+
+        assert result["result"] == IntValue(3)
+
+    def test_companion_constructed_and_updated_function_fields_remain_callable(
+        self, tmp_path: Path
+    ) -> None:
+        source = (
+            "record Box\n"
+            "  var callback: (int) -> int\n"
+            "extern def build_and_apply(callback: (int) -> int) -> int\n"
+            "extern def build_update_and_apply(first: (int) -> int, second: (int) -> int) -> int\n"
+            "extern def update_and_apply(box: Box, callback: (int) -> int) -> int\n"
+            "let increment = fn(value: int) -> int => value + 1\n"
+            "let doubled = fn(value: int) -> int => value * 2\n"
+            "let built = build_and_apply(increment)\n"
+            "let updated = build_update_and_apply(increment, doubled)\n"
+            "let incoming_updated = update_and_apply(Box(callback = increment), doubled)\n"
+        )
+        companion = (
+            "from agl import Box\n"
+            "def build_and_apply(callback): return Box(callback=callback).callback(2)\n"
+            "def build_update_and_apply(first, second):\n"
+            "    box = Box(callback=first)\n"
+            "    box.callback = second\n"
+            "    return box.callback(2)\n"
+            "def update_and_apply(box, callback):\n"
+            "    box.callback = callback\n"
+            "    return box.callback(2)\n"
+        )
+
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+
+        assert result["built"] == IntValue(3)
+        assert result["updated"] == IntValue(4)
+        assert result["incoming_updated"] == IntValue(4)
+
     def test_companion_exception_message_over_a_cyclic_argument_raises_cyclic_value_error(
         self, tmp_path: Path
     ) -> None:
@@ -248,6 +294,26 @@ class TestValueDirectedBoundary:
         )
         companion = "def boom(xs): raise ValueError(xs)\n"
         _, stdout = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert stdout == "caught: value contains a reference cycle\n"
+
+    def test_repr_of_a_cyclic_mutable_record_view_raises_cyclic_value_error(
+        self, tmp_path: Path
+    ) -> None:
+        source = (
+            "record Node(var children: array[Node])\n"
+            "extern def show(node: Node) -> unit\n"
+            "var node = Node(children = [])\n"
+            "node.children := [node]\n"
+            "try\n"
+            "  let _ = show(node)\n"
+            '  print "unreached"\n'
+            "catch CyclicValueError as e =>\n"
+            '  print "caught: %{e.message}"\n'
+        )
+        companion = "def show(node): repr(node)\n"
+
+        _, stdout = evaluate_ir_with_externs(source, companion, tmp_path)
+
         assert stdout == "caught: value contains a reference cycle\n"
 
 

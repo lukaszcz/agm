@@ -1,13 +1,12 @@
-"""Cycle detection shared by the AgL container walkers.
+"""Cycle detection shared by the AgL structured-value walkers.
 
-Reference semantics makes cyclic ``array``/``dict`` values constructible: an
-array or dict can hold a reference back to a container that (transitively)
-contains it. Every walker that recurses through a value's containers —
-rendering and JSON serialization — must detect that re-entry rather than
-recursing forever. A cycle can only ever be closed through an array or a
-dict: records, enums, and exceptions are immutable, so none of them can hold
-a reference to itself. Tracking container identity is therefore enough; no
-other value kind ever needs to join the active set.
+Reference semantics makes cyclic ``array``/``dict`` and record values
+constructible: an array, dict, or mutable record field can hold a reference
+back to a structured value that (transitively) contains it. Every walker that
+recurses through structured values — rendering and JSON serialization — must
+detect that re-entry rather than recursing forever. Arrays, dicts, records,
+enum members, and exceptions therefore join the active set; scalar values
+never need to join it.
 
 The FFI encoder does not walk array or dict payloads: it produces lazy views,
 so cyclic arguments cross the boundary. A companion that ``repr``s such a
@@ -30,7 +29,7 @@ __all__ = [
     "CYCLIC_VALUE_MARKER",
     "AglCyclicValue",
     "cyclic_value_raise",
-    "enter_container",
+    "enter_value",
 ]
 
 #: The single ``CyclicValueError`` message text, shared by every construction
@@ -45,33 +44,32 @@ CYCLIC_VALUE_MARKER = "<cyclic value>"
 
 
 class AglCyclicValue(Exception):
-    """Sentinel: a container walk re-entered a container already on its own path.
+    """Sentinel: a structured-value walk re-entered an active value.
 
-    Raised by :func:`enter_container` when rendering or JSON serialization
-    revisits a container it has not yet finished visiting. A caller that can
+    Raised by :func:`enter_value` when rendering or JSON serialization
+    revisits a value it has not yet finished visiting. A caller that can
     reach a cyclic value converts this into a catchable ``CyclicValueError``
     via :func:`cyclic_value_raise`.
     """
 
 
-def enter_container(container_id: int, active: "set[int] | None") -> "set[int]":
-    """Mark *container_id* active; raise :class:`AglCyclicValue` on re-entry.
+def enter_value(value_id: int, active: "set[int] | None") -> "set[int]":
+    """Mark *value_id* active; raise :class:`AglCyclicValue` on re-entry.
 
     Cheaper than a ``@contextmanager`` guard (an inline check plus explicit
     ``try``/``finally`` avoids the generator-based context-manager overhead).
-    *active* is allocated
-    lazily: every walker's entry point passes ``None``, so an acyclic value
-    with no containers never allocates a set — one is created only the first
-    time this is called. The returned set must be threaded into every further
-    recursive call so sibling and nested containers share the same active
-    path, and the caller must ``active.discard(container_id)`` in a
-    ``finally`` block once done walking *container_id*'s contents.
+    *active* is allocated lazily: every walker's entry point passes ``None``,
+    so an acyclic value with no structured values never allocates a set — one
+    is created only the first time this is called. The returned set must be
+    threaded into every further recursive call so sibling and nested values
+    share the same active path, and the caller must ``active.discard(value_id)``
+    in a ``finally`` block once done walking *value_id*'s children.
     """
     if active is None:
         active = set()
-    elif container_id in active:
+    elif value_id in active:
         raise AglCyclicValue()
-    active.add(container_id)
+    active.add(value_id)
     return active
 
 

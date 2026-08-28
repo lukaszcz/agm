@@ -55,7 +55,7 @@ def value_eq(left: Value, right: Value) -> bool:
     """Value equality with int↔decimal widening.
 
     Delegates the structural comparison to ``values_equal``, which is
-    cycle-safe and co-inductive, so ``==`` on a cyclic array or dict
+    cycle-safe and co-inductive, so ``==`` on a cyclic structured value
     terminates instead of recursing forever. The widening here only applies
     at this top level, never inside a container (unchanged from before).
     """

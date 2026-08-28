@@ -77,7 +77,12 @@ def _color_nominals() -> dict[NominalId, NominalDescriptor]:
         ),
         _PLAIN: NominalDescriptor(_PLAIN, ENTRY_ID, ("Color",), "Plain", NominalKind.RECORD),
         _WITH: NominalDescriptor(
-            _WITH, ENTRY_ID, ("Color",), "With", NominalKind.RECORD, ("value", "unused")
+            _WITH,
+            ENTRY_ID,
+            ("Color",),
+            "With",
+            NominalKind.RECORD,
+            ("value", "unused"),
         ),
     }
 
@@ -101,7 +106,12 @@ def test_validation_requires_enum_member_record() -> None:
 
     wrong_shape = _color_nominals()
     wrong_shape[_PLAIN] = NominalDescriptor(
-        _PLAIN, ENTRY_ID, ("Color",), "Plain", NominalKind.RECORD, ("unexpected",)
+        _PLAIN,
+        ENTRY_ID,
+        ("Color",),
+        "Plain",
+        NominalKind.RECORD,
+        ("unexpected",),
     )
     with pytest.raises(InvalidIrError, match="fields"):
         validate_ir(_program(enum_value, nominals=wrong_shape))

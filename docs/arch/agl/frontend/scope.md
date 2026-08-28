@@ -76,6 +76,9 @@ local path or imported routes so incremental hosts retain target identity
 without re-deriving it from syntax. It publishes resolved program artifacts
 rather than rewriting source nodes.
 
+`IndexTarget` and `FieldTarget` receiver expressions resolve as ordinary reads
+and introduce no binding; typecheck owns container, field, and mutability rules.
+
 ## Code Entry Points
 
 - `src/agm/agl/scope/` — whole-program resolution and resolution side tables.

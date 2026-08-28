@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "positive_increment",
+      "params": {"initial": 1, "amount": 4, "label": "done"},
+      "expect": {"stdout": "5\n5\ndone\ndone\n"}
+    },
+    {
+      "name": "negative_increment",
+      "params": {"initial": 10, "amount": -3, "label": "recounted"},
+      "expect": {"stdout": "7\n7\nrecounted\nrecounted\n"}
+    }
+  ]
+}

@@ -53,6 +53,7 @@ from agm.agl.syntax.nodes import (
     ExportDecl,
     ExportItem,
     FieldAccess,
+    FieldTarget,
     FuncDef,
     If,
     IfBranch,
@@ -200,6 +201,7 @@ class Visitor:
     def visit_AssignStmt(self, node: AssignStmt) -> None: ...
     def visit_NameTarget(self, node: NameTarget) -> None: ...
     def visit_IndexTarget(self, node: IndexTarget) -> None: ...
+    def visit_FieldTarget(self, node: FieldTarget) -> None: ...
 
     # Literal nodes
     def visit_UnitLit(self, node: UnitLit) -> None: ...
@@ -311,6 +313,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         AssignStmt,
         NameTarget,
         IndexTarget,
+        FieldTarget,
         # literal nodes
         UnitLit,
         IntLit,
@@ -548,6 +551,9 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, IndexTarget):
         walk(node.obj, callback)
         walk(node.index, callback)
+
+    elif isinstance(node, FieldTarget):
+        walk(node.obj, callback)
 
     # --- Literal nodes ---
     elif isinstance(node, (UnitLit, IntLit, DecimalLit, BoolLit, NullLit, StringLit)):

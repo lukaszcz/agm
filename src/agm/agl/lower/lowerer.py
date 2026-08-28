@@ -77,6 +77,7 @@ from agm.agl.ir.nodes import (
     IrExpr,
     IrField,
     IrFieldMode,
+    IrFieldSet,
     IrFunctionParam,
     IrIf,
     IrIfBranch,
@@ -221,6 +222,7 @@ from agm.agl.syntax.nodes import (
     ExportDecl,
     Expr,
     FieldAccess,
+    FieldTarget,
     FuncDef,
     If,
     IfBranch,
@@ -313,6 +315,7 @@ def _add_builtin_nominals(
                 declared_name=name,
                 kind=NominalKind.RECORD,
                 fields=tuple(type_table.record_fields(typ).keys()),
+                mutable_fields=type_table.record_mutable_fields(typ),
                 variants=(),
             )
             continue
@@ -750,11 +753,12 @@ class _Lowerer:
                     # never otherwise read (e.g. `x := 5`).
                     self._record_capture(node.node_id, local_ids, captured)
                 else:
-                    # An IndexTarget has no binding of its own -- its `obj`/
-                    # `index` are ordinary expressions, so scanning them finds
-                    # every capture the assignment needs.
+                    # A non-name target has no binding of its own. Its receiver
+                    # expression supplies its captures; indexed targets also
+                    # have an ordinary index expression.
                     self._scan_captures(node.target.obj, local_ids, captured)
-                    self._scan_captures(node.target.index, local_ids, captured)
+                    if isinstance(node.target, IndexTarget):
+                        self._scan_captures(node.target.index, local_ids, captured)
                 self._scan_captures(node.value, local_ids, captured)
             case Block():
                 for item in node.items:
@@ -3613,8 +3617,21 @@ class _Lowerer:
         rhs: Expr,
         span: SourceSpan,
         assign_node_id: int,
-    ) -> "IrAssign | IrIndexSet | IrBuiltinStore":
-        """Lower an assignment statement (simple name, indexed target, or builtin var)."""
+    ) -> "IrAssign | IrFieldSet | IrIndexSet | IrBuiltinStore":
+        """Lower an assignment statement to a binding, index, field, or builtin-var store."""
+        if isinstance(target, FieldTarget):
+            receiver_type = self._node_type(target.obj.node_id)
+            assert isinstance(receiver_type, RecordType), (
+                f"compiler bug: non-record type in field assignment: {receiver_type!r}"
+            )
+            return IrFieldSet(
+                location=self._loc(span),
+                value=self.lower_expr(target.obj),
+                nominal=NominalId(receiver_type.decl_id),
+                field=target.field,
+                new=self.lower_coerced(rhs, self._node_type(target.node_id)),
+            )
+
         if isinstance(target, IndexTarget):
             # An IndexTarget has no binding of its own -- under reference
             # semantics an indexed assignment needs no root symbol or Cell,

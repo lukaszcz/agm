@@ -330,10 +330,10 @@ def values_equal(a: Value, b: Value, _seen: "set[tuple[int, int]] | None" = None
     relation. This must never raise.
 
     Every structural kind extends ``_seen``, including the nominal ones.
-    Records and exceptions cannot be self-referential (their fields are fixed
-    at construction), so for them the entry is never needed to *terminate* —
-    but it is what keeps a shared subterm from being re-compared once per path
-    that reaches it.
+    Mutable record fields can close a cycle directly, so nominal pairs need
+    the same co-inductive entry as arrays and dicts to terminate. The monotone
+    memo also keeps a shared subterm from being re-compared once per path that
+    reaches it.
 
     Every other value kind (scalars, ``json``, agents, constructors,
     closures) falls through to its own ``__eq__`` unchanged — this function

@@ -88,9 +88,10 @@ than an extern signature.
 | `json` | `agl.json(value)` / `AglJson` |
 | `array[T]` | a mutable sequence view (`MutableSequence`) over the AgL array |
 | `dict[text, V]` | a mutable mapping view (`MutableMapping[str, object]`) over the AgL dict |
-| record | instance of its synthesized class |
-| enum value | instance of its member record's synthesized class |
+| record | snapshot instance, or a live view when its declaration has a `var` field |
+| enum value | instance of its member record's class, live when that member has a `var` field |
 | exception | instance of its synthesized class |
+| function | a callback proxy, valid only inside the invocation window |
 
 `bool` is considered before `int` on return because Python makes `bool` an
 `int` subclass while AgL does not. A bare Python `list` or `dict` is never an
@@ -119,15 +120,15 @@ def null_json():
 
 ## Nominal values
 
-Each program receives one synthesized class per nominal identity. Records,
-enum-member records, and exceptions have immutable fields and `__match_args__`;
-an enum class is a namespace over its member classes. An inline member record
-is available below its enum scope, so `Shape.circle` remains its Python
-spelling. A nominal whose final name is unique and does not collide with a
-built-in `agl` API can be imported directly. Use the identity-preserving
-`nominals` namespace, rooted by module path (or `entry`) and then by AgL scope,
-for name collisions and reserved names such as an exception named
-`AglException`:
+Each program receives one synthesized class per nominal identity. Records and
+enum-member records without `var` fields, and exceptions, have immutable fields
+and `__match_args__`; records with `var` fields cross as live mutable views. An
+enum class is a namespace over its member classes. An inline member record is
+available below its enum scope, so `Shape.circle` remains its Python spelling. A
+nominal whose final name is unique and does not collide with a built-in `agl` API
+can be imported directly. Use the identity-preserving `nominals` namespace,
+rooted by module path (or `entry`) and then by AgL scope, for name collisions and
+reserved names such as an exception named `AglException`:
 
 ```python
 from agl import Box, Shape, nominals
@@ -154,10 +155,15 @@ whether held in a module global, a closure, or a default argument. A
 companion that imports afterward instead sees the redeclaration, under both
 its bare name and its `nominals` path.
 
-AgL records are immutable, so assigning a synthesized nominal field raises
-`AttributeError`. Fields are encoded eagerly when a nominal object is built:
-a nested array or dict field is therefore already a live view, while replacing
-the outer record is impossible.
+A record or enum-member record with at least one `var` field crosses as a
+live view. Reading an attribute reads the current AgL field. Assigning a `var`
+field decodes the Python value and updates the AgL value in place; assigning an
+unmarked field raises `AttributeError`. The view is unhashable and compares by
+AgL value equality. Records without `var` fields remain immutable snapshots.
+Fields are encoded eagerly when a snapshot nominal object is built; a nested
+array, dictionary, or mutable record field is therefore already a live view.
+Reading a function-typed field yields a callback proxy under the window below,
+whichever closure the field currently holds and however the view was obtained.
 
 Constructors always use the original AgL field spelling. Python-compatible
 field names work with ordinary keyword arguments and dot access. For another
@@ -173,10 +179,14 @@ described in [Raising AgL exceptions](#raising-agl-exceptions).
 
 Arrays and dicts are lazy, mutable views over the original AgL container.
 Mutating a view mutates the caller's value, including a view stored inside a
-nominal field. Views hold only their container and remain usable after an
+nominal field. Mutable-record views have the same write-through behavior for
+their `var` fields. Views hold only their container and remain usable after an
 extern call returns; retaining one is therefore part of the companion's
-contract. Two views over the same AgL container compare equal and hash alike,
-but they need not be the same Python object.
+contract. The one exception is a function value: reading one out of a view
+needs the extern call that owns it, as described in
+[Callback invocation window](#callback-invocation-window). Two views over the
+same AgL container compare equal and hash alike, but they need not be the same
+Python object.
 
 Views are not built-in `list` or `dict`. Use `list(view)` or `dict(view)` for a
 detached Python snapshot. A view encodes and decodes elements lazily, so a
@@ -219,6 +229,13 @@ active. A companion may retain a callback and invoke it during a later extern
 call on that thread, including a nested extern call. Calling it after the
 outermost extern call returns, or from another thread, raises a Python-side
 error before AgL execution resumes.
+
+Obtaining a callback follows the same window: an AgL function crosses only
+inside an extern call, so reading a function out of a retained view outside
+every call raises rather than yielding a callback nothing could invoke. Per-call
+context — the callback encoder and `runtime` state alike — belongs to the
+calling thread's context; a thread the companion spawns sees it only when it
+runs in a copy of that context (`contextvars.copy_context()`).
 
 ## Transparent callback exceptions
 
@@ -275,8 +292,8 @@ particular, `f[T, U](xs, xs)` is allowed: two generic positions never need
 schema reconciliation.
 
 Likewise, a companion must honor the declared argument and return types, and
-the same obligation covers a value written into a live `array` or `dict`
-view. This is trusted, not checked: a representable value of the wrong type
+the same obligation covers a value written into a live `array`, `dict`, or
+mutable-record view. This is trusted, not checked: a representable value of the wrong type
 is accepted at the boundary, and the program is then free to fail later, at
 an unrelated point, with an error the program cannot catch. An unsupported
 Python value (such as a bare `list`) raises `ExternError`. Ordinary Python

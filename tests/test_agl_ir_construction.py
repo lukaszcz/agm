@@ -1034,7 +1034,12 @@ def test_validate_accepts_ir_make_constructor_for_a_record() -> None:
         symbols={},
         nominals={
             nominal: NominalDescriptor(
-                nominal, ENTRY_ID, (), "Point", NominalKind.RECORD, fields=("x",)
+                nominal,
+                ENTRY_ID,
+                (),
+                "Point",
+                NominalKind.RECORD,
+                fields=("x",),
             )
         },
         sources={sid: SourceFile(display_name="<test>", normalized_text=" ")},

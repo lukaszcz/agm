@@ -1,0 +1,48 @@
+# A mutable enum-member record supports a doubly linked list. `unlink` narrows
+# the enum value with a case/as-pattern and relinks neighbors through identity
+# casts at each mutable enum field.
+record LinkedList::Cell[T, L]
+  var value: T
+  var prev: L
+  var next: L
+
+enum LinkedList[T]
+  | Nil
+  | LinkedList::Cell[T, LinkedList[T]]
+
+def unlink[T](node: LinkedList[T]) -> unit =
+  case node of
+    | Nil => ()
+    | Cell() as cell =>
+        let prev = (cell as LinkedList::Cell[T, LinkedList[T]]).prev
+        let next = (cell as LinkedList::Cell[T, LinkedList[T]]).next
+        if prev is not Nil => (prev as LinkedList::Cell[T, LinkedList[T]]).next := next
+        if next is not Nil => (next as LinkedList::Cell[T, LinkedList[T]]).prev := prev
+
+param seed: int
+param target: text
+
+program def main() -> unit =
+  let head = LinkedList::Cell::[int, LinkedList[int]](seed, Nil, Nil)
+  head.value := seed + 1
+  head.next := Cell(seed + 2, head, Nil)
+  let middle = head.next as LinkedList::Cell[int, LinkedList[int]]
+  middle.next := Cell(seed + 3, middle, Nil)
+  let tail = middle.next as LinkedList::Cell[int, LinkedList[int]]
+
+  if
+    | target == "head" =>
+        unlink(head)
+        print(head.value)
+        print(middle.prev is Nil)
+        print((middle.next as LinkedList::Cell[int, LinkedList[int]]).value)
+    | target == "middle" =>
+        unlink(middle)
+        print(head.value)
+        print((head.next as LinkedList::Cell[int, LinkedList[int]]).value)
+        print((tail.prev as LinkedList::Cell[int, LinkedList[int]]).value)
+    | else =>
+        unlink(tail)
+        print(head.value)
+        print(middle.next is Nil)
+        print((tail.prev as LinkedList::Cell[int, LinkedList[int]]).value)

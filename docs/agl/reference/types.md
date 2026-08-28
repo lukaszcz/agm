@@ -149,19 +149,19 @@ in place through an index with `:=` — see [Bindings and scope](bindings-and-sc
 for the assignment-root rules and evaluation order. There is no `len`
 operator.
 
-Records, enums, and exceptions are immutable — none of their fields can be
-reassigned, and `with` ([Expressions](expressions.md)) builds a new value
-rather than mutating one — but they too are shared by reference: two
-bindings holding "the same" record share it, so a record or enum that holds
-an array or dict makes that container's mutability observable through every
-binding that reaches it.
+A record or enum-member record may mark an individual field with `var`.
+That field is a mutable reference slot: `receiver.field := value` updates the
+shared record in place, so every alias observes the new field value. Unmarked
+fields and every exception field cannot be reassigned. `with`
+([Expressions](expressions.md)) always builds a new shallow record or
+exception value rather than mutating its target.
 
-See [Bindings and Scope](bindings-and-scope.md) for the `:=` indexed-assignment
-rules, and [Foreign Function Interface](ffi.md) for boundary behavior. Arrays
-and dicts cross the FFI as live views; immutable kinds cross as independent
-values. Use
-`copy` or `shallow_copy` before the call, or an explicit `as json` cast, when
-a boundary snapshot is needed. (`as json` builds an independent container
+See [Bindings and Scope](bindings-and-scope.md) for `:=` rules, and [Foreign
+Function Interface](ffi.md) for boundary behavior. Arrays, dictionaries, and
+records with a `var` field cross the FFI as live views; records without one,
+exceptions, and other immutable values cross as independent values. Use `copy`
+or `shallow_copy` before the call, or an explicit `as json` cast, when a
+boundary snapshot is needed. (`as json` builds an independent container
 snapshot — see [Casts and convertibility](#casts-and-convertibility) below —
 and `with` ([Expressions](expressions.md)) builds a shallow copy of a record.
 See [Copying values](#copying-values) below for `copy`/`shallow_copy`.)
@@ -191,29 +191,35 @@ program def main() -> unit =
   xs[0] := n
 ```
 
-A record, enum, or exception cannot be self-referential on its own — every
-field is fixed at construction — so a cycle is always closed through at
-least one array or dict, however many nominal layers it passes through.
+A `var` field can also close a cycle directly, without a container:
+
+```agl
+enum Link
+  | End
+  | Cell(var next: Link)
+```
+
+The `End` member makes this recursive declaration inhabited. A `Cell` may
+first point at `End` and later receive itself with `cell.next := cell`. Cycles
+can also pass through arrays, dictionaries, records, enums, or exceptions.
 
 Rendering (`print`, `render`, string interpolation, REPL echo), `as text`,
-and `as json` walk a value's containers and therefore raise the catchable
-`CyclicValueError` ([Exceptions](exceptions.md#cyclicvalueerror)) if the walk
-re-enters a container already on its own path. An `extern def` call can pass a
-cyclic array or dict as a live view; rendering that view in its companion
-raises `CyclicValueError`. `as?` never
-raises: it returns `false` when the corresponding conversion fails, so `as?
-text` and `as? json` on a cyclic value evaluate to `false` instead. `copy` is
-the exception: it is the one deep, structure-rebuilding walk that traverses a
-cyclic value to completion instead of raising — see [Copying
-values](#copying-values) below. A **shared** (diamond) structure — the same
-array or dict reachable twice from different paths, but never from itself —
-is not a cycle and renders normally.
+and `as json` walk a value and raise the catchable `CyclicValueError`
+([Exceptions](exceptions.md#cyclicvalueerror)) if the walk re-enters a value
+already on its own path. An `extern def` call can pass a cyclic array,
+dictionary, or mutable record as a live view; rendering that view in its
+companion raises `CyclicValueError`. `as?` never raises: it returns `false`
+when the corresponding conversion fails, so `as? text` and `as? json` on a
+cyclic value evaluate to `false` instead. `copy` is the exception: it is the
+one deep, structure-rebuilding walk that traverses a cyclic value to completion
+instead of raising — see [Copying values](#copying-values) below. A **shared**
+(diamond) structure — the same value reachable twice from different paths, but
+never from itself — is not a cycle and renders normally.
 
 Equality (`==`) is different: it never raises. Comparing two values assumes a
-pair already being compared is equal, so `==` on a cyclic array or dict
-terminates and answers the same structural relation co-inductively — the
-comparison never needs a base case for the parts of the structure it has
-already matched up.
+pair already being compared is equal, so `==` on a cyclic value terminates and
+answers the same structural relation co-inductively — the comparison never
+needs a base case for the parts of the structure it has already matched up.
 
 Trace logging is a narrower exception still: a traced cyclic value is
 recorded as a placeholder marker rather than raising — see
@@ -241,11 +247,12 @@ call position.
 
 `shallow_copy` rebuilds exactly **one** level: a new array, dict, record,
 enum, or exception holding the *same* element or field references as the
-original. Replacing the copy's own top-level contents does not affect the
-original, but mutating a container reached *through* the copy — one level
-down or deeper — is observed through the original too, because that nested
-container is the same shared object. Every other value kind (`int`,
-`decimal`, `bool`, `text`, `json`, `unit`, a function value) is returned as-is:
+original. Replacing the copy's own top-level contents — including assigning a
+`var` field — does not affect the original, but mutating a container reached
+*through* the copy — one level down or deeper — is observed through the
+original too, because that nested container is the same shared object. Every
+other value kind (`int`, `decimal`, `bool`, `text`, `json`, `unit`, a function
+value) is returned as-is:
 primitives are immutable, so there is nothing to detach. `shallow_copy`
 never recurses, so it can never loop and never raises, even on a cyclic
 value.
@@ -547,16 +554,19 @@ inline member records.
 ## Record types
 
 A `record` declares a nominal product type. The fields are written in an
-indented block, one per line:
+indented block, one per line. Prefix a field with `var` when it may be
+reassigned in place:
 
 ```agl
 record Issue
   title: text
-  severity: int
+  var severity: int
   description: text
 ```
 
-All fields are required. A fieldless record uses an empty parenthesized field
+All fields are required. `var` is valid on records and enum-member records,
+not exceptions. It affects assignment only, not construction or the field's
+type. A fieldless record uses an empty parenthesized field
 list (`record R1()`). Its constructor reference in value position constructs an
 `R1` value; see [Expressions](expressions.md#fieldless-constructor-references).
 By default, record fields are **standard**: they may be supplied positionally
@@ -685,11 +695,11 @@ let err = Result::Err("bad", false)
 let named_err = Result::Err(reason = "bad", fatal = false)
 ```
 
-Zone markers are also available on inline member fields:
+Zone markers and `var` are also available on inline member fields:
 
 ```agl
 enum Triple
-  | T(*, a: int, b: int, c: int)   # all fields named-only
+  | T(*, var a: int, b: int, c: int)   # all fields named-only
 ```
 
 Construction, qualification, and ambiguity rules are covered in
@@ -1175,6 +1185,9 @@ Every **data** type has full value equality (`==` / `!=`):
 - Records compare by nominal type and field values; enum values compare by
   their member-record nominal type and field values.
 - `json` values compare structurally.
+
+Equality is cycle-safe: cyclic values, including cycles closed through `var`
+record fields, compare structurally and do not raise `CyclicValueError`.
 
 Function types and `unit` have **no equality**. A comparison involving one of
 these types is a static error. This rule is **transitive**: an `array`, `dict`,

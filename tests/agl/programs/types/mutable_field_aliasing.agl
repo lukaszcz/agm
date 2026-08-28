@@ -1,0 +1,43 @@
+# Mutable fields share their record value through bindings, containers, record
+# fields, parameters, and enum-typed views. Pattern field bindings snapshot the
+# field slot while preserving aliases to the value that was bound.
+record Item(var amount: int)
+record Holder(var item: Item)
+
+enum Choice
+  | Empty
+  | Present(var item: Item)
+
+def add(item: Item, amount: int) -> unit =
+  item.amount := item.amount + amount
+
+param seed: int
+
+program def main() -> unit =
+  let shared = Item(amount = seed)
+  let binding_alias = shared
+  let items = [shared]
+  let holder = Holder(item = shared)
+
+  add(shared, 1)
+  print(binding_alias.amount)
+  print(items[0].amount)
+  print(holder.item.amount)
+
+  let left: Choice = Present(item = shared)
+  let right = left
+  (left as Choice::Present).item := Item(amount = seed + 2)
+  print((right as Choice::Present).item.amount)
+  print(shared.amount)
+
+  let original_item = (left as Choice::Present).item
+  case left of
+    | Empty => ()
+    | Present(item) as present =>
+        (present as Choice::Present).item := Item(amount = seed + 3)
+        print(item.amount)
+        print((present as Choice::Present).item.amount)
+        item.amount := seed + 4
+        print(item.amount)
+        print(original_item.amount)
+        print((right as Choice::Present).item.amount)

@@ -557,6 +557,82 @@ def test_encode_plan_distinguishes_record_and_enum_slots_for_a_shared_member() -
     }
 
 
+def test_encode_plan_detects_record_exception_and_enum_closed_cycles() -> None:
+    from agm.agl.semantics.cycles import AglCyclicValue
+
+    record = RecordValue(NominalId(1), "Node", {})
+    record.fields["next"] = record
+    exception = ExceptionValue(NominalId(2), "Problem", {})
+    exception.fields["cause"] = exception
+    member = RecordValue(NominalId(4), "Link::Cell", {})
+    member.fields["next"] = member
+
+    plans = (
+        (
+            EncodePlan(
+                RefEncode("Node"),
+                (
+                    EncodeDefinition(
+                        "Node", 0, RecordEncode(NominalId(1), (("next", RefEncode("Node")),))
+                    ),
+                ),
+            ),
+            record,
+        ),
+        (
+            EncodePlan(
+                RefEncode("Problem"),
+                (
+                    EncodeDefinition(
+                        "Problem",
+                        0,
+                        ExceptionEncode(NominalId(2), (("cause", RefEncode("Problem")),)),
+                    ),
+                ),
+            ),
+            exception,
+        ),
+        (
+            EncodePlan(
+                RefEncode("Link"),
+                (
+                    EncodeDefinition(
+                        "Link",
+                        0,
+                        EnumEncode(
+                            NominalId(3),
+                            (VariantEncode("Cell", NominalId(4), (("next", RefEncode("Link")),)),),
+                        ),
+                    ),
+                ),
+            ),
+            member,
+        ),
+    )
+
+    for plan, value in plans:
+        with pytest.raises(AglCyclicValue):
+            encode_value(plan, value)
+
+
+def test_encode_plan_allows_a_record_diamond() -> None:
+    leaf = NominalId(1)
+    pair = NominalId(2)
+    shared = RecordValue(leaf, "Leaf", {"value": IntValue(1)})
+    value = RecordValue(pair, "Pair", {"left": shared, "right": shared})
+    plan = EncodePlan(
+        RecordEncode(
+            pair,
+            (
+                ("left", RecordEncode(leaf, (("value", ScalarEncode()),))),
+                ("right", RecordEncode(leaf, (("value", ScalarEncode()),))),
+            ),
+        )
+    )
+
+    assert encode_value(plan, value) == {"left": {"value": 1}, "right": {"value": 1}}
+
+
 def test_template_encode_plan_rejects_unbound_or_unknown_types() -> None:
     from agm.agl.semantics.types import TypeVarType
 

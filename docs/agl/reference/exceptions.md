@@ -33,7 +33,8 @@ exception DeployError extends Exception
 An exception extends exactly one base exception type. Constructor fields include
 the inherited fields first, followed by fields declared on the subtype.
 `trace_id` is not reserved: a user-declared exception may use it as one of its
-own fields. `builtin exception` is the standard-library form for host-recognized
+own fields. Exception fields do not accept the `var` marker and cannot be
+reassigned. `builtin exception` is the standard-library form for host-recognized
 exception types; the name, base, and fields must match the recognized shape
 exactly.
 
@@ -487,11 +488,13 @@ The general-purpose user abort; carries only the base fields.
 ### `CyclicValueError`
 
 Raised when rendering (`print`, `render`, string interpolation, REPL echo),
-`as text`, or `as json` encounters a genuine reference cycle. A cyclic array
-or dict can be passed to an `extern def`; this error arises if its companion
-calls Python `repr()` on the corresponding view. Carries only the base fields. See [Cycles](types.md#cycles) for how
-a cycle arises, which operations raise this and which tolerate a cycle instead
-(`as?`, `copy`), and how equality and tracing treat one.
+`as text`, or `as json` encounters a genuine reference cycle, including one
+closed through a record or enum-member `var` field. A cyclic array, dictionary,
+or mutable record can be passed to an `extern def`; this error arises if its
+companion calls Python `repr()` on the corresponding view. Carries only the
+base fields. See [Cycles](types.md#cycles) for how a cycle arises, which
+operations raise this and which tolerate a cycle instead (`as?`, `copy`), and
+how equality and tracing treat one.
 
 ```text
 (base fields only)
@@ -522,7 +525,7 @@ a cycle arises, which operations raise this and which tolerate a cycle instead
 | `std/toml` parsing — input is not well-formed TOML | `TomlParseError` |
 | `std/toml` rendering — root is not an object, a value is `null`, an integer is outside signed 64-bit range, or a `decimal` NaN is signaling/payload | `TomlRenderError` |
 | `std/regex` pattern compilation — Python `re` rejects the pattern | `RegexError` |
-| Rendering, `as text`, or `as json` encounters a reference cycle; or an extern companion `repr()`s the corresponding cyclic view | `CyclicValueError` |
+| Rendering, `as text`, or `as json` encounters a reference cycle, including a record-closed cycle; or an extern companion `repr()`s the corresponding cyclic view | `CyclicValueError` |
 | `raise` of a constructed or re-raised value | any concrete type |
 
 An exception that reaches the top of the program uncaught terminates the

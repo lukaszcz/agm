@@ -699,7 +699,14 @@ def test_validate_rejects_malformed_encode_nominal_shapes() -> None:
     exception = NominalId(5)
     enum = NominalId(6)
     program_nominals = {
-        record: NominalDescriptor(record, ENTRY_ID, (), "Record", NominalKind.RECORD, ("field",)),
+        record: NominalDescriptor(
+            record,
+            ENTRY_ID,
+            (),
+            "Record",
+            NominalKind.RECORD,
+            ("field",),
+        ),
         exception: NominalDescriptor(
             exception, ENTRY_ID, (), "Exception", NominalKind.EXCEPTION, ("field",)
         ),
@@ -809,8 +816,22 @@ def test_validate_accepts_a_parameterized_to_json_encode_plan() -> None:
     program = _convert_program(recipe)
     program.nominals.update(
         {
-            box: NominalDescriptor(box, ENTRY_ID, (), "Box", NominalKind.RECORD, ("item",)),
-            inner: NominalDescriptor(inner, ENTRY_ID, (), "Inner", NominalKind.RECORD, ("value",)),
+            box: NominalDescriptor(
+                box,
+                ENTRY_ID,
+                (),
+                "Box",
+                NominalKind.RECORD,
+                ("item",),
+            ),
+            inner: NominalDescriptor(
+                inner,
+                ENTRY_ID,
+                (),
+                "Inner",
+                NominalKind.RECORD,
+                ("value",),
+            ),
         }
     )
     validate_ir(program, deep=True)
@@ -944,14 +965,24 @@ def test_validate_rejects_decode_with_unregistered_nominal() -> None:
         (
             RecordDecode(NominalId(10), "Record", (("wrong", ScalarDecode(ScalarKind.INT)),)),
             NominalDescriptor(
-                NominalId(10), ENTRY_ID, (), "Record", NominalKind.RECORD, ("value",)
+                NominalId(10),
+                ENTRY_ID,
+                (),
+                "Record",
+                NominalKind.RECORD,
+                ("value",),
             ),
             "fields disagree",
         ),
         (
             RecordDecode(NominalId(10), "Wrong", (("value", ScalarDecode(ScalarKind.INT)),)),
             NominalDescriptor(
-                NominalId(10), ENTRY_ID, (), "Record", NominalKind.RECORD, ("value",)
+                NominalId(10),
+                ENTRY_ID,
+                (),
+                "Record",
+                NominalKind.RECORD,
+                ("value",),
             ),
             "display name disagrees",
         ),

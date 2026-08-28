@@ -65,6 +65,7 @@ from agm.agl.syntax import (
     ExceptionDef,
     Expr,
     FieldAccess,
+    FieldTarget,
     FuncDef,
     FuncT,
     If,
@@ -566,6 +567,7 @@ class TestParamNode:
         assert p.name == "x"
         assert p.type_expr is t
         assert p.default is None
+        assert p.mutable is False
 
     def test_param_with_default(self) -> None:
         t = IntT(span=self._s(), node_id=2)
@@ -1172,6 +1174,12 @@ class TestBinders:
         assert node.obj is obj
         assert node.index is index
 
+    def test_field_target(self) -> None:
+        obj = VarRef(name="record", span=self._s(), node_id=2)
+        node = FieldTarget(obj=obj, field="value", span=self._s(), node_id=1)
+        assert node.obj is obj
+        assert node.field == "value"
+
     def test_raise_is_expr(self) -> None:
         # Raise is in the Expr union (bottom type).
         expr = VarRef(name="err", span=self._s(), node_id=2)
@@ -1720,6 +1728,7 @@ class TestVisitorWalk:
         var_with_type = VarDecl(name="d", type_ann=json_t, value=null_lit, span=s, node_id=603)
         name_target = NameTarget(name="b", span=s, node_id=604)
         index_target = IndexTarget(obj=var_ref, index=int_lit, span=s, node_id=605)
+        field_target = FieldTarget(obj=var_ref, field="value", span=s, node_id=606)
         assign_stmt = AssignStmt(target=name_target, value=index_access, span=s, node_id=606)
         indexed_assign_stmt = AssignStmt(target=index_target, value=int_lit, span=s, node_id=607)
 
@@ -1746,6 +1755,7 @@ class TestVisitorWalk:
                 var_with_type,
                 assign_stmt,
                 indexed_assign_stmt,
+                AssignStmt(target=field_target, value=int_lit, span=s, node_id=609),
                 # expressions directly in block
                 var_ref,
                 field_access,
@@ -2601,6 +2611,7 @@ class TestUnionAliases:
         args = typing.get_args(AssignTarget)
         assert NameTarget in args
         assert IndexTarget in args
+        assert FieldTarget in args
 
     def test_item_contains_declaration_binder_expr(self) -> None:
         import typing

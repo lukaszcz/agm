@@ -1,0 +1,24 @@
+# Mutable record fields can close a cycle directly. Equality remains
+# co-inductive, copy rebuilds the cycle independently, and shallow_copy keeps
+# the original nested alias.
+param seed: int
+
+enum Link
+  | End
+  | Cell(var next: Link, var value: int)
+
+program def main() -> unit =
+  let left = Cell(next = End, value = seed)
+  left.next := left
+  let right = Cell(next = End, value = seed)
+  right.next := right
+  print(left == right)
+
+  let copied = copy(left)
+  (copied.next as Link::Cell).value := seed + 1
+  print(copied.value)
+  print(left.value)
+
+  let shallow = shallow_copy(left)
+  (shallow.next as Link::Cell).value := seed + 2
+  print(left.value)

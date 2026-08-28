@@ -78,6 +78,7 @@ from agm.agl.ir.nodes import (
     IrExpr,
     IrField,
     IrFieldMode,
+    IrFieldSet,
     IrFunctionParam,
     IrIf,
     IrIndex,
@@ -139,7 +140,6 @@ from agm.agl.ir.program import (
 from agm.agl.ir.validate import InvalidIrError
 from agm.agl.modules.ids import STD_CONFIG_ID, STD_ENV_ID, ModuleId
 from agm.agl.runtime.agents import AgentFn
-from agm.agl.runtime.boundary import encode_boundary_value
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
 from agm.agl.runtime.externs import (
     AglCallableProxy,
@@ -771,7 +771,7 @@ class IrInterpreter:
 
         Mirrors ``_index_failure``: centralizes the sentinel-to-exception
         conversion so every ``render``/``as json``/coercion site that can
-        reach a cyclic array or dict raises identical exception fields.
+        reach a cyclic value raises identical exception fields.
         """
         return cyclic_value_raise(nominals=self._program.builtin_nominals)
 
@@ -939,10 +939,6 @@ class IrInterpreter:
         """Open this interpreter's callback window for one extern invocation."""
         return self._extern_call_window_guard.active()
 
-    def _encode_extern_value(self, value: Value) -> object:
-        """Encode one value for an extern, preserving callable interpreter access."""
-        return encode_boundary_value(value, self._make_extern_callable_proxy)
-
     def _make_extern_callable_proxy(self, closure: IrClosureValue) -> AglCallableProxy:
         """Wrap one AgL closure for a companion's synchronous callback."""
 
@@ -954,7 +950,6 @@ class IrInterpreter:
             closure=closure,
             require_active_window=self._extern_call_window_guard.require_active,
             invoke=invoke,
-            encode=self._encode_extern_value,
         )
 
     def _invoke_crossed_closure(self, closure: IrClosureValue, args: tuple[Value, ...]) -> Value:
@@ -1383,9 +1378,26 @@ class IrInterpreter:
                 slot.value = self._eval(val_expr)
                 return VOID_VALUE
 
+            case IrFieldSet(value=value_expr, nominal=nominal, field=field, new=new_expr):
+                # Evaluate the receiver before the replacement. The identity
+                # guard protects superseded same-named declarations from
+                # writes; validation already proved the field is declared, so
+                # matching identity is all the store needs.
+                value = self._eval(value_expr)
+                if not isinstance(value, RecordValue):
+                    raise InvalidIrError(
+                        f"IrFieldSet: expected RecordValue, got {type(value).__name__}"
+                    )
+                if value.nominal != nominal:
+                    raise InvalidIrError(
+                        f"IrFieldSet: expected nominal {nominal!r}, got {value.nominal!r}"
+                    )
+                value.fields[field] = self._eval(new_expr)
+                return VOID_VALUE
+
+            # Plain left-to-right evaluation order: container, then index,
+            # then the right-hand side, then the checked in-place store.
             case IrIndexSet(container=container_expr, kind=kind, index=idx_expr, value=val_expr):
-                # Plain left-to-right evaluation order: container, then index,
-                # then the right-hand side, then the checked in-place store.
                 container = self._eval(container_expr)
                 index_val = self._eval(idx_expr)
                 new_value = self._eval(val_expr)

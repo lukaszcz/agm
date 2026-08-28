@@ -1,0 +1,59 @@
+# Mutable record fields cross to Python as live record views, while immutable
+# records retain their snapshot boundary behavior.
+param mode: text
+
+record Mutable(var value: int, fixed: text)
+record Snapshot(value: int)
+record Callbacks(var callback: (int) -> int)
+
+enum Event
+  | Changed(var value: int, fixed: text)
+
+extern def mutate(box: Mutable) -> unit
+extern def reject_fixed_write(box: Mutable) -> bool
+extern def return_received(box: Mutable) -> Mutable
+extern def construct() -> Mutable
+extern def mutate_member(member: Event::Changed) -> unit
+extern def snapshot_behavior(box: Snapshot) -> bool
+extern def build_callbacks(seed: (int) -> int) -> Callbacks
+extern def call_retained_callback(box: Callbacks) -> int
+
+def double(n: int) -> int = n * 2
+def triple(n: int) -> int = n * 3
+
+program def main() -> unit =
+  if mode == "write_through" =>
+    let item = Mutable(value = 1, fixed = "fixed")
+    let _: unit = mutate(item)
+    print item
+
+  if mode == "fixed_rejected" =>
+    let item = Mutable(value = 1, fixed = "fixed")
+    print reject_fixed_write(item)
+
+  if mode == "round_trip_identity" =>
+    let item = Mutable(value = 1, fixed = "fixed")
+    let alias = return_received(item)
+    alias.value := 3
+    print item
+    print alias
+
+  if mode == "python_constructed" =>
+    let item = construct()
+    item.value := 10
+    print item
+
+  if mode == "mutable_member" =>
+    let member = Changed(value = 1, fixed = "fixed")
+    let _: unit = mutate_member(member)
+    print member
+
+  if mode == "immutable_snapshot" =>
+    print snapshot_behavior(Snapshot(value = 1))
+
+  # A view the companion constructed itself has no encoder of its own, so it
+  # reads the active call's -- and encodes a closure it was never handed.
+  if mode == "retained_view_encodes_new_closure" =>
+    let box = build_callbacks(double)
+    box.callback := triple
+    print call_retained_callback(box)

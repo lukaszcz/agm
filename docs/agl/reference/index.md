@@ -26,11 +26,11 @@ oriented orchestration language whose core ideas are:
   lambdas produce values of function type `A -> B` or `(A, B) -> C`; they may be stored,
   passed, and returned.
 - **Mutability is explicit.** `let` binds a name immutably and `var` binds it
-  mutably, with `:=` updating a mutable binding — but binding never copies, so
-  arrays and dicts are mutable objects that every alias observes, regardless
-  of whether the binding that reaches them is `let` or `var`. Equality is
-  `==`, while a single `=` is a binder and named-argument separator, never
-  assignment.
+  mutably; records and enum-member records may also mark individual fields
+  `var`. `:=` updates a mutable binding, container element, or `var` field in
+  place. Binding never copies, so every alias observes mutable arrays,
+  dictionaries, and record fields. Equality is `==`, while a single `=` is a
+  binder and named-argument separator, never assignment.
 - **Failures are exceptions.** Parse failures, cast failures, loop exhaustion,
   explicitly raised match errors, recursion depth, and shell errors are typed,
   catchable exceptions.
@@ -77,7 +77,7 @@ program def main() -> unit =
 | [Program structure](program-structure.md) | Programs, blocks, items, binders, inline forms |
 | [Modules](modules.md) | File-based module system: module identity, import forms, qualified access, visibility, cyclic imports, REPL imports |
 | [Named scopes](scopes.md) | Nestable declaration namespaces, qualifier paths, visibility, and `use` |
-| [Types](types.md) | Built-in types (`unit`, `text`, `int`, `decimal`, `bool`, `json`, function types), `record`/`enum`/`type` declarations, standard-library types (`Option`, `ExecResult`, `ParsePolicy`, `Agent`, `AgentRequest`, `SessionTransport`, `Session`, `SessionStats`), assignability, casts and convertibility (`as`/`as?`), reference semantics, cycles, and copying (`copy`/`shallow_copy`) |
+| [Types](types.md) | Built-in types (`unit`, `text`, `int`, `decimal`, `bool`, `json`, function types), `record`/`enum`/`type` declarations, standard-library types (`Option`, `ExecResult`, `ParsePolicy`, `Agent`, `AgentRequest`, `SessionTransport`, `Session`, `SessionStats`), assignability, casts and convertibility (`as`/`as?`), mutable record fields and reference semantics, cycles, and copying (`copy`/`shallow_copy`) |
 | [Bindings and scope](bindings-and-scope.md) | `let`, `var`, `:=`, `param`, `builtin var`, `def`, lexical scoping, shadowing |
 | [Expressions](expressions.md) | Literals, constructors, calls, operators, `as`/`as?` cast operators, `render`, JSON parsing, `case`/`if` expressions, `unit`-typed forms, expected-type propagation |
 | [Functions](functions.md) | `def` declarations, `fn` lambdas, optional/named arguments, function types, first-class values, recursion and depth limit |

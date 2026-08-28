@@ -139,6 +139,7 @@ from agm.agl.syntax.nodes import (
     ExportDecl,
     Expr,
     FieldAccess,
+    FieldTarget,
     FuncDef,
     If,
     ImportDecl,
@@ -251,6 +252,28 @@ class _BuiltinMethodChecker(Protocol):
 def _builtin_method_receiver_key(receiver_type: RecordType | EnumType) -> _BuiltinMethodReceiver:
     """Return the nominal identity that directs a receiver's host-method dispatch."""
     return NominalId(receiver_type.decl_id)
+
+
+def _no_member(
+    obj_type: RecordType | EnumType | ExceptionType, field: str, span: SourceSpan
+) -> AglTypeError:
+    """Return the diagnostic for a member the receiver declares neither way."""
+    return AglTypeError(
+        f"{obj_type.kind.capitalize()} '{obj_type.name}' has no field or method '{field}'.",
+        span=span,
+    )
+
+
+def _no_type_var_members(obj_type: TypeVarType, members: str, span: SourceSpan) -> AglTypeError:
+    """Return the diagnostic for selecting *members* from a bare type variable.
+
+    AgL has no type-variable bounds, so nothing at all can be selected from one;
+    *members* names only what the attempted operation would have selected.
+    """
+    return AglTypeError(
+        f"a value of type variable '{obj_type.name}' has no {members}.",
+        span=span,
+    )
 
 
 def _variant_not_in_enum(variant: str, enum_type: EnumType, span: SourceSpan) -> AglTypeError:
@@ -1537,8 +1560,11 @@ class _Checker:
         if isinstance(stmt.target, IndexTarget):
             return self._check_indexed_assign_stmt(stmt, stmt.target)
 
+        if isinstance(stmt.target, FieldTarget):
+            return self._check_field_assign_stmt(stmt, stmt.target)
+
         raise AglTypeError(
-            "assignment target must be a mutable variable or an indexed expression.",
+            "assignment target must be a mutable variable, indexed expression, or field.",
             span=stmt.span,
         )
 
@@ -1559,14 +1585,70 @@ class _Checker:
         elem_type = self._check_index_operand(
             container_type, target.index, span=target.span, obj_expr=target.obj
         )
-        # Recorded so the lowerer can generically lower the target's own node
-        # (an IndexTarget is not an Expr, so it has no other node-type slot)
-        # to size the coercion of the assigned value, without a dedicated
-        # element-type-for-container helper of its own.
-        self._record_node_type(target.node_id, elem_type)
-        value_type = self._check_boundary_expr(stmt.value, expected=elem_type)
-        with self._frame_direct_candidate_use(exprs=(stmt.value, target.obj)):
-            self._assert_assignable(value_type, elem_type, stmt.span)
+        return self._check_assigned_value(stmt, target.node_id, elem_type, target.obj)
+
+    def _check_field_assign_stmt(self, stmt: AssignStmt, target: FieldTarget) -> Type:
+        # A field target has no binding of its own: `target.obj` is an ordinary
+        # expression that must produce a record, and the assignment mutates
+        # whatever record value it evaluates to.
+        receiver_type = self._check_boundary_expr(target.obj, expected=None)
+        try:
+            field_type = self._mutable_field_type(receiver_type, target)
+        except AglTypeError as exc:
+            raise self._frame_inferred_return_error(exc, exprs=(target.obj,)) from exc
+        return self._check_assigned_value(stmt, target.node_id, field_type, target.obj)
+
+    def _mutable_field_type(self, receiver_type: Type, target: FieldTarget) -> Type:
+        """Return the type of the ``var`` field *target* names on *receiver_type*."""
+        if isinstance(receiver_type, EnumType):
+            raise AglTypeError(
+                f"Enum values expose no fields; narrow '{receiver_type.name}' directly "
+                "through 'case' or 'as' before assigning.",
+                span=target.span,
+            )
+        if isinstance(receiver_type, ExceptionType):
+            raise AglTypeError(
+                f"Field assignment is not permitted on exception type '{receiver_type.name}'.",
+                span=target.span,
+            )
+        if isinstance(receiver_type, TypeVarType):
+            raise _no_type_var_members(receiver_type, "fields", target.span)
+        if not isinstance(receiver_type, RecordType):
+            raise AglTypeError(
+                f"Field assignment requires a record value; got '{receiver_type!r}'.",
+                span=target.span,
+            )
+
+        fields = self._env.type_table.record_fields(receiver_type)
+        if target.field not in fields:
+            if self._env.type_table.lookup_method(receiver_type, target.field) is not None:
+                raise AglTypeError(
+                    f"Method '{target.field}' of record '{receiver_type.name}' is not assignable.",
+                    span=target.span,
+                )
+            raise _no_member(receiver_type, target.field, target.span)
+        if target.field not in self._env.type_table.record_mutable_fields(receiver_type):
+            raise AglTypeError(
+                f"Field '{target.field}' of record '{receiver_type.name}' is immutable; "
+                "declare it with 'var' to assign to it.",
+                span=target.span,
+            )
+        return fields[target.field]
+
+    def _check_assigned_value(
+        self, stmt: AssignStmt, target_node_id: int, slot_type: Type, obj_expr: Expr
+    ) -> Type:
+        """Check an assignment's right-hand side against the target slot's type.
+
+        Shared by the indexed and field forms. Neither target is an ``Expr``,
+        so neither has a node-type slot of its own; recording *slot_type*
+        against the target's node lets the lowerer size the assigned value's
+        coercion generically, with no per-target-shape helper.
+        """
+        self._record_node_type(target_node_id, slot_type)
+        value_type = self._check_boundary_expr(stmt.value, expected=slot_type)
+        with self._frame_direct_candidate_use(exprs=(stmt.value, obj_expr)):
+            self._assert_assignable(value_type, slot_type, stmt.span)
         return self._binder_result(value_type)
 
     # ------------------------------------------------------------------
@@ -2155,7 +2237,9 @@ class _Checker:
 
     def _check_cast(self, node: Cast) -> Type:
         source_type = self._check_expr(node.expr, expected=None)
-        target_type = self._env.resolve_type_expr(node.target_type, span=node.span)
+        target_type = self._env.resolve_type_expr(
+            node.target_type, span=node.span, type_vars=self._current_type_vars
+        )
         table = self._env.type_table
         kind = cast_classification(source_type, target_type, table)
         if kind == CastKind.STATIC_ERROR:
@@ -4503,13 +4587,8 @@ class _Checker:
         if self._candidate_session is not None and contains_inference_var(obj_type):
             return self._active_inference_engine().fresh("member result")
         try:
-            # AgL has no type-variable bounds, so neither a field nor a method
-            # can be selected from a bare type variable.
             if isinstance(obj_type, TypeVarType):
-                raise AglTypeError(
-                    f"a value of type variable '{obj_type.name}' has no fields or methods.",
-                    span=node.span,
-                )
+                raise _no_type_var_members(obj_type, "fields or methods", node.span)
 
             fields: Mapping[str, Type] | None = None
             if isinstance(obj_type, ExceptionType):
@@ -4588,11 +4667,7 @@ class _Checker:
                     )
                 ):
                     return _SelectedBuiltinMethod(name=node.field, receiver_type=obj_type)
-                raise AglTypeError(
-                    f"{obj_type.kind.capitalize()} '{obj_type.name}' has no field or method "
-                    f"'{node.field}'.",
-                    span=node.span,
-                )
+                raise _no_member(obj_type, node.field, node.span)
             raise AglTypeError(
                 f"Member access requires a record, enum, exception, or built-in receiver; "
                 f"got '{obj_type!r}'.",
@@ -4613,12 +4688,8 @@ class _Checker:
                 self._check_expr(update.value, expected=None)
             return obj_type
         try:
-            # Reject operations on bare type variables.
             if isinstance(obj_type, TypeVarType):
-                raise AglTypeError(
-                    f"a value of type variable '{obj_type.name}' has no fields.",
-                    span=node.span,
-                )
+                raise _no_type_var_members(obj_type, "fields", node.span)
             fields: Mapping[str, Type]
             if isinstance(obj_type, ExceptionType):
                 fields = self._env.type_table.exception_fields(obj_type)

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import contextvars
 import operator
 from collections.abc import Callable, Iterable, Iterator, MutableMapping, MutableSequence
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Protocol, SupportsIndex, cast, overload
+from typing import Protocol, Self, SupportsIndex, cast, overload
 
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.program import NominalDescriptor, NominalKind
@@ -28,6 +29,7 @@ from agm.agl.semantics.values import (
     Value,
     value_equal,
 )
+from agm.util.scoping import ScopedVar
 
 
 class _SortKey(Protocol):
@@ -52,7 +54,7 @@ class BoundaryViolation(Exception):
 
 
 class BoundaryTypeError(TypeError):
-    """A value written through an AgL container view is unsupported."""
+    """A value written through an AgL live view is unsupported."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +84,77 @@ class AglException(Exception):
         self.value = decoded
 
 
+_FunctionEncoder = Callable[[IrClosureValue], object] | None
+
+_IMMUTABLE_MESSAGE = "AgL nominal values are immutable"
+
+# The closure encoder for the extent of one companion call. Encoding a closure
+# needs an interpreter, which this evaluator-independent module never holds, so
+# the extern-call chokepoint publishes one here rather than every crossing
+# value carrying a copy: whatever a companion reaches -- an argument, a view it
+# built itself, a closure nested in an array or dict -- encodes through the
+# call it is running inside. Scoped to that call rather than captured, so
+# nothing here outlives the interpreter that published it.
+_ACTIVE_FUNCTION_ENCODER: contextvars.ContextVar["_FunctionEncoder"] = contextvars.ContextVar(
+    "agl_active_function_encoder", default=None
+)
+
+
+def active_function_encoder(encoder: "_FunctionEncoder") -> ScopedVar["_FunctionEncoder | None"]:
+    """Publish *encoder* as the ambient closure encoder for a call's extent."""
+    return ScopedVar(_ACTIVE_FUNCTION_ENCODER, encoder)
+
+
+def _require_exact_fields(
+    cls: "type[_AglNominal | _AglRecordView]", fields: dict[str, object]
+) -> None:
+    """Check a companion-side construction names exactly *cls*'s declared fields."""
+    if fields.keys() != cls._agl_field_set:
+        raise TypeError(f"expected fields {cls._agl_fields!r}")
+
+
+def _decode_written_value(value: object) -> Value:
+    """Decode a value a companion writes through a live view.
+
+    A write is the one direction where an unrepresentable value is the
+    companion's own type error rather than a boundary defect, so every view's
+    setter reports it as :class:`BoundaryTypeError`.
+    """
+    try:
+        return decode_boundary_value(value)
+    except BoundaryViolation as exc:
+        raise BoundaryTypeError(str(exc)) from exc
+
+
+def _nominal_value(
+    descriptor: NominalDescriptor, fields: dict[str, Value]
+) -> RecordValue | ExceptionValue:
+    """Build the AgL value one synthesized nominal instance stands for."""
+    if descriptor.kind is NominalKind.RECORD:
+        return RecordValue(descriptor.nominal, descriptor.display_name, fields)
+    # A descriptor reaches here only from :func:`_create_nominal`, which builds
+    # a class for a record or an exception declaration; an enum class is a pure
+    # namespace carrying no descriptor of its own.
+    return ExceptionValue(descriptor.nominal, descriptor.display_name, fields)
+
+
+class _AglNominalShape(Protocol):
+    """How one synthesized nominal class crosses the boundary, both directions.
+
+    Whether a nominal snapshots (:class:`_AglNominal`) or stays a live window
+    onto its AgL value (:class:`_AglRecordView`) is settled once, when its
+    class is synthesized. The generic encoder and decoder dispatch through
+    this pair rather than re-deciding the strategy per crossing value, so a
+    further strategy is a further base class, not another branch in the
+    walkers.
+    """
+
+    @classmethod
+    def _agl_encode(cls, value: RecordValue | ExceptionValue) -> object: ...
+
+    def _agl_decode(self) -> Value: ...
+
+
 class _AglNominal:
     """Base implementation shared by synthesized record, exception, and enum-variant classes.
 
@@ -98,12 +171,11 @@ class _AglNominal:
     _agl_nominal: NominalId
     _agl_kind: NominalKind
     _agl_fields: tuple[str, ...]
+    _agl_field_set: frozenset[str]
     _agl_descriptor: NominalDescriptor
 
     def __init__(self, **fields: object) -> None:
-        expected = type(self)._agl_fields
-        if set(fields) != set(expected):
-            raise TypeError(f"expected fields {expected!r}")
+        _require_exact_fields(type(self), fields)
         object.__setattr__(self, "_agl_values", fields)
 
     def __getattr__(self, name: str) -> object:
@@ -113,7 +185,7 @@ class _AglNominal:
             raise AttributeError(name) from None
 
     def __setattr__(self, name: str, value: object) -> None:
-        raise AttributeError("AgL nominal values are immutable")
+        raise AttributeError(_IMMUTABLE_MESSAGE)
 
     def __eq__(self, other: object) -> bool:
         if type(other) is not type(self):
@@ -126,6 +198,94 @@ class _AglNominal:
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}(...)"
+
+    @classmethod
+    def _agl_encode(cls, value: RecordValue | ExceptionValue) -> Self:
+        """Snapshot *value*: encode every field once, up front."""
+        return cls(**{name: encode_boundary_value(field) for name, field in value.fields.items()})
+
+    def _agl_decode(self) -> Value:
+        """Rebuild the AgL value this snapshot stands for."""
+        cls = type(self)
+        return _nominal_value(
+            cls._agl_descriptor,
+            {name: decode_boundary_value(self._agl_values[name]) for name in cls._agl_fields},
+        )
+
+
+class _AglRecordView:
+    """Base implementation for synthesized live views of mutable record values.
+
+    Unlike :class:`_AglNominal`, which snapshots its fields into a dict of
+    already-encoded Python objects, a view keeps the underlying
+    :class:`RecordValue` and encodes each field on read, so a companion sees
+    AgL-side mutation and AgL sees the companion's writes.
+
+    Name collisions follow :class:`_AglNominal`'s rule: ordinary attribute
+    lookup wins, so a field sharing a name with an ``_agl_*`` class attribute
+    is reachable only through that attribute. Reads get that for free by
+    falling back through ``__getattr__``; writes, which a view also has to
+    serve, restate it rather than letting a companion reach a field reads
+    cannot.
+    """
+
+    __slots__ = ("_agl_value",)
+    _agl_value: RecordValue
+    _agl_nominal: NominalId
+    _agl_kind: NominalKind
+    _agl_fields: tuple[str, ...]
+    _agl_field_set: frozenset[str]
+    _agl_descriptor: NominalDescriptor
+
+    def __init__(self, **fields: object) -> None:
+        expected = type(self)._agl_fields
+        _require_exact_fields(type(self), fields)
+        object.__setattr__(
+            self,
+            "_agl_value",
+            _nominal_value(
+                type(self)._agl_descriptor,
+                {name: _decode_written_value(fields[name]) for name in expected},
+            ),
+        )
+
+    @classmethod
+    def _agl_encode(cls, value: RecordValue | ExceptionValue) -> Self:
+        """Open a window onto *value*: nothing is copied and no field is read."""
+        view = object.__new__(cls)
+        object.__setattr__(view, "_agl_value", value)
+        return view
+
+    def _agl_decode(self) -> Value:
+        """Return the live record this view is a window onto."""
+        return self._agl_value
+
+    def __getattr__(self, name: str) -> object:
+        try:
+            field = self._agl_value.fields[name]
+        except KeyError:
+            raise AttributeError(name) from None
+        return encode_boundary_value(field)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        cls = type(self)
+        # A shadowed field is a field dot access cannot reach in either
+        # direction, so it reports as unwritable rather than as unknown.
+        shadowed = hasattr(cls, name)
+        if not shadowed and name in cls._agl_descriptor.mutable_fields:
+            self._agl_value.fields[name] = _decode_written_value(value)
+        elif shadowed or name in cls._agl_field_set:
+            raise AttributeError(_IMMUTABLE_MESSAGE)
+        else:
+            raise AttributeError(name)
+
+    def __eq__(self, other: object) -> bool:
+        if type(other) is not type(self):
+            return NotImplemented
+        return self._agl_value == other._agl_value
+
+    def __repr__(self) -> str:
+        return render_value(self._agl_value)
 
 
 class _AglEnum:
@@ -152,6 +312,9 @@ def _nominal_attrs(descriptor: NominalDescriptor) -> dict[str, object]:
         "_agl_nominal": descriptor.nominal,
         "_agl_kind": descriptor.kind,
         "_agl_fields": descriptor.fields,
+        # Kept alongside the ordered tuple so a companion-side construction
+        # checks its keyword names without building a set per instance.
+        "_agl_field_set": frozenset(descriptor.fields),
         "_agl_descriptor": descriptor,
         "__match_args__": descriptor.fields,
     }
@@ -171,10 +334,17 @@ def _create_nominal(descriptor: NominalDescriptor, name: str) -> type[object]:
     an identity's layout is fixed at its declaration, so there is never a
     reason to build a second class for the same ``NominalId``.
     """
-    attrs = _nominal_attrs(descriptor)
+    # A record with a `var` field gets the live view base; every other nominal
+    # shape snapshots. `_AglRecordView` declares `__eq__` and no `__hash__`, so
+    # Python already makes it (and every subclass) unhashable.
+    base = (
+        _AglRecordView
+        if descriptor.kind is NominalKind.RECORD and descriptor.mutable_fields
+        else _AglNominal
+    )
     return cast(
         type[object],
-        type(name, (cast(type[object], _AglNominal),), _class_namespace(attrs)),
+        type(name, (cast(type[object], base),), _class_namespace(_nominal_attrs(descriptor))),
     )
 
 
@@ -272,16 +442,10 @@ def synthesize_nominal_classes(
 class AglArrayView(MutableSequence[object]):
     """A mutable, lazy Python view over one AgL array value."""
 
-    __slots__ = ("_value", "_function_encoder")
+    __slots__ = ("_value",)
 
-    def __init__(
-        self,
-        value: ArrayValue,
-        *,
-        function_encoder: Callable[[IrClosureValue], object] | None = None,
-    ) -> None:
+    def __init__(self, value: ArrayValue) -> None:
         self._value = value
-        self._function_encoder = function_encoder
 
     def __len__(self) -> int:
         return len(self._value.elements)
@@ -297,13 +461,8 @@ class AglArrayView(MutableSequence[object]):
     ) -> object | list[object]:
         if not isinstance(index, SupportsIndex):
             slice_index = index
-            return [
-                encode_boundary_value(value, self._function_encoder)
-                for value in self._value.elements[slice_index]
-            ]
-        return encode_boundary_value(
-            self._value.elements[operator.index(index)], self._function_encoder
-        )
+            return [encode_boundary_value(value) for value in self._value.elements[slice_index]]
+        return encode_boundary_value(self._value.elements[operator.index(index)])
 
     @overload
     def __setitem__(self, index: SupportsIndex, value: object) -> None: ...
@@ -316,25 +475,19 @@ class AglArrayView(MutableSequence[object]):
     def __setitem__(
         self, index: SupportsIndex | slice[int | None, int | None, int | None], value: object
     ) -> None:
-        try:
-            if not isinstance(index, SupportsIndex):
-                slice_index = index
-                if not isinstance(value, Iterable):
-                    raise TypeError("can only assign an iterable to an array slice")
-                self._value.elements[slice_index] = [decode_boundary_value(item) for item in value]
-            else:
-                self._value.elements[operator.index(index)] = decode_boundary_value(value)
-        except BoundaryViolation as exc:
-            raise BoundaryTypeError(str(exc)) from exc
+        if not isinstance(index, SupportsIndex):
+            slice_index = index
+            if not isinstance(value, Iterable):
+                raise TypeError("can only assign an iterable to an array slice")
+            self._value.elements[slice_index] = [_decode_written_value(item) for item in value]
+        else:
+            self._value.elements[operator.index(index)] = _decode_written_value(value)
 
     def __delitem__(self, index: SupportsIndex | slice[int | None, int | None, int | None]) -> None:
         del self._value.elements[index]
 
     def insert(self, index: SupportsIndex, value: object) -> None:
-        try:
-            self._value.elements.insert(operator.index(index), decode_boundary_value(value))
-        except BoundaryViolation as exc:
-            raise BoundaryTypeError(str(exc)) from exc
+        self._value.elements.insert(operator.index(index), _decode_written_value(value))
 
     def extend(self, values: Iterable[object]) -> None:
         # Mirrors ``MutableSequence.extend``'s own self-aliasing guard: without
@@ -346,11 +499,7 @@ class AglArrayView(MutableSequence[object]):
         # mutated.
         if values is self:
             values = list(values)
-        try:
-            decoded = [decode_boundary_value(value) for value in values]
-        except BoundaryViolation as exc:
-            raise BoundaryTypeError(str(exc)) from exc
-        self._value.elements.extend(decoded)
+        self._value.elements.extend([_decode_written_value(value) for value in values])
 
     def clear(self) -> None:
         self._value.elements.clear()
@@ -373,9 +522,9 @@ class AglArrayView(MutableSequence[object]):
             (
                 cast(
                     "_SortKey",
-                    encode_boundary_value(value, self._function_encoder)
+                    encode_boundary_value(value)
                     if key is None
-                    else key(encode_boundary_value(value, self._function_encoder)),
+                    else key(encode_boundary_value(value)),
                 ),
                 index,
             )
@@ -386,7 +535,7 @@ class AglArrayView(MutableSequence[object]):
 
     def __iter__(self) -> Iterator[object]:
         for value in self._value.elements:
-            yield encode_boundary_value(value, self._function_encoder)
+            yield encode_boundary_value(value)
 
     def __contains__(self, value: object) -> bool:
         try:
@@ -435,27 +584,18 @@ class AglArrayView(MutableSequence[object]):
 class AglDictView(MutableMapping[str, object]):
     """A mutable, lazy Python view over one AgL dict value."""
 
-    __slots__ = ("_value", "_function_encoder")
+    __slots__ = ("_value",)
 
-    def __init__(
-        self,
-        value: DictValue,
-        *,
-        function_encoder: Callable[[IrClosureValue], object] | None = None,
-    ) -> None:
+    def __init__(self, value: DictValue) -> None:
         self._value = value
-        self._function_encoder = function_encoder
 
     def __getitem__(self, key: str) -> object:
-        return encode_boundary_value(self._value.entries[key], self._function_encoder)
+        return encode_boundary_value(self._value.entries[key])
 
     def __setitem__(self, key: str, value: object) -> None:
         if not isinstance(key, str):
             raise TypeError("AgL dict keys must be str")
-        try:
-            self._value.entries[key] = decode_boundary_value(value)
-        except BoundaryViolation as exc:
-            raise BoundaryTypeError(str(exc)) from exc
+        self._value.entries[key] = _decode_written_value(value)
 
     def __delitem__(self, key: str) -> None:
         del self._value.entries[key]
@@ -471,7 +611,7 @@ class AglDictView(MutableMapping[str, object]):
 
     def popitem(self) -> tuple[str, object]:
         key, value = self._value.entries.popitem()
-        return key, encode_boundary_value(value, self._function_encoder)
+        return key, encode_boundary_value(value)
 
     def __contains__(self, key: object) -> bool:
         return key in self._value.entries
@@ -486,16 +626,19 @@ class AglDictView(MutableMapping[str, object]):
         return render_value(self._value)
 
 
-def encode_boundary_value(
-    value: Value, function_encoder: Callable[[IrClosureValue], object] | None = None
-) -> object:
+def encode_boundary_value(value: Value) -> object:
     """Encode an AgL value by its runtime subclass.
 
     An ``array``/``dict`` crosses as a live view (mutating it mutates the AgL
-    value). A caller that owns an interpreter supplies *function_encoder* to
-    turn closures into callable proxies; the runtime boundary itself remains
-    evaluator-independent. A ``json`` payload crosses uncopied and unchecked:
-    the companion is trusted to treat what it receives as read-only.
+    value). A closure needs an interpreter to become a callable proxy, which
+    the active extern call supplies through :func:`active_function_encoder`;
+    the runtime boundary itself remains evaluator-independent. A closure
+    therefore crosses only inside a call, matching the window a proxy may be
+    invoked in: reading one through a view that outlived its call -- or from
+    a thread that did not inherit the call's context -- reports rather than
+    minting a proxy nothing could invoke. A ``json`` payload crosses uncopied
+    and unchecked: the companion is trusted to treat what it receives as
+    read-only.
     """
     if isinstance(value, UnitValue):
         return None
@@ -510,23 +653,23 @@ def encode_boundary_value(
     if isinstance(value, JsonValue):
         return AglJson(value.raw)
     if isinstance(value, ArrayValue):
-        return AglArrayView(value, function_encoder=function_encoder)
+        return AglArrayView(value)
     if isinstance(value, DictValue):
-        return AglDictView(value, function_encoder=function_encoder)
+        return AglDictView(value)
     if isinstance(value, IrClosureValue):
-        if function_encoder is None:
-            raise BoundaryViolation("cannot encode an AgL function without an interpreter")
-        return function_encoder(value)
+        encoder = _ACTIVE_FUNCTION_ENCODER.get()
+        if encoder is None:
+            raise BoundaryViolation(
+                "an AgL function crosses the boundary only during its extern call, "
+                "on the interpreter's own thread"
+            )
+        return encoder(value)
     if isinstance(value, (RecordValue, ExceptionValue)):
         try:
             cls = _NOMINAL_CLASSES[value.nominal]
         except KeyError as exc:
             raise BoundaryViolation(f"unknown AgL nominal {value.display_name!r}") from exc
-        fields = {
-            name: encode_boundary_value(field, function_encoder)
-            for name, field in value.fields.items()
-        }
-        return cls(**fields)
+        return cast("type[_AglNominalShape]", cls)._agl_encode(value)
     raise BoundaryViolation(f"cannot encode {type(value).__name__}")
 
 
@@ -564,15 +707,5 @@ def decode_boundary_value(obj: object) -> Value:
         return obj._closure
     descriptor = cast(object, getattr(type(obj), "_agl_descriptor", None))
     if isinstance(descriptor, NominalDescriptor):
-        nominal_obj = cast(_AglNominal, obj)
-        fields = {
-            name: decode_boundary_value(nominal_obj._agl_values[name])
-            for name in type(nominal_obj)._agl_fields
-        }
-        if descriptor.kind is NominalKind.RECORD:
-            return RecordValue(descriptor.nominal, descriptor.display_name, fields)
-        # A descriptor reaches here only from :func:`_create_nominal`, which
-        # builds a class for a record or an exception declaration; an enum
-        # class is a pure namespace carrying no descriptor of its own.
-        return ExceptionValue(descriptor.nominal, descriptor.display_name, fields)
+        return cast("_AglNominalShape", obj)._agl_decode()
     raise BoundaryViolation(f"unsupported Python extern value {type(obj).__name__}")

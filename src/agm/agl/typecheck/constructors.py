@@ -188,21 +188,32 @@ class ConstructorChecker:
         if (
             isinstance(result, FunctionType)
             and isinstance(expected, FunctionType)
-            and isinstance(result.result, RecordType)
-            and isinstance(expected.result, EnumType)
+            and self._unify_member_with_expected(result.result, expected.result, span, owner_name)
         ):
-            expected_member = self._ctx._env.type_table.enum_member_by_decl(
-                expected.result, result.result.decl_id
-            )
-            if expected_member is not None:
-                engine = self._ctx._active_inference_engine()
-                engine.unify(
-                    result.result,
-                    expected_member,
-                    engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject=owner_name),
-                )
-                return replace(result, result=expected.result)
+            return replace(result, result=expected.result)
         return result
+
+    def _unify_member_with_expected(
+        self, result: Type, expected: Type | None, span: SourceSpan, owner_name: str
+    ) -> bool:
+        """Specialize a member constructor's record result against an expected enum slot.
+
+        Returns whether *result* is a member of *expected* and was unified with
+        the enum's own instantiation of it -- the step that lets an expected
+        enum type settle the member's type arguments.
+        """
+        if not isinstance(result, RecordType) or not isinstance(expected, EnumType):
+            return False
+        expected_member = self._ctx._env.type_table.enum_member_by_decl(expected, result.decl_id)
+        if expected_member is None:
+            return False
+        engine = self._inference_engine()
+        engine.unify(
+            result,
+            expected_member,
+            engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject=owner_name),
+        )
+        return True
 
     # --- Generic constructor type-apply as value (explicit type args) ---
 
@@ -464,6 +475,7 @@ class ConstructorChecker:
             )
             field_types = instantiation.templates[:-1]
             result = instantiation.templates[-1]
+            self._unify_member_with_expected(result, expected, span, owner_name)
             for type_param in type_params:
                 engine.require_solved(
                     instantiation.variables[type_param],

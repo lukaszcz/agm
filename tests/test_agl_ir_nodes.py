@@ -45,6 +45,7 @@ from agm.agl.ir import (
     IrConstText,
     IrConstUnit,
     IrExpr,
+    IrFieldSet,
     IrIndexSet,
     IrLiteralCaseKey,
     IrLiteralKind,
@@ -585,6 +586,26 @@ class TestIrBindingsStorage:
         assert n.kind is IndexKind.ARRAY
         assert n.index == idx
         assert n.value == val
+
+    def test_ir_field_set(self) -> None:
+        value = IrLoad(location=LOC, symbol=SYM0)
+        new = IrConstInt(location=LOC, value=7)
+        n = IrFieldSet(location=LOC, value=value, nominal=NOM0, field="x", new=new)
+        assert n.value == value
+        assert n.nominal == NOM0
+        assert n.field == "x"
+        assert n.new == new
+
+    def test_ir_field_set_frozen(self) -> None:
+        n = IrFieldSet(
+            location=LOC,
+            value=IrLoad(location=LOC, symbol=SYM0),
+            nominal=NOM0,
+            field="x",
+            new=IrConstInt(location=LOC, value=1),
+        )
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(n, "field", "y")
 
     def test_ir_index_set_frozen(self) -> None:
         n = IrIndexSet(

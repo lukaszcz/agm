@@ -66,6 +66,7 @@ from agm.agl.syntax import (
     ExceptionDef,
     ExportDecl,
     FieldAccess,
+    FieldTarget,
     FuncDef,
     If,
     IfBranch,
@@ -468,8 +469,35 @@ class TestBinders:
 
     @pytest.mark.parametrize(
         "source",
-        ("f() := 10", "r.x := 10", "1 := 10"),
-        ids=("call", "field", "literal"),
+        ("r.a.b := 1", "xs[0].field := 1", "make().field := 1"),
+        ids=("chained", "indexed", "call"),
+    )
+    def test_assign_field_target_accepts_postfix_root(self, source: str) -> None:
+        assignment = first(parse(source))
+        assert isinstance(assignment, AssignStmt)
+        assert isinstance(assignment.target, FieldTarget)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "if true => r.a.b := 1 else => ()",
+            "if true => xs[0].field := 1 else => ()",
+            "if true => make().field := 1 else => ()",
+        ),
+        ids=("chained", "indexed", "call"),
+    )
+    def test_inline_assign_field_target_accepts_postfix_root(self, source: str) -> None:
+        assignment = first(parse(source))
+        assert isinstance(assignment, If)
+        assert isinstance(assignment.branches[0].body, Block)
+        inline_assign = assignment.branches[0].body.items[0]
+        assert isinstance(inline_assign, AssignStmt)
+        assert isinstance(inline_assign.target, FieldTarget)
+
+    @pytest.mark.parametrize(
+        "source",
+        ("f() := 10", "1 := 10"),
+        ids=("call", "literal"),
     )
     def test_assign_non_indexed_non_variable_target_rejected(self, source: str) -> None:
         """A non-indexed target that is neither a variable nor an indexed
@@ -682,6 +710,42 @@ class TestDeclarations:
         assert isinstance(rec, RecordDef)
         assert rec.name == "Point"
         assert [field.name for field in rec.fields] == ["x", "y"]
+
+    @pytest.mark.parametrize(
+        ("source", "expected_mutability"),
+        (
+            ("record Paren(var x: int, /, y: int, *, var z: int)", (True, False, True)),
+            ("record Indent\n  var x: int\n  y: int", (True, False)),
+            ("record Inline var x: int, y: int", (True, False)),
+            ("builtin record Builtin(var value: int)", (True,)),
+        ),
+        ids=("parenthesized", "indented", "inline", "builtin"),
+    )
+    def test_record_fields_accept_mutable_marker(
+        self, source: str, expected_mutability: tuple[bool, ...]
+    ) -> None:
+        rec = first(parse(source))
+        assert isinstance(rec, RecordDef)
+        assert tuple(field.mutable for field in rec.fields) == expected_mutability
+
+    def test_mutable_record_fields_preserve_constructor_zones(self) -> None:
+        rec = first(parse("record R(var x: int, /, y: int, *, var z: int)"))
+        assert isinstance(rec, RecordDef)
+        assert tuple(field.kind for field in rec.fields) == (
+            ParamKind.POSITIONAL_ONLY,
+            ParamKind.STANDARD,
+            ParamKind.NAMED_ONLY,
+        )
+
+    def test_enum_payload_fields_accept_mutable_marker(self) -> None:
+        en = first(parse("enum Result | Value(var value: int, label: text)"))
+        assert isinstance(en, EnumDef)
+        assert tuple(field.mutable for field in en.members[0].fields) == (True, False)
+
+    def test_exception_fields_accept_mutable_marker_syntactically(self) -> None:
+        exc = first(parse("exception Problem(var reason: text, code: int)"))
+        assert isinstance(exc, ExceptionDef)
+        assert tuple(field.mutable for field in exc.fields) == (True, False)
 
     def test_record_def_with_optional_equals_before_parens(self) -> None:
         prog = parse("record Point = (x: int, y: int)")
@@ -1224,6 +1288,7 @@ class TestParamKind:
         fd = first(parse("def f(x: int) -> int = x"))
         assert isinstance(fd, FuncDef)
         assert fd.params[0].kind == ParamKind.STANDARD
+        assert fd.params[0].mutable is False
 
     def test_lambda_param_is_standard(self) -> None:
         prog = parse("let g = fn(x: int) => x")

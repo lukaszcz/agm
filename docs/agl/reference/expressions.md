@@ -351,7 +351,7 @@ function value whose receiver is the value on the left of the dot.
 
 ```agl
 record Meter
-  value: int
+  var value: int
 
 def Meter::add(self, amount: int) -> int = self.value + amount
 program def main() -> unit =
@@ -359,6 +359,7 @@ program def main() -> unit =
   let value = meter.value
   let add = meter.add
   let plus = meter.add(?)
+  meter.value := 7
   let _ = print(value)
   let _ = print(add(3))
   let _ = print(plus(5))
@@ -380,6 +381,15 @@ an `Option` method directly; the call keeps the member value as its receiver.
 Other enum methods require an enum-typed receiver. Use a pattern or member-record
 cast before accessing a member's fields or methods from an enum value.
 
+A field assignment `receiver.field := value` requires `field` to be declared
+with `var` on a record or enum-member record. It updates that field in place,
+so aliases of `receiver` observe the new value. A `let` receiver is valid: it
+prevents rebinding the name, not updating a `var` field. An enum-typed receiver
+has no fields; narrow it with a `case` pattern or cast it to a member record
+before assignment. Exceptions and fields without `var` cannot be assigned.
+See [Bindings and scope](bindings-and-scope.md#--destructive-assignment) for
+assignment targets, evaluation order, and cycle behavior.
+
 ## Record update
 
 `target with field = value, ...` builds a **shallow copy** of a **record** or
@@ -387,7 +397,7 @@ cast before accessing a member's fields or methods from an enum value.
 a record for this rule. All other fields keep their values — an unlisted array
 or dict field is shared with the target, not copied, so mutating it through the
 update's result is observed through the
-target too. The target itself is unchanged (values are immutable):
+target too. The target itself is unchanged, even when it has `var` fields:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -398,7 +408,9 @@ let urgent = base with severity = 5, title = "Bug!"
 The result has the target's static type. Every listed field must exist on
 that type, each value must be assignable to the declared field type (with the
 usual expected-type propagation and `int` → `decimal` coercion), and listing
-the same field twice in one update is a static error. `with` does not apply
+the same field twice in one update is a static error. Thus `with` rebuilds a
+new outer value, while `:=` updates a `var` field of the existing value in
+place. `with` does not apply
 to enums (match and reconstruct instead), dictionaries, arrays, or `json`
 values. The target is evaluated once, then the update values left to right.
 
@@ -530,7 +542,8 @@ print(classify(-4))                    # compound argument needs parens
 print res.stdout                       # field-access chain as sugar arg
 ```
 
-`print` cannot be bound as a function value (`let f = print` is a static
+`print` raises `CyclicValueError` when its argument contains a reference
+cycle. `print` cannot be bound as a function value (`let f = print` is a static
 error, because built-ins are only valid in call position). An explicit type
 argument (`print::[decimal](5)`) is accepted, requires the argument to be
 assignable to it, and prints the argument coerced to that type — so
@@ -559,8 +572,9 @@ program def main() -> unit =
   let _ = render([1, 2], pretty = false)
 ```
 
-`render` cannot be bound as a function value (`let f = render` is a static
-error, because built-ins are only valid in call position). An explicit type
+`render` raises `CyclicValueError` when its argument contains a reference
+cycle. `render` cannot be bound as a function value (`let f = render` is a
+static error, because built-ins are only valid in call position). An explicit type
 argument (`render::[decimal](5)`) is accepted, requires the argument to be
 assignable to it, and renders the argument coerced to that type — so
 `render::[json]("hi", quote_strings = false)` renders the quoted json form
@@ -689,7 +703,9 @@ EXPR as? T    # convertibility test: bool, never raises
 
 `as` converts the value to the named type; `as?` tests whether the same `as`
 conversion would succeed, returning `true` on success and `false` on failure.
-Casting from an enum to one of its member records is an identity downcast;
+`as text` and `as json` raise `CyclicValueError` when conversion walks a
+reference cycle; their `as?` forms return `false` instead. Casting from an enum
+to one of its member records is an identity downcast;
 casting a member record to a containing enum is an identity upcast.
 The full conversion matrix and semantics are in
 [Types](types.md#casts-and-convertibility).

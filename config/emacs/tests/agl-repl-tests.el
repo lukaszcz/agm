@@ -81,11 +81,22 @@
       (insert "def f() -> int =\n  1\n")
       (agl-send-buffer))
     (should (= (length agl-repl-tests--sent) 1))
-    (should (equal (car agl-repl-tests--sent) "def f() -> int =\n  1\n"))))
+    (should (equal (car agl-repl-tests--sent) "def f() -> int =\n  1\n\n"))))
+
+(ert-deftest agl-repl-terminates-a-block-left-open-by-its-last-line ()
+  ;; An indented last line leaves the reader inside a layout block, which can
+  ;; always take one more line; the blank line is what closes it.  A single
+  ;; final newline would only start another continuation line.
+  (agl-repl--with-stubs
+    (with-temp-buffer
+      (insert "case 1 of\n  | 1 => print(\"one\")\n  | _ => print(\"other\")\n")
+      (agl-send-buffer))
+    (should (equal agl-repl-tests--sent
+                   '("case 1 of\n  | 1 => print(\"one\")\n  | _ => print(\"other\")\n\n")))))
 
 (ert-deftest agl-repl-terminates-a-trailing-raw-tail-block ()
-  ;; A blank line tells the plain reader that the indented raw payload is
-  ;; complete; a single final newline only starts its continuation line.
+  ;; An indented raw-tail payload is the same case: its blank line is what
+  ;; tells the plain reader the payload is complete.
   (agl-repl--with-stubs
     (dolist (opener '("exec!" "ask!"))
       (with-temp-buffer
@@ -94,6 +105,15 @@
         (agl-send-buffer)))
     (should (equal agl-repl-tests--sent
                    '("exec!\n  payload\n\n" "ask!\n  payload\n\n")))))
+
+(ert-deftest agl-repl-does-not-terminate-a-closed-region ()
+  ;; Sibling statements at column zero are each a complete entry, so the
+  ;; reader needs no terminator and one is not sent.
+  (agl-repl--with-stubs
+    (with-temp-buffer
+      (insert "let x = 1\nlet y = 2\n")
+      (agl-send-buffer))
+    (should (equal agl-repl-tests--sent '("let x = 1\nlet y = 2\n")))))
 
 (ert-deftest agl-repl-does-not-double-a-trailing-newline ()
   (agl-repl--with-stubs

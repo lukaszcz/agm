@@ -12,6 +12,8 @@ import subprocess
 import sys
 from collections.abc import Callable
 
+import pytest
+
 from agm.agl.repl import ReplSession
 from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.plain_console import PlainReader, plain_mode_engaged, run_plain_console
@@ -247,6 +249,35 @@ class TestPlainMultiline:
         output = drive_plain("record R\n\n")
         assert "declared" not in output
         assert ": error:" in output.lower()
+
+    def test_editor_sent_block_is_read_as_one_entry(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # An `if'/`else' block is complete after its first branch, so a reader
+        # that submits at the first parseable prefix splits it in three and
+        # reports the `else' as a stray. This is what `C-c C-r' sends.
+        output = drive_plain(
+            'let x = 5\nif x > 3 =>\n  print("big")\nelse =>\n  print("small")\n\n'
+        )
+        assert "error" not in output.lower()
+        assert capsys.readouterr().out.split() == ["big"]
+
+    def test_indented_line_keeps_the_entry_open(self, capsys: pytest.CaptureFixture[str]) -> None:
+        # A layout block can always take one more line, so an indented last
+        # line leaves the entry open however well the text parses: a `case'
+        # parses after its first branch, and its second one is a stray on its
+        # own.
+        output = drive_plain('case 1 of\n  | 1 => print("one")\n  | _ => print("other")\n\n')
+        assert "error" not in output.lower()
+        assert capsys.readouterr().out.split() == ["one"]
+
+    def test_pending_block_is_evaluated_at_end_of_input(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # A pipe that closes without the terminating blank line still runs the
+        # block it sent, rather than dropping it.
+        drive_plain('if true =>\n  print("done")\n')
+        assert capsys.readouterr().out.split() == ["done"]
 
     def test_multiline_string_continues_through_blank_lines(self) -> None:
         # A blank line inside an open triple-quoted string must not force-submit

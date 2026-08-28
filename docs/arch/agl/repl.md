@@ -84,8 +84,10 @@ Two front ends wire that seam to different I/O:
   and wires its prompt/print as reader and writer.
 - `agm.agl.repl.plain_console` — a styling-free line front end for a pipe,
   comint buffer, or other non-terminal consumer. It reads from a text stream
-  and accumulates continuation lines with the same predicate, so a pasted
-  multi-line block works. It also owns the engagement predicate (non-tty
+  and accumulates continuation lines with the same predicate; since it sees one
+  line at a time rather than a whole pasted buffer, an entry whose latest line
+  is indented stays open until a blank line or end of input closes it, which is
+  the only way a layout block can end. It also owns the engagement predicate (non-tty
   stdin/stdout, or `TERM=dumb`) that `agm.commands.repl` uses to pick a front
   end unless `--plain` forces it; nothing forces prompt_toolkit onto a pipe.
 

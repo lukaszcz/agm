@@ -8,7 +8,11 @@
 ;; mode prints unstyled prompts and reads entries line by line, which is
 ;; what makes the session drivable from a comint buffer; it also
 ;; accumulates continuation lines until an entry is complete, so a
-;; multi-line region can be sent as-is rather than split here.
+;; multi-line region can be sent as-is rather than split here.  What the
+;; reader cannot decide on its own is where a layout block ends -- an
+;; indented block takes one more line however well it parses -- so a
+;; region left open by an indented last line is sent with the blank line
+;; that closes it.
 
 ;;; Code:
 
@@ -61,39 +65,35 @@ line start; the alternative is kept so the regexp describes both.")
   (interactive)
   (pop-to-buffer (agl-repl-buffer)))
 
-(defun agl-repl-send-string (text &optional terminate-raw-tail)
+(defun agl-repl--open-block-p (text)
+  "Return non-nil when TEXT leaves the plain REPL reader inside a block.
+
+The reader keeps an entry open while its latest line is indented, since
+a layout block accepts one more line however well what precedes it
+parses.  An indented raw-tail payload is the same case, and is closed by
+the same blank line."
+  (let* ((lines (split-string (string-trim-right text) "\n"))
+         (last (car (last lines))))
+    (and (cdr lines) (string-match-p "\\`[ \t]" last))))
+
+(defun agl-repl-send-string (text)
   "Send TEXT to the inferior AgL REPL, followed by a newline.
 
 The REPL reads continuation lines until an entry is complete, so a
 multi-line TEXT is sent unchanged rather than split into entries here.
-When TERMINATE-RAW-TAIL is non-nil, send the blank line that ends an
-indented raw-tail block."
+A TEXT that leaves a block open (`agl-repl--open-block-p') is followed by
+a blank line instead, which is what closes that block."
   (let ((buffer (agl-repl-buffer)))
     (comint-send-string (get-buffer-process buffer)
-                        ;; Exactly one terminating newline, except raw-tail
-                        ;; blocks, for which the second newline is their
-                        ;; required blank-line terminator.
                         (concat (string-trim-right text "\n+")
-                                (if terminate-raw-tail "\n\n" "\n")))
+                                (if (agl-repl--open-block-p text) "\n\n" "\n")))
     buffer))
-
-(defun agl-repl--trailing-raw-tail-block-p (start end)
-  "Return non-nil when START through END ends in an indented raw-tail block."
-  (syntax-propertize end)
-  (let ((last-content (save-excursion
-                        (goto-char end)
-                        (skip-chars-backward " \t\n" start)
-                        (point))))
-    (and (> last-content start)
-         (get-text-property (1- last-content) 'agl-raw-tail-payload)
-         (get-text-property (1- last-content) 'agl-multiline))))
 
 ;;;###autoload
 (defun agl-send-region (start end)
   "Send the region between START and END to the inferior AgL REPL."
   (interactive "r")
-  (agl-repl-send-string (buffer-substring-no-properties start end)
-                        (agl-repl--trailing-raw-tail-block-p start end)))
+  (agl-repl-send-string (buffer-substring-no-properties start end)))
 
 ;;;###autoload
 (defun agl-send-buffer ()

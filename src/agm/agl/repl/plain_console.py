@@ -40,20 +40,39 @@ def plain_mode_engaged(*, stdin: TextIO, stdout: TextIO, env: Mapping[str, str])
     return not (stdin.isatty() and stdout.isatty())
 
 
+def _continues_block(text: str, line: str) -> bool:
+    """Return whether *line* leaves the entry accumulated in *text* still open.
+
+    An indented line sits inside a layout block, and a block accepts one more
+    line however well what precedes it parses, so only a blank line (or end of
+    input) can say the entry is finished. *text* is empty for the entry's first
+    line, which starts no block of its own.
+    """
+    return bool(text) and line[:1] in (" ", "\t")
+
+
 class PlainReader:
     """Read one (possibly multiline) entry from *stdin*, prompting on *stdout*.
 
     Accumulates continuation lines using :func:`agm.agl.repl.loop.is_incomplete`
-    — the same predicate the prompt_toolkit Enter handler uses — so a pasted or
-    editor-sent multi-line block accumulates exactly like the rich console's
-    multiline entry: each line is appended and, if the accumulated text is
-    still an incomplete prefix, another line is read after printing
-    :data:`~agm.agl.repl.loop.CONTINUATION`. Closed *stdin* (EOF) raises
-    ``EOFError`` — matching Ctrl-D — even mid-entry, so a pipe that closes
-    exits the REPL cleanly rather than hanging. Over a pty, Ctrl-C interrupts
-    the blocked read with ``KeyboardInterrupt``; a newline is written first so
-    the loop's fresh prompt starts on its own line instead of gluing onto the
-    cancelled entry's echoed input (matching the rich console, which is
+    — the same predicate the prompt_toolkit Enter handler uses — printing
+    :data:`~agm.agl.repl.loop.CONTINUATION` before each further line. The
+    predicate alone cannot end a multi-line entry, though: this front end sees
+    one line at a time (the rich console evaluates a paste as one buffer), and
+    in a layout language an indented block is complete after every line yet can
+    always take one more. An entry whose latest line is indented therefore stays
+    open until a blank line — the terminator ``is_incomplete`` already
+    documents — or end of input closes it. Without that an editor-sent
+    ``if``/``else`` block would submit at its first branch and report the
+    ``else`` as a stray.
+
+    Closed *stdin* (EOF) raises ``EOFError`` — matching Ctrl-D — so a pipe that
+    closes exits the REPL cleanly rather than hanging; an entry accumulated when
+    that happens is returned first, so a block sent without the terminating
+    blank line still runs, and the next read raises. Over a pty, Ctrl-C
+    interrupts the blocked read with ``KeyboardInterrupt``; a newline is written
+    first so the loop's fresh prompt starts on its own line instead of gluing
+    onto the cancelled entry's echoed input (matching the rich console, which is
     already on a fresh line by the time Ctrl-C reaches it).
     """
 
@@ -74,9 +93,12 @@ class PlainReader:
                 self._stdout.flush()
                 raise
             if raw == "":
+                if text:
+                    return text
                 raise EOFError
-            candidate = text + raw.rstrip("\n")
-            if not is_incomplete(candidate):
+            line = raw.rstrip("\n")
+            candidate = text + line
+            if not is_incomplete(candidate) and not _continues_block(text, line):
                 return candidate
             text = candidate + "\n"
             prompt = CONTINUATION

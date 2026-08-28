@@ -51,6 +51,10 @@ the directory directly:
 | `C-c C-r` | `agl-send-region` |
 | `C-c C-b` | `agl-send-buffer` |
 
+A sent region goes to the REPL unsplit. When its last line is indented the
+region leaves a block open — a layout block always accepts one more line — so
+the blank line that closes it is sent too.
+
 ## Customization
 
 - `agl-indent-offset` — block indentation, default 2.

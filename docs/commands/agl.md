@@ -85,9 +85,11 @@ These behaviors are shared by both front ends:
   such as `exec!`/`ask!` opens a continuation line (`...>`); a complete entry submits.
   Pressing Enter on a blank continuation line force-submits even an unfinished buffer
   so you can always escape. In the plain front end this accumulation happens as lines
-  are read from stdin rather than through key bindings, but the same predicate decides
-  when an entry is complete, so a pasted or programmatically sent multi-line block
-  works identically.
+  are read from stdin rather than through key bindings, and the same predicate decides
+  when an entry is complete. One line at a time is less than a pasted buffer, though:
+  an indented block parses after every line yet can always take one more, so there an
+  entry whose latest line is indented stays open until the blank line closes it. End of
+  input closes it too, so a block piped in without that blank line still runs.
 - Press Ctrl-C to cancel the current entry without exiting. During a live agent call,
   Ctrl-C interrupts the call and stops the current entry; effects completed before
   cancellation remain visible, and unreached operations do not run.

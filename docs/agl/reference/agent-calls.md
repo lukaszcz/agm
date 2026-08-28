@@ -63,8 +63,8 @@ Session::ask[T](self, prompt: text, format: text = "",
 It sends the prompt through that live session, so the session's stored agent
 and transport select the backend; it has no `agent` argument. It uses the same
 contextual or explicit `::[T]` target, concrete-target restriction, parse
-options, and output-contract checking as `ask`. `session.ask!` has the same
-raw-tail spelling rules as `reviewer.ask!`. Parse retries remain in this same
+options, and output-contract checking as `ask`. `session.ask$` has the same
+raw-tail spelling rules as `reviewer.ask$`. Parse retries remain in this same
 conversation.
 
 ### Single-argument sugar
@@ -84,15 +84,15 @@ With named arguments, parentheses are required:
 let r: Review = reviewer.ask("Review %{artifact}")
 ```
 
-## Raw-tail `ask!`
+## Raw-tail `ask$`
 
-`ask!` writes a prompt directly after the keyword. Inline form consumes the
+`ask$` writes a prompt directly after the keyword. Inline form consumes the
 rest of its line; block form consumes one dedented, newline-joined prompt.
 It desugars to the same call as `ask(<template>)`, so explicit type arguments
 and target-type inference work exactly as for `ask`. It may also follow an
-`Agent` projection: `reviewer.ask!` desugars to `reviewer.ask(<template>)`.
-Type arguments must touch the raw name (`ask!::[T]` or
-`reviewer.ask!::[T]`); in `ask! ::[T]`, the spaced `::[T]` is prompt payload:
+`Agent` projection: `reviewer.ask$` desugars to `reviewer.ask(<template>)`.
+Type arguments must touch the raw name (`ask$::[T]` or
+`reviewer.ask$::[T]`); in `ask$ ::[T]`, the spaced `::[T]` is prompt payload:
 
 ```agl
 record Review
@@ -100,15 +100,15 @@ record Review
 
 program def main() -> unit =
   let subject = "the release notes"
-  let summary: text = ask! Summarize %{subject}.
-  let review: Review = ask!::[Review]
+  let summary: text = ask$ Summarize %{subject}.
+  let review: Review = ask$::[Review]
     Review %{subject} and provide a concise summary.
 ```
 
 Raw-tail prompt text is verbatim except for `%{expr}` interpolation and
 trailing spaces and tabs in an inline prompt; `\%{` writes a literal `%{`.
 A raw call needs a nonempty inline prompt or a block with at least one nonblank
-line. A bare `ask!` uses the default session and `reviewer.ask!` opens the
+line. A bare `ask$` uses the default session and `reviewer.ask$` opens the
 short-lived session for its receiver. Use `ask(...)` or `reviewer.ask(...)`
 when setting `format`, `strict_json`, or `on_parse_error`; the parenthesized
 forms are also available outside a raw-tail line-final position.

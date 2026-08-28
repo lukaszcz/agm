@@ -166,7 +166,7 @@ def assert_raw_tail_name_span(error: AglSyntaxError, source: str) -> None:
     assert "reserved for raw-tail calls" in str(error)
     span = error.span
     assert span is not None
-    name = next(name for name in ("exec!", "ask!") if name in source)
+    name = next(name for name in ("exec$", "ask$") if name in source)
     offset = source.index(name)
     line = source.count("\n", 0, offset) + 1
     col = offset - source.rfind("\n", 0, offset)
@@ -4568,13 +4568,13 @@ class TestRawTailCalls:
     @pytest.mark.parametrize(
         ("raw_source", "call_source"),
         (
-            ("exec! ls -lh", 'exec("ls -lh")'),
-            ("ask! Summarize %{f}", 'ask("Summarize %{f}")'),
-            ("exec!\n  echo %{file}\n  date", 'exec("""echo %{file}\ndate""")'),
-            ("ask!\n  Review %{file}\n  carefully", 'ask("""Review %{file}\ncarefully""")'),
-            ("exec!::[json] cat result.json", 'exec::[json]("cat result.json")'),
-            ("ask!::[Review] Summarize %{f}", 'ask::[Review]("Summarize %{f}")'),
-            ("exec! : true", 'exec(": true")'),
+            ("exec$ ls -lh", 'exec("ls -lh")'),
+            ("ask$ Summarize %{f}", 'ask("Summarize %{f}")'),
+            ("exec$\n  echo %{file}\n  date", 'exec("""echo %{file}\ndate""")'),
+            ("ask$\n  Review %{file}\n  carefully", 'ask("""Review %{file}\ncarefully""")'),
+            ("exec$::[json] cat result.json", 'exec::[json]("cat result.json")'),
+            ("ask$::[Review] Summarize %{f}", 'ask::[Review]("Summarize %{f}")'),
+            ("exec$ : true", 'exec(": true")'),
         ),
     )
     def test_desugars_to_equivalent_call(self, raw_source: str, call_source: str) -> None:
@@ -4583,37 +4583,37 @@ class TestRawTailCalls:
     @pytest.mark.parametrize(
         ("raw_source", "call_source"),
         (
-            ("ag.ask! Summarize %{subject}", 'ag.ask("Summarize %{subject}")'),
+            ("ag.ask$ Summarize %{subject}", 'ag.ask("Summarize %{subject}")'),
             (
-                "ag.ask!\n  Review %{subject} carefully",
+                "ag.ask$\n  Review %{subject} carefully",
                 'ag.ask("""Review %{subject} carefully""")',
             ),
             (
-                "ag.ask!::[Review] Summarize %{subject}",
+                "ag.ask$::[Review] Summarize %{subject}",
                 'ag.ask::[Review]("Summarize %{subject}")',
             ),
             (
-                "agents[0].ask! Continue %{subject}",
+                "agents[0].ask$ Continue %{subject}",
                 'agents[0].ask("Continue %{subject}")',
             ),
             (
-                "print agents[0].ask! Continue %{subject}",
+                "print agents[0].ask$ Continue %{subject}",
                 'print agents[0].ask("Continue %{subject}")',
             ),
             (
-                "print make_agent().ask! Continue %{subject}",
+                "print make_agent().ask$ Continue %{subject}",
                 'print make_agent().ask("Continue %{subject}")',
             ),
             (
-                "print fleet.current[0].ask! Continue %{subject}",
+                "print fleet.current[0].ask$ Continue %{subject}",
                 'print fleet.current[0].ask("Continue %{subject}")',
             ),
             (
-                "print ag.ask! Summarize %{subject}",
+                "print ag.ask$ Summarize %{subject}",
                 'print ag.ask("Summarize %{subject}")',
             ),
             (
-                "print ag.ask!::[Review]\n  Review %{subject} carefully",
+                "print ag.ask$::[Review]\n  Review %{subject} carefully",
                 'print ag.ask::[Review]("""Review %{subject} carefully""")',
             ),
         ),
@@ -4625,16 +4625,16 @@ class TestRawTailCalls:
 
     def test_is_allowed_at_each_line_final_position(self) -> None:
         source = """\
-exec! true
-let a = exec! true
-var b = exec! true
-b := exec! false
+exec$ true
+let a = exec$ true
+var b = exec$ true
+b := exec$ false
 def returned() -> ExecResult
-  return exec! true
-def inline() -> ExecResult = return exec! true
-print exec! true
-(1 + 1) exec! true
-1 + 1; exec! true
+  return exec$ true
+def inline() -> ExecResult = return exec$ true
+print exec$ true
+(1 + 1) exec$ true
+1 + 1; exec$ true
 """
         program = parse(source)
         assert len(program.body.items) == 10
@@ -4647,13 +4647,13 @@ print exec! true
         assert isinstance(inline.body, Return)
 
     def test_raw_tail_is_allowed_as_an_arrow_suite_item(self) -> None:
-        branch = first(parse("if true =>\n  exec! true"))
+        branch = first(parse("if true =>\n  exec$ true"))
         assert isinstance(branch, If)
         assert isinstance(branch.branches[0].body, Block)
         assert isinstance(branch.branches[0].body.items[0], Call)
 
     def test_inline_nominal_declaration_does_not_reserve_nested_do_suite_items(self) -> None:
-        function = first(parse("def f() -> unit\n  record R x: int\n  do\n    exec! true\n  done"))
+        function = first(parse("def f() -> unit\n  record R x: int\n  do\n    exec$ true\n  done"))
         assert isinstance(function, FuncDef)
         assert isinstance(function.body, Block)
         loop = function.body.items[-1]
@@ -4664,10 +4664,10 @@ print exec! true
     @pytest.mark.parametrize(
         ("source", "expected_span"),
         (
-            ("exec!", (1, 6, 1, 6)),
-            ("ask!   ", (1, 8, 1, 8)),
-            ("exec!\n", (2, 1, 2, 1)),
-            ("exec!\nnext", (2, 1, 2, 1)),
+            ("exec$", (1, 6, 1, 6)),
+            ("ask$   ", (1, 8, 1, 8)),
+            ("exec$\n", (2, 1, 2, 1)),
+            ("exec$\nnext", (2, 1, 2, 1)),
         ),
     )
     def test_empty_payload_is_rejected_at_its_location(
@@ -4686,16 +4686,16 @@ print exec! true
     @pytest.mark.parametrize(
         ("source", "expected_span"),
         (
-            ("1 + exec!", (1, 5, 1, 10)),
-            ("1 + exec! true", (1, 5, 1, 10)),
-            ("1 + ag.ask! true", (1, 8, 1, 12)),
-            ("1 + print ag.ask! true", (1, 14, 1, 18)),
-            ("if true => exec! date | else => 0", (1, 12, 1, 17)),
-            ("case true of true => exec! date | false => 0", (1, 22, 1, 27)),
-            ("try exec! date catch _ => 0", (1, 5, 1, 10)),
-            ("if true => return exec! date | else => 0", (1, 19, 1, 24)),
-            ("case true of true => return exec! date | false => 0", (1, 29, 1, 34)),
-            ("try return exec! date catch _ => 0", (1, 12, 1, 17)),
+            ("1 + exec$", (1, 5, 1, 10)),
+            ("1 + exec$ true", (1, 5, 1, 10)),
+            ("1 + ag.ask$ true", (1, 8, 1, 12)),
+            ("1 + print ag.ask$ true", (1, 14, 1, 18)),
+            ("if true => exec$ date | else => 0", (1, 12, 1, 17)),
+            ("case true of true => exec$ date | false => 0", (1, 22, 1, 27)),
+            ("try exec$ date catch _ => 0", (1, 5, 1, 10)),
+            ("if true => return exec$ date | else => 0", (1, 19, 1, 24)),
+            ("case true of true => return exec$ date | false => 0", (1, 29, 1, 34)),
+            ("try return exec$ date catch _ => 0", (1, 12, 1, 17)),
         ),
     )
     def test_non_line_final_position_is_rejected_at_its_location(
@@ -4714,8 +4714,8 @@ print exec! true
     @pytest.mark.parametrize(
         "source",
         (
-            "let a = (1 + 2\nlet b: text = exec! echo hi\nprint(b)\n",
-            "let a = [1, 2\nlet b: text = exec! echo hi\n",
+            "let a = (1 + 2\nlet b: text = exec$ echo hi\nprint(b)\n",
+            "let a = [1, 2\nlet b: text = exec$ echo hi\n",
         ),
     )
     def test_unclosed_bracket_is_reported_where_the_expression_breaks(self, source: str) -> None:
@@ -4729,24 +4729,24 @@ print exec! true
 
     def test_arrow_body_raw_tail_is_rejected_over_its_shell_quotes(self) -> None:
         with pytest.raises(AglSyntaxError) as exc_info:
-            parse("if true => exec! echo 'oops")
+            parse("if true => exec$ echo 'oops")
         span = exc_info.value.span
         assert span is not None
         assert (span.start_line, span.start_col) == (1, 12)
 
     def test_empty_payload_names_the_form_after_nested_type_arguments(self) -> None:
         with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program("let x: array[int] = exec!::[array[int]]\nnext")
-        assert "exec!" in str(exc_info.value)
+            parse_program("let x: array[int] = exec$::[array[int]]\nnext")
+        assert "exec$" in str(exc_info.value)
 
     def test_empty_dotted_raw_tail_names_its_member(self) -> None:
         with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program("agent.ask!")
-        assert "ask!" in str(exc_info.value)
+            parse_program("agent.ask$")
+        assert "ask$" in str(exc_info.value)
 
     @pytest.mark.parametrize(
         "source",
-        ("let x = 1\n  exec! echo hi", "print 1\n  exec! echo hi"),
+        ("let x = 1\n  exec$ echo hi", "print 1\n  exec$ echo hi"),
     )
     def test_stray_indentation_before_a_raw_tail_is_reported_as_indentation(
         self, source: str
@@ -4757,7 +4757,7 @@ print exec! true
 
     def test_raw_tail_default_is_rejected_inside_parameter_brackets_at_its_location(self) -> None:
         with pytest.raises(AglSyntaxError) as exc_info:
-            parse("def f(x: int = exec! true) -> int = x")
+            parse("def f(x: int = exec$ true) -> int = x")
         assert exc_info.value.span is not None
         assert (
             exc_info.value.span.start_line,
@@ -4771,7 +4771,7 @@ print exec! true
     def test_nominal_marker_rejects_raw_tail_as_a_field_definition(
         self, declaration: str, marker: str
     ) -> None:
-        source = f"{declaration} R\n  x: int\n  {marker}\n  exec!: int"
+        source = f"{declaration} R\n  x: int\n  {marker}\n  exec$: int"
         with pytest.raises(AglSyntaxError) as exc_info:
             parse(source)
         assert_raw_tail_name_span(exc_info.value, source)
@@ -4779,13 +4779,13 @@ print exec! true
     @pytest.mark.parametrize(
         "source",
         (
-            pytest.param("let exec! = 1", id="let_binder"),
-            pytest.param("var exec! = 1", id="var_binder"),
-            pytest.param("record R\n  exec!: int", id="record_field_name"),
-            pytest.param("enum E\n  | ask!", id="enum_variant_name"),
-            pytest.param("program def exec!\n()", id="legacy_program"),
-            pytest.param("for exec! in [] do 1 done", id="for_binder"),
-            pytest.param("type exec! = int", id="type_name"),
+            pytest.param("let exec$ = 1", id="let_binder"),
+            pytest.param("var exec$ = 1", id="var_binder"),
+            pytest.param("record R\n  exec$: int", id="record_field_name"),
+            pytest.param("enum E\n  | ask$", id="enum_variant_name"),
+            pytest.param("program def exec$\n()", id="legacy_program"),
+            pytest.param("for exec$ in [] do 1 done", id="for_binder"),
+            pytest.param("type exec$ = int", id="type_name"),
         ),
     )
     def test_reserved_raw_name_in_a_name_slot_names_the_spelling(self, source: str) -> None:
@@ -4802,13 +4802,13 @@ print exec! true
         # genuine misplaced call, so it keeps the positional guidance instead
         # of the "reserved" wording used for name slots.
         with pytest.raises(AglSyntaxError) as exc_info:
-            parse("let command = 1 + exec! true")
+            parse("let command = 1 + exec$ true")
         message = str(exc_info.value)
         assert "reserved" not in message
         assert "call form" in message and "block form" in message
 
     def test_raw_tail_in_unsupported_lambda_suite_is_rejected_at_its_location(self) -> None:
-        source = "let f = fn() =>\n  exec! date"
+        source = "let f = fn() =>\n  exec$ date"
         with pytest.raises(AglSyntaxError) as exc_info:
             parse(source)
         assert exc_info.value.span is not None
@@ -4822,8 +4822,8 @@ print exec! true
     @pytest.mark.parametrize(
         "source",
         (
-            "fn(exec!: int) => 1",
-            "type Box[ask!] = int",
+            "fn(exec$: int) => 1",
+            "type Box[ask$] = int",
         ),
     )
     def test_reserved_raw_parameter_names_are_rejected_inside_brackets(self, source: str) -> None:
@@ -4835,7 +4835,7 @@ print exec! true
     def test_inline_field_declaration_does_not_leak_to_next_expression(
         self, declaration: str
     ) -> None:
-        source = f"{declaration} R x: int\nfoo(exec! true)"
+        source = f"{declaration} R x: int\nfoo(exec$ true)"
         with pytest.raises(AglSyntaxError) as exc_info:
             parse(source)
         assert exc_info.value.span is not None
@@ -4847,14 +4847,14 @@ print exec! true
         ) == (2, 5, 2, 5)
 
     def test_desugaring_assigns_node_ids_in_source_order(self) -> None:
-        raw_call = first(parse("exec! true"))
+        raw_call = first(parse("exec$ true"))
         assert isinstance(raw_call, Call)
         assert isinstance(raw_call.callee, VarRef)
         assert isinstance(raw_call.args[0], StringLit)
         assert raw_call.callee.node_id < raw_call.args[0].node_id < raw_call.node_id
 
     def test_dotted_raw_tail_member_span_and_node_ids_precede_its_payload(self) -> None:
-        raw_call = first(parse("ag.ask!::[Review] payload"))
+        raw_call = first(parse("ag.ask$::[Review] payload"))
         assert isinstance(raw_call, Call)
         assert isinstance(raw_call.callee, FieldAccess)
         assert isinstance(raw_call.args[0], StringLit)
@@ -4871,7 +4871,7 @@ print exec! true
         assert raw_call.type_args[0].node_id < raw_call.args[0].node_id < raw_call.node_id
 
     def test_juxtaposed_dotted_raw_tail_preserves_postfix_component_spans_and_ids(self) -> None:
-        print_call = first(parse("print a.b().c[0].ask! x"))
+        print_call = first(parse("print a.b().c[0].ask$ x"))
         assert isinstance(print_call, Call)
         raw_call = print_call.args[0]
         assert isinstance(raw_call, Call)
@@ -4910,7 +4910,7 @@ print exec! true
         assert len(node_ids) == len(set(node_ids))
 
     def test_interpolated_raw_text_precedes_its_interpolation_node_ids(self) -> None:
-        raw_call = first(parse("exec! before %{value}"))
+        raw_call = first(parse("exec$ before %{value}"))
         assert isinstance(raw_call, Call)
         assert isinstance(raw_call.args[0], Template)
         text, interpolation = raw_call.args[0].segments
@@ -4931,6 +4931,6 @@ print exec! true
         from agm.agl import PipelineDriver
 
         with patch("agm.core.process.run_capture_result", return_value=completed):
-            result = run_inline_command(PipelineDriver(), "exec! true")
+            result = run_inline_command(PipelineDriver(), "exec$ true")
 
         assert result.ok

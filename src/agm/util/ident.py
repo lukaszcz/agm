@@ -8,7 +8,7 @@ from typing import Final
 # (Unicode) letter or ``_`` and then greedily consumes every character that is
 # not in this set. The stop set retains structural punctuators and operators as
 # standalone delimiters, while allowing names such as ``ask-prompt``, ``ask?``,
-# ``do-it-now!``, ``a+b``, and ``foo\"bar``.
+# ``do-it-now!``, ``exec$``, ``a+b``, and ``foo\"bar``.
 IDENT_STOP: Final[frozenset[str]] = frozenset(
     {" ", "\t", "\n", "\r", "(", ")", "[", "]", "{", "}", ":", ",", ".", "|", ";", "/", "@", "="}
 )

@@ -2893,13 +2893,13 @@ class TestRawTailTypingParity:
         ("raw_source", "call_source", "expected_type"),
         (
             pytest.param(
-                "let result = exec!::[json] printf-json\nresult",
+                "let result = exec$::[json] printf-json\nresult",
                 'let result = exec::[json]("printf-json")\nresult',
                 JsonType(),
                 id="exec",
             ),
             pytest.param(
-                "record Review\n  approved: bool\nlet result = ask!::[Review] review it\nresult",
+                "record Review\n  approved: bool\nlet result = ask$::[Review] review it\nresult",
                 'record Review\n  approved: bool\nlet result = ask::[Review]("review it")\nresult',
                 "Review",
                 id="ask",
@@ -2916,25 +2916,25 @@ class TestRawTailTypingParity:
         ("raw_source", "call_source", "expected_type"),
         (
             pytest.param(
-                "let result: text = exec! echo result\nresult",
+                "let result: text = exec$ echo result\nresult",
                 'let result: text = exec("echo result")\nresult',
                 TextType(),
                 id="exec-binder",
             ),
             pytest.param(
-                "def build() -> text\n  return exec! echo result\nbuild()",
+                "def build() -> text\n  return exec$ echo result\nbuild()",
                 'def build() -> text\n  return exec("echo result")\nbuild()',
                 TextType(),
                 id="exec-return",
             ),
             pytest.param(
-                "def build() -> text = exec! echo result\nbuild()",
+                "def build() -> text = exec$ echo result\nbuild()",
                 'def build() -> text = exec("echo result")\nbuild()',
                 TextType(),
                 id="exec-inline-function",
             ),
             pytest.param(
-                "record Review\n  approved: bool\nlet result: Review = ask! review it\nresult",
+                "record Review\n  approved: bool\nlet result: Review = ask$ review it\nresult",
                 'record Review\n  approved: bool\nlet result: Review = ask("review it")\nresult',
                 "Review",
                 id="ask-binder",
@@ -2942,7 +2942,7 @@ class TestRawTailTypingParity:
             pytest.param(
                 (
                     "record Review\n  approved: bool\ndef build() -> Review\n"
-                    "  return ask! review it\nbuild()"
+                    "  return ask$ review it\nbuild()"
                 ),
                 (
                     "record Review\n  approved: bool\ndef build() -> Review\n"
@@ -2952,7 +2952,7 @@ class TestRawTailTypingParity:
                 id="ask-return",
             ),
             pytest.param(
-                "record Review\n  approved: bool\ndef build() -> Review = ask! review it\nbuild()",
+                "record Review\n  approved: bool\ndef build() -> Review = ask$ review it\nbuild()",
                 (
                     "record Review\n  approved: bool\ndef build() -> Review = "
                     'ask("review it")\nbuild()'
@@ -2972,14 +2972,14 @@ class TestRawTailTypingParity:
         ("raw_source", "call_source", "expected_type", "structured_exec"),
         (
             pytest.param(
-                "let result = exec! true\nresult",
+                "let result = exec$ true\nresult",
                 'let result = exec("true")\nresult',
                 "ExecResult",
                 True,
                 id="exec",
             ),
             pytest.param(
-                "let result = ask! summarize\nresult",
+                "let result = ask$ summarize\nresult",
                 'let result = ask("summarize")\nresult',
                 TextType(),
                 False,
@@ -3000,7 +3000,7 @@ class TestRawTailTypingParity:
         assert raw_checked.contract_specs[call_site.node_id].structured_exec is structured_exec
 
     def test_exec_statement_discard_matches_call_form(self) -> None:
-        raw_checked, _ = assert_raw_tail_type_parity("exec! true\n()", 'exec("true")\n()')
+        raw_checked, _ = assert_raw_tail_type_parity("exec$ true\n()", 'exec("true")\n()')
         call_site = raw_checked.call_sites[0]
         assert raw_checked.node_types[call_site.node_id] == UnitType()
         assert raw_checked.contract_specs[call_site.node_id] == OutputContractSpec(
@@ -3008,7 +3008,7 @@ class TestRawTailTypingParity:
         )
 
     def test_ask_raw_payload_has_no_agent_slot(self) -> None:
-        accept_type("ask! agent = reviewer", capabilities=no_agent_caps())
+        accept_type("ask$ agent = reviewer", capabilities=no_agent_caps())
         accept_type(
             'let reviewer = AgentCommand("reviewer")\nreviewer.ask("prompt")',
             capabilities=no_agent_caps(),
@@ -5562,7 +5562,7 @@ class TestFieldAccess:
         assert "field" in str(error).lower() and "method" in str(error).lower()
 
     def test_dotted_raw_tail_unknown_member_is_a_member_error(self) -> None:
-        error = reject_type('let value = AgentCommand("worker")\nvalue.exec! echo hello')
+        error = reject_type('let value = AgentCommand("worker")\nvalue.exec$ echo hello')
         assert "field" in str(error).lower() and "method" in str(error).lower()
         assert error.span is not None
         assert (

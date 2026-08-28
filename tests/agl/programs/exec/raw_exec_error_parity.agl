@@ -1,7 +1,7 @@
 program def main() -> unit =
   # Raw and call-shaped unit exec calls expose identical ExecError fields.
   try
-    let raw: text = exec! raw-failure
+    let raw: text = exec$ raw-failure
     ()
   catch ExecError as error =>
     print "raw %{error.command} %{error.exit_code} %{error.stdout} %{error.stderr} %{error.timed_out}"

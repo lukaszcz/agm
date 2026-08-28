@@ -116,16 +116,16 @@ def test_format_banner_starts_with_stable_prefix() -> None:
 
 
 class TestIsIncomplete:
-    @pytest.mark.parametrize("source", ["exec!", "ask!::[text]", "let reply = ask!"])
+    @pytest.mark.parametrize("source", ["exec$", "ask$::[text]", "let reply = ask$"])
     def test_raw_tail_headers_open_blocks(self, source: str) -> None:
         assert is_incomplete(source) is True
 
     @pytest.mark.parametrize(
         "source",
         [
-            "exec! echo hi",
-            "exec!\n  echo hi\nnext",
-            "let x: text = exec!\n    echo hi\n# trailing comment",
+            "exec$ echo hi",
+            "exec$\n  echo hi\nnext",
+            "let x: text = exec$\n    echo hi\n# trailing comment",
         ],
     )
     def test_closed_raw_tail_blocks_submit(self, source: str) -> None:

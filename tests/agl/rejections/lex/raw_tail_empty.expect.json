@@ -1,1 +1,1 @@
-{"diagnostic": {"message_contains": ["payload", "exec!"]}}
+{"diagnostic": {"message_contains": ["payload", "exec$"]}}

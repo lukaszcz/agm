@@ -188,7 +188,7 @@
       (should (member "real" (agl-nav--category-names index "Functions"))))))
 
 (ert-deftest agl-nav-imenu-skips-declaration-inside-raw-tail-payload ()
-  (agl-nav--with-buffer "exec! echo def hidden() -> int = 0\ndef real2() -> int = 2\n"
+  (agl-nav--with-buffer "exec$ echo def hidden() -> int = 0\ndef real2() -> int = 2\n"
     (let ((index (agl-imenu-create-index)))
       (should-not (member "hidden" (agl-nav--category-names index "Functions")))
       (should (member "real2" (agl-nav--category-names index "Functions"))))))

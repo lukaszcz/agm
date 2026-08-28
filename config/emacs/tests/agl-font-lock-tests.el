@@ -227,13 +227,13 @@
   (agl-flt--with-buffer "let r = exec(\"ls\")\n"
     (should (eq (agl-flt--face-of "exec") 'font-lock-builtin-face))))
 
-(ert-deftest agl-flt-exec-bang-is-builtin-face ()
-  (agl-flt--with-buffer "exec! ls -la\n"
-    (should (eq (agl-flt--face-of "exec!") 'font-lock-builtin-face))))
+(ert-deftest agl-flt-exec-dollar-is-builtin-face ()
+  (agl-flt--with-buffer "exec$ ls -la\n"
+    (should (eq (agl-flt--face-of "exec$") 'font-lock-builtin-face))))
 
-(ert-deftest agl-flt-ask-bang-is-builtin-face ()
-  (agl-flt--with-buffer "ask! Summarize this\n"
-    (should (eq (agl-flt--face-of "ask!") 'font-lock-builtin-face))))
+(ert-deftest agl-flt-ask-dollar-is-builtin-face ()
+  (agl-flt--with-buffer "ask$ Summarize this\n"
+    (should (eq (agl-flt--face-of "ask$") 'font-lock-builtin-face))))
 
 (ert-deftest agl-flt-render-is-builtin-face ()
   (agl-flt--with-buffer "let s = render(x)\n"
@@ -322,7 +322,7 @@
     (should (eq (agl-flt--face-of "price") 'font-lock-string-face))))
 
 (ert-deftest agl-flt-interpolation-delimiters-faced-in-raw-tail-payload ()
-  (agl-flt--with-buffer "ask! Summarize %{topic} please\n"
+  (agl-flt--with-buffer "ask$ Summarize %{topic} please\n"
     (should (eq (agl-flt--face-of "%{topic}") 'agl-interpolation-face))))
 
 (ert-deftest agl-flt-escaped-percent-brace-is-not-faced ()
@@ -337,7 +337,7 @@
     (should (eq (agl-flt--face-of "let x") 'font-lock-string-face))))
 
 (ert-deftest agl-flt-keyword-inside-raw-tail-payload-stays-string-faced ()
-  (agl-flt--with-buffer "exec! let x = 1\n"
+  (agl-flt--with-buffer "exec$ let x = 1\n"
     (should (eq (agl-flt--face-of "let x") 'font-lock-string-face))))
 
 ;; --- Numbers ---
@@ -494,11 +494,11 @@
     (should (eq (agl-flt--face-of "%{100}") 'font-lock-string-face))))
 
 (ert-deftest agl-flt-single-backslash-before-interpolation-is-escaped-in-raw-tail ()
-  (agl-flt--with-buffer "exec! echo \\%{100}\n"
+  (agl-flt--with-buffer "exec$ echo \\%{100}\n"
     (should-not (eq (agl-flt--face-of "%{100}") 'agl-interpolation-face))))
 
 (ert-deftest agl-flt-double-backslash-before-interpolation-is-still-escaped-in-raw-tail ()
-  (agl-flt--with-buffer "exec! echo \\\\%{100}\n"
+  (agl-flt--with-buffer "exec$ echo \\\\%{100}\n"
     ;; Unlike a template, a raw-tail payload owns its backslashes: any
     ;; single immediately preceding `\' escapes the hole, with no parity
     ;; counting, so a run of two is still escaped here.
@@ -507,8 +507,8 @@
 ;; --- The interpolation face cannot leak outside its string region ---
 
 (ert-deftest agl-flt-interpolation-face-does-not-leak-past-string-region ()
-  (agl-flt--with-buffer "exec! echo %{p\nlet c = f(1)}\n"
-    ;; The `%{' on the exec! line is unbalanced within that line's inline
+  (agl-flt--with-buffer "exec$ echo %{p\nlet c = f(1)}\n"
+    ;; The `%{' on the exec$ line is unbalanced within that line's inline
     ;; raw-tail payload; the `}' on the next, ordinary code line must not
     ;; be painted with `agl-interpolation-face'.
     (should-not (eq (agl-flt--face-of "}") 'agl-interpolation-face))))

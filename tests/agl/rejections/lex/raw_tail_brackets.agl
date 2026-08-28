@@ -1,1 +1,1 @@
-let commands = [exec! true]
+let commands = [exec$ true]

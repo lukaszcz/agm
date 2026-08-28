@@ -82,7 +82,7 @@ These behaviors are shared by both front ends:
 
 - Multiline editing is **AgL-aware**: pressing Enter on an unterminated block
   (`record`, `enum`, `if`, `case`, `try`, `do`, …) or a line-final raw-tail header
-  such as `exec!`/`ask!` opens a continuation line (`...>`); a complete entry submits.
+  such as `exec$`/`ask$` opens a continuation line (`...>`); a complete entry submits.
   Pressing Enter on a blank continuation line force-submits even an unfinished buffer
   so you can always escape. In the plain front end this accumulation happens as lines
   are read from stdin rather than through key bindings, and the same predicate decides

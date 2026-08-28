@@ -42,7 +42,7 @@ The firewall is *semantic*, not an I/O boundary: it isolates the static passes f
 
 ## Expression-Oriented Design
 
-AgL has no separate statement category. Every construct — bindings, assignment, `print`, loops, `if` without `else` — is an expression with a type, and a block yields the value of its last item. Built-ins such as `print`, `exec`, and `ask` are ordinary calls classified during resolution rather than special syntax. Method selection is type-directed for both nominal and builtin receivers; an ordinary selected method lowers as a receiver-first call, while a host-backed selection uses its existing builtin route with the receiver operand. The raw-tail `exec!` and `ask!` forms desugar to calls in the parser. This uniformity is why the AST has a single call node and why the type system carries a unit type for side-effecting expressions.
+AgL has no separate statement category. Every construct — bindings, assignment, `print`, loops, `if` without `else` — is an expression with a type, and a block yields the value of its last item. Built-ins such as `print`, `exec`, and `ask` are ordinary calls classified during resolution rather than special syntax. Method selection is type-directed for both nominal and builtin receivers; an ordinary selected method lowers as a receiver-first call, while a host-backed selection uses its existing builtin route with the receiver operand. The raw-tail `exec$` and `ask$` forms desugar to calls in the parser. This uniformity is why the AST has a single call node and why the type system carries a unit type for side-effecting expressions.
 
 ## Programs and Modules
 

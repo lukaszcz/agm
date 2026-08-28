@@ -96,8 +96,8 @@ indented; the resulting indentation column is returned."
   (should (= (agl-ind--indent-of "let f = a->\nlet s = 1\n" 2) 0)))
 
 (ert-deftest agl-ind-name-ending-in-a-raw-tail-keyword-does-not-open-a-block ()
-  ;; `do-exec!' is one identifier, not the `exec!' raw-tail opener.
-  (should (= (agl-ind--indent-of "let x = do-exec!\nlet s = 1\n" 2) 0)))
+  ;; `do-exec$' is one identifier, not the `exec$' raw-tail opener.
+  (should (= (agl-ind--indent-of "let x = do-exec$\nlet s = 1\n" 2) 0)))
 
 ;; --- Continuation of the previous line's level ---
 
@@ -207,7 +207,7 @@ indented; the resulting indentation column is returned."
 ;; --- Verbatim regions are never re-indented ---
 
 (ert-deftest agl-ind-raw-tail-payload-is-untouched ()
-  (let ((text "exec!\n    echo one\n      echo two\n"))
+  (let ((text "exec$\n    echo one\n      echo two\n"))
     (should (equal (agl-ind--reindented text) text))))
 
 (ert-deftest agl-ind-triple-quoted-template-is-untouched ()
@@ -215,7 +215,7 @@ indented; the resulting indentation column is returned."
     (should (equal (agl-ind--reindented text) text))))
 
 (ert-deftest agl-ind-line-after-raw-tail-block-returns-to-code-level ()
-  (should (= (agl-ind--indent-of "exec!\n    echo one\nlet after = 1\n" 3) 0)))
+  (should (= (agl-ind--indent-of "exec$\n    echo one\nlet after = 1\n" 3) 0)))
 
 ;; --- TAB cycling ---
 

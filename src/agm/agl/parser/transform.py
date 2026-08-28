@@ -1618,7 +1618,7 @@ class AstBuilder(Transformer):
         """Single-arg call sugar shared by ``juxt`` and ``raw_juxt``.
 
         Both ``juxt: postfix juxt_arg`` and ``raw_juxt: postfix raw_call`` alias
-        here: `f x` and `print exec! date` alike desugar to
+        here: `f x` and `print exec$ date` alike desugar to
         `Call(callee=f, args=(arg,), named_args=())`, where the second argument
         is the juxtaposed expression (an ordinary ``juxt_arg`` Expr, or the
         ``raw_call`` desugared to its builtin Call).

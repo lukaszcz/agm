@@ -1074,9 +1074,9 @@ class _Scanner:
         # then greedily consume every character that is not whitespace and not
         # an operator/punctuator delimiter (see ``IDENT_STOP``). This admits
         # arbitrary Unicode letters/digits as well as the symbol characters
-        # ``-``, ``?``, ``!``, so names like ``ask-prompt`` or ``do-it-now!``
-        # scan as a single token.  Operator tokens (``->``, ``=>``, ``!=``,
-        # ``<=``, ``>=``, field access ``.``, etc.) still lex as operators
+        # ``-``, ``?``, ``!``, ``$``, so names like ``ask-prompt``, ``exec$`` or
+        # ``do-it-now!`` scan as a single token.  Operator tokens (``->``, ``=>``,
+        # ``!=``, ``<=``, ``>=``, field access ``.``, etc.) still lex as operators
         # when they appear as standalone reserved spellings.
         if is_identifier_start(ch):
             while not self._at_end() and self._peek() not in IDENT_STOP:

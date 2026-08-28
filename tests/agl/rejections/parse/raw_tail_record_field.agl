@@ -1,2 +1,2 @@
 record R
-  exec!: int
+  exec$: int

@@ -22,7 +22,7 @@
 ;;   not in the middle of an identifier scan.
 ;; - Four string-template forms -- `"..."', `'...'', `"""..."""',
 ;;   `'''...''''  -- with `%{expr}' interpolation.
-;; - Raw tails (`exec!'/`ask!', bare or after a `.' projection, with an
+;; - Raw tails (`exec$'/`ask$', bare or after a `.' projection, with an
 ;;   optional byte-adjacent `::[T]' type argument) own a verbatim payload:
 ;;   the rest of the line, or a following indented block.
 ;;
@@ -93,7 +93,7 @@ an AgL identifier boundary -- `-' continues a name, so `resource-path'
 and `copy-of' stay unfaced.")
 
 (defconst agl-raw-tail-names
-  '("exec!" "ask!")
+  '("exec$" "ask$")
   "Raw-tail opener spellings.  Canonical source:
 `src/agm/raw_tail_catalog.py' (`RAW_TAIL_NAMES').")
 
@@ -147,12 +147,13 @@ regexp match would risk (see `agl--ident-boundary-after-p').")
 ;; Identifier-boundary-safe searching.
 ;;
 ;; Keywords, contextual builtins, and other fixed spellings must not match
-;; inside a larger AgL identifier: `-', `?', `!', `+', `*', `<', `>',
-;; quotes, and `#' are identifier-continuation characters (see
-;; `agl--ident-continue-skip'), so `ask-prompt' and `a+and+b' are each one
-;; name, and a naive `\\b'-anchored regexp would wrongly light up `ask' or
-;; `and' inside them.  `agl--search-ident-forward' is the shared primitive
-;; every font-lock matcher below is built from.
+;; inside a larger AgL identifier.  Every character but the `IDENT_STOP'
+;; delimiters continues a name (see `agl--ident-continue-skip', which spells
+;; that set as its complement) -- operator characters, quotes and `#'
+;; included -- so `ask-prompt' and `a+and+b' are each one name, and a naive
+;; `\\b'-anchored regexp would wrongly light up `ask' or `and' inside them.
+;; `agl--search-ident-forward' is the shared primitive every font-lock
+;; matcher below is built from.
 ;; ---------------------------------------------------------------------------
 
 (defun agl--ident-boundary-before-p (pos)
@@ -160,11 +161,11 @@ regexp match would risk (see `agl--ident-boundary-after-p').")
 
 Walks backward from POS over identifier-continuation characters; POS is
 embedded in a larger identifier only when that backward run is
-non-empty AND starts with a letter or `_'.  A run made only of operator
-characters (`-', `?', `!', `+', `*', `<', `>') never began as an
-identifier -- e.g. `-3' lexes as `MINUS' then `INT', not one run -- so
-it does not block a match at POS; this is what lets a keyword or number
-match right after an unspaced arrow or unary minus."
+non-empty AND starts with a letter or `_'.  A run starting with any
+other continuation character -- an operator character, say -- never
+began as an identifier (`-3' lexes as `MINUS' then `INT', not one run),
+so it does not block a match at POS; this is what lets a keyword or
+number match right after an unspaced arrow or unary minus."
   (save-excursion
     (goto-char pos)
     (let ((run-end (point)))
@@ -312,7 +313,7 @@ must not escape the fence character that closes it."
 (defun agl--propertize-raw-tail (name-start)
   "Propertize the raw-tail payload that follows the opener at NAME-START.
 
-Point is right after a raw-tail opener (`exec!' or `ask!') that
+Point is right after a raw-tail opener (`exec$' or `ask$') that
 started at NAME-START.  Skip a byte-adjacent `::[...]' type argument if
 present, then propertize the payload -- the rest of the line, or a
 following more-indented block -- as a generic string."
@@ -437,7 +438,7 @@ visited as standalone characters.  See
 `docs/agl/reference/lexical-structure.md' for the lexical rules this
 implements.
 
-A raw-tail opener (`exec!'/`ask!') is only recognized at bracket depth
+A raw-tail opener (`exec$'/`ask$') is only recognized at bracket depth
 zero, per the reference's \"only recognized at bracket depth zero\"
 rule, so a bracket depth counter is threaded through the scan, seeded
 from `(car (syntax-ppss start))' -- safe to call here because
@@ -692,7 +693,7 @@ The window is item-start, followed by a `NAME (:: NAME)*' closer path."
   (agl--search-ident-forward agl--contextual-builtin-re limit))
 
 (defun agl--match-raw-tail-name (limit)
-  "`font-lock-keywords' MATCHER for `exec!'/`ask!', up to LIMIT."
+  "`font-lock-keywords' MATCHER for `exec$'/`ask$', up to LIMIT."
   (agl--search-ident-forward agl--raw-tail-name-re limit))
 
 (defun agl--match-use-keyword (limit)
@@ -1190,7 +1191,7 @@ inside\" even when that character is itself the region's content --
 concretely, the first character of an inline raw-tail payload doubles
 as that payload's synthetic opening fence (see
 `agl--propertize-raw-inline'), so a decl-head keyword landing exactly
-there (`exec! def fake()') would otherwise slip through unrejected.
+there (`exec$ def fake()') would otherwise slip through unrejected.
 Checking one character in is always still inside the same region
 for any keyword this file matches against a decl head (they are all
 longer than one character), and is never inside a *different* region

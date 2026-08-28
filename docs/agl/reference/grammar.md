@@ -554,17 +554,17 @@ raw_call        ::= raw_callee type_args? raw_tail
 dotted_raw_call ::= postfix "." raw_callee type_args? raw_tail
 raw_juxt        ::= postfix raw_call
                   | postfix juxt_atom juxt_suffix* "." raw_callee type_args? raw_tail
-raw_callee      ::= "exec!" | "ask!"
+raw_callee      ::= "exec$" | "ask$"
 type_args       ::= "::" "[" type_expr ("," type_expr)* "]"
 raw_tail        ::= inline_raw_tail | block_raw_tail
 ```
 
 A raw tail may start a call directly or follow a runtime member projection.
-`receiver.ask! payload` is equivalent to `receiver.ask(payload)`, including
+`receiver.ask$ payload` is equivalent to `receiver.ask(payload)`, including
 normal field-then-method resolution. The optional `type_args` group is
 recognized only when its `::` is immediately adjacent to the raw name:
-`exec!::[T]` and `receiver.ask!::[T]`. Whitespace before the `::` makes it
-payload text instead, so `ask! ::[T]` and `receiver.ask! ::[T]` have no type
+`exec$::[T]` and `receiver.ask$::[T]`. Whitespace before the `::` makes it
+payload text instead, so `ask$ ::[T]` and `receiver.ask$ ::[T]` have no type
 arguments.
 
 An inline raw tail is all text from its first non-whitespace character through
@@ -581,14 +581,14 @@ nothing else follows on its line: as an `item`; as a `let_decl`, `var_decl`, or
 `assign_stmt` right-hand side; as an inline `func_body`; as the operand of a
 `return` in those same positions; or, through `raw_juxt`, as the
 single-argument juxtaposition argument of a call whose callee precedes it on
-the line (for example, `print receiver.ask! prompt`). It is not valid inside
+the line (for example, `print receiver.ask$ prompt`). It is not valid inside
 brackets, branch/catch inline bodies, or another inline expression. Use the
 ordinary call form there.
 
 ```agl
 program def main() -> unit =
   let path = "."
-  let output: text = exec! printf '%s' %{path}
+  let output: text = exec$ printf '%s' %{path}
 ```
 
 ## Expressions

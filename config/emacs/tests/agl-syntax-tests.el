@@ -5,7 +5,7 @@
 ;; Tests the context-sensitive `syntax-propertize' layer of `agl-mode':
 ;; identifier atomicity (quotes, '#', and operator characters are
 ;; identifier-continuation characters), the four string-template forms,
-;; comments, raw-tail (`exec!'/`ask!') payloads, and the consequences
+;; comments, raw-tail (`exec$'/`ask$') payloads, and the consequences
 ;; (forward-sexp, comment-dwim, syntax-ppss) that fall out of getting the
 ;; syntax-table properties right.  See
 ;; docs/agl/reference/lexical-structure.md for the authoritative rules.
@@ -167,36 +167,36 @@ call never exercises `agl--propertize-extend-region' this way."
   (agl-test--with-buffer "let a = \"unterminated\nlet b = 2\n"
     (should-not (agl-test--in-string-p (agl-test--pos-after "let b = 2")))))
 
-;; --- Raw tails: exec! and ask! ---
+;; --- Raw tails: exec$ and ask$ ---
 
 (ert-deftest agl-syntax-raw-tail-exec-inline-hash-is-payload ()
-  (agl-test--with-buffer "exec! ls -la # not a comment\nlet x = 1\n"
+  (agl-test--with-buffer "exec$ ls -la # not a comment\nlet x = 1\n"
     (should (agl-test--in-string-p (agl-test--pos-after "ls -la # not a comment")))
     (should-not (agl-test--in-comment-p (agl-test--pos-after "# not a comment")))
     (should-not (agl-test--in-string-p (agl-test--pos-after "let x")))))
 
 (ert-deftest agl-syntax-raw-tail-ask-inline ()
-  (agl-test--with-buffer "ask! Summarize %{topic} please\nlet y = 2\n"
+  (agl-test--with-buffer "ask$ Summarize %{topic} please\nlet y = 2\n"
     (should (agl-test--in-string-p (agl-test--pos-after "Summarize")))
     (should-not (agl-test--in-string-p (agl-test--pos-after "let y")))))
 
 (ert-deftest agl-syntax-raw-tail-dotted-projection ()
-  (agl-test--with-buffer "receiver.ask! do the thing\nlet z = 3\n"
+  (agl-test--with-buffer "receiver.ask$ do the thing\nlet z = 3\n"
     (should (agl-test--in-string-p (agl-test--pos-after "do the thing")))
     (should-not (agl-test--in-string-p (agl-test--pos-after "let z")))))
 
 (ert-deftest agl-syntax-raw-tail-adjacent-type-args-are-not-payload ()
-  (agl-test--with-buffer "ask!::[Review] prompt text\n"
+  (agl-test--with-buffer "ask$::[Review] prompt text\n"
     (should-not (agl-test--in-string-p (agl-test--pos-after "::[Review")))
     (should (agl-test--in-string-p (agl-test--pos-after "prompt text")))))
 
 (ert-deftest agl-syntax-raw-tail-spaced-type-args-is-payload ()
-  (agl-test--with-buffer "ask! ::[T]\n"
+  (agl-test--with-buffer "ask$ ::[T]\n"
     (should (agl-test--in-string-p (agl-test--pos-after "::[T]")))))
 
 (ert-deftest agl-syntax-raw-tail-block-payload ()
   (agl-test--with-buffer
-      (concat "ask!\n"
+      (concat "ask$\n"
               "  Summarize the report.\n"
               "\n"
               "  Mention \"quotes\" and # not-a-comment.\n"
@@ -209,14 +209,14 @@ call never exercises `agl--propertize-extend-region' this way."
 (ert-deftest agl-syntax-raw-tail-block-ends-at-opener-indentation ()
   (agl-test--with-buffer
       (concat "if cond\n"
-              "  ask!\n"
+              "  ask$\n"
               "    Explain this.\n"
               "  let x = 1\n")
     (should (agl-test--in-string-p (agl-test--pos-after "Explain this.")))
     (should-not (agl-test--in-string-p (agl-test--pos-after "let x")))))
 
 (ert-deftest agl-syntax-raw-tail-payload-parens-are-inert ()
-  (agl-test--with-buffer "exec! echo (unbalanced\nlet x = [1, 2]\n"
+  (agl-test--with-buffer "exec$ echo (unbalanced\nlet x = [1, 2]\n"
     (should (agl-test--in-string-p (agl-test--pos-after "(unbalanced")))
     (goto-char (agl-test--pos-after "let x = "))
     (forward-sexp 1)
@@ -243,7 +243,7 @@ The buggy extend-region only backed up to `agl-multiline''s start
 inside the block, never to the opener line, so the opener was never
 rescanned and the payload was relexed as code."
   (agl-test--with-edited-buffer
-      (concat "ask!\n"
+      (concat "ask$\n"
               "  line one\n"
               "  line two\n"
               "let x = 1\n")
@@ -271,7 +271,7 @@ Chunk boundaries (as `jit-lock-mode' produces, bounded by
 `syntax-propertize-chunk-size') land inside the block and inside the
 opener line."
   (agl-test--with-chunked-buffer
-      (concat "ask!\n"
+      (concat "ask$\n"
               "  line one\n"
               "  line two\n"
               "  line three\n"
@@ -304,7 +304,7 @@ opener line."
 ;; --- Raw-tail payload backslashes: owned as text, not escape syntax ---
 
 (ert-deftest agl-syntax-raw-tail-payload-trailing-backslash-does-not-escape-fence ()
-  (agl-test--with-buffer "exec! echo foo\\\nlet x = 1\n"
+  (agl-test--with-buffer "exec$ echo foo\\\nlet x = 1\n"
     (should (agl-test--in-string-p (agl-test--pos-after "foo\\")))
     (should-not (agl-test--in-string-p (agl-test--pos-after "let x")))))
 
@@ -313,7 +313,7 @@ opener line."
 
 Otherwise the block stays open and swallows the following code."
   (agl-test--with-buffer
-      (concat "ask!\n"
+      (concat "ask$\n"
               "  line one\n"
               "  line two\\\n"
               "let x = 1\n")
@@ -323,8 +323,8 @@ Otherwise the block stays open and swallows the following code."
 ;; --- Raw tails are only recognized at bracket depth zero ---
 
 (ert-deftest agl-syntax-raw-tail-name-inside-call-args-is-not-an-opener ()
-  (agl-test--with-buffer "let y = f(exec!, 1)\nlet z = 2\n"
-    (should-not (agl-test--in-string-p (agl-test--pos-after "exec!")))
+  (agl-test--with-buffer "let y = f(exec$, 1)\nlet z = 2\n"
+    (should-not (agl-test--in-string-p (agl-test--pos-after "exec$")))
     (goto-char (agl-test--pos-after "let y = f"))
     (forward-sexp 1)
     (should (eq (char-before) ?\)))
@@ -344,25 +344,25 @@ Otherwise the block stays open and swallows the following code."
 ;; --- Degenerate raw-tail payload lengths ---
 
 (ert-deftest agl-syntax-raw-tail-single-char-inline-payload-at-eof-is-string ()
-  (agl-test--with-buffer "exec! x"
+  (agl-test--with-buffer "exec$ x"
     (should (agl-test--in-string-p (point-max)))))
 
 (ert-deftest agl-syntax-raw-tail-inline-payload-at-eof-keeps-last-char-as-content ()
-  (agl-test--with-buffer "exec! ab"
+  (agl-test--with-buffer "exec$ ab"
     (should (agl-test--in-string-p (agl-test--pos-after "ab")))))
 
 (ert-deftest agl-syntax-raw-tail-block-payload-at-eof-without-newline-is-string ()
-  (agl-test--with-buffer (concat "ask!\n" "  line one\n" "  line two")
+  (agl-test--with-buffer (concat "ask$\n" "  line one\n" "  line two")
     (should (agl-test--in-string-p (point-max)))))
 
 (ert-deftest agl-syntax-raw-block-drops-trailing-blank-lines ()
   ;; The scanner drops the blank lines after a block payload's last content
   ;; line, so they are not part of the verbatim region.
-  (agl-test--with-buffer "exec!\n  a\n\n"
+  (agl-test--with-buffer "exec$\n  a\n\n"
     (should-not (nth 3 (syntax-ppss (1- (point-max)))))))
 
 (ert-deftest agl-syntax-raw-block-keeps-its-content ()
-  (agl-test--with-buffer "exec!\n  a\n  b\nlet after = 1\n"
+  (agl-test--with-buffer "exec$\n  a\n  b\nlet after = 1\n"
     (goto-char (point-min))
     (search-forward "  b")
     (should (nth 3 (syntax-ppss (1- (point)))))

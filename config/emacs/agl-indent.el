@@ -71,8 +71,11 @@ As with `agl--block-opener-symbol-re' the spelling must be a whole token:
 which is what `agl--block-opener-keyword-p' checks.")
 
 (defconst agl--raw-tail-opener-re
-  "\\(?:exec!\\|ask!\\)\\(?:::\\[[^]]*\\]\\)?[ \t]*$"
-  "Regexp matching a raw-tail opener that carries no inline payload.")
+  (concat (regexp-opt '("exec$" "ask$")) "\\(?:::\\[[^]]*\\]\\)?[ \t]*$")
+  "Regexp matching a raw-tail opener that carries no inline payload.
+
+The opener spellings end in `$', which is the regexp end-of-line anchor,
+so they are escaped through `regexp-opt' rather than spelled inline.")
 
 (defconst agl--block-header-re
   (concat "\\`[ \t]*\\(?:"
@@ -269,8 +272,8 @@ match counts only where it begins a token (`registry' is not `try')."
   "Return non-nil when CODE is a raw-tail opener carrying no inline payload.
 
 CODE and START are as in `agl--block-opener-symbol-p'; such an opener owns
-the indented block that follows it.  `do-exec!' is one identifier rather
-than the `exec!' opener, so the same token-boundary check applies."
+the indented block that follows it.  `do-exec$' is one identifier rather
+than the `exec$' opener, so the same token-boundary check applies."
   (and (string-match agl--raw-tail-opener-re code)
        (agl--ident-boundary-before-p (+ start (match-beginning 0)))))
 

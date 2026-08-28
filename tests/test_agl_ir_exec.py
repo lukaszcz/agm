@@ -488,7 +488,7 @@ def test_exec_with_an_extended_environment_reaches_the_process_boundary() -> Non
 
 
 def test_exec_raw_tail_uses_the_live_std_config_timeout_default() -> None:
-    """An omitted timeout on exec! reads std/config at the call point."""
+    """An omitted timeout on exec$ reads std/config at the call point."""
     calls: list[float | None] = []
 
     def fake_shell(
@@ -506,7 +506,7 @@ def test_exec_raw_tail_uses_the_live_std_config_timeout_default() -> None:
     source = (
         "import std/config\n"
         'std/config::timeout := Option[text]::Some(value = "2s")\n'
-        "let output: text = exec! configured\n"
+        "let output: text = exec$ configured\n"
         "output"
     )
     from tests.agl.ir_harness import _run_ir_exec
@@ -538,8 +538,8 @@ def test_t13_exec_spawn_parameters_and_defaults() -> None:
         'let explicit: text = exec("explicit", env = child, '
         'cwd = Option[text]::Some(value = "/work"), '
         'timeout = Option[text]::Some(value = "2s"))\n'
-        "let ambient: text = exec! ambient\n"
-        "let configured: text = exec! configured\n"
+        "let ambient: text = exec$ ambient\n"
+        "let configured: text = exec$ configured\n"
         "()"
     )
     from tests.agl.ir_harness import _run_ir_exec

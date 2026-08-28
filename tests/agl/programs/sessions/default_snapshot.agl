@@ -11,5 +11,5 @@ program def main() -> unit =
   let explicit = Session::open(AgentPi("reviewer", "model", "high"))
   let interleaved = explicit.ask("explicit prompt")
   let through_default = direct.ask("direct prompt")
-  let second = ask! second prompt
+  let second = ask$ second prompt
   if explicit_close => direct.close()

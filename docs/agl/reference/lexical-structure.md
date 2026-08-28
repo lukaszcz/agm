@@ -99,7 +99,7 @@ resolution. They may not be declared with `let`, `var`, or `param`, may not be
 declared as functions, and may not appear as pattern or catch
 binders — but they remain legal as field and method names, which live in a
 type's own member namespace. The distinct raw-tail spellings
-`exec!` and `ask!` are reserved for their raw forms and cannot be used as names.
+`exec$` and `ask$` are reserved for their raw forms and cannot be used as names.
 
 **Type-annotation keywords** — `text`, `json`, `bool`, `int`, `decimal`,
 `array`, `dict`, and `unit` are **not** reserved; they are recognized
@@ -200,10 +200,10 @@ starts a string template because an identifier must begin with a letter or
 `_`.
 
 Every other character is an identifier-continuation character.  In particular
-the operator characters `-`, `?`, `!`, `<`, `>` may appear *inside*
-an identifier, so names like `ask-prompt`, `ask?`, and `do-it-now!` scan as a
-single token.  Note that `=` and `@` **are** delimiters, so `a=b` scans as
-three tokens and `@std` as two.
+the operator characters `-`, `?`, `!`, `$`, `<`, `>` may appear *inside*
+an identifier, so names like `ask-prompt`, `ask?`, `exec$`, and `do-it-now!`
+scan as a single token.  Note that `=` and `@` **are** delimiters, so `a=b`
+scans as three tokens and `@std` as two.
 
 Operator names are a second lexical class of identifier: the grammar terminal
 `OP_NAME`. They start with an operator character and continue while the next
@@ -313,12 +313,12 @@ semantics are covered in [Strings and interpolation](strings-and-interpolation.m
 
 ## Raw-tail forms
 
-`exec!` and `ask!` begin raw-tail calls, either directly or after a `.`
-projection: `receiver.ask! prompt`. The lexer emits a `RAW_TAIL_NAME`, then
+`exec$` and `ask$` begin raw-tail calls, either directly or after a `.`
+projection: `receiver.ask$ prompt`. The lexer emits a `RAW_TAIL_NAME`, then
 `RAW_TAIL_START`, one or more `RAW_FRAGMENT` and interpolation-token runs, and
 `RAW_TAIL_END`. Optional type arguments must be byte-adjacent to the raw name:
-`ask!::[T]` and `receiver.ask!::[T]`. In `ask! ::[T]` or
-`receiver.ask! ::[T]`, the spaced `::[T]` instead begins the payload. The
+`ask$::[T]` and `receiver.ask$::[T]`. In `ask$ ::[T]` or
+`receiver.ask$ ::[T]`, the spaced `::[T]` instead begins the payload. The
 payload is either the rest of that line or a following indented block. In both
 cases it is one template: its text is verbatim except that `%{expr}`
 interpolates and `\%{` is a literal `%{`. Inline payloads discard trailing

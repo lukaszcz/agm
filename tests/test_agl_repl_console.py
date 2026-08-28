@@ -278,7 +278,7 @@ class TestMultiline:
         shell = FakeShell()
         with patch("agm.core.process.run_capture_result", side_effect=shell):
             output = drive(
-                "exec!\r  echo one\r  echo two\r\r\x04", session=ReplSession(default_stdlib=True)
+                "exec$\r  echo one\r  echo two\r\r\x04", session=ReplSession(default_stdlib=True)
             )
 
         assert ": error:" not in output.lower()
@@ -288,7 +288,7 @@ class TestMultiline:
     def test_raw_tail_ask_block_continues_and_uses_mocked_default_agent(self) -> None:
         agent = _CountingAgent("mocked reply")
         output = drive(
-            "ask!\r  summarize this\r\r\x04",
+            "ask$\r  summarize this\r\r\x04",
             session=ReplSession(agent_dispatcher=agent, default_stdlib=True),
         )
 
@@ -625,7 +625,7 @@ class TestEvalOutput:
     def test_inline_raw_tail_exec_evaluates_through_the_console(self) -> None:
         shell = FakeShell()
         with patch("agm.core.process.run_capture_result", side_effect=shell):
-            output = drive("exec! echo hi\r\x04", session=ReplSession(default_stdlib=True))
+            output = drive("exec$ echo hi\r\x04", session=ReplSession(default_stdlib=True))
 
         assert ": error:" not in output.lower()
         assert shell.commands == ["echo hi"]

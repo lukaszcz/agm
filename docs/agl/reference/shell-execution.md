@@ -37,7 +37,7 @@ exec(
 merges with the AGM process environment. The default is the startup ambient
 `std/env::environ` snapshot. Use `environ.extended(overrides)` when a command
 needs an explicit overlay. `cwd` is an optional working directory and `timeout`
-is an optional idle timeout duration. `exec!` supplies only its command, so it
+is an optional idle timeout duration. `exec$` supplies only its command, so it
 uses all three defaults.
 
 ## Single-argument sugar
@@ -52,22 +52,22 @@ program def main() -> unit =
 
 With named arguments, parentheses are required.
 
-## Raw-tail `exec!`
+## Raw-tail `exec$`
 
-`exec!` writes the command directly after the keyword rather than inside a
+`exec$` writes the command directly after the keyword rather than inside a
 string template. The inline form takes the rest of its line; the block form
 collects one dedented, newline-joined shell script. Both produce the same call
 as `exec(<template>)` and accept explicit type arguments. Like every raw-tail
-name, `exec!` may follow a projection: `target.exec! command` is
+name, `exec$` may follow a projection: `target.exec$ command` is
 `target.exec(command)` and uses ordinary member resolution. Type arguments
-must touch the name (`exec!::[T]`); in `exec! ::[T]`, the spaced `::[T]` is
+must touch the name (`exec$::[T]`); in `exec$ ::[T]`, the spaced `::[T]` is
 command payload:
 
 ```agl
 program def main() -> unit =
   let directory = "."
-  let listing: text = exec! printf '%s\n' %{directory}
-  let home_listing: text = exec!
+  let listing: text = exec$ printf '%s\n' %{directory}
+  let home_listing: text = exec$
     for file in "$HOME"/*; do
       printf '%s\n' "$file"
     done
@@ -84,7 +84,7 @@ this command passes `%{literal}` to the shell:
 
 ```agl
 program def main() -> unit =
-  let marker: text = exec! printf '\%{literal}'
+  let marker: text = exec$ printf '\%{literal}'
 ```
 
 The backslash in `\%{` is consumed by the escape, so a payload cannot spell a
@@ -95,16 +95,16 @@ backslash from a text literal instead:
 ```agl
 program def main() -> unit =
   let subdir: text = "docs"
-  let path: text = exec! printf '%s' "C:%{"\\"}%{subdir}"
+  let path: text = exec$ printf '%s' "C:%{"\\"}%{subdir}"
 ```
 
 Raw-tail calls are permitted only in line-final expression positions: block
 items, binding or assignment right-hand sides, inline function bodies, eligible
-`return` operands, and the final juxtaposition argument (`print exec! date`).
+`return` operands, and the final juxtaposition argument (`print exec$ date`).
 They cannot appear inside brackets or before more AgL syntax on the same line.
 See [Grammar](grammar.md#raw-tail-calls) for the complete position rule.
 
-`exec!` has the same typing behavior as `exec`: without an expected type it
+`exec$` has the same typing behavior as `exec`: without an expected type it
 returns `ExecResult`; a non-`ExecResult`/non-`unit` target parses stdout; and a
 `unit` target discards successful output. Use `exec(...)` instead when the
 command needs named parsing options (`format`, `strict_json`, or

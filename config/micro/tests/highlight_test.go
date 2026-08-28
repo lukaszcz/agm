@@ -108,9 +108,9 @@ func TestBuiltinsAreFacedBySpelling(t *testing.T) {
 // delimiter with the region's own group. Mirrors RAW_TAIL_NAMES in
 // src/agm/raw_tail_catalog.py.
 func TestRawTailOpenersAreFaced(t *testing.T) {
-	assertFace(t, "exec! ls -la", "exec!", "constant.string")
-	assertFace(t, "ask! summarise this", "ask!", "constant.string")
-	// The bare builtin spellings, without the `!', are unaffected.
+	assertFace(t, "exec$ ls -la", "exec$", "constant.string")
+	assertFace(t, "ask$ summarise this", "ask$", "constant.string")
+	// The bare builtin spellings, without the `$', are unaffected.
 	assertFace(t, "let x = exec(c)", "exec", "identifier")
 	assertFace(t, "let x = ask(p)", "ask", "identifier")
 }
@@ -121,14 +121,14 @@ func TestRawTailOpenersAreFaced(t *testing.T) {
 // there. A region's start delimiter cannot be repainted by a later rule, so
 // the boundary has to be in the delimiter itself.
 func TestRawTailOpenerInsideANameStaysCode(t *testing.T) {
-	assertFace(t, "let x = do-exec! + 1", "do-exec!", "default")
-	assertFace(t, "let x = do-exec! + 1", "+", "symbol.operator")
-	assertFace(t, "let y = an-ask! + 1", "an-ask!", "default")
+	assertFace(t, "let x = do-exec$ + 1", "do-exec$", "default")
+	assertFace(t, "let x = do-exec$ + 1", "+", "symbol.operator")
+	assertFace(t, "let y = an-ask$ + 1", "an-ask$", "default")
 	// A spelling inside a string literal is string content, not an opener.
-	assertFace(t, `print("exec! ls")`, "print", "identifier")
+	assertFace(t, `print("exec$ ls")`, "print", "identifier")
 }
 
-// `-', `?' and `!' continue an AgL name (IDENT_STOP in
+// `-', `?', `!' and `$' continue an AgL name (IDENT_STOP in
 // src/agm/util/ident.py), so a keyword or builtin spelling that merely starts
 // or ends a longer name must not be faced. Regexp `\b' does not know that;
 // these pin the layering in agl.yaml that compensates for it.
@@ -235,8 +235,8 @@ func TestDelimiterAfterARefacedNameIsRepainted(t *testing.T) {
 // A raw-tail payload is verbatim text, so AgL spellings inside it are not
 // code: the whole tail faces as a string, opener included.
 func TestRawTailPayloadIsVerbatim(t *testing.T) {
-	assertFace(t, "let a = exec! ls -la | grep record", "exec! ls -la | grep record", "constant.string")
-	assertFace(t, "let a = ask! summarise the record", "ask! summarise the record", "constant.string")
+	assertFace(t, "let a = exec$ ls -la | grep record", "exec$ ls -la | grep record", "constant.string")
+	assertFace(t, "let a = ask$ summarise the record", "ask$ summarise the record", "constant.string")
 	// The code before the opener is unaffected.
-	assertFace(t, "let a = exec! ls", "let", "statement")
+	assertFace(t, "let a = exec$ ls", "let", "statement")
 }

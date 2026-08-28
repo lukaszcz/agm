@@ -787,7 +787,7 @@ class TestSingleQuotedStrings:
 
 
 class TestRawTailForms:
-    @pytest.mark.parametrize("name", ("exec!", "ask!"))
+    @pytest.mark.parametrize("name", ("exec$", "ask$"))
     def test_inline_payload_and_interpolation(self, name: str) -> None:
         assert tok(f"{name} echo %{'{'}value}}  ") == [
             ("RAW_TAIL_NAME", name),
@@ -799,7 +799,7 @@ class TestRawTailForms:
             ("RAW_TAIL_END", ""),
         ]
 
-    @pytest.mark.parametrize("name", ("exec!", "ask!"))
+    @pytest.mark.parametrize("name", ("exec$", "ask$"))
     def test_inline_payload_is_verbatim_except_interpolation_escape(self, name: str) -> None:
         source = rf"""{name} echo '#; "quoted"' \\ \%{{ $HOME ${{shell}} $(date) $1"""
         assert tok(source) == [
@@ -809,7 +809,7 @@ class TestRawTailForms:
             ("RAW_TAIL_END", ""),
         ]
 
-    @pytest.mark.parametrize("name", ("exec!", "ask!"))
+    @pytest.mark.parametrize("name", ("exec$", "ask$"))
     def test_type_args_are_code_tokens_before_payload(self, name: str) -> None:
         assert tok(f"{name}::[Map[Result]] run") == [
             ("RAW_TAIL_NAME", name),
@@ -825,7 +825,7 @@ class TestRawTailForms:
             ("RAW_TAIL_END", ""),
         ]
 
-    @pytest.mark.parametrize("name", ("exec!", "ask!"))
+    @pytest.mark.parametrize("name", ("exec$", "ask$"))
     def test_type_args_allow_whitespace_inside_the_group(self, name: str) -> None:
         assert tok(f"{name}::[ T ] run") == [
             ("RAW_TAIL_NAME", name),
@@ -838,13 +838,13 @@ class TestRawTailForms:
             ("RAW_TAIL_END", ""),
         ]
 
-    @pytest.mark.parametrize("name", ("exec!", "ask!"))
+    @pytest.mark.parametrize("name", ("exec$", "ask$"))
     def test_unterminated_type_args_raise_lex_error(self, name: str) -> None:
         with pytest.raises(LexError) as exc_info:
             tok(f"{name}::[T")
         assert exc_info.value.span is not None
 
-    @pytest.mark.parametrize("name", ("exec!", "ask!"))
+    @pytest.mark.parametrize("name", ("exec$", "ask$"))
     def test_block_payload_is_dedented_and_inert_to_layout(self, name: str) -> None:
         source = f"{name}\n  first %{{value}}\n    done\n\n  else\nafter"
         assert tok(source) == [
@@ -861,8 +861,8 @@ class TestRawTailForms:
         ]
 
     def test_block_preserves_leading_and_interior_blank_lines(self) -> None:
-        assert tok("exec!\n\n  first\n\n  last") == [
-            ("RAW_TAIL_NAME", "exec!"),
+        assert tok("exec$\n\n  first\n\n  last") == [
+            ("RAW_TAIL_NAME", "exec$"),
             ("RAW_TAIL_START", ""),
             ("RAW_FRAGMENT", "\nfirst\n\nlast"),
             ("RAW_TAIL_END", ""),
@@ -871,41 +871,41 @@ class TestRawTailForms:
     @pytest.mark.parametrize(
         "source",
         (
-            "exec!\n  echo hi\n\nlet y = 1",
-            "exec!\n  echo hi\n\n\nlet y = 1",
-            "exec!\n  echo hi\n\n",
-            "exec!\n  echo hi\n  \n",
+            "exec$\n  echo hi\n\nlet y = 1",
+            "exec$\n  echo hi\n\n\nlet y = 1",
+            "exec$\n  echo hi\n\n",
+            "exec$\n  echo hi\n  \n",
         ),
     )
     def test_block_drops_trailing_blank_lines(self, source: str) -> None:
         assert raw_fragments(source) == ["echo hi"]
 
     def test_block_tab_straddling_the_margin_keeps_relative_indentation(self) -> None:
-        assert raw_fragments("ask!\n echo start\n\tnested") == ["echo start\n   nested"]
+        assert raw_fragments("ask$\n echo start\n\tnested") == ["echo start\n   nested"]
 
     def test_block_indentation_tab_is_advised_against(self) -> None:
-        assert lex_tab_warnings("exec!\n\ttext") != []
+        assert lex_tab_warnings("exec$\n\ttext") != []
 
     def test_block_payload_span_ends_at_the_last_payload_line(self) -> None:
-        end = next(t for t in tokenize("exec!\n  echo hi\nlet z = 1") if t.type == "RAW_TAIL_END")
+        end = next(t for t in tokenize("exec$\n  echo hi\nlet z = 1") if t.type == "RAW_TAIL_END")
         assert (end.line, end.column, end.end_line, end.end_column) == (2, 10, 2, 10)
 
     def test_inline_payload_span_ends_at_the_payload(self) -> None:
-        end = next(t for t in tokenize("exec! echo hi   ") if t.type == "RAW_TAIL_END")
+        end = next(t for t in tokenize("exec$ echo hi   ") if t.type == "RAW_TAIL_END")
         assert (end.line, end.column, end.end_line, end.end_column) == (1, 14, 1, 14)
 
     def test_empty_block_payload_keeps_the_statement_separator(self) -> None:
-        assert ("_NEWLINE", "0") in tok("exec!\nnext")
+        assert ("_NEWLINE", "0") in tok("exec$\nnext")
 
     def test_raw_tail_under_an_unclosed_bracket_is_left_to_the_parser(self) -> None:
-        tokens = tok("let a = (1 + 2\nlet b: text = exec! echo hi\nprint(b)\n")
-        assert ("RAW_TAIL_NAME", "exec!") in tokens
+        tokens = tok("let a = (1 + 2\nlet b: text = exec$ echo hi\nprint(b)\n")
+        assert ("RAW_TAIL_NAME", "exec$") in tokens
 
     def test_bracketed_raw_tail_error_points_at_the_first_occurrence(self) -> None:
         # Two raw tails inside one bracket: the closed bracket really does
         # enclose them, so the error is reported — anchored at the first.
         with pytest.raises(LexError) as exc_info:
-            tok("(exec! a exec! b)")
+            tok("(exec$ a exec$ b)")
         assert "brackets" in str(exc_info.value)
         span = exc_info.value.span
         assert span is not None
@@ -915,12 +915,12 @@ class TestRawTailForms:
         # A closed bracket encloses the raw tail, so its diagnostic is raised
         # even though a later unterminated string would otherwise be the failure.
         with pytest.raises(LexError) as exc_info:
-            tok("[exec! a] 'oops")
+            tok("[exec$ a] 'oops")
         assert "brackets" in str(exc_info.value)
 
     def test_block_followed_by_comment_emits_one_layout_newline(self) -> None:
-        assert tok("exec!\n  echo hi\n# outside\nafter") == [
-            ("RAW_TAIL_NAME", "exec!"),
+        assert tok("exec$\n  echo hi\n# outside\nafter") == [
+            ("RAW_TAIL_NAME", "exec$"),
             ("RAW_TAIL_START", ""),
             ("RAW_FRAGMENT", "echo hi"),
             ("RAW_TAIL_END", ""),
@@ -929,11 +929,11 @@ class TestRawTailForms:
         ]
 
     def test_tab_indentation_is_dedented_by_visual_width(self) -> None:
-        assert ("RAW_FRAGMENT", "text") in tok("exec!\n\ttext")
+        assert ("RAW_FRAGMENT", "text") in tok("exec$\n\ttext")
 
     def test_under_indented_block_line_is_rejected_at_its_location(self) -> None:
         with pytest.raises(LexError) as exc_info:
-            tok("exec!\n  first\n next")
+            tok("exec$\n  first\n next")
         assert exc_info.value.span is not None
         assert (
             exc_info.value.span.start_line,
@@ -942,7 +942,7 @@ class TestRawTailForms:
             exc_info.value.span.end_col,
         ) == (3, 2, 3, 2)
 
-    @pytest.mark.parametrize("source", ("exec!", "ask!   ", "exec!\n", "exec!\nnext"))
+    @pytest.mark.parametrize("source", ("exec$", "ask$   ", "exec$\n", "exec$\nnext"))
     def test_empty_payload_reaches_the_parser(self, source: str) -> None:
         tokens = tok(source)
         assert ("RAW_TAIL_START", "") in tokens
@@ -950,7 +950,7 @@ class TestRawTailForms:
 
     def test_raw_tail_is_rejected_inside_brackets_at_its_location(self) -> None:
         with pytest.raises(LexError) as exc_info:
-            tok("(exec! echo hi)")
+            tok("(exec$ echo hi)")
         assert exc_info.value.span is not None
         assert (
             exc_info.value.span.start_line,
@@ -960,31 +960,31 @@ class TestRawTailForms:
         ) == (1, 2, 1, 2)
 
     def test_raw_tail_after_completed_paren_and_semicolon_is_scanned(self) -> None:
-        for source in ("(1 + 1) exec! true", "1 + 1; exec! true"):
-            assert ("RAW_TAIL_NAME", "exec!") in tok(source)
+        for source in ("(1 + 1) exec$ true", "1 + 1; exec$ true"):
+            assert ("RAW_TAIL_NAME", "exec$") in tok(source)
             assert ("RAW_FRAGMENT", "true") in tok(source)
 
     @pytest.mark.parametrize(
         "source",
         (
-            "record R\n  exec!: int",
-            "exception X\n  ask!: int",
-            "enum E\n  | ask!",
-            "let x = ::ask!",
+            "record R\n  exec$: int",
+            "exception X\n  ask$: int",
+            "enum E\n  | ask$",
+            "let x = ::ask$",
         ),
     )
     def test_reserved_raw_names_always_start_raw_tail_scanning(self, source: str) -> None:
         tokens = tok(source)
-        assert ("RAW_TAIL_NAME", "exec!") in tokens or ("RAW_TAIL_NAME", "ask!") in tokens
+        assert ("RAW_TAIL_NAME", "exec$") in tokens or ("RAW_TAIL_NAME", "ask$") in tokens
 
-    @pytest.mark.parametrize("source", ("def f(exec!: int) -> int = 1", "record R[exec!]"))
+    @pytest.mark.parametrize("source", ("def f(exec$: int) -> int = 1", "record R[exec$]"))
     def test_reserved_raw_names_in_bracket_keys_are_lexically_rejected(self, source: str) -> None:
         with pytest.raises(LexError) as exc_info:
             tok(source)
         assert exc_info.value.span is not None
         assert "brackets" in str(exc_info.value)
 
-    @pytest.mark.parametrize("name", ("exec!", "ask!"))
+    @pytest.mark.parametrize("name", ("exec$", "ask$"))
     def test_enum_variant_payload_field_name_is_lexically_rejected(self, name: str) -> None:
         with pytest.raises(LexError) as exc_info:
             tok(f"enum E\n  | V({name}: int)")
@@ -994,59 +994,59 @@ class TestRawTailForms:
     def test_raw_tail_after_branch_arrow_scans_its_payload(self) -> None:
         # The payload is shell/prompt text wherever it appears, so it is never
         # re-read as code; the parser rejects the position.
-        assert tok("if true => exec! date | else => 0") == [
+        assert tok("if true => exec$ date | else => 0") == [
             ("if", "if"),
             ("true", "true"),
             ("ARROW", "=>"),
-            ("RAW_TAIL_NAME", "exec!"),
+            ("RAW_TAIL_NAME", "exec$"),
             ("RAW_TAIL_START", ""),
             ("RAW_FRAGMENT", "date | else => 0"),
             ("RAW_TAIL_END", ""),
         ]
 
     def test_raw_tail_after_branch_arrow_does_not_lex_shell_quotes(self) -> None:
-        assert ("RAW_FRAGMENT", "echo 'oops") in tok("if true => exec! echo 'oops")
+        assert ("RAW_FRAGMENT", "echo 'oops") in tok("if true => exec$ echo 'oops")
 
     def test_raw_tail_on_arrow_suite_line_is_scanned(self) -> None:
-        tokens = tok("if true =>\n  exec! true")
-        assert ("RAW_TAIL_NAME", "exec!") in tokens
+        tokens = tok("if true =>\n  exec$ true")
+        assert ("RAW_TAIL_NAME", "exec$") in tokens
         assert ("RAW_FRAGMENT", "true") in tokens
 
     @pytest.mark.parametrize(
         "source",
         (
-            "record R\nexec! true",
-            "record R\n  field: int\nexec! true",
-            "record R\n  field: exec! true",
-            "record R\n  do\n    exec! true\n  done",
-            "record R\n  x: int\n  *\n  y: int\nexec! true",
-            "enum E\n  | V(value: int)\nexec! true",
+            "record R\nexec$ true",
+            "record R\n  field: int\nexec$ true",
+            "record R\n  field: exec$ true",
+            "record R\n  do\n    exec$ true\n  done",
+            "record R\n  x: int\n  *\n  y: int\nexec$ true",
+            "enum E\n  | V(value: int)\nexec$ true",
         ),
     )
     def test_raw_tail_closes_nominal_context_outside_field_margin(self, source: str) -> None:
-        assert ("RAW_TAIL_NAME", "exec!") in tok(source)
+        assert ("RAW_TAIL_NAME", "exec$") in tok(source)
 
     @pytest.mark.parametrize(
         "source",
         (
-            "for exec! in [] do 1 done",
-            "case x of value as ask! => 1",
-            "type exec! = int",
-            "::ask!",
+            "for exec$ in [] do 1 done",
+            "case x of value as ask$ => 1",
+            "type exec$ = int",
+            "::ask$",
         ),
     )
     def test_reserved_raw_names_always_start_raw_tail_in_binding_and_qualified_contexts(
         self, source: str
     ) -> None:
         tokens = tok(source)
-        assert ("RAW_TAIL_NAME", "exec!") in tokens or ("RAW_TAIL_NAME", "ask!") in tokens
+        assert ("RAW_TAIL_NAME", "exec$") in tokens or ("RAW_TAIL_NAME", "ask$") in tokens
 
-    @pytest.mark.parametrize("name", ("exec!", "ask!"))
+    @pytest.mark.parametrize("name", ("exec$", "ask$"))
     def test_qualified_name_starts_raw_tail_scanning(self, name: str) -> None:
         for source in (f"target.{name}", f"module::{name}", f"module:: {name} echo"):
             assert ("RAW_TAIL_NAME", name) in tok(source)
 
-    @pytest.mark.parametrize("name", ("exec!", "ask!"))
+    @pytest.mark.parametrize("name", ("exec$", "ask$"))
     def test_spaced_dcolon_does_not_suppress_raw_tail(self, name: str) -> None:
         assert tok(f"module :: {name} echo hi") == [
             ("NAME", "module"),
@@ -1057,13 +1057,13 @@ class TestRawTailForms:
             ("RAW_TAIL_END", ""),
         ]
 
-    @pytest.mark.parametrize("name", ("exec!x", "ask!x"))
+    @pytest.mark.parametrize("name", ("exec$x", "ask$x"))
     def test_raw_tail_prefix_identifier_does_not_trigger(self, name: str) -> None:
         assert tok(name) == [("NAME", name)]
 
     def test_newline_in_raw_tail_hole_is_rejected(self) -> None:
         with pytest.raises(LexError):
-            tok("exec! %{value\n  }")
+            tok("exec$ %{value\n  }")
 
 
 # ---------------------------------------------------------------------------
@@ -1959,11 +1959,11 @@ class TestIdentifierUnicodeAndSymbols:
     """Identifiers start with a (Unicode) letter or ``_`` and then greedily
     consume every character that is not whitespace and not a structural
     operator/punctuator delimiter.  Non-ASCII letters, digits, and the symbol
-    characters ``-``, ``?``, ``!`` are all valid identifier-continuation
-    characters, so names like ``ask-prompt`` or ``do-it-now!`` scan as a single
-    token.  Operator tokens (``->``, ``=>``, ``!=``, field access ``.``, etc.)
-    still lex as operators when they appear as standalone, whitespace-delimited
-    tokens."""
+    characters ``-``, ``?``, ``!``, ``$`` are all valid identifier-continuation
+    characters, so names like ``ask-prompt``, ``do-it-now!`` or ``do-exec$``
+    scan as a single token.  Operator tokens (``->``, ``=>``, ``!=``, field
+    access ``.``, etc.) still lex as operators when they appear as standalone,
+    whitespace-delimited tokens."""
 
     def test_latin_extended_lowercase_accepted(self) -> None:
         # é (U+00E9) is a Unicode letter — a valid NAME start.
@@ -2000,6 +2000,12 @@ class TestIdentifierUnicodeAndSymbols:
 
     def test_exclamation_in_identifier(self) -> None:
         assert tok("do-it-now!") == [("NAME", "do-it-now!")]
+
+    def test_dollar_in_identifier(self) -> None:
+        # The raw-tail openers end in ``$``, so a name merely ending in one of
+        # their spellings is a single ordinary identifier, not an opener.
+        assert tok("price$") == [("NAME", "price$")]
+        assert tok("do-exec$") == [("NAME", "do-exec$")]
 
     def test_operator_chars_in_identifier(self) -> None:
         # -, >, +, * (but NOT =) are identifier-continuation characters, so

@@ -1,1 +1,1 @@
-let exec! = "not allowed"
+let exec$ = "not allowed"

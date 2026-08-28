@@ -103,11 +103,18 @@ backend."
                         "\n" (string-trim (match-string 1 line))))))))
     (nreverse reports)))
 
-(defun agl-flymake--same-file-p (path file)
-  "Return non-nil when PATH and FILE name the same file."
+(defun agl-flymake--same-file-p (path file directory)
+  "Return non-nil when PATH and FILE name the same file.
+
+`agm check' prints each path relative to its own working directory, so a
+diagnostic for the checked file usually arrives as a bare basename.
+DIRECTORY is that working directory: resolving PATH against anything
+else -- `default-directory', which in a process sentinel belongs to
+whatever buffer happens to be current -- would leave the buffer's own
+diagnostics looking foreign."
   (and path file
        (or (string= path file)
-           (string= (expand-file-name path) (expand-file-name file)))))
+           (string= (expand-file-name path directory) (expand-file-name file)))))
 
 (defun agl-flymake--line-count (buffer)
   "Return the number of lines in BUFFER."
@@ -165,17 +172,18 @@ region rather than signalling."
             (setq beg (or (car (bounds-of-thing-at-point 'symbol)) beg)))
           (cons beg (min (point-max) (max end (1+ beg)))))))))
 
-(defun agl-flymake--diagnostics (buffer file reports)
+(defun agl-flymake--diagnostics (buffer file directory reports)
   "Return flymake diagnostics for BUFFER, checking FILE, from REPORTS.
 
-A report naming another file — an imported module — has no position in
-BUFFER, so it is attached at `point-min' with its path kept in the
-message."
+DIRECTORY is the working directory the checker ran in, against which a
+relative report path is resolved (`agl-flymake--same-file-p').  A report
+naming another file — an imported module — has no position in BUFFER, so
+it is attached at `point-min' with its path kept in the message."
   (let ((diagnostics nil))
     (dolist (report reports)
       (let ((type (agl-flymake-report-severity report))
             (text (agl-flymake-report-text report)))
-        (if (agl-flymake--same-file-p (agl-flymake-report-path report) file)
+        (if (agl-flymake--same-file-p (agl-flymake-report-path report) file directory)
             (let ((region (agl-flymake--region buffer report)))
               (when region
                 (push (flymake-make-diagnostic buffer (car region) (cdr region)
@@ -197,15 +205,17 @@ message."
                   diagnostics)))))
     (nreverse diagnostics)))
 
-(defun agl-flymake--result-diagnostics (buffer file output exit-status)
+(defun agl-flymake--result-diagnostics (buffer file directory output exit-status)
   "Return Flymake diagnostics from an `agm check' result.
 
-EXIT-STATUS is non-zero both for source diagnostics and checker failures.
-The latter emit no GNU-style diagnostic, so attach their output to BUFFER
-rather than incorrectly reporting a clean result."
+DIRECTORY is the working directory the checker ran in; see
+`agl-flymake--diagnostics'.  EXIT-STATUS is non-zero both for source
+diagnostics and checker failures.  The latter emit no GNU-style
+diagnostic, so attach their output to BUFFER rather than incorrectly
+reporting a clean result."
   (let ((reports (agl-flymake-parse output)))
     (if (or reports (zerop exit-status))
-        (agl-flymake--diagnostics buffer file reports)
+        (agl-flymake--diagnostics buffer file directory reports)
       (with-current-buffer buffer
         (list (flymake-make-diagnostic
                buffer (point-min) (min (point-max) (1+ (point-min))) :error
@@ -229,6 +239,10 @@ can never overwrite a newer one."
     (when (process-live-p agl-flymake--process)
       (kill-process agl-flymake--process))
     (let* ((buffer (current-buffer))
+           ;; The checker's paths are relative to the directory it is spawned
+           ;; in, which is this buffer's; the sentinel below runs with no
+           ;; buffer of its own, so the directory is captured here.
+           (directory default-directory)
            (output (generate-new-buffer " *agl-check*"))
            (process
             (make-process
@@ -247,7 +261,8 @@ can never overwrite a newer one."
                                      (buffer-string))))
                          (funcall report-fn
                                   (agl-flymake--result-diagnostics
-                                   buffer file text (process-exit-status proc)))))
+                                   buffer file directory text
+                                   (process-exit-status proc)))))
                    (kill-buffer output)))))))
       (setq agl-flymake--process process))))
 

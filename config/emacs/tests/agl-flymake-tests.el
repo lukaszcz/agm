@@ -86,7 +86,8 @@
   (agl-fm--with-buffer "let a = 1\n"
     (let ((diagnostics
            (agl-flymake--result-diagnostics
-            (current-buffer) buffer-file-name "Error: invalid module root\n" 2)))
+            (current-buffer) buffer-file-name default-directory
+            "Error: invalid module root\n" 2)))
       (should (= (length diagnostics) 1))
       (should (eq (flymake-diagnostic-type (car diagnostics)) :error))
       (should (string-match-p "invalid module root"
@@ -104,7 +105,8 @@
     (let* ((reports (agl-flymake-parse
                      (format "%s:2:5: error: boom\n" buffer-file-name)))
            (diagnostics (agl-flymake--diagnostics
-                         (current-buffer) buffer-file-name reports))
+                         (current-buffer) buffer-file-name
+                         default-directory reports))
            (diagnostic (car diagnostics)))
       (should (= (length diagnostics) 1))
       (should (>= (flymake-diagnostic-beg diagnostic)
@@ -119,7 +121,8 @@
     (let* ((reports (agl-flymake-parse
                      (format "%s:1:5-9: error: boom\n" buffer-file-name)))
            (diagnostic (car (agl-flymake--diagnostics
-                             (current-buffer) buffer-file-name reports))))
+                             (current-buffer) buffer-file-name
+                             default-directory reports))))
       (should (= (flymake-diagnostic-beg diagnostic) 5))
       (should (= (flymake-diagnostic-end diagnostic) 10)))))
 
@@ -128,7 +131,8 @@
     (let* ((reports (agl-flymake-parse
                      (format "%s:1:1: error: boom\n" buffer-file-name)))
            (diagnostic (car (agl-flymake--diagnostics
-                             (current-buffer) buffer-file-name reports))))
+                             (current-buffer) buffer-file-name
+                             default-directory reports))))
       (should (= (flymake-diagnostic-beg diagnostic) 1)))))
 
 (ert-deftest agl-fm-tolerates-a-line-past-the-end-of-the-buffer ()
@@ -136,15 +140,51 @@
     (let* ((reports (agl-flymake-parse
                      (format "%s:99:3: error: boom\n" buffer-file-name)))
            (diagnostics (agl-flymake--diagnostics
-                         (current-buffer) buffer-file-name reports)))
+                         (current-buffer) buffer-file-name
+                         default-directory reports)))
       ;; Whatever it maps to, producing it must not signal.
       (should (listp diagnostics)))))
+
+(ert-deftest agl-fm-maps-a-relative-path-onto-its-line ()
+  ;; `agm check' prints each path relative to its own working directory, so
+  ;; a diagnostic for the checked file arrives as a bare basename.
+  (agl-fm--with-buffer "let a = 1\nlet b = 2\n"
+    (let* ((reports (agl-flymake-parse
+                     (format "%s:2:5: error: boom\n"
+                             (file-name-nondirectory buffer-file-name))))
+           (diagnostics (agl-flymake--diagnostics
+                         (current-buffer) buffer-file-name
+                         (file-name-directory buffer-file-name) reports))
+           (diagnostic (car diagnostics)))
+      (should (= (length diagnostics) 1))
+      ;; On its own line, and with its own text: a diagnostic mistaken for a
+      ;; foreign one lands at `point-min' with the path folded in.
+      (should (equal (flymake-diagnostic-text diagnostic) "boom"))
+      (should (>= (flymake-diagnostic-beg diagnostic)
+                  (save-excursion (goto-char (point-min))
+                                  (forward-line 1)
+                                  (point)))))))
+
+(ert-deftest agl-fm-relative-path-ignores-the-current-directory ()
+  ;; The checker's working directory is what its relative paths are against;
+  ;; the sentinel that reports them runs in whatever buffer happens to be
+  ;; current, so nothing may be read from `default-directory' there.
+  (agl-fm--with-buffer "let a = 1\n"
+    (let* ((directory (file-name-directory buffer-file-name))
+           (reports (agl-flymake-parse
+                     (format "%s:1:1: error: boom\n"
+                             (file-name-nondirectory buffer-file-name))))
+           (default-directory "/")
+           (diagnostic (car (agl-flymake--diagnostics
+                             (current-buffer) buffer-file-name directory reports))))
+      (should (equal (flymake-diagnostic-text diagnostic) "boom")))))
 
 (ert-deftest agl-fm-attaches-a-foreign-diagnostic-at-point-min ()
   (agl-fm--with-buffer "import lib\n"
     (let* ((reports (agl-flymake-parse "/other/lib.agl:4:2: error: boom\n"))
            (diagnostic (car (agl-flymake--diagnostics
-                             (current-buffer) buffer-file-name reports))))
+                             (current-buffer) buffer-file-name
+                             default-directory reports))))
       (should (= (flymake-diagnostic-beg diagnostic) (point-min)))
       (should (string-match-p "/other/lib.agl" (flymake-diagnostic-text diagnostic)))
       (should (string-match-p "boom" (flymake-diagnostic-text diagnostic))))))
@@ -154,13 +194,15 @@
     (let* ((reports (agl-flymake-parse
                      (format "%s:1:1: warning: careful\n" buffer-file-name)))
            (diagnostic (car (agl-flymake--diagnostics
-                             (current-buffer) buffer-file-name reports))))
+                             (current-buffer) buffer-file-name
+                             default-directory reports))))
       (should (eq (flymake-diagnostic-type diagnostic) :warning)))))
 
 (ert-deftest agl-fm-empty-output-yields-no-diagnostics ()
   (agl-fm--with-buffer "let a = 1\n"
     (should-not (agl-flymake--diagnostics
-                 (current-buffer) buffer-file-name (agl-flymake-parse "")))))
+                 (current-buffer) buffer-file-name
+                 default-directory (agl-flymake-parse "")))))
 
 (ert-deftest agl-fm-reports-both-local-and-foreign-diagnostics ()
   (agl-fm--with-buffer "import lib\nlet a = 1\n"
@@ -168,7 +210,8 @@
                      (concat "/other/lib.agl:1:1: error: foreign\n"
                              (format "%s:2:1: error: local\n" buffer-file-name))))
            (diagnostics (agl-flymake--diagnostics
-                         (current-buffer) buffer-file-name reports)))
+                         (current-buffer) buffer-file-name
+                         default-directory reports)))
       (should (= (length diagnostics) 2))
       (should (cl-some (lambda (text) (string-match-p "foreign" text))
                        (agl-fm--texts diagnostics)))
@@ -179,7 +222,8 @@
   (agl-fm--with-buffer "import lib\n"
     (let* ((reports (agl-flymake-parse "/other/lib.agl:4:2: error: boom\n"))
            (diagnostic (car (agl-flymake--diagnostics
-                             (current-buffer) buffer-file-name reports))))
+                             (current-buffer) buffer-file-name
+                             default-directory reports))))
       (should (string-match-p "/other/lib.agl:4:2:" (flymake-diagnostic-text diagnostic))))))
 
 (provide 'agl-flymake-tests)

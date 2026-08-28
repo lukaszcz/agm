@@ -53,21 +53,44 @@ rules:
     # the repair.  Each consumes the delimiter that has to follow it, so a
     # longer name merely starting with one of them stays plain (`ask-request-x').
     - identifier: "\\b(ask-request|resource-dir)($|[\\]\\[(){}:,.|;/@=\\s])"
-    - identifier: "\\b(exec|ask)!($|[\\]\\[(){}:,.|;/@=\\s])"
     - statement: "\\bas\\?($|[\\]\\[(){}:,.|;/@=\\s])"
 
-    # Repaint the delimiter each re-face rule had to swallow.  `.' is left out
+    # `?' and `?N' partial-application placeholders.  A placeholder is a whole
+    # argument, so it follows an opening bracket, a comma, or whitespace;
+    # anchoring on that character is what keeps the `?' ending a name such as
+    # `is-ready?' plain.  The anchor is repainted just below.
+    - symbol.operator: "(^|[\\s(\\[,])\\?[0-9]*"
+
+    # Repaint the delimiter each rule above had to swallow.  `.' is left out
     # on purpose: repainting it here would also re-split the `.' of a decimal
     # literal, so a `.' directly after one of the spellings above keeps that
     # spelling's colour instead.
     - symbol.operator: "(::|[/=@])"
-    - symbol: "([:;|])"
+    - symbol: "([:;|,])"
     - symbol.brackets: "([(){}]|\\[|\\])"
 
-    # `::' and `:=' are single operator tokens, but the delimiter rules above
-    # repaint the `:' of each.  Restoring them last is safe: `:' is a true
-    # delimiter, so neither spelling can ever occur inside a name.
+    # Multi-character operator tokens, restored after the delimiter rules that
+    # would otherwise split them.  `::' and `:=' are fixed spellings whose `:'
+    # is a true delimiter, so neither can occur inside a name and both are safe
+    # to repaint anywhere.  Every other operator name is a run of two or more
+    # operator characters (`|>', `<|', `>>', or any `infixl'/`infixr' spelling);
+    # those characters also continue a name, so the run is anchored to
+    # whitespace, which no name can contain -- and painting the anchor with it
+    # is invisible.
     - symbol.operator: "(::|:=)"
+    - symbol.operator: "(^|\\s)[!$%&*+\\-/<=>?\\\\^|~]{2,}"
+
+    # Raw-tail payloads. The tail of an `exec!'/`ask!' line is verbatim text,
+    # not AgL, so the whole tail is a region: a keyword or an apostrophe inside
+    # a shell command is content, not code.  Micro paints a region's start
+    # delimiter with the region's own group, so the opener faces as part of the
+    # payload rather than as a builtin -- the tail's verbatim reading is what
+    # matters, and unlike the Emacs mode there is no way to split the two.
+    # Only the inline form is covered; an indented block payload is beyond what
+    # a regexp-only region can delimit.
+    - constant.string:
+        start: "\\b(exec|ask)!"
+        end: "$"
 
     # Template strings. AgL strings may contain %{...}; this highlights the
     # interpolation delimiters without trying to parse nested AgL expressions.

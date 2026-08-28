@@ -103,10 +103,16 @@ func TestBuiltinsAreFacedBySpelling(t *testing.T) {
 	}
 }
 
+// A raw-tail opener starts the verbatim payload region below, so it faces with
+// the payload rather than as a builtin call: micro paints a region's start
+// delimiter with the region's own group. Mirrors RAW_TAIL_NAMES in
+// src/agm/raw_tail_catalog.py.
 func TestRawTailOpenersAreFaced(t *testing.T) {
-	// Mirrors RAW_TAIL_NAMES in src/agm/raw_tail_catalog.py.
-	assertFace(t, "exec! ls -la", "exec!", "identifier")
-	assertFace(t, "ask! summarise this", "ask!", "identifier")
+	assertFace(t, "exec! ls -la", "exec!", "constant.string")
+	assertFace(t, "ask! summarise this", "ask!", "constant.string")
+	// The bare builtin spellings, without the `!', are unaffected.
+	assertFace(t, "let x = exec(c)", "exec", "identifier")
+	assertFace(t, "let x = ask(p)", "ask", "identifier")
 }
 
 // `-', `?' and `!' continue an AgL name (IDENT_STOP in
@@ -182,4 +188,42 @@ func TestColonOperatorsFaceAsOneToken(t *testing.T) {
 	assertFace(t, "let o = Point::origin", "::", "symbol.operator")
 	// A lone `:' introducing an annotation stays a plain delimiter.
 	assertFace(t, "def f(a: int)", ":", "symbol")
+}
+
+// A symbolic operator name is one token, however many characters it spells.
+// `std/core' declares `|>', `<|', `>>' and `<<', and a program may declare any
+// other spelling with `infixl'/`infixr'.
+func TestOperatorNamesFaceAsOneToken(t *testing.T) {
+	for _, op := range []string{"|>", "<|", ">>", "<<", "++", "<$>"} {
+		assertFace(t, "let y = a "+op+" b", op, "symbol.operator")
+	}
+	assertFace(t, "infixl |> at 5", "|>", "symbol.operator")
+	// A lone `|' is the branch marker, a plain delimiter rather than an operator.
+	assertFace(t, "case v of\n| A => 1", "|", "symbol")
+}
+
+// `?' and `?N' are partial-application placeholders: whole tokens, so the
+// digits of `?1' are part of the placeholder rather than a number literal.
+func TestPlaceholdersFaceAsOneToken(t *testing.T) {
+	assertFace(t, "let g = f(?)", "?", "symbol.operator")
+	assertFace(t, "let g = f(?1, ?2)", "?1", "symbol.operator")
+	assertFace(t, "let g = f(?1, ?2)", "?2", "symbol.operator")
+	// The `?' ending a name is part of that name, not a placeholder.
+	assertFace(t, "let u = is-ready?", "is-ready?", "default")
+}
+
+// A re-faced builtin spelling has to consume the delimiter that follows it,
+// which then needs its own face back.
+func TestDelimiterAfterARefacedNameIsRepainted(t *testing.T) {
+	assertFace(t, "f(ask-request, x)", ",", "symbol")
+	assertFace(t, "f(resource-dir, x)", ",", "symbol")
+}
+
+// A raw-tail payload is verbatim text, so AgL spellings inside it are not
+// code: the whole tail faces as a string, opener included.
+func TestRawTailPayloadIsVerbatim(t *testing.T) {
+	assertFace(t, "let a = exec! ls -la | grep record", "exec! ls -la | grep record", "constant.string")
+	assertFace(t, "let a = ask! summarise the record", "ask! summarise the record", "constant.string")
+	// The code before the opener is unaffected.
+	assertFace(t, "let a = exec! ls", "let", "statement")
 }

@@ -33,9 +33,9 @@
 ;; Font-lock is structural only : capitalization is semantically
 ;; meaningless in AgL, so faces derive from declaration and annotation
 ;; positions, never from spelling; constructor use-sites in expressions
-;; stay unfaced.  Later tasks add indentation, flymake, and exec/REPL
-;; integration.  See docs/agl/reference/lexical-structure.md for the
-;; authoritative lexical rules.
+;; stay unfaced.  Indentation, flymake, and the exec/REPL integrations
+;; live in the sibling files.  See docs/agl/reference/lexical-structure.md
+;; for the authoritative lexical rules.
 
 ;;; Code:
 
@@ -598,11 +598,10 @@ match must still pass the identifier-boundary predicates; see
 
 ;; `font-lock-escape-face', `font-lock-number-face', and
 ;; `font-lock-operator-face' were all added in Emacs 29.1.
-;; Package-Requires still floors at 27.1 (the plan's stated minimum, not
-;; owner-visible to bump), so each is resolved through a `facep' check with
-;; a pre-29 fallback rather than referenced directly -- on 27/28 nothing
-;; errors either way, but referencing the absent face directly would
-;; silently fontify with no face at all.
+;; Package-Requires still floors at 27.1, so each is resolved through a
+;; `facep' check with a pre-29 fallback rather than referenced directly
+;; -- on 27/28 nothing errors either way, but referencing the absent face
+;; directly would silently fontify with no face at all.
 
 (defconst agl--escape-face
   (if (facep 'font-lock-escape-face) 'font-lock-escape-face 'font-lock-constant-face)

@@ -17,6 +17,7 @@ program that calls an extern.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -249,6 +250,48 @@ class TestExternRegistryLoadAndResolve:
         assert registry_a.resolve(mid, "f")(None) == 1
         assert registry_b.resolve(mid, "f")(None) == 1
 
+    def test_a_rewritten_companion_is_reimported(self, tmp_path: Path) -> None:
+        """An edited companion runs its new code, not the code first imported.
+
+        The registry caches by canonical path so that two module ids sharing
+        one companion do not run its top level twice. Without a validity
+        check that cache also outlives the file: a REPL session that edits a
+        companion, or a host that replaces one, would keep calling the old
+        Python for the life of the registry, with nothing to say why.
+        """
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("def f(x):\n    return x + 1\n")
+        mid = ModuleId.from_path("lib/mod")
+        registry = ExternRegistry()
+        registry.load_companion(mid, py_path)
+        assert registry.resolve(mid, "f")(1) == 2
+
+        py_path.write_text("def f(x):\n    return x + 100\n")
+        registry.load_companion(mid, py_path)
+
+        assert registry.resolve(mid, "f")(1) == 101
+
+    def test_a_rewritten_companion_of_the_same_size_is_reimported(self, tmp_path: Path) -> None:
+        """Size alone cannot decide staleness, so the stamp carries the mtime too."""
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("def f(x):\n    return x + 1\n")
+        mid = ModuleId.from_path("lib/mod")
+        registry = ExternRegistry()
+        registry.load_companion(mid, py_path)
+        assert registry.resolve(mid, "f")(1) == 2
+
+        replacement = "def f(x):\n    return x + 9\n"
+        assert len(replacement) == len("def f(x):\n    return x + 1\n")
+        py_path.write_text(replacement)
+        # Set the timestamp rather than trusting the clock: a filesystem with
+        # coarse timestamps could otherwise stamp both writes identically and
+        # make this pass or fail on granularity instead of on the rule.
+        stamp = py_path.stat().st_mtime_ns + 1_000_000_000
+        os.utime(py_path, ns=(stamp, stamp))
+        registry.load_companion(mid, py_path)
+
+        assert registry.resolve(mid, "f")(1) == 10
+
     def test_missing_attribute_raises_resolution_error(self, tmp_path: Path) -> None:
         py_path = tmp_path / "mod.py"
         py_path.write_text("def wrong_name(x):\n    return x\n")
@@ -292,6 +335,21 @@ class TestExternRegistryLoadAndResolve:
         assert set(sys.path) == before
         assert not any(name.startswith("agm_agl_extern_companion__") for name in sys.modules)
         assert "agl" not in sys.modules
+
+    def test_a_companion_that_disappeared_is_reported_as_an_import_failure(
+        self, tmp_path: Path
+    ) -> None:
+        """A vanished companion is a diagnosable import failure, not a crash.
+
+        The loader records a companion path when it discovers the file; by the
+        time the extern is loaded the file may be gone. The pipeline turns an
+        import failure into a diagnostic, so anything else escapes as an
+        unhandled error out of a command.
+        """
+        registry = ExternRegistry()
+
+        with pytest.raises(ExternImportError):
+            registry.load_companion(ModuleId.from_path("lib/mod"), tmp_path / "gone.py")
 
     def test_failed_companion_import_also_removes_agl_module(self, tmp_path: Path) -> None:
         import sys

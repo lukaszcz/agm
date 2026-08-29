@@ -42,6 +42,7 @@ from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
 from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
 from agm.agl.semantics.values import ArrayValue, DictValue, IrClosureValue, TextValue, Value
+from agm.core import fs
 from agm.util.scoping import ScopedVar
 
 # These companion module attributes are APIs, never synthesized nominal aliases.
@@ -253,9 +254,10 @@ class ExternRegistry:
     """Imports extern companions, resolves their callables, and invokes them.
 
     Two-step resolution mirrors the way the pipeline discovers externs by
-    module: :meth:`load_companion` imports a module's companion exactly once
-    (cached per canonical path, so re-importing the same file — even for a
-    different module id sharing it — is a no-op); :meth:`resolve` then looks
+    module: :meth:`load_companion` imports a module's companion once per
+    version of the file (cached per canonical path, so re-importing an
+    unchanged file — even for a different module id sharing it — is a no-op,
+    while an edited one is imported again); :meth:`resolve` then looks
     up one already-loaded companion's callable by name, caching each
     successful lookup by ``(module_id, name)`` so repeated invocations of the
     same extern skip the attribute lookup.  If a module id is later remapped to
@@ -266,7 +268,7 @@ class ExternRegistry:
     """
 
     def __init__(self) -> None:
-        self._by_path: dict[Path, ModuleType] = {}
+        self._by_path: dict[Path, tuple[fs.IdentityStamp, ModuleType]] = {}
         self._by_module: dict[ModuleId, ModuleType] = {}
         self._resolved: dict[tuple[ModuleId, str], ExternCallable] = {}
         self._nominal_classes: dict[NominalId, type[object]] = {}
@@ -341,19 +343,34 @@ class ExternRegistry:
         return module
 
     def load_companion(self, module_id: ModuleId, companion_path: Path) -> ModuleType:
-        """Import *companion_path* for *module_id*, executing it at most once.
+        """Import *companion_path* for *module_id*, executing it once per version.
 
         Registered in ``sys.modules`` under a synthetic name for the duration
         of the import only (no ``sys.path`` manipulation — the companion may
         still import installed packages absolutely).  A companion already
         imported for a different module id under the same canonical path is
-        reused without re-running its top-level code.
+        reused without re-running its top-level code, which is what keeps a
+        shared companion's top level from running twice.
+
+        That reuse is conditional on the file's identity stamp, so an edited
+        companion is imported again rather than serving the code a long-lived
+        process happened to read first.  The fresh import produces a new module
+        object, and :meth:`_bind_module` drops the callables resolved from the
+        old one; a value already handed out keeps denoting the version it was
+        taken from, as a superseded declaration does.
         """
         canonical = companion_path.resolve()
+        try:
+            stamp = fs.identity_stamp(canonical)
+        except OSError as exc:
+            # The companion was recorded when the loader saw it and may since
+            # have been removed or made unreadable; that reads as a failure to
+            # import it, which callers already turn into a diagnostic.
+            raise self._import_error(module_id, canonical, exc) from exc
         cached = self._by_path.get(canonical)
-        if cached is not None:
-            self._bind_module(module_id, cached)
-            return cached
+        if cached is not None and cached[0] == stamp:
+            self._bind_module(module_id, cached[1])
+            return cached[1]
 
         synthetic_name = (
             f"agm_agl_extern_companion__{module_id.synthetic_name_component()}"
@@ -374,9 +391,7 @@ class ExternRegistry:
         try:
             spec.loader.exec_module(module)
         except Exception as exc:
-            raise ExternImportError(
-                module_id, f"companion {canonical} failed to import: {exc}"
-            ) from exc
+            raise self._import_error(module_id, canonical, exc) from exc
         finally:
             sys.modules.pop(synthetic_name, None)
             if previous_agl is None:
@@ -384,9 +399,15 @@ class ExternRegistry:
             else:
                 sys.modules["agl"] = previous_agl
 
-        self._by_path[canonical] = module
+        self._by_path[canonical] = (stamp, module)
         self._bind_module(module_id, module)
         return module
+
+    @staticmethod
+    def _import_error(module_id: ModuleId, canonical: Path, cause: Exception) -> ExternImportError:
+        """Report *cause* as *module_id*'s companion failing to import."""
+
+        return ExternImportError(module_id, f"companion {canonical} failed to import: {cause}")
 
     def _bind_module(self, module_id: ModuleId, module: ModuleType) -> None:
         """Bind *module_id* to *module*, dropping stale resolved callables."""

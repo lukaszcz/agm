@@ -11,6 +11,9 @@ from uuid import uuid4
 from agm.core import dry_run
 from agm.core.path import display_path
 
+# (modification time, size, inode) -- see :func:`identity_stamp`.
+IdentityStamp = tuple[int, int, int]
+
 
 def exists(path: Path) -> bool:
     """Return whether *path* exists."""
@@ -77,6 +80,20 @@ def stat(path: Path) -> os.stat_result:
     """Return stat information for *path*."""
 
     return path.stat()
+
+
+def identity_stamp(path: Path) -> IdentityStamp:
+    """Return a stamp that changes whenever *path*'s contents could have.
+
+    Callers that cache something derived from a file compare this stamp to
+    decide whether the cached artifact still describes the file. Size alone
+    misses a same-length rewrite and modification time alone misses a file
+    swapped in under a preserved timestamp, so the stamp carries both plus the
+    inode, which changes when a file is replaced rather than written through.
+    """
+
+    info = stat(path)
+    return (info.st_mtime_ns, info.st_size, info.st_ino)
 
 
 def iterdir(path: Path) -> list[Path]:

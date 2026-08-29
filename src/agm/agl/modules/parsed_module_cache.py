@@ -56,9 +56,6 @@ _DEFAULT_CAPACITY = 128
 # (canonical path, module id, prelude injected)
 _CacheKey = tuple[str, "ModuleId", bool]
 
-# (modification time, size, inode)
-_IdentityStamp = tuple[int, int, int]
-
 # Given the first node id it may use, returns the parsed module and the first
 # node id it did not use.
 ModuleBuilder = Callable[[int], "tuple[LoadedModule, int]"]
@@ -68,14 +65,8 @@ ModuleBuilder = Callable[[int], "tuple[LoadedModule, int]"]
 class _Entry:
     """One cached module and the file identity it was parsed from."""
 
-    stamp: _IdentityStamp
+    stamp: fs.IdentityStamp
     module: LoadedModule
-
-
-def _identity_stamp(path: Path) -> _IdentityStamp:
-    """Return *path*'s filesystem identity stamp."""
-    info = fs.stat(path)
-    return (info.st_mtime_ns, info.st_size, info.st_ino)
 
 
 def _companion_intact(module: LoadedModule) -> bool:
@@ -128,7 +119,7 @@ class ParsedModuleCache:
         """
         key = (str(path), module_id, default_stdlib)
         with self._lock:
-            stamp = _identity_stamp(path)
+            stamp = fs.identity_stamp(path)
             entry = self._entries.get(key)
             if entry is not None and entry.stamp == stamp and _companion_intact(entry.module):
                 self._entries.move_to_end(key)

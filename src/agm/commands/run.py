@@ -80,7 +80,10 @@ def _resource_limit_run_context(
             _SYSTEMD_DELEGATED_CGROUP_BOOTSTRAP,
             "--",
         ],
-        ["systemctl", "--user", "stop", scope_name],
+        # --no-block: hand the teardown to systemd and return immediately.  The
+        # stop job then completes on its own even if this process is killed
+        # before the scope's members have finished dying.
+        ["systemctl", "--user", "--no-block", "stop", scope_name],
     )
 
 

@@ -112,7 +112,13 @@ def test_run_delegates_sandbox_execution_to_srt(
     assert "--unit" in process_prefix
     assert "bash" in process_prefix
     unit = process_prefix[process_prefix.index("--unit") + 1]
-    assert captured["interrupt_cleanup_cmd"] == ["systemctl", "--user", "stop", unit]
+    assert captured["interrupt_cleanup_cmd"] == [
+        "systemctl",
+        "--user",
+        "--no-block",
+        "stop",
+        unit,
+    ]
 
     bootstrap_script = process_prefix[process_prefix.index("-c") + 1]
     assert isinstance(bootstrap_script, str)
@@ -872,7 +878,7 @@ class TestRunNoSandboxSwapLimit:
         assert len(foreground_calls) == 1
         assert "MemorySwapMax=2G" in foreground_calls[0]
         assert cleanup_calls[0] is not None
-        assert cleanup_calls[0][0:3] == ["systemctl", "--user", "stop"]
+        assert cleanup_calls[0][0:4] == ["systemctl", "--user", "--no-block", "stop"]
 
 
 # ===========================================================================

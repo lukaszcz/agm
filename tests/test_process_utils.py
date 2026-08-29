@@ -30,6 +30,7 @@ from agm.core.process import (
     run_foreground,
     run_subprocess,
     terminate_process,
+    terminating_signals_raise_interrupt,
 )
 
 
@@ -1537,3 +1538,95 @@ class TestDrainLoopTimeoutSentinel:
             isolate_process_group=True,
         )
         assert result.timed_out is True
+
+
+class TestTerminationSignalsReachCleanup:
+    """A signalled AGM must still release what it registered for cleanup.
+
+    An outer AGM cleans up by signalling the process group of the runner it
+    spawned.  A nested ``agm run`` in that group owns a transient systemd scope
+    that only its cleanup command removes, so dying on the default SIGTERM
+    disposition left the scope — and everything still running inside it — alive.
+    """
+
+    def test_sigterm_inside_the_guard_becomes_an_interrupt(self) -> None:
+        with pytest.raises(KeyboardInterrupt):
+            with terminating_signals_raise_interrupt():
+                os.kill(os.getpid(), signal.SIGTERM)
+
+    def test_sighup_inside_the_guard_becomes_an_interrupt(self) -> None:
+        with pytest.raises(KeyboardInterrupt):
+            with terminating_signals_raise_interrupt():
+                os.kill(os.getpid(), signal.SIGHUP)
+
+    def test_the_guard_restores_the_previous_dispositions(self) -> None:
+        before = (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP))
+
+        with terminating_signals_raise_interrupt():
+            pass
+
+        assert (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP)) == before
+
+    def test_a_registered_cleanup_command_arms_termination_signals(self) -> None:
+        """While the child runs, SIGTERM must route into the cleanup path."""
+        armed: list[Any] = []
+
+        run_subprocess(
+            [sys.executable, "-c", "print('go')"],
+            capture_output=True,
+            stdout_callback=lambda _text: armed.append(signal.getsignal(signal.SIGTERM)),
+            interrupt_cleanup_cmd=["true"],
+        )
+
+        assert armed, "the child produced no output to observe the handler from"
+        handler = armed[0]
+        assert callable(handler)
+        with pytest.raises(KeyboardInterrupt):
+            handler(signal.SIGTERM, None)
+
+    def test_signal_dispositions_are_untouched_without_a_cleanup_command(self) -> None:
+        before = signal.getsignal(signal.SIGTERM)
+        observed: list[Any] = []
+
+        run_subprocess(
+            [sys.executable, "-c", "print('go')"],
+            capture_output=True,
+            stdout_callback=lambda _text: observed.append(signal.getsignal(signal.SIGTERM)),
+        )
+
+        assert observed == [before]
+
+    def test_cleanup_is_requested_before_the_process_group_is_torn_down(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Whoever interrupted us may SIGKILL before the teardown finishes.
+
+        Killing the group can take a second we do not have, so the cleanup
+        command — the only way to reach resources outside this process — has to
+        be the request that gets out first.
+        """
+        import agm.core.process as process_module
+
+        marker = tmp_path / "cleaned"
+        cleaned_first: list[bool] = []
+
+        monkeypatch.setattr(
+            process_module,
+            "kill_process_group",
+            lambda _proc: cleaned_first.append(marker.exists()),
+        )
+        _patch_start_process(
+            monkeypatch,
+            process_module,
+            process=cast(subprocess.Popen[bytes], _FakeProcess(interrupt_on_wait=True)),
+        )
+
+        with pytest.raises(KeyboardInterrupt):
+            run_subprocess(
+                ["sleeper"],
+                cwd=tmp_path,
+                isolate_process_group=True,
+                interrupt_cleanup_cmd=["touch", str(marker)],
+            )
+
+        assert cleaned_first == [True]

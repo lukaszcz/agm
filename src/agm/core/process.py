@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import codecs
+import contextlib
 import os
 import queue
 import signal
@@ -10,11 +11,13 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import IO, TextIO
+from types import FrameType
+from typing import IO, NoReturn, TextIO
 
 from agm.core import dry_run
 
@@ -106,6 +109,33 @@ def _wait_for_process_group_exit(pgid: int, *, grace: float) -> None:
         time.sleep(0.01)
 
 
+@contextlib.contextmanager
+def terminating_signals_raise_interrupt() -> Iterator[None]:
+    """Deliver SIGTERM and SIGHUP as ``KeyboardInterrupt`` inside the block.
+
+    Under the default disposition a termination signal tears the interpreter
+    down without unwinding, so cleanup that lives in ``except`` handlers never
+    runs.  That is exactly how a nested AGM dies: the outer process cleans up
+    by signalling the process group of the runner it spawned, and the inner
+    ``agm run`` in that group owns a transient systemd scope that only its
+    cleanup command removes.  Raising instead routes the signal through the
+    same teardown as Ctrl-C, so the scope goes away with its children rather
+    than outliving them both.
+    """
+
+    def raise_interrupt(_signum: int, _frame: FrameType | None) -> NoReturn:
+        raise KeyboardInterrupt
+
+    previous = {
+        number: signal.signal(number, raise_interrupt) for number in (signal.SIGTERM, signal.SIGHUP)
+    }
+    try:
+        yield
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+
+
 def _run_cleanup_command(
     cmd: list[str] | None,
     *,
@@ -187,11 +217,11 @@ def _drain_process_streams(
                     stream_name, chunk = stream_queue.get()
             except queue.Empty:
                 # Idle timeout: no output received within the deadline.
+                _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
                 if isolate_process_group:
                     kill_process_group(process)
                 else:
                     terminate_process(process)
-                _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
                 timed_out = True
                 break
             if chunk is None:
@@ -223,11 +253,15 @@ def _drain_process_streams(
         stdout = "".join(stream_data["stdout"])
         stderr = "".join(stream_data["stderr"])
     except BaseException:
+        # Cleanup first: whoever interrupted us may escalate to SIGKILL, and
+        # killing the process group can take a second we do not necessarily
+        # have.  The cleanup command releases resources we cannot reach once
+        # we are gone, so it must be the request that gets out first.
+        _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
         if isolate_process_group:
             kill_process_group(process)
         else:
             terminate_process(process)
-        _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
         raise
     finally:
         for reader in readers:
@@ -357,47 +391,55 @@ def run_subprocess(
     process tree can be cleaned up.
     """
 
-    process, readers, stream_queue, _stdin_writer = _start_process_with_readers(
-        cmd,
-        cwd=cwd,
-        env=env,
-        capture_output=capture_output,
-        stdout_callback=stdout_callback,
-        stderr_callback=stderr_callback,
-        isolate_process_group=isolate_process_group,
-        stdin_text=None,
+    # A registered cleanup command releases something this process owns but
+    # does not contain, so a termination signal must not be allowed to skip it.
+    guard: AbstractContextManager[None] = (
+        contextlib.nullcontext()
+        if interrupt_cleanup_cmd is None
+        else terminating_signals_raise_interrupt()
     )
-
-    if readers:
-        stdout, stderr, timed_out = _drain_process_streams(
-            process,
-            readers,
-            stream_queue,
+    with guard:
+        process, readers, stream_queue, _stdin_writer = _start_process_with_readers(
+            cmd,
+            cwd=cwd,
+            env=env,
             capture_output=capture_output,
             stdout_callback=stdout_callback,
             stderr_callback=stderr_callback,
-            idle_timeout=idle_timeout,
             isolate_process_group=isolate_process_group,
-            interrupt_cleanup_cmd=interrupt_cleanup_cmd,
-            cwd=cwd,
-            env=env,
+            stdin_text=None,
         )
-        if timed_out:
-            print(
-                f"Idle timeout ({idle_timeout}s) exceeded, process terminated.",
-                file=sys.stderr,
+
+        if readers:
+            stdout, stderr, timed_out = _drain_process_streams(
+                process,
+                readers,
+                stream_queue,
+                capture_output=capture_output,
+                stdout_callback=stdout_callback,
+                stderr_callback=stderr_callback,
+                idle_timeout=idle_timeout,
+                isolate_process_group=isolate_process_group,
+                interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+                cwd=cwd,
+                env=env,
             )
-            raise SystemExit(124)
-        return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
-    else:
+            if timed_out:
+                print(
+                    f"Idle timeout ({idle_timeout}s) exceeded, process terminated.",
+                    file=sys.stderr,
+                )
+                raise SystemExit(124)
+            return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
         try:
             process.wait()
         except BaseException:
+            # Cleanup first — see the matching path in _drain_process_streams.
+            _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
             if isolate_process_group:
                 kill_process_group(process)
             else:
                 terminate_process(process)
-            _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
             raise
         return subprocess.CompletedProcess(cmd, process.returncode, None, None)
 

@@ -4,7 +4,7 @@ Two foundation packages sit beneath everything else, and *both* are shared by bo
 
 ## Process Execution
 
-Ordinary foreground and captured subprocess work goes through the shared process module. It distinguishes terminal-inheriting commands from captured output, offers "require success" variants, and manages process groups so interruption tears down descendants. The persistent Pi RPC session is the deliberate exception: `agent/session/rpc.py` owns a raw streaming `Popen`, nonblocking bounded writes, and reader threads because the request/response process must outlive one capture call; it still tears its child down through the shared process-group teardown.
+Ordinary foreground and captured subprocess work goes through the shared process module. It distinguishes terminal-inheriting commands from captured output, offers "require success" variants, and manages process groups so interruption tears down descendants. A caller may also register a cleanup command for a resource it owns but does not contain — `agm run` registers the stop of the transient systemd scope it creates. Such a command only runs while unwinding, so for as long as one is registered the process module delivers SIGTERM and SIGHUP as `KeyboardInterrupt`, and issues the command before killing the process group; a nested AGM signalled by its parent would otherwise die outright and leak the scope along with everything inside it. The persistent Pi RPC session is the deliberate exception: `agent/session/rpc.py` owns a raw streaming `Popen`, nonblocking bounded writes, and reader threads because the request/response process must outlive one capture call; it still tears its child down through the shared process-group teardown.
 
 ## Environment Handling
 

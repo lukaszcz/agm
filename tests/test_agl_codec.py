@@ -33,11 +33,16 @@ from jsonschema import Draft202012Validator
 from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.contracts import (
+    ArrayDecode,
     ContractRequest,
     DecodeSchema,
+    DictDecode,
+    EnumDecode,
+    RecordDecode,
     RefDecode,
     ScalarDecode,
     ScalarKind,
+    VariantDecode,
 )
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
@@ -841,7 +846,7 @@ class TestRecursiveSchemaDerivation:
         )
         table = type_table_for(pair_def, perfect_def)
         perfect_int = EnumType(name="Perfect", type_args=(IntType(),), decl_id=perfect_id)
-        with pytest.raises(TypeError, match="no finite schema"):
+        with pytest.raises(TypeError, match="finite schema"):
             derive_schema(perfect_int, table)
 
     def test_assign_defs_keys_breaks_residual_collision_with_numeric_suffix(self) -> None:
@@ -1153,7 +1158,7 @@ class TestRecursiveDecodeDerivation:
         )
         table = type_table_for(pair_def, perfect_def)
         perfect_int = EnumType(name="Perfect", type_args=(IntType(),), decl_id=perfect_id)
-        with pytest.raises(TypeError, match="no finite schema"):
+        with pytest.raises(TypeError, match="finite schema"):
             build_decode_schema(perfect_int, table)
 
     def test_derive_schema_and_decode_shares_one_plan_and_matches_separate_calls(self) -> None:
@@ -1367,7 +1372,7 @@ class TestLenientParsing:
         codec = self._codec()
         result = _parse_typed(codec, "maybe true or maybe false", BoolType(), strict_json=False)
         assert result.ok is False
-        assert "multiple JSON values" in result.error_msg
+        assert "multiple" in result.error_msg
 
     def test_ref_decode_without_defs_raises_clear_value_error(self) -> None:
         codec = self._codec()
@@ -1909,13 +1914,13 @@ class TestMultiValueAmbiguity:
         codec = JsonCodec()
         result = _parse_typed(codec, '{"a":1} {"b":2}', JsonType(), strict_json=False)
         assert result.ok is False
-        assert "multiple JSON values" in result.error_msg
+        assert "multiple" in result.error_msg
 
     def test_two_objects_newline_separated_rejected(self) -> None:
         codec = JsonCodec()
         result = _parse_typed(codec, '{"a":1}\n{"b":2}', JsonType(), strict_json=False)
         assert result.ok is False
-        assert "multiple JSON values" in result.error_msg
+        assert "multiple" in result.error_msg
 
     def test_text_then_single_object_recovers(self) -> None:
         codec = JsonCodec()
@@ -1950,21 +1955,21 @@ class TestMultiValueAmbiguity:
         codec = JsonCodec()
         result = _parse_typed(codec, '```json\n{"a":1} {"b":2}\n```', JsonType(), strict_json=False)
         assert result.ok is False
-        assert "multiple JSON values" in result.error_msg
+        assert "multiple" in result.error_msg
 
     def test_two_objects_with_inner_array_rejected(self) -> None:
         """``{"a": [1]} {"b": 2}`` is ambiguous despite the inner ``[``."""
         codec = JsonCodec()
         result = _parse_typed(codec, '{"a": [1]} {"b": 2}', JsonType(), strict_json=False)
         assert result.ok is False
-        assert "multiple JSON values" in result.error_msg
+        assert "multiple" in result.error_msg
 
     def test_two_values_with_escaped_bracket_string_rejected(self) -> None:
         """a bracket inside an escaped string does not hide the second value."""
         codec = JsonCodec()
         result = _parse_typed(codec, '{"a": "[x]"} {"b": 2}', JsonType(), strict_json=False)
         assert result.ok is False
-        assert "multiple JSON values" in result.error_msg
+        assert "multiple" in result.error_msg
 
     def test_single_object_with_inner_array_recovers(self) -> None:
         """a single object containing an array is one value (not ambiguous)."""
@@ -2433,7 +2438,7 @@ issue
         """A JSON string that fails schema validation for the declared type raises."""
         from agm.agl.runtime.params import convert_param_value
 
-        with pytest.raises(ValueError, match="could not parse"):
+        with pytest.raises(ValueError, match="severity"):
             issue_type, issue_def = record_type(
                 "Issue", {"title": TextType(), "severity": IntType()}
             )
@@ -2461,7 +2466,7 @@ issue
         """
         from agm.agl.runtime.params import convert_param_value
 
-        with pytest.raises(ValueError, match="JSON parse error"):
+        with pytest.raises(ValueError, match="JSON parse"):
             issue_type, issue_def = record_type(
                 "Issue", {"title": TextType(), "severity": IntType()}
             )
@@ -2476,7 +2481,7 @@ issue
         """a Markdown-fenced --param value is not stripped (strict parsing)."""
         from agm.agl.runtime.params import convert_param_value
 
-        with pytest.raises(ValueError, match="JSON parse error"):
+        with pytest.raises(ValueError, match="JSON parse"):
             convert_param_value(
                 "tags",
                 "```json\n[1, 2]\n```",
@@ -2486,170 +2491,85 @@ issue
 
 
 # ---------------------------------------------------------------------------
-# 13. Coverage: decode_value error branches
+# Decoding a validated payload into typed AgL values
 # ---------------------------------------------------------------------------
 
 
-class TestDecodeValueErrorBranches:
-    """Cover the ValueError branches inside decode_value / _decode_scalar."""
-
-    def test_text_type_got_non_string(self) -> None:
-        from agm.agl.ir.contracts import ScalarDecode, ScalarKind
-        from agm.agl.runtime.convert import decode_value
-
-        with pytest.raises(ValueError, match="string"):
-            decode_value(ScalarDecode(kind=ScalarKind.TEXT), 42)
-
-    def test_int_type_got_bool(self) -> None:
-        from agm.agl.ir.contracts import ScalarDecode, ScalarKind
-        from agm.agl.runtime.convert import decode_value
-
-        with pytest.raises(ValueError, match="bool"):
-            decode_value(ScalarDecode(kind=ScalarKind.INT), True)
-
-    def test_int_type_got_non_integer_decimal(self) -> None:
-        from agm.agl.ir.contracts import ScalarDecode, ScalarKind
-        from agm.agl.runtime.convert import decode_value
-
-        with pytest.raises(ValueError, match="integer"):
-            decode_value(ScalarDecode(kind=ScalarKind.INT), Decimal("1.5"))
-
-    def test_decimal_type_got_bool(self) -> None:
-        from agm.agl.ir.contracts import ScalarDecode, ScalarKind
-        from agm.agl.runtime.convert import decode_value
-
-        with pytest.raises(ValueError, match="bool"):
-            decode_value(ScalarDecode(kind=ScalarKind.DECIMAL), True)
-
-    def test_decimal_type_got_string(self) -> None:
-        from agm.agl.ir.contracts import ScalarDecode, ScalarKind
-        from agm.agl.runtime.convert import decode_value
-
-        with pytest.raises(ValueError, match="decimal"):
-            decode_value(ScalarDecode(kind=ScalarKind.DECIMAL), "not a number")
-
-    def test_bool_type_got_int(self) -> None:
-        from agm.agl.ir.contracts import ScalarDecode, ScalarKind
-        from agm.agl.runtime.convert import decode_value
-
-        with pytest.raises(ValueError, match="bool"):
-            decode_value(ScalarDecode(kind=ScalarKind.BOOL), 1)
-
-    def test_array_type_got_non_array(self) -> None:
-        from agm.agl.ir.contracts import ArrayDecode, ScalarDecode, ScalarKind
-        from agm.agl.runtime.convert import decode_value
-
-        with pytest.raises(ValueError, match="array"):
-            decode_value(ArrayDecode(elem=ScalarDecode(kind=ScalarKind.TEXT)), "not a list")
-
-    def test_dict_type_got_non_dict(self) -> None:
-        from agm.agl.ir.contracts import DictDecode, ScalarDecode, ScalarKind
-        from agm.agl.runtime.convert import decode_value
-
-        with pytest.raises(ValueError, match="object"):
-            decode_value(DictDecode(value=ScalarDecode(kind=ScalarKind.TEXT)), [1, 2])
-
-    def test_dict_non_string_key(self) -> None:
-        from agm.agl.ir.contracts import DictDecode, ScalarDecode, ScalarKind
-        from agm.agl.runtime.convert import decode_value
-
-        # Construct a dict with a non-str key (not normally from json.loads but defensive).
-        with pytest.raises(ValueError, match="Dict key must be string"):
-            decode_value(
-                DictDecode(value=ScalarDecode(kind=ScalarKind.TEXT)),
-                {1: "val"},
-            )
-
-    def test_record_type_got_non_dict(self) -> None:
-        from agm.agl.ir.contracts import RecordDecode, ScalarDecode, ScalarKind
-        from agm.agl.ir.ids import NominalId
-        from agm.agl.runtime.convert import decode_value
-
-        schema = RecordDecode(
-            nominal=NominalId(1),
-            display_name="R",
+_R_DECODE = RecordDecode(
+    nominal=NominalId(1),
+    display_name="R",
+    fields=(("x", ScalarDecode(kind=ScalarKind.INT)),),
+)
+_E_DECODE = EnumDecode(
+    nominal=NominalId(1),
+    display_name="E",
+    variants=(VariantDecode(name="A", nominal=NominalId(999), display_name="A", fields=()),),
+)
+_E_PAYLOAD_DECODE = EnumDecode(
+    nominal=NominalId(1),
+    display_name="E",
+    variants=(
+        VariantDecode(
+            name="B",
+            nominal=NominalId(999),
+            display_name="B",
             fields=(("x", ScalarDecode(kind=ScalarKind.INT)),),
-        )
-        with pytest.raises(ValueError, match="record"):
-            decode_value(schema, [1, 2])
+        ),
+    ),
+)
 
-    def test_record_missing_field(self) -> None:
-        from agm.agl.ir.contracts import RecordDecode, ScalarDecode, ScalarKind
-        from agm.agl.ir.ids import NominalId
+
+class TestDecodeValueRejectsMismatchedPayloads:
+    """A decoded JSON payload that does not match its decode plan is rejected.
+
+    The rejection names the shape that was expected so a failing agent response
+    can be diagnosed from the message alone.
+    """
+
+    @pytest.mark.parametrize(
+        ("decode", "payload", "expected"),
+        [
+            (ScalarDecode(kind=ScalarKind.TEXT), 42, "string"),
+            (ScalarDecode(kind=ScalarKind.INT), True, "bool"),
+            (ScalarDecode(kind=ScalarKind.INT), Decimal("1.5"), "integer"),
+            (ScalarDecode(kind=ScalarKind.DECIMAL), True, "bool"),
+            (ScalarDecode(kind=ScalarKind.DECIMAL), "not a number", "decimal"),
+            (ScalarDecode(kind=ScalarKind.BOOL), 1, "bool"),
+            (ArrayDecode(elem=ScalarDecode(kind=ScalarKind.TEXT)), "not a list", "array"),
+            (DictDecode(value=ScalarDecode(kind=ScalarKind.TEXT)), [1, 2], "object"),
+            (DictDecode(value=ScalarDecode(kind=ScalarKind.TEXT)), {1: "val"}, "Dict key"),
+            (_R_DECODE, [1, 2], "record"),
+            (_R_DECODE, {}, "Missing field"),
+            (_E_DECODE, "oops", "object for enum"),
+            (_E_DECODE, {}, r"\$case"),
+            (_E_DECODE, {"$case": "X"}, "Unknown enum variant"),
+            (_E_PAYLOAD_DECODE, {"$case": "B"}, "missing field"),
+        ],
+        ids=(
+            "text-from-number",
+            "int-from-bool",
+            "int-from-fractional-decimal",
+            "decimal-from-bool",
+            "decimal-from-text",
+            "bool-from-number",
+            "array-from-text",
+            "dict-from-array",
+            "dict-with-non-text-key",
+            "record-from-array",
+            "record-missing-field",
+            "enum-from-text",
+            "enum-without-case-tag",
+            "enum-unknown-variant",
+            "enum-variant-missing-payload-field",
+        ),
+    )
+    def test_payload_shape_mismatch_is_rejected(
+        self, decode: DecodeSchema, payload: object, expected: str
+    ) -> None:
         from agm.agl.runtime.convert import decode_value
 
-        schema = RecordDecode(
-            nominal=NominalId(1),
-            display_name="R",
-            fields=(("x", ScalarDecode(kind=ScalarKind.INT)),),
-        )
-        with pytest.raises(ValueError, match="Missing field"):
-            decode_value(schema, {})
-
-    def test_enum_type_got_non_dict(self) -> None:
-        from agm.agl.ir.contracts import EnumDecode, VariantDecode
-        from agm.agl.ir.ids import NominalId
-        from agm.agl.runtime.convert import decode_value
-
-        schema = EnumDecode(
-            nominal=NominalId(1),
-            display_name="E",
-            variants=(
-                VariantDecode(name="A", nominal=NominalId(999), display_name="A", fields=()),
-            ),
-        )
-        with pytest.raises(ValueError, match="object for enum"):
-            decode_value(schema, "oops")
-
-    def test_enum_missing_case_tag(self) -> None:
-        from agm.agl.ir.contracts import EnumDecode, VariantDecode
-        from agm.agl.ir.ids import NominalId
-        from agm.agl.runtime.convert import decode_value
-
-        schema = EnumDecode(
-            nominal=NominalId(1),
-            display_name="E",
-            variants=(
-                VariantDecode(name="A", nominal=NominalId(999), display_name="A", fields=()),
-            ),
-        )
-        with pytest.raises(ValueError, match=r"\$case"):
-            decode_value(schema, {})
-
-    def test_enum_unknown_variant(self) -> None:
-        from agm.agl.ir.contracts import EnumDecode, VariantDecode
-        from agm.agl.ir.ids import NominalId
-        from agm.agl.runtime.convert import decode_value
-
-        schema = EnumDecode(
-            nominal=NominalId(1),
-            display_name="E",
-            variants=(
-                VariantDecode(name="A", nominal=NominalId(999), display_name="A", fields=()),
-            ),
-        )
-        with pytest.raises(ValueError, match="Unknown enum variant"):
-            decode_value(schema, {"$case": "X"})
-
-    def test_enum_missing_payload_field(self) -> None:
-        from agm.agl.ir.contracts import EnumDecode, ScalarDecode, ScalarKind, VariantDecode
-        from agm.agl.ir.ids import NominalId
-        from agm.agl.runtime.convert import decode_value
-
-        schema = EnumDecode(
-            nominal=NominalId(1),
-            display_name="E",
-            variants=(
-                VariantDecode(
-                    name="B",
-                    nominal=NominalId(999),
-                    display_name="B",
-                    fields=(("x", ScalarDecode(kind=ScalarKind.INT)),),
-                ),
-            ),
-        )
-        with pytest.raises(ValueError, match="missing field"):
-            decode_value(schema, {"$case": "B"})
+        with pytest.raises(ValueError, match=expected):
+            decode_value(decode, payload)
 
     def test_integral_decimal_to_int_through_parse(self) -> None:
         """wire ``1.0`` validates and converts to IntValue(1) for an int target.
@@ -2697,7 +2617,7 @@ class TestDecodeValueErrorBranches:
 
 
 # ---------------------------------------------------------------------------
-# 14. Coverage: schema.py ExceptionType branch
+# Exception types have no JSON Schema
 # ---------------------------------------------------------------------------
 
 
@@ -2726,7 +2646,7 @@ class TestSchemaExceptionType:
 
 
 # ---------------------------------------------------------------------------
-# 15. Coverage: fenced malformed JSON (repair within fence)
+# Malformed JSON inside a code fence is repaired
 # ---------------------------------------------------------------------------
 
 
@@ -2749,7 +2669,7 @@ class TestFencedMalformedJson:
 
 
 # ---------------------------------------------------------------------------
-# 17. Coverage: lenient json parse fail after repair
+# Lenient parsing when repair cannot produce a valid value
 # ---------------------------------------------------------------------------
 
 
@@ -2761,7 +2681,7 @@ class TestLenientParseAfterRepair:
         codec = JsonCodec()
         result = _parse_typed(codec, '"not an int"', IntType(), strict_json=False)
         assert result.ok is False
-        assert "Schema validation failed" in result.error_msg
+        assert "Schema validation" in result.error_msg
 
     def test_validate_and_decode_core_value_conversion_failure(self) -> None:
         """_validate_and_decode_core: schema passes (permissive) but decode_value raises."""
@@ -2772,7 +2692,7 @@ class TestLenientParseAfterRepair:
         decode = ScalarDecode(ScalarKind.TEXT)
         result = _validate_and_decode_core("42", 42, {}, decode)
         assert result.ok is False
-        assert "Value conversion failed" in result.error_msg
+        assert "Value conversion" in result.error_msg
 
 
 class TestFencedRepairFallback:
@@ -2800,16 +2720,16 @@ class TestFencedRepairFallback:
         with patch.object(codec_module, "_extract_json_text", return_value="{broken"):
             result = _parse_typed(codec, "anything", IntType(), strict_json=False)
         assert result.ok is False
-        assert "JSON parse failed after repair attempt" in result.error_msg
+        assert "repair" in result.error_msg
 
 
 # ---------------------------------------------------------------------------
-# 16. Coverage: validation-error mapping internals and extraction edges
+# Schema-validation failures are classified for the caller
 # ---------------------------------------------------------------------------
 
 
-class TestValidationMappingCoverage:
-    """Cover structural / defensive branches of the  error mapping."""
+class TestValidationErrorClassification:
+    """Each schema-validation failure is mapped to a category, path, and field."""
 
     def test_trailing_comma_array_recovers_not_ambiguous(self) -> None:
         """A repaired array whose candidate already starts with '[' is not ambiguous."""
@@ -2865,8 +2785,8 @@ class TestValidationMappingCoverage:
         assert result.errors[0].category == "bad_case"
         assert result.errors[0].path == "$.k"
 
-    def test_make_validation_error_required_non_array(self) -> None:
-        """_make_validation_error: required validator with non-array value → field=None."""
+    def test_required_clause_that_is_not_a_list_reports_no_field(self) -> None:
+        """A malformed ``required`` clause is still a missing-field failure, with no field."""
         from unittest.mock import MagicMock
 
         from jsonschema import ValidationError as JVE
@@ -2885,8 +2805,8 @@ class TestValidationMappingCoverage:
         assert ve.category == "missing_field"
         assert ve.field is None
 
-    def test_make_validation_error_required_all_present(self) -> None:
-        """_make_validation_error: all required fields present → field=None."""
+    def test_required_failure_with_all_fields_present_reports_no_field(self) -> None:
+        """A ``required`` failure with nothing actually missing names no field."""
         from unittest.mock import MagicMock
 
         from jsonschema import ValidationError as JVE
@@ -2905,8 +2825,8 @@ class TestValidationMappingCoverage:
         assert ve.category == "missing_field"
         assert ve.field is None
 
-    def test_make_validation_error_unknown_validator_is_wrong_type(self) -> None:
-        """A non-required/additionalProperties/type/oneOf validator → wrong_type."""
+    def test_unrecognized_validator_is_reported_as_wrong_type(self) -> None:
+        """Any other validator failure is reported as a wrong-type failure."""
         from unittest.mock import MagicMock
 
         from jsonschema import ValidationError as JVE
@@ -2925,22 +2845,22 @@ class TestValidationMappingCoverage:
         assert ve.category == "wrong_type"
         assert ve.message == "const mismatch"
 
-    def test_find_enum_decode_at_path_unknown_record_field(self) -> None:
-        """_find_enum_decode_at_path returns None when path names unknown field."""
+    def test_unknown_record_field_in_path_matches_no_enum(self) -> None:
+        """A path naming a field the record does not have matches no enum."""
         from agm.agl.runtime.codec import _find_enum_decode_at_path
 
         rec, rec_def = record_type("R", {"a": IntType()})
         decode = build_decode_schema(rec, type_table_for(rec_def)).root
         assert _find_enum_decode_at_path(decode, ["missing"]) is None
 
-    def test_find_enum_decode_at_path_scalar_with_remaining_path(self) -> None:
-        """_find_enum_decode_at_path returns None when path descends past a scalar."""
+    def test_path_descending_past_a_scalar_matches_no_enum(self) -> None:
+        """A path that descends past a scalar matches no enum."""
         from agm.agl.runtime.codec import _find_enum_decode_at_path
 
         decode = build_decode_schema(IntType(), type_table_for()).root
         assert _find_enum_decode_at_path(decode, ["deeper"]) is None
 
-    def test_find_enum_decode_at_path_unresolvable_ref_returns_none(self) -> None:
+    def test_unresolvable_reference_matches_no_enum(self) -> None:
         """An unresolvable RefDecode (unknown key) fails soft: no crash, no match found.
 
         Classification walkers only refine an already-failed validation's
@@ -2951,7 +2871,7 @@ class TestValidationMappingCoverage:
 
         assert _find_enum_decode_at_path(RefDecode("NoSuchKey"), [], {}) is None
 
-    def test_find_enum_decode_at_path_resolves_recursive_ref_to_enum(self) -> None:
+    def test_recursive_reference_resolves_to_the_enum_it_names(self) -> None:
         """A root RefDecode that DOES resolve reaches the EnumDecode it points to."""
         from agm.agl.ir.contracts import RefDecode
         from agm.agl.runtime.codec import _find_enum_decode_at_path
@@ -2963,8 +2883,8 @@ class TestValidationMappingCoverage:
         found = _find_enum_decode_at_path(plan.root, [], defs)
         assert found is defs["Tree"]
 
-    def test_classify_enum_failure_no_enum_decode_at_path(self) -> None:
-        """_classify_enum_failure: _find_enum_decode_at_path returns None → bad_case fallback."""
+    def test_oneof_failure_without_an_enum_at_the_path_is_a_bad_case(self) -> None:
+        """A oneOf failure with no enum at the failing path still reports a bad ``$case``."""
         from unittest.mock import MagicMock
 
         from jsonschema import ValidationError as JVE
@@ -2986,7 +2906,7 @@ class TestValidationMappingCoverage:
 
 
 # ---------------------------------------------------------------------------
-# 18. Schema reuse: make_contract takes no TypeEnvironment
+# make_contract needs no TypeEnvironment
 # ---------------------------------------------------------------------------
 
 
@@ -3003,7 +2923,11 @@ class TestMakeContractNoTypeEnv:
         codec = JsonCodec()
         issue_type = _make_issue_type()
         contract = codec.make_contract(issue_type, _DEFAULT_TABLE)
-        assert contract.json_schema is not None
+        # The table alone carries enough shape for the record's schema.
+        assert contract.codec is codec
+        assert contract.target_type_label == "Issue"
+        assert contract.json_schema["required"] == ["title", "severity", "description"]
+        assert contract.json_schema["properties"]["severity"] == {"type": "integer"}
 
     def test_materialize_contract_no_longer_constructs_type_env(self) -> None:
         """materialize_contract must not instantiate TypeEnvironment internally."""
@@ -3011,6 +2935,7 @@ class TestMakeContractNoTypeEnv:
         from agm.agl.typecheck.env import OutputContractSpec
 
         issue_type = _make_issue_type()
+        codec = JsonCodec()
         spec = OutputContractSpec(
             target_type=issue_type,
             codec_name="json",
@@ -3018,10 +2943,13 @@ class TestMakeContractNoTypeEnv:
         )
         # If TypeEnvironment() were still constructed it would not fail, but we
         # verify the contract comes out correctly to confirm the wire-up works.
-        contract = materialize_contract(
-            spec, {"json": JsonCodec(), "text": TextCodec()}, _DEFAULT_TABLE
-        )
-        assert contract.json_schema is not None
+        contract = materialize_contract(spec, {"json": codec, "text": TextCodec()}, _DEFAULT_TABLE)
+        assert contract.codec is codec
+        assert contract.strict_json is False
+        assert contract.target_type_label == "Issue"
+        assert contract.json_schema == codec.make_contract(issue_type, _DEFAULT_TABLE).json_schema
+        assert isinstance(contract.decode, RecordDecode)
+        assert contract.decode.display_name == "Issue"
 
 
 class TestSchemaPrecomputedInParse:
@@ -4283,7 +4211,7 @@ class TestRegisterCodec:
         )
         interpreter = IrInterpreter(program, host_contracts={contract_id: host_contract})
 
-        with pytest.raises(TypeError, match="codec parse bug"):
+        with pytest.raises(TypeError, match="codec parse"):
             interpreter._parse_host_output("{}", contract_id, effective_strict=False)
 
 

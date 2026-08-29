@@ -64,17 +64,19 @@ class TestIdleTimeout:
         assert returncode == 0
         assert stdout.strip() == "hello"
 
-    def test_idle_timeout_kills_silent_process(self) -> None:
-        """A process that produces no output for the timeout period gets killed."""
-        script = (
-            "import time\n"
-            "time.sleep(60)\n"  # Would hang forever
-        )
+    @pytest.mark.parametrize("isolate_process_group", [True, False])
+    def test_idle_timeout_kills_silent_process(self, isolate_process_group: bool) -> None:
+        """A process that produces no output for the timeout period gets killed.
+
+        Both the isolated-process-group kill path and the plain terminate path
+        must honour the idle timeout.
+        """
+        script = "import time\ntime.sleep(60)\n"  # Would hang forever
         start = time.monotonic()
         with pytest.raises(SystemExit) as exc_info:
             run_capture(
                 [sys.executable, "-c", script],
-                isolate_process_group=True,
+                isolate_process_group=isolate_process_group,
                 idle_timeout=0.5,
             )
         elapsed = time.monotonic() - start
@@ -113,20 +115,6 @@ class TestIdleTimeout:
     def test_idle_timeout_kills_after_output_stops(self) -> None:
         """Process that outputs then goes silent should be killed after timeout."""
         script = "import time, sys\nprint('initial output')\nsys.stdout.flush()\ntime.sleep(60)\n"
-        start = time.monotonic()
-        with pytest.raises(SystemExit) as exc_info:
-            run_capture(
-                [sys.executable, "-c", script],
-                isolate_process_group=True,
-                idle_timeout=0.5,
-            )
-        elapsed = time.monotonic() - start
-        assert exc_info.value.code == 124
-        assert elapsed < 5
-
-    def test_idle_timeout_with_isolate_process_group(self) -> None:
-        """Idle timeout works with isolate_process_group=True."""
-        script = "import time\ntime.sleep(60)\n"
         start = time.monotonic()
         with pytest.raises(SystemExit) as exc_info:
             run_capture(

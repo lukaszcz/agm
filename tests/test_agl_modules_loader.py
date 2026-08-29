@@ -863,8 +863,7 @@ class TestPackageRootsAndVisibility:
                 default_stdlib=False,
             )
 
-        assert "[dependencies]" in str(exc_info.value)
-        assert "bravo" in str(exc_info.value)
+        assert (exc_info.value.importer, exc_info.value.target) == ("alpha", "bravo")
 
     def test_package_module_rejects_undeclared_loose_import(self, tmp_path: Path) -> None:
         alpha = _package(tmp_path, "alpha")
@@ -881,7 +880,7 @@ class TestPackageRootsAndVisibility:
                 default_stdlib=False,
             )
 
-        assert "loose" in str(exc_info.value)
+        assert (exc_info.value.importer, exc_info.value.target) == ("alpha", "loose")
 
     def test_declared_dependency_does_not_authorize_a_package_under_an_unqualified_identity(
         self, tmp_path: Path
@@ -918,7 +917,7 @@ class TestPackageRootsAndVisibility:
                 default_stdlib=False,
             )
 
-        assert "bravo" in str(exc_info.value)
+        assert (exc_info.value.importer, exc_info.value.target) == ("alpha", "bravo")
 
     def test_ad_hoc_modules_can_import_any_mounted_package(self, tmp_path: Path) -> None:
         alpha = _package(tmp_path, "alpha")

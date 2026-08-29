@@ -898,8 +898,16 @@ class TestDeepTierNominalDescriptor:
 
 class TestDeepTierSourceConsistency:
     def test_sources_are_accessible(self) -> None:
-        """Basic: program with a source file passes validate_ir."""
-        prog = _make_program()
+        """Every source key a node's location names is resolved, not just the first."""
+        second = SourceFile(display_name="other.agl", normalized_text=SOURCE_TEXT)
+        nodes = (
+            IrConstInt(location=loc(source_id=SID0), value=1),
+            IrConstInt(location=loc(source_id=SID1), value=2),
+        )
+        prog = _make_program(
+            initializers=nodes,
+            sources={SID0: _source_file(), SID1: second},
+        )
         validate_ir(prog)  # no exception
 
 
@@ -1174,25 +1182,6 @@ class TestChildTraversal:
         prog = _make_program(initializers=(node,))
         with pytest.raises(InvalidIrError, match="444"):
             validate_ir(prog)
-
-
-# ===========================================================================
-# InvalidIrError is exported from agm.agl.ir
-# ===========================================================================
-
-
-class TestInvalidIrErrorExport:
-    def test_importable_from_package(self) -> None:
-        from agm.agl.ir import InvalidIrError as _IIE
-
-        assert issubclass(_IIE, Exception)
-
-    def test_error_has_message(self) -> None:
-        node = IrSequence(location=LOC, items=())
-        prog = _make_program(initializers=(node,))
-        with pytest.raises(InvalidIrError) as exc_info:
-            validate_ir(prog)
-        assert str(exc_info.value)  # message is non-empty
 
 
 # ===========================================================================

@@ -69,6 +69,20 @@ fresh image. Retained user `infixl`/`infixr` fixity resolves relative
 priorities against the same bare-visible assembly table used for the submitted
 entry, without retaining imported operators as session declarations.
 
+## Retained Library Image
+
+Every entry compiles a whole program — the entry module plus every library
+module the session has loaded — but the library half is compiled once. The
+session retains each library module's infix-resolved source, scope resolution,
+checked artifact, and compiled match sites, and each pass reuses one only while
+the graph still holds the very AST object that artifact was derived from. A
+reparse, a setting-override splice, or a redeclaration therefore misses and
+recompiles, and reuse can never bridge supersession, whose fresh declaration
+identities live in fresh nodes. Reuse is per module rather than all-or-nothing,
+so importing a module mid-session recompiles only that module; the entry module
+itself is never reused. Self-validation follows the same line, sealing what an
+entry actually built rather than re-sealing objects it already sealed.
+
 ## Front-End Seam
 
 The loop body — meta-command dispatch, the blank/comment no-op, entry

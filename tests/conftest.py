@@ -14,6 +14,17 @@ import pytest
 
 from agm.agl.self_validation import self_validation_enabled, set_self_validation_enabled
 from agm.core import dry_run
+from tests import _command_coverage
+from tests._durations import (
+    pytest_runtest_protocol,
+    pytest_sessionfinish,
+    pytest_testnodedown,
+)
+
+# Re-exported so pytest picks the per-test cost accounting up as conftest hooks.
+# Registering the module with ``-p`` instead would break every invocation that
+# does not put the repository root on ``sys.path`` (plain ``uv run pytest``).
+__all__ = ["pytest_runtest_protocol", "pytest_sessionfinish", "pytest_testnodedown"]
 
 # Enable AgL's optional invariant self-checks — match-compilation self-checks and
 # IR structural validation — for the whole test suite.  They are disabled in
@@ -64,7 +75,13 @@ def pytest_configure(config: pytest.Config) -> None:
     Runs once per process.  Under ``-n auto`` only the xdist *workers* execute
     tests, so the controller stays attached (it owns terminal reporting); each
     worker detaches.  Without xdist the single process runs tests and detaches.
+
+    Also registers the e2e command-coverage gate as a plugin in its own right.
+    It declares ``pytest_sessionfinish``/``pytest_testnodedown`` hooks of its
+    own, which a conftest re-export (the mechanism used above for the duration
+    hooks) cannot express twice under one name.
     """
+    config.pluginmanager.register(_command_coverage, "agm_command_coverage")
     is_xdist_worker = hasattr(config, "workerinput")
     xdist_active = getattr(config.option, "dist", "no") != "no"
     if is_xdist_worker or not xdist_active:
@@ -291,3 +308,19 @@ def fake_agent_transport(monkeypatch: pytest.MonkeyPatch) -> FakeAgentTransport:
         lambda _prepared, **_: transport._next_response(),
     )
     return transport
+
+
+# pytest names each test's ``tmp_path`` directory after the test itself, so an
+# absolute path embedded in a message can supply the very word an assertion is
+# looking for — ``assert "ambiguous" in message`` has passed on the strength of
+# a ``..._ambiguous_module_fails0`` path component alone, with the production
+# wording deleted.  Setting AGM_TEST_NEUTRAL_TMP_PATH=1 hands out neutrally
+# named directories instead, so any assertion resting on its own test's name
+# fails.  Off by default: test-named temp directories are worth keeping when
+# reading a failure.
+if os.environ.get("AGM_TEST_NEUTRAL_TMP_PATH") == "1":
+
+    @pytest.fixture
+    def tmp_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
+        """Temp directory whose name cannot leak the test name into assertions."""
+        return tmp_path_factory.mktemp("t")

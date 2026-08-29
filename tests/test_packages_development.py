@@ -41,9 +41,15 @@ assert "agm.agl.pipeline" not in sys.modules
 
 def test_agl_facade_lazily_exposes_its_public_api() -> None:
     import agm.agl as agl
+    from agm.agl.diagnostics import Diagnostic
+    from agm.agl.pipeline import PipelineDriver
 
-    for name in agl.__all__:
-        assert getattr(agl, name) is not None
+    exported = {name: getattr(agl, name) for name in agl.__all__}
+    # Every advertised name serves the very object its owning module defines,
+    # and repeated access keeps serving that same object.
+    assert exported["PipelineDriver"] is PipelineDriver
+    assert exported["Diagnostic"] is Diagnostic
+    assert all(getattr(agl, name) is value for name, value in exported.items())
     with pytest.raises(AttributeError):
         getattr(agl, "missing")
 

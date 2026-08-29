@@ -3,19 +3,18 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 import agm.commands.dep.remove as dep_remove
 import agm.commands.dep.switch as dep_switch
-import agm.project.dependency_checkout as dep_common
 from agm.cli_support.args import DepRemoveArgs, DepSwitchArgs
 from agm.project.dependency_checkout import (
     derive_dep_name,
     main_dep_repo,
 )
 from agm.vcs.git import WorktreeInfo, default_branch_from_remote, default_branch_from_repo
+from tests._git_helpers import clone_local_remote, git_output, git_run, init_repo
 
 # ---------------------------------------------------------------------------
 # agm.project.dependency_checkout – derive_dep_name
@@ -80,37 +79,40 @@ class TestDeriveDependencyName:
 
 
 class TestDefaultBranchFromRemote:
-    def test_parses_ref_line(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(
-            "agm.vcs.git.ls_remote_head",
-            lambda repo_url, env=None: "ref: refs/heads/main\tHEAD\nabc123\tHEAD\n",
-        )
-        assert default_branch_from_remote("https://github.com/org/repo") == "main"
+    def test_reports_the_default_branch_of_a_local_repository(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        repo = init_repo(tmp_path / "repo", env)
+        assert default_branch_from_remote(str(repo), env=env) == "main"
 
-    def test_parses_non_main_branch(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(
-            "agm.vcs.git.ls_remote_head",
-            lambda repo_url, env=None: "ref: refs/heads/develop\tHEAD\n",
-        )
-        assert default_branch_from_remote("https://github.com/org/repo") == "develop"
+    def test_reports_a_non_main_default_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
+        repo = init_repo(tmp_path / "repo", env, branch="develop")
+        assert default_branch_from_remote(str(repo), env=env) == "develop"
 
-    def test_exits_on_nonzero_returncode(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def fake_ls_remote_head(repo_url: str, env: dict[str, str] | None = None) -> str:
-            del repo_url, env
-            raise SystemExit(1)
-
-        monkeypatch.setattr("agm.vcs.git.ls_remote_head", fake_ls_remote_head)
+    def test_exits_when_the_remote_cannot_be_reached(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
         with pytest.raises(SystemExit):
-            default_branch_from_remote("https://github.com/org/repo")
+            default_branch_from_remote(str(tmp_path / "missing"), env=env)
 
-    def test_exits_when_no_ref_line(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(
-            "agm.vcs.git.ls_remote_head",
-            lambda repo_url, env=None: "abc123\tHEAD\n",
+    def test_exits_when_the_remote_head_is_detached(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        source = init_repo(tmp_path / "source", env)
+        bare = tmp_path / "bare.git"
+        git_run(None, ["clone", "--bare", "-q", str(source), str(bare)], env)
+        # A detached HEAD names no branch, so ls-remote reports no symref line.
+        git_run(
+            bare,
+            ["update-ref", "--no-deref", "HEAD", git_output(source, ["rev-parse", "HEAD"], env)],
+            env,
         )
-        with pytest.raises(SystemExit):
-            default_branch_from_remote("https://github.com/org/repo")
 
+        with pytest.raises(SystemExit):
+            default_branch_from_remote(str(bare), env=env)
+
+    # Kept as a behavioral fake: git always prints the target alongside a
+    # ``ref:`` line, so a truncated one cannot be produced by a real remote.
     def test_exits_when_ref_line_has_no_parts(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             "agm.vcs.git.ls_remote_head",
@@ -126,37 +128,22 @@ class TestDefaultBranchFromRemote:
 
 
 class TestDefaultBranchFromRepo:
-    def test_returns_branch_without_origin_prefix(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def fake_run_capture(cmd: list[str], **_kwargs: Any) -> tuple[int, str, str]:
-            return 0, "origin/main\n", ""
-
-        monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
-        assert default_branch_from_repo(Path("/some/repo")) == "main"
-
-    def test_returns_branch_without_prefix_already_stripped(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_reports_the_default_branch_of_the_checkout(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        def fake_run_capture(cmd: list[str], **_kwargs: Any) -> tuple[int, str, str]:
-            return 0, "main\n", ""
+        _source, clone = clone_local_remote(tmp_path, env)
+        assert default_branch_from_repo(clone, env=env) == "main"
 
-        monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
-        assert default_branch_from_repo(Path("/some/repo")) == "main"
+    def test_reports_a_non_main_default_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
+        _source, clone = clone_local_remote(tmp_path, env, default_branch="develop")
+        assert default_branch_from_repo(clone, env=env) == "develop"
 
-    def test_exits_on_nonzero_returncode(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def fake_run_capture(cmd: list[str], **_kwargs: Any) -> tuple[int, str, str]:
-            return 1, "", ""
-
-        monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
+    def test_exits_when_the_checkout_has_no_origin(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        repo = init_repo(tmp_path / "repo", env)
         with pytest.raises(SystemExit):
-            default_branch_from_repo(Path("/some/repo"))
-
-    def test_exits_on_empty_stdout(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def fake_run_capture(cmd: list[str], **_kwargs: Any) -> tuple[int, str, str]:
-            return 0, "   \n", ""
-
-        monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
-        with pytest.raises(SystemExit):
-            default_branch_from_repo(Path("/some/repo"))
+            default_branch_from_repo(repo, env=env)
 
 
 # ---------------------------------------------------------------------------
@@ -165,50 +152,37 @@ class TestDefaultBranchFromRepo:
 
 
 class TestMainDepRepo:
-    def test_returns_first_git_repo_dir(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_first_git_repo_dir(self, tmp_path: Path, env: dict[str, str]) -> None:
         dep_dir = tmp_path / "mydep"
         repo_dir = dep_dir / "repo"
-        repo_dir.mkdir(parents=True)
-        (repo_dir / ".git").mkdir()
+        # A directory that merely carries a .git entry sorts first but is not a
+        # checkout, so it must be skipped.
+        (dep_dir / "broken" / ".git").mkdir(parents=True)
+        git_run(None, ["init", "-q", "-b", "main", str(repo_dir)], env)
 
-        monkeypatch.setattr(dep_common.git_helpers, "is_git_repo", lambda p: p == repo_dir)
         assert main_dep_repo(dep_dir) == repo_dir
 
     def test_returns_first_sorted_git_repo_among_many(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         dep_dir = tmp_path / "mydep"
-        repo_a = dep_dir / "alpha"
-        repo_b = dep_dir / "beta"
-        repo_a.mkdir(parents=True)
-        (repo_a / ".git").mkdir()
-        repo_b.mkdir(parents=True)
-        (repo_b / ".git").mkdir()
+        git_run(None, ["init", "-q", "-b", "main", str(dep_dir / "alpha")], env)
+        git_run(None, ["init", "-q", "-b", "main", str(dep_dir / "beta")], env)
 
-        monkeypatch.setattr(dep_common.git_helpers, "is_git_repo", lambda p: p in {repo_a, repo_b})
         # sorted order: alpha < beta → should return alpha
-        assert main_dep_repo(dep_dir) == repo_a
+        assert main_dep_repo(dep_dir) == dep_dir / "alpha"
 
-    def test_exits_when_no_git_repo_found(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_exits_when_no_git_repo_found(self, tmp_path: Path) -> None:
         dep_dir = tmp_path / "mydep"
-        subdir = dep_dir / "notrepo"
-        subdir.mkdir(parents=True)
+        (dep_dir / "notrepo").mkdir(parents=True)
 
-        monkeypatch.setattr(dep_common.git_helpers, "is_git_repo", lambda p: False)
         with pytest.raises(SystemExit):
             main_dep_repo(dep_dir)
 
-    def test_exits_when_dep_dir_is_empty(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_exits_when_dep_dir_is_empty(self, tmp_path: Path) -> None:
         dep_dir = tmp_path / "mydep"
         dep_dir.mkdir()
 
-        monkeypatch.setattr(dep_common.git_helpers, "is_git_repo", lambda p: False)
         with pytest.raises(SystemExit):
             main_dep_repo(dep_dir)
 

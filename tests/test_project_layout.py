@@ -37,6 +37,7 @@ from agm.project.layout import (
     require_current_project_dir,
     require_project_dir,
 )
+from tests._git_helpers import add_linked_worktree, init_repo
 
 # ---------------------------------------------------------------------------
 # _resolved_cwd
@@ -1207,17 +1208,6 @@ def test_current_workspace_or_project_root_falls_back_to_git_checkout_root(
 
 
 class TestCurrentProjectDirFallbackPaths:
-    def test_simplified_fallback_ignores_git_common_dir(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        """Simplified fallback discovery returns the worktree itself, not git_common_dir."""
-        worktree = tmp_path / "worktree"
-        worktree.mkdir()
-        subprocess.run(["git", "init", "-b", "main"], cwd=worktree, env=env, check=True)
-
-        result = current_workspace_or_project_root(worktree)
-        assert result == worktree
-
     def test_falls_back_to_workspace_dir_when_no_project_markers(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -1304,6 +1294,7 @@ class TestCurrentWorkspace:
 
         result = current_workspace(project, cwd=repo)
         assert result is not None
+        assert result.workspace_dir == repo.resolve(strict=False)
 
     def test_checkout_root_raises_system_exit_no_repo_dir(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -1342,26 +1333,37 @@ class TestCurrentWorkspace:
         assert result.is_main is True
 
 
-class TestCurrentProjectDirCommonDirFallback:
-    def test_returns_workspace_dir_when_in_parents(
+class TestCurrentProjectDirIgnoresGitCommonDir:
+    """The fallback answers with the current checkout, never with the common dir."""
+
+    def test_linked_worktree_returns_worktree_not_common_dir(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """When cwd is inside a git repo whose root has no project markers,
-        returns the checkout root."""
-        plain_dir = tmp_path / "plain"
-        plain_dir.mkdir()
-        subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, env=env, check=True)
+        """In a linked worktree the fallback is the worktree, not the main checkout.
 
-        result = current_workspace_or_project_root(plain_dir)
-        assert result == tmp_path
+        The main checkout owns the git common dir, so resolving through it would
+        answer with ``main`` instead of the worktree the caller is standing in.
+        """
+        main_checkout = tmp_path / "main"
+        init_repo(main_checkout, env)
+        worktree = tmp_path / "linked"
+        add_linked_worktree(main_checkout, worktree, env, branch="linked")
 
-    def test_checkout_root_succeeds_but_no_project_markers_uses_common_dir(
+        result = current_workspace_or_project_root(worktree)
+        assert result == worktree
+
+    def test_project_markers_beside_common_dir_are_ignored(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """When checkout_root succeeds and finds no project markers, returns checkout root."""
-        worktree = tmp_path / "somewhere"
-        worktree.mkdir()
-        subprocess.run(["git", "init", "-b", "main"], cwd=worktree, env=env, check=True)
+        """A project around the main checkout is not adopted by a linked worktree.
+
+        The linked worktree sits outside the project, so the answer must be the
+        worktree even though the git common dir lives inside ``proj``.
+        """
+        project = tmp_path / "proj"
+        init_repo(project / "repo", env)
+        worktree = tmp_path / "elsewhere"
+        add_linked_worktree(project / "repo", worktree, env, branch="linked")
 
         result = current_workspace_or_project_root(worktree)
         assert result == worktree
@@ -1535,42 +1537,7 @@ class TestCurrentWorkspaceWithRepoDirEnv:
         assert result.branch is None
 
 
-class TestCurrentProjectDirGitCommonDirFindsProject:
-    def test_git_common_dir_parent_has_project_markers(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        """When checkout_root succeeds, that root is the fallback."""
-        worktree = tmp_path / "somewhere"
-        worktree.mkdir()
-        subprocess.run(["git", "init", "-b", "main"], cwd=worktree, env=env, check=True)
-
-        result = current_workspace_or_project_root(worktree)
-        assert result == worktree
-
-    def test_falls_back_to_current_when_nothing_matches(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        """When checkout_root succeeds, returns that checkout root."""
-        other = tmp_path
-        isolated = other / "isolated"
-        isolated.mkdir()
-        subprocess.run(["git", "init", "-b", "main"], cwd=other, env=env, check=True)
-
-        result = current_workspace_or_project_root(isolated)
-        assert result == other
-
-
-class TestCurrentWorkspaceCwdNotInProject:
-    def test_returns_none_when_cwd_not_in_project(self, tmp_path: Path) -> None:
-        """current_workspace returns None when cwd is not inside project."""
-        project = tmp_path / "proj"
-        (project / "repo").mkdir(parents=True)
-        other = tmp_path / "other"
-        other.mkdir()
-
-        result = current_workspace(project, cwd=other)
-        assert result is None
-
+class TestCurrentWorkspaceCheckoutRootFailure:
     def test_checkout_root_raises_repo_not_git_repo_uses_current(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -1626,10 +1593,10 @@ class TestCurrentWorkspaceReturnsNoneWhenCwdNotInProject:
         assert result is None
 
 
-class TestCurrentProjectDirGitCommonDirTry:
-    """Cover checkout_root fallback in current_workspace_or_project_root."""
+class TestCurrentProjectDirFromSubdirectory:
+    """Discovery from a directory below the checkout root or the project root."""
 
-    def test_git_common_dir_search_after_checkout_root_finds_no_project(
+    def test_subdirectory_without_project_markers_returns_checkout_root(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """When checkout_root returns a dir without project markers, it is the fallback."""
@@ -1641,44 +1608,33 @@ class TestCurrentProjectDirGitCommonDirTry:
 
         assert current_workspace_or_project_root(cwd) == checkout
 
-    def test_git_common_dir_finds_workspace_project(
+    def test_workspace_project_found_by_walking_parents(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """When checkout_root succeeds, the checkout root is returned as fallback."""
-        checkout = tmp_path / "checkout"
-        checkout.mkdir()
-        cwd = checkout / "sub"
-        cwd.mkdir()
-        subprocess.run(["git", "init", "-b", "main"], cwd=checkout, env=env, check=True)
+        """From inside a split-layout worktree, the parent walk finds the project."""
+        project = tmp_path / "proj"
+        (project / "repo").mkdir(parents=True)
+        subprocess.run(["git", "init", "-b", "main"], cwd=project / "repo", env=env, check=True)
+        cwd = project / "worktrees" / "feature" / "src"
+        cwd.mkdir(parents=True)
 
         result = current_workspace_or_project_root(cwd)
-        assert result == checkout
+        assert result == project
 
-    def test_git_common_dir_finds_embedded_project_via_parent_walk(
+    def test_embedded_project_found_by_walking_parents(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """When checkout_root succeeds, fallback stays at checkout root."""
-        checkout = tmp_path / "checkout"
-        checkout.mkdir()
-        cwd = checkout / "sub"
-        cwd.mkdir()
-        subprocess.run(["git", "init", "-b", "main"], cwd=checkout, env=env, check=True)
+        """From a nested directory of an embedded project, the parent walk finds ``.agm``."""
+        project = tmp_path / "proj"
+        project.mkdir()
+        agm_dir = project / ".agm"
+        agm_dir.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
+        cwd = project / "src" / "pkg"
+        cwd.mkdir(parents=True)
 
         result = current_workspace_or_project_root(cwd)
-        assert result == checkout
-
-
-class TestCurrentProjectDirGitCommonDirPath:
-    def test_git_common_dir_parent_finds_project_via_worktrees_marker(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        """Fallback does not use git_common_dir to search for project markers."""
-        worktree = tmp_path / "checkout"
-        worktree.mkdir()
-        subprocess.run(["git", "init", "-b", "main"], cwd=worktree, env=env, check=True)
-
-        result = current_workspace_or_project_root(worktree)
-        assert result == worktree
+        assert result == agm_dir
 
 
 # ---------------------------------------------------------------------------

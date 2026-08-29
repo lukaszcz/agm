@@ -2797,7 +2797,6 @@ class TestModuleSystemNodes:
         )
         operator = RawInfixOperator(
             name="|>",
-            builtin=None,
             callee_node_id=4,
             span=self._sp(),
             node_id=5,

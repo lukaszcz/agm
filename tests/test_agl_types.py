@@ -5,6 +5,7 @@ both import cleanly without depending on the rest of the checker.
 
 Coverage:
 - UnitType / FunctionType: kind, repr, structural equality.
+- repr / kind: how every type spells itself and the kind tag it carries.
 - is_json_shaped: False for both types.
 - is_assignable: exact-only for both types (positive + negative).
 - comparable_types: False for unit/function; unchanged for scalars.
@@ -235,6 +236,110 @@ class TestFunctionType:
         )
         member_access = checked.resolved.program.body.items[-1]
         assert checked.node_types[member_access.node_id] == FunctionType((), IntType())
+
+
+# ---------------------------------------------------------------------------
+# Type repr / kind
+# ---------------------------------------------------------------------------
+
+
+class TestTypeReprAndKind:
+    def test_text_repr(self) -> None:
+        assert repr(TextType()) == "text"
+
+    def test_int_repr(self) -> None:
+        assert repr(IntType()) == "int"
+
+    def test_decimal_repr(self) -> None:
+        assert repr(DecimalType()) == "decimal"
+
+    def test_bool_repr(self) -> None:
+        assert repr(BoolType()) == "bool"
+
+    def test_json_repr(self) -> None:
+        assert repr(JsonType()) == "json"
+
+    def test_unit_repr(self) -> None:
+        assert repr(UnitType()) == "unit"
+
+    def test_bottom_repr(self) -> None:
+        assert repr(BottomType()) == "bottom"
+
+    def test_array_repr(self) -> None:
+        assert repr(ArrayType(elem=IntType())) == "array[int]"
+
+    def test_dict_repr(self) -> None:
+        assert repr(DictType(value=TextType())) == "dict[text, text]"
+
+    def test_record_repr(self) -> None:
+        assert repr(RecordType(name="Point")) == "Point"
+
+    def test_enum_repr(self) -> None:
+        assert repr(EnumType(name="Color")) == "Color"
+
+    def test_exception_repr(self) -> None:
+        assert repr(ExceptionType(name="Abort")) == "Abort"
+
+    def test_exception_repr_qualified_for_non_entry_module(self) -> None:
+        from agm.agl.modules.ids import ModuleId
+
+        lib_id = ModuleId.from_path("lib")
+        assert repr(ExceptionType(name="Boom", module_id=lib_id)) == "lib::Boom"
+
+    def test_function_repr(self) -> None:
+        ft = FunctionType(params=(IntType(), TextType()), result=BoolType())
+        assert repr(ft) == "(int, text) -> bool"
+
+    def test_function_no_params(self) -> None:
+        ft = FunctionType(params=(), result=IntType())
+        assert repr(ft) == "() -> int"
+
+    def test_text_kind(self) -> None:
+        assert TextType().kind == "text"
+
+    def test_json_kind(self) -> None:
+        assert JsonType().kind == "json"
+
+    def test_bool_kind(self) -> None:
+        assert BoolType().kind == "bool"
+
+    def test_int_kind(self) -> None:
+        assert IntType().kind == "int"
+
+    def test_decimal_kind(self) -> None:
+        assert DecimalType().kind == "decimal"
+
+    def test_unit_kind(self) -> None:
+        assert UnitType().kind == "unit"
+
+    def test_bottom_kind(self) -> None:
+        assert BottomType().kind == "bottom"
+
+    def test_array_kind(self) -> None:
+        assert ArrayType(elem=IntType()).kind == "array"
+
+    def test_dict_kind(self) -> None:
+        assert DictType(value=IntType()).kind == "dict"
+
+    def test_record_kind(self) -> None:
+        assert RecordType(name="R").kind == "record"
+
+    def test_enum_kind(self) -> None:
+        assert EnumType(name="E").kind == "enum"
+
+    def test_exception_kind(self) -> None:
+        assert ExceptionType(name="Ex").kind == "exception"
+
+    def test_exception_equality_is_by_name_and_module_id_only(self) -> None:
+        from agm.agl.modules.ids import ModuleId
+
+        lib_id = ModuleId.from_path("lib")
+        assert ExceptionType(name="Boom") == ExceptionType(name="Boom")
+        assert ExceptionType(name="Boom") != ExceptionType(name="Boom", module_id=lib_id)
+        assert ExceptionType(name="Boom") != ExceptionType(name="Bang")
+
+    def test_function_kind(self) -> None:
+        assert FunctionType(params=(), result=IntType()).kind == "function"
 
 
 # ---------------------------------------------------------------------------

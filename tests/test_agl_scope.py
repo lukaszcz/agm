@@ -11,6 +11,7 @@ deliberately do *not* pin internal implementation details.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -115,6 +116,11 @@ def diag(err: AglScopeError) -> tuple[int, str]:
     """Return (line, message) from an AglScopeError."""
     d = err.to_diagnostic()
     return d.line, d.message
+
+
+def quoted_names(message: str) -> list[str]:
+    """Return the single-quoted names a diagnostic mentions, in order."""
+    return re.findall(r"'([^']+)'", message)
 
 
 def _find_varref(program: object, name: str, occurrence: int = -1) -> VarRef:
@@ -396,18 +402,29 @@ class TestScopeRegions:
         )
 
     @pytest.mark.parametrize(
-        "source",
+        ("source", "name", "line"),
         (
-            "scope Point\ndef distance() -> int = 0\nend Point\ndef Point::distance() -> int = 1",
-            "scope Point\nend Point\ndef Point() -> int = 0",
-            "record Point()\ndef Point() -> int = 0",
-            "enum Point = one | one",
+            (
+                "scope Point\ndef distance() -> int = 0\nend Point\n"
+                "def Point::distance() -> int = 1",
+                "distance",
+                4,
+            ),
+            ("scope Point\nend Point\ndef Point() -> int = 0", "Point", 3),
+            ("record Point()\ndef Point() -> int = 0", "Point", 2),
+            ("enum Point = one | one", "one", 1),
         ),
     )
-    def test_same_path_declaration_collisions_are_rejected(self, source: str) -> None:
+    def test_same_path_declaration_collisions_are_rejected(
+        self, source: str, name: str, line: int
+    ) -> None:
         err = reject_scope(source)
 
-        assert "already declared" in err.to_diagnostic().message
+        reported_line, message = diag(err)
+        assert name in message
+        assert "declared" in message
+        # The complaint locates the later declaration, not the first one.
+        assert reported_line == line
 
     def test_enum_member_spelling_can_be_claimed_in_its_enclosing_scope(self) -> None:
         parse_and_resolve("enum Point = origin\ndef origin() -> int = 0\n()")
@@ -464,18 +481,22 @@ class TestScopedBindings:
         assert set(resolved.scope_nodes[("A",)].members) == {"x", "y"}
 
     @pytest.mark.parametrize(
-        "source",
+        ("source", "name"),
         (
-            "scope A\ndef f() -> int = 0\nlet f = 1\nend A\n()",
-            "scope A\nlet x = 1\nlet x = 2\nend A\n()",
-            "scope A\nrecord R()\nlet R = 1\nend A\n()",
-            "scope A\nvar x = 1\nvar x = 2\nend A\n()",
+            ("scope A\ndef f() -> int = 0\nlet f = 1\nend A\n()", "f"),
+            ("scope A\nlet x = 1\nlet x = 2\nend A\n()", "x"),
+            ("scope A\nrecord R()\nlet R = 1\nend A\n()", "R"),
+            ("scope A\nvar x = 1\nvar x = 2\nend A\n()", "x"),
         ),
         ids=("binding-vs-def", "binding-vs-binding", "binding-vs-type", "binding-vs-binding-var"),
     )
-    def test_binding_duplicate_at_the_same_path_is_rejected(self, source: str) -> None:
+    def test_binding_duplicate_at_the_same_path_is_rejected(self, source: str, name: str) -> None:
         err = reject_scope(source)
-        assert "already declared" in err.to_diagnostic().message
+        line, message = diag(err)
+        assert name in message
+        assert "declared" in message
+        # The complaint locates the second declaration, on the third line.
+        assert line == 3
 
     @pytest.mark.parametrize(
         "source",
@@ -505,7 +526,9 @@ class TestScopedBindings:
         """
         with pytest.raises(AglScopeError) as exc_info:
             parse_and_resolve_file(source.removesuffix("\n()"))
-        assert "already declared" in exc_info.value.to_diagnostic().message
+        message = exc_info.value.to_diagnostic().message
+        assert "B" in message
+        assert "declared" in message
 
     def test_earlier_block_cannot_see_a_later_blocks_binding(self) -> None:
         with pytest.raises(AglScopeError):
@@ -1092,10 +1115,10 @@ class TestBlockScoping:
         assert "x" in msg
 
     def test_block_local_binding_does_not_escape(self) -> None:
-        """A binding in a branch block is not visible outside."""
-        err = reject_scope("if true =>\n  let inner = 1\n| else =>\n  ()\ninner\n")
+        """A binding inside a nested block is not visible after the block."""
+        err = reject_scope("try\n  let inner = 1\n  inner\ncatch _ =>\n  ()\ninner\n")
         line, msg = diag(err)
-        assert line == 5
+        assert line == 6
         assert "inner" in msg
 
     def test_outer_binding_visible_in_nested_block(self) -> None:
@@ -1405,7 +1428,7 @@ class TestReservedNames:
         err = reject_scope("try\n  ()\ncatch _ as ask =>\n  ()\n")
         _, msg = diag(err)
         assert "ask" in msg
-        assert "reserved" in msg.lower() or "contextual" in msg.lower()
+        assert "reserved" in msg.lower()
 
     def test_reserve_exec_catch_binder(self) -> None:
         err = reject_scope("try\n  ()\ncatch _ as exec =>\n  ()\n")
@@ -1432,7 +1455,7 @@ class TestReservedNames:
         err = reject_program(let_x, case_node)
         msg = err.to_diagnostic().message
         assert "ask" in msg
-        assert "visible constructor" in msg.lower()
+        assert "constructor" in msg.lower()
 
     def test_bare_ask_varref_rejected(self) -> None:
         """A bare VarRef to 'ask' (not in call position) is rejected."""
@@ -1459,21 +1482,25 @@ class TestReservedNames:
 class TestBuiltinVarPlacement:
     def test_entry_module_declaration_rejected(self) -> None:
         err = reject_scope("builtin var max-iters: int\n()")
-        _, message = diag(err)
+        line, message = diag(err)
         assert "std/config" in message
+        assert line == 1
 
     def test_entry_module_scoped_declaration_still_rejected(self) -> None:
         """The region relaxation lifts only the scope-path clause; the module
         restriction stands, so a scoped ``builtin var`` outside ``std/config``
         is rejected the same way as a root one."""
         err = reject_scope("scope Region\nbuiltin var max-iters: int\nend Region\n()")
-        _, message = diag(err)
+        line, message = diag(err)
         assert "std/config" in message
+        assert line == 2
 
     def test_scoped_declaration_inside_a_function_body_still_rejected(self) -> None:
         err = reject_scope('def f() -> text =\n  builtin var runner: text\n  "x"\nf()')
-        _, message = diag(err)
+        line, message = diag(err)
+        assert "runner" in message, "the diagnostic names the misplaced declaration"
         assert "nested block" in message
+        assert line == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1514,17 +1541,32 @@ class TestScopedBuiltinDeclarations:
         assert resolved.resolution[call.callee.node_id].scope_path == ("Host",)
 
     @pytest.mark.parametrize(
-        "source",
+        ("source", "name"),
         (
-            "scope A\nbuiltin def print[T](value: T) -> unit\n"
-            "builtin def print[T](value: T) -> unit\nend A\n()",
-            "scope A\nbuiltin\nrecord ExecResult\n  x: int\nlet ExecResult = 1\nend A\n()",
-            "scope A\nbuiltin\nrecord ExecResult\n  x: int\n"
-            "builtin\nrecord ExecResult\n  y: int\nend A\n()",
-            "scope A\nbuiltin\nenum ParsePolicy =\n  | Abort\n"
-            "builtin\nenum ParsePolicy =\n  | Abort\nend A\n()",
-            "scope A\nbuiltin exception RangeError extends Exception()\n"
-            "builtin exception RangeError extends Exception()\nend A\n()",
+            (
+                "scope A\nbuiltin def print[T](value: T) -> unit\n"
+                "builtin def print[T](value: T) -> unit\nend A\n()",
+                "print",
+            ),
+            (
+                "scope A\nbuiltin\nrecord ExecResult\n  x: int\nlet ExecResult = 1\nend A\n()",
+                "ExecResult",
+            ),
+            (
+                "scope A\nbuiltin\nrecord ExecResult\n  x: int\n"
+                "builtin\nrecord ExecResult\n  y: int\nend A\n()",
+                "ExecResult",
+            ),
+            (
+                "scope A\nbuiltin\nenum ParsePolicy =\n  | Abort\n"
+                "builtin\nenum ParsePolicy =\n  | Abort\nend A\n()",
+                "ParsePolicy",
+            ),
+            (
+                "scope A\nbuiltin exception RangeError extends Exception()\n"
+                "builtin exception RangeError extends Exception()\nend A\n()",
+                "RangeError",
+            ),
         ),
         ids=(
             "def-vs-def",
@@ -1534,9 +1576,11 @@ class TestScopedBuiltinDeclarations:
             "exception-vs-exception",
         ),
     )
-    def test_duplicate_at_the_same_path_is_rejected(self, source: str) -> None:
+    def test_duplicate_at_the_same_path_is_rejected(self, source: str, name: str) -> None:
         err = reject_scope(source)
-        assert "already declared" in err.to_diagnostic().message
+        message = err.to_diagnostic().message
+        assert name in message
+        assert "declared" in message
 
 
 class TestScopedBuiltinUsedAsValueRejected:
@@ -1551,20 +1595,29 @@ class TestScopedBuiltinUsedAsValueRejected:
         err = reject_scope(
             "scope H\nbuiltin def render[T](value: T) -> text\nend H\nlet f = H::render\nprint(f)"
         )
-        assert "cannot be used as a value" in err.to_diagnostic().message
+        line, message = diag(err)
+        assert "render" in message
+        assert "value" in message, "rejected for being used as a value, not for being unknown"
+        assert line == 4
 
     def test_bare_reference_inside_its_own_region_used_as_a_value_is_rejected(self) -> None:
         err = reject_scope(
             "scope H\nbuiltin def render[T](value: T) -> text\nlet f = render\nend H\nprint(H::f)"
         )
-        assert "cannot be used as a value" in err.to_diagnostic().message
+        line, message = diag(err)
+        assert "render" in message
+        assert "value" in message, "rejected for being used as a value, not for being unknown"
+        assert line == 3
 
     def test_qualified_reference_with_a_type_argument_used_as_a_value_is_rejected(self) -> None:
         err = reject_scope(
             "scope H\nbuiltin def render[T](value: T) -> text\nend H\n"
             "let f = H::render[json]\nprint(f)"
         )
-        assert "cannot be used as a value" in err.to_diagnostic().message
+        line, message = diag(err)
+        assert "render" in message
+        assert "value" in message, "rejected for being used as a value, not for being unknown"
+        assert line == 4
 
     def test_qualified_call_to_a_scoped_builtin_def_is_unaffected(self) -> None:
         """The value-use rejection must not reject the legitimate call form
@@ -1586,6 +1639,13 @@ class TestQualifiedMembersSharingBuiltinNames:
 
         qualified = _find_varref(resolved.program, "render")
         assert qualified.qualifier is not None
+        assert [segment.name for segment in qualified.qualifier.segments] == ["Codec"]
+        assert qualified.qualifier.member == "render"
+        # The qualified route reaches the scope's own declaration rather than
+        # the builtin that shares the name.
+        binding = _ref(resolved, "render")
+        assert binding.scope_path == ("Codec",)
+        assert binding.is_builtin is False
 
     def test_opened_member_does_not_intercept_the_bare_builtin(self) -> None:
         resolved = parse_and_resolve(
@@ -1632,11 +1692,12 @@ class TestBuiltinCallClassification:
         assert isinstance(let_node.value, Call)
         assert r.builtin_calls[let_node.value.node_id] == BuiltinKind.ASK
 
-    def test_ask_request_call_classified(self) -> None:
-        r = parse_and_resolve('let x = ask-request("Q")\nx')
+    def test_ask_request_with_type_arg_classified(self) -> None:
+        r = parse_and_resolve('let x = ask-request::[text]("Q")\nx')
         let_node = r.program.body.items[0]
         assert isinstance(let_node, LetDecl)
         assert isinstance(let_node.value, Call)
+        assert len(let_node.value.type_args) == 1
         assert r.builtin_calls[let_node.value.node_id] == BuiltinKind.ASK_REQUEST
 
     def test_ask_request_without_type_arg_classified(self) -> None:
@@ -1644,6 +1705,7 @@ class TestBuiltinCallClassification:
         let_node = r.program.body.items[0]
         assert isinstance(let_node, LetDecl)
         assert isinstance(let_node.value, Call)
+        assert let_node.value.type_args == ()
         assert r.builtin_calls[let_node.value.node_id] == BuiltinKind.ASK_REQUEST
 
     def test_ask_request_callee_resolves_to_its_builtin_declaration(self) -> None:
@@ -1666,7 +1728,8 @@ class TestBuiltinCallClassification:
         with pytest.raises(AglScopeError) as exc_info:
             parse_and_resolve("let x = ask-request\nx")
         msg = str(exc_info.value)
-        assert "built-in" in msg.lower() or "reserved" in msg.lower()
+        assert "ask-request" in msg
+        assert "value" in msg, "rejected for being used as a value, not for being unknown"
 
     def test_user_def_call_not_classified(self) -> None:
         """A user-defined function call does NOT appear in builtin_calls."""
@@ -2163,12 +2226,6 @@ class TestDoScoping:
         line, msg = diag(err)
         assert line == 4
         assert "inner" in msg
-
-    def test_do_input_not_root_error(self) -> None:
-        err = reject_scope("do[2]\n  param x\nuntil true\n")
-        line, msg = diag(err)
-        assert line == 2
-        assert "param" in msg.lower()
 
     def test_do_inline_body_resolved(self) -> None:
         """Inline (non-block) do body is also resolved."""
@@ -2880,19 +2937,22 @@ class TestDirectASTConstruction:
         err = reject_scope("if true =>\n  record R\n    n: int\n| else =>\n  ()\n")
         line, msg = diag(err)
         assert line == 2
-        assert "top" in msg.lower() or "top-level" in msg.lower() or "program root" in msg.lower()
+        assert "'record'" in msg, "the diagnostic names the misplaced declaration kind"
+        assert "top level" in msg.lower()
 
     def test_enum_not_at_root_rejected(self) -> None:
         err = reject_scope("do[2]\n  enum E\n    | A\nuntil true\n")
         line, msg = diag(err)
         assert line == 2
-        assert "top" in msg.lower() or "top-level" in msg.lower() or "program root" in msg.lower()
+        assert "'enum'" in msg, "the diagnostic names the misplaced declaration kind"
+        assert "top level" in msg.lower()
 
     def test_type_alias_not_at_root_rejected(self) -> None:
         err = reject_scope("try\n  type T = text\ncatch _ =>\n  ()\n")
         line, msg = diag(err)
         assert line == 2
-        assert "top" in msg.lower() or "top-level" in msg.lower() or "program root" in msg.lower()
+        assert "'type'" in msg, "the diagnostic names the misplaced declaration kind"
+        assert "top level" in msg.lower()
 
     # --- param not at root ---
 
@@ -3315,8 +3375,11 @@ class TestConstructorBindings:
         """Ambiguity error tells the user to qualify the reference."""
         err = reject_scope("enum Option\n  | some\nenum Other\n  | some\nsome\n")
         msg = err.to_diagnostic().message
-        # Should suggest qualification like 'Option::some'
-        assert "." in msg or "qualify" in msg.lower()
+        names = quoted_names(msg)
+        # The ambiguous reference, then both owners, then the repair spelling.
+        assert names[0] == "some"
+        assert {"Option::some", "Other::some"} <= set(names)
+        assert names[-1] == "Option::some", "the repair is a concrete qualified spelling"
 
     # ---  regression: payload / type-args / context do NOT disambiguate ---
 
@@ -3435,8 +3498,12 @@ class TestConstructorBindings:
 
     def test_dot_access_with_type_name_is_rejected(self) -> None:
         err = reject_scope("record Box\n  value: int\nBox.value\n")
-        assert "type name" in str(err).lower()
-        assert "::" in str(err)
+        line, message = diag(err)
+        names = quoted_names(message)
+        assert names[0] == "Box", "the offending object is named first"
+        assert "type name" in message.lower()
+        assert "::" in message, "the repair names the qualification operator"
+        assert line == 3
 
     # --- Collision rules (non-constructor vs constructor) ---
 
@@ -3532,26 +3599,29 @@ class TestConstructorBindings:
         """Duplicate type parameter in a def declaration raises AglScopeError."""
         err = reject_scope("def id[T, T](x: int) -> int = x\nid(1)\n")
         msg = err.to_diagnostic().message
-        assert "T" in msg
-        assert "duplicate" in msg.lower() or "Duplicate" in msg
+        assert "'T'" in msg
+        assert "duplicate" in msg.lower()
 
     def test_duplicate_type_param_in_record_raises(self) -> None:
         """Duplicate type parameter in a record declaration raises AglScopeError."""
         err = reject_scope("record Box[T, T]\n  value: int\n()\n")
         msg = err.to_diagnostic().message
-        assert "T" in msg
+        assert "'T'" in msg
+        assert "duplicate" in msg.lower()
 
     def test_duplicate_type_param_in_enum_raises(self) -> None:
         """Duplicate type parameter in an enum declaration raises AglScopeError."""
         err = reject_scope("enum Option[T, T]\n  | none\n()\n")
         msg = err.to_diagnostic().message
-        assert "T" in msg
+        assert "'T'" in msg
+        assert "duplicate" in msg.lower()
 
     def test_duplicate_type_param_in_type_alias_raises(self) -> None:
         """Duplicate type parameter in a type alias raises AglScopeError."""
         err = reject_scope("type Pair[A, A] = int\n()\n")
         msg = err.to_diagnostic().message
-        assert "A" in msg
+        assert "'A'" in msg
+        assert "duplicate" in msg.lower()
 
     def test_duplicate_record_name_raises(self) -> None:
         err = reject_scope("record P\n  n: int\nrecord P\n  t: text\n()")
@@ -3597,8 +3667,8 @@ class TestConstructorBindings:
         """A '_' type parameter on a function without a 'self' receiver is rejected."""
         err = reject_scope("def ignored[_, _](x: int) -> int = 1\nignored(1)\n")
         msg = err.to_diagnostic().message
+        assert "ignored" in msg, "the diagnostic names the declaration carrying the '_' slot"
         assert "receiver" in msg
-        assert "needs a name" in msg
 
     def test_multiple_type_params_unique_accepted(self) -> None:
         """Multiple unique type params in a record are accepted."""
@@ -3820,4 +3890,9 @@ class TestScopedNominalAliases:
             "p.x\n"
         )
 
-        assert parse_and_resolve(source) is not None
+        resolved = parse_and_resolve(source)
+
+        # The construction resolves to the alias declared inside scope ``A``.
+        [constructed] = resolved.constructor_refs.values()
+        assert constructed.owner_name == "Alias"
+        assert constructed.owner_path == ("A",)

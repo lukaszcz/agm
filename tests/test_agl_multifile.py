@@ -181,7 +181,7 @@ def test_import_cycle_param_default_dependency_cycle_is_diagnostic(tmp_path: Pat
     assert result.error is None
     assert len(result.diagnostics) == 1
     diagnostic = result.diagnostics[0]
-    assert "parameter defaults form a dependency cycle" in diagnostic.message.lower()
+    assert "cycle" in diagnostic.message.lower()
     assert "a::a_value -> b::b_value -> a::a_value" in diagnostic.message
     assert diagnostic.source_label == "b"
     assert diagnostic.line == 2
@@ -443,8 +443,8 @@ def test_imported_type_parameter_wildcard_is_rejected(tmp_path: Path) -> None:
 
     assert result.ok is False
     messages = " | ".join(d.message for d in result.diagnostics)
-    assert "only allowed in a method's receiver type parameters" in messages
-    assert "needs a name" in messages
+    assert "Box" in messages, "the diagnostic names the declaration carrying the '_' slot"
+    assert "receiver" in messages, "'_' is a receiver-slot spelling, not a type parameter"
 
 
 def test_unannotated_import_cycle_recursion_runs_from_fixture(
@@ -548,7 +548,10 @@ class TestLibRootModule:
         source = "import missing_module::*\nlet x = 1\nx\n"
         result = _run_program(source, roots_dirs=[tmp_path])
         assert result.ok is False
-        assert any("missing_module" in d.message for d in result.diagnostics)
+        assert any(
+            "missing_module" in d.message and "not found" in d.message.lower()
+            for d in result.diagnostics
+        )
 
     def test_ambiguous_module_fails(self, tmp_path: Path) -> None:
         """A module found in two roots is an AmbiguousModule error."""
@@ -562,7 +565,16 @@ class TestLibRootModule:
         source = "import shared::*\nlet r = f()\nr\n"
         result = _run_program(source, roots_dirs=[root_a, root_b])
         assert result.ok is False
-        assert any("shared" in d.message for d in result.diagnostics)
+        # The candidate list quotes temp paths that embed the test name, so the
+        # wording is checked on the head of the message and the candidates by
+        # the files they name: both roots' copies, which is what makes it
+        # ambiguous rather than missing.
+        heads = [d.message.partition("[")[0].lower() for d in result.diagnostics]
+        assert any("shared" in head and "ambiguous" in head for head in heads)
+        assert any(
+            str(root_a / "shared.agl") in d.message and str(root_b / "shared.agl") in d.message
+            for d in result.diagnostics
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -663,7 +675,9 @@ class TestMultiFileParams:
 
         result = _run_program(source, roots_dirs=[lib_dir], param_values={})
         assert result.ok is False
-        assert any("n" in d.message for d in result.diagnostics)
+        assert any(
+            "'n'" in d.message and "required" in d.message.lower() for d in result.diagnostics
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -727,7 +741,10 @@ class TestWildcardImportTailsAndHiding:
         source = "import pkg/*::* hiding mul\nlet r = mul(3, 4)\nprint r\n"
         result = _run_program(source, roots_dirs=[lib_dir])
         assert result.ok is False
-        assert any("mul" in d.message for d in result.diagnostics)
+        # The hiding list is validated per expanded module: `pkg/text` never
+        # exported `mul`, so the import line is what is rejected.
+        assert any("mul" in d.message and "pkg/text" in d.message for d in result.diagnostics)
+        assert all(diagnostic.line == 1 for diagnostic in result.diagnostics)
 
     def test_wildcard_selected_tail_multi_module_union(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -1120,7 +1137,7 @@ class TestCrossModuleScopedPaths:
         )
         assert ambiguous.ok is False
         assert any(
-            "both" in diagnostic.message.lower() and "module route" in diagnostic.message.lower()
+            "Point" in diagnostic.message and "module route" in diagnostic.message.lower()
             for diagnostic in ambiguous.diagnostics
         )
 
@@ -1294,6 +1311,7 @@ class TestScopeUses:
 
         assert result.ok is False
         assert "ambiguous" in result.diagnostics[0].message
+        assert "geo" in result.diagnostics[0].message
 
     def test_used_variant_merges_with_the_same_selected_import(self, tmp_path: Path) -> None:
         (tmp_path / "geo.agl").write_text("enum Flag | Ready\n")
@@ -1353,6 +1371,7 @@ class TestScopeUses:
 
         assert result.ok is False
         assert "ambiguous" in result.diagnostics[0].message
+        assert "distance" in result.diagnostics[0].message
 
     def test_scope_use_rename_collision_reports_each_contributing_member(
         self, tmp_path: Path

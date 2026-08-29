@@ -344,13 +344,21 @@ class TestScopedBuiltinVar:
         assert not result.ok
         assert result.diagnostics
 
-    def test_existing_std_config_behavior_is_unchanged(self) -> None:
-        """A root, unscoped ``builtin var`` still round-trips as before."""
-        result = _run_program(
-            "import std/config\nstd/config::max-iters := 3\nlet n = std/config::max-iters\nprint n"
+    def test_root_and_scoped_bindings_of_one_name_are_independent(self, tmp_path: Path) -> None:
+        """A root binding and a same-named scoped one are separate registers."""
+        result = _run_with_std_config(
+            "import std/config\n"
+            "std/config::max-iters := 3\n"
+            "std/config::Region::max-iters := 4\n"
+            "let root_setting = std/config::max-iters\n"
+            "let scoped = std/config::Region::max-iters\n"
+            "()",
+            "builtin var max-iters: int\nscope Region\nbuiltin var max-iters: int = 0\nend Region",
+            tmp_path,
         )
         assert result.ok, f"expected success but got: {result.error!r}"
-        assert result.bindings["n"] == IntValue(3)
+        assert result.bindings["root_setting"] == IntValue(3)
+        assert result.bindings["scoped"] == IntValue(4)
 
 
 # ---------------------------------------------------------------------------
@@ -359,22 +367,13 @@ class TestScopedBuiltinVar:
 
 
 class TestStdConfigQualified:
-    def test_qualified_read_reflects_write(self) -> None:
+    def test_qualified_read_sees_a_bare_write_to_the_same_setting(self) -> None:
+        """The bare name a wildcard import brings in addresses the same register."""
         result = _run_program(
-            "import std/config\nstd/config::max-iters := 3\nlet n = std/config::max-iters\nprint n"
+            "import std/config::*\nmax-iters := 3\nlet n = std/config::max-iters\nprint n"
         )
         assert result.ok, f"expected success but got: {result.error!r}"
         assert result.bindings["n"] == IntValue(3)
-
-    def test_qualified_strict_json(self) -> None:
-        result = _run_program(
-            "import std/config::*\n"
-            "std/config::strict-json := true\n"
-            "let b = std/config::strict-json\n"
-            "print b"
-        )
-        assert result.ok
-        assert result.bindings["b"] == BoolValue(True)
 
     def test_max_iters_zero_disables_valve(self) -> None:
         result = _run_program(

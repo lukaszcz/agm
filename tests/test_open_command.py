@@ -23,18 +23,14 @@ from agm.commands.workspace.open import (
 from agm.core import dry_run
 from agm.project import workspace_shell
 from agm.project.workspace_shell import ensure_workspace_shell
-from tests._git_helpers import clone_with_fork_remote
+from tests._git_helpers import clone_with_fork_remote, init_repo
 
 
 def _make_git_project(tmp_path: Path, env: dict[str, str]) -> Path:
     project = tmp_path / "proj"
     repo = project / "repo"
     (project / "config").mkdir(parents=True)
-    repo.mkdir()
-    subprocess.run(["git", "init", "-b", "main"], cwd=repo, env=env, check=True)
-    (repo / "README.md").write_text("main\n", encoding="utf-8")
-    subprocess.run(["git", "add", "README.md"], cwd=repo, env=env, check=True)
-    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, env=env, check=True)
+    init_repo(repo, env)
     return project
 
 
@@ -59,7 +55,7 @@ class TestValidatePaneCount:
             validate_pane_count("0")
 
     def test_re_raises_when_exit_code_is_not_one(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Cover the re-raise when exc.code != 1."""
+        """An exit that is not the pane-count rejection propagates with its own code."""
 
         def _raise_exit_2(cmd: list[str], pane_count: str | None) -> int:
             raise SystemExit(2)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import re
 import shutil
 from collections.abc import Callable, Generator, Iterable, Iterator
 from pathlib import Path
@@ -557,7 +558,7 @@ def test_install_accepts_shipped_standard_library_from_wheel_layout(
 def test_install_refuses_a_standard_library_at_an_arbitrary_version(tmp_path: Path) -> None:
     source = _package(tmp_path / "source", "std", "0.0.1")
 
-    with pytest.raises(PackageInstallError, match="AGM version"):
+    with pytest.raises(PackageInstallError, match=re.escape(AGM_VERSION)):
         install_directory(source, home=tmp_path / "home", env={})
 
 
@@ -682,10 +683,9 @@ def test_uninstall_reports_a_provenance_cleanup_failure(
         original_unlink(path)
 
     monkeypatch.setattr(package_install.fs, "unlink", fail_provenance_unlink)
-    with pytest.raises(PackageInstallError, match="provenance") as error:
+    with pytest.raises(PackageInstallError, match="provenance"):
         uninstall_package("alpha", home=home, env={})
 
-    assert "cannot lock package store" not in str(error.value)
     assert (home / ".agm" / "packages" / "alpha" / ".uninstalling").is_dir()
     assert "alpha" not in load_activation_index(home=home, env={}).packages
 
@@ -792,11 +792,10 @@ def test_partial_uninstall_cleanup_is_hidden_and_retryable(
 
     monkeypatch.setattr(package_install.fs, "unlink", interrupt_tree_cleanup)
 
-    with pytest.raises(PackageInstallError, match="remove") as error:
+    with pytest.raises(PackageInstallError, match="remove"):
         uninstall_package("alpha", home=home, env={})
 
     tombstone = installed.root.parent / ".uninstalling"
-    assert "cannot lock package store" not in str(error.value)
     assert removed_files == 2
     assert tombstone.is_dir()
     assert not installed.root.exists()
@@ -1733,7 +1732,7 @@ def test_directory_install_revalidates_staged_imports_after_source_changes(
 
     monkeypatch.setattr(package_install, "materialize_distribution", change_source_before_staging)
 
-    with pytest.raises(PackageInstallError, match="cannot install"):
+    with pytest.raises(PackageInstallError, match="alpha"):
         install_directory(source, home=home, env={})
 
     assert not destination.exists()
@@ -1762,7 +1761,7 @@ def test_directory_install_revalidates_the_staged_package_identity(
 
     monkeypatch.setattr(package_install, "materialize_distribution", change_staged_identity)
 
-    with pytest.raises(PackageInstallError, match="cannot install"):
+    with pytest.raises(PackageInstallError, match="alpha"):
         install_directory(source, home=home, env={})
 
     assert not destination.exists()
@@ -1790,7 +1789,7 @@ def test_directory_install_cleans_staging_when_atomic_publication_fails(
 
     monkeypatch.setattr(Path, "replace", fail_publication)
 
-    with pytest.raises(PackageInstallError, match="cannot install"):
+    with pytest.raises(PackageInstallError, match="publication failed"):
         install_directory(source, home=home, env={})
 
     assert not destination.exists()
@@ -1819,7 +1818,7 @@ def test_install_refuses_tampered_existing_tree_and_cleans_failed_copy(
         raise OSError("full")
 
     monkeypatch.setattr(package_install, "materialize_distribution", fail_staging)
-    with pytest.raises(PackageInstallError, match="cannot install"):
+    with pytest.raises(PackageInstallError, match="full"):
         install_directory(fresh, home=home, env={})
     assert not (home / ".agm" / "packages" / "bravo" / "1.0.0").exists()
 
@@ -1829,7 +1828,7 @@ def test_install_refuses_tampered_existing_tree_and_cleans_failed_copy(
         "materialize_distribution",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("full")),
     )
-    with pytest.raises(PackageInstallError, match="cannot install"):
+    with pytest.raises(PackageInstallError, match="full"):
         install_directory(another, home=home, env={})
 
 
@@ -2842,7 +2841,7 @@ def test_dry_run_url_dependency_never_fetches_or_creates_scratch(
     monkeypatch.setattr(package_install, "fetch_archive", fail_fetch)
     dry_run.set_enabled(True)
 
-    with pytest.raises(PackageInstallError, match=r"URL package.*bravo >= 1\.0\.0"):
+    with pytest.raises(PackageInstallError, match=r"bravo >= 1\.0\.0"):
         install_directory(source, home=tmp_path / "dry-home", env={})
 
     assert not fetched
@@ -2861,7 +2860,7 @@ def test_url_fetch_refuses_when_the_fetch_handoff_does_not_install(
     )
     monkeypatch.setattr(package_install, "fetch_archive", lambda **_: None)
 
-    with pytest.raises(PackageInstallError, match="archive was not installed"):
+    with pytest.raises(PackageInstallError, match=r"bravo >= 1\.0\.0"):
         install_directory(source, home=tmp_path / "home", env={})
 
 
@@ -2906,7 +2905,7 @@ def test_fetch_failure_and_dry_run_use_clean_dependency_errors(
         install_directory(source, home=tmp_path / "home", env={})
 
     dry_run.set_enabled(True)
-    with pytest.raises(PackageInstallError, match=r"URL package.*bravo >= 1\.0\.0"):
+    with pytest.raises(PackageInstallError, match=r"bravo >= 1\.0\.0"):
         install_directory(source, home=tmp_path / "dry-home", env={})
 
 

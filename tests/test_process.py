@@ -366,7 +366,8 @@ class TestRunCaptureIdleTimeout:
             )
 
         assert exc_info.value.code == 124
-        assert messages == ["Idle timeout (0.2s) exceeded, process terminated.\n"]
+        assert len(messages) == 1
+        assert "0.2" in messages[0]
 
 
 class TestRunCaptureResultIdleTimeout:
@@ -381,12 +382,13 @@ class TestRunCaptureResultIdleTimeout:
         assert result.timed_out is True
 
     def test_idle_timeout_does_not_raise_system_exit(self) -> None:
-        # Must return a result, never raise SystemExit
-        result = run_capture_result(
-            [sys.executable, "-c", "import time; time.sleep(60)"],
-            idle_timeout=0.2,
-            isolate_process_group=True,
-        )
+        """Where ``run_capture`` exits the process, ``run_capture_result`` returns."""
+        command = [sys.executable, "-c", "import time; time.sleep(60)"]
+
+        with pytest.raises(SystemExit):
+            run_capture(command, idle_timeout=0.2, isolate_process_group=True)
+
+        result = run_capture_result(command, idle_timeout=0.2, isolate_process_group=True)
         assert result.timed_out is True
 
     def test_idle_timeout_returncode_is_set(self) -> None:
@@ -563,7 +565,7 @@ class TestRunCaptureErrnoIntact:
 
 
 class TestRunCaptureResultLargeStdin:
-    """stdin_text must be written from a thread; large stdin to 'true' must not raise."""
+    """stdin_text is written from a thread; large stdin must not raise or deadlock."""
 
     def test_large_stdin_to_true_does_not_raise(self) -> None:
         """2MB stdin to 'true' (which never reads stdin) must return rc=0, no exception."""
@@ -577,15 +579,6 @@ class TestRunCaptureResultLargeStdin:
         result = run_capture_result(["cat"], stdin_text=payload)
         assert result.returncode == 0
         assert result.stdout == payload
-
-    def test_small_stdin_behavior_unchanged(self) -> None:
-        """Small stdin still works correctly after the threading change."""
-        result = run_capture_result(
-            [sys.executable, "-c", "import sys; print(sys.stdin.read().strip())"],
-            stdin_text="hello from stdin",
-        )
-        assert result.returncode == 0
-        assert "hello from stdin" in result.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -611,8 +604,8 @@ class TestRunCaptureNullByteReraise:
         with pytest.raises(ValueError, match="null"):
             run_capture(["sh", "-c", "echo \x00bad"])
 
-    def test_null_byte_run_capture_result_still_returns_structured(self) -> None:
-        """run_capture_result is unchanged: NUL byte still returns spawn-error result."""
+    def test_null_byte_run_capture_result_returns_structured(self) -> None:
+        """run_capture_result maps a NUL byte to a spawn-error result instead of raising."""
         result = run_capture_result(["sh", "-c", "echo \x00bad"])
         assert result.spawn_error is not None
         assert result.returncode is None

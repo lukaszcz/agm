@@ -23,7 +23,7 @@ The primary purpose of architecture docs in docs/arch/**/*.md is to provide agen
 Use `just` for the standard workflow:
 
 - `just setup` creates `.venv` with Python 3.12 and installs the project plus dev dependencies via `uv`
-- `just lint` runs `ruff check src/ tests/` and `ruff format --check src/ tests/` (run `uv run ruff format src/ tests/` to fix formatting)
+- `just lint` runs `ruff check src/ tests/ stdlib/` and `ruff format --check src/ tests/ stdlib/` (run `uv run ruff format src/ tests/ stdlib/` to fix formatting)
 - `just test` runs the test suite
 - `just typecheck` runs strict `mypy` with `MYPYPATH=src:stubs`
 - `just check` runs linting, tests, and type checking together
@@ -48,6 +48,8 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 - Test only main app Python code under `src/agm/`, NOT build/install scripts, `justfile` commands or config file content. Do NOT test exact help, warning or error messages.
 - Do NOT add heavy ungated validation or defensive assertions (defense-in-depth) to the code. Write appropriate tests instead. Defense-in-depth assertions are allowed ONLY if they are trivial preconditions or gated behind a test-only flag.
 - Make sure tests are not flaky.
+- Do not let an assertion pass on the strength of its own test's name: pytest builds `tmp_path` from the test name, so a path in an error message can contain the word being asserted. `just test-neutral-tmp` re-runs the suite with neutrally named temp directories and fails any assertion that does.
+- Keep individual tests cheap. `just test` fails any test that overruns the CPU ceiling in its `check_cpu_budget`; `just test-budget` ranks tests by cost so the ceiling can be recalibrated, and `just test-budget test_cpu_budget=<seconds>` tries out a candidate number. Measure cost in CPU seconds, never wall clock — under `-n auto` a test's wall time tracks the load average rather than the test, while its CPU time varies by well under half.
 - Maintain 100% test coverage of `src/` and of the standard library's Python companions in `stdlib/std/`.
 - Maintain 100% command coverage in e2e tests.
 - Group the tests in `tests/` by meaningful categories and name the files meaningfully.

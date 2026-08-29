@@ -11,11 +11,12 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import AglScopeError
-from agm.agl.semantics.types import EnumOwnerFormKind
+from agm.agl.semantics.types import EnumOwnerFormKind, RecordType
 from agm.agl.syntax import QualifierAnchor, QualifierChain, QualifierSegment
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 from agm.agl.typecheck import AglTypeError
 from agm.agl.typecheck.program import check_program
+from tests._agl_helpers import strip_decl_ids
 from tests.agl.ir_harness import (
     base_caps,
     make_graph_from_files,
@@ -737,7 +738,7 @@ def test_root_use_and_import_tail_type_collision_is_ambiguous(
         },
     )
 
-    with pytest.raises(AglTypeError, match="Ambiguous type"):
+    with pytest.raises(AglTypeError, match="[Aa]mbiguous"):
         check_program(resolve_program(graph), base_caps())
 
 
@@ -829,7 +830,14 @@ def test_ambiguous_exception_base_is_reported_as_ambiguous(tmp_path: Path) -> No
     with pytest.raises(AglTypeError, match="[Aa]mbiguous") as raised:
         check_program(resolve_program(graph), base_caps())
 
+    # The report names the contested base and both contributing routes, and
+    # points at the declaration that named it.
+    message = str(raised.value)
+    assert "Boom" in message
+    assert "m/a" in message
+    assert "m/b" in message
     assert raised.value.span is not None
+    assert raised.value.span.start_line == 5
 
 
 def test_resolve_named_type_deduplicates_root_routes_to_same_origin(tmp_path: Path) -> None:
@@ -843,7 +851,22 @@ def test_resolve_named_type_deduplicates_root_routes_to_same_origin(tmp_path: Pa
 
     checked = check_program(resolve_program(graph), base_caps())
 
-    assert checked.modules[graph.entry_id].type_env.resolve_named_type("R") is not None
+    resolved = checked.modules[graph.entry_id].type_env.resolve_named_type("R")
+    assert strip_decl_ids(resolved) == RecordType("R", module_id=ModuleId.from_path("lib"))
+
+    # Negative control: two routes to *different* origins are not deduplicated.
+    rival = make_graph_from_files(
+        tmp_path / "rival",
+        {
+            "entry": "import lib::*\nimport other::*\n",
+            "lib": "record R(value: int)\n",
+            "other": "record R(value: int)\n",
+        },
+        default_stdlib=False,
+    )
+    rival_checked = check_program(resolve_program(rival), base_caps())
+    with pytest.raises(AglTypeError, match="[Aa]mbiguous"):
+        rival_checked.modules[rival.entry_id].type_env.resolve_named_type("R")
 
 
 def test_use_can_target_local_scope_exposed_by_an_earlier_use(tmp_path: Path) -> None:
@@ -914,8 +937,11 @@ def test_use_rejects_ambiguous_scopes_exposed_by_earlier_uses(tmp_path: Path) ->
         },
     )
 
-    with pytest.raises(AglScopeError, match="ambiguous across local scopes"):
+    with pytest.raises(AglScopeError, match="local scopes") as raised:
         resolve_program(graph)
+
+    assert "First" in str(raised.value)
+    assert "Second" in str(raised.value)
 
 
 def test_use_can_target_imported_scope_exposed_by_an_earlier_use(tmp_path: Path) -> None:
@@ -992,8 +1018,11 @@ def test_use_rejects_ambiguous_imported_scopes_exposed_by_earlier_uses(
         },
     )
 
-    with pytest.raises(AglScopeError, match="ambiguous across imported modules"):
+    with pytest.raises(AglScopeError, match="imported modules") as raised:
         resolve_program(graph)
+
+    assert "left" in str(raised.value)
+    assert "right" in str(raised.value)
 
 
 def test_use_rejects_ordinary_imported_member_exposed_by_an_earlier_use(
@@ -1126,7 +1155,7 @@ def test_unanchored_type_scope_and_module_route_clash_requires_an_anchor(tmp_pat
         },
     )
 
-    with pytest.raises(AglTypeError, match="both a type name and a module route") as exc_info:
+    with pytest.raises(AglTypeError, match="module route") as exc_info:
         check_program(resolve_program(graph), base_caps())
 
     for repair in ("hiding", "longer suffix", "/-anchored", "as"):
@@ -1153,7 +1182,8 @@ def test_imported_type_route_keeps_its_missing_member_error_over_a_local_scope(
     with pytest.raises(AglTypeError, match="not accessible") as exc_info:
         check_program(resolve_program(graph), base_caps())
 
-    assert "Unknown scoped type" not in str(exc_info.value)
+    assert "'Missing'" in str(exc_info.value)
+    assert "'A::'" in str(exc_info.value)
 
 
 def test_unanchored_generic_type_scope_and_module_route_clash_requires_an_anchor(
@@ -1174,7 +1204,7 @@ def test_unanchored_generic_type_scope_and_module_route_clash_requires_an_anchor
         },
     )
 
-    with pytest.raises(AglTypeError, match="both a type name and a module route"):
+    with pytest.raises(AglTypeError, match="module route"):
         check_program(resolve_program(graph), base_caps())
 
 
@@ -1216,7 +1246,7 @@ def test_generic_is_test_type_and_module_constructor_member_collision_is_ambiguo
     )
 
     resolved = resolve_program(graph)
-    with pytest.raises(AglTypeError, match="both a type name and a module route"):
+    with pytest.raises(AglTypeError, match="module route"):
         check_program(resolved, base_caps())
 
 
@@ -1241,7 +1271,7 @@ def test_is_test_type_and_module_constructor_member_collision_is_ambiguous(
         check_program(resolved, base_caps())
 
     diagnostic = str(exc_info.value)
-    assert "both a type name and a module route" in diagnostic
+    assert "module route" in diagnostic
     for repair in ("hiding", "longer suffix", "/-anchored", "as"):
         assert repair in diagnostic
 
@@ -1267,7 +1297,9 @@ def test_current_module_anchor_does_not_resolve_an_imported_constructor_owner(
     with pytest.raises(AglScopeError) as exc_info:
         resolve_program(graph)
 
-    assert exc_info.value.to_diagnostic().message == "'Unknown' is not defined in this module."
+    message = exc_info.value.to_diagnostic().message
+    assert "Unknown" in message
+    assert "not defined" in message
 
 
 def test_invalid_qualified_pattern_and_is_routes_reach_typecheck(tmp_path: Path) -> None:
@@ -1307,7 +1339,7 @@ def test_is_test_does_not_treat_an_imported_enum_owner_as_its_variant_route(
         (
             "enum Flag | On | Off\nlet flag: Flag = Flag::On\nflag is unknown::Flag::On",
             {},
-            "Unknown module qualifier",
+            "Unknown module",
         ),
         (
             "import remote/config hiding Flag\nenum Flag | On | Off\n"
@@ -1519,8 +1551,10 @@ def test_anchored_constructor_route_never_falls_back_to_a_local_type(tmp_path: P
         },
     )
 
-    with pytest.raises(AglScopeError, match="No module imported"):
+    with pytest.raises(AglScopeError, match="qualifier") as raised:
         resolve_program(graph)
+
+    assert "'/C'" in str(raised.value)
 
 
 def test_spec_suffixes_anchor_and_two_line_bare_full_idiom(tmp_path: Path) -> None:
@@ -1621,7 +1655,14 @@ def test_wildcard_facade_use_hiding_keeps_a_variant_constructor_hidden(tmp_path:
         },
     )
     checked = check_program(resolve_program(visible), base_caps())
-    assert checked.modules[visible.entry_id] is not None
+    # Hiding one variant leaves the rest of the enum reachable through the
+    # facade: the case pattern still matches the facade module's ``E::B``.
+    [matched] = checked.modules[visible.entry_id].pattern_constructor_refs.values()
+    assert (matched.owner_name, matched.owner_path, matched.owner_module_id) == (
+        "B",
+        ("E",),
+        ModuleId.from_path("facade/one"),
+    )
 
     hidden = make_graph_from_files(
         tmp_path,

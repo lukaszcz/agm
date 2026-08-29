@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -18,6 +18,8 @@ from agm.agent.review.revise import prepare_revise
 from agm.cli_support.args import RefineArgs, ReviewArgs, ReviseArgs
 from agm.commands.refine import _write_review_file, refine
 from agm.core import dry_run
+from tests._git_helpers import init_repo
+from tests._process_helpers import AgentCall, AgentReply, FakeAgent, fake_agent
 
 
 class _FixedDatetime:
@@ -36,6 +38,23 @@ def _setup_home(tmp_path: Path) -> Path:
     )
     (prompt_dir / "revise.md").write_text("revise @%{REVIEW_FILE}\n", encoding="utf-8")
     return home
+
+
+def _isolate_git(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Stop git's repository search from escaping *tmp_path*.
+
+    ``.agent-files`` is placed at the containing git root, which AGM finds by
+    running git for real.  Capping the search keeps the answer the same whether
+    or not the directory holding the suite's temporary files happens to sit
+    inside somebody's checkout, while a repository created inside *tmp_path* is
+    still found normally.
+    """
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+
+
+def _review_file_of(revise_prompt: str) -> Path:
+    """The review file a rendered ``revise @<file>`` prompt points the agent at."""
+    return Path(revise_prompt.split("@", maxsplit=1)[1].strip())
 
 
 def _review_args(
@@ -88,6 +107,30 @@ def _revise_args(
     )
 
 
+def _refine_args(**overrides: object) -> RefineArgs:
+    """Build ``RefineArgs`` with every option unset except the given overrides."""
+    fields: dict[str, object] = {
+        "max_steps": None,
+        "no_max_steps": False,
+        "runner": None,
+        "reviewer": "fake-reviewer",
+        "reviser": "fake-reviser",
+        "scope": None,
+        "aspects": None,
+        "review_prompt": None,
+        "review_prompt_file": None,
+        "extra_review_prompt": None,
+        "extra_review_prompt_file": None,
+        "revise_prompt": None,
+        "revise_prompt_file": None,
+        "extra_revise_prompt": None,
+        "extra_revise_prompt_file": None,
+        "no_log": True,
+    }
+    fields.update(overrides)
+    return RefineArgs(**fields)
+
+
 def test_prepare_review_expands_scope_and_aspects(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -117,7 +160,6 @@ def test_prepare_review_uses_loop_runner_as_fallback(
     monkeypatch.delenv("PROJ_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: None)
 
     prepared = prepare_review(_review_args(runner=None), temp_files=[])
 
@@ -135,7 +177,6 @@ def test_prepare_review_config_runner_wins_over_loop_runner(
     monkeypatch.delenv("PROJ_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: None)
 
     prepared = prepare_review(_review_args(runner=None), temp_files=[])
 
@@ -153,7 +194,6 @@ def test_prepare_review_cli_runner_wins_over_loop_runner(
     monkeypatch.delenv("PROJ_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: None)
 
     prepared = prepare_review(_review_args(runner="cli-runner"), temp_files=[])
 
@@ -483,38 +523,14 @@ def test_unlink_temp_file_ignores_missing_untracked_file(tmp_path: Path) -> None
     refine_mod._unlink_temp_file(tmp_path / "missing.md", temp_files=[])
 
 
-def test_review_once_runs_prompt_and_cleans_temp_files(
+def test_review_once_streams_output_and_removes_its_prompt_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     home = _setup_home(tmp_path)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-    cleaned: list[list[Path]] = []
-
-    def fake_run_prompt_command(
-        command: list[str],
-        target: Path,
-        *,
-        env: dict[str, str],
-        stdout_callback: Callable[[str], None] | None = None,
-        stderr_callback: Callable[[str], None] | None = None,
-        **_kwargs: object,
-    ) -> str:
-        assert command == ["fake-reviewer"]
-        assert target.is_file()
-        assert env["REVIEW_SCOPE"] == review_pass.DEFAULT_REVIEW_SCOPE
-        if callable(stdout_callback):
-            stdout_callback("out")
-        if callable(stderr_callback):
-            stderr_callback("err")
-        return "outerr"
-
-    def fake_cleanup(temp_files: list[Path]) -> None:
-        cleaned.append(list(temp_files))
-
-    monkeypatch.setattr("agm.agent.runner.run_prompt_command", fake_run_prompt_command)
-    monkeypatch.setattr("agm.agent.review.review.cleanup_temp_files", fake_cleanup)
+    agent = fake_agent(monkeypatch, lambda _call: AgentReply(stdout="out", stderr="err"))
 
     output = review_mod.review_once(_review_args(no_review_file=True))
 
@@ -522,44 +538,29 @@ def test_review_once_runs_prompt_and_cleans_temp_files(
     assert captured.out == "out"
     assert captured.err == "err"
     assert output == "outerr"
-    assert len(cleaned) == 1
+    (call,) = agent.calls
+    assert call.runner == ["fake-reviewer"]
+    assert call.env["REVIEW_SCOPE"] == review_pass.DEFAULT_REVIEW_SCOPE
+    assert call.prompt == (
+        f"review {review_pass.DEFAULT_REVIEW_SCOPE} for {DEFAULT_REVIEW_ASPECTS}\n"
+    )
+    assert not call.prompt_file.exists()
 
 
-def test_review_once_reuses_config_for_preparation(
+def test_review_once_saves_an_empty_review_when_the_agent_prints_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A silent agent still produces a review — an empty one."""
     home = _setup_home(tmp_path)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-    original_review_config = review_pass._review_config
-    load_count = 0
+    fake_agent(monkeypatch, AgentReply())
 
-    def counting_review_config(
-        command_name: str | None, *, require_command: bool
-    ) -> review_pass.ReviewConfig:
-        nonlocal load_count
-        load_count += 1
-        return original_review_config(command_name, require_command=require_command)
+    output = review_mod.review_once(_review_args(review_file="saved/review.md"))
 
-    def fake_run_prompt_command(
-        command: list[str],
-        target: Path,
-        *,
-        env: dict[str, str],
-        stdout_callback: Callable[[str], None] | None = None,
-        stderr_callback: Callable[[str], None] | None = None,
-        **_kwargs: object,
-    ) -> str:
-        del command, target, env, stdout_callback, stderr_callback
-        return "review output\n"
-
-    monkeypatch.setattr("agm.agent.review.review._review_config", counting_review_config)
-    monkeypatch.setattr("agm.agent.runner.run_prompt_command", fake_run_prompt_command)
-
-    review_mod.review_once(_review_args(no_review_file=True))
-
-    assert load_count == 1
+    assert output == ""
+    assert (tmp_path / "saved" / "review.md").read_text(encoding="utf-8") == ""
 
 
 def test_review_once_saves_output_to_default_review_file(
@@ -569,32 +570,37 @@ def test_review_once_saves_output_to_default_review_file(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-    monkeypatch.setattr("agm.core.log.git_helpers.containing_root", lambda _path: None)
     monkeypatch.setattr("agm.agent.review.review.datetime", _FixedDatetime)
-
-    def fake_run_prompt_command(
-        command: list[str],
-        target: Path,
-        *,
-        env: dict[str, str],
-        stdout_callback: Callable[[str], None] | None = None,
-        stderr_callback: Callable[[str], None] | None = None,
-        **_kwargs: object,
-    ) -> str:
-        del command, target, env, stdout_callback, stderr_callback
-        return "review output\n"
-
-    monkeypatch.setattr("agm.agent.runner.run_prompt_command", fake_run_prompt_command)
+    _isolate_git(monkeypatch, tmp_path)
+    fake_agent(monkeypatch, "review output\n")
 
     output = review_mod.review_once(_review_args())
 
     review_file = tmp_path / ".agent-files" / "review-20260513-142530-000000.md"
     assert output == "review output\n"
     assert review_file.read_text(encoding="utf-8") == "review output\n"
-    assert (
-        capsys.readouterr().out
-        == "\nSaved review to .agent-files/review-20260513-142530-000000.md\n"
-    )
+    assert "review-20260513-142530-000000.md" in capsys.readouterr().out
+
+
+def test_review_once_saves_the_default_review_file_at_the_git_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, env: dict[str, str]
+) -> None:
+    """The review of a checkout lands in the checkout's own ``.agent-files``."""
+    home = _setup_home(tmp_path)
+    checkout = init_repo(tmp_path / "checkout", env)
+    nested = checkout / "src"
+    nested.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(nested)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    _isolate_git(monkeypatch, tmp_path)
+    fake_agent(monkeypatch, "review output\n")
+
+    review_mod.review_once(_review_args())
+
+    saved = sorted((checkout / ".agent-files").glob("review-*.md"))
+    assert [path.read_text(encoding="utf-8") for path in saved] == ["review output\n"]
+    assert not (nested / ".agent-files").exists()
 
 
 def test_review_once_honors_explicit_and_disabled_review_file(
@@ -604,20 +610,8 @@ def test_review_once_honors_explicit_and_disabled_review_file(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-
-    def fake_run_prompt_command(
-        command: list[str],
-        target: Path,
-        *,
-        env: dict[str, str],
-        stdout_callback: Callable[[str], None] | None = None,
-        stderr_callback: Callable[[str], None] | None = None,
-        **_kwargs: object,
-    ) -> str:
-        del command, target, env, stdout_callback, stderr_callback
-        return "review output\n"
-
-    monkeypatch.setattr("agm.agent.runner.run_prompt_command", fake_run_prompt_command)
+    _isolate_git(monkeypatch, tmp_path)
+    fake_agent(monkeypatch, "review output\n")
 
     review_mod.review_once(_review_args(review_file="saved/review.md"))
     review_mod.review_once(_review_args(no_review_file=True))
@@ -637,20 +631,8 @@ def test_review_once_saves_to_configured_review_file(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-
-    def fake_run_prompt_command(
-        command: list[str],
-        target: Path,
-        *,
-        env: dict[str, str],
-        stdout_callback: Callable[[str], None] | None = None,
-        stderr_callback: Callable[[str], None] | None = None,
-        **_kwargs: object,
-    ) -> str:
-        del command, target, env, stdout_callback, stderr_callback
-        return "review output\n"
-
-    monkeypatch.setattr("agm.agent.runner.run_prompt_command", fake_run_prompt_command)
+    _isolate_git(monkeypatch, tmp_path)
+    fake_agent(monkeypatch, "review output\n")
 
     review_mod.review_once(_review_args())
 
@@ -670,20 +652,7 @@ def test_review_once_warns_before_overwriting_existing_review_file(
     review_file = tmp_path / "saved" / "review.md"
     review_file.parent.mkdir()
     review_file.write_text("existing\n", encoding="utf-8")
-
-    def fake_run_prompt_command(
-        command: list[str],
-        target: Path,
-        *,
-        env: dict[str, str],
-        stdout_callback: Callable[[str], None] | None = None,
-        stderr_callback: Callable[[str], None] | None = None,
-        **_kwargs: object,
-    ) -> str:
-        del command, target, env, stdout_callback, stderr_callback
-        return "new review output\n"
-
-    monkeypatch.setattr("agm.agent.runner.run_prompt_command", fake_run_prompt_command)
+    fake_agent(monkeypatch, "new review output\n")
 
     review_mod.review_once(_review_args(review_file="saved/review.md"))
 
@@ -699,20 +668,8 @@ def test_review_once_honors_none_and_absolute_review_file(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-
-    def fake_run_prompt_command(
-        command: list[str],
-        target: Path,
-        *,
-        env: dict[str, str],
-        stdout_callback: Callable[[str], None] | None = None,
-        stderr_callback: Callable[[str], None] | None = None,
-        **_kwargs: object,
-    ) -> str:
-        del command, target, env, stdout_callback, stderr_callback
-        return "review output\n"
-
-    monkeypatch.setattr("agm.agent.runner.run_prompt_command", fake_run_prompt_command)
+    _isolate_git(monkeypatch, tmp_path)
+    fake_agent(monkeypatch, "review output\n")
 
     absolute_review_file = tmp_path / "absolute-review.md"
     review_mod.review_once(_review_args(review_file="none"))
@@ -741,7 +698,7 @@ def test_revise_once_dry_run_prints_configuration_and_command(
     assert "fake-reviser" in captured.out
 
 
-def test_legacy_review_and_revise_use_the_existing_prompt_command_path(
+def test_review_and_revise_interpolate_session_id_into_the_runner_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = _setup_home(tmp_path)
@@ -751,15 +708,7 @@ def test_legacy_review_and_revise_use_the_existing_prompt_command_path(
     monkeypatch.setenv("SESSION_ID", "legacy-review-session")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-    commands: list[list[str]] = []
-    prompts: list[str] = []
-
-    def fake_run_capture(command: list[str], **kwargs: object) -> tuple[int, str, str]:
-        commands.append(command)
-        prompts.append(Path(command[-1][1:]).read_text(encoding="utf-8"))
-        return 0, "agent output\n", ""
-
-    monkeypatch.setattr("agm.agent.runner.run_capture", fake_run_capture)
+    agent = fake_agent(monkeypatch, "agent output\n")
 
     assert (
         review_pass.review_once(
@@ -774,49 +723,36 @@ def test_legacy_review_and_revise_use_the_existing_prompt_command_path(
         == "agent output\n"
     )
 
-    assert [command[:2] for command in commands] == [
+    assert [call.runner for call in agent.calls] == [
         ["fake-reviewer", "--session=legacy-review-session"],
         ["fake-reviser", "--session=legacy-review-session"],
     ]
-    assert all(command[-1].startswith("@") for command in commands)
-    assert prompts[0] == (
+    assert agent.prompts[0] == (
         f"review {review_pass.DEFAULT_REVIEW_SCOPE} for {DEFAULT_REVIEW_ASPECTS}\n"
     )
-    assert prompts[1].startswith("revise @")
+    assert _review_file_of(agent.prompts[1]) == review_file
 
 
-def test_revise_once_runs_prepared_prompt_when_dry_run_disabled(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_revise_once_sends_the_review_file_to_the_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """dry_run disabled branch in revise_once.
-
-    When dry_run is NOT enabled, revise_once does not print any dry-run
-    configuration and delegates directly to run_prepared_prompt.
-    """
+    """Outside dry-run the reviser is really invoked, with no dry-run output."""
     home = _setup_home(tmp_path)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    review_file = tmp_path / "review.md"
+    review_file.write_text("findings\n", encoding="utf-8")
+    agent = fake_agent(monkeypatch, "agent output")
 
-    run_called = [False]
-
-    def fake_run_prepared_prompt(
-        prepared: object,
-        *,
-        stdout_callback: object = None,
-        stderr_callback: object = None,
-    ) -> str:
-        run_called[0] = True
-        return "agent output"
-
-    monkeypatch.setattr("agm.agent.review.revise.run_prepared_prompt", fake_run_prepared_prompt)
-
-    # Ensure dry_run is disabled (it should be by default, but be explicit)
     assert not dry_run.enabled()
     output = revise_mod.revise_once(_revise_args("review.md"))
 
-    assert run_called[0] is True
+    (call,) = agent.calls
+    assert call.runner == ["fake-reviser"]
+    assert _review_file_of(call.prompt) == review_file
     assert output == "agent output"
+    assert "dry-run" not in capsys.readouterr().out
 
 
 def test_revise_stream_callbacks_write_non_empty_chunks(capsys: pytest.CaptureFixture[str]) -> None:
@@ -841,7 +777,6 @@ def test_prepare_revise_uses_loop_runner_as_fallback(
     monkeypatch.delenv("PROJ_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: None)
 
     prepared = prepare_revise(_revise_args("review.md", runner=None), temp_files=[])
 
@@ -884,7 +819,6 @@ def test_prepare_revise_config_runner_wins_over_loop_runner(
     monkeypatch.delenv("PROJ_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: None)
 
     prepared = prepare_revise(_revise_args("review.md", runner=None), temp_files=[])
 
@@ -904,7 +838,6 @@ def test_prepare_revise_cli_runner_wins_over_loop_runner(
     monkeypatch.delenv("PROJ_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: None)
 
     prepared = prepare_revise(_revise_args("review.md", runner="cli-runner"), temp_files=[])
 
@@ -957,692 +890,243 @@ def test_write_stream_helpers_ignore_empty_chunks(
     assert captured.err == ""
 
 
-def test_refine_repeats_revise_for_unknown_status_and_honors_max_steps(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _refine_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Set up the prompts, working directory and PATH lookup a refine run needs."""
     home = _setup_home(tmp_path)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(tmp_path)
-    reviews: list[ReviewArgs] = []
-    revisions: list[ReviseArgs] = []
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    _isolate_git(monkeypatch, tmp_path)
+    return home
 
-    def fake_review_once(
-        args: ReviewArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del stdout_callback, stderr_callback
-        reviews.append(args)
-        return "review result\n"
 
-    def fake_revise_once(
-        args: ReviseArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del stdout_callback, stderr_callback
-        revisions.append(args)
-        return "try again\n"
+def _refine_agent(
+    monkeypatch: pytest.MonkeyPatch,
+    revise_statuses: Sequence[str] = (),
+    *,
+    review_output: str = "review result\n",
+    final_status: str | None = "try again\n",
+) -> FakeAgent:
+    """Fake agent answering review calls and scripting the reviser's verdicts.
 
-    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
-    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
+    Statuses are consumed one per revise call; once the script runs out every
+    further revise call answers *final_status*, or fails the test when that is
+    ``None`` (which also bounds an otherwise unbounded refine run).
+    """
+    statuses = iter(revise_statuses)
 
-    refine(
-        RefineArgs(
-            max_steps=3,
-            no_max_steps=False,
-            runner=None,
-            reviewer=None,
-            reviser=None,
-            scope=None,
-            aspects=None,
-            review_prompt=None,
-            review_prompt_file=None,
-            extra_review_prompt=None,
-            extra_review_prompt_file=None,
-            revise_prompt=None,
-            revise_prompt_file=None,
-            extra_revise_prompt=None,
-            extra_revise_prompt_file=None,
-        )
-    )
+    def respond(call: AgentCall) -> str | AgentReply:
+        if not _is_revise(call):
+            return review_output
+        status = next(statuses, final_status)
+        assert status is not None, "the reviser ran more times than the script allows"
+        return status
 
-    assert len(reviews) == 1
-    assert len(revisions) == 3
+    return fake_agent(monkeypatch, respond)
+
+
+def _is_revise(call: AgentCall) -> bool:
+    """Whether *call* ran the revise pass rather than the review pass.
+
+    The two default prompts differ in their first word, so the rendered prompt
+    identifies the pass without depending on how the runner was named.
+    """
+    return call.prompt.startswith("revise")
+
+
+def _passes(agent: FakeAgent) -> list[str]:
+    """Which pass each recorded agent call ran, in order."""
+    return ["revise" if _is_revise(call) else "review" for call in agent.calls]
+
+
+def _revised_review_files(agent: FakeAgent) -> list[Path]:
+    """The review file each revise call was pointed at, in order."""
+    return [_review_file_of(call.prompt) for call in agent.calls if _is_revise(call)]
+
+
+def test_refine_repeats_revise_for_unknown_status_and_honors_max_steps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _refine_home(tmp_path, monkeypatch)
+    agent = _refine_agent(monkeypatch)
+
+    refine(_refine_args(max_steps=3))
+
+    assert _passes(agent) == ["review", "revise", "revise", "revise"]
+    assert agent.runners == ["fake-reviewer", "fake-reviser", "fake-reviser", "fake-reviser"]
 
 
 def test_refine_uses_default_max_steps_when_unconfigured(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    home = _setup_home(tmp_path)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.chdir(tmp_path)
-    revisions: list[ReviseArgs] = []
+    _refine_home(tmp_path, monkeypatch)
+    agent = _refine_agent(monkeypatch)
 
-    def fake_review_once(
-        args: ReviewArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del args, stdout_callback, stderr_callback
-        return "review result\n"
+    refine(_refine_args())
 
-    def fake_revise_once(
-        args: ReviseArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del stdout_callback, stderr_callback
-        revisions.append(args)
-        return "try again\n"
-
-    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
-    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
-
-    refine(
-        RefineArgs(
-            max_steps=None,
-            no_max_steps=False,
-            runner=None,
-            reviewer=None,
-            reviser=None,
-            scope=None,
-            aspects=None,
-            review_prompt=None,
-            review_prompt_file=None,
-            extra_review_prompt=None,
-            extra_review_prompt_file=None,
-            revise_prompt=None,
-            revise_prompt_file=None,
-            extra_revise_prompt=None,
-            extra_revise_prompt_file=None,
-        )
-    )
-
-    assert len(revisions) == 12
+    assert _passes(agent).count("revise") == refine_mod.DEFAULT_MAX_STEPS
 
 
+@pytest.mark.parametrize("max_steps", [1, 2, 5])
 def test_refine_max_steps_limits_iterations_to_exact_count(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, max_steps: int
 ) -> None:
-    home = _setup_home(tmp_path)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.chdir(tmp_path)
-    revisions: list[ReviseArgs] = []
+    _refine_home(tmp_path, monkeypatch)
+    agent = _refine_agent(monkeypatch)
 
-    def fake_review_once(
-        args: ReviewArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del stdout_callback, stderr_callback
-        reviews.append(args)
-        return "review result\n"
+    refine(_refine_args(max_steps=max_steps))
 
-    def fake_revise_once(
-        args: ReviseArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del stdout_callback, stderr_callback
-        revisions.append(args)
-        return "try again\n"
-
-    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
-    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
-    reviews: list[ReviewArgs] = []
-
-    for n in [1, 2, 5]:
-        revisions.clear()
-        reviews.clear()
-        refine(
-            RefineArgs(
-                max_steps=n,
-                no_max_steps=False,
-                runner=None,
-                reviewer=None,
-                reviser=None,
-                scope=None,
-                aspects=None,
-                review_prompt=None,
-                review_prompt_file=None,
-                extra_review_prompt=None,
-                extra_review_prompt_file=None,
-                revise_prompt=None,
-                revise_prompt_file=None,
-                extra_revise_prompt=None,
-                extra_revise_prompt_file=None,
-            )
-        )
-        assert len(revisions) == n, f"max_steps={n} should produce {n} revisions"
+    assert _passes(agent).count("revise") == max_steps
 
 
 def test_refine_max_steps_one_with_continue_still_exits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    home = _setup_home(tmp_path)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.chdir(tmp_path)
-    reviews: list[ReviewArgs] = []
-    revisions: list[ReviseArgs] = []
+    _refine_home(tmp_path, monkeypatch)
+    agent = _refine_agent(monkeypatch, ["CONTINUE\n"])
 
-    def fake_review_once(
-        args: ReviewArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del stdout_callback, stderr_callback
-        reviews.append(args)
-        return "review result\n"
+    refine(_refine_args(max_steps=1))
 
-    def fake_revise_once(
-        args: ReviseArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del stdout_callback, stderr_callback
-        revisions.append(args)
-        return "CONTINUE\n"
-
-    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
-    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
-
-    refine(
-        RefineArgs(
-            max_steps=1,
-            no_max_steps=False,
-            runner=None,
-            reviewer=None,
-            reviser=None,
-            scope=None,
-            aspects=None,
-            review_prompt=None,
-            review_prompt_file=None,
-            extra_review_prompt=None,
-            extra_review_prompt_file=None,
-            revise_prompt=None,
-            revise_prompt_file=None,
-            extra_revise_prompt=None,
-            extra_revise_prompt_file=None,
-        )
-    )
-
-    assert len(reviews) == 1
-    assert len(revisions) == 1
+    assert _passes(agent) == ["review", "revise"]
 
 
-def test_refine_max_steps_with_alternating_continue_and_unknown(
+def test_refine_reviews_again_after_continue_and_keeps_the_review_otherwise(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    home = _setup_home(tmp_path)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.chdir(tmp_path)
-    reviews: list[ReviewArgs] = []
-    revisions: list[ReviseArgs] = []
-    # Pattern: CONTINUE, unknown, unknown, CONTINUE, unknown
-    statuses = iter(["CONTINUE\n", "unclear\n", "unclear\n", "CONTINUE\n", "unclear\n"])
-
-    def fake_review_once(
-        args: ReviewArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del stdout_callback, stderr_callback
-        reviews.append(args)
-        return "review result\n"
-
-    def fake_revise_once(
-        args: ReviseArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del stdout_callback, stderr_callback
-        revisions.append(args)
-        return next(statuses)
-
-    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
-    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
-
-    refine(
-        RefineArgs(
-            max_steps=5,
-            no_max_steps=False,
-            runner=None,
-            reviewer=None,
-            reviser=None,
-            scope=None,
-            aspects=None,
-            review_prompt=None,
-            review_prompt_file=None,
-            extra_review_prompt=None,
-            extra_review_prompt_file=None,
-            revise_prompt=None,
-            revise_prompt_file=None,
-            extra_revise_prompt=None,
-            extra_revise_prompt_file=None,
-        )
+    """``CONTINUE`` discards the review; any other status revises it again."""
+    _refine_home(tmp_path, monkeypatch)
+    agent = _refine_agent(
+        monkeypatch,
+        ["CONTINUE\n", "unclear\n", "unclear\n", "CONTINUE\n", "unclear\n"],
     )
 
-    # CONTINUE triggers a new review in the next step:
-    # Step 1: review + revise → CONTINUE → review_file=None
-    # Step 2: review + revise → unknown → review_file stays
-    # Step 3: revise only → unknown → review_file stays
-    # Step 4: revise only → CONTINUE → review_file=None
-    # Step 5: review + revise → unknown → review_file stays
-    assert len(reviews) == 3
-    assert len(revisions) == 5
+    refine(_refine_args(max_steps=5))
+
+    assert _passes(agent) == [
+        "review",
+        "revise",
+        "review",
+        "revise",
+        "revise",
+        "revise",
+        "review",
+        "revise",
+    ]
+    revised = _revised_review_files(agent)
+    assert revised == [revised[0], revised[1], revised[1], revised[1], revised[4]]
+    assert len(set(revised)) == 3
+    assert not any(path.exists() for path in set(revised))
 
 
-def test_refine_runs_fresh_review_after_continue(
+def test_refine_runs_a_fresh_review_after_continue(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    home = _setup_home(tmp_path)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.chdir(tmp_path)
-    reviews: list[ReviewArgs] = []
-    outputs = iter(["CONTINUE\n", "COMPLETE\n"])
-
-    def fake_review_once(
-        args: ReviewArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del stdout_callback, stderr_callback
-        reviews.append(args)
-        return "review result\n"
-
-    def fake_revise_once(
-        args: ReviseArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del args, stdout_callback, stderr_callback
-        return next(outputs)
-
-    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
-    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
+    _refine_home(tmp_path, monkeypatch)
+    agent = _refine_agent(monkeypatch, ["CONTINUE\n", "COMPLETE\n"])
 
     refine(
-        RefineArgs(
+        _refine_args(
             max_steps=5,
-            no_max_steps=False,
-            runner="both",
             reviewer="reviewer",
             reviser="reviser",
-            scope="scope",
-            aspects="aspects",
-            review_prompt=None,
-            review_prompt_file=None,
-            extra_review_prompt=None,
-            extra_review_prompt_file=None,
-            revise_prompt=None,
-            revise_prompt_file=None,
-            extra_revise_prompt=None,
-            extra_revise_prompt_file=None,
+            scope="my scope",
+            aspects="my aspects",
         )
     )
 
-    assert len(reviews) == 2
-    assert reviews[0].runner == "reviewer"
-    assert reviews[0].scope == "scope"
-    assert reviews[0].aspects == "aspects"
+    assert agent.runners == ["reviewer", "reviser", "reviewer", "reviser"]
+    assert agent.prompts[0] == "review my scope for my aspects\n"
+    first, second = _revised_review_files(agent)
+    assert first != second
 
 
-def test_refine_no_save_review_disables_review_file_for_each_review(
+def test_refine_no_save_review_keeps_reviews_out_of_the_working_tree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    home = _setup_home(tmp_path)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.chdir(tmp_path)
-    reviews: list[ReviewArgs] = []
-    outputs = iter(["CONTINUE\n", "COMPLETE\n"])
+    _refine_home(tmp_path, monkeypatch)
+    agent = _refine_agent(monkeypatch, ["CONTINUE\n", "COMPLETE\n"])
 
-    def fake_review_once(
-        args: ReviewArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del stdout_callback, stderr_callback
-        reviews.append(args)
-        return "review result\n"
+    refine(_refine_args(max_steps=5, save_review=False))
 
-    def fake_revise_once(
-        args: ReviseArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del args, stdout_callback, stderr_callback
-        return next(outputs)
-
-    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
-    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
-
-    refine(
-        RefineArgs(
-            max_steps=5,
-            no_max_steps=False,
-            runner=None,
-            reviewer=None,
-            reviser=None,
-            scope=None,
-            aspects=None,
-            review_prompt=None,
-            review_prompt_file=None,
-            extra_review_prompt=None,
-            extra_review_prompt_file=None,
-            revise_prompt=None,
-            revise_prompt_file=None,
-            extra_revise_prompt=None,
-            extra_revise_prompt_file=None,
-            save_review=False,
-        )
-    )
-
-    assert len(reviews) == 2
-    assert all(review.no_review_file for review in reviews)
-    assert all(review.review_file is None for review in reviews)
+    assert _passes(agent).count("review") == 2
+    assert not (tmp_path / ".agent-files").exists()
 
 
-def test_refine_save_review_enables_auto_review_file_for_each_review(
+def test_refine_save_review_writes_every_review_to_agent_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    home = _setup_home(tmp_path)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.chdir(tmp_path)
-    reviews: list[ReviewArgs] = []
-    outputs = iter(["CONTINUE\n", "COMPLETE\n"])
+    _refine_home(tmp_path, monkeypatch)
+    agent = _refine_agent(monkeypatch, ["CONTINUE\n", "COMPLETE\n"])
 
-    def fake_review_once(
-        args: ReviewArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del stdout_callback, stderr_callback
-        reviews.append(args)
-        return "review result\n"
+    refine(_refine_args(max_steps=5, save_review=True))
 
-    def fake_revise_once(
-        args: ReviseArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del args, stdout_callback, stderr_callback
-        return next(outputs)
-
-    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
-    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
-
-    refine(
-        RefineArgs(
-            max_steps=5,
-            no_max_steps=False,
-            runner=None,
-            reviewer=None,
-            reviser=None,
-            scope=None,
-            aspects=None,
-            review_prompt=None,
-            review_prompt_file=None,
-            extra_review_prompt=None,
-            extra_review_prompt_file=None,
-            revise_prompt=None,
-            revise_prompt_file=None,
-            extra_revise_prompt=None,
-            extra_revise_prompt_file=None,
-            save_review=True,
-        )
-    )
-
-    assert len(reviews) == 2
-    assert all(review.review_file == "auto" for review in reviews)
-    assert not any(review.no_review_file for review in reviews)
+    assert _passes(agent).count("review") == 2
+    saved = sorted((tmp_path / ".agent-files").glob("review-*.md"))
+    assert [path.read_text(encoding="utf-8") for path in saved] == [
+        "review result\n",
+        "review result\n",
+    ]
 
 
-def test_refine_review_file_uses_custom_review_file_for_each_review(
+def test_refine_review_file_collects_every_review_in_one_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    home = _setup_home(tmp_path)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.chdir(tmp_path)
-    reviews: list[ReviewArgs] = []
-    outputs = iter(["CONTINUE\n", "COMPLETE\n"])
+    _refine_home(tmp_path, monkeypatch)
+    agent = _refine_agent(monkeypatch, ["CONTINUE\n", "COMPLETE\n"], review_output="findings\n")
 
-    def fake_review_once(
-        args: ReviewArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del stdout_callback, stderr_callback
-        reviews.append(args)
-        return "review result\n"
+    refine(_refine_args(max_steps=5, review_file="reviews/last.md"))
 
-    def fake_revise_once(
-        args: ReviseArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del args, stdout_callback, stderr_callback
-        return next(outputs)
-
-    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
-    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
-
-    refine(
-        RefineArgs(
-            max_steps=5,
-            no_max_steps=False,
-            runner=None,
-            reviewer=None,
-            reviser=None,
-            scope=None,
-            aspects=None,
-            review_prompt=None,
-            review_prompt_file=None,
-            extra_review_prompt=None,
-            extra_review_prompt_file=None,
-            revise_prompt=None,
-            revise_prompt_file=None,
-            extra_revise_prompt=None,
-            extra_revise_prompt_file=None,
-            review_file="reviews/last.md",
-        )
-    )
-
-    assert len(reviews) == 2
-    assert all(review.review_file == "reviews/last.md" for review in reviews)
-    assert not any(review.no_review_file for review in reviews)
+    assert _passes(agent).count("review") == 2
+    assert (tmp_path / "reviews" / "last.md").read_text(encoding="utf-8") == "findings\n"
+    assert not (tmp_path / ".agent-files").exists()
 
 
 def test_refine_leaves_missing_scope_and_aspects_for_review_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    home = _setup_home(tmp_path)
+    home = _refine_home(tmp_path, monkeypatch)
     (home / ".agm" / "config.toml").write_text("[refine.frontend]\n", encoding="utf-8")
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.chdir(tmp_path)
-    reviews: list[ReviewArgs] = []
+    agent = _refine_agent(monkeypatch, ["COMPLETE\n"])
 
-    def fake_review_once(
-        args: ReviewArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del stdout_callback, stderr_callback
-        reviews.append(args)
-        return "review result\n"
+    refine(_refine_args(command_name="frontend"))
 
-    def fake_revise_once(
-        args: ReviseArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del args, stdout_callback, stderr_callback
-        return "COMPLETE\n"
-
-    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
-    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
-
-    refine(
-        RefineArgs(
-            max_steps=None,
-            no_max_steps=False,
-            runner=None,
-            reviewer=None,
-            reviser=None,
-            scope=None,
-            aspects=None,
-            review_prompt=None,
-            review_prompt_file=None,
-            extra_review_prompt=None,
-            extra_review_prompt_file=None,
-            revise_prompt=None,
-            revise_prompt_file=None,
-            extra_revise_prompt=None,
-            extra_revise_prompt_file=None,
-            command_name="frontend",
-        )
+    assert agent.prompts[0] == (
+        f"review {review_pass.DEFAULT_REVIEW_SCOPE} for {DEFAULT_REVIEW_ASPECTS}\n"
     )
 
-    assert reviews[0].scope is None
-    assert reviews[0].aspects is None
 
-
-def test_refine_uses_named_config_and_forwards_command_name(
+def test_refine_uses_named_config_for_both_passes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    home = _setup_home(tmp_path)
+    home = _refine_home(tmp_path, monkeypatch)
     (home / ".agm" / "config.toml").write_text(
         '[refine.frontend]\nrunner = "frontend-runner"\nscope = "frontend scope"\n'
     )
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.chdir(tmp_path)
-    reviews: list[ReviewArgs] = []
-    revisions: list[ReviseArgs] = []
+    agent = _refine_agent(monkeypatch, ["COMPLETE\n"])
 
-    def fake_review_once(
-        args: ReviewArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del stdout_callback, stderr_callback
-        reviews.append(args)
-        return "review result\n"
+    refine(_refine_args(command_name="frontend", reviewer=None, reviser=None))
 
-    def fake_revise_once(
-        args: ReviseArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del stdout_callback, stderr_callback
-        revisions.append(args)
-        return "COMPLETE\n"
-
-    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
-    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
-
-    refine(
-        RefineArgs(
-            max_steps=None,
-            no_max_steps=False,
-            runner=None,
-            reviewer=None,
-            reviser=None,
-            scope=None,
-            aspects=None,
-            review_prompt=None,
-            review_prompt_file=None,
-            extra_review_prompt=None,
-            extra_review_prompt_file=None,
-            revise_prompt=None,
-            revise_prompt_file=None,
-            extra_revise_prompt=None,
-            extra_revise_prompt_file=None,
-            command_name="frontend",
-        )
-    )
-
-    assert reviews[0].runner == "frontend-runner"
-    assert reviews[0].scope == "frontend scope"
-    assert reviews[0].command_name == "frontend"
-    assert revisions[0].runner == "frontend-runner"
-    assert revisions[0].command_name == "frontend"
+    assert agent.runners == ["frontend-runner", "frontend-runner"]
+    assert agent.prompts[0] == f"review frontend scope for {DEFAULT_REVIEW_ASPECTS}\n"
 
 
 def test_refine_writes_review_and_revise_output_to_log_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    home = _setup_home(tmp_path)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.chdir(tmp_path)
+    _refine_home(tmp_path, monkeypatch)
     log_file = tmp_path / "refine.log"
 
-    def fake_review_once(
-        args: ReviewArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del args
-        stdout_callback("review stdout\n")
-        stderr_callback("review stderr\n")
-        return "review result\n"
-
-    def fake_revise_once(
-        args: ReviseArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del args
-        stdout_callback("revise stdout\n")
-        stderr_callback("revise stderr\n")
-        return "COMPLETE\n"
-
-    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
-    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
-
-    refine(
-        RefineArgs(
-            max_steps=1,
-            no_max_steps=False,
-            runner=None,
-            reviewer=None,
-            reviser=None,
-            scope=None,
-            aspects=None,
-            review_prompt=None,
-            review_prompt_file=None,
-            extra_review_prompt=None,
-            extra_review_prompt_file=None,
-            revise_prompt=None,
-            revise_prompt_file=None,
-            extra_revise_prompt=None,
-            extra_revise_prompt_file=None,
-            log_file=str(log_file),
+    def respond(call: AgentCall) -> AgentReply:
+        pass_name = "revise" if _is_revise(call) else "review"
+        return AgentReply(
+            stdout=f"{pass_name} stdout\n",
+            stderr=f"{pass_name} stderr\n",
+            returncode=0,
         )
-    )
+
+    fake_agent(monkeypatch, respond)
+
+    refine(_refine_args(max_steps=1, no_log=False, log_file=str(log_file), save_review=False))
 
     log_content = log_file.read_text(encoding="utf-8")
     assert "Step 1" in log_content
@@ -1654,54 +1138,14 @@ def test_refine_step_header_is_printed_and_logged(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    home = _setup_home(tmp_path)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.chdir(tmp_path)
+    _refine_home(tmp_path, monkeypatch)
     log_file = tmp_path / "refine.log"
-
-    def fake_review_once(
-        args: ReviewArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del args, stderr_callback
-        stdout_callback("review stdout\n")
-        return "review result\n"
-
-    def fake_revise_once(
-        args: ReviseArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del args, stderr_callback
-        stdout_callback("revise stdout\n")
-        return "COMPLETE\n"
-
-    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
-    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
-
-    refine(
-        RefineArgs(
-            max_steps=1,
-            no_max_steps=False,
-            runner=None,
-            reviewer=None,
-            reviser=None,
-            scope=None,
-            aspects=None,
-            review_prompt=None,
-            review_prompt_file=None,
-            extra_review_prompt=None,
-            extra_review_prompt_file=None,
-            revise_prompt=None,
-            revise_prompt_file=None,
-            extra_revise_prompt=None,
-            extra_revise_prompt_file=None,
-            log_file=str(log_file),
-        )
+    fake_agent(
+        monkeypatch,
+        lambda call: "revise stdout\n" if _is_revise(call) else "review stdout\n",
     )
+
+    refine(_refine_args(max_steps=1, no_log=False, log_file=str(log_file), save_review=False))
 
     out = capsys.readouterr().out
     log_content = log_file.read_text(encoding="utf-8")
@@ -1711,60 +1155,20 @@ def test_refine_step_header_is_printed_and_logged(
     assert log_content.index("Step 1") < log_content.index("review stdout")
 
 
-def test_refine_prints_logging_to_full_default_log_path(
+def test_refine_logs_to_a_default_file_under_agent_files(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    home = _setup_home(tmp_path)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("agm.core.log.git_helpers.containing_root", lambda _path: None)
+    _refine_home(tmp_path, monkeypatch)
+    _refine_agent(monkeypatch, ["COMPLETE\n"])
 
-    def fake_review_once(
-        args: ReviewArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del args, stdout_callback, stderr_callback
-        return "review result\n"
+    refine(_refine_args(max_steps=1, no_log=False))
 
-    def fake_revise_once(
-        args: ReviseArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del args, stdout_callback, stderr_callback
-        return "COMPLETE\n"
-
-    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
-    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
-
-    refine(
-        RefineArgs(
-            max_steps=1,
-            no_max_steps=False,
-            runner=None,
-            reviewer=None,
-            reviser=None,
-            scope=None,
-            aspects=None,
-            review_prompt=None,
-            review_prompt_file=None,
-            extra_review_prompt=None,
-            extra_review_prompt_file=None,
-            revise_prompt=None,
-            revise_prompt_file=None,
-            extra_revise_prompt=None,
-            extra_revise_prompt_file=None,
-        )
-    )
-
-    first_line = capsys.readouterr().out.splitlines()[0]
-    assert first_line.startswith("Logging to .agent-files/refine-")
-    assert first_line.endswith(".log")
+    (log_file,) = sorted((tmp_path / ".agent-files").glob("refine-*.log"))
+    out = capsys.readouterr().out
+    assert str(Path(".agent-files") / log_file.name) in out.splitlines()[0]
+    assert "Step 1" in log_file.read_text(encoding="utf-8")
 
 
 def test_refine_exits_when_named_config_is_missing(
@@ -1772,255 +1176,109 @@ def test_refine_exits_when_named_config_is_missing(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    home = _setup_home(tmp_path)
+    home = _refine_home(tmp_path, monkeypatch)
     (home / ".agm" / "config.toml").write_text('[refine]\nrunner = "base-runner"\n')
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.chdir(tmp_path)
+    agent = _refine_agent(monkeypatch)
 
     with pytest.raises(SystemExit):
-        refine(
-            RefineArgs(
-                max_steps=None,
-                no_max_steps=False,
-                runner=None,
-                reviewer=None,
-                reviser=None,
-                scope=None,
-                aspects=None,
-                review_prompt=None,
-                review_prompt_file=None,
-                extra_review_prompt=None,
-                extra_review_prompt_file=None,
-                revise_prompt=None,
-                revise_prompt_file=None,
-                extra_revise_prompt=None,
-                extra_revise_prompt_file=None,
-                command_name="fronend",
-            )
-        )
+        refine(_refine_args(command_name="fronend"))
 
+    assert agent.calls == []
     err = capsys.readouterr().err
     assert "fronend" in err
     assert "refine" in err.lower()
 
 
-def test_run_wrappers_translate_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
-    def raise_interrupt(_args: object) -> str:
+def test_run_wrappers_translate_keyboard_interrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _refine_home(tmp_path, monkeypatch)
+    review_file = tmp_path / "review.md"
+    review_file.write_text("findings\n", encoding="utf-8")
+
+    def interrupt(_call: AgentCall) -> str:
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("agm.commands.review.review_once", raise_interrupt)
+    fake_agent(monkeypatch, interrupt)
+
     with pytest.raises(SystemExit) as review_exit:
-        review_mod.run(_review_args())
+        review_mod.run(_review_args(no_review_file=True))
     assert review_exit.value.code == 130
 
-    monkeypatch.setattr("agm.commands.revise.revise_once", raise_interrupt)
     with pytest.raises(SystemExit) as revise_exit:
         revise_mod.run(_revise_args("review.md"))
     assert revise_exit.value.code == 130
 
-    monkeypatch.setattr("agm.commands.refine.refine", raise_interrupt)
     with pytest.raises(SystemExit) as refine_exit:
-        refine_mod.run(
-            RefineArgs(
-                max_steps=1,
-                no_max_steps=False,
-                runner=None,
-                reviewer=None,
-                reviser=None,
-                scope=None,
-                aspects=None,
-                review_prompt=None,
-                review_prompt_file=None,
-                extra_review_prompt=None,
-                extra_review_prompt_file=None,
-                revise_prompt=None,
-                revise_prompt_file=None,
-                extra_revise_prompt=None,
-                extra_revise_prompt_file=None,
-            )
-        )
+        refine_mod.run(_refine_args(max_steps=1))
     assert refine_exit.value.code == 130
 
 
 def test_refine_no_max_steps_runs_until_complete(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    home = _setup_home(tmp_path)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.chdir(tmp_path)
-    revisions: list[ReviseArgs] = []
-    # COMPLETE after 25 steps — well beyond DEFAULT_MAX_STEPS=20
-    statuses = iter(["CONTINUE\n"] * 10 + ["unclear\n"] * 14 + ["COMPLETE\n"])
-
-    def fake_review_once(
-        args: ReviewArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del stdout_callback, stderr_callback
-        return "review result\n"
-
-    def fake_revise_once(
-        args: ReviseArgs,
-        *,
-        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
-        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
-    ) -> str:
-        del stdout_callback, stderr_callback
-        revisions.append(args)
-        return next(statuses)
-
-    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
-    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
-
-    refine(
-        RefineArgs(
-            max_steps=None,
-            no_max_steps=True,
-            runner=None,
-            reviewer=None,
-            reviser=None,
-            scope=None,
-            aspects=None,
-            review_prompt=None,
-            review_prompt_file=None,
-            extra_review_prompt=None,
-            extra_review_prompt_file=None,
-            revise_prompt=None,
-            revise_prompt_file=None,
-            extra_revise_prompt=None,
-            extra_revise_prompt_file=None,
-        )
+    _refine_home(tmp_path, monkeypatch)
+    # COMPLETE only after 25 steps — well beyond the default step limit.
+    agent = _refine_agent(
+        monkeypatch,
+        ["CONTINUE\n"] * 10 + ["unclear\n"] * 14 + ["COMPLETE\n"],
+        final_status=None,
     )
 
-    assert len(revisions) == 25
+    refine(_refine_args(no_max_steps=True))
+
+    assert _passes(agent).count("revise") == 25
 
 
-def _minimal_refine_args() -> RefineArgs:
-    return RefineArgs(
-        max_steps=3,
-        no_max_steps=False,
-        runner=None,
-        reviewer=None,
-        reviser=None,
-        scope=None,
-        aspects=None,
-        review_prompt=None,
-        review_prompt_file=None,
-        extra_review_prompt=None,
-        extra_review_prompt_file=None,
-        revise_prompt=None,
-        revise_prompt_file=None,
-        extra_revise_prompt=None,
-        extra_revise_prompt_file=None,
-        no_log=True,
+def test_refine_stops_when_the_review_agent_cannot_be_started(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _refine_home(tmp_path, monkeypatch)
+
+    def spawn_failure(_call: AgentCall) -> str:
+        raise FileNotFoundError(2, "No such file or directory", "fake-reviewer")
+
+    agent = fake_agent(monkeypatch, spawn_failure)
+
+    with pytest.raises(SystemExit) as exc_info:
+        refine(_refine_args())
+
+    assert exc_info.value.code == 1
+    assert _passes(agent) == ["review"]
+
+
+def test_refine_stops_when_the_review_runner_is_not_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exit code 127 is a runner-configuration error, not a step to retry."""
+    _refine_home(tmp_path, monkeypatch)
+    agent = fake_agent(
+        monkeypatch,
+        lambda _call: AgentReply(stderr="command not found\n", returncode=127),
     )
 
-
-def test_refine_review_once_spawn_failure_propagates(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """SystemExit(1) from review_once (simulating spawn failure) propagates out of refine."""
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.chdir(tmp_path)
-
-    def failing_review_once(
-        args: ReviewArgs,
-        *,
-        stdout_callback: Callable[[str], None],
-        stderr_callback: Callable[[str], None],
-    ) -> str:
-        del args, stdout_callback, stderr_callback
-        raise SystemExit(1)
-
-    def unreachable_revise_once(
-        args: ReviseArgs,
-        *,
-        stdout_callback: Callable[[str], None],
-        stderr_callback: Callable[[str], None],
-    ) -> str:
-        del args, stdout_callback, stderr_callback
-        raise AssertionError("revise_once must not be called when review_once fails")
-
-    monkeypatch.setattr("agm.commands.refine.review_once", failing_review_once)
-    monkeypatch.setattr("agm.commands.refine.revise_once", unreachable_revise_once)
-
     with pytest.raises(SystemExit) as exc_info:
-        refine(_minimal_refine_args())
+        refine(_refine_args())
 
     assert exc_info.value.code == 1
+    assert _passes(agent) == ["review"]
 
 
-def test_refine_review_once_timeout_propagates(
+def test_refine_cleans_up_the_review_file_when_revise_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """SystemExit(124) from review_once (simulating idle timeout) propagates out of refine."""
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.chdir(tmp_path)
+    _refine_home(tmp_path, monkeypatch)
 
-    def timeout_review_once(
-        args: ReviewArgs,
-        *,
-        stdout_callback: Callable[[str], None],
-        stderr_callback: Callable[[str], None],
-    ) -> str:
-        del args, stdout_callback, stderr_callback
-        raise SystemExit(124)
+    def respond(call: AgentCall) -> AgentReply:
+        if _is_revise(call):
+            return AgentReply(stderr="command not found\n", returncode=127)
+        return AgentReply(stdout="review result\n")
 
-    def unreachable_revise_once(
-        args: ReviseArgs,
-        *,
-        stdout_callback: Callable[[str], None],
-        stderr_callback: Callable[[str], None],
-    ) -> str:
-        del args, stdout_callback, stderr_callback
-        raise AssertionError("revise_once must not be called when review_once fails")
-
-    monkeypatch.setattr("agm.commands.refine.review_once", timeout_review_once)
-    monkeypatch.setattr("agm.commands.refine.revise_once", unreachable_revise_once)
+    agent = fake_agent(monkeypatch, respond)
 
     with pytest.raises(SystemExit) as exc_info:
-        refine(_minimal_refine_args())
-
-    assert exc_info.value.code == 124
-
-
-def test_refine_revise_once_spawn_failure_propagates(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """SystemExit(1) from revise_once (after successful review) propagates out of refine."""
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.chdir(tmp_path)
-
-    def succeeding_review_once(
-        args: ReviewArgs,
-        *,
-        stdout_callback: Callable[[str], None],
-        stderr_callback: Callable[[str], None],
-    ) -> str:
-        del args, stdout_callback, stderr_callback
-        return "review output\n"
-
-    def failing_revise_once(
-        args: ReviseArgs,
-        *,
-        stdout_callback: Callable[[str], None],
-        stderr_callback: Callable[[str], None],
-    ) -> str:
-        del args, stdout_callback, stderr_callback
-        raise SystemExit(1)
-
-    monkeypatch.setattr("agm.commands.refine.review_once", succeeding_review_once)
-    monkeypatch.setattr("agm.commands.refine.revise_once", failing_revise_once)
-
-    with pytest.raises(SystemExit) as exc_info:
-        refine(_minimal_refine_args())
+        refine(_refine_args())
 
     assert exc_info.value.code == 1
+    assert _passes(agent) == ["review", "revise"]
+    assert not _revised_review_files(agent)[0].exists()

@@ -824,9 +824,13 @@ class _Checker:
         Scope-classified methods have their own member namespace. Global
         builtin-name and signature rules therefore apply only to ordinary
         declarations; builtin methods are rejected because they have no host
-        dispatch contract.
+        dispatch contract. A receiver disqualifies a ``program def`` before its
+        parameter list does, so ``program def Owner::main(self)`` is reported as
+        a method rather than as a function carrying a value parameter.
         """
         if node.is_program:
+            if is_method:
+                raise AglTypeError("Program def cannot be a method.", span=node.span)
             if node.is_builtin or node.is_extern:
                 raise AglTypeError("Program def cannot be builtin or extern.", span=node.span)
             if node.type_param_slots:
@@ -839,8 +843,6 @@ class _Checker:
                     f"Program function '{node.name}' cannot declare value parameters.",
                     span=node.span,
                 )
-            if is_method:
-                raise AglTypeError("Program def cannot be a method.", span=node.span)
         static_kind = _builtin_static_kind(
             self._resolved, self._env.type_table, self._module_id, node
         )

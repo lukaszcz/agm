@@ -62,10 +62,17 @@ class MatchCompiledModule:
 
 @dataclass(frozen=True, slots=True)
 class MatchCompiledProgram:
-    """A checked program plus total per-module compiled match-site mappings."""
+    """A checked program plus total per-module compiled match-site mappings.
+
+    ``reused_modules`` names the modules whose sites were carried over from an
+    earlier compilation of the same checked module instead of being compiled
+    here. Self-validation skips them, because it already validated those very
+    objects when they were first compiled.
+    """
 
     checked: CheckedProgram
     sites_by_module: Mapping[ModuleId, Mapping[int, CompiledMatchSite]]
+    reused_modules: frozenset[ModuleId] = frozenset()
 
     @property
     def capabilities(self) -> object | None:
@@ -149,11 +156,27 @@ def _rejected(
     return MatchCompilationResult(compiled=None, issues=issues)
 
 
-def compile_program_matches(checked: CheckedProgram) -> MatchCompilationResult:
-    """Compile every match site in every reachable checked module."""
+def compile_program_matches(
+    checked: CheckedProgram,
+    previous: MatchCompiledProgram | None = None,
+) -> MatchCompilationResult:
+    """Compile every match site in every reachable checked module.
+
+    A module carries its sites over from *previous*, an artifact of an earlier
+    compilation, only while that artifact holds the very
+    :class:`~agm.agl.typecheck.env.CheckedModule` this program carries;
+    compiled sites are a pure function of that module, so identity is the whole
+    condition. Only a compilation that produced an artifact can be offered
+    here, so a module with issues re-reports them every time.
+    """
     sites_by_module: dict[ModuleId, Mapping[int, CompiledMatchSite]] = {}
+    reused_modules: set[ModuleId] = set()
     issues: list[MatchIssue] = []
     for module_id, checked_module in checked.modules.items():
+        if previous is not None and previous.checked.modules.get(module_id) is checked_module:
+            sites_by_module[module_id] = previous.sites_by_module[module_id]
+            reused_modules.add(module_id)
+            continue
         module_sites, module_issues = _compile_owner_sites(checked_module)
         sites_by_module[module_id] = module_sites
         issues.extend(module_issues)
@@ -161,7 +184,12 @@ def compile_program_matches(checked: CheckedProgram) -> MatchCompilationResult:
     if sorted_issues:
         return _rejected(sites_by_module.values(), sorted_issues)
     return MatchCompilationResult(
-        compiled=MatchCompiledProgram(checked=checked, sites_by_module=sites_by_module), issues=()
+        compiled=MatchCompiledProgram(
+            checked=checked,
+            sites_by_module=sites_by_module,
+            reused_modules=frozenset(reused_modules),
+        ),
+        issues=(),
     )
 
 
@@ -253,6 +281,8 @@ def validate_match_compiled_program(compiled: MatchCompiledProgram) -> None:
             f"match-compiled program module mismatch; missing={missing}, extra={extra}"
         )
     for module_id, checked_module in compiled.checked.modules.items():
+        if module_id in compiled.reused_modules:
+            continue
         _validate_sites(
             owner=checked_module,
             module_id=module_id,

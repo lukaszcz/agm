@@ -785,6 +785,7 @@ def resolve_program(
     entry_repl_session_scope: ScopeNode | None = None,
     entry_repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
     entry_repl_session_type_paths: Mapping[ScopePath, str | None] | None = None,
+    cached_modules: Mapping[ModuleId, ResolvedModule] | None = None,
 ) -> ResolvedProgram:
     """Run the full scope-resolution pass over a :class:`~agm.agl.modules.loader.ModuleGraph`.
 
@@ -816,6 +817,10 @@ def resolve_program(
         Type-owned scope paths among the retained layers, each mapped to its
         rendered alias target or to None for a nominal type. Scope needs the
         distinction to reject a method receiver in an alias scope.
+    cached_modules:
+        Resolutions from an earlier compilation of the same modules. A cached
+        entry is reused only while it holds the very ``Program`` node this
+        graph carries, so any reparse, splice or redeclaration misses it.
 
     Returns
     -------
@@ -955,6 +960,10 @@ def resolve_program(
     resolved_modules: dict[ModuleId, ResolvedModule] = {}
 
     for mid, loaded in graph.modules.items():
+        cached = cached_modules.get(mid) if cached_modules is not None else None
+        if cached is not None and cached.resolved.program is loaded.program:
+            resolved_modules[mid] = cached
+            continue
         is_entry = mid.is_entry
         # Build cross-module constructor candidates from unqualified import tails.
         cross_module_candidates, cross_module_type_names = (

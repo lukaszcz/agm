@@ -28,6 +28,7 @@ import tomllib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TypedDict, cast
 
 import pytest
@@ -35,6 +36,14 @@ import pytest
 from agm.packages.record import write_record
 from agm.project.workspace_shell import _sanitize_session_key
 from tests._agl_helpers import write_file_program
+from tests._command_coverage import (
+    GATE_ENV,
+    gate_enabled,
+    leaf_commands,
+    record_invocation,
+    recorded_commands,
+    resolve_leaf_path,
+)
 from tests._git_helpers import clone_with_fork_remote
 from tests._proc_helpers import wait_for_path
 
@@ -335,6 +344,50 @@ def _install_fake_loop_command(
     return command
 
 
+def _install_recording_runner(
+    directory: Path,
+    env: dict[str, str],
+    *,
+    command_name: str,
+    log: Path,
+    output: str,
+    extra: str = "",
+) -> Path:
+    """Install a fake agent runner that records every invocation to *log*.
+
+    Each call appends a ``runner=``/``cwd=``/``argv=`` block, runs the optional
+    *extra* shell fragment (which sees the prompt file as ``$1``, ``@``-prefixed
+    as AGM attaches it), then prints *output* as its final line so completion
+    detection reads it.  Parse the log with :func:`_runner_records`.
+    """
+    return _install_fake_loop_command(
+        directory,
+        env,
+        command_name=command_name,
+        script=(
+            f"log_file={shlex.quote(str(log))}\n"
+            "{\n"
+            f"  printf 'runner={command_name}\\n'\n"
+            "  printf 'cwd=%s\\n' \"$PWD\"\n"
+            "  printf 'argv=%s\\n' \"$*\"\n"
+            '} >> "$log_file"\n'
+            f"{extra}"
+            f"printf '%s\\n' {shlex.quote(output)}\n"
+        ),
+    )
+
+
+def _runner_records(log: Path) -> list[dict[str, str]]:
+    """Parse a :func:`_install_recording_runner` log into one dict per call."""
+    records: list[dict[str, str]] = []
+    for line in log.read_text(encoding="utf-8").splitlines():
+        key, _, value = line.partition("=")
+        if key == "runner":
+            records.append({})
+        records[-1][key] = value
+    return records
+
+
 # ---------------------------------------------------------------------------
 # Isolated install of the current repo's ``agm`` CLI
 # ---------------------------------------------------------------------------
@@ -498,7 +551,12 @@ def run_agm(
     Pass *executable* — see :func:`_install_agm_at_prefix` — to invoke that same
     binary through another prefix's entry point, which is what selects the
     install prefix AGM resolves for itself.
+
+    Every invocation is recorded for the e2e command-coverage gate (see
+    :mod:`tests._command_coverage`), which is why this must stay the single way
+    e2e tests reach the binary.
     """
+    record_invocation(args)
     return subprocess.run(
         _agm_argv(args) if executable is None else [str(executable), *args],
         capture_output=True,
@@ -2613,6 +2671,15 @@ class TestDepRemove:
 
         assert not (project / "deps" / "mylib").exists()
 
+    def test_dep_remove_long_alias(self, tmp_path: Path, env: dict[str, str]) -> None:
+        """The 'dep remove' spelling works identically to 'dep rm'."""
+        bare = make_bare_repo(tmp_path / "mylib.git", env)
+        project = TestDepSwitch._setup_dep(tmp_path, bare, env)
+
+        run_agm(["dep", "remove", "mylib/repo"], env=env, cwd=str(project))
+
+        assert not (project / "deps" / "mylib").exists()
+
     def test_repo_removal_fails_when_other_worktrees_exist(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -4680,34 +4747,7 @@ class TestLoop:
             f"---\nloop {tasks_dir}\nliteral {tasks_dir}\n"
         )
 
-    def test_uses_configured_loop_command(self, tmp_path: Path, env: dict[str, str]) -> None:
-        _install_fake_claude(tmp_path / "bin", env)
-        env["FAKE_CLAUDE_STATE"] = str(tmp_path / "claude-count")
-        env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
-
-        home = Path(env["HOME"])
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text(
-            '[loop]\nrunner = "claude --print"\nno_selector = true\n'
-        )
-        prompt_dir = home / ".agm" / "prompts"
-        prompt_dir.mkdir(parents=True)
-        prompt_file = prompt_dir / "loop.md"
-        prompt_file.write_text("loop prompt\n")
-
-        work = tmp_path / "work"
-        work.mkdir()
-        (work / ".agent-files" / "tasks").mkdir(parents=True)
-        (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
-
-        result = run_agm(["loop", "run"], env=env, cwd=str(work))
-
-        assert result.returncode == 0
-        assert (
-            Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"--print @{prompt_file}"] * 2
-        )
-
-    def test_loop_run_uses_configured_runner_when_command_is_omitted(
+    def test_uses_configured_runner_when_command_is_omitted(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         _install_fake_claude(tmp_path / "bin", env)
@@ -8508,6 +8548,279 @@ class TestWorkflows:
         assert head == "branch-keep"
 
 
+class TestAgentWorkflows:
+    """Multi-step workflows that cross from project management into agent commands.
+
+    Each test drives a real project through the project-management commands and
+    then hands the resulting workspace to an agent-facing command, so the state
+    one command writes is proved to be the state the next command reads.
+    """
+
+    @staticmethod
+    def _write_loop_prompts(env: dict[str, str]) -> None:
+        """Give ``agm loop`` the home-scope prompts a run needs."""
+        prompts = Path(env["HOME"]) / ".agm" / "prompts"
+        prompts.mkdir(parents=True, exist_ok=True)
+        (prompts / "select.md").write_text("record progress\n", encoding="utf-8")
+        (prompts / "loop.md").write_text("work the next task\n", encoding="utf-8")
+
+    @staticmethod
+    def _seed_tasks_dir(worktree: Path) -> None:
+        """Seed the default loop tasks dir so no bootstrap step is needed."""
+        tasks = worktree / ".agent-files" / "tasks"
+        tasks.mkdir(parents=True)
+        (tasks / "PROGRESS.md").write_text("started\n", encoding="utf-8")
+
+    def test_open_then_loop_then_close_in_the_created_workspace(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """init → open → loop in the opened worktree → close removes it again."""
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+        runner_log = tmp_path / "runner.log"
+        _install_recording_runner(
+            tmp_path / "bin",
+            env,
+            command_name="looper",
+            log=runner_log,
+            output="COMPLETE",
+        )
+        self._write_loop_prompts(env)
+
+        run_agm(["init", "proj", str(bare)], env=env, cwd=str(tmp_path))
+        project = tmp_path / "proj"
+
+        run_agm(["open", "-d", "feat/agent"], env=env, cwd=str(project))
+        worktree = project / "worktrees" / "feat/agent"
+        assert worktree.is_dir()
+
+        result = run_agm(
+            ["loop", "run", "--no-selector", "--runner", "looper"],
+            env=env,
+            cwd=str(worktree),
+        )
+
+        assert result.returncode == 0
+        # The loop ran inside the worktree ``open`` created, not the project root.
+        assert {record["cwd"] for record in _runner_records(runner_log)} == {str(worktree)}
+        # Everything under .agent-files/ here was written by agm itself.
+        loop_log = next((worktree / ".agent-files").glob("loop-*.log"))
+        assert "COMPLETE" in loop_log.read_text(encoding="utf-8")
+
+        run_agm(["close", "feat/agent"], env=env, cwd=str(project))
+
+        # Closing the workspace takes the agent's artifacts with it.
+        assert not worktree.exists()
+        assert not loop_log.exists()
+        assert "kill-session -t proj/feat/agent" in tmux_log.read_text()
+        assert "feat/agent" not in _git("branch", cwd=str(project / "repo"), env=env).stdout
+
+    def test_review_then_revise_then_worktree_removal(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """init → wt new → review → revise applies it → wt rm guards the edit."""
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        runner_log = tmp_path / "runner.log"
+        _install_recording_runner(
+            tmp_path / "bin",
+            env,
+            command_name="reviewer",
+            log=runner_log,
+            output="note: extend the readme",
+        )
+        _install_recording_runner(
+            tmp_path / "bin",
+            env,
+            command_name="reviser",
+            log=runner_log,
+            output="applied",
+            # The revise prompt is the review file path, so the reviser reads
+            # exactly the file the reviewer produced and applies it.
+            extra='review_file="$(cat "${1#@}")"\ncat "$review_file" >> README.md\n',
+        )
+        prompts = Path(env["HOME"]) / ".agm" / "prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "review.md").write_text("review the workspace\n", encoding="utf-8")
+        (prompts / "revise.md").write_text("%{REVIEW_FILE}\n", encoding="utf-8")
+
+        run_agm(["init", "proj", str(bare)], env=env, cwd=str(tmp_path))
+        project = tmp_path / "proj"
+        run_agm(["wt", "new", "feat/audit"], env=env, cwd=str(project / "repo"))
+        worktree = project / "worktrees" / "feat/audit"
+
+        # Save the review outside the worktree so the only change inside it is
+        # the revision the agent applies below.
+        review_file = tmp_path / "review.md"
+        run_agm(
+            ["review", "--runner", "reviewer", "--review-file", str(review_file)],
+            env=env,
+            cwd=str(worktree),
+        )
+
+        assert review_file.read_text(encoding="utf-8") == "note: extend the readme\n"
+
+        run_agm(["revise", "--runner", "reviser", str(review_file)], env=env, cwd=str(worktree))
+
+        revised = "initial\nnote: extend the readme\n"
+        assert (worktree / "README.md").read_text(encoding="utf-8") == revised
+        records = _runner_records(runner_log)
+        assert [record["runner"] for record in records] == ["reviewer", "reviser"]
+        assert {record["cwd"] for record in records} == {str(worktree)}
+
+        blocked = run_agm(
+            ["wt", "rm", "feat/audit"],
+            env=env,
+            cwd=str(project / "repo"),
+            check=False,
+        )
+
+        # The revision is the only pending change, and it protects the
+        # workspace from a plain removal.
+        assert _git("status", "--short", cwd=str(worktree), env=env).stdout == " M README.md\n"
+        assert blocked.returncode != 0
+        assert (worktree / "README.md").read_text(encoding="utf-8") == revised
+
+        run_agm(["wt", "rm", "-f", "feat/audit"], env=env, cwd=str(project / "repo"))
+
+        assert not worktree.exists()
+        assert "feat/audit" not in _git("branch", cwd=str(project / "repo"), env=env).stdout
+
+    def test_project_config_layer_selects_the_loop_runner(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """init → config update → project ``[loop]`` overrides home for a worktree loop."""
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        home_log = tmp_path / "home-runner.log"
+        project_log = tmp_path / "project-runner.log"
+        for command_name, log in (("home-runner", home_log), ("project-runner", project_log)):
+            _install_recording_runner(
+                tmp_path / "bin",
+                env,
+                command_name=command_name,
+                log=log,
+                output="COMPLETE",
+            )
+        self._write_loop_prompts(env)
+        (Path(env["HOME"]) / ".agm" / "config.toml").write_text(
+            '[loop]\nrunner = "home-runner"\nno_selector = true\n', encoding="utf-8"
+        )
+
+        run_agm(["init", "proj", str(bare)], env=env, cwd=str(tmp_path))
+        project = tmp_path / "proj"
+        run_agm(["config", "update"], env=env, cwd=str(project / "repo"))
+
+        project_config = project / "config" / "config.toml"
+        assert project_config.is_file()
+        with project_config.open("a", encoding="utf-8") as handle:
+            handle.write('\n[loop]\nrunner = "project-runner"\n')
+
+        run_agm(["wt", "new", "feat/layered"], env=env, cwd=str(project / "repo"))
+        worktree = project / "worktrees" / "feat/layered"
+        self._seed_tasks_dir(worktree)
+
+        result = run_agm(["loop", "run"], env=env, cwd=str(worktree))
+
+        assert result.returncode == 0
+        # The project layer won, and the loop resolved it from the worktree.
+        assert not home_log.exists()
+        assert [record["cwd"] for record in _runner_records(project_log)] == [str(worktree)]
+
+    def test_sandboxed_run_from_a_worktree_sees_the_project_layout(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """init → wt new → run inside the worktree resolves the project's sandbox policy."""
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        TestSandbox._make_fake_srt(tmp_path / "bin", env)
+
+        run_agm(["init", "proj", str(bare)], env=env, cwd=str(tmp_path))
+        project = tmp_path / "proj"
+        sandbox_dir = project / "config" / "sandbox"
+        sandbox_dir.mkdir(parents=True)
+        (sandbox_dir / "echo.json").write_text(
+            json.dumps(
+                _settings(
+                    network=_network_settings("proj.example"),
+                    filesystem=_filesystem_settings("."),
+                )
+            ),
+            encoding="utf-8",
+        )
+
+        run_agm(["wt", "new", "feat/sandboxed"], env=env, cwd=str(project / "repo"))
+        worktree = project / "worktrees" / "feat/sandboxed"
+
+        # No PROJ_DIR: the project must be discovered from the worktree itself.
+        result = run_agm(["run", "echo", "hi"], env=env, cwd=str(worktree))
+
+        assert result.returncode == 0
+        parsed = _srt_settings(result)
+        assert parsed["network"]["allowedDomains"] == ["proj.example"]
+        allow_write = parsed["filesystem"]["allowWrite"]
+        # The worktree's git plumbing lives in the main repo's git directory.
+        assert str(project / "repo" / ".git") in allow_write
+        assert str(project / "notes") in allow_write
+        assert str(project / "deps") in allow_write
+        assert _srt_command(result) == "echo hi"
+
+    def test_tmux_close_leaves_the_workspace_for_agm_close(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """init → open → tmux close ends only the session → close ends the workspace."""
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        run_agm(["init", "proj", str(bare)], env=env, cwd=str(tmp_path))
+        project = tmp_path / "proj"
+        run_agm(["open", "-d", "feat/session"], env=env, cwd=str(project))
+        worktree = project / "worktrees" / "feat/session"
+        wrapper = _workspace_shell_path(env, "proj/feat/session")
+        assert worktree.is_dir()
+        assert wrapper.exists()
+
+        run_agm(["tmux", "close", "proj/feat/session"], env=env, cwd=str(project))
+
+        # Ending the session leaves the workspace the project commands created.
+        assert "kill-session -t proj/feat/session" in tmux_log.read_text()
+        assert worktree.is_dir()
+        assert wrapper.exists()
+        listing = run_agm(["workspace", "list"], env=env, cwd=str(project / "repo"))
+        assert "  feat/session" in listing.stdout.splitlines()
+
+        run_agm(["close", "feat/session"], env=env, cwd=str(project))
+
+        assert not worktree.exists()
+        assert not wrapper.exists()
+        listing = run_agm(["workspace", "list"], env=env, cwd=str(project / "repo"))
+        assert listing.stdout.splitlines() == ["* main"]
+
+    def test_checked_agl_program_runs_with_the_project_module_root(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """A project ``[modules]`` root feeds check and exec the same module."""
+        project = _make_workspace_project(tmp_path, env)
+        lib = project / "lib"
+        lib.mkdir()
+        (lib / "calc.agl").write_text("def double(n: int) -> int = n * 2\n", encoding="utf-8")
+        (project / "config" / "config.toml").write_text(
+            f"[modules]\nlib_root = {str(lib)!r}\n", encoding="utf-8"
+        )
+        program = project / "repo" / "main.agl"
+        write_file_program(program, "import calc::*\nprint double(21)\n", encoding="utf-8")
+
+        checked = run_agm(["check", str(program)], env=env, cwd=str(project / "repo"))
+
+        assert checked.returncode == 0
+        assert checked.stderr == ""
+
+        executed = run_agm(["exec", str(program)], env=env, cwd=str(project / "repo"))
+
+        # The program the checker accepted is the program that runs.
+        assert executed.returncode == 0
+        assert executed.stdout.strip() == "42"
+
+
 # ---------------------------------------------------------------------------
 # Command-surface coverage: every ``agm`` command exercised via the installed
 # binary.  These tests cover commands not otherwise reached by the workflow
@@ -9610,3 +9923,100 @@ class TestRefineCommand:
         # No third step is attempted.
         assert "Step 3" not in result.stdout
         assert "keep going" in result.stdout
+
+
+# ── the e2e command-coverage gate ────────────────────────────────────────────
+
+
+class TestCommandCoverageGate:
+    """The gate that keeps this file exercising every registered leaf command.
+
+    See :mod:`tests._command_coverage`: it enumerates AGM's command surface from
+    the live Typer registry and compares it against what :func:`run_agm` really
+    invoked.  These tests pin the two derivations and the gate's scope rule.
+    """
+
+    @staticmethod
+    def _config(
+        args: list[str],
+        *,
+        keyword: str = "",
+        markexpr: str = "",
+        deselect: list[str] | None = None,
+        collectonly: bool = False,
+        lf: bool = False,
+    ) -> SimpleNamespace:
+        """Build the minimal pytest-config surface :func:`gate_enabled` reads."""
+        option = SimpleNamespace(
+            keyword=keyword,
+            markexpr=markexpr,
+            deselect=deselect,
+            collectonly=collectonly,
+            lf=lf,
+            failedfirst=False,
+        )
+        return SimpleNamespace(
+            option=option,
+            args=args,
+            invocation_params=SimpleNamespace(dir=Path(__file__).resolve().parents[1]),
+        )
+
+    def test_enumerates_nested_leaves_under_canonical_group_names(self) -> None:
+        leaves = leaf_commands()
+
+        assert ("exec",) in leaves
+        assert ("workspace", "list") in leaves
+        assert ("dep", "remove") in leaves
+        assert ("dep", "rm") in leaves
+        # Alias group spellings are folded onto the command they duplicate.
+        assert not [path for path in leaves if path[0] in {"wsp", "wt"}]
+
+    @pytest.mark.parametrize(
+        ("args", "expected"),
+        [
+            (["exec", "-c", "print 1"], ("exec",)),
+            (["--dry-run", "workspace", "list"], ("workspace", "list")),
+            (["wsp", "shell-regen"], ("workspace", "shell-regen")),
+            (["wt", "rm", "-f", "branch"], ("worktree", "rm")),
+            (["loop", "run", "--no-selector"], ("loop",)),
+            # Bare groups, unknown words and package commands name no leaf.
+            (["config"], None),
+            (["not-a-command"], None),
+            ([], None),
+        ],
+    )
+    def test_resolves_argv_to_the_leaf_it_invokes(
+        self, args: list[str], expected: tuple[str, ...] | None
+    ) -> None:
+        assert resolve_leaf_path(args) == expected
+
+    def test_records_the_command_a_run_agm_call_invoked(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        result = run_agm(["help", "dep"], env=env, cwd=str(tmp_path))
+
+        assert result.returncode == 0
+        assert ("help",) in recorded_commands()
+
+    def test_gate_covers_whole_suite_runs_only(self) -> None:
+        assert gate_enabled(cast(pytest.Config, self._config(["tests"])))
+        assert gate_enabled(cast(pytest.Config, self._config(["."])))
+        # A single file, a narrowed selection or a collect-only pass proves
+        # nothing about the command surface, so the gate stays silent.
+        assert not gate_enabled(cast(pytest.Config, self._config(["tests/test_e2e.py"])))
+        assert not gate_enabled(cast(pytest.Config, self._config(["tests/test_e2e.py::TestOpen"])))
+        assert not gate_enabled(cast(pytest.Config, self._config([])))
+        assert not gate_enabled(cast(pytest.Config, self._config(["tests"], keyword="open")))
+        assert not gate_enabled(cast(pytest.Config, self._config(["tests"], markexpr="slow")))
+        assert not gate_enabled(cast(pytest.Config, self._config(["tests"], deselect=["x"])))
+        assert not gate_enabled(cast(pytest.Config, self._config(["tests"], collectonly=True)))
+        assert not gate_enabled(cast(pytest.Config, self._config(["tests"], lf=True)))
+
+    def test_environment_override_forces_the_gate_either_way(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(GATE_ENV, "1")
+        assert gate_enabled(cast(pytest.Config, self._config(["tests/test_e2e.py"])))
+
+        monkeypatch.setenv(GATE_ENV, "0")
+        assert not gate_enabled(cast(pytest.Config, self._config(["tests"])))

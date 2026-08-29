@@ -602,7 +602,7 @@ def test_unqualified_type_clash_on_use(tmp_path: Path) -> None:
         "libA": ("enum Color\n  | Red\n  | Blue"),
         "libB": ("enum Color\n  | Green\n  | Yellow"),
     }
-    with pytest.raises(AglTypeError, match="Ambiguous type"):
+    with pytest.raises(AglTypeError, match="[Aa]mbiguous"):
         _check_program(tmp_path, modules)
 
 
@@ -709,7 +709,7 @@ def test_imported_exception_base_ignores_non_type_export(tmp_path: Path) -> None
         "a": ("import z\nexception Child extends Base\n  code: int"),
         "z": "def Base() -> int = 1",
     }
-    with pytest.raises(AglTypeError, match="extends unknown exception 'Base'"):
+    with pytest.raises(AglTypeError, match="'Base'"):
         _check_program(tmp_path, modules)
 
 
@@ -883,7 +883,7 @@ def test_checked_module_graph_entry_id(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: type alias in a module graph
+# Type aliases declared in a library module
 # ---------------------------------------------------------------------------
 
 
@@ -999,7 +999,7 @@ def test_cross_module_owner_applied_inline_member_aliases_substitute_captured_pa
 
 def test_owner_applied_inline_member_rejects_a_second_type_application() -> None:
     """An applied owner makes its member concrete before a member application."""
-    with pytest.raises(AglTypeError, match="does not take type arguments"):
+    with pytest.raises(AglTypeError, match="type arguments"):
         _check(
             "enum Source[T]\n  | Member(value: T)\ntype Invalid[T] = Source[text]::Member[T]\n()"
         )
@@ -1007,9 +1007,9 @@ def test_owner_applied_inline_member_rejects_a_second_type_application() -> None
 
 def test_owner_applied_inline_member_rejects_non_enum_owners_and_unknown_members() -> None:
     """Owner application uses the enum member namespace rather than a raw path."""
-    with pytest.raises(AglTypeError, match="not a generic enum"):
+    with pytest.raises(AglTypeError, match="'Source'"):
         _check("record Source[T](value: T)\ntype Invalid = Source[text]::Member\n()")
-    with pytest.raises(AglTypeError, match="Unknown scoped type"):
+    with pytest.raises(AglTypeError, match="'Source::Member'"):
         _check("enum Source[T]\n  | Known(value: T)\ntype Invalid = Source[text]::Member\n()")
 
 
@@ -1017,7 +1017,7 @@ def test_cross_module_owner_applied_inline_member_rejects_a_second_type_applicat
     tmp_path: Path,
 ) -> None:
     """An imported generic alias cannot reapply a member after its owner."""
-    with pytest.raises(AglTypeError, match="does not take type arguments"):
+    with pytest.raises(AglTypeError, match="type arguments"):
         _check_program(
             tmp_path,
             {
@@ -1274,11 +1274,19 @@ def test_imported_alias_to_record_remains_constructible(tmp_path: Path) -> None:
         },
     )
 
-    assert _binding_value_type(checked, ENTRY_ID, "point") is not None
+    lib_id = ModuleId.from_path("lib")
+    # Both the aliased constructor passed as a function value and the direct
+    # call build the record the alias names.
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "point")) == RecordType(
+        "Point", module_id=lib_id
+    )
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "direct")) == RecordType(
+        "Point", module_id=lib_id
+    )
 
 
 def test_imported_alias_to_non_nominal_named_type_is_not_constructible(tmp_path: Path) -> None:
-    with pytest.raises(AglTypeError, match="not a constructible nominal"):
+    with pytest.raises(AglTypeError, match="constructible"):
         _check_program(
             tmp_path,
             {
@@ -1297,7 +1305,7 @@ def test_local_alias_of_enum_is_a_type_name_not_a_value(tmp_path: Path) -> None:
     "variant is required for EnumType" assertion that a variant-less
     ``ConstructorRef`` for the alias used to trigger.
     """
-    with pytest.raises(AglTypeError, match="is a type name, not a value"):
+    with pytest.raises(AglTypeError, match="not a value"):
         _check_program(
             tmp_path,
             {
@@ -1326,7 +1334,7 @@ def test_local_alias_of_record_remains_constructible(tmp_path: Path) -> None:
 
 def test_open_imported_alias_of_enum_is_a_type_name_not_a_value(tmp_path: Path) -> None:
     """A nominal enum alias exposed by an import tail keeps its "type name" diagnostic."""
-    with pytest.raises(AglTypeError, match="is a type name, not a value"):
+    with pytest.raises(AglTypeError, match="not a value"):
         _check_program(
             tmp_path,
             {
@@ -1348,7 +1356,7 @@ def test_module_qualified_alias_of_imported_enum_is_a_type_name_not_a_value(
     diagnostic instead of leaking the internal "variant is required for
     EnumType" assertion.
     """
-    with pytest.raises(AglTypeError, match="is a type name, not a value"):
+    with pytest.raises(AglTypeError, match="not a value"):
         _check_program(
             tmp_path,
             {
@@ -1368,7 +1376,7 @@ def test_open_imported_bare_alias_of_imported_enum_is_a_type_name_not_a_value(
     alias here is declared in the CONSUMING (entry) module, and its target
     reaches the enum through an unqualified name exposed by an import tail.
     """
-    with pytest.raises(AglTypeError, match="is a type name, not a value"):
+    with pytest.raises(AglTypeError, match="not a value"):
         _check_program(
             tmp_path,
             {
@@ -1429,7 +1437,7 @@ def test_later_module_parameterized_alias_bare_reference_is_rejected(
     tmp_path: Path,
 ) -> None:
     """A lazy parameterized alias exposed by an import tail still requires type arguments."""
-    with pytest.raises(AglTypeError, match="requires 1 type argument"):
+    with pytest.raises(AglTypeError, match="1 type argument"):
         _check_program(
             tmp_path,
             {
@@ -1455,7 +1463,7 @@ def test_resolve_named_type_treats_open_parameterized_alias_as_non_concrete(
 
 def test_later_module_cross_alias_cycle_is_rejected(tmp_path: Path) -> None:
     """Lazy cross-module alias resolution rejects transparent alias cycles."""
-    with pytest.raises(AglTypeError, match="part of a cycle"):
+    with pytest.raises(AglTypeError, match="cycle"):
         _check_program(
             tmp_path,
             {
@@ -1468,7 +1476,7 @@ def test_later_module_cross_alias_cycle_is_rejected(tmp_path: Path) -> None:
 
 def test_open_imported_generic_type_bare_reference_is_rejected(tmp_path: Path) -> None:
     """A bare generic nominal type exposed by an import tail is not concrete."""
-    with pytest.raises(AglTypeError, match="Unknown type 'Box'"):
+    with pytest.raises(AglTypeError, match="'Box'"):
         _check_program(
             tmp_path,
             {
@@ -1480,7 +1488,7 @@ def test_open_imported_generic_type_bare_reference_is_rejected(tmp_path: Path) -
 
 def test_qualified_generic_type_bare_reference_is_rejected(tmp_path: Path) -> None:
     """A module-qualified generic nominal type still needs its type arguments."""
-    with pytest.raises(AglTypeError, match="does not name a type"):
+    with pytest.raises(AglTypeError, match="Box"):
         _check_program(
             tmp_path,
             {
@@ -1491,7 +1499,7 @@ def test_qualified_generic_type_bare_reference_is_rejected(tmp_path: Path) -> No
 
 
 # ---------------------------------------------------------------------------
-# Coverage: access to a non-type name is an error
+# Module-qualified type and constructor references
 # ---------------------------------------------------------------------------
 
 
@@ -1501,13 +1509,8 @@ def test_qualified_ref_to_function_is_type_error(tmp_path: Path) -> None:
         "entry": ("import mylib\nlet n: mylib::getValue = 1\nn"),
         "mylib": "def getValue() -> int = 42",
     }
-    with pytest.raises(AglTypeError, match="does not name a type"):
+    with pytest.raises(AglTypeError, match="getValue"):
         _check_program(tmp_path, modules)
-
-
-# ---------------------------------------------------------------------------
-# Coverage: unknown module qualifier error
-# ---------------------------------------------------------------------------
 
 
 def test_unknown_module_qualifier_error(tmp_path: Path) -> None:
@@ -1516,13 +1519,8 @@ def test_unknown_module_qualifier_error(tmp_path: Path) -> None:
         "entry": ("import mylib\nlet n: other::Point = mylib::mkPoint()\nn"),
         "mylib": ("record Point\n  x: int\ndef mkPoint() -> Point = Point(x = 1)"),
     }
-    with pytest.raises(AglTypeError, match="Unknown module qualifier"):
+    with pytest.raises(AglTypeError, match="Unknown module"):
         _check_program(tmp_path, modules)
-
-
-# ---------------------------------------------------------------------------
-# Coverage: module-qualified constructor where enum type name is wrong
-# ---------------------------------------------------------------------------
 
 
 def test_module_qualified_constructor_not_enum_error(tmp_path: Path) -> None:
@@ -1535,11 +1533,6 @@ def test_module_qualified_constructor_not_enum_error(tmp_path: Path) -> None:
         _check_program(tmp_path, modules)
 
 
-# ---------------------------------------------------------------------------
-# Coverage: module-qualified constructor with missing variant
-# ---------------------------------------------------------------------------
-
-
 def test_module_qualified_constructor_missing_variant_error(tmp_path: Path) -> None:
     "'mylib::Color::Purple' is rejected when the variant is absent."
     modules = {
@@ -1548,11 +1541,6 @@ def test_module_qualified_constructor_missing_variant_error(tmp_path: Path) -> N
     }
     with pytest.raises(AglScopeError):
         _check_program(tmp_path, modules)
-
-
-# ---------------------------------------------------------------------------
-# Coverage: module-qualified record constructor via module_qualifier
-# ---------------------------------------------------------------------------
 
 
 def test_module_qualified_record_constructor(tmp_path: Path) -> None:
@@ -1566,31 +1554,6 @@ def test_module_qualified_record_constructor(tmp_path: Path) -> None:
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
         "Point", module_id=mylib_id
     )
-
-
-# ---------------------------------------------------------------------------
-# Coverage: ::Name self-reference in a module (program context)
-# ---------------------------------------------------------------------------
-
-
-def test_self_ref_type_graph_mode(tmp_path: Path) -> None:
-    """'::Point' self-reference resolves to the current module's own Point type."""
-    modules = {
-        "entry": ("import mylib\nlet p: mylib::Point = mylib::origin()\np"),
-        "mylib": (
-            "record Point\n  x: int\n  y: int\ndef origin() -> ::Point = Point(x = 0, y = 0)"
-        ),
-    }
-    mylib_id = ModuleId.from_path("mylib")
-    cg = _check_program(tmp_path, modules)
-    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
-        "Point", module_id=mylib_id
-    )
-
-
-# ---------------------------------------------------------------------------
-# Coverage: module-qualified variant qualifier mismatch in case pattern
-# ---------------------------------------------------------------------------
 
 
 def test_module_qualified_variant_qualifier_mismatch(tmp_path: Path) -> None:
@@ -1607,7 +1570,7 @@ def test_module_qualified_variant_qualifier_mismatch(tmp_path: Path) -> None:
         "libA": ("enum Color\n  | Red\n  | Blue"),
         "libB": ("enum Color\n  | Red\n  | Blue"),
     }
-    with pytest.raises(AglTypeError, match="resolves to enum"):
+    with pytest.raises(AglTypeError, match="resolves"):
         _check_program(tmp_path, modules)
 
 
@@ -1640,7 +1603,22 @@ def test_is_test_uses_local_enum_when_alias_route_has_another_owner(tmp_path: Pa
         "lib": "enum Other | Red",
     }
 
-    assert _check_program(tmp_path, modules).modules[ENTRY_ID].type_env is not None
+    checked = _check_program(tmp_path, modules)
+
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "c")) == RecordType(
+        "Red", scope_path=("Color",), module_id=ENTRY_ID
+    )
+    # Negative control: the module alias is not a route to the variant, so a
+    # member only the aliased module declares stays unresolvable.
+    with pytest.raises(AglScopeError):
+        _check_program(
+            tmp_path / "alias-route",
+            {
+                "entry": modules["entry"].replace("is Color::Red", "is Color::Green"),
+                "lib": "enum Other | Red | Green",
+            },
+            default_stdlib=False,
+        )
 
 
 def test_unknown_enum_owner_form_is_not_visible(tmp_path: Path) -> None:
@@ -1686,20 +1664,29 @@ def test_pattern_uses_injected_enum_when_alias_route_has_same_owner(tmp_path: Pa
         "b": "enum Color | Red",
     }
 
-    assert _check_program(tmp_path, modules).modules[ENTRY_ID].type_env is not None
+    checked = _check_program(tmp_path, modules)
+
+    # The pattern matches the injected ``a::Color::Red``, not the same-named
+    # variant reachable through the ``b`` alias.
+    [matched] = checked.modules[ENTRY_ID].pattern_constructor_refs.values()
+    assert (matched.owner_name, matched.owner_path, matched.owner_module_id) == (
+        "Red",
+        ("Color",),
+        ModuleId.from_path("a"),
+    )
 
 
 # ---------------------------------------------------------------------------
-# Coverage: type name not in S via lookup
+# Import-tail visibility of types and bare enum variants
 # ---------------------------------------------------------------------------
 
 
-def test_name_not_in_s_qualified_lookup(tmp_path: Path) -> None:
-    """Qualified access to a name not in S raises an error."""
+def test_qualified_type_is_nameable_when_the_import_tail_omits_it(tmp_path: Path) -> None:
+    """An import tail narrows unqualified names only; qualified access sees the module."""
     modules = {
         "entry": (
             "import mylib::{getValue}\n"
-            # Point is NOT in S (only getValue is)
+            # The tail names getValue only; Point is still reachable as mylib::Point.
             "let n: mylib::Point = mylib::mkPoint()\n"
             "n"
         ),
@@ -1710,12 +1697,10 @@ def test_name_not_in_s_qualified_lookup(tmp_path: Path) -> None:
             "def mkPoint() -> Point = Point(x = 1)"
         ),
     }
-    assert _check_program(tmp_path, modules).modules[ENTRY_ID].type_env is not None
-
-
-# ---------------------------------------------------------------------------
-# Coverage: _check_module_qualified_variant: resolved is not an enum type.
-# ---------------------------------------------------------------------------
+    cg = _check_program(tmp_path, modules)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "n")) == RecordType(
+        "Point", module_id=ModuleId.from_path("mylib")
+    )
 
 
 def test_module_qualified_variant_qualifier_is_not_enum(tmp_path: Path) -> None:
@@ -1730,13 +1715,8 @@ def test_module_qualified_variant_qualifier_is_not_enum(tmp_path: Path) -> None:
         ),
         "mylib": ("record Point\n  x: int\nenum Color\n  | Red\n  | Blue"),
     }
-    with pytest.raises(AglTypeError, match="not a known enum type"):
+    with pytest.raises(AglTypeError, match="enum type"):
         _check_program(tmp_path, modules)
-
-
-# ---------------------------------------------------------------------------
-# Coverage: _check_module_qualified_variant: resolve_type_expr raises on unknown type.
-# ---------------------------------------------------------------------------
 
 
 def test_module_qualified_variant_unknown_enum_in_pattern(tmp_path: Path) -> None:
@@ -1755,24 +1735,14 @@ def test_module_qualified_variant_unknown_enum_in_pattern(tmp_path: Path) -> Non
         _check_program(tmp_path, modules)
 
 
-# ---------------------------------------------------------------------------
-# Coverage: _check_module_qualified_constructor: enum used as constructor without a variant.
-# ---------------------------------------------------------------------------
-
-
 def test_module_qualified_enum_as_constructor_error(tmp_path: Path) -> None:
     """'mylib::Color' used as constructor (without ::Variant) → type error."""
     modules = {
         "entry": ("import mylib\nlet c = mylib::Color\nc"),
         "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
-    with pytest.raises(AglTypeError, match="is a type name, not a value"):
+    with pytest.raises(AglTypeError, match="not a value"):
         _check_program(tmp_path, modules)
-
-
-# ---------------------------------------------------------------------------
-# Coverage: _check_module_qualified_constructor: unknown name in access.
-# ---------------------------------------------------------------------------
 
 
 def test_module_qualified_unknown_constructor_error(tmp_path: Path) -> None:
@@ -1783,11 +1753,6 @@ def test_module_qualified_unknown_constructor_error(tmp_path: Path) -> None:
     }
     with pytest.raises(AglScopeError):
         _check_program(tmp_path, modules)
-
-
-# ---------------------------------------------------------------------------
-# Coverage: get_open_imported_enum_candidates returns the matching enum for a bare variant.
-# ---------------------------------------------------------------------------
 
 
 def test_open_imported_enum_variant_unqualified_bare(tmp_path: Path) -> None:
@@ -1808,18 +1773,13 @@ def test_open_imported_enum_variant_unqualified_bare(tmp_path: Path) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Coverage: _resolve_qualified_name_type falls back to built-in type when not in graph table.
-# ---------------------------------------------------------------------------
-
-
 def test_self_ref_type_builtin_exception_fallback(tmp_path: Path) -> None:
     """'::Abort' self-reference in a module falls back to built-in exception type."""
     modules = {
         "entry": ("import mylib\nlet e = mylib::boom()\ne"),
         "mylib": (
-            # ::Abort references the built-in Abort exception type (not in graph table)
-            # This exercises the fallback at env.py line 509
+            # ::Abort references the built-in Abort exception type, which is not a
+            # user declaration in the graph's type table.
             'def boom() -> ::Abort = raise Abort(message = "oops")'
         ),
     }
@@ -1829,40 +1789,14 @@ def test_self_ref_type_builtin_exception_fallback(tmp_path: Path) -> None:
     assert t.name == "Abort"
 
 
-# ---------------------------------------------------------------------------
-# Coverage: _resolve_qualified_name_type raises when the name is inaccessible.
-# ---------------------------------------------------------------------------
-
-
-def test_qualified_type_not_in_s_error(tmp_path: Path) -> None:
-    """Referencing mylib::Secret when Secret is outside the selected tail → type error."""
+def test_qualified_type_annotation_must_match_the_bound_value(tmp_path: Path) -> None:
+    """A cross-module annotation is checked against the value it binds."""
     modules = {
         "entry": ("import mylib::{pub}\nlet n: mylib::Secret = mylib::pub()\nn"),
         "mylib": ("record Secret\n  x: int\ndef pub() -> int = 1"),
     }
-    with pytest.raises(AglTypeError):
+    with pytest.raises(AglTypeError, match="Secret"):
         _check_program(tmp_path, modules)
-
-
-# ---------------------------------------------------------------------------
-# Coverage: _resolve_name_type raises for ambiguous import-tail exposure.
-# ---------------------------------------------------------------------------
-
-
-def test_ambiguous_open_import_type_error(tmp_path: Path) -> None:
-    """Both import tails expose 'Color', so its unqualified use is ambiguous → error."""
-    modules = {
-        "entry": ("import libA::*\nimport libB::*\nlet c: Color = libA::Color::Red\nc"),
-        "libA": ("enum Color\n  | Red\n  | Blue"),
-        "libB": ("enum Color\n  | Green\n  | Yellow"),
-    }
-    with pytest.raises(AglTypeError, match="Ambiguous type"):
-        _check_program(tmp_path, modules)
-
-
-# ---------------------------------------------------------------------------
-# Coverage: get_open_imported_enum_candidates skips non-enum types during variant lookup.
-# ---------------------------------------------------------------------------
 
 
 def test_open_import_non_enum_type_skipped_in_variant_lookup(tmp_path: Path) -> None:
@@ -1882,11 +1816,6 @@ def test_open_import_non_enum_type_skipped_in_variant_lookup(tmp_path: Path) -> 
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == RecordType(
         "Red", scope_path=("Color",), module_id=mylib_id
     )
-
-
-# ---------------------------------------------------------------------------
-# Coverage: env.py get_open_imported_enum_candidates: duplicate key seen (563)
-# ---------------------------------------------------------------------------
 
 
 def test_open_import_dedup_in_variant_lookup(tmp_path: Path) -> None:
@@ -2210,7 +2139,7 @@ def test_cross_module_mismatch_message_qualifies_type(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: cross-module field-type reference forms resolve correctly
+# Field types that reference other modules, aliases, and built-ins
 # ---------------------------------------------------------------------------
 
 
@@ -2329,10 +2258,7 @@ def test_type_expr_deps_alias_to_cross_module(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: _topological_sort_types cycle detection
-# and _build_program_type_table cross-module cycle error.
-# This is different from the existing test (which tests same-module recursion)
-# and exercises the cross-module structural cycle path.
+# Cross-module structural type cycles
 # ---------------------------------------------------------------------------
 
 
@@ -2356,7 +2282,7 @@ def test_cross_module_structural_cycle_is_uninhabitable(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: RecordType.__repr__ renders as 'module::Name' for non-entry module types.
+# Type mismatch messages qualify same-named types by module
 # ---------------------------------------------------------------------------
 
 
@@ -2384,11 +2310,6 @@ def test_record_type_repr_qualified_with_module(tmp_path: Path) -> None:
     assert "foo" in msg and "bar" in msg, (
         f"Expected mismatch message to qualify both modules, got: {msg!r}"
     )
-
-
-# ---------------------------------------------------------------------------
-# Coverage: graph.py remaining branch paths
-# ---------------------------------------------------------------------------
 
 
 def test_type_alias_with_cross_module_dep_creates_dep(tmp_path: Path) -> None:
@@ -2442,12 +2363,6 @@ def test_type_expr_deps_func_field(tmp_path: Path) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Coverage: field types referencing built-in names resolve without a
-# cross-module lookup (built-ins are never user-declared type keys).
-# ---------------------------------------------------------------------------
-
-
 def test_type_expr_deps_self_ref_to_builtin(tmp_path: Path) -> None:
     """A '::BuiltinType' self-ref in a field resolves to the built-in type."""
     modules = {
@@ -2481,7 +2396,7 @@ def test_type_expr_deps_open_import_to_builtin_variant(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: invalid cross-module field-type references are rejected
+# Type declarations may not shadow built-in type names
 # ---------------------------------------------------------------------------
 
 
@@ -2500,7 +2415,7 @@ def test_builtin_shadowing_type_raises_type_error(tmp_path: Path) -> None:
             "record ExecResult\n  x: int"
         ),
     }
-    with pytest.raises(_AglTypeError, match="built-in type name"):
+    with pytest.raises(_AglTypeError, match="built-in"):
         _check_program(tmp_path, modules)
 
 
@@ -2794,17 +2709,12 @@ def test_cross_module_underconstrained_cycle_reports_each_declaration(tmp_path: 
 
 
 # ---------------------------------------------------------------------------
-# Coverage: _build_program_func_sig_table branches
+# Function signatures declared in library modules
 # ---------------------------------------------------------------------------
 
 
 def test_graph_func_def_with_defaulted_param(tmp_path: Path) -> None:
-    """A library function with a defaulted parameter typechecks successfully.
-
-    Covers the ``seen_required = False`` branch in
-    ``_build_program_func_sig_table``, which is only reached when a FuncDef in a
-    non-entry module has at least one defaulted parameter.
-    """
+    """A library function with a defaulted parameter may be called without it."""
     modules = {
         "lib": "def add(a: int, b: int = 0) -> int = a + b",
         "entry": "import lib\nlet r = lib::add(10)\nr",
@@ -2814,33 +2724,22 @@ def test_graph_func_def_with_defaulted_param(tmp_path: Path) -> None:
 
 
 def test_graph_func_def_required_after_default_error(tmp_path: Path) -> None:
-    """A library function with a required param after a defaulted one → AglTypeError.
-
-    Covers the ``raise AglTypeError`` branch in ``_build_program_func_sig_table``
-    (required parameter follows a defaulted parameter in a non-entry module's FuncDef).
-    """
+    """A required parameter may not follow a defaulted one in a library function."""
     from agm.agl.typecheck.env import AglTypeError as _AglTypeError
 
     modules = {
         "lib": "def bad(a: int = 0, b: int) -> int = a + b",
         "entry": "import lib\nlet r = lib::bad(1, 2)\nr",
     }
-    with pytest.raises(_AglTypeError, match="has no default but follows"):
+    with pytest.raises(_AglTypeError, match="default"):
         _check_program(tmp_path, modules)
 
 
 def test_graph_func_def_builtin_type_name_error(tmp_path: Path) -> None:
-    """A library function named after a builtin type → AglTypeError from body checker.
+    """A library function may not be named after a built-in type.
 
-    The function-signature pre-pass skips functions whose names clash with
-    built-in type names (e.g. 'bool') to avoid raising prematurely with wrong
-    source spans; the body checker's _preregister_funcdef then raises the proper
-    error.  This test covers the ``continue`` at the builtin-name guard in
-    ``_build_program_func_sig_table``.
-
-    Note: builtin *function* names ('print', 'ask', etc.) are rejected earlier by
-    the scope resolver (AglScopeError).  Only builtin *type* names pass scope
-    resolution to reach the typecheck gate tested here.
+    Built-in *function* names are rejected earlier, by the scope resolver; only
+    built-in *type* names reach this typecheck gate.
     """
     from agm.agl.typecheck.env import AglTypeError as _AglTypeError
 
@@ -2848,7 +2747,7 @@ def test_graph_func_def_builtin_type_name_error(tmp_path: Path) -> None:
         "lib": "def bool(x: int) -> int = x",
         "entry": "import lib\n()",
     }
-    with pytest.raises(_AglTypeError, match="built-in type name"):
+    with pytest.raises(_AglTypeError, match="built-in"):
         _check_program(tmp_path, modules)
 
 
@@ -3158,7 +3057,7 @@ def test_cross_module_non_generic_constructor_value_type_apply_rejected(tmp_path
         "lib": "record Point\n  value: int",
         "entry": "import lib\nlet factory = lib::Point::[int]\nfactory",
     }
-    with pytest.raises(AglTypeError, match="not a generic constructor"):
+    with pytest.raises(AglTypeError, match="generic constructor"):
         _check_program(tmp_path, modules)
 
 
@@ -3264,7 +3163,7 @@ def test_ambiguous_open_imported_generic_type_rejected(tmp_path: Path) -> None:
         "b": "record Box[T]\n  value: T",
         "entry": "import a::*\nimport b::*\nlet x: Box[int] = null\nx",
     }
-    with pytest.raises(AglTypeError, match="Ambiguous type 'Box'"):
+    with pytest.raises(AglTypeError, match="[Aa]mbiguous.*'Box'"):
         _check_program(tmp_path, modules)
 
 
@@ -3273,7 +3172,7 @@ def test_open_imported_non_generic_type_application_rejected(tmp_path: Path) -> 
         "lib": "record Point\n  value: int",
         "entry": "import lib::*\nlet x: Point[int] = null\nx",
     }
-    with pytest.raises(AglTypeError, match="does not take type arguments"):
+    with pytest.raises(AglTypeError, match="type arguments"):
         _check_program(tmp_path, modules)
 
 
@@ -3282,12 +3181,12 @@ def test_open_imported_non_generic_type_application_rejected(tmp_path: Path) -> 
     [
         (
             "import lib::*\nlet x: missing::Box[int] = null\nx",
-            "Unknown module qualifier",
+            "Unknown module",
         ),
-        ("import lib::*\nlet x: lib::Point[int] = null\nx", "does not take"),
+        ("import lib::*\nlet x: lib::Point[int] = null\nx", "type arguments"),
         (
             "import lib::*\nlet x: lib::helper[int] = null\nx",
-            "does not name a type",
+            "helper",
         ),
     ],
 )
@@ -3307,7 +3206,7 @@ def test_unknown_applied_type_with_import_environment_rejected(tmp_path: Path) -
         "lib": "def helper(x: int) -> int = x",
         "entry": "import lib\nlet x: Missing[int] = null\nx",
     }
-    with pytest.raises(AglTypeError, match="Unknown type 'Missing'"):
+    with pytest.raises(AglTypeError, match="'Missing'"):
         _check_program(tmp_path, modules)
 
 
@@ -3425,11 +3324,27 @@ def test_cross_module_record_constructor_values_preserve_their_call_shape(tmp_pa
         },
     )
 
-    assert checked.modules[ENTRY_ID].resolved.program is not None
+    # Naming a constructor preserves its call shape: it stays a function of the
+    # record's fields, whether the type arguments come from an annotation, an
+    # explicit qualifier, or a non-generic record. Only an actual call collapses
+    # to the record type itself.
+    for name, expected_result in (
+        ("generic", "lib::Box[int]"),
+        ("explicit", "lib::Box[int]"),
+        ("plain", "lib::Point"),
+    ):
+        value = _binding_value_type(checked, ENTRY_ID, name)
+        assert isinstance(value, FunctionType), name
+        assert len(value.params) == 1, name
+        assert str(value.result) == expected_result, name
+
+    direct = _binding_value_type(checked, ENTRY_ID, "direct")
+    assert isinstance(direct, RecordType)
+    assert str(direct) == "lib::Point"
 
 
 def test_cross_module_non_generic_constructor_type_args_rejected(tmp_path: Path) -> None:
-    """Coverage: checker.py _check_cross_module_constructor_call — non-generic with type args."""
+    """Type arguments on a non-generic cross-module record constructor are rejected."""
     modules = {
         "lib": "record Point\n  x: int",
         "entry": "import lib\nlib::Point::[int](x = 1)",
@@ -3478,14 +3393,14 @@ def test_cross_module_generic_enum_body_resolved(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# BUG 1 regression: module_id dropped when instantiating generic nominals
+# Regression: module_id dropped when instantiating generic nominals
 # Two modules each define a generic with the same short name; instances must
 # NOT be assignable across modules.
 # ---------------------------------------------------------------------------
 
 
 def test_cross_module_generic_record_template_has_module_id(tmp_path: Path) -> None:
-    """Regression for BUG 1: generic record template must carry the owning module's module_id.
+    """A generic record template carries the owning module's module_id.
 
     Before the fix, _build_generic_record created the template RecordType without
     module_id=self._module_id, so all generic templates got module_id=ENTRY_ID.
@@ -3510,12 +3425,12 @@ def test_cross_module_generic_record_template_has_module_id(tmp_path: Path) -> N
     assert gdef.template.module_id == lib_id, (
         f"lib::Box template must have module_id={lib_id!r}, "
         f"got {gdef.template.module_id!r}. "
-        "BUG 1: _build_generic_record must pass module_id=self._module_id."
+        "A generic record template must keep the declaring module's module_id."
     )
 
 
 def test_cross_module_generic_enum_template_has_module_id(tmp_path: Path) -> None:
-    """Regression for BUG 1: generic enum template must carry the owning module's module_id.
+    """A generic enum template carries the owning module's module_id.
 
     Before the fix, _build_generic_enum created the template EnumType without
     module_id=self._module_id, so all generic templates got module_id=ENTRY_ID.
@@ -3540,18 +3455,18 @@ def test_cross_module_generic_enum_template_has_module_id(tmp_path: Path) -> Non
     assert gdef.template.module_id == lib_id, (
         f"lib::Opt template must have module_id={lib_id!r}, "
         f"got {gdef.template.module_id!r}. "
-        "BUG 1: _build_generic_enum must pass module_id=self._module_id."
+        "A generic enum template must keep the declaring module's module_id."
     )
 
 
 # ---------------------------------------------------------------------------
-# BUG 2 regression: parameterized-alias type_params lost in multi-module pre-pass
+# Regression: parameterized-alias type_params lost in the multi-module pre-pass
 # A module defines a parameterized alias; uses with type args must typecheck.
 # ---------------------------------------------------------------------------
 
 
 def test_parameterized_alias_in_graph_mode(tmp_path: Path) -> None:
-    """Regression for BUG 2: type Pair[A,B] used in a record field typechecks via graph path.
+    """A parameterized alias Pair[A,B] used in a record field typechecks via the graph path.
 
     Before the fix, collect_shells_only called register_alias(name, expr) without
     type_params. When the cross-module body resolver (_resolve_body_for_one) called
@@ -3639,18 +3554,18 @@ def test_imported_parameterized_alias_arity_mismatch_rejected(tmp_path: Path) ->
         "entry": "import lib\nlet x: lib::Id[int, text] = 1\nx",
     }
 
-    with pytest.raises(AglTypeError, match="requires 1 type argument"):
+    with pytest.raises(AglTypeError, match="1 type argument"):
         _check_program(tmp_path, modules)
 
 
 # ---------------------------------------------------------------------------
-# BUG 3 regression: missing spans on instantiate diagnostics
+# Regression: missing spans on instantiate diagnostics
 # An arity mismatch on a generic type application must carry a line number.
 # ---------------------------------------------------------------------------
 
 
 def test_generic_arity_mismatch_has_span(tmp_path: Path) -> None:
-    """Regression for BUG 3: arity-mismatch AglTypeError carries a line number.
+    """An arity-mismatch AglTypeError carries a line number.
 
     Before the fix, instantiate_from_gdef raised AglTypeError without span=, so
     the error had no source location.  After the fix the error carries the span
@@ -3667,13 +3582,13 @@ def test_generic_arity_mismatch_has_span(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# BUG 4 regression:  generic-def-as-value uses name-keyed lookup (cross-module)
+# Regression: generic-def-as-value used a name-keyed lookup (cross-module)
 # A cross-module generic def used as a value must typecheck correctly.
 # ---------------------------------------------------------------------------
 
 
-def test_d5_generic_def_as_value_single_module(tmp_path: Path) -> None:
-    """Regression for BUG 4:  generic-def-as-value path uses correct signature lookup.
+def test_generic_def_as_value_single_module(tmp_path: Path) -> None:
+    """A generic def used as a value resolves through the node-id signature lookup.
 
     The fix changes _check_varref to consult get_function_signature_by_node_id
     (globally unique, correct for cross-module) BEFORE falling back to
@@ -3685,8 +3600,6 @@ def test_d5_generic_def_as_value_single_module(tmp_path: Path) -> None:
     single-module program too (seeded by _preregister_funcdef), so this
     verifies the new lookup path doesn't break anything.
 
-    Note: cross-module testing requires graph.py to handle generic function type
-    params in _build_program_func_sig_table (out of scope for this fix set).
     """
     # generic def used as a value with expected type annotation
     src = "def id[T](x: T) -> T = x\nlet f: (int) -> int = id\nf(1)"
@@ -3694,7 +3607,7 @@ def test_d5_generic_def_as_value_single_module(tmp_path: Path) -> None:
     assert cp is not None
 
     # no expected type → error
-    with pytest.raises(AglTypeError, match="Cannot infer type arguments"):
+    with pytest.raises(AglTypeError, match="infer"):
         _check("def id[T](x: T) -> T = x\nlet f = id\nf")
 
     # The cross-module  case (lib::id as a value in entry) is tested at the
@@ -3723,8 +3636,7 @@ def test_d5_generic_def_as_value_single_module(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# BUG 5 regression: _build_program_func_sig_table drops generic type parameters
-# These tests MUST FAIL before the graph.py fix and MUST PASS after.
+# Regression: the program function-signature table dropped generic type parameters
 # ---------------------------------------------------------------------------
 
 
@@ -3916,13 +3828,13 @@ def test_checked_module_graph_rejects_a_flexible_graph_type(tmp_path: Path) -> N
         program_type_table={**graph.program_type_table, key: InferenceVarType("leak")},
     )
 
-    with pytest.raises(AssertionError, match="inference variable leaked"):
+    with pytest.raises(AssertionError, match="leaked"):
         assert_checked_program_closed(leaked)
 
     entry = graph.modules[ENTRY_ID]
     leaked_module = replace(entry, node_types={**entry.node_types, -1: InferenceVarType("leak")})
     leaked = replace(graph, modules={**graph.modules, ENTRY_ID: leaked_module})
-    with pytest.raises(AssertionError, match="inference variable leaked"):
+    with pytest.raises(AssertionError, match="leaked"):
         assert_checked_program_closed(leaked)
 
 

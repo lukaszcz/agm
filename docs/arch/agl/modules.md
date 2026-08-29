@@ -37,6 +37,21 @@ graph carries both full import/export adjacency and explicit-source adjacency
 excluding loader injections, so execution uses the former while inventories use
 the latter.
 
+Modules resolved under a standard-library root are parsed once per process and
+served from a shared cache afterwards, since every compilation — `exec`,
+`check`, a REPL start, package validation — loads the whole library first.
+Cached modules draw node ids from a reserved high band ordinary graph
+allocation never reaches, so they stay disjoint from every graph they are
+served into, and they are cached before infix resolution, which still runs per
+graph. An entry is dropped as soon as its file's identity changes, so a
+replaced standard library is never served stale. User and package modules are
+never cached.
+
+Infix resolution runs per graph, but a caller that already resolved some of a
+graph's modules — the REPL, entry after entry — can name them, and their
+programs are left untouched. Their operator declarations still take part in the
+fixity fixed point, because the modules being resolved may import them.
+
 ## Standard-Library Surfaces
 
 Standard-library modules may declare host-backed `builtin var` bindings. Their
@@ -90,7 +105,8 @@ ambient implementations do not.
 
 ## Code Entry Points
 
-- `src/agm/agl/modules/` — module identities, roots, resolution, and graph loading.
+- `src/agm/agl/modules/` — module identities, roots, resolution, graph loading, and the
+  parsed standard-library cache (`parsed_module_cache.py`).
 - `src/agm/agl/scope/` — import contributions, exports, and whole-program name resolution.
 - `src/agm/agl/pipeline.py` — orchestration of the program passes.
 - `src/agm/config/module_roots.py` and `src/agm/packages/` — configured and package-mounted roots.

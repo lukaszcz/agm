@@ -6,6 +6,7 @@ import shlex
 import shutil
 import sys
 from pathlib import Path
+from typing import NoReturn
 from uuid import uuid4
 
 from agm.cli_support.args import RunArgs
@@ -90,7 +91,13 @@ def _run_with_optional_resource_limits(
     env: dict[str, str],
     memory_limit: str | None,
     swap_limit: str | None,
-) -> None:
+) -> NoReturn:
+    """Run *subprocess_args* in the foreground and exit with its status.
+
+    Never returns: the child's exit code becomes this process's, and an
+    interrupt exits 130.
+    """
+
     process_prefix, interrupt_cleanup_cmd = _resource_limit_run_context(
         env, memory_limit, swap_limit
     )
@@ -189,7 +196,6 @@ def run(args: RunArgs) -> None:
             memory_limit=effective_memory_limit,
             swap_limit=effective_swap_limit,
         )
-        return
 
     srt.run_sandboxed(
         command=effective_run_command,

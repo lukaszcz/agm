@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.ids import SymbolId
     from agm.agl.ir.program import IrParam
+    from agm.agl.matchcompile import MatchCompiledProgram
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule
     from agm.agl.modules.roots import RootSet
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.host_settings import HostSettingsPolicy
     from agm.agl.runtime.sessions import SessionHost
+    from agm.agl.scope.program import ResolvedModule
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import Frame, RecordValue, Value
@@ -104,6 +106,7 @@ class _BootstrapSnapshot:
     next_node_id: int
     source_texts: tuple[tuple["Path", str], ...]
     wildcard_matches: tuple[tuple[tuple[str, ...], tuple[tuple["ModuleId", "Path"], ...]], ...]
+    resolved_modules: dict["ModuleId", "ResolvedModule"]
     checked_modules: dict["ModuleId", "CheckedModule"]
 
 
@@ -371,9 +374,13 @@ class ReplSession:
         self._roots: RootSet | None = None
         # Cached lib modules from prior REPL program entries.
         self._loaded_lib_modules: dict[ModuleId, LoadedModule] = {}
-        # Checked standard-library artifacts from ``open()``. They are reused
-        # only while a later entry's graph contains exactly this library image.
-        self._bootstrap_checked_modules: dict[ModuleId, CheckedModule] = {}
+        # Compilation artifacts of the library modules this session has loaded,
+        # retained across entries. Each pass reuses one only while the entry's
+        # graph still holds the very AST object the artifact was derived from,
+        # so a reparse, an override splice, or a redeclaration simply misses.
+        self._library_resolved_modules: dict[ModuleId, ResolvedModule] = {}
+        self._library_checked_modules: dict[ModuleId, CheckedModule] = {}
+        self._last_match_compilation: MatchCompiledProgram | None = None
         # Imported params installed by successfully completed entries.  These
         # stay in the config-resolution inventory so later imports cannot make
         # an existing suffix route ambiguous, but they are not installed again.
@@ -535,11 +542,6 @@ class ReplSession:
             self._loaded_lib_modules.update(loaded.new_modules)
             self._next_node_id = loaded.new_next_id
             self._type_env = loaded.checked_program.modules[ENTRY_ID].type_env
-            self._bootstrap_checked_modules = {
-                module_id: checked
-                for module_id, checked in loaded.checked_program.modules.items()
-                if not module_id.is_entry
-            }
             if cache_key is not None:
                 _bootstrap_cache[cache_key] = _BootstrapSnapshot(
                     modules=dict(loaded.new_modules),
@@ -551,7 +553,8 @@ class ReplSession:
                         if module.path is not None
                     ),
                     wildcard_matches=self._bootstrap_wildcard_matches(loaded.new_modules),
-                    checked_modules=dict(self._bootstrap_checked_modules),
+                    resolved_modules=dict(self._library_resolved_modules),
+                    checked_modules=dict(self._library_checked_modules),
                 )
                 _bootstrap_cache.move_to_end(cache_key)
                 while len(_bootstrap_cache) > BOOTSTRAP_CACHE_MAX_ENTRIES:
@@ -685,7 +688,8 @@ class ReplSession:
         self._loaded_lib_modules.update(snapshot.modules)
         self._next_node_id = snapshot.next_node_id
         self._type_env = snapshot.type_env
-        self._bootstrap_checked_modules = dict(snapshot.checked_modules)
+        self._library_resolved_modules = dict(snapshot.resolved_modules)
+        self._library_checked_modules = dict(snapshot.checked_modules)
 
     # ------------------------------------------------------------------
     # Core evaluation
@@ -1844,7 +1848,7 @@ class ReplSession:
         checked = checked_program.modules[ENTRY_ID]
         from agm.agl.matchcompile import compile_program_matches, diagnostics_from_match_issues
 
-        match_result = compile_program_matches(checked_program)
+        match_result = compile_program_matches(checked_program, self._last_match_compilation)
         if match_result.compiled is None:
             diagnostic = diagnostics_from_match_issues(match_result.issues)[0]
             raise AglError(diagnostic.message, span=match_result.issues[0].span)
@@ -1950,7 +1954,12 @@ class ReplSession:
         # Clear module state.
         self._roots = None
         self._loaded_lib_modules = {}
-        self._bootstrap_checked_modules = {}
+        # The retained library artifacts survive: each is consulted only through
+        # the identity of the AST or checked module it was derived from, so a
+        # reopened session reuses one only when it loads that very module, and
+        # anything else it holds is never consulted again. A reopen that reloads
+        # the same standard library therefore keeps its library image even when
+        # it has to recompile the entry program.
         self._active_imported_params = {}
         self._accumulated_imports = []
         self._accumulated_scoped_imports = []

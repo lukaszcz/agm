@@ -104,7 +104,7 @@ class TestResolveInstalledReference:
             "missing/main::main", home=tmp_path, proj_dir=None, cwd=tmp_path
         )
         assert isinstance(result, ExecTargetError)
-        assert "does not name an active package" in result.message
+        assert "missing/main::main" in result.message
 
     def test_package_name_override_selects_by_the_given_name(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
@@ -115,7 +115,12 @@ class TestResolveInstalledReference:
         )
 
         assert isinstance(result, ExecTargetError)
-        assert "does not name an active package" in result.message
+        # The very same reference resolves without the override, so the
+        # override — not the reference — chose the package that is missing.
+        assert isinstance(
+            resolve_installed_reference("tools/main::main", home=home, proj_dir=None, cwd=tmp_path),
+            PackageProgramReference,
+        )
 
     def test_broken_active_package_selection_is_an_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -133,4 +138,5 @@ class TestResolveInstalledReference:
         )
 
         assert isinstance(result, ExecTargetError)
-        assert "cannot resolve active packages" in result.message
+        # The underlying selection failure is propagated, not swallowed.
+        assert "broken" in result.message

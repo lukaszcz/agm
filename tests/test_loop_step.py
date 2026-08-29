@@ -1,70 +1,115 @@
-"""Comprehensive tests for agm.commands.loop.step, loop.select, and loop.run."""
+"""Tests for the ``agm loop`` step, run, and select commands."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
 
-from agm.agent.loop import PreparedSelectInvocation
-from agm.agent.loop import dry_run_prompt_text as next_dry_run_prompt_text
-from agm.agent.runner import AgentCallTimeout, ResolvedPrompt, prepare_prompt_from_source
 from agm.cli_support.args import LoopArgs, LoopSelectArgs
 from agm.commands.loop.run import run as loop_run
-from agm.commands.loop.select import _print_dry_run_prompt as next_print_dry_run_prompt
-from agm.commands.loop.select import run as next_run
+from agm.commands.loop.select import run as select_run
 from agm.commands.loop.step import (
     LoopStepRuntime,
     PreparedPrompt,
-    _prepare_prompt,
-    _print_dry_run_command,
-    _print_dry_run_prompt,
     _write_stream,
     cleanup_runtime,
-    execute_single_step,
     prepare_runtime,
     print_dry_run,
-    print_startup,
-    run,
 )
-from agm.core.log import (
-    append_log,
-    prepare_log_file,
-    resolve_log_file,
+from agm.commands.loop.step import run as step_run
+from agm.core import dry_run
+from agm.core.log import append_log, prepare_log_file, resolve_log_file
+from tests._git_helpers import init_repo
+from tests._process_helpers import (
+    AgentCall,
+    AgentReply,
+    AgentTimeout,
+    FakeAgent,
+    Reply,
+    fake_agent,
 )
+
+
+def _raising_agent(monkeypatch: pytest.MonkeyPatch, error: BaseException) -> FakeAgent:
+    """Install an agent boundary whose process launch raises *error*."""
+
+    def respond(_call: AgentCall) -> Reply:
+        raise error
+
+    return fake_agent(monkeypatch, respond)
+
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Loop fixtures
 # ---------------------------------------------------------------------------
 
 
-def _track_prepared_sources(
-    monkeypatch: pytest.MonkeyPatch, *, only: Path | None = None
-) -> list[str | Path]:
-    """Record prompt sources passed to ``prepare_prompt_from_source``.
+DEFAULT_PROMPTS = {
+    "loop.md": "work on the tasks in %{TASKS_DIR}\n",
+    "select.md": "select a task from %{TASKS_DIR}\n",
+    "implement.md": "implement @%{TASK_FILE}\n",
+}
 
-    Preparation still happens for real; *only* narrows recording to one source.
+
+def _loop_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    prompts: Mapping[str, str] | None = None,
+) -> Path:
+    """Set up an isolated home with loop prompts and work in *tmp_path*."""
+    home = tmp_path / "home"
+    prompt_dir = home / ".agm" / "prompts"
+    prompt_dir.mkdir(parents=True)
+    for name, text in (DEFAULT_PROMPTS if prompts is None else prompts).items():
+        (prompt_dir / name).write_text(text, encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    # Runner and selector executables are looked up on PATH; no real agent
+    # binary may be involved, so resolution answers for any name.
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    return home
+
+
+def _isolate_git(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Stop git's repository search from escaping *tmp_path*.
+
+    Default log files are placed at the containing git root, which AGM finds
+    by running git for real.  Capping the search keeps the answer the same
+    whether or not the directory holding the suite's temporary files happens
+    to sit inside somebody's checkout, while a repository created inside
+    *tmp_path* is still found normally.
     """
-    original_prepare = prepare_prompt_from_source
-    prepared_sources: list[str | Path] = []
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
 
-    def track_prepare(
-        source: str | Path, *, temp_files: list[Path], env: dict[str, str]
-    ) -> ResolvedPrompt:
-        if only is None or source == only:
-            prepared_sources.append(source)
-        return original_prepare(source, temp_files=temp_files, env=env)
 
-    monkeypatch.setattr("agm.commands.loop.step.prepare_prompt_from_source", track_prepare)
-    return prepared_sources
+def _tasks_dir(tmp_path: Path) -> Path:
+    """The default tasks directory for a loop run inside *tmp_path*."""
+    return tmp_path / ".agent-files" / "tasks"
+
+
+def _write_progress(tmp_path: Path) -> Path:
+    """Create the progress file, which tells the loop it needs no bootstrap."""
+    progress = _tasks_dir(tmp_path) / "PROGRESS.md"
+    progress.parent.mkdir(parents=True, exist_ok=True)
+    progress.write_text("in progress\n", encoding="utf-8")
+    return progress
+
+
+def _write_task(tmp_path: Path, name: str = "task-1.md") -> Path:
+    """Create a selectable task file in the default tasks directory."""
+    task = _tasks_dir(tmp_path) / name
+    task.parent.mkdir(parents=True, exist_ok=True)
+    task.write_text("do the task\n", encoding="utf-8")
+    return task
 
 
 def _make_loop_args(
     *,
     no_log: bool = True,
     log_file: str | None = None,
-    runner: str | None = "myrunner",
+    runner: str | None = "fake-runner",
     runner_args: list[str] | None = None,
     selector: str | None = None,
     no_selector: bool = True,
@@ -101,11 +146,11 @@ def _make_loop_args(
     )
 
 
-def _make_loop_select_args(
+def _make_select_args(
     *,
-    runner: str | None = "myrunner",
+    runner: str | None = "fake-runner",
     runner_args: list[str] | None = None,
-    selector: str | None = None,
+    selector: str | None = "fake-selector",
     no_selector: bool = False,
     tasks_dir: str | None = None,
     prompt: str | None = None,
@@ -138,2733 +183,1019 @@ def _make_loop_select_args(
     )
 
 
-def _make_runtime(
-    tmp_path: Path,
-    *,
-    select_invocation: PreparedSelectInvocation | None = None,
-    implement_prompt_file: Path | None = None,
-    loop_prompt: PreparedPrompt | None = None,
-    prompt_source: str | Path | None = None,
-    bootstrap_prompt: PreparedPrompt | None = None,
-    log_file: Path | None = None,
-    runner_command: list[str] | None = None,
-    extra_prompt_source: str | Path | None = None,
-    idle_timeout: float | None = None,
-    env: dict[str, str] | None = None,
-) -> LoopStepRuntime:
-    tasks_dir = tmp_path / "tasks"
-    tasks_dir.mkdir(parents=True, exist_ok=True)
-    progress = tasks_dir / "PROGRESS.md"
-    if loop_prompt is None and select_invocation is None:
-        prompt_file = tmp_path / "loop.md"
-        prompt_file.write_text("do stuff\n", encoding="utf-8")
-        loop_prompt = PreparedPrompt(
-            label="loop", source_file=prompt_file, effective_file=prompt_file
-        )
-    return LoopStepRuntime(
-        temp_files=[],
-        resolved_tasks_dir=tasks_dir,
-        resolved_progress_file=progress,
-        env=env if env is not None else {"TASKS_DIR": str(tasks_dir)},
-        resolved_runner_command=runner_command if runner_command is not None else ["myrunner"],
-        select_invocation=select_invocation,
-        implement_prompt_file=implement_prompt_file,
-        loop_prompt=loop_prompt,
-        prompt_source=prompt_source,
-        bootstrap_prompt=bootstrap_prompt,
-        extra_prompt_source=extra_prompt_source,
-        log_file=log_file,
-        idle_timeout=idle_timeout,
-    )
+def _selector_args(**overrides: object) -> LoopArgs:
+    """Loop arguments in selector mode, with a distinct selector command."""
+    fields: dict[str, object] = {"no_selector": False, "selector": "fake-selector"}
+    fields.update(overrides)
+    return _make_loop_args(**fields)
 
 
-# ===========================================================================
-# resolve_log_file
-# ===========================================================================
+# ---------------------------------------------------------------------------
+# Log files
+# ---------------------------------------------------------------------------
 
 
 class TestLogFile:
-    def test_returns_none_when_no_log(self, tmp_path: Path) -> None:
-        args = _make_loop_args(no_log=True, log_file=None)
-        assert (
-            resolve_log_file(
-                command_name="loop",
-                enabled=not args.no_log,
-                log_file=args.log_file,
-            )
-            is None
-        )
+    @pytest.mark.parametrize("log_file", [None, "ignored.log"], ids=["default", "explicit"])
+    def test_logging_disabled_yields_no_log_file(self, log_file: str | None) -> None:
+        assert resolve_log_file(command_name="loop", enabled=False, log_file=log_file) is None
 
-    def test_returns_explicit_log_file_when_given(self, tmp_path: Path) -> None:
-        explicit = str(tmp_path / "my.log")
-        args = _make_loop_args(no_log=False, log_file=explicit)
-        result = resolve_log_file(
-            command_name="loop",
-            enabled=not args.no_log,
-            log_file=args.log_file,
-        )
-        assert result == Path(explicit)
+    def test_explicit_log_file_is_used_as_given(self, tmp_path: Path) -> None:
+        explicit = tmp_path / "my.log"
+        result = resolve_log_file(command_name="loop", enabled=True, log_file=str(explicit))
+        assert result == explicit
 
-    def test_generates_timestamped_log_file_in_agent_files_when_no_log_file_set(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("agm.core.log.git_helpers.containing_root", lambda _path: None)
-        args = _make_loop_args(no_log=False, log_file=None)
-        result = resolve_log_file(
-            command_name="loop",
-            enabled=not args.no_log,
-            log_file=args.log_file,
-        )
-        assert result is not None
-        assert result.parent == tmp_path / ".agent-files"
-        assert result.name.startswith("loop-")
-        assert result.suffix == ".log"
-
-    def test_generates_timestamped_log_file_in_checkout_agent_files_when_under_git(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        checkout = tmp_path / "checkout"
-        nested = checkout / "nested"
-        nested.mkdir(parents=True)
-        monkeypatch.chdir(nested)
-        monkeypatch.setattr("agm.core.log.git_helpers.containing_root", lambda _path: checkout)
-        args = _make_loop_args(no_log=False, log_file=None)
-        result = resolve_log_file(
-            command_name="refine",
-            enabled=not args.no_log,
-            log_file=args.log_file,
-        )
-        assert result is not None
-        assert result.parent == checkout / ".agent-files"
-        assert result.name.startswith("refine-")
-        assert result.suffix == ".log"
-
-    def test_relative_log_file_resolves_against_cwd(
+    def test_relative_log_file_resolves_against_the_working_directory(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         work = tmp_path / "work"
         work.mkdir()
         monkeypatch.chdir(work)
-        args = _make_loop_args(no_log=False, log_file="logs/run.log")
-        result = resolve_log_file(
-            command_name="loop",
-            enabled=not args.no_log,
-            log_file=args.log_file,
-        )
+
+        result = resolve_log_file(command_name="loop", enabled=True, log_file="logs/run.log")
+
         assert result == work / "logs" / "run.log"
 
-    def test_no_log_overrides_explicit_log_file(self, tmp_path: Path) -> None:
-        args = _make_loop_args(no_log=True, log_file=str(tmp_path / "ignored.log"))
-        assert (
-            resolve_log_file(
-                command_name="loop",
-                enabled=not args.no_log,
-                log_file=args.log_file,
-            )
-            is None
-        )
+    def test_default_log_file_lands_in_the_working_directory_outside_a_repository(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        _isolate_git(monkeypatch, tmp_path)
 
-    def test_prepare_log_file_prints_full_default_log_path(
+        result = resolve_log_file(command_name="loop", enabled=True, log_file=None)
+
+        assert result is not None
+        assert result.parent == tmp_path / ".agent-files"
+        assert result.name.startswith("loop-")
+        assert result.suffix == ".log"
+
+    def test_default_log_file_lands_at_the_git_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, env: dict[str, str]
+    ) -> None:
+        checkout = init_repo(tmp_path / "checkout", env)
+        nested = checkout / "src"
+        nested.mkdir()
+        monkeypatch.chdir(nested)
+        _isolate_git(monkeypatch, tmp_path)
+
+        result = resolve_log_file(command_name="refine", enabled=True, log_file=None)
+
+        assert result is not None
+        assert result.parent == checkout / ".agent-files"
+        assert result.name.startswith("refine-")
+
+    def test_preparing_a_log_file_creates_its_directory_and_names_it(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        log_file = tmp_path / ".agent-files" / "loop-20260513-120000.log"
+        log_file = tmp_path / ".agent-files" / "loop.log"
 
         prepare_log_file(log_file)
 
-        out = capsys.readouterr().out
-        assert out == f"Logging to {log_file}\n"
         assert log_file.parent.is_dir()
-
-
-# ===========================================================================
-# append_log
-# ===========================================================================
+        assert str(log_file) in capsys.readouterr().out
 
 
 class TestAppendLog:
-    def test_no_op_when_log_file_is_none(self, tmp_path: Path) -> None:
-        # Should not raise; no file should be written
-        append_log(None, "some content")
-
-    def test_no_op_when_content_is_empty(self, tmp_path: Path) -> None:
+    def test_appends_successive_chunks_creating_the_file(self, tmp_path: Path) -> None:
         log = tmp_path / "out.log"
-        append_log(log, "")
-        assert not log.exists()
 
-    def test_appends_content_to_file(self, tmp_path: Path) -> None:
-        log = tmp_path / "out.log"
         append_log(log, "first line\n")
         append_log(log, "second line\n")
+
         assert log.read_text(encoding="utf-8") == "first line\nsecond line\n"
 
-    def test_creates_file_if_missing(self, tmp_path: Path) -> None:
-        log = tmp_path / "new.log"
-        append_log(log, "hello")
-        assert log.read_text(encoding="utf-8") == "hello"
+    def test_nothing_is_written_without_a_log_file_or_content(self, tmp_path: Path) -> None:
+        log = tmp_path / "out.log"
 
+        append_log(None, "some content")
+        append_log(log, "")
 
-# ===========================================================================
-# _write_stream
-# ===========================================================================
+        assert not log.exists()
 
 
 class TestWriteStream:
-    def test_no_op_when_chunk_is_empty(self, capsys: pytest.CaptureFixture[str]) -> None:
-        _write_stream("")
-        out, err = capsys.readouterr()
-        assert out == ""
-        assert err == ""
-
-    def test_writes_to_stdout_by_default(self, capsys: pytest.CaptureFixture[str]) -> None:
-        _write_stream("hello stdout")
-        out, _ = capsys.readouterr()
-        assert out == "hello stdout"
-
-    def test_writes_to_stderr_when_flag_set(self, capsys: pytest.CaptureFixture[str]) -> None:
-        _write_stream("hello stderr", stderr=True)
-        _, err = capsys.readouterr()
-        assert err == "hello stderr"
-
-    def test_empty_string_does_not_write_to_stderr(
-        self, capsys: pytest.CaptureFixture[str]
+    @pytest.mark.parametrize("stderr", [False, True], ids=["stdout", "stderr"])
+    def test_empty_chunks_are_not_written(
+        self, capsys: pytest.CaptureFixture[str], stderr: bool
     ) -> None:
-        _write_stream("", stderr=True)
-        _, err = capsys.readouterr()
-        assert err == ""
+        _write_stream("", stderr=stderr)
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == ""
 
 
-# ===========================================================================
-# _print_dry_run_command (step)
-# ===========================================================================
+# ---------------------------------------------------------------------------
+# A loop step without a selector
+# ---------------------------------------------------------------------------
 
 
-class TestPrintDryRunCommand:
-    def test_prints_labeled_command_to_stdout(self, capsys: pytest.CaptureFixture[str]) -> None:
-        _print_dry_run_command("runner", ["myrunner", "--verbose"])
-        out, _ = capsys.readouterr()
-        assert "command [runner]:" in out
-        assert "myrunner" in out
-        assert "--verbose" in out
+class TestStepWithoutSelector:
+    def test_step_sends_the_default_loop_prompt_to_the_runner(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        home = _loop_home(tmp_path, monkeypatch)
+        _write_progress(tmp_path)
+        agent = fake_agent(monkeypatch, {"fake-runner": ["still working\n"]})
 
+        step_run(_make_loop_args())
 
-# ===========================================================================
-# _print_dry_run_prompt (step)
-# ===========================================================================
+        (call,) = agent.calls
+        assert call.runner == ["fake-runner"]
+        assert call.prompt == f"work on the tasks in {_tasks_dir(tmp_path)}\n"
+        assert call.env["TASKS_DIR"] == str(_tasks_dir(tmp_path))
+        # The rendered prompt is a temporary file, cleaned up after the step;
+        # the prompt it was rendered from is left alone.
+        assert not call.prompt_file.exists()
+        assert (home / ".agm" / "prompts" / "loop.md").exists()
+        out = capsys.readouterr().out
+        assert f"Tasks dir: {Path('.agent-files') / 'tasks'}" in out
+        assert "Step 1" in out
+        assert "still working" in out
 
+    def test_step_reports_completion_when_the_runner_is_done(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        _write_progress(tmp_path)
+        fake_agent(monkeypatch, {"fake-runner": ["COMPLETE\n"]})
 
-class TestPrintDryRunPrompt:
-    def test_prints_formatted_prompt_line(self, capsys: pytest.CaptureFixture[str]) -> None:
-        _print_dry_run_prompt("loop", "/path/to/loop.md")
-        out, _ = capsys.readouterr()
-        assert out.strip() == "dry-run: prompt [loop]: /path/to/loop.md"
+        step_run(_make_loop_args())
 
-    def test_includes_label_in_output(self, capsys: pytest.CaptureFixture[str]) -> None:
-        _print_dry_run_prompt("bootstrap", "some text")
-        out, _ = capsys.readouterr()
-        assert "[bootstrap]" in out
-        assert "some text" in out
+        assert "Completed." in capsys.readouterr().out
 
+    def test_loop_repeats_steps_until_the_runner_completes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        _write_progress(tmp_path)
+        agent = fake_agent(monkeypatch, {"fake-runner": ["working\n", "working\n", "COMPLETE\n"]})
 
-# ===========================================================================
-# _prepare_prompt (step)
-# ===========================================================================
+        loop_run(_make_loop_args())
 
+        assert len(agent.calls) == 3
+        out = capsys.readouterr().out
+        assert "Step 1" in out
+        assert "Step 3" in out
+        assert out.count("Tasks dir:") == 1
+        assert "Completed." in out
 
-class TestPreparePrompt:
-    def test_returns_prepared_prompt_with_label_and_files(
+    def test_a_single_step_does_not_repeat_when_the_runner_is_unfinished(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        source = tmp_path / "loop.md"
-        effective = tmp_path / "loop.md.tmp"
-        monkeypatch.setattr(
-            "agm.commands.loop.step.preprocess_prompt_file",
-            lambda path, temp_files, env: effective,
-        )
-        temp_files: list[Path] = []
-        result = _prepare_prompt("loop", source, temp_files=temp_files, env={})
-        assert result.label == "loop"
-        assert result.source_file == source
-        assert result.effective_file == effective
+        _loop_home(tmp_path, monkeypatch)
+        _write_progress(tmp_path)
+        agent = fake_agent(monkeypatch, {"fake-runner": ["working\n"]})
 
-    def test_passes_temp_files_and_env_to_preprocess(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        step_run(_make_loop_args())
+
+        assert len(agent.calls) == 1
+
+    def test_runner_output_is_streamed_to_the_terminal_and_the_log(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        source = tmp_path / "loop.md"
-        effective = tmp_path / "loop.md.tmp"
-        captured: dict[str, object] = {}
-
-        def fake_preprocess(path: Path, *, temp_files: list[Path], env: dict[str, str]) -> Path:
-            captured["path"] = path
-            captured["temp_files"] = temp_files
-            captured["env"] = env
-            return effective
-
-        monkeypatch.setattr("agm.commands.loop.step.preprocess_prompt_file", fake_preprocess)
-        env = {"MY_VAR": "value"}
-        _prepare_prompt("bootstrap", source, temp_files=[], env=env)
-        assert captured["path"] == source
-        assert captured["env"] == env
-
-    def test_effective_equals_source_when_no_preprocessing_needed(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        source = tmp_path / "loop.md"
-        monkeypatch.setattr(
-            "agm.commands.loop.step.preprocess_prompt_file",
-            lambda path, temp_files, env: path,
-        )
-        result = _prepare_prompt("loop", source, temp_files=[], env={})
-        assert result.source_file == result.effective_file == source
-
-
-# ===========================================================================
-# prepare_runtime
-# ===========================================================================
-
-
-class TestPrepareRuntime:
-    def _setup_home_with_prompts(self, tmp_path: Path, prompts: list[str] | None = None) -> Path:
-        if prompts is None:
-            prompts = ["loop.md", "select.md", "implement.md"]
-        home = tmp_path / "home"
-        prompt_dir = home / ".agm" / "prompts"
-        prompt_dir.mkdir(parents=True)
-        for name in prompts:
-            (prompt_dir / name).write_text(f"# {name}\n", encoding="utf-8")
-        return home
-
-    def test_no_selector_mode_with_loop_prompt_and_progress_file(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        home = self._setup_home_with_prompts(tmp_path, ["loop.md", "select.md"])
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
-
-        # Create a progress file so bootstrap is skipped
-        tasks_dir_path = tmp_path / ".agent-files" / "tasks"
-        tasks_dir_path.mkdir(parents=True)
-        (tasks_dir_path / "PROGRESS.md").write_text("done\n", encoding="utf-8")
-
-        args = _make_loop_args(no_log=True, no_selector=True, runner="fake-runner")
-        runtime = prepare_runtime(args)
-
-        assert runtime.select_invocation is None
-        assert runtime.loop_prompt is not None
-        assert runtime.loop_prompt.label == "loop"
-        assert runtime.bootstrap_prompt is None
-        assert runtime.log_file is None
-        cleanup_runtime(runtime)
-
-    def test_prepare_runtime_validates_interpolated_runner_without_mutating_it(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        home = self._setup_home_with_prompts(tmp_path, ["loop.md", "select.md"])
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setenv("LOOP_RUNNER", "fake-runner")
-        monkeypatch.setattr("shutil.which", lambda executable: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
-
-        tasks_dir_path = tmp_path / ".agent-files" / "tasks"
-        tasks_dir_path.mkdir(parents=True)
-        (tasks_dir_path / "PROGRESS.md").write_text("done\n", encoding="utf-8")
-
-        runtime = prepare_runtime(
-            _make_loop_args(no_log=True, no_selector=True, runner="%{LOOP_RUNNER}")
-        )
-
-        assert runtime.resolved_runner_command == ["%{LOOP_RUNNER}"]
-        cleanup_runtime(runtime)
-
-    def test_no_selector_mode_creates_bootstrap_when_no_progress_file(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        home = self._setup_home_with_prompts(tmp_path, ["loop.md", "select.md"])
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.chdir(tmp_path)
-
-        run_calls: list[list[str]] = []
-        run_targets: list[Path] = []
-
-        def fake_run_command(
-            command: list[str],
-            target: Path,
-            *,
-            env: dict[str, str],
-            stdout_callback: object = None,
-            stderr_callback: object = None,
-            idle_timeout: float | None = None,
-        ) -> str:
-            del stdout_callback, stderr_callback
-            run_calls.append(command)
-            run_targets.append(target)
-            return ""
-
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-
-        args = _make_loop_args(no_log=True, no_selector=True, runner="fake-runner")
-        runtime = prepare_runtime(args)
-
-        assert runtime.bootstrap_prompt is not None
-        assert runtime.bootstrap_prompt.label == "bootstrap"
-        # bootstrap runner was invoked with the runner command targeting the bootstrap prompt
-        assert run_calls == [["fake-runner"]]
-        assert run_targets == [runtime.bootstrap_prompt.effective_file]
-        cleanup_runtime(runtime)
-
-    def test_bootstrap_timeout_does_not_abort_runtime_preparation(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        home = self._setup_home_with_prompts(tmp_path, ["loop.md", "select.md"])
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.run_prompt_command",
-            lambda *args, **kwargs: (_ for _ in ()).throw(AgentCallTimeout(1.0)),
-        )
-
-        runtime = prepare_runtime(_make_loop_args(no_log=True, no_selector=True))
-
-        assert runtime.bootstrap_prompt is not None
-        cleanup_runtime(runtime)
-
-    def test_bootstrap_failure_is_logged_before_it_propagates(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        home = self._setup_home_with_prompts(tmp_path, ["loop.md", "select.md"])
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
+        _loop_home(tmp_path, monkeypatch)
+        _write_progress(tmp_path)
         log_file = tmp_path / "loop.log"
-        monkeypatch.setattr(
-            "agm.commands.loop.step.run_prompt_command",
-            lambda *args, **kwargs: (_ for _ in ()).throw(OSError("runner disappeared")),
+        fake_agent(
+            monkeypatch,
+            {"fake-runner": [AgentReply(stdout="progress report\n", stderr="a warning\n")]},
         )
 
-        with pytest.raises(OSError):
-            prepare_runtime(
-                _make_loop_args(
-                    no_log=False,
-                    log_file=str(log_file),
-                    no_selector=True,
-                    runner="fake-runner",
-                )
-            )
+        step_run(_make_loop_args(no_log=False, log_file=str(log_file)))
 
-        assert "Error: agent call failed" in log_file.read_text(encoding="utf-8")
+        captured = capsys.readouterr()
+        assert "progress report" in captured.out
+        assert "a warning" in captured.err
+        logged = log_file.read_text(encoding="utf-8")
+        assert "Tasks dir:" in logged
+        assert "Step 1" in logged
+        assert "progress report" in logged
+        assert "a warning" in logged
 
-    def test_prepare_runtime_uses_explicit_prompt_file(
+    def test_an_idle_runner_leaves_the_step_unfinished_and_is_logged(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        home = self._setup_home_with_prompts(tmp_path, ["loop.md", "select.md"])
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
+        _loop_home(tmp_path, monkeypatch)
+        _write_progress(tmp_path)
+        log_file = tmp_path / "loop.log"
+        fake_agent(monkeypatch, {"fake-runner": [AgentTimeout()]})
 
-        # Create progress file so no bootstrap
-        tasks_dir_path = tmp_path / ".agent-files" / "tasks"
-        tasks_dir_path.mkdir(parents=True)
-        (tasks_dir_path / "PROGRESS.md").write_text("done\n", encoding="utf-8")
+        step_run(_make_loop_args(no_log=False, log_file=str(log_file)))
 
-        custom_prompt = tmp_path / "custom.md"
-        custom_prompt.write_text("custom instructions\n", encoding="utf-8")
+        logged = log_file.read_text(encoding="utf-8")
+        assert "Idle timeout" in logged
+        assert "Completed." not in logged
 
-        args = _make_loop_args(
-            no_log=True,
-            no_selector=True,
-            runner="fake-runner",
-            prompt_file=str(custom_prompt),
-        )
-        runtime = prepare_runtime(args)
-
-        assert runtime.prompt_source is not None
-        assert runtime.loop_prompt is not None
-        cleanup_runtime(runtime)
-
-    def test_prepare_runtime_exits_when_loop_prompt_file_missing(
+    def test_a_failed_agent_launch_is_logged_before_it_propagates(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        home = tmp_path / "home"
-        (home / ".agm" / "prompts").mkdir(parents=True)
-        # No loop.md, no select.md
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
+        _loop_home(tmp_path, monkeypatch)
+        _write_progress(tmp_path)
+        log_file = tmp_path / "loop.log"
+        _raising_agent(monkeypatch, ValueError("runner disappeared"))
 
-        args = _make_loop_args(no_log=True, no_selector=True, runner="fake-runner")
+        with pytest.raises(ValueError):
+            step_run(_make_loop_args(no_log=False, log_file=str(log_file)))
+
+        assert "runner disappeared" in log_file.read_text(encoding="utf-8")
+
+    def test_an_explicit_prompt_file_replaces_the_default_loop_prompt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        _write_progress(tmp_path)
+        custom = tmp_path / "custom.md"
+        custom.write_text("custom work in %{TASKS_DIR}\n", encoding="utf-8")
+        agent = fake_agent(monkeypatch, {"fake-runner": ["COMPLETE\n"]})
+
+        step_run(_make_loop_args(prompt_file=str(custom)))
+
+        assert agent.prompts == [f"custom work in {_tasks_dir(tmp_path)}\n"]
+
+    def test_an_inline_prompt_replaces_the_default_loop_prompt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        _write_progress(tmp_path)
+        agent = fake_agent(monkeypatch, {"fake-runner": ["COMPLETE\n"]})
+
+        step_run(_make_loop_args(prompt="inline work in %{TASKS_DIR}"))
+
+        assert agent.prompts == [f"inline work in {_tasks_dir(tmp_path)}"]
+
+    def test_an_extra_prompt_is_appended_to_the_loop_prompt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        _write_progress(tmp_path)
+        agent = fake_agent(monkeypatch, {"fake-runner": ["COMPLETE\n"]})
+
+        step_run(_make_loop_args(extra_prompt="also mind %{TASKS_DIR}"))
+
+        (prompt,) = agent.prompts
+        assert prompt.startswith("work on the tasks in")
+        assert prompt.endswith(f"also mind {_tasks_dir(tmp_path)}")
+
+    def test_the_runner_command_is_expanded_at_launch_time(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        _write_progress(tmp_path)
+        monkeypatch.setenv("LOOP_RUNNER", "fake-runner")
+        agent = fake_agent(monkeypatch, {"fake-runner": ["COMPLETE\n"]})
+
+        step_run(_make_loop_args(runner="%{LOOP_RUNNER}", runner_args=["--fast"]))
+
+        assert agent.calls[0].runner == ["fake-runner", "--fast"]
+
+    def test_a_custom_tasks_directory_reaches_the_prompt_and_the_environment(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        tasks = tmp_path / "my-tasks"
+        tasks.mkdir()
+        (tasks / "PROGRESS.md").write_text("in progress\n", encoding="utf-8")
+        agent = fake_agent(monkeypatch, {"fake-runner": ["COMPLETE\n"]})
+
+        step_run(_make_loop_args(tasks_dir="my-tasks"))
+
+        (call,) = agent.calls
+        assert call.env["TASKS_DIR"] == str(tasks)
+        assert str(tasks) in call.prompt
+
+
+class TestBootstrap:
+    def test_the_bootstrap_prompt_runs_once_before_the_first_step(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        agent = fake_agent(monkeypatch, {"fake-runner": ["bootstrapped\n", "COMPLETE\n"]})
+
+        step_run(_make_loop_args())
+
+        assert agent.prompts == [
+            f"select a task from {_tasks_dir(tmp_path)}\n",
+            f"work on the tasks in {_tasks_dir(tmp_path)}\n",
+        ]
+
+    def test_no_bootstrap_runs_once_the_progress_file_exists(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        _write_progress(tmp_path)
+        agent = fake_agent(monkeypatch, {"fake-runner": ["COMPLETE\n"]})
+
+        step_run(_make_loop_args())
+
+        assert len(agent.calls) == 1
+
+    def test_an_idle_bootstrap_agent_does_not_abort_the_step(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        agent = fake_agent(monkeypatch, {"fake-runner": [AgentTimeout(), "COMPLETE\n"]})
+
+        step_run(_make_loop_args())
+
+        assert len(agent.calls) == 2
+        assert "Completed." in capsys.readouterr().out
+
+    def test_a_failed_bootstrap_launch_is_logged_before_it_propagates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        log_file = tmp_path / "loop.log"
+        _raising_agent(monkeypatch, ValueError("runner disappeared"))
+
+        with pytest.raises(ValueError):
+            step_run(_make_loop_args(no_log=False, log_file=str(log_file)))
+
+        assert "runner disappeared" in log_file.read_text(encoding="utf-8")
+
+    def test_dry_run_describes_the_bootstrap_without_running_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        agent = fake_agent(monkeypatch, "COMPLETE\n")
+        dry_run.set_enabled(True)
+
+        step_run(_make_loop_args())
+
+        assert agent.calls == []
+        assert "command [bootstrap]:" in capsys.readouterr().out
+
+
+class TestPromptValidation:
+    def test_a_missing_loop_prompt_stops_the_step(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch, prompts={})
+        agent = fake_agent(monkeypatch, "COMPLETE\n")
+
         with pytest.raises(SystemExit) as exc_info:
-            prepare_runtime(args)
+            step_run(_make_loop_args())
+
         assert exc_info.value.code == 1
+        assert agent.calls == []
 
-    def test_prepare_runtime_sets_log_file_from_args(
+    def test_a_missing_bootstrap_prompt_stops_the_step(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        home = self._setup_home_with_prompts(tmp_path, ["loop.md", "select.md"])
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
+        _loop_home(tmp_path, monkeypatch, prompts={"loop.md": "work\n"})
+        agent = fake_agent(monkeypatch, "COMPLETE\n")
 
-        tasks_dir_path = tmp_path / ".agent-files" / "tasks"
-        tasks_dir_path.mkdir(parents=True)
-        (tasks_dir_path / "PROGRESS.md").write_text("done\n", encoding="utf-8")
-
-        log_path = str(tmp_path / "test.log")
-        args = _make_loop_args(
-            no_log=False, log_file=log_path, no_selector=True, runner="fake-runner"
-        )
-        runtime = prepare_runtime(args)
-        assert runtime.log_file == Path(log_path)
-        cleanup_runtime(runtime)
-
-    def test_prepare_runtime_in_selector_mode_creates_invocation(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        home = self._setup_home_with_prompts(tmp_path, ["loop.md", "select.md", "implement.md"])
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
-
-        args = _make_loop_args(
-            no_log=True, no_selector=False, runner="fake-runner", selector="fake-selector"
-        )
-        runtime = prepare_runtime(args)
-
-        assert runtime.select_invocation is not None
-        assert runtime.loop_prompt is None
-        assert runtime.implement_prompt_file is not None
-        assert runtime.implement_prompt_file.name == "implement.md"
-        cleanup_runtime(runtime)
-
-    def test_prepare_runtime_in_selector_mode_no_implement_prompt_exits(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        home = self._setup_home_with_prompts(tmp_path, ["loop.md", "select.md"])
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
-
-        args = _make_loop_args(
-            no_log=True, no_selector=False, runner="fake-runner", selector="fake-selector"
-        )
         with pytest.raises(SystemExit) as exc_info:
-            prepare_runtime(args)
+            step_run(_make_loop_args())
+
         assert exc_info.value.code == 1
-        # Verifies that selector mode requires implement.md when no explicit prompt is given.
+        assert agent.calls == []
 
-    def test_prepare_runtime_selector_mode_no_implement_with_inline_prompt(
+    def test_setup_diagnostics_are_recorded_in_the_log(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        home = self._setup_home_with_prompts(tmp_path, ["loop.md", "select.md"])
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
-
-        args = _make_loop_args(
-            no_log=True,
-            no_selector=False,
-            runner="fake-runner",
-            selector="fake-selector",
-            prompt="implement this task",
-        )
-        runtime = prepare_runtime(args)
-        assert runtime.implement_prompt_file is None
-        assert runtime.prompt_source is not None
-        cleanup_runtime(runtime)
-
-    def test_prepare_runtime_selector_mode_no_implement_with_explicit_prompt(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        home = self._setup_home_with_prompts(tmp_path, ["loop.md", "select.md"])
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
-
-        custom_prompt = tmp_path / "custom.md"
-        custom_prompt.write_text("custom instructions\n", encoding="utf-8")
-
-        args = _make_loop_args(
-            no_log=True,
-            no_selector=False,
-            runner="fake-runner",
-            selector="fake-selector",
-            prompt_file=str(custom_prompt),
-        )
-        runtime = prepare_runtime(args)
-
-        # When explicit prompt is set, implement.md is not required
-        assert runtime.select_invocation is not None
-        assert runtime.implement_prompt_file is None
-        assert runtime.prompt_source is not None
-        cleanup_runtime(runtime)
-
-    def test_dry_run_skips_bootstrap_prompt_execution(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """dry_run mode skips run_prompt_command for bootstrap.
-
-        When dry_run is enabled, the bootstrap prompt is prepared (so it
-        appears in the dry-run output) but run_prompt_command is NOT called.
-        """
-        home = self._setup_home_with_prompts(tmp_path, ["loop.md", "select.md"])
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
-
-        # No progress file → bootstrap prompt path is taken
-        run_calls: list[list[str]] = []
-
-        def fake_run_command(
-            command: list[str],
-            target: Path,
-            *,
-            env: dict[str, str],
-            idle_timeout: float | None = None,
-        ) -> str:
-            run_calls.append(command)
-            return ""
-
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        monkeypatch.setattr("agm.commands.loop.step.dry_run.enabled", lambda: True)
-
-        args = _make_loop_args(no_log=True, no_selector=True, runner="fake-runner")
-        runtime = prepare_runtime(args)
-
-        # Bootstrap prompt should be prepared but not executed
-        assert runtime.bootstrap_prompt is not None
-        assert run_calls == [], "run_prompt_command must not be called in dry-run mode"
-        cleanup_runtime(runtime)
-
-    def test_selector_mode_prepares_explicit_prompt_once_after_selecting_task(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        home = self._setup_home_with_prompts(tmp_path, ["select.md"])
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
-
-        task_file = tmp_path / ".agent-files" / "tasks" / "task-1.md"
-        task_file.parent.mkdir(parents=True)
-        task_file.write_text("task\n", encoding="utf-8")
-        prompt = tmp_path / "prompt.md"
-        prompt.write_text("Implement %{TASK_FILE}\n", encoding="utf-8")
-
-        prepared_sources = _track_prepared_sources(monkeypatch, only=prompt)
-        targets: list[Path] = []
-
-        def fake_run_command(
-            command: list[str],
-            target: Path,
-            *,
-            env: dict[str, str],
-            stdout_callback: object = None,
-            stderr_callback: object = None,
-            idle_timeout: float | None = None,
-        ) -> str:
-            if command == ["fake-selector"]:
-                return "task-1.md\n"
-            targets.append(target)
-            return "runner output\n"
-
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-
-        runtime = prepare_runtime(
-            _make_loop_args(
-                no_log=True,
-                no_selector=False,
-                runner="fake-runner",
-                selector="fake-selector",
-                prompt_file=str(prompt),
-            )
-        )
-        execute_single_step(runtime, step_number=1)
-
-        assert prepared_sources == [prompt]
-        assert targets[0].read_text(encoding="utf-8") == f"Implement {task_file}\n"
-        cleanup_runtime(runtime)
-
-    def test_non_selector_mode_rejects_task_file_hole(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        home = self._setup_home_with_prompts(tmp_path, ["select.md"])
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
-
-        tasks_dir = tmp_path / ".agent-files" / "tasks"
-        tasks_dir.mkdir(parents=True)
-        (tasks_dir / "PROGRESS.md").write_text("progress\n", encoding="utf-8")
-        prompt = tmp_path / "prompt.md"
-        prompt.write_text("Implement %{TASK_FILE}\n", encoding="utf-8")
-
-        prepared_sources = _track_prepared_sources(monkeypatch, only=prompt)
+        _loop_home(tmp_path, monkeypatch, prompts={})
+        log_file = tmp_path / "loop.log"
 
         with pytest.raises(SystemExit):
-            prepare_runtime(
-                _make_loop_args(
-                    no_log=True,
-                    no_selector=True,
-                    runner="fake-runner",
-                    prompt_file=str(prompt),
-                )
-            )
+            prepare_runtime(_make_loop_args(no_log=False, log_file=str(log_file)))
 
-        assert prepared_sources == [prompt]
+        assert "loop.md" in log_file.read_text(encoding="utf-8")
+
+    def test_a_loop_prompt_cannot_reference_the_task_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Without a selector no task is ever selected, so the hole cannot bind."""
+        _loop_home(tmp_path, monkeypatch)
+        _write_progress(tmp_path)
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Implement %{TASK_FILE}\n", encoding="utf-8")
+        agent = fake_agent(monkeypatch, "COMPLETE\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            step_run(_make_loop_args(prompt_file=str(prompt)))
+
+        assert exc_info.value.code == 1
+        assert agent.calls == []
         error = capsys.readouterr().err
         assert "prompt.md" in error
         assert "TASK_FILE" in error
 
-    def test_selector_mode_dry_run_does_not_prepare_runner_prompt(
+
+# ---------------------------------------------------------------------------
+# A loop step driven by a selector
+# ---------------------------------------------------------------------------
+
+
+class TestStepWithSelector:
+    def test_the_selected_task_is_handed_to_the_runner(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """dry-run must not render the runner prompt before task selection.
+        _loop_home(tmp_path, monkeypatch)
+        task = _write_task(tmp_path)
+        agent = fake_agent(
+            monkeypatch,
+            {"fake-selector": ["task-1.md\n"], "fake-runner": ["done\n"]},
+        )
 
-        The runner prompt depends on ``TASK_FILE``, which is only known once
-        a task is selected, so dry-run must describe it by source label
-        alone rather than creating a rendered temp file for it.
-        """
-        home = self._setup_home_with_prompts(tmp_path, ["select.md"])
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
+        step_run(_selector_args())
 
+        assert agent.runners == ["fake-selector", "fake-runner"]
+        assert agent.prompts_of("fake-selector") == [f"select a task from {_tasks_dir(tmp_path)}\n"]
+        assert agent.prompts_of("fake-runner") == [f"implement @{task}\n"]
+        assert agent.calls[1].env["TASK_FILE"] == str(task)
+        assert "Selected task:" in capsys.readouterr().out
+
+    def test_the_selector_ends_the_loop_when_no_task_is_left(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        agent = fake_agent(monkeypatch, {"fake-selector": ["COMPLETE\n"]})
+
+        loop_run(_selector_args())
+
+        assert len(agent.calls) == 1
+        assert "Completed." in capsys.readouterr().out
+
+    def test_the_selector_is_retried_until_it_names_a_real_task(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        _write_task(tmp_path)
+        agent = fake_agent(
+            monkeypatch,
+            {
+                "fake-selector": ["thinking about it\n", "task-1.md\n"],
+                "fake-runner": ["done\n"],
+            },
+        )
+
+        step_run(_selector_args())
+
+        assert agent.runners == ["fake-selector", "fake-selector", "fake-runner"]
+
+    def test_an_idle_selector_is_retried_within_the_same_step(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        agent = fake_agent(monkeypatch, {"fake-selector": [AgentTimeout(), "COMPLETE\n"]})
+
+        step_run(_selector_args())
+
+        assert len(agent.calls) == 2
+        assert "Completed." in capsys.readouterr().out
+
+    def test_an_idle_runner_leaves_the_step_unfinished(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        _write_task(tmp_path)
+        agent = fake_agent(
+            monkeypatch,
+            {"fake-selector": ["task-1.md\n"], "fake-runner": [AgentTimeout()]},
+        )
+
+        step_run(_selector_args())
+
+        assert len(agent.calls) == 2
+        assert "Completed." not in capsys.readouterr().out
+
+    def test_the_runner_command_selects_tasks_when_no_selector_command_is_set(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        task = _write_task(tmp_path)
+        agent = fake_agent(monkeypatch, {"fake-runner": ["task-1.md\n", "done\n"]})
+
+        step_run(_make_loop_args(no_selector=False))
+
+        assert agent.runners == ["fake-runner", "fake-runner"]
+        assert agent.prompts[1] == f"implement @{task}\n"
+
+    @pytest.mark.parametrize(
+        ("prompt_kind", "prompt_text"),
+        [("file", "Work on %{TASK_FILE}\n"), ("inline", "Work on %{TASK_FILE}")],
+    )
+    def test_an_explicit_prompt_is_rendered_once_the_task_is_known(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        prompt_kind: str,
+        prompt_text: str,
+    ) -> None:
+        """Rendering before selection would fail: ``TASK_FILE`` is unbound then."""
+        _loop_home(tmp_path, monkeypatch, prompts={"select.md": "select\n"})
+        task = _write_task(tmp_path)
+        overrides: dict[str, object] = {}
+        if prompt_kind == "file":
+            prompt_file = tmp_path / "prompt.md"
+            prompt_file.write_text(prompt_text, encoding="utf-8")
+            overrides["prompt_file"] = str(prompt_file)
+        else:
+            overrides["prompt"] = prompt_text
+        agent = fake_agent(
+            monkeypatch,
+            {"fake-selector": ["task-1.md\n"], "fake-runner": ["done\n"]},
+        )
+
+        step_run(_selector_args(**overrides))
+
+        assert agent.prompts_of("fake-runner") == [prompt_text.replace("%{TASK_FILE}", str(task))]
+
+    @pytest.mark.parametrize(
+        "prompt_override",
+        [{}, {"prompt": "Work on %{TASK_FILE}"}],
+        ids=["implement-prompt", "explicit-prompt"],
+    )
+    def test_an_extra_prompt_is_appended_to_the_selected_task_prompt(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        prompt_override: dict[str, object],
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        task = _write_task(tmp_path)
+        agent = fake_agent(
+            monkeypatch,
+            {"fake-selector": ["task-1.md\n"], "fake-runner": ["done\n"]},
+        )
+
+        step_run(_selector_args(extra_prompt="also review %{TASK_FILE}", **prompt_override))
+
+        (runner_prompt,) = agent.prompts_of("fake-runner")
+        assert str(task) in runner_prompt
+        assert runner_prompt.endswith(f"also review {task}")
+
+    def test_an_extra_selector_prompt_is_appended_to_the_selector_prompt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        agent = fake_agent(monkeypatch, {"fake-selector": ["COMPLETE\n"]})
+
+        step_run(_selector_args(extra_selector_prompt="prefer the oldest task"))
+
+        (selector_prompt,) = agent.prompts_of("fake-selector")
+        assert selector_prompt.startswith("select a task from")
+        assert selector_prompt.endswith("prefer the oldest task")
+
+    def test_a_custom_selector_prompt_file_replaces_the_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        selector_prompt = tmp_path / "pick.md"
+        selector_prompt.write_text("pick from %{TASKS_DIR}\n", encoding="utf-8")
+        agent = fake_agent(monkeypatch, {"fake-selector": ["COMPLETE\n"]})
+
+        step_run(_selector_args(selector_prompt_file=str(selector_prompt)))
+
+        assert agent.prompts == [f"pick from {_tasks_dir(tmp_path)}\n"]
+
+    def test_a_missing_implement_prompt_stops_the_step(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch, prompts={"select.md": "select\n"})
+        agent = fake_agent(monkeypatch, "COMPLETE\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            step_run(_selector_args())
+
+        assert exc_info.value.code == 1
+        assert agent.calls == []
+
+    def test_an_explicit_prompt_stands_in_for_a_missing_implement_prompt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch, prompts={"select.md": "select\n"})
+        task = _write_task(tmp_path)
+        agent = fake_agent(
+            monkeypatch,
+            {"fake-selector": ["task-1.md\n"], "fake-runner": ["done\n"]},
+        )
+
+        step_run(_selector_args(prompt="Implement %{TASK_FILE}"))
+
+        assert agent.prompts_of("fake-runner") == [f"Implement {task}"]
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"prompt": "Fix %{TASK_FILEE}"},
+            {"prompt": "Fix %{TASK_FILE", "dry_run": True},
+            {"prompt": "Fix %{TASK_FILE}", "extra_prompt": "Also %{TASK_FILEE}"},
+            {"implement_prompt": "Fix %{TASK_FILEE}"},
+            {"prompt_file": "missing.md"},
+            {"extra_prompt_file": "missing-extra.md", "dry_run": True},
+        ],
+        ids=[
+            "typo-in-prompt",
+            "unterminated-hole",
+            "typo-in-extra-prompt",
+            "typo-in-implement-prompt",
+            "missing-prompt-file",
+            "missing-extra-prompt-file",
+        ],
+    )
+    def test_a_bad_runner_prompt_is_rejected_before_the_selector_runs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, overrides: dict[str, object]
+    ) -> None:
+        """The selector mutates the task files, so it must not run first."""
+        options = dict(overrides)
+        implement_prompt = options.pop("implement_prompt", None)
+        prompts = dict(DEFAULT_PROMPTS)
+        if isinstance(implement_prompt, str):
+            prompts["implement.md"] = implement_prompt
+        _loop_home(tmp_path, monkeypatch, prompts=prompts)
+        if options.pop("dry_run", False):
+            dry_run.set_enabled(True)
+        for key in ("prompt_file", "extra_prompt_file"):
+            value = options.get(key)
+            if isinstance(value, str):
+                options[key] = str(tmp_path / value)
+        agent = fake_agent(monkeypatch, "COMPLETE\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            step_run(_selector_args(**options))
+
+        assert exc_info.value.code == 1
+        assert agent.calls == []
+
+    def test_the_task_file_hole_is_accepted_before_selection(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``TASK_FILE`` binds only after selection, but is a known name up front."""
+        _loop_home(tmp_path, monkeypatch, prompts={"select.md": "select\n"})
+        agent = fake_agent(monkeypatch, {"fake-selector": ["COMPLETE\n"]})
+
+        step_run(_selector_args(prompt="Implement %{TASK_FILE}"))
+
+        assert len(agent.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Dry-run reporting
+# ---------------------------------------------------------------------------
+
+
+class TestDryRun:
+    @pytest.mark.parametrize(
+        ("overrides", "prompts", "expected_snippets"),
+        [
+            pytest.param(
+                {"no_selector": False, "selector": "fake-selector", "timeout": 5.0},
+                None,
+                ["idle timeout: 5.0s", "selector command: fake-selector"],
+                id="selector-idle-timeout",
+            ),
+            pytest.param(
+                {"no_selector": False, "selector": "fake-selector"},
+                None,
+                ["runner prompt: ", "implement.md (default) (reprocessed after task selection)"],
+                id="selector-implement-prompt",
+            ),
+            pytest.param(
+                {"no_selector": False, "selector": "fake-selector", "prompt_file": "custom.md"},
+                None,
+                ["runner prompt: custom.md (reprocessed after task selection)"],
+                id="selector-explicit-prompt",
+            ),
+            pytest.param(
+                {"no_selector": False, "selector": "fake-selector", "prompt": "do %{TASK_FILE}"},
+                None,
+                [
+                    "prompt [prompt]: inline prompt",
+                    "runner prompt: inline prompt (reprocessed after task selection)",
+                ],
+                id="selector-inline-prompt",
+            ),
+            pytest.param(
+                {"no_log": False, "log_file": "loop.log"},
+                None,
+                ["idle timeout: disabled", "log file: loop.log", "selector command: disabled"],
+                id="no-selector-log-file",
+            ),
+            pytest.param(
+                {"prompt": "inline work"},
+                None,
+                ["explicit prompt:", "loop-runner"],
+                id="no-selector-explicit-prompt",
+            ),
+            pytest.param(
+                {"bootstrap": True},
+                {"loop.md": "work\n", "select.md": "select\n"},
+                ["command [bootstrap]:", "prompt [bootstrap]:"],
+                id="bootstrap-prompt",
+            ),
+        ],
+    )
+    def test_dry_run_reports_the_resolved_configuration(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        overrides: dict[str, object],
+        prompts: dict[str, str] | None,
+        expected_snippets: list[str],
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch, prompts=prompts)
+        options = dict(overrides)
+        if "prompt_file" in options:
+            prompt_file = tmp_path / str(options["prompt_file"])
+            prompt_file.write_text("custom %{TASK_FILE}\n", encoding="utf-8")
+            options["prompt_file"] = str(prompt_file)
+        if not options.pop("bootstrap", False):
+            # A progress file means the loop needs no bootstrap pass.
+            _write_progress(tmp_path)
+        agent = fake_agent(monkeypatch, "COMPLETE\n")
+        dry_run.set_enabled(True)
+
+        step_run(_make_loop_args(**options))
+
+        out = capsys.readouterr().out
+        for snippet in expected_snippets:
+            assert snippet in out
+        assert agent.calls == []
+
+    def test_dry_run_does_not_render_the_runner_prompt_before_selection(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The runner prompt depends on ``TASK_FILE``, unknown until selection."""
+        _loop_home(tmp_path, monkeypatch, prompts={"select.md": "select\n"})
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Implement %{TASK_FILE}\n", encoding="utf-8")
-        monkeypatch.setattr("agm.commands.loop.step.dry_run.enabled", lambda: True)
+        fake_agent(monkeypatch, "COMPLETE\n")
+        dry_run.set_enabled(True)
 
-        runtime = prepare_runtime(
-            _make_loop_args(
-                no_log=True,
-                no_selector=False,
-                runner="fake-runner",
-                selector="fake-selector",
-                prompt_file=str(prompt),
-            )
-        )
-        print_dry_run(runtime)
+        runtime = prepare_runtime(_selector_args(prompt_file=str(prompt)))
+        try:
+            # No rendered prompt file exists yet; only its source is named.
+            assert runtime.temp_files == []
+            print_dry_run(runtime)
+        finally:
+            cleanup_runtime(runtime)
 
-        assert runtime.temp_files == [], "no rendered prompt file before task selection"
-        output = capsys.readouterr().out
-        assert "dry-run: prompt [prompt]: prompt.md" in output
-        assert "runner prompt: prompt.md" in output
-        cleanup_runtime(runtime)
+        out = capsys.readouterr().out
+        assert "prompt [prompt]: prompt.md" in out
+        assert "runner prompt: prompt.md" in out
 
-    def test_selector_mode_dry_run_validates_extra_prompt_file_before_selection(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        home = self._setup_home_with_prompts(tmp_path, ["select.md", "implement.md"])
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("agm.commands.loop.step.dry_run.enabled", lambda: True)
-
-        with pytest.raises(SystemExit) as exc_info:
-            run(
-                _make_loop_args(
-                    no_log=True,
-                    no_selector=False,
-                    runner="fake-runner",
-                    selector="fake-selector",
-                    extra_prompt_file=str(tmp_path / "missing-extra.md"),
-                )
-            )
-
-        assert exc_info.value.code == 1
-
-    def test_selector_mode_validates_missing_explicit_prompt_before_selection(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        home = self._setup_home_with_prompts(tmp_path, ["select.md"])
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
-
-        with pytest.raises(SystemExit):
-            prepare_runtime(
-                _make_loop_args(
-                    no_log=True,
-                    no_selector=False,
-                    runner="fake-runner",
-                    selector="fake-selector",
-                    prompt_file=str(tmp_path / "missing-prompt.md"),
-                )
-            )
-
-    def test_selector_mode_accepts_task_file_hole_before_selection(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A legitimate ``%{TASK_FILE}`` hole passes up-front validation.
-
-        ``TASK_FILE`` is only bound after a task is selected, but the
-        up-front check must still treat it as an available name so it does
-        not spuriously reject the common case.
-        """
-        home = self._setup_home_with_prompts(tmp_path, ["select.md"])
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
-
-        runtime = prepare_runtime(
-            _make_loop_args(
-                no_log=True,
-                no_selector=False,
-                runner="fake-runner",
-                selector="fake-selector",
-                prompt="Implement %{TASK_FILE}",
-            )
-        )
-
-        assert runtime.select_invocation is not None
-        cleanup_runtime(runtime)
-
-    def test_selector_mode_dry_run_rejects_unknown_prompt_hole(
+    def test_dry_run_of_the_whole_loop_reports_and_runs_nothing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """A typo'd hole must be caught by dry-run, not silently accepted."""
-        home = self._setup_home_with_prompts(tmp_path, ["select.md"])
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("agm.commands.loop.step.dry_run.enabled", lambda: True)
+        _loop_home(tmp_path, monkeypatch)
+        _write_progress(tmp_path)
+        agent = fake_agent(monkeypatch, "COMPLETE\n")
+        dry_run.set_enabled(True)
 
-        with pytest.raises(SystemExit) as exc_info:
-            run(
-                _make_loop_args(
-                    no_log=True,
-                    no_selector=False,
-                    runner="fake-runner",
-                    selector="fake-selector",
-                    prompt="Fix %{TASK_FILEE}",
-                )
-            )
+        loop_run(_make_loop_args())
 
-        assert exc_info.value.code == 1
-        error = capsys.readouterr().err
-        assert "cannot interpolate" in error
-        assert "TASK_FILEE" in error
+        assert agent.calls == []
+        out = capsys.readouterr().out
+        assert "loop configuration" in out
+        assert "command [runner]:" in out
 
-    @pytest.mark.parametrize(
-        ("implement_prompt", "extra_prompt"),
-        [
-            ("Fix %{TASK_FILEE}", None),
-            ("Fix %{TASK_FILE}", "Additional context: %{TASK_FILEE}"),
-        ],
-        ids=["default-runner-prompt", "extra-runner-prompt"],
-    )
-    def test_selector_mode_validates_deferred_runner_prompts_before_selection(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        implement_prompt: str,
-        extra_prompt: str | None,
-    ) -> None:
-        """Malformed deferred runner prompts cannot start the selector."""
-        home = self._setup_home_with_prompts(tmp_path, ["select.md", "implement.md"])
-        (home / ".agm" / "prompts" / "implement.md").write_text(implement_prompt, encoding="utf-8")
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
-
-        selector_prepared = False
-
-        def fail_if_selector_is_prepared(*args: object, **kwargs: object) -> None:
-            nonlocal selector_prepared
-            selector_prepared = True
-            raise AssertionError("the selector must not be prepared")
-
-        monkeypatch.setattr(
-            "agm.commands.loop.step.prepare_select_invocation", fail_if_selector_is_prepared
-        )
-
-        with pytest.raises(SystemExit):
-            prepare_runtime(
-                _make_loop_args(
-                    no_log=True,
-                    no_selector=False,
-                    runner="fake-runner",
-                    selector="fake-selector",
-                    extra_prompt=extra_prompt,
-                )
-            )
-
-        assert not selector_prepared
-
-    def test_selector_mode_dry_run_rejects_unterminated_hole(
+    def test_dry_run_names_the_preprocessed_prompt(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """An unterminated ``%{`` needs no environment to detect, and dry-run must too."""
-        home = self._setup_home_with_prompts(tmp_path, ["select.md"])
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("agm.commands.loop.step.dry_run.enabled", lambda: True)
+        _loop_home(tmp_path, monkeypatch)
+        _write_progress(tmp_path)
+        fake_agent(monkeypatch, "COMPLETE\n")
+        dry_run.set_enabled(True)
 
-        prompt = tmp_path / "prompt.md"
-        prompt.write_text("Fix %{TASK_FILE\n", encoding="utf-8")
+        step_run(_make_loop_args())
 
-        with pytest.raises(SystemExit) as exc_info:
-            run(
-                _make_loop_args(
-                    no_log=True,
-                    no_selector=False,
-                    runner="fake-runner",
-                    selector="fake-selector",
-                    prompt_file=str(prompt),
-                )
-            )
+        out = capsys.readouterr().out
+        assert "loop.md -> " in out
+        assert "(preprocessed)" in out
 
-        assert exc_info.value.code == 1
-        error = capsys.readouterr().err
-        assert "cannot interpolate" in error
-
-    def test_selector_mode_rejects_typo_prompt_hole_before_selector_runs(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A bad template must fail before the selector agent ever runs.
-
-        Reproduces the reported bug: without up-front validation, the
-        selector agent (which per the shipped select.md prompt mutates
-        PROGRESS.md) would run first, and only the subsequent render would
-        fail.
-        """
-        home = self._setup_home_with_prompts(tmp_path, ["select.md"])
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
-
-        task_file = tmp_path / ".agent-files" / "tasks" / "task-1.md"
-        task_file.parent.mkdir(parents=True)
-        task_file.write_text("task\n", encoding="utf-8")
-
-        selector_calls: list[list[str]] = []
-
-        def fake_run_command(
-            command: list[str],
-            target: Path,
-            *,
-            env: dict[str, str],
-            stdout_callback: object = None,
-            stderr_callback: object = None,
-            idle_timeout: float | None = None,
-        ) -> str:
-            selector_calls.append(command)
-            return "task-1.md\n"
-
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-
-        with pytest.raises(SystemExit) as exc_info:
-            run(
-                _make_loop_args(
-                    no_log=True,
-                    no_selector=False,
-                    runner="fake-runner",
-                    selector="fake-selector",
-                    prompt="Fix %{TASK_FILEE}",
-                )
-            )
-
-        assert exc_info.value.code == 1
-        assert selector_calls == [], (
-            "selector command must not run before the prompt template is validated"
-        )
-
-
-# ===========================================================================
-# print_startup
-# ===========================================================================
-
-
-class TestPrintStartup:
-    def test_prints_and_logs_resolved_tasks_dir(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        log_file = tmp_path / "out.log"
-        runtime = _make_runtime(tmp_path, log_file=log_file)
-
-        print_startup(runtime)
-
-        out, _ = capsys.readouterr()
-        expected = f"Tasks dir: {runtime.resolved_tasks_dir}\n"
-        assert out == expected
-        assert log_file.read_text(encoding="utf-8") == expected
-
-    def test_displays_tasks_dir_relative_to_current_directory(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        monkeypatch.chdir(tmp_path)
-        log_file = tmp_path / "out.log"
-        runtime = _make_runtime(tmp_path, log_file=log_file)
-
-        print_startup(runtime)
-
-        out, _ = capsys.readouterr()
-        expected = f"Tasks dir: {Path('tasks')}\n"
-        assert out == expected
-        assert log_file.read_text(encoding="utf-8") == expected
-
-
-# ===========================================================================
-# execute_single_step
-# ===========================================================================
-
-
-class TestExecuteSingleStep:
-    def test_no_selector_returns_true_when_output_is_complete(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        runtime = _make_runtime(tmp_path)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.run_prompt_command",
-            lambda *a, **kw: "COMPLETE",
-        )
-        result = execute_single_step(runtime, step_number=1)
-        assert result is True
-
-    def test_no_selector_returns_false_when_output_is_not_complete(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        runtime = _make_runtime(tmp_path)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.run_prompt_command",
-            lambda *a, **kw: "still working",
-        )
-        result = execute_single_step(runtime, step_number=1)
-        assert result is False
-
-    def test_no_selector_timeout_is_logged_and_leaves_iteration_incomplete(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        log_file = tmp_path / "loop.log"
-        runtime = _make_runtime(tmp_path, log_file=log_file)
-
-        def fake_run_command(*args: object, **kwargs: object) -> str:
-            stderr_callback = kwargs["stderr_callback"]
-            assert callable(stderr_callback)
-            stderr_callback("Idle timeout (1.0s) exceeded, process terminated.\n")
-            raise AgentCallTimeout(1.0)
-
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-
-        assert execute_single_step(runtime, step_number=1) is False
-        assert "Idle timeout" in log_file.read_text(encoding="utf-8")
-
-    def test_agent_failure_is_logged_before_it_propagates(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        log_file = tmp_path / "loop.log"
-        runtime = _make_runtime(tmp_path, log_file=log_file)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.run_prompt_command",
-            lambda *args, **kwargs: (_ for _ in ()).throw(OSError("runner disappeared")),
-        )
-
-        with pytest.raises(OSError):
-            execute_single_step(runtime, step_number=1)
-
-        assert "Error: agent call failed" in log_file.read_text(encoding="utf-8")
-
-    def test_no_selector_passes_callbacks_to_run_command(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        runtime = _make_runtime(tmp_path)
-        captured_callbacks: dict[str, object] = {}
-
-        def fake_run_command(
-            command: list[str],
-            target: Path,
-            *,
-            env: dict[str, str],
-            stdout_callback: object = None,
-            stderr_callback: object = None,
-            idle_timeout: float | None = None,
-        ) -> str:
-            captured_callbacks["stdout_callback"] = stdout_callback
-            captured_callbacks["stderr_callback"] = stderr_callback
-            return "COMPLETE"
-
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        execute_single_step(runtime, step_number=1)
-        assert callable(captured_callbacks["stdout_callback"])
-        assert callable(captured_callbacks["stderr_callback"])
-
-    def test_no_selector_appends_output_to_log_via_callback(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        log_file = tmp_path / "out.log"
-        runtime = _make_runtime(tmp_path, log_file=log_file)
-
-        def fake_run_command(
-            command: list[str],
-            target: Path,
-            *,
-            env: dict[str, str],
-            stdout_callback: object = None,
-            stderr_callback: object = None,
-            idle_timeout: float | None = None,
-        ) -> str:
-            if callable(stdout_callback):
-                stdout_callback("stdout chunk\n")
-            if callable(stderr_callback):
-                stderr_callback("stderr chunk\n")
-            return "COMPLETE"
-
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        execute_single_step(runtime, step_number=1)
-        log_content = log_file.read_text(encoding="utf-8")
-        assert "stdout chunk" in log_content
-        assert "stderr chunk" in log_content
-
-    def test_step_header_is_printed_and_logged(
+    def test_dry_run_names_a_prompt_that_needs_no_preprocessing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        log_file = tmp_path / "out.log"
-        runtime = _make_runtime(tmp_path, log_file=log_file)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.run_prompt_command",
-            lambda *a, **kw: "COMPLETE",
-        )
-        execute_single_step(runtime, step_number=3)
-        out, _ = capsys.readouterr()
-        assert "Step 3" in out
-        assert "Step 3" in log_file.read_text(encoding="utf-8")
-
-    def test_selector_mode_returns_true_when_complete(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        prompt_file = tmp_path / "select.md"
-        prompt_file.write_text("select a task\n", encoding="utf-8")
-        invocation = PreparedSelectInvocation(
-            source_prompt_file=prompt_file,
-            effective_prompt_file=prompt_file,
-            command=["fake-selector"],
-            command_kind="selector",
-            runner_command=["fake-runner"],
-            selector_command=["fake-selector"],
-        )
-        runtime = _make_runtime(
-            tmp_path,
-            select_invocation=invocation,
-            loop_prompt=None,
-            implement_prompt_file=tmp_path / "implement.md",
-        )
-
-        # The step retries the selector until it resolves, so the script also
-        # bounds the retries: an unscripted call raises instead of looping.
-        scripted = iter(["COMPLETE"])
-        monkeypatch.setattr(
-            "agm.commands.loop.step.run_prompt_command",
-            lambda *a, **kw: next(scripted),
-        )
-        # Real selector_result: "COMPLETE" on the last line → returns None → done.
-        result = execute_single_step(runtime, step_number=1)
-        assert result is True
-
-    def test_selector_timeout_is_retried_within_the_step(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        prompt_file = tmp_path / "select.md"
-        prompt_file.write_text("select a task\n", encoding="utf-8")
-        invocation = PreparedSelectInvocation(
-            source_prompt_file=prompt_file,
-            effective_prompt_file=prompt_file,
-            command=["fake-selector"],
-            command_kind="selector",
-            runner_command=["fake-runner"],
-            selector_command=["fake-selector"],
-        )
-        runtime = _make_runtime(tmp_path, select_invocation=invocation, loop_prompt=None)
-        # The step retries the selector until it resolves, so the script also
-        # bounds the retries: an unscripted call raises instead of looping.
-        scripted: list[str | BaseException] = [AgentCallTimeout(1.0), "COMPLETE\n"]
-        calls = 0
-
-        def fake_run_command(*args: object, **kwargs: object) -> str:
-            del args, kwargs
-            nonlocal calls
-            calls += 1
-            response = scripted.pop(0)
-            if isinstance(response, BaseException):
-                raise response
-            return response
-
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-
-        assert execute_single_step(runtime, step_number=1) is True
-        assert calls == 2
-
-    def test_selector_mode_returns_false_and_runs_runner_for_task_file(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        prompt_file = tmp_path / "select.md"
-        prompt_file.write_text("select a task\n", encoding="utf-8")
-        task_file = tmp_path / "tasks" / "task-1.md"
-        task_file.parent.mkdir(parents=True, exist_ok=True)
-        task_file.write_text("do task\n", encoding="utf-8")
-
-        implement_file = tmp_path / "implement.md"
-        implement_file.write_text("implement @%{TASK_FILE}\n", encoding="utf-8")
-
-        invocation = PreparedSelectInvocation(
-            source_prompt_file=prompt_file,
-            effective_prompt_file=prompt_file,
-            command=["fake-selector"],
-            command_kind="selector",
-            runner_command=["fake-runner"],
-            selector_command=["fake-selector"],
-        )
-        runtime = _make_runtime(
-            tmp_path,
-            select_invocation=invocation,
-            implement_prompt_file=implement_file,
-            loop_prompt=None,
-        )
-
-        call_count = 0
-        all_targets: list[Path] = []
-
-        def fake_run_command(
-            command: list[str],
-            target: Path,
-            *,
-            env: dict[str, str],
-            stdout_callback: object = None,
-            stderr_callback: object = None,
-            idle_timeout: float | None = None,
-        ) -> str:
-            nonlocal call_count
-            call_count += 1
-            all_targets.append(target)
-            # Selector call: return task filename so real selector_result resolves it.
-            # Runner call: return arbitrary output.
-            if command == ["fake-selector"]:
-                return "task-1.md\n"
-            return "task output"
-
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
-        result = execute_single_step(runtime, step_number=1)
-        assert result is False
-        # selector + runner calls = 2
-        assert call_count == 2
-        # Runner (2nd call) uses preprocessed implement.md, not the raw task file
-        assert all_targets[1] != task_file
-        expanded_text = all_targets[1].read_text(encoding="utf-8")
-        assert "TASK_FILE" in expanded_text or str(task_file) in expanded_text
-
-    def test_runner_timeout_leaves_selector_iteration_incomplete(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        prompt_file = tmp_path / "select.md"
-        prompt_file.write_text("select a task\n", encoding="utf-8")
-        task_file = tmp_path / "tasks" / "task.md"
-        task_file.parent.mkdir(parents=True)
-        task_file.write_text("task\n", encoding="utf-8")
-        invocation = PreparedSelectInvocation(
-            source_prompt_file=prompt_file,
-            effective_prompt_file=prompt_file,
-            command=["fake-selector"],
-            command_kind="selector",
-            runner_command=["fake-runner"],
-            selector_command=["fake-selector"],
-        )
-        runtime = _make_runtime(tmp_path, select_invocation=invocation, loop_prompt=None)
-
-        def fake_run_command(command: list[str], *args: object, **kwargs: object) -> str:
-            del args, kwargs
-            if command == ["fake-selector"]:
-                return "task.md\n"
-            raise AgentCallTimeout(1.0)
-
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-
-        assert execute_single_step(runtime, step_number=1) is False
-
-    def test_selector_mode_implement_prompt_expands_task_file_env_var(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        prompt_file = tmp_path / "select.md"
-        prompt_file.write_text("select a task\n", encoding="utf-8")
-        task_file = tmp_path / "tasks" / "task-1.md"
-        task_file.parent.mkdir(parents=True, exist_ok=True)
-        task_file.write_text("do task\n", encoding="utf-8")
-
-        implement_file = tmp_path / "implement.md"
-        implement_file.write_text("Implement the task at %{TASK_FILE}.\n", encoding="utf-8")
-
-        invocation = PreparedSelectInvocation(
-            source_prompt_file=prompt_file,
-            effective_prompt_file=prompt_file,
-            command=["fake-selector"],
-            command_kind="selector",
-            runner_command=["fake-runner"],
-            selector_command=["fake-selector"],
-        )
-        runtime = _make_runtime(
-            tmp_path,
-            select_invocation=invocation,
-            implement_prompt_file=implement_file,
-            loop_prompt=None,
-        )
-
-        all_targets: list[Path] = []
-        all_envs: list[dict[str, str]] = []
-
-        def fake_run_command(
-            command: list[str],
-            target: Path,
-            *,
-            env: dict[str, str],
-            stdout_callback: object = None,
-            stderr_callback: object = None,
-            idle_timeout: float | None = None,
-        ) -> str:
-            all_targets.append(target)
-            all_envs.append(env)
-            # Selector call: real selector_result resolves "task-1.md" → task_file.
-            if command == ["fake-selector"]:
-                return "task-1.md\n"
-            return "task output"
-
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
-        execute_single_step(runtime, step_number=1)
-
-        # Runner (2nd call) receives preprocessed implement.md with TASK_FILE expanded
-        assert len(all_targets) == 2
-        runner_target = all_targets[1]
-        expanded_content = runner_target.read_text(encoding="utf-8")
-        assert str(task_file) in expanded_content
-        assert "%{TASK_FILE}" not in expanded_content
-        # TASK_FILE is in runner env
-        assert all_envs[1]["TASK_FILE"] == str(task_file)
-
-    def test_selector_mode_explicit_prompt_prepares_with_task_file_env(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        task_file = tmp_path / "tasks" / "task-1.md"
-        task_file.parent.mkdir(parents=True, exist_ok=True)
-        task_file.write_text("do task\n", encoding="utf-8")
-
-        prompt_file = tmp_path / "select.md"
-        prompt_file.write_text("select\n", encoding="utf-8")
-
-        custom_prompt = tmp_path / "custom-prompt.md"
-        custom_prompt.write_text("Do %{TASK_FILE} with %{TASKS_DIR}\n", encoding="utf-8")
-
-        invocation = PreparedSelectInvocation(
-            source_prompt_file=prompt_file,
-            effective_prompt_file=prompt_file,
-            command=["fake-selector"],
-            command_kind="selector",
-            runner_command=["fake-runner"],
-            selector_command=["fake-selector"],
-        )
-        runtime = _make_runtime(
-            tmp_path,
-            select_invocation=invocation,
-            prompt_source=custom_prompt,
-            loop_prompt=None,
-        )
-
-        all_targets: list[Path] = []
-        all_envs: list[dict[str, str]] = []
-
-        def fake_run_command(
-            command: list[str],
-            target: Path,
-            *,
-            env: dict[str, str],
-            stdout_callback: object = None,
-            stderr_callback: object = None,
-            idle_timeout: float | None = None,
-        ) -> str:
-            all_targets.append(target)
-            all_envs.append(env)
-            # Selector call: real selector_result resolves "task-1.md" → task_file.
-            if command == ["fake-selector"]:
-                return "task-1.md\n"
-            return "output"
-
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
-        execute_single_step(runtime, step_number=1)
-
-        # Explicit prompt is prepared with TASK_FILE in its environment.
-        assert len(all_targets) == 2
-        runner_content = all_targets[1].read_text(encoding="utf-8")
-        assert str(task_file) in runner_content
-        assert all_envs[1]["TASK_FILE"] == str(task_file)
-
-    def test_selector_mode_no_implement_no_prompt_uses_raw_task_file(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """When no implement.md and no explicit prompt, task file is used."""
-        task_file = tmp_path / "tasks" / "task-1.md"
-        task_file.parent.mkdir(parents=True, exist_ok=True)
-        task_file.write_text("do task\n", encoding="utf-8")
-
-        prompt_file = tmp_path / "select.md"
-        prompt_file.write_text("select\n", encoding="utf-8")
-
-        invocation = PreparedSelectInvocation(
-            source_prompt_file=prompt_file,
-            effective_prompt_file=prompt_file,
-            command=["fake-selector"],
-            command_kind="selector",
-            runner_command=["fake-runner"],
-            selector_command=["fake-selector"],
-        )
-        runtime = _make_runtime(
-            tmp_path,
-            select_invocation=invocation,
-            loop_prompt=None,
-            # Neither an implementation prompt nor an explicit prompt is set.
-        )
-
-        all_targets: list[Path] = []
-        all_envs: list[dict[str, str]] = []
-
-        def fake_run_command(
-            command: list[str],
-            target: Path,
-            *,
-            env: dict[str, str],
-            stdout_callback: object = None,
-            stderr_callback: object = None,
-            idle_timeout: float | None = None,
-        ) -> str:
-            all_targets.append(target)
-            all_envs.append(env)
-            # Selector call: real selector_result resolves "task-1.md" → task_file.
-            if command == ["fake-selector"]:
-                return "task-1.md\n"
-            return "output"
-
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
-        execute_single_step(runtime, step_number=1)
-
-        # Raw task file is used as runner target (fallback)
-        assert len(all_targets) == 2
-        assert all_targets[1] == task_file
-        assert "TASK_FILE" not in all_envs[1]
-
-    def test_selector_mode_retries_until_valid_task_path(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        prompt_file = tmp_path / "select.md"
-        prompt_file.write_text("select\n", encoding="utf-8")
-        task_file = tmp_path / "tasks" / "task-1.md"
-        task_file.parent.mkdir(parents=True, exist_ok=True)
-        task_file.write_text("do task\n", encoding="utf-8")
-
-        implement_file = tmp_path / "implement.md"
-        implement_file.write_text("implement @%{TASK_FILE}\n", encoding="utf-8")
-
-        invocation = PreparedSelectInvocation(
-            source_prompt_file=prompt_file,
-            effective_prompt_file=prompt_file,
-            command=["fake-selector"],
-            command_kind="selector",
-            runner_command=["fake-runner"],
-            selector_command=["fake-selector"],
-        )
-        runtime = _make_runtime(
-            tmp_path,
-            select_invocation=invocation,
-            implement_prompt_file=implement_file,
-            loop_prompt=None,
-        )
-
-        selector_call_count = 0
-
-        def fake_run_command(
-            command: list[str],
-            target: Path,
-            *,
-            env: dict[str, str],
-            stdout_callback: object = None,
-            stderr_callback: object = None,
-            idle_timeout: float | None = None,
-        ) -> str:
-            nonlocal selector_call_count
-            if command == ["fake-selector"]:
-                selector_call_count += 1
-                # 1st selector call: return non-resolvable text → real selector_result → str.
-                # 2nd selector call: return task filename → real selector_result → Path.
-                if selector_call_count == 1:
-                    return "not a path yet\n"
-                return "task-1.md\n"
-            return "output"
-
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        # Real selector_result drives the retry: str on 1st call, Path on 2nd.
-        execute_single_step(runtime, step_number=1)
-        assert selector_call_count == 2
-
-
-# ===========================================================================
-# cleanup_runtime
-# ===========================================================================
-
-
-class TestCleanupRuntime:
-    def test_removes_temp_files(self, tmp_path: Path) -> None:
-        f1 = tmp_path / "tmp1.md"
-        f2 = tmp_path / "tmp2.md"
-        f1.write_text("a", encoding="utf-8")
-        f2.write_text("b", encoding="utf-8")
-        runtime = _make_runtime(tmp_path)
-        runtime.temp_files.extend([f1, f2])
-        cleanup_runtime(runtime)
-        assert not f1.exists()
-        assert not f2.exists()
-
-    def test_tolerates_already_deleted_temp_files(self, tmp_path: Path) -> None:
-        missing = tmp_path / "gone.md"
-        runtime = _make_runtime(tmp_path)
-        runtime.temp_files.append(missing)
-        cleanup_runtime(runtime)  # should not raise
-
-
-# ===========================================================================
-# run (step entry point)
-# ===========================================================================
-
-
-class TestStepRun:
-    def _stub_prepare(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LoopStepRuntime:
-        runtime = _make_runtime(tmp_path)
-
-        def fake_prepare(args: LoopArgs) -> LoopStepRuntime:
-            return runtime
-
-        monkeypatch.setattr("agm.commands.loop.step.prepare_runtime", fake_prepare)
-        monkeypatch.setattr("agm.commands.loop.step.cleanup_runtime", lambda r: None)
-        return runtime
-
-    def test_calls_execute_single_step_and_returns(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        runtime = self._stub_prepare(tmp_path, monkeypatch)
-        step_calls: list[int] = []
-
-        def fake_execute(r: LoopStepRuntime, *, step_number: int) -> bool:
-            step_calls.append(step_number)
-            print(f"Step {step_number}")
-            return True
-
-        monkeypatch.setattr("agm.commands.loop.step.execute_single_step", fake_execute)
-        monkeypatch.setattr("agm.commands.loop.step.dry_run.enabled", lambda: False)
-
-        args = _make_loop_args()
-        run(args)
-        out, _ = capsys.readouterr()
-        assert step_calls == [1]
-        assert out.startswith(f"Tasks dir: {runtime.resolved_tasks_dir}\nStep 1\n")
-
-    def test_dry_run_prints_and_does_not_execute(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        self._stub_prepare(tmp_path, monkeypatch)
-        dry_run_called = [False]
-
-        def fake_print_dry_run(r: LoopStepRuntime) -> None:
-            dry_run_called[0] = True
-
-        execute_called = [False]
-
-        def fake_execute(r: LoopStepRuntime, *, step_number: int) -> bool:
-            execute_called[0] = True
-            return True
-
-        monkeypatch.setattr("agm.commands.loop.step.print_dry_run", fake_print_dry_run)
-        monkeypatch.setattr("agm.commands.loop.step.execute_single_step", fake_execute)
-        monkeypatch.setattr("agm.commands.loop.step.dry_run.enabled", lambda: True)
-
-        args = _make_loop_args()
-        run(args)
-        assert dry_run_called[0] is True
-        assert execute_called[0] is False
-
-    def test_keyboard_interrupt_exits_with_130(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._stub_prepare(tmp_path, monkeypatch)
-        monkeypatch.setattr("agm.commands.loop.step.dry_run.enabled", lambda: False)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.execute_single_step",
-            lambda *a, **kw: (_ for _ in ()).throw(KeyboardInterrupt),
-        )
-        args = _make_loop_args()
-        with pytest.raises(SystemExit) as exc_info:
-            run(args)
-        assert exc_info.value.code == 130
-
-    def test_keyboard_interrupt_during_setup_exits_130(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            "agm.commands.loop.step.prepare_runtime",
-            lambda args: (_ for _ in ()).throw(KeyboardInterrupt),
-        )
-
-        with pytest.raises(SystemExit) as exc_info:
-            run(_make_loop_args())
-
-        assert exc_info.value.code == 130
-
-    def test_cleanup_is_called_even_on_exception(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        runtime = _make_runtime(tmp_path)
-        cleanup_called = [False]
-
-        monkeypatch.setattr("agm.commands.loop.step.prepare_runtime", lambda args: runtime)
-        monkeypatch.setattr("agm.commands.loop.step.dry_run.enabled", lambda: False)
-
-        def fake_execute(r: LoopStepRuntime, *, step_number: int) -> bool:
-            raise RuntimeError("oops")
-
-        monkeypatch.setattr("agm.commands.loop.step.execute_single_step", fake_execute)
-
-        def fake_cleanup(r: LoopStepRuntime) -> None:
-            cleanup_called[0] = True
-
-        monkeypatch.setattr("agm.commands.loop.step.cleanup_runtime", fake_cleanup)
-
-        args = _make_loop_args()
-        with pytest.raises(RuntimeError):
-            run(args)
-        assert cleanup_called[0] is True
-
-    def test_cleanup_not_called_when_prepare_runtime_raises(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """finally block when runtime is None after prepare_runtime raises.
-
-        When prepare_runtime raises, runtime stays None and cleanup_runtime
-        must NOT be called.
-        """
-        monkeypatch.setattr(
-            "agm.commands.loop.step.prepare_runtime",
-            lambda _args: (_ for _ in ()).throw(RuntimeError("setup failed")),
-        )
-        cleanup_called = [False]
-        monkeypatch.setattr(
-            "agm.commands.loop.step.cleanup_runtime",
-            lambda r: cleanup_called.__setitem__(0, True),
-        )
-
-        args = _make_loop_args()
-        with pytest.raises(RuntimeError, match="setup failed"):
-            run(args)
-        assert cleanup_called[0] is False
-
-
-# ===========================================================================
-# loop.select — _dry_run_prompt_text
-# ===========================================================================
-
-
-class TestNextDryRunPromptText:
-    def test_same_file_returns_source_path(self, tmp_path: Path) -> None:
-        f = tmp_path / "select.md"
-        assert next_dry_run_prompt_text(f, f) == str(f)
-
-    def test_different_files_shows_arrow_and_label(self, tmp_path: Path) -> None:
-        src = tmp_path / "select.md"
-        eff = tmp_path / "select.md.tmp"
-        text = next_dry_run_prompt_text(src, eff)
-        assert text == f"{src} -> {eff} (preprocessed)"
-
-
-# ===========================================================================
-# loop.select — _print_dry_run_prompt
-# ===========================================================================
-
-
-class TestNextPrintDryRunPrompt:
-    def test_prints_correct_format(self, capsys: pytest.CaptureFixture[str]) -> None:
-        next_print_dry_run_prompt("selector", "/tmp/select.md")
-        out, _ = capsys.readouterr()
-        assert out.strip() == "dry-run: prompt [selector]: /tmp/select.md"
-
-    def test_includes_label_in_output(self, capsys: pytest.CaptureFixture[str]) -> None:
-        next_print_dry_run_prompt("custom-label", "some text")
-        out, _ = capsys.readouterr()
-        assert "[custom-label]" in out
-        assert "some text" in out
-
-
-# ===========================================================================
-# loop.select — run
-# ===========================================================================
-
-
-class TestNextRun:
-    def _make_invocation(self, tmp_path: Path) -> PreparedSelectInvocation:
-        prompt = tmp_path / "select.md"
-        prompt.write_text("select a task\n", encoding="utf-8")
-        return PreparedSelectInvocation(
-            source_prompt_file=prompt,
-            effective_prompt_file=prompt,
-            command=["fake-cmd"],
-            command_kind="selector",
-            runner_command=["fake-runner"],
-            selector_command=["fake-cmd"],
-        )
-
-    def test_errors_when_no_selector_mode(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        home = tmp_path / "home"
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("agm.commands.loop.select.use_selector_mode", lambda args: False)
-
-        args = _make_loop_select_args(no_selector=True)
-        with pytest.raises(SystemExit) as exc_info:
-            next_run(args)
-        assert exc_info.value.code == 1
-        _, err = capsys.readouterr()
-        assert "selector" in err.lower()
-
-    def test_dry_run_prints_configuration_and_skips_execution(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        home = tmp_path / "home"
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.chdir(tmp_path)
-
-        invocation = self._make_invocation(tmp_path)
-        monkeypatch.setattr("agm.commands.loop.select.use_selector_mode", lambda args: True)
-        monkeypatch.setattr(
-            "agm.commands.loop.select.prepare_select_invocation",
-            lambda args, temp_files, env: invocation,
-        )
-        monkeypatch.setattr("agm.commands.loop.select.dry_run.enabled", lambda: True)
-        monkeypatch.setattr("agm.commands.loop.select.tasks_dir", lambda args: tmp_path / "tasks")
-        monkeypatch.setattr("agm.commands.loop.select.loop_env", lambda d: {})
-
-        run_command_called = [False]
-
-        def fake_run_command(
-            command: list[str],
-            target: Path,
-            *,
-            env: dict[str, str],
-            idle_timeout: float | None = None,
-        ) -> str:
-            run_command_called[0] = True
-            return ""
-
-        monkeypatch.setattr("agm.commands.loop.select.run_prompt_command", fake_run_command)
-
-        args = _make_loop_select_args()
-        next_run(args)
-
-        assert run_command_called[0] is False
-        out, _ = capsys.readouterr()
-        assert "dry-run" in out
-
-    def test_run_command_output_is_printed(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        home = tmp_path / "home"
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.chdir(tmp_path)
-
-        invocation = self._make_invocation(tmp_path)
-        monkeypatch.setattr("agm.commands.loop.select.use_selector_mode", lambda args: True)
-        monkeypatch.setattr(
-            "agm.commands.loop.select.prepare_select_invocation",
-            lambda args, temp_files, env: invocation,
-        )
-        monkeypatch.setattr("agm.commands.loop.select.dry_run.enabled", lambda: False)
-        monkeypatch.setattr("agm.commands.loop.select.tasks_dir", lambda args: tmp_path / "tasks")
-        monkeypatch.setattr("agm.commands.loop.select.loop_env", lambda d: {})
-        monkeypatch.setattr("agm.commands.loop.select.cleanup_temp_files", lambda files: None)
-        monkeypatch.setattr(
-            "agm.commands.loop.select.run_prompt_command",
-            lambda command, target, *, env, idle_timeout=None: "task-1.md",
-        )
-
-        args = _make_loop_select_args()
-        next_run(args)
-
-        out, _ = capsys.readouterr()
-        assert "task-1.md" in out
-
-    def test_timeout_returns_without_terminating_select_command(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        home = tmp_path / "home"
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.chdir(tmp_path)
-        invocation = self._make_invocation(tmp_path)
-        monkeypatch.setattr("agm.commands.loop.select.use_selector_mode", lambda args: True)
-        monkeypatch.setattr(
-            "agm.commands.loop.select.prepare_select_invocation",
-            lambda args, temp_files, env: invocation,
-        )
-        monkeypatch.setattr("agm.commands.loop.select.dry_run.enabled", lambda: False)
-        monkeypatch.setattr("agm.commands.loop.select.tasks_dir", lambda args: tmp_path / "tasks")
-        monkeypatch.setattr("agm.commands.loop.select.loop_env", lambda d: {})
-        monkeypatch.setattr("agm.commands.loop.select.cleanup_temp_files", lambda files: None)
-        monkeypatch.setattr(
-            "agm.commands.loop.select.run_prompt_command",
-            lambda *args, **kwargs: (_ for _ in ()).throw(AgentCallTimeout(1.0)),
-        )
-
-        next_run(_make_loop_select_args())
-
-    def test_keyboard_interrupt_exits_130(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        home = tmp_path / "home"
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.chdir(tmp_path)
-
-        invocation = self._make_invocation(tmp_path)
-        monkeypatch.setattr("agm.commands.loop.select.use_selector_mode", lambda args: True)
-        monkeypatch.setattr(
-            "agm.commands.loop.select.prepare_select_invocation",
-            lambda args, temp_files, env: invocation,
-        )
-        monkeypatch.setattr("agm.commands.loop.select.dry_run.enabled", lambda: False)
-        monkeypatch.setattr("agm.commands.loop.select.tasks_dir", lambda args: tmp_path / "tasks")
-        monkeypatch.setattr("agm.commands.loop.select.loop_env", lambda d: {})
-        monkeypatch.setattr(
-            "agm.commands.loop.select.run_prompt_command",
-            lambda command, target, *, env, idle_timeout=None: (_ for _ in ()).throw(
-                KeyboardInterrupt
-            ),
-        )
-
-        args = _make_loop_select_args()
-        with pytest.raises(SystemExit) as exc_info:
-            next_run(args)
-        assert exc_info.value.code == 130
-
-    def test_cleanup_is_called_even_on_error(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        home = tmp_path / "home"
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.chdir(tmp_path)
-
-        invocation = self._make_invocation(tmp_path)
-        monkeypatch.setattr("agm.commands.loop.select.use_selector_mode", lambda args: True)
-        monkeypatch.setattr(
-            "agm.commands.loop.select.prepare_select_invocation",
-            lambda args, temp_files, env: invocation,
-        )
-        monkeypatch.setattr("agm.commands.loop.select.dry_run.enabled", lambda: False)
-        monkeypatch.setattr("agm.commands.loop.select.tasks_dir", lambda args: tmp_path / "tasks")
-        monkeypatch.setattr("agm.commands.loop.select.loop_env", lambda d: {})
-        monkeypatch.setattr(
-            "agm.commands.loop.select.run_prompt_command",
-            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")),
-        )
-
-        cleanup_called = [False]
-
-        def fake_cleanup(files: list[Path]) -> None:
-            cleanup_called[0] = True
-
-        monkeypatch.setattr("agm.commands.loop.select.cleanup_temp_files", fake_cleanup)
-
-        args = _make_loop_select_args()
-        with pytest.raises(RuntimeError):
-            next_run(args)
-        assert cleanup_called[0] is True
-
-
-# ===========================================================================
-# loop.run — run
-# ===========================================================================
-
-
-class TestLoopRun:
-    def _stub_prepare(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LoopStepRuntime:
-        runtime = _make_runtime(tmp_path)
-        monkeypatch.setattr("agm.commands.loop.run.step_command.prepare_runtime", lambda a: runtime)
-        monkeypatch.setattr("agm.commands.loop.run.step_command.cleanup_runtime", lambda r: None)
-        return runtime
-
-    def test_loops_until_execute_returns_true(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        runtime = self._stub_prepare(tmp_path, monkeypatch)
-        monkeypatch.setattr("agm.commands.loop.run.dry_run.enabled", lambda: False)
-
-        call_count = [0]
-
-        def fake_execute(r: LoopStepRuntime, *, step_number: int) -> bool:
-            call_count[0] += 1
-            print(f"Step {step_number}")
-            return call_count[0] >= 3
-
-        monkeypatch.setattr("agm.commands.loop.run.step_command.execute_single_step", fake_execute)
-
-        args = _make_loop_args()
-        loop_run(args)
-        out, _ = capsys.readouterr()
-        assert call_count[0] == 3
-        assert out.startswith(f"Tasks dir: {runtime.resolved_tasks_dir}\nStep 1\n")
-        assert out.count("Tasks dir:") == 1
-
-    def test_increments_step_number_across_iterations(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._stub_prepare(tmp_path, monkeypatch)
-        monkeypatch.setattr("agm.commands.loop.run.dry_run.enabled", lambda: False)
-
-        step_numbers: list[int] = []
-
-        def fake_execute(r: LoopStepRuntime, *, step_number: int) -> bool:
-            step_numbers.append(step_number)
-            return len(step_numbers) >= 3
-
-        monkeypatch.setattr("agm.commands.loop.run.step_command.execute_single_step", fake_execute)
-
-        args = _make_loop_args()
-        loop_run(args)
-        assert step_numbers == [1, 2, 3]
-
-    def test_dry_run_calls_print_dry_run_and_does_not_execute(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._stub_prepare(tmp_path, monkeypatch)
-        monkeypatch.setattr("agm.commands.loop.run.dry_run.enabled", lambda: True)
-
-        dry_run_called = [False]
-
-        def fake_print_dry_run(r: LoopStepRuntime) -> None:
-            dry_run_called[0] = True
-
-        execute_called = [False]
-
-        def fake_execute(r: LoopStepRuntime, *, step_number: int) -> bool:
-            execute_called[0] = True
-            return True
-
-        monkeypatch.setattr("agm.commands.loop.run.step_command.print_dry_run", fake_print_dry_run)
-        monkeypatch.setattr("agm.commands.loop.run.step_command.execute_single_step", fake_execute)
-
-        args = _make_loop_args()
-        loop_run(args)
-        assert dry_run_called[0] is True
-        assert execute_called[0] is False
-
-    def test_keyboard_interrupt_exits_130(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._stub_prepare(tmp_path, monkeypatch)
-        monkeypatch.setattr("agm.commands.loop.run.dry_run.enabled", lambda: False)
-        monkeypatch.setattr(
-            "agm.commands.loop.run.step_command.execute_single_step",
-            lambda *a, **kw: (_ for _ in ()).throw(KeyboardInterrupt),
-        )
-
-        args = _make_loop_args()
-        with pytest.raises(SystemExit) as exc_info:
-            loop_run(args)
-        assert exc_info.value.code == 130
-
-    def test_keyboard_interrupt_during_setup_exits_130(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            "agm.commands.loop.run.step_command.prepare_runtime",
-            lambda args: (_ for _ in ()).throw(KeyboardInterrupt),
-        )
-
-        with pytest.raises(SystemExit) as exc_info:
-            loop_run(_make_loop_args())
-
-        assert exc_info.value.code == 130
-
-    def test_cleanup_is_called_even_on_exception(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        runtime = _make_runtime(tmp_path)
-        monkeypatch.setattr("agm.commands.loop.run.step_command.prepare_runtime", lambda a: runtime)
-        monkeypatch.setattr("agm.commands.loop.run.dry_run.enabled", lambda: False)
-
-        def fake_execute(r: LoopStepRuntime, *, step_number: int) -> bool:
-            raise RuntimeError("step failed")
-
-        monkeypatch.setattr("agm.commands.loop.run.step_command.execute_single_step", fake_execute)
-
-        cleanup_called = [False]
-
-        def fake_cleanup(r: LoopStepRuntime) -> None:
-            cleanup_called[0] = True
-
-        monkeypatch.setattr("agm.commands.loop.run.step_command.cleanup_runtime", fake_cleanup)
-
-        args = _make_loop_args()
-        with pytest.raises(RuntimeError):
-            loop_run(args)
-        assert cleanup_called[0] is True
-
-    def test_terminates_immediately_when_execute_returns_true_on_first_call(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._stub_prepare(tmp_path, monkeypatch)
-        monkeypatch.setattr("agm.commands.loop.run.dry_run.enabled", lambda: False)
-
-        call_count = [0]
-
-        def fake_execute(r: LoopStepRuntime, *, step_number: int) -> bool:
-            call_count[0] += 1
-            return True
-
-        monkeypatch.setattr("agm.commands.loop.run.step_command.execute_single_step", fake_execute)
-
-        args = _make_loop_args()
-        loop_run(args)
-        assert call_count[0] == 1
-
-    def test_cleanup_not_called_when_prepare_runtime_raises(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """finally block when runtime is None after prepare_runtime raises.
-
-        When prepare_runtime raises before returning, runtime stays None and
-        cleanup_runtime must NOT be called.
-        """
-        monkeypatch.setattr(
-            "agm.commands.loop.run.step_command.prepare_runtime",
-            lambda _args: (_ for _ in ()).throw(RuntimeError("prepare failed")),
-        )
-        cleanup_called = [False]
-        monkeypatch.setattr(
-            "agm.commands.loop.run.step_command.cleanup_runtime",
-            lambda r: cleanup_called.__setitem__(0, True),
-        )
-
-        args = _make_loop_args()
-        with pytest.raises(RuntimeError, match="prepare failed"):
-            loop_run(args)
-        assert cleanup_called[0] is False
+        _loop_home(tmp_path, monkeypatch, prompts={"loop.md": "work\n", "select.md": "select\n"})
+        _write_progress(tmp_path)
+        fake_agent(monkeypatch, "COMPLETE\n")
+        dry_run.set_enabled(True)
+
+        step_run(_make_loop_args())
+
+        out = capsys.readouterr().out
+        assert "prompt [loop]: " in out
+        assert "(preprocessed)" not in out
 
 
 # ---------------------------------------------------------------------------
-# Runtime builders for TestPrintDryRunFull parametrized cases
+# Cleanup and interruption
 # ---------------------------------------------------------------------------
 
 
-def _make_selector_invocation(tmp_path: Path) -> PreparedSelectInvocation:
-    """Build a selector PreparedSelectInvocation for dry-run tests."""
-    prompt = tmp_path / "select.md"
-    prompt.write_text("select\n", encoding="utf-8")
-    return PreparedSelectInvocation(
-        source_prompt_file=prompt,
-        effective_prompt_file=prompt,
-        command=["selector"],
-        command_kind="selector",
-        runner_command=["runner"],
-        selector_command=["selector"],
-    )
-
-
-def _dry_run_selector_idle_timeout(tmp_path: Path) -> LoopStepRuntime:
-    return _make_runtime(
-        tmp_path,
-        select_invocation=_make_selector_invocation(tmp_path),
-        loop_prompt=None,
-        runner_command=["runner"],
-        env={},
-        idle_timeout=5.0,
-    )
-
-
-def _dry_run_selector_implement_prompt(tmp_path: Path) -> LoopStepRuntime:
-    impl = tmp_path / "implement.md"
-    impl.write_text("implement\n", encoding="utf-8")
-    return _make_runtime(
-        tmp_path,
-        select_invocation=_make_selector_invocation(tmp_path),
-        implement_prompt_file=impl,
-        loop_prompt=None,
-        runner_command=["runner"],
-        env={},
-    )
-
-
-def _dry_run_selector_explicit_prompt(tmp_path: Path) -> LoopStepRuntime:
-    prompt_source = tmp_path / "custom-prompt.md"
-    prompt_source.write_text("custom\n", encoding="utf-8")
-    return _make_runtime(
-        tmp_path,
-        select_invocation=_make_selector_invocation(tmp_path),
-        prompt_source=prompt_source,
-        loop_prompt=None,
-        runner_command=["runner"],
-        env={},
-    )
-
-
-def _dry_run_selector_inline_prompt(tmp_path: Path) -> LoopStepRuntime:
-    return _make_runtime(
-        tmp_path,
-        select_invocation=_make_selector_invocation(tmp_path),
-        prompt_source="custom %{TASK_FILE}",
-        loop_prompt=None,
-        runner_command=["runner"],
-        env={},
-    )
-
-
-def _dry_run_no_selector_log_file(tmp_path: Path) -> LoopStepRuntime:
-    return _make_runtime(
-        tmp_path,
-        runner_command=["runner"],
-        env={},
-        log_file=tmp_path / "test.log",
-    )
-
-
-def _dry_run_no_selector_explicit_prompt(tmp_path: Path) -> LoopStepRuntime:
-    inline_prompt = tmp_path / "inline.md"
-    inline_prompt.write_text("inline text\n", encoding="utf-8")
-    return _make_runtime(
-        tmp_path,
-        runner_command=["runner"],
-        env={},
-        prompt_source="inline text",
-        loop_prompt=PreparedPrompt(
-            label="prompt", source_file=inline_prompt, effective_file=inline_prompt
-        ),
-    )
-
-
-def _dry_run_with_bootstrap(tmp_path: Path) -> LoopStepRuntime:
-    bootstrap_f = tmp_path / "select.md"
-    bootstrap_f.write_text("bootstrap\n", encoding="utf-8")
-    bp = PreparedPrompt(label="bootstrap", source_file=bootstrap_f, effective_file=bootstrap_f)
-    return _make_runtime(
-        tmp_path,
-        runner_command=["runner"],
-        env={},
-        bootstrap_prompt=bp,
-    )
-
-
-class TestPrintDryRunFull:
-    @pytest.mark.parametrize(
-        ("build_runtime", "expected_snippets"),
-        [
-            pytest.param(
-                _dry_run_selector_idle_timeout,
-                ["idle timeout: 5.0s", "selector command: selector"],
-                id="selector_idle_timeout",
-            ),
-            pytest.param(
-                _dry_run_selector_implement_prompt,
-                ["implement.md", "(default)"],
-                id="selector_implement_prompt",
-            ),
-            pytest.param(
-                _dry_run_selector_explicit_prompt,
-                ["custom-prompt"],
-                id="selector_explicit_prompt",
-            ),
-            pytest.param(
-                _dry_run_selector_inline_prompt,
-                ["prompt [prompt]: inline prompt"],
-                id="selector_inline_prompt",
-            ),
-            pytest.param(
-                _dry_run_no_selector_log_file,
-                ["idle timeout: disabled", "test.log"],
-                id="no_selector_log_file",
-            ),
-            pytest.param(
-                _dry_run_no_selector_explicit_prompt,
-                ["explicit prompt:"],
-                id="no_selector_explicit_prompt",
-            ),
-            pytest.param(
-                _dry_run_with_bootstrap,
-                ["command [bootstrap]:"],
-                id="bootstrap_prompt",
-            ),
-        ],
-    )
-    def test_print_dry_run_output(
-        self,
-        tmp_path: Path,
-        build_runtime: Callable[[Path], LoopStepRuntime],
-        expected_snippets: list[str],
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        runtime = build_runtime(tmp_path)
-        print_dry_run(runtime)
-        output = capsys.readouterr().out
-        for snippet in expected_snippets:
-            assert snippet in output
-        # When a log file is configured, the dry-run output names its full path.
-        if runtime.log_file is not None:
-            assert str(runtime.log_file) in output
-
-
-class TestPrepareRuntimeMissingPromptFiles:
-    def test_exits_when_select_md_prompt_file_missing(
+class TestCleanup:
+    def test_rendered_prompts_are_removed_when_the_agent_fails(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """prepare_runtime exits when bootstrap prompt (select.md) is missing."""
-        home = tmp_path / "home"
-        (home / ".agm" / "prompts").mkdir(parents=True)
-        # Create loop.md so the loop prompt check passes
-        (home / ".agm" / "prompts" / "loop.md").write_text("loop", encoding="utf-8")
-        # No select.md!
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
+        _loop_home(tmp_path, monkeypatch)
+        _write_progress(tmp_path)
+        rendered: list[Path] = []
 
-        args = LoopArgs(
-            command_name=None,
-            runner="fake-runner",
-            runner_args=[],
+        def respond(call: AgentCall) -> Reply:
+            rendered.append(call.prompt_file)
+            raise OSError("runner disappeared")
+
+        fake_agent(monkeypatch, respond)
+
+        # A runner that cannot be spawned is a fatal configuration error.
+        with pytest.raises(SystemExit) as exc_info:
+            step_run(_make_loop_args())
+
+        assert exc_info.value.code == 1
+
+        assert rendered and not any(path.exists() for path in rendered)
+
+    def test_cleanup_tolerates_already_deleted_prompt_files(self, tmp_path: Path) -> None:
+        runtime = LoopStepRuntime(
+            temp_files=[tmp_path / "gone.md"],
+            resolved_tasks_dir=tmp_path,
+            resolved_progress_file=tmp_path / "PROGRESS.md",
+            env={},
+            resolved_runner_command=["fake-runner"],
             selector=None,
-            no_selector=True,
-            tasks_dir=None,
-            no_log=True,
+            loop_prompt=PreparedPrompt(
+                label="loop",
+                source_file=tmp_path / "loop.md",
+                effective_file=tmp_path / "loop.md",
+            ),
+            prompt_source=None,
+            bootstrap_prompt=None,
+            extra_prompt_source=None,
             log_file=None,
-            prompt=None,
-            prompt_file=None,
-            selector_prompt=None,
-            selector_prompt_file=None,
-            extra_prompt=None,
-            extra_prompt_file=None,
-            extra_selector_prompt=None,
-            extra_selector_prompt_file=None,
-            timeout=None,
+            idle_timeout=None,
         )
+
+        cleanup_runtime(runtime)
+
+    def test_a_failed_setup_leaves_no_cleanup_to_do(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Setup can fail before a runtime exists; teardown must cope with that."""
+        _loop_home(tmp_path, monkeypatch, prompts={})
+        fake_agent(monkeypatch, "COMPLETE\n")
+
         with pytest.raises(SystemExit) as exc_info:
-            prepare_runtime(args)
+            step_run(_make_loop_args())
+
         assert exc_info.value.code == 1
 
-    def test_records_setup_diagnostic_in_log(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+
+class TestInterruption:
+    @pytest.mark.parametrize("entry_point", [step_run, loop_run], ids=["step", "loop"])
+    def test_an_interrupted_step_exits_with_the_interrupt_status(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        entry_point: Callable[[LoopArgs], None],
     ) -> None:
-        home = tmp_path / "home"
-        (home / ".agm" / "prompts").mkdir(parents=True)
-        (home / ".agm" / "prompts" / "loop.md").write_text("loop", encoding="utf-8")
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
+        _loop_home(tmp_path, monkeypatch)
+        _write_progress(tmp_path)
         log_file = tmp_path / "loop.log"
+        _raising_agent(monkeypatch, KeyboardInterrupt())
 
-        with pytest.raises(SystemExit):
-            prepare_runtime(
-                _make_loop_args(
-                    no_log=False,
-                    log_file=str(log_file),
-                    no_selector=True,
-                    runner="fake-runner",
-                )
-            )
+        with pytest.raises(SystemExit) as exc_info:
+            entry_point(_make_loop_args(no_log=False, log_file=str(log_file)))
 
-        assert "Error: prompt file not found" in log_file.read_text(encoding="utf-8")
+        assert exc_info.value.code == 130
+        assert "Interrupted" in capsys.readouterr().out
+        assert "Interrupted" in log_file.read_text(encoding="utf-8")
 
-
-class TestExecuteSingleStepSelectorStringResult:
-    def test_selector_mode_retries_when_result_is_string(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("entry_point", [step_run, loop_run], ids=["step", "loop"])
+    def test_an_interrupt_during_setup_exits_with_the_interrupt_status(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        entry_point: Callable[[LoopArgs], None],
     ) -> None:
-        """When selector_result returns a string (not Path), selector retries."""
-        prompt = tmp_path / "select.md"
-        prompt.write_text("select\n", encoding="utf-8")
-        invocation = PreparedSelectInvocation(
-            source_prompt_file=prompt,
-            effective_prompt_file=prompt,
-            command=["fake-selector"],
-            command_kind="selector",
-            runner_command=["fake-runner"],
-            selector_command=["fake-selector"],
-        )
-        runtime = _make_runtime(
-            tmp_path,
-            select_invocation=invocation,
-            loop_prompt=None,
-            runner_command=["fake-runner"],
-            env={},
-        )
+        """The bootstrap agent runs while the runtime is still being built."""
+        _loop_home(tmp_path, monkeypatch)
+        _raising_agent(monkeypatch, KeyboardInterrupt())
 
-        # 1st selector call: non-resolvable text → real selector_result → str → retry.
-        # 2nd selector call: COMPLETE → real selector_result → None → done.
-        # The script also bounds the retries: an unscripted call raises instead
-        # of looping.
-        scripted = ["not-a-file-path\n", "COMPLETE\n"]
-        call_count = 0
+        with pytest.raises(SystemExit) as exc_info:
+            entry_point(_make_loop_args())
 
-        def fake_run_command(
-            command: list[str],
-            target: Path,
-            *,
-            env: dict[str, str],
-            stdout_callback: object = None,
-            stderr_callback: object = None,
-            idle_timeout: float | None = None,
-        ) -> str:
-            nonlocal call_count
-            call_count += 1
-            return scripted.pop(0)
-
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        # Real selector_result: "not-a-file-path" is not a file → str (retry);
-        # then "COMPLETE" on last line → None (done).
-        result = execute_single_step(runtime, step_number=1)
-        # After string result, selector retries; eventually COMPLETE returns True
-        assert result is True
-        # The str result must have triggered a retry: exactly two selector calls,
-        # never a runner call (this branch never selects a task).
-        assert call_count == 2
-
-
-class TestExecuteSingleStepWithPromptSource:
-    def test_selector_mode_uses_prompt_source_for_runner_target(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """An explicit prompt source is prepared after task selection."""
-        prompt = tmp_path / "select.md"
-        prompt.write_text("select\n", encoding="utf-8")
-        invocation = PreparedSelectInvocation(
-            source_prompt_file=prompt,
-            effective_prompt_file=prompt,
-            command=["fake-selector"],
-            command_kind="selector",
-            runner_command=["fake-runner"],
-            selector_command=["fake-selector"],
-        )
-
-        runtime = _make_runtime(
-            tmp_path,
-            select_invocation=invocation,
-            prompt_source="inline",
-            loop_prompt=None,
-            runner_command=["fake-runner"],
-            env={},
-        )
-
-        task_file = tmp_path / "tasks" / "task-1.md"
-        task_file.parent.mkdir(parents=True, exist_ok=True)
-        task_file.write_text("do task\n", encoding="utf-8")
-
-        run_targets: list[Path] = []
-        run_envs: list[dict[str, str]] = []
-
-        def fake_run_command(
-            command: list[str],
-            target: Path,
-            *,
-            env: dict[str, str],
-            stdout_callback: object = None,
-            stderr_callback: object = None,
-            idle_timeout: float | None = None,
-        ) -> str:
-            run_targets.append(target)
-            run_envs.append(env)
-            # Selector call: real selector_result resolves "task-1.md" → task_file.
-            if command == ["fake-selector"]:
-                return "task-1.md\n"
-            return "output"
-
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
-        result = execute_single_step(runtime, step_number=1)
-        assert result is False
-        # The inline source is prepared with TASK_FILE in its environment.
-        assert run_targets[-1].read_text(encoding="utf-8") == "inline"
-        # TASK_FILE env var should be set for the runner
-        assert "TASK_FILE" in run_envs[-1]
-
-
-class TestExecuteSingleStepExpandsTaskFileInPrompt:
-    def test_task_file_expanded_in_prompt_file(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """When a prompt file contains %{TASK_FILE}, it is expanded after task selection."""
-        select_prompt = tmp_path / "select.md"
-        select_prompt.write_text("select\n", encoding="utf-8")
-        invocation = PreparedSelectInvocation(
-            source_prompt_file=select_prompt,
-            effective_prompt_file=select_prompt,
-            command=["fake-selector"],
-            command_kind="selector",
-            runner_command=["fake-runner"],
-            selector_command=["fake-selector"],
-        )
-
-        # Prompt file with %{TASK_FILE} placeholder
-        prompt_file_path = tmp_path / "loop.md"
-        prompt_file_path.write_text("Work on %{TASK_FILE}\n", encoding="utf-8")
-
-        runtime = _make_runtime(
-            tmp_path,
-            select_invocation=invocation,
-            prompt_source=prompt_file_path,
-            loop_prompt=None,
-            runner_command=["fake-runner"],
-            env={},
-        )
-
-        task_file = tmp_path / "tasks" / "task-1.md"
-        task_file.parent.mkdir(parents=True, exist_ok=True)
-        task_file.write_text("do task\n", encoding="utf-8")
-
-        run_targets: list[Path] = []
-
-        def fake_run_command(
-            command: list[str],
-            target: Path,
-            *,
-            env: dict[str, str],
-            stdout_callback: object = None,
-            stderr_callback: object = None,
-            idle_timeout: float | None = None,
-        ) -> str:
-            run_targets.append(target)
-            # Selector call: real selector_result resolves "task-1.md" → task_file.
-            if command == ["fake-selector"]:
-                return "task-1.md\n"
-            return "output"
-
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
-        result = execute_single_step(runtime, step_number=1)
-        assert result is False
-        # The runner target should be a new file with TASK_FILE expanded,
-        # not the original prompt file that still has %{TASK_FILE}
-        runner_target = run_targets[-1]
-        content = runner_target.read_text(encoding="utf-8")
-        assert "%{TASK_FILE}" not in content
-        assert str(task_file) in content
-
-    def test_task_file_expanded_in_inline_prompt(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """When inline prompt text contains %{TASK_FILE}, it is expanded after task selection."""
-        select_prompt = tmp_path / "select.md"
-        select_prompt.write_text("select\n", encoding="utf-8")
-        invocation = PreparedSelectInvocation(
-            source_prompt_file=select_prompt,
-            effective_prompt_file=select_prompt,
-            command=["fake-selector"],
-            command_kind="selector",
-            runner_command=["fake-runner"],
-            selector_command=["fake-selector"],
-        )
-
-        # Inline prompt text with %{TASK_FILE} placeholder
-        inline_text = "Work on %{TASK_FILE}\n"
-        from agm.agent.loop import loop_env
-
-        env_no_task = loop_env(tmp_path / "tasks")
-        runtime = _make_runtime(
-            tmp_path,
-            select_invocation=invocation,
-            prompt_source=inline_text,
-            loop_prompt=None,
-            runner_command=["fake-runner"],
-            env=env_no_task,
-        )
-
-        task_file = tmp_path / "tasks" / "task-1.md"
-        task_file.parent.mkdir(parents=True, exist_ok=True)
-        task_file.write_text("do task\n", encoding="utf-8")
-
-        run_targets: list[Path] = []
-
-        def fake_run_command(
-            command: list[str],
-            target: Path,
-            *,
-            env: dict[str, str],
-            stdout_callback: object = None,
-            stderr_callback: object = None,
-            idle_timeout: float | None = None,
-        ) -> str:
-            run_targets.append(target)
-            # Selector call: real selector_result resolves "task-1.md" → task_file.
-            if command == ["fake-selector"]:
-                return "task-1.md\n"
-            return "output"
-
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
-        result = execute_single_step(runtime, step_number=1)
-        assert result is False
-        # The runner target content should have TASK_FILE expanded
-        runner_target = run_targets[-1]
-        content = runner_target.read_text(encoding="utf-8")
-        assert "%{TASK_FILE}" not in content
-        assert str(task_file) in content
+        assert exc_info.value.code == 130
 
 
 # ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# commands/loop/step.py – cleanup_runtime
+# agm loop select
 # ---------------------------------------------------------------------------
 
 
-class TestCleanupRuntimeViaStep:
-    def test_cleanup_runtime_delegates_to_cleanup_temp_files(
+class TestLoopSelect:
+    def test_selection_requires_selector_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        agent = fake_agent(monkeypatch, "task-1.md\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            select_run(_make_select_args(no_selector=True))
+
+        assert exc_info.value.code == 1
+        assert agent.calls == []
+        assert capsys.readouterr().err.strip()
+
+    def test_the_selected_task_is_printed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        agent = fake_agent(monkeypatch, {"fake-selector": ["task-1.md\n"]})
+
+        select_run(_make_select_args())
+
+        (call,) = agent.calls
+        assert call.prompt == f"select a task from {_tasks_dir(tmp_path)}\n"
+        assert "task-1.md" in capsys.readouterr().out
+
+    def test_the_runner_selects_when_no_selector_command_is_set(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """cleanup_runtime delegates to cleanup_temp_files."""
-        f1 = tmp_path / "temp1.md"
-        f1.write_text("temp", encoding="utf-8")
+        _loop_home(tmp_path, monkeypatch)
+        agent = fake_agent(monkeypatch, {"fake-runner": ["task-1.md\n"]})
 
-        runtime = _make_runtime(tmp_path)
-        runtime.temp_files.append(f1)
-        cleanup_runtime(runtime)
-        assert not f1.exists()
+        select_run(_make_select_args(selector=None))
 
+        assert agent.runners == ["fake-runner"]
 
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# project/layout.py – current_project_dir git_common_dir path
-# ---------------------------------------------------------------------------
+    def test_dry_run_reports_the_configuration_without_selecting(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        agent = fake_agent(monkeypatch, "task-1.md\n")
+        dry_run.set_enabled(True)
 
+        select_run(_make_select_args())
 
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# project/layout.py – current_workspace with REPO_DIR env var
-# ---------------------------------------------------------------------------
+        assert agent.calls == []
+        out = capsys.readouterr().out
+        assert "loop-select configuration" in out
+        assert "selector command: fake-selector" in out
+        assert "command [selector]:" in out
 
+    def test_an_idle_selector_is_not_an_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        fake_agent(monkeypatch, {"fake-selector": [AgentTimeout()]})
 
-class TestPrepareRuntimeExtraPromptSource:
-    def test_extra_prompt_applied_to_loop_prompt(
+        select_run(_make_select_args())
+
+        assert "task" not in capsys.readouterr().out
+
+    def test_an_interrupted_selection_exits_with_the_interrupt_status(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _loop_home(tmp_path, monkeypatch)
+        _raising_agent(monkeypatch, KeyboardInterrupt())
+
+        with pytest.raises(SystemExit) as exc_info:
+            select_run(_make_select_args())
+
+        assert exc_info.value.code == 130
+        assert "Interrupted" in capsys.readouterr().out
+
+    def test_rendered_prompts_are_removed_when_selection_fails(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Extra prompt source is stored in runtime and applied to loop prompt."""
-        home = tmp_path / "home"
-        prompt_dir = home / ".agm" / "prompts"
-        prompt_dir.mkdir(parents=True)
-        (prompt_dir / "loop.md").write_text("# loop prompt1", encoding="utf-8")
-        (prompt_dir / "select.md").write_text("# select1", encoding="utf-8")
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
+        _loop_home(tmp_path, monkeypatch)
+        rendered: list[Path] = []
 
-        # Create progress file so bootstrap is skipped
-        tasks_dir_path = tmp_path / ".agent-files" / "tasks"
-        tasks_dir_path.mkdir(parents=True)
-        (tasks_dir_path / "PROGRESS.md").write_text("done1", encoding="utf-8")
+        def respond(call: AgentCall) -> Reply:
+            rendered.append(call.prompt_file)
+            raise RuntimeError("boom")
 
-        args = _make_loop_args(no_log=True, no_selector=True, extra_prompt="extra stuff")
-        runtime = prepare_runtime(args)
-        assert runtime.extra_prompt_source == "extra stuff"
-        cleanup_runtime(runtime)
+        fake_agent(monkeypatch, respond)
 
-    def test_extra_selector_prompt_applied_to_select_invocation(
+        with pytest.raises(RuntimeError):
+            select_run(_make_select_args())
+
+        assert rendered and not any(path.exists() for path in rendered)
+
+    def test_an_extra_selector_prompt_is_appended(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Extra selector prompt is appended to the selector invocation."""
-        home = tmp_path / "home"
-        prompt_dir = home / ".agm" / "prompts"
-        prompt_dir.mkdir(parents=True)
-        (prompt_dir / "loop.md").write_text("# loop1", encoding="utf-8")
-        (prompt_dir / "select.md").write_text("select %{TASKS_DIR}1", encoding="utf-8")
-        (prompt_dir / "implement.md").write_text("# implement1", encoding="utf-8")
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.chdir(tmp_path)
+        _loop_home(tmp_path, monkeypatch)
+        agent = fake_agent(monkeypatch, {"fake-selector": ["task-1.md\n"]})
 
-        tasks_dir_path = tmp_path / ".agent-files" / "tasks"
-        tasks_dir_path.mkdir(parents=True)
-        (tasks_dir_path / "PROGRESS.md").write_text("done1", encoding="utf-8")
+        select_run(_make_select_args(extra_selector_prompt="prefer the oldest task"))
 
-        args = _make_loop_args(
-            no_log=True,
-            no_selector=False,
-            selector="fake-selector",
-            extra_selector_prompt="extra selector stuff",
-        )
-        runtime = prepare_runtime(args)
-        assert runtime.select_invocation is not None
-        effective_text = runtime.select_invocation.effective_prompt_file.read_text(encoding="utf-8")
-        assert "extra selector stuff" in effective_text
-        cleanup_runtime(runtime)
+        (call,) = agent.calls
+        assert call.prompt.startswith("select a task from")
+        assert call.prompt.endswith("prefer the oldest task")
 
-
-class TestExecuteSingleStepWithExtraPrompt:
-    def test_extra_prompt_appended_to_runner_target_in_selector_mode(
+    def test_a_missing_selector_prompt_stops_the_selection(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When extra_prompt_source is set, it's appended to the runner target."""
-        task_file = tmp_path / "tasks" / "task-1.md"
-        task_file.parent.mkdir(parents=True, exist_ok=True)
-        task_file.write_text("do task1", encoding="utf-8")
+        _loop_home(tmp_path, monkeypatch, prompts={})
+        agent = fake_agent(monkeypatch, "task-1.md\n")
 
-        prompt_file = tmp_path / "select.md"
-        prompt_file.write_text("select1", encoding="utf-8")
+        with pytest.raises(SystemExit) as exc_info:
+            select_run(_make_select_args())
 
-        implement_file = tmp_path / "implement.md"
-        implement_file.write_text("implement @%{TASK_FILE}1", encoding="utf-8")
-
-        invocation = PreparedSelectInvocation(
-            source_prompt_file=prompt_file,
-            effective_prompt_file=prompt_file,
-            command=["fake-selector"],
-            command_kind="selector",
-            runner_command=["fake-runner"],
-            selector_command=["fake-selector"],
-        )
-        runtime = _make_runtime(
-            tmp_path,
-            select_invocation=invocation,
-            implement_prompt_file=implement_file,
-            loop_prompt=None,
-            extra_prompt_source="EXTRA CONTENT",
-        )
-
-        all_targets: list[Path] = []
-
-        def fake_run_command(
-            command: list[str],
-            target: Path,
-            *,
-            env: dict[str, str],
-            stdout_callback: object = None,
-            stderr_callback: object = None,
-            idle_timeout: float | None = None,
-        ) -> str:
-            all_targets.append(target)
-            # Selector call: real selector_result resolves "task-1.md" → task_file.
-            if command == ["fake-selector"]:
-                return "task-1.md\n"
-            return "output"
-
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
-        execute_single_step(runtime, step_number=1)
-
-        assert len(all_targets) == 2
-        runner_target_text = all_targets[1].read_text(encoding="utf-8")
-        assert "EXTRA CONTENT" in runner_target_text
-
-    def test_extra_prompt_appended_to_runner_target_in_implement_mode(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """With an explicit prompt source, extra content is appended."""
-        task_file = tmp_path / "tasks" / "task-1.md"
-        task_file.parent.mkdir(parents=True, exist_ok=True)
-        task_file.write_text("do task1", encoding="utf-8")
-
-        prompt_file = tmp_path / "select.md"
-        prompt_file.write_text("select1", encoding="utf-8")
-
-        custom_prompt = tmp_path / "custom-prompt.md"
-        custom_prompt.write_text("Do %{TASK_FILE} stuff", encoding="utf-8")
-
-        invocation = PreparedSelectInvocation(
-            source_prompt_file=prompt_file,
-            effective_prompt_file=prompt_file,
-            command=["fake-selector"],
-            command_kind="selector",
-            runner_command=["fake-runner"],
-            selector_command=["fake-selector"],
-        )
-        runtime = _make_runtime(
-            tmp_path,
-            select_invocation=invocation,
-            prompt_source=custom_prompt,
-            loop_prompt=None,
-            extra_prompt_source="APPENDED EXTRA",
-        )
-
-        all_targets: list[Path] = []
-
-        def fake_run_command(
-            command: list[str],
-            target: Path,
-            *,
-            env: dict[str, str],
-            stdout_callback: object = None,
-            stderr_callback: object = None,
-            idle_timeout: float | None = None,
-        ) -> str:
-            all_targets.append(target)
-            # Selector call: real selector_result resolves "task-1.md" → task_file.
-            if command == ["fake-selector"]:
-                return "task-1.md\n"
-            return "output"
-
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
-        execute_single_step(runtime, step_number=1)
-
-        assert len(all_targets) == 2
-        runner_target_text = all_targets[1].read_text(encoding="utf-8")
-        assert "APPENDED EXTRA" in runner_target_text
-
-
-class TestNextRunWithExtraSelectorPrompt:
-    def test_extra_selector_prompt_appended_to_invocation(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        home = tmp_path / "home"
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.chdir(tmp_path)
-
-        prompt_file = tmp_path / "select.md"
-        prompt_file.write_text("select content", encoding="utf-8")
-
-        effective_prompt = tmp_path / "effective-select.md"
-        effective_prompt.write_text("select content", encoding="utf-8")
-
-        invocation = PreparedSelectInvocation(
-            source_prompt_file=prompt_file,
-            effective_prompt_file=effective_prompt,
-            command=["fake-selector"],
-            command_kind="selector",
-            runner_command=["fake-runner"],
-            selector_command=["fake-selector"],
-        )
-        monkeypatch.setattr("agm.commands.loop.select.use_selector_mode", lambda args: True)
-        monkeypatch.setattr(
-            "agm.commands.loop.select.prepare_select_invocation",
-            lambda args, temp_files, env: invocation,
-        )
-        monkeypatch.setattr("agm.commands.loop.select.dry_run.enabled", lambda: False)
-        monkeypatch.setattr("agm.commands.loop.select.tasks_dir", lambda args: tmp_path / "tasks")
-        monkeypatch.setattr("agm.commands.loop.select.loop_env", lambda d: {})
-        monkeypatch.setattr("agm.commands.loop.select.cleanup_temp_files", lambda files: None)
-        monkeypatch.setattr(
-            "agm.commands.loop.select.run_prompt_command",
-            lambda command, target, *, env, idle_timeout=None: "task-1.md",
-        )
-
-        args = _make_loop_select_args(
-            selector="fake-selector",
-            extra_selector_prompt="extra selector context",
-        )
-        next_run(args)
-
-        # The effective prompt file should now include the extra selector prompt
-        effective_text = invocation.effective_prompt_file.read_text(encoding="utf-8")
-        assert "extra selector context" in effective_text
+        assert exc_info.value.code == 1
+        assert agent.calls == []

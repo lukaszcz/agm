@@ -1,6 +1,7 @@
 """``std/text`` companion operations, including runtime interpolation and text methods."""
 
 from agl import AglException, array, nominals
+
 from agm.util.interp import interp
 
 IndexError = nominals.std.core.IndexError
@@ -12,9 +13,7 @@ def _none() -> object:
 
 
 def _index_error(value: str) -> None:
-    raise AglException(
-        IndexError(message="text substring not found", index=-1, length=len(value))
-    )
+    raise AglException(IndexError(message="text substring not found", index=-1, length=len(value)))
 
 
 def _padding(length: int, fill: str) -> str:

@@ -652,7 +652,7 @@ class ConstructorChecker:
         never gained an entry for it. Raises a proper diagnostic, rather than
         returning ``None``, when neither lookup finds a constructible owner.
         """
-        owner = self._ctx._env.resolve_constructible_type_by_module_id(
+        owner: Type | None = self._ctx._env.resolve_constructible_type_by_module_id(
             ref.owner_module_id, ref.owner_name, scope_path=ref.owner_path
         )
         if owner is None:
@@ -662,16 +662,9 @@ class ConstructorChecker:
             # the authoritative record shape.
             typedef = self._ctx._env.type_table.get_by_id(ref.owner_decl_node_id)
             if typedef is not None and typedef.kind == "record":
-                table_owner = typedef.handle()
-                assert isinstance(table_owner, RecordType)
-                owner = table_owner
+                owner = typedef.handle()
         if owner is None:
-            candidate = self._ctx._env.get_type(ref.owner_name)
-            if not isinstance(candidate, (RecordType, ExceptionType)):
-                raise AglTypeError(
-                    f"'{ref.owner_name}' is not a known record constructor.", span=span
-                )
-            owner = candidate
+            owner = self._ctx._env.get_type(ref.owner_name)
         if not isinstance(owner, (RecordType, ExceptionType)):
             raise AglTypeError(f"'{ref.owner_name}' is not a known record constructor.", span=span)
         return owner

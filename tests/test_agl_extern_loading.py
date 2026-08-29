@@ -45,6 +45,11 @@ _CAPS = HostCapabilities(
 )
 
 
+# Message of the contract diagnostic this module injects; owned by the test, so
+# asserting on it pins propagation rather than production wording.
+_INJECTED_CONTRACT_DIAGNOSTIC = "injected contract failure"
+
+
 def _roots(*paths: Path) -> RootSet:
     return RootSet(roots=frozenset(paths))
 
@@ -536,7 +541,10 @@ class TestOrdering:
         )
         result = driver.run_prepared(prepared)
         assert result.ok is False
-        assert any("operand" in d.message.lower() for d in result.diagnostics)
+        assert result.diagnostics
+        # The type error is what was reported: nothing complains about the
+        # extern module, whose companion was never imported.
+        assert all("lib/mod" not in d.message for d in result.diagnostics)
         assert not marker.exists()
 
     def test_custom_contract_error_reported_before_any_companion_import(
@@ -553,7 +561,7 @@ class TestOrdering:
             "agm.agl.pipeline._materialize_program_custom_contract_payloads",
             lambda checked, codecs: (
                 {},
-                [Diagnostic(message="Contract error: bad contract", line=1)],
+                [Diagnostic(message=_INJECTED_CONTRACT_DIAGNOSTIC, line=1)],
             ),
         )
         driver = PipelineDriver()
@@ -564,7 +572,7 @@ class TestOrdering:
         )
         result = driver.run_prepared(prepared)
         assert result.ok is False
-        assert any("Contract error" in d.message for d in result.diagnostics)
+        assert any(d.message == _INJECTED_CONTRACT_DIAGNOSTIC for d in result.diagnostics)
         assert not marker.exists()
 
 

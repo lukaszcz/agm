@@ -1099,11 +1099,14 @@ class TestAssignStmtLowering:
         assert coerce.operation == IntToDecimal()
 
     def test_assign_no_coercion_when_types_match(self) -> None:
-        prog = _lower("var _x: int = 0\n_x := 5\n()")
+        # Same decimal target as test_assign_with_coercion, but a decimal RHS:
+        # the coercible pairing is absent, so no IrCoerce wrapper is emitted.
+        prog = _lower("var _x: decimal = 0.0\n_x := 1.5\n()")
         inits = prog.modules[prog.entry_module].initializers
         assign = inits[1]
         assert isinstance(assign, IrAssign)
-        assert isinstance(assign.value, IrConstInt)
+        assert not isinstance(assign.value, IrCoerce)
+        assert isinstance(assign.value, IrConstDecimal)
 
 
 # ---------------------------------------------------------------------------

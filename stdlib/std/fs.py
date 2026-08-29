@@ -87,11 +87,14 @@ def mkdir(path: str) -> None:
 def remove(path: str) -> None:
     """Remove a file, symbolic link, or directory tree at *path*."""
     target = Path(path)
-    _run(
-        path,
-        "remove",
-        lambda: fs.unlink(target) if target.is_symlink() or not target.is_dir() else fs.rmtree(target),
-    )
+
+    def drop() -> None:
+        if target.is_symlink() or not target.is_dir():
+            fs.unlink(target)
+        else:
+            fs.rmtree(target)
+
+    _run(path, "remove", drop)
 
 
 def copy(source: str, destination: str) -> None:

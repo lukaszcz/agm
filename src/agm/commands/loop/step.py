@@ -58,14 +58,26 @@ class PreparedPrompt:
 
 
 @dataclass(slots=True)
+class SelectorStep:
+    """A prepared selector invocation and the runner prompt it feeds.
+
+    Selector mode always resolves exactly one runner prompt source — the
+    configured prompt, or the default ``implement.md`` — so the two travel
+    together and the post-selection runner has a single prompt to render.
+    """
+
+    invocation: PreparedSelectInvocation
+    runner_prompt_source: str | Path
+
+
+@dataclass(slots=True)
 class LoopStepRuntime:
     temp_files: list[Path]
     resolved_tasks_dir: Path
     resolved_progress_file: Path
     env: dict[str, str]
     resolved_runner_command: list[str]
-    select_invocation: PreparedSelectInvocation | None
-    implement_prompt_file: Path | None
+    selector: SelectorStep | None
     loop_prompt: PreparedPrompt | None
     prompt_source: str | Path | None
     bootstrap_prompt: PreparedPrompt | None
@@ -110,7 +122,12 @@ def _run_agent_call(
     stderr_callback: Callable[[str], None] | None = None,
     idle_timeout: float | None,
 ) -> str | None:
-    """Run one agent call, treating a timeout as a failed invocation."""
+    """Run one agent call, treating a timeout as a failed invocation.
+
+    A spawn failure that ``run_prompt_command`` cannot classify — an argv the
+    OS rejects outright — still reaches the caller, but is reported here first
+    so it lands in the loop log alongside the agent's own output.
+    """
     try:
         return run_prompt_command(
             command,
@@ -122,7 +139,7 @@ def _run_agent_call(
         )
     except AgentCallTimeout:
         return None
-    except (OSError, ValueError) as exc:
+    except ValueError as exc:
         message = f"Error: agent call failed: {exc}\n"
         if stderr_callback is None:
             print(message, end="", file=sys.stderr)
@@ -174,8 +191,7 @@ def _prepare_runtime(args: LoopArgs, *, log_file: Path | None) -> LoopStepRuntim
     resolved_runner_command = runner_command(args)
     validate_command(resolved_runner_command, kind="runner", env=env)
     selector_mode = use_selector_mode(args)
-    implement_prompt_file: Path | None = None
-    select_invocation: PreparedSelectInvocation | None = None
+    selector: SelectorStep | None = None
     if selector_mode:
         # Runner prompts are rendered only after selection, but their
         # structure and names can be checked before the selector makes any
@@ -194,7 +210,10 @@ def _prepare_runtime(args: LoopArgs, *, log_file: Path | None) -> LoopStepRuntim
                 variables=runner_variables,
                 label="extra prompt",
             )
-        select_invocation = prepare_select_invocation(args, temp_files=temp_files, env=env)
+        selector = SelectorStep(
+            invocation=prepare_select_invocation(args, temp_files=temp_files, env=env),
+            runner_prompt_source=runner_prompt_source,
+        )
 
     loop_prompt: PreparedPrompt | None = None
     if prompt_source is not None and not selector_mode:
@@ -208,13 +227,13 @@ def _prepare_runtime(args: LoopArgs, *, log_file: Path | None) -> LoopStepRuntim
             ),
             effective_file=resolved_prompt.effective_file,
         )
-    elif select_invocation is None:
+    elif selector is None:
         loop_prompt_file = prompt_file("loop.md")
         require_prompt_file(loop_prompt_file)
         loop_prompt = _prepare_prompt("loop", loop_prompt_file, temp_files=temp_files, env=env)
 
     bootstrap_prompt: PreparedPrompt | None = None
-    if select_invocation is None and not is_file(resolved_progress_file):
+    if selector is None and not is_file(resolved_progress_file):
         bootstrap_prompt_file = prompt_file("select.md")
         require_prompt_file(bootstrap_prompt_file)
         bootstrap_prompt = _prepare_prompt(
@@ -234,14 +253,14 @@ def _prepare_runtime(args: LoopArgs, *, log_file: Path | None) -> LoopStepRuntim
     resolved_extra_selector_prompt_source = extra_selector_prompt_source(args)
 
     # Apply extra selector prompt to the selector invocation
-    if select_invocation is not None and resolved_extra_selector_prompt_source is not None:
+    if selector is not None and resolved_extra_selector_prompt_source is not None:
         new_effective = append_extra_prompt(
-            select_invocation.effective_prompt_file,
+            selector.invocation.effective_prompt_file,
             resolved_extra_selector_prompt_source,
             temp_files=temp_files,
             env=env,
         )
-        select_invocation.effective_prompt_file = new_effective
+        selector.invocation.effective_prompt_file = new_effective
 
     # Apply extra prompt to the loop prompt (no-selector mode)
     if loop_prompt is not None and resolved_extra_prompt_source is not None:
@@ -261,8 +280,7 @@ def _prepare_runtime(args: LoopArgs, *, log_file: Path | None) -> LoopStepRuntim
         resolved_progress_file=resolved_progress_file,
         env=env,
         resolved_runner_command=resolved_runner_command,
-        select_invocation=select_invocation,
-        implement_prompt_file=implement_prompt_file,
+        selector=selector,
         loop_prompt=loop_prompt,
         prompt_source=prompt_source,
         bootstrap_prompt=bootstrap_prompt,
@@ -297,15 +315,10 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
         "idle timeout",
         f"{runtime.idle_timeout}s" if runtime.idle_timeout is not None else "disabled",
     )
-    has_selector_command = (
-        runtime.select_invocation is not None
-        and runtime.select_invocation.selector_command is not None
-    )
+    selector = runtime.selector
     selector_command_text = "disabled"
-    if has_selector_command:
-        assert runtime.select_invocation is not None
-        assert runtime.select_invocation.selector_command is not None
-        selector_command_text = dry_run.format_command(runtime.select_invocation.selector_command)
+    if selector is not None and selector.invocation.selector_command is not None:
+        selector_command_text = dry_run.format_command(selector.invocation.selector_command)
     dry_run.print_detail("selector command", selector_command_text)
 
     prompts = [runtime.bootstrap_prompt, runtime.loop_prompt]
@@ -316,17 +329,17 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
             prompt.label,
             dry_run_prompt_text(prompt.source_file, prompt.effective_file),
         )
-    if runtime.select_invocation is not None and runtime.prompt_source is not None:
+    if selector is not None and runtime.prompt_source is not None:
         _print_dry_run_prompt(
             "prompt",
             prompt_source_label(runtime.prompt_source),
         )
-    if runtime.select_invocation is not None:
+    if selector is not None:
         _print_dry_run_prompt(
             "selector",
             dry_run_prompt_text(
-                runtime.select_invocation.source_prompt_file,
-                runtime.select_invocation.effective_prompt_file,
+                selector.invocation.source_prompt_file,
+                selector.invocation.effective_prompt_file,
             ),
         )
 
@@ -340,7 +353,7 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
             ),
         )
 
-    if runtime.select_invocation is None:
+    if selector is None:
         assert runtime.loop_prompt is not None
         _print_dry_run_command(
             "runner",
@@ -363,23 +376,18 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
     _print_dry_run_command(
         "selector",
         command_with_prompt_target_or_exit(
-            runtime.select_invocation.command,
-            runtime.select_invocation.effective_prompt_file,
+            selector.invocation.command,
+            selector.invocation.effective_prompt_file,
             runtime.env,
         ),
     )
     dry_run.print_detail("TASK_FILE", "unavailable (the selector is not run in dry-run mode)")
-    if runtime.prompt_source is not None:
-        dry_run.print_detail(
-            "runner prompt",
-            f"{prompt_source_label(runtime.prompt_source)} (reprocessed after task selection)",
-        )
-    elif runtime.implement_prompt_file is not None:
-        dry_run.print_detail(
-            "runner prompt",
-            f"{display_path(runtime.implement_prompt_file)} "
-            "(default) (reprocessed after task selection)",
-        )
+    default_marker = "" if runtime.prompt_source is not None else "(default) "
+    dry_run.print_detail(
+        "runner prompt",
+        f"{prompt_source_label(selector.runner_prompt_source)} "
+        f"{default_marker}(reprocessed after task selection)",
+    )
     dry_run.print_operation(
         "loop-runner",
         "would run after task selection; no selector or runner is executed",
@@ -405,7 +413,8 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
         append_log(runtime.log_file, chunk)
         _write_stream(chunk, stderr=True)
 
-    if runtime.select_invocation is None:
+    selector = runtime.selector
+    if selector is None:
         assert runtime.loop_prompt is not None
         output = _run_agent_call(
             runtime.resolved_runner_command,
@@ -426,8 +435,8 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
 
     while True:
         selector_output = _run_agent_call(
-            runtime.select_invocation.command,
-            runtime.select_invocation.effective_prompt_file,
+            selector.invocation.command,
+            selector.invocation.effective_prompt_file,
             env=runtime.env,
             stdout_callback=stdout_callback,
             stderr_callback=stderr_callback,
@@ -449,7 +458,9 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
     _write_stream("\n" + selected_task_output)
 
     with _record_diagnostics(runtime.log_file):
-        runner_env, runner_target = _runner_target(runtime, next_task)
+        runner_env, runner_target = _runner_target(
+            runtime, selector.runner_prompt_source, next_task
+        )
 
     _run_agent_call(
         runtime.resolved_runner_command,
@@ -462,42 +473,27 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
     return False
 
 
-def _runner_target(runtime: LoopStepRuntime, next_task: Path) -> tuple[dict[str, str], Path]:
+def _runner_target(
+    runtime: LoopStepRuntime,
+    runner_prompt_source: str | Path,
+    next_task: Path,
+) -> tuple[dict[str, str], Path]:
     """Build the selected task's runner environment and prompt target."""
-    if runtime.prompt_source is not None:
-        runner_env = loop_env(runtime.resolved_tasks_dir, task_file=next_task)
-        resolved_prompt = prepare_prompt_from_source(
-            runtime.prompt_source,
+    runner_env = loop_env(runtime.resolved_tasks_dir, task_file=next_task)
+    resolved_prompt = prepare_prompt_from_source(
+        runner_prompt_source,
+        temp_files=runtime.temp_files,
+        env=runner_env,
+    )
+    runner_target = resolved_prompt.effective_file
+    if runtime.extra_prompt_source is not None:
+        runner_target = append_extra_prompt(
+            runner_target,
+            runtime.extra_prompt_source,
             temp_files=runtime.temp_files,
             env=runner_env,
         )
-        runner_target = resolved_prompt.effective_file
-        if runtime.extra_prompt_source is not None:
-            runner_target = append_extra_prompt(
-                runner_target,
-                runtime.extra_prompt_source,
-                temp_files=runtime.temp_files,
-                env=runner_env,
-            )
-        return runner_env, runner_target
-
-    if runtime.implement_prompt_file is not None:
-        runner_env = loop_env(runtime.resolved_tasks_dir, task_file=next_task)
-        runner_target = preprocess_prompt_file(
-            runtime.implement_prompt_file,
-            temp_files=runtime.temp_files,
-            env=runner_env,
-        )
-        if runtime.extra_prompt_source is not None:
-            runner_target = append_extra_prompt(
-                runner_target,
-                runtime.extra_prompt_source,
-                temp_files=runtime.temp_files,
-                env=runner_env,
-            )
-        return runner_env, runner_target
-
-    return runtime.env, next_task
+    return runner_env, runner_target
 
 
 def cleanup_runtime(runtime: LoopStepRuntime) -> None:

@@ -539,11 +539,13 @@ def test_semantics_values_includes_frame_model() -> None:
 
 def test_broad_value_includes_ir_callable_forms() -> None:
     """The broad runtime union includes IR closure and constructor values."""
+    from typing import get_args
+
     from agm.agl.semantics.values import ConstructorValue, IrClosureValue, Value
 
-    assert IrClosureValue is not None
-    assert ConstructorValue is not None
-    assert Value is not None
+    members = get_args(Value)
+    assert IrClosureValue in members
+    assert ConstructorValue in members
 
 
 def test_helpers_accessible_from_semantics_values() -> None:

@@ -168,8 +168,12 @@ case 1 of
 """
             )
         error = exc_info.value
-        assert "cannot be an inline `=>` body" in str(error)
-        assert error.source_span.start_line == 2, "diagnostic anchors on the binder"
+        message = str(error)
+        assert "let" in message, "the diagnostic names the binder keyword"
+        assert "inline" in message, "the diagnostic is the inline-body rejection"
+        assert (error.source_span.start_line, error.source_span.start_col) == (2, 10), (
+            "diagnostic anchors on the binder"
+        )
 
     def test_binder_with_continuation_inline_is_still_rejected(self) -> None:
         with pytest.raises(AglSyntaxError) as exc_info:
@@ -180,7 +184,9 @@ case 1 of
   | _ => 0
 """
             )
-        assert "cannot be an inline `=>` body" in str(exc_info.value)
+        message = str(exc_info.value)
+        assert "let" in message
+        assert "inline" in message
 
     def test_binder_inline_in_catch_body_is_rejected(self) -> None:
         with pytest.raises(AglSyntaxError) as exc_info:
@@ -191,7 +197,9 @@ try
 catch ArithmeticError as e => var m = e.message; print m
 """
             )
-        assert "cannot be an inline `=>` body" in str(exc_info.value)
+        message = str(exc_info.value)
+        assert "var" in message
+        assert "inline" in message
 
     def test_parenthesized_block_is_the_inline_escape_hatch(self) -> None:
         ok, out, diags = _run(
@@ -221,19 +229,24 @@ case 1 of
         """A branch after `else` is not reported as a binder problem."""
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program("let k = 1\nif k == 1 => 1 else => 2 | k == 2 => 3")
-        assert "cannot be an inline `=>` body" not in str(exc_info.value)
+        assert "inline" not in str(exc_info.value)
+        assert exc_info.value.source_span.start_line == 2
 
     def test_binder_outside_an_inline_body_keeps_its_own_diagnostic(self) -> None:
         """A `let` not opening an inline `=>` body takes the generic path."""
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program("let a = let b = 1\n")
-        assert "cannot be an inline `=>` body" not in str(exc_info.value)
+        message = str(exc_info.value)
+        assert "let" in message, "the generic path still names the offending token"
+        assert "inline" not in message
 
     def test_binder_partway_through_an_inline_body_keeps_its_own_diagnostic(self) -> None:
         """A `let` after an `=>` but not opening the body is a different error."""
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program("let k = if true => 1 + let a = 2 else => 3\n")
-        assert "cannot be an inline `=>` body" not in str(exc_info.value)
+        message = str(exc_info.value)
+        assert "let" in message, "the generic path still names the offending token"
+        assert "inline" not in message
 
     def test_binder_diagnosis_needs_source_text(self) -> None:
         """Without source text the binder shape cannot be confirmed.
@@ -243,7 +256,9 @@ case 1 of
         """
         token = Token("LET", "let", start_pos=0, line=1, column=1)
         err = syntax_error_from_lark(UnexpectedToken(token, expected={"NAME"}))
-        assert "cannot be an inline `=>` body" not in str(err)
+        message = str(err)
+        assert "let" in message, "the generic path still names the offending token"
+        assert "inline" not in message
 
 
 class TestParenthesizedBlock:
@@ -330,7 +345,7 @@ print v
         """`catch` is repeatable, so an inner `try` there would take them all."""
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program("let v = try try 1 catch _ => 2 catch _ => 3\nprint v\n")
-        assert "nested `try`" in str(exc_info.value)
+        assert "nested" in str(exc_info.value)
 
     def test_nested_try_diagnosis_needs_the_parser_state(self) -> None:
         """Without a parse stack the completed rule is unknown; fall back.
@@ -340,7 +355,7 @@ print v
         """
         token = Token("_NEWLINE", "0", start_pos=0, line=1, column=1)
         err = syntax_error_from_lark(UnexpectedToken(token, expected={"SEMICOLON"}))
-        assert "nested `try`" not in str(err)
+        assert "nested" not in str(err)
 
     def test_nested_try_as_the_final_item_works_parenthesized(self) -> None:
         ok, out, diags = _run("let v = try (try 1 catch _ => 2) catch _ => 3\nprint v\n")
@@ -350,7 +365,11 @@ print v
     def test_try_without_a_catch_clause_is_diagnosed(self) -> None:
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program("let v = try 1\nprint v\n")
-        assert "at least one `catch`" in str(exc_info.value)
+        message = str(exc_info.value)
+        # ``catch`` names the missing clause; ``nested`` separates this from the
+        # sibling rejection of a nested ``try`` in the same body position.
+        assert "catch" in message
+        assert "nested" not in message
 
     def test_raise_in_inline_try_body_is_caught(self) -> None:
         ok, out, diags = _run(
@@ -469,7 +488,9 @@ case 1 of
   | _ => ()
 """
             )
-        assert "not allowed inline here" in str(exc_info.value)
+        message = str(exc_info.value)
+        assert keyword in message, "the diagnostic names the blocked form"
+        assert "inline" in message
 
     def test_lambda_inline_in_case_arm_is_rejected(self) -> None:
         with pytest.raises(AglSyntaxError):

@@ -854,7 +854,6 @@ class RawInfixOperator:
     """One operator token retained while a raw infix chain awaits resolution."""
 
     name: str
-    builtin: BinOp | None
     callee_node_id: int
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)

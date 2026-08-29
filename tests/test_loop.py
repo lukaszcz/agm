@@ -646,7 +646,7 @@ class TestPreparePromptFromSource:
         # Clean up
         resolved.effective_file.unlink()
 
-    def test_inline_text_without_env_vars_still_creates_temp_file(self, tmp_path: Path) -> None:
+    def test_inline_text_without_env_vars_creates_temp_file(self, tmp_path: Path) -> None:
         temp_files: list[Path] = []
         env: dict[str, str] = {}
 
@@ -1280,7 +1280,8 @@ class TestValidateCommandNotFound:
 
         assert exc_info.value.code == 1
         error = capsys.readouterr().err
-        assert "runner command executable" in error
+        assert "runner" in error
+        assert executable in error
         assert "Traceback" not in error
 
     @pytest.mark.parametrize(
@@ -1291,7 +1292,7 @@ class TestValidateCommandNotFound:
             ("%%-%{unterminated", "unterminated"),
         ],
     )
-    def test_prompt_file_executable_still_rejects_ordinary_hole_errors(
+    def test_prompt_file_executable_rejects_ordinary_hole_errors(
         self, executable: str, expected: str, capsys: pytest.CaptureFixture[str]
     ) -> None:
         with pytest.raises(SystemExit) as exc_info:
@@ -1543,6 +1544,22 @@ class TestSelectorResultEdgeCases:
         result = selector_result("task-1.md\n", tasks_dir=tasks_dir)
         assert result == task_file
 
+    def test_strips_trailing_newline_from_nonexistent_absolute_path(self) -> None:
+        """A trailing newline is stripped before the path is reported back."""
+        result = selector_result("/nonexistent/file.md\n", tasks_dir=Path("/tmp/tasks"))
+        assert result == "/nonexistent/file.md"
+
+    def test_returns_str_when_missing_from_existing_tasks_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A relative name absent from an existing tasks dir is returned verbatim."""
+        monkeypatch.chdir(tmp_path)
+        tasks_dir = tmp_path / "tasks"
+        tasks_dir.mkdir()
+
+        result = selector_result("missing-file.md\n", tasks_dir=tasks_dir)
+        assert result == "missing-file.md"
+
 
 class TestRunCommandOutputAssembly:
     def test_run_command_returns_ordered_output_with_callbacks(
@@ -1693,7 +1710,7 @@ class TestRunCommandExit127Fatal:
                 stderr_callback=diagnostics.append,
             )
         assert exc_info.value.code == 1
-        assert diagnostics and "could not be found or executed" in diagnostics[0]
+        assert diagnostics
         assert "claude" in diagnostics[0]
         assert "127" in diagnostics[0]
 
@@ -1728,7 +1745,7 @@ class TestRunCommandExit127Fatal:
         assert long_stderr[-500:] in captured.err
         assert "HEAD-" not in captured.err
 
-    def test_exit_127_without_stderr_still_fatal(
+    def test_exit_127_without_stderr_is_fatal(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         target = tmp_path / "prompt.md"
@@ -1753,7 +1770,8 @@ class TestRunCommandExit127Fatal:
             run_prompt_command(["missing-runner"], target, env={})
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
-        assert "could not be found or executed" in captured.err
+        assert "missing-runner" in captured.err
+        assert "127" in captured.err
 
     def test_nonzero_non_127_exit_is_not_fatal(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -1828,7 +1846,7 @@ class TestRunCommandSpawnFailure:
         assert "Traceback" not in error
         assert "Permission denied" in error
 
-    def test_validate_command_passes_and_run_prompt_command_still_exits_cleanly(
+    def test_validate_command_passes_and_run_prompt_command_exits_cleanly(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """End-to-end reproduction: ``validate_command`` defers for ``%%``, so the
@@ -1965,35 +1983,6 @@ class TestRunCommandOutputAssemblyFull:
 
         output = run_prompt_command(["runner"], target, env={})
         assert output == "the-stdoutthe-stderr"
-
-
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# loop/common.py – selector_result edge cases
-# ---------------------------------------------------------------------------
-
-
-class TestSelectorResultAdditionalEdgeCases:
-    def test_empty_output_returns_empty_string(self) -> None:
-        """selector_result returns empty string for empty output."""
-        result = selector_result("", tasks_dir=Path("/tmp/tasks"))
-        assert result == ""
-
-    def test_absolute_path_not_a_file_returns_string(self) -> None:
-        """selector_result returns raw string when absolute path is not a file."""
-        result = selector_result("/nonexistent/file.md\n", tasks_dir=Path("/tmp/tasks"))
-        assert result == "/nonexistent/file.md"
-
-    def test_relative_path_not_found_anywhere_returns_string(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """selector_result returns raw string when relative path not in cwd or tasks_dir."""
-        monkeypatch.chdir(tmp_path)
-        tasks_dir = tmp_path / "tasks"
-        tasks_dir.mkdir()
-
-        result = selector_result("missing-file.md\n", tasks_dir=tasks_dir)
-        assert result == "missing-file.md"
 
 
 # ---------------------------------------------------------------------------

@@ -369,7 +369,7 @@ class TestPlaceholderTokens:
             ("OP_NAME", "-?"),
         ]
 
-    def test_question_containing_identifiers_are_unchanged(self) -> None:
+    def test_question_containing_identifiers_lex_as_names(self) -> None:
         assert tok("valid?") == [("NAME", "valid?")]
         assert tok("as?") == [("as?", "as?")]
 
@@ -566,9 +566,13 @@ class TestSimpleTemplates:
         assert frags[0] == ("STRING_FRAGMENT", "A")
 
     def test_unknown_escape_raises_lex_error(self) -> None:
+        source = r'"\q"'
         with pytest.raises(LexError) as exc_info:
-            tok(r'"\q"')
-        assert exc_info.value.span is not None
+            tok(source)
+        span = exc_info.value.span
+        assert span is not None
+        # The error is located on the offending escape sequence itself.
+        assert source[span.start_offset : span.end_offset] == r"\q"
 
     def test_unknown_escape_message_renders_escape_plainly(self) -> None:
         # The bad escape is rendered as ``\q`` (a literal backslash + char),
@@ -766,19 +770,31 @@ class TestSingleQuotedStrings:
         assert frags == ['"']
 
     def test_unterminated_single_quoted_string(self) -> None:
+        source = "'hello"
         with pytest.raises(LexError) as exc_info:
-            tok("'hello")
-        assert exc_info.value.span is not None
+            tok(source)
+        span = exc_info.value.span
+        assert span is not None
+        # The missing closing quote is reported at end of input.
+        assert (span.start_offset, span.end_offset) == (len(source), len(source))
 
     def test_newline_inside_single_quoted_string(self) -> None:
+        source = "'hello\nworld'"
         with pytest.raises(LexError) as exc_info:
-            tok("'hello\nworld'")
-        assert exc_info.value.span is not None
+            tok(source)
+        span = exc_info.value.span
+        assert span is not None
+        # The literal is reported where the newline cut it off, on its own line.
+        assert (span.start_line, span.start_offset) == (1, source.index("\n"))
 
     def test_unterminated_triple_single_quoted_string(self) -> None:
+        source = "'''hello"
         with pytest.raises(LexError) as exc_info:
-            tok("'''hello")
-        assert exc_info.value.span is not None
+            tok(source)
+        span = exc_info.value.span
+        assert span is not None
+        # The missing closing delimiter is reported at end of input.
+        assert (span.start_offset, span.end_offset) == (len(source), len(source))
 
 
 # ---------------------------------------------------------------------------
@@ -840,9 +856,13 @@ class TestRawTailForms:
 
     @pytest.mark.parametrize("name", ("exec$", "ask$"))
     def test_unterminated_type_args_raise_lex_error(self, name: str) -> None:
+        source = f"{name}::[T"
         with pytest.raises(LexError) as exc_info:
-            tok(f"{name}::[T")
-        assert exc_info.value.span is not None
+            tok(source)
+        span = exc_info.value.span
+        assert span is not None
+        # The error is located on the type-argument group that was never closed.
+        assert source[span.start_offset :] == "::[T"
 
     @pytest.mark.parametrize("name", ("exec$", "ask$"))
     def test_block_payload_is_dedented_and_inert_to_layout(self, name: str) -> None:
@@ -906,7 +926,6 @@ class TestRawTailForms:
         # enclose them, so the error is reported — anchored at the first.
         with pytest.raises(LexError) as exc_info:
             tok("(exec$ a exec$ b)")
-        assert "brackets" in str(exc_info.value)
         span = exc_info.value.span
         assert span is not None
         assert (span.start_line, span.start_col) == (1, 2)
@@ -916,7 +935,11 @@ class TestRawTailForms:
         # even though a later unterminated string would otherwise be the failure.
         with pytest.raises(LexError) as exc_info:
             tok("[exec$ a] 'oops")
-        assert "brackets" in str(exc_info.value)
+        span = exc_info.value.span
+        # Anchored at the raw tail (column 2), not at the unterminated string
+        # that starts at column 11.
+        assert span is not None
+        assert (span.start_line, span.start_col) == (1, 2)
 
     def test_block_followed_by_comment_emits_one_layout_newline(self) -> None:
         assert tok("exec$\n  echo hi\n# outside\nafter") == [
@@ -981,15 +1004,17 @@ class TestRawTailForms:
     def test_reserved_raw_names_in_bracket_keys_are_lexically_rejected(self, source: str) -> None:
         with pytest.raises(LexError) as exc_info:
             tok(source)
-        assert exc_info.value.span is not None
-        assert "brackets" in str(exc_info.value)
+        span = exc_info.value.span
+        assert span is not None
+        assert (span.start_line, span.start_col) == (1, source.index("exec$") + 1)
 
     @pytest.mark.parametrize("name", ("exec$", "ask$"))
     def test_enum_variant_payload_field_name_is_lexically_rejected(self, name: str) -> None:
         with pytest.raises(LexError) as exc_info:
             tok(f"enum E\n  | V({name}: int)")
-        assert exc_info.value.span is not None
-        assert "brackets" in str(exc_info.value)
+        span = exc_info.value.span
+        assert span is not None
+        assert (span.start_line, span.start_col) == (2, 7)
 
     def test_raw_tail_after_branch_arrow_scans_its_payload(self) -> None:
         # The payload is shell/prompt text wherever it appears, so it is never
@@ -1168,7 +1193,11 @@ class TestLayout:
         source = "a\n    b\n  c"
         with pytest.raises(LexError) as exc_info:
             tok(source)
-        assert exc_info.value.span is not None
+        span = exc_info.value.span
+        assert span is not None
+        # The error lands on the misindented line, not on the line that opened
+        # the indentation.
+        assert (span.start_line, source[span.start_offset : span.end_offset]) == (3, "c")
 
     def test_eof_unwinds_dedents(self) -> None:
         source = "a\n  b"
@@ -1919,12 +1948,14 @@ class TestTripleTemplatePositions:
     def test_layout_tokens_have_positions(self) -> None:
         # _NEWLINE/_INDENT/_DEDENT must all carry concrete positions.
         source = "a\n  b\nc"
-        for t in tokenize(source):
-            if t.type in ("_NEWLINE", "_INDENT", "_DEDENT"):
-                assert t.start_pos is not None
-                assert t.end_pos is not None
-                assert t.line is not None
-                assert t.column is not None
+        layout = [t for t in tokenize(source) if t.type in ("_NEWLINE", "_INDENT", "_DEDENT")]
+        assert [t.type for t in layout] == ["_INDENT", "_DEDENT", "_NEWLINE"]
+        for t in layout:
+            # Each layout token carries a real offset into the source, and its
+            # line/column agree with that offset.
+            assert 0 <= t.start_pos <= t.end_pos <= len(source)
+            assert t.line == source.count("\n", 0, t.start_pos) + 1
+            assert t.column == t.start_pos - source.rfind("\n", 0, t.start_pos)
 
     def test_newline_token_positioned_at_newline_char(self) -> None:
         # Per the layout rule, a _NEWLINE sits at the newline character itself.
@@ -2129,7 +2160,11 @@ class TestIdentifierUnicodeAndSymbols:
         for ch in ("２", "٠"):
             with pytest.raises(LexError) as exc_info:
                 tok(ch)
-            assert exc_info.value.span is not None
+            span = exc_info.value.span
+            assert span is not None
+            # Rejected as an unexpected character spanning the digit itself,
+            # rather than consumed as the start of a number.
+            assert (span.start_offset, span.end_offset) == (0, len(ch))
 
 
 # ---------------------------------------------------------------------------
@@ -2201,14 +2236,6 @@ class TestTripleDedentHoleAwareMinIndent:
         # "\n  " → after strip 2 → "\n" → trailing \n removed → so "tail"
         assert frags[1] == "tail"
 
-    def test_existing_dedent_no_holes_unchanged(self) -> None:
-        # Regression guard: no-hole case must still work correctly.
-        source = '"""\n    hello\n      world\n    """'
-        result = tok(source)
-        frags = [v for t, v in result if t == "STRING_FRAGMENT"]
-        content = "".join(frags)
-        assert content == "hello\n  world"
-
     def test_sentinel_collision_still_passes(self) -> None:
         # Literal \x00INTERP\x00 content alongside a real interpolation must
         # still work (verifies the old sentinel-collision regression fix).
@@ -2246,7 +2273,7 @@ class TestTabWarnings:
         # Tab is the 9th character (column 9) on the line.
         warnings = lex_tab_warnings("let x = \t1")
         assert len(warnings) == 1
-        assert "9" in warnings[0].message
+        assert (warnings[0].column, warnings[0].end_column) == (9, 10)
 
     def test_tab_on_second_line_reported_at_correct_line(self) -> None:
         warnings = lex_tab_warnings("let x = 1\n\tlet y = 2")
@@ -2318,8 +2345,8 @@ class TestTabWarnings:
 # ---------------------------------------------------------------------------
 
 
-class TestV2Keywords:
-    """Tests for new and changed keyword reservation in AgL."""
+class TestKeywordReservation:
+    """Tests for which words AgL reserves as keywords."""
 
     # --- def is a new reserved keyword ---
 
@@ -2422,9 +2449,9 @@ class TestV2Keywords:
         assert "let" in types
         assert "NAME" in types
 
-    def test_existing_primitive_type_keywords_still_lex_as_var_name(self) -> None:
-        # Regression guard: text, int, bool, json, decimal, array, dict
-        # must all still be NAME (unchanged from before).
+    def test_primitive_type_words_lex_as_names(self) -> None:
+        # text, int, bool, json, decimal, array and dict are ordinary
+        # identifiers, not reserved words.
         for word in ("text", "int", "bool", "json", "decimal", "array", "dict"):
             result = tok(word)
             assert result == [("NAME", word)], f"{word!r} should be NAME"
@@ -2436,9 +2463,9 @@ class TestV2Keywords:
         types = [t for t, _ in result]
         assert types == ["def", "fn"]
 
-    def test_still_reserved_keywords_unchanged(self) -> None:
+    def test_control_flow_words_are_reserved(self) -> None:
         # let/var/do/until/if/else/case/of/try/catch/raise/as/and/or/not
-        # are still reserved.
+        # are reserved keywords.
         source = "let var set do until if else case of try catch raise as and or not"
         result = tok(source)
         types = [t for t, _ in result]
@@ -2462,8 +2489,8 @@ class TestV2Keywords:
             assert kw in types, f"keyword {kw!r} must still be reserved"
 
 
-class TestV2ThinArrow:
-    """Tests for the new THIN_ARROW (->) token, distinct from ARROW (=>)."""
+class TestThinArrow:
+    """Tests for the THIN_ARROW (->) token, distinct from ARROW (=>)."""
 
     def test_thin_arrow_emits_thin_arrow_token(self) -> None:
         result = tok("->")
@@ -2496,11 +2523,6 @@ class TestV2ThinArrow:
         # standalone ">" must still be GT
         result = tok(">")
         assert result == [("GT", ">")]
-
-    def test_ge_still_works(self) -> None:
-        # >= must still be GE
-        result = tok(">=")
-        assert result == [("GE", ">=")]
 
     def test_func_type_annotation_lexes_correctly(self) -> None:
         # "(int) -> text" as a type expression lexes with THIN_ARROW
@@ -2537,9 +2559,10 @@ class TestV2ThinArrow:
         assert result[0].type == "THIN_ARROW"
 
     def test_maximal_munch_thin_arrow_over_minus_gt(self) -> None:
-        # "->" must be one THIN_ARROW, not MINUS + GT
-        result = tok("->")
-        assert result == [("THIN_ARROW", "->")]
+        # Adjacent "->" is one THIN_ARROW; separating the characters yields
+        # the two shorter tokens instead.
+        assert tok("->") == [("THIN_ARROW", "->")]
+        assert tok("- >") == [("MINUS", "-"), ("GT", ">")]
 
     def test_arrow_vs_thin_arrow_in_sequence(self) -> None:
         # Both tokens in the same snippet
@@ -2547,8 +2570,8 @@ class TestV2ThinArrow:
         assert result == [("THIN_ARROW", "->"), ("ARROW", "=>")]
 
 
-class TestV2LoopBoundPreserved:
-    """Verify the do[N] bracket tokens are preserved for the grammar."""
+class TestLoopBoundBrackets:
+    """Verify the do[N] bracket tokens the grammar needs."""
 
     def _lex(self, source: str) -> list[tuple[str, str]]:
         """Lex via AglLexer (Lark interface)."""
@@ -2627,6 +2650,7 @@ class TestCaseNeutralNames:
 
     def test_agent_is_case_neutral_name(self) -> None:
         assert tok("agent") == [("NAME", "agent")]
+        assert tok("Agent") == [("NAME", "Agent")]
 
 
 # ---------------------------------------------------------------------------
@@ -2943,8 +2967,13 @@ class TestDivisionRequiresSurroundingSpace:
         types = [t for t, _ in lark_tok("def g(a: int, /, b: int) -> int = a")]
         assert "SLASH" in types
 
-    def test_wildcard_import_tail_is_unaffected(self) -> None:
-        assert tok("import foo/bar/*")[:3] == [
+    @pytest.mark.parametrize("lexer", (tok, lark_tok), ids=("public", "lark"))
+    def test_wildcard_tail_is_not_a_clinging_slash(
+        self, lexer: Callable[[str], list[tuple[str, str]]]
+    ) -> None:
+        # `/*` touches the path on its left, but it is a wildcard tail rather
+        # than a rejected space-less division -- through either lexer entry.
+        assert lexer("import foo/bar/*")[:3] == [
             ("IMPORT", "import"),
             ("MODPATH", "foo/bar"),
             ("WILDCARD", "/*"),

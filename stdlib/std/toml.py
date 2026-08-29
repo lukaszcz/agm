@@ -60,8 +60,10 @@ def _validate_renderable(value: object) -> None:
     """Raise for JSON values outside TOML's value domain."""
     if value is None:
         _render_error("TOML cannot represent null values.")
-    if isinstance(value, Decimal) and value.is_nan() and (
-        value.is_snan() or value.as_tuple().digits
+    if (
+        isinstance(value, Decimal)
+        and value.is_nan()
+        and (value.is_snan() or value.as_tuple().digits)
     ):
         _render_error("TOML cannot represent signaling or payload NaN values.")
     if type(value) is int and not _TOML_INT_MIN <= value <= _TOML_INT_MAX:

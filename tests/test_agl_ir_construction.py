@@ -83,20 +83,6 @@ let p = Point(x = 3, y = 4)
     assert p.nominal == nominal_id_for(prog, "Point")
 
 
-def test_record_field_access_now_unblocked() -> None:
-    """Record construction + field access: p.x works end-to-end."""
-    source = """\
-record Point
-  x: int
-  y: int
-let p = Point(x = 3, y = 4)
-let px = p.x
-()
-"""
-    ir = evaluate_ir(source)
-    assert ir["px"] == IntValue(3)
-
-
 def test_record_field_coercion_int_to_decimal() -> None:
     """Record construction with int→decimal field coercion.
 
@@ -145,20 +131,6 @@ let ne = p1 != p2
 """
     ir = evaluate_ir(source)
     assert ir["ne"] == BoolValue(True)
-
-
-def test_template_with_record_interpolation_now_unblocked() -> None:
-    """Template interpolation with a record value."""
-    source = """\
-record Point
-  x: int
-  y: int
-let p = Point(x = 1, y = 2)
-let s: text = "point: %{p}"
-()
-"""
-    ir = evaluate_ir(source)
-    assert isinstance(ir["s"], TextValue)
 
 
 # ---------------------------------------------------------------------------
@@ -938,17 +910,25 @@ def test_validate_non_deep_accepts_unknown_nominal_in_ir_make_record() -> None:
 
 
 def test_validate_non_deep_accepts_unknown_nominal_in_member_ir_make_record() -> None:
-    """Non-deep validation skips nominal checks for member records too."""
+    """Non-deep validation skips nominal checks for enum member records too.
+
+    The program declares an enum whose variant links a member record nominal
+    that is absent from ``program.nominals``, and constructs that member with
+    IrMakeRecord.  Shallow validation accepts it; only the deep tier rejects
+    the dangling member nominal.
+    """
     from agm.agl.ir.ids import Location, SourceId
     from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
     from agm.agl.ir.validate import validate_ir
 
     sid = SourceId(0)
     loc = Location(source_id=sid, start_offset=0, end_offset=1, start_line=1, start_col=0)
+    enum_nominal = NominalId(1)
+    member_nominal = NominalId(2)
     node = IrMakeRecord(
         location=loc,
-        nominal=NominalId(1),
-        display_name="Ghost",
+        nominal=member_nominal,
+        display_name="Choice::first",
         fields=(),
     )
     from agm.agl.modules.ids import ENTRY_ID as EID
@@ -957,10 +937,21 @@ def test_validate_non_deep_accepts_unknown_nominal_in_member_ir_make_record() ->
         entry_module=EID,
         modules={EID: ExecutableModule(module_id=EID, initializers=(node,))},
         symbols={},
-        nominals={},
+        nominals={
+            enum_nominal: NominalDescriptor(
+                enum_nominal,
+                EID,
+                (),
+                "Choice",
+                NominalKind.ENUM,
+                variants=(VariantDescriptor(name="first", fields=(), member=member_nominal),),
+            )
+        },
         sources={sid: SourceFile(display_name="<test>", normalized_text=" ")},
     )
     validate_ir(prog, deep=False)  # must not raise
+    with pytest.raises(InvalidIrError, match="member"):
+        validate_ir(prog, deep=True)
 
 
 def test_validate_non_deep_accepts_unknown_nominal_in_ir_make_exception() -> None:

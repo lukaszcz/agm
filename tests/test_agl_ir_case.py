@@ -144,7 +144,9 @@ let r = case x of
 r"""
     result = run_inline_command(PipelineDriver(), src)
     assert not result.ok
-    assert any("Redundant" in diagnostic.message for diagnostic in result.diagnostics)
+    # Anchored at the redundant arm itself, not at the case head.
+    assert [(d.line, d.column) for d in result.diagnostics] == [(4, 5)]
+    assert "Redundant" in result.diagnostics[0].message
 
 
 # ---------------------------------------------------------------------------
@@ -445,7 +447,9 @@ let r = case x of
 r"""
     result = run_inline_command(PipelineDriver(), src)
     assert not result.ok
-    assert any("Non-exhaustive" in diagnostic.message for diagnostic in result.diagnostics)
+    # Anchored at the case head, where the missing arms belong.
+    assert [(d.line, d.column) for d in result.diagnostics] == [(2, 9)]
+    assert "Non-exhaustive" in result.diagnostics[0].message
 
 
 def test_case_no_match_enum_reports_missing_constructor() -> None:
@@ -462,6 +466,7 @@ program def main() -> unit =
     result = PipelineDriver().run(src)
     assert not result.ok
     assert any("Red" in diagnostic.message for diagnostic in result.diagnostics)
+    assert [(d.line, d.column) for d in result.diagnostics] == [(5, 7)]
 
 
 # ---------------------------------------------------------------------------

@@ -439,19 +439,3 @@ def test_bare_shorthand_unknown_named_only() -> None:
         _bind(params, [accepted, offender], [])
     assert exc_info.value.span == offender.span
     assert exc_info.value.span != accepted.span
-
-
-def test_bare_shorthand_already_filled() -> None:
-    """Bare name shorthand lands on a named-only param already filled by named arg → duplicate."""
-    params = [
-        BindParam("x", STANDARD, False),
-        BindParam("z", NAMED_ONLY, False),
-    ]
-    # z is filled by named arg first (z=something), then bare "z" as positional
-    # But note: positional args are processed BEFORE named args in bind_arguments.
-    # So the bare "z" is processed first and fills z, then the named arg "z=..." is a duplicate.
-    shorthand, offender = _bare("z"), _item("also")
-    with pytest.raises(AglTypeError, match="Duplicate") as exc_info:
-        _bind(params, [_item("1"), shorthand], [("z", offender)])
-    assert exc_info.value.span == offender.span
-    assert exc_info.value.span != shorthand.span

@@ -288,7 +288,11 @@ def test_spaced_qualifier_near_miss_requires_a_contributed_member(
     with pytest.raises(AglScopeError) as raised:
         resolve_repl_graph(graph)
 
-    assert raised.value is not None
+    # The tight-qualifier repair is offered only when the route really
+    # contributes the member; otherwise the qualifier is just undefined.
+    diagnostic = str(raised.value).lower()
+    assert "config" in diagnostic
+    assert ("config::x" in diagnostic) == ("def x" in module_source)
 
 
 def test_spaced_type_qualified_near_miss_requires_a_constructible_owner(tmp_path: Path) -> None:

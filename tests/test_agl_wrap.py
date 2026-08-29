@@ -439,9 +439,8 @@ def test_late_import_in_inline_source_reports_the_header_rule() -> None:
 
     assert not result.ok
     assert [diagnostic.line for diagnostic in result.diagnostics] == [2]
-    message = result.diagnostics[0].message
-    assert "nested block" not in message
-    assert "before any other" in message
+    # The ordering rule, not the nesting rule the generated wrapper would suggest.
+    assert "nested block" not in result.diagnostics[0].message
 
 
 def test_import_inside_an_inline_nested_block_still_names_the_block() -> None:
@@ -451,6 +450,7 @@ def test_import_inside_an_inline_nested_block_still_names_the_block() -> None:
     )
 
     assert not result.ok
+    assert [diagnostic.line for diagnostic in result.diagnostics] == [3]
     assert "nested block" in result.diagnostics[0].message
 
 

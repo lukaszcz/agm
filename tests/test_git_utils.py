@@ -45,29 +45,14 @@ from agm.vcs.git import (
     worktree_prune,
     worktree_remove,
 )
-from tests._git_helpers import clone_with_fork_remote
-
-
-def _init_repo(path: Path, env: dict[str, str]) -> None:
-    """Initialize a git repo at *path* with an initial commit.
-
-    Uses *env* for git identity (GIT_AUTHOR_NAME / GIT_COMMITTER_NAME must be
-    set).  Mirrors the helper pattern from test_project_utils.py / test_config_git.py.
-    """
-    path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-b", "main", "-q"], cwd=path, env=env, check=True)
-    (path / "README.md").write_text("# test\n", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=path, env=env, check=True)
-    subprocess.run(["git", "commit", "-m", "initial", "-q"], cwd=path, env=env, check=True)
-
-
-def _assert_git_repo_command(cmd: list[str], repo_dir: Path, *parts: str) -> None:
-    assert cmd[0] == "git"
-    assert "-C" in cmd
-    assert cmd[cmd.index("-C") + 1] == str(repo_dir)
-    for part in parts:
-        assert part in cmd
-
+from tests._git_helpers import (
+    clone_local_remote,
+    clone_with_fork_remote,
+    commit_file,
+    git_output,
+    git_run,
+    init_repo,
+)
 
 # ---------------------------------------------------------------------------
 # _git_args — pure function, no mocking needed
@@ -108,12 +93,12 @@ class TestContainingRoot:
 
     def test_returns_repo_root(self, tmp_path: Path, env: dict[str, str]) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         assert containing_root(repo, env=env) == repo
 
     def test_returns_repo_root_from_subdir(self, tmp_path: Path, env: dict[str, str]) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         subdir = repo / "src"
         subdir.mkdir()
         assert containing_root(subdir, env=env) == repo
@@ -122,12 +107,12 @@ class TestContainingRoot:
 class TestExactRepoRoot:
     def test_returns_path_for_exact_repo_root(self, tmp_path: Path, env: dict[str, str]) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         assert exact_repo_root(repo, env=env) == repo
 
     def test_returns_none_for_subdir_of_repo(self, tmp_path: Path, env: dict[str, str]) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         subdir = repo / "src"
         subdir.mkdir()
         assert exact_repo_root(subdir, env=env) is None
@@ -152,7 +137,7 @@ class TestGenericGitProbeHelpers:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
 
         assert has_commits(repo, env=env) is True
 
@@ -172,7 +157,7 @@ class TestGenericGitProbeHelpers:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         # Nothing staged after the initial commit.
         assert has_staged_changes(repo, [repo / "README.md"], env=env) is False
 
@@ -180,7 +165,7 @@ class TestGenericGitProbeHelpers:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         new_file = repo / "new.txt"
         new_file.write_text("hello\n", encoding="utf-8")
         subprocess.run(["git", "add", "new.txt"], cwd=repo, env=env, check=True)
@@ -199,7 +184,7 @@ class TestGenericGitProbeHelpers:
 class TestIsGitRepo:
     def test_returns_true_for_real_repo(self, tmp_path: Path, env: dict[str, str]) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         assert is_git_repo(repo) is True
 
     def test_returns_false_for_plain_dir(self, tmp_path: Path) -> None:
@@ -218,12 +203,12 @@ class TestCheckoutRoot:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         repo = tmp_path / "myrepo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         assert checkout_root(cwd=repo) == repo
 
     def test_returns_toplevel_from_subdir(self, tmp_path: Path, env: dict[str, str]) -> None:
         repo = tmp_path / "myrepo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         subdir = repo / "src"
         subdir.mkdir()
         assert checkout_root(cwd=subdir) == repo
@@ -234,7 +219,7 @@ class TestCheckoutRoot:
         # cwd is a plain dir that contains a "repo/" subdir that IS a git repo.
         project = tmp_path / "project"
         project.mkdir()
-        _init_repo(project / "repo", env)
+        init_repo(project / "repo", env)
         assert checkout_root(cwd=project) == project / "repo"
 
     def test_exits_when_neither_cwd_nor_repo_subdir_is_git(self, tmp_path: Path) -> None:
@@ -261,12 +246,12 @@ class TestCheckoutRoot:
 class TestGitCommonDir:
     def test_returns_common_dir_for_main_repo(self, tmp_path: Path, env: dict[str, str]) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         assert git_common_dir(cwd=repo) == repo / ".git"
 
     def test_returns_common_dir_from_worktree(self, tmp_path: Path, env: dict[str, str]) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         wt = tmp_path / "wt"
         # Create a linked worktree; its --git-common-dir points to the main .git.
         subprocess.run(
@@ -284,54 +269,62 @@ class TestGitCommonDir:
 
 
 class TestFetch:
-    # These helpers hit a remote (network).  Kept as behavioral fakes: setting
-    # up a real local bare-repo remote + clone and asserting fetch effects would
-    # work but adds significant complexity for thin wrapper functions whose only
-    # observable side-effect is "git fetch ran."  The fake asserts the call is
-    # made with the expected arguments.
-    def test_fetch_calls_require_success_with_correct_args(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_brings_remote_commits_into_the_tracking_ref(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        captured: list[list[str]] = []
-        monkeypatch.setattr(
-            "agm.vcs.git.require_success",
-            lambda cmd, **kwargs: captured.append(cmd),
+        source, clone = clone_local_remote(tmp_path, env)
+        commit_file(source, env, name="later.txt")
+        source_head = git_output(source, ["rev-parse", "HEAD"], env)
+        assert git_output(clone, ["rev-parse", "origin/main"], env) != source_head
+
+        fetch(clone, env=env)
+
+        assert git_output(clone, ["rev-parse", "origin/main"], env) == source_head
+
+    def test_uses_the_supplied_environment(self, tmp_path: Path, env: dict[str, str]) -> None:
+        # The remote is only reachable through a rewrite rule in the git config
+        # of the HOME that *env* points at, so a fetch run under any other
+        # environment cannot resolve the remote at all.
+        source, clone = clone_local_remote(tmp_path, env)
+        git_run(clone, ["remote", "set-url", "origin", "agm-remote/source"], env)
+        Path(env["HOME"], ".gitconfig").write_text(
+            f'[url "{tmp_path}/"]\n\tinsteadOf = "agm-remote/"\n', encoding="utf-8"
         )
-        fetch(tmp_path)
-        _assert_git_repo_command(captured[0], tmp_path, "fetch")
+        commit_file(source, env, name="later.txt")
 
-    def test_fetch_passes_env(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        received_env: list[dict[str, str] | None] = []
+        fetch(clone, env=env)
 
-        def fake_require_success(cmd: list[str], *, env: dict[str, str] | None = None) -> None:
-            received_env.append(env)
+        assert git_output(clone, ["rev-parse", "origin/main"], env) == git_output(
+            source, ["rev-parse", "HEAD"], env
+        )
 
-        monkeypatch.setattr("agm.vcs.git.require_success", fake_require_success)
-        custom_env = {"MY_VAR": "value"}
-        fetch(tmp_path, env=custom_env)
-        assert received_env[0] == custom_env
-
-    def test_fetch_prune_all_passes_correct_args(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_prune_all_drops_tracking_refs_deleted_on_every_remote(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        captured: list[list[str]] = []
-        monkeypatch.setattr(
-            "agm.vcs.git.require_success",
-            lambda cmd, **kwargs: captured.append(cmd),
+        repo = clone_with_fork_remote(
+            tmp_path, env, branch="branch-x", on_origin=True, on_fork=True
         )
-        fetch_prune_all(tmp_path)
-        _assert_git_repo_command(captured[0], tmp_path, "fetch", "--all", "--prune")
+        assert remotes_with_branch(repo, "branch-x", env=env) == ["fork", "origin"]
+        git_run(tmp_path / "origin.git", ["branch", "-D", "branch-x", "-q"], env)
+        git_run(tmp_path / "fork.git", ["branch", "-D", "branch-x", "-q"], env)
 
-    def test_fetch_prune_origin_passes_correct_args(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        fetch_prune_all(repo, env=env)
+
+        assert remotes_with_branch(repo, "branch-x", env=env) == []
+
+    def test_prune_origin_leaves_the_other_remotes_alone(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        captured: list[list[str]] = []
-        monkeypatch.setattr(
-            "agm.vcs.git.require_success",
-            lambda cmd, **kwargs: captured.append(cmd),
+        repo = clone_with_fork_remote(
+            tmp_path, env, branch="branch-x", on_origin=True, on_fork=True
         )
-        fetch_prune_origin(tmp_path)
-        _assert_git_repo_command(captured[0], tmp_path, "fetch", "--prune", "origin")
+        git_run(tmp_path / "origin.git", ["branch", "-D", "branch-x", "-q"], env)
+        git_run(tmp_path / "fork.git", ["branch", "-D", "branch-x", "-q"], env)
+
+        fetch_prune_origin(repo, env=env)
+
+        # Only origin was fetched, so only its stale tracking ref disappeared.
+        assert remotes_with_branch(repo, "branch-x", env=env) == ["fork"]
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +335,7 @@ class TestFetch:
 class TestMerge:
     def test_merges_upstream_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
 
         # Create a feature branch with one extra commit.
         subprocess.run(["git", "checkout", "-b", "feature", "-q"], cwd=repo, env=env, check=True)
@@ -376,12 +369,12 @@ class TestMerge:
 class TestCurrentBranch:
     def test_returns_main_branch_name(self, tmp_path: Path, env: dict[str, str]) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         assert current_branch(repo, env=env) == "main"
 
     def test_returns_branch_after_checkout(self, tmp_path: Path, env: dict[str, str]) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         subprocess.run(["git", "checkout", "-b", "feature", "-q"], cwd=repo, env=env, check=True)
         assert current_branch(repo, env=env) == "feature"
 
@@ -396,7 +389,7 @@ class TestLocalBranches:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         subprocess.run(["git", "branch", "develop"], cwd=repo, env=env, check=True)
         subprocess.run(["git", "branch", "feature"], cwd=repo, env=env, check=True)
         assert local_branches(repo, env=env) == ["develop", "feature", "main"]
@@ -432,7 +425,7 @@ class TestWorktreeAdd:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         subprocess.run(["git", "branch", "feature"], cwd=repo, env=env, check=True)
         wt = tmp_path / "wt-feature"
         worktree_add(repo, wt, "feature", env=env)
@@ -442,7 +435,7 @@ class TestWorktreeAdd:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         wt = tmp_path / "wt-new"
         worktree_add(repo, wt, "new-branch", create=True, env=env)
         assert wt.is_dir()
@@ -458,7 +451,7 @@ class TestWorktreeAdd:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         # Create a develop branch with an extra file.
         subprocess.run(["git", "checkout", "-b", "develop", "-q"], cwd=repo, env=env, check=True)
         (repo / "dev.txt").write_text("dev\n", encoding="utf-8")
@@ -477,7 +470,7 @@ class TestWorktreeAdd:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         (repo / "tagged.txt").write_text("tagged\n", encoding="utf-8")
         subprocess.run(["git", "add", "."], cwd=repo, env=env, check=True)
         subprocess.run(
@@ -504,7 +497,7 @@ class TestWorktreeAdd:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         source = tmp_path / "source"
-        _init_repo(source, env)
+        init_repo(source, env)
         subprocess.run(
             ["git", "checkout", "-b", "cloud-native", "-q"], cwd=source, env=env, check=True
         )
@@ -564,7 +557,7 @@ class TestWorktreeAdd:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         source = tmp_path / "source"
-        _init_repo(source, env)
+        init_repo(source, env)
         subprocess.run(
             ["git", "checkout", "-b", "existing-remote", "-q"],
             cwd=source,
@@ -632,7 +625,7 @@ class TestWorktreeAdd:
 class TestWorktreeRemove:
     def test_remove_clean_worktree(self, tmp_path: Path, env: dict[str, str]) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         wt = tmp_path / "wt"
         subprocess.run(
             ["git", "worktree", "add", str(wt), "-b", "wt-branch"],
@@ -649,7 +642,7 @@ class TestWorktreeRemove:
 
     def test_force_removes_dirty_worktree(self, tmp_path: Path, env: dict[str, str]) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         wt = tmp_path / "wt"
         subprocess.run(
             ["git", "worktree", "add", str(wt), "-b", "wt-branch"],
@@ -677,7 +670,7 @@ class TestWorktreePrune:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         wt = tmp_path / "wt"
         subprocess.run(
             ["git", "worktree", "add", str(wt), "-b", "wt-branch"],
@@ -846,7 +839,7 @@ class TestWorktreeList:
 
     def test_lists_real_worktrees(self, tmp_path: Path, env: dict[str, str]) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         wt = tmp_path / "wt-feature"
         subprocess.run(
             ["git", "worktree", "add", str(wt), "-b", "feature"],
@@ -867,7 +860,7 @@ class TestWorktreeList:
 class TestBranchDelete:
     def test_deletes_merged_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         # A branch with no commits beyond main is trivially merged, so the
         # safe `-d` deletion accepts it.
         subprocess.run(["git", "branch", "merged"], cwd=repo, env=env, check=True)
@@ -879,7 +872,7 @@ class TestBranchDelete:
 
     def test_force_deletes_unmerged_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         # Create a branch with a commit that is not merged into main: a plain
         # `-d` deletion would refuse it, so success proves `-D` (force) ran.
         subprocess.run(["git", "checkout", "-b", "unmerged", "-q"], cwd=repo, env=env, check=True)
@@ -897,27 +890,21 @@ class TestBranchDelete:
 
 
 class TestBranchUpstream:
-    def test_returns_upstream_name_when_set(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_returns_upstream_of_a_tracking_branch(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        monkeypatch.setattr(
-            "agm.vcs.git.run_capture",
-            lambda cmd, **kwargs: (0, "origin/main\n", ""),
-        )
-        result = _branch_upstream(tmp_path, "feature")
-        assert result == "origin/main"
+        _source, clone = clone_local_remote(tmp_path, env)
+        assert _branch_upstream(clone, "main", env=env) == "origin/main"
 
-    def test_returns_none_when_no_upstream(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_returns_none_when_the_branch_tracks_nothing(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        monkeypatch.setattr(
-            "agm.vcs.git.run_capture",
-            lambda cmd, **kwargs: (128, "", "fatal: no upstream"),
-        )
-        result = _branch_upstream(tmp_path, "feature")
-        assert result is None
+        repo = init_repo(tmp_path / "repo", env)
+        assert _branch_upstream(repo, "main", env=env) is None
 
-    def test_returns_none_when_empty_output(
+    # Kept as a behavioral fake: git either resolves ``@{upstream}`` or fails,
+    # so a successful call returning empty output cannot be produced for real.
+    def test_returns_none_when_output_is_empty(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         monkeypatch.setattr(
@@ -929,99 +916,67 @@ class TestBranchUpstream:
 
 
 class TestIsAncestor:
-    def test_returns_true_when_ancestor(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_reports_ancestry_in_one_direction_only(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        monkeypatch.setattr(
-            "agm.vcs.git.run_foreground",
-            lambda cmd, **kwargs: 0,
-        )
-        assert _is_ancestor(tmp_path, "main", "feature") is True
+        repo = init_repo(tmp_path / "repo", env)
+        git_run(repo, ["checkout", "-b", "feature", "-q"], env)
+        commit_file(repo, env, name="feature.txt")
 
-    def test_returns_false_when_not_ancestor(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        monkeypatch.setattr(
-            "agm.vcs.git.run_foreground",
-            lambda cmd, **kwargs: 1,
-        )
-        assert _is_ancestor(tmp_path, "feature", "main") is False
+        assert _is_ancestor(repo, "main", "feature", env=env) is True
+        assert _is_ancestor(repo, "feature", "main", env=env) is False
 
 
 class TestBranchCanDelete:
-    def test_returns_false_when_branch_not_exists(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_absent_branch_is_never_deletable(self, tmp_path: Path, env: dict[str, str]) -> None:
+        repo = init_repo(tmp_path / "repo", env)
+
+        assert branch_can_delete(repo, "missing", env=env) is False
+        assert branch_can_delete(repo, "missing", force=True, env=env) is False
+
+    def test_force_accepts_a_branch_safe_deletion_refuses(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        monkeypatch.setattr("agm.vcs.git.local_branch_exists", lambda repo, b, env=None: False)
-        result = branch_can_delete(tmp_path, "missing")
-        assert result is False
+        repo = init_repo(tmp_path / "repo", env)
+        git_run(repo, ["checkout", "-b", "unmerged", "-q"], env)
+        commit_file(repo, env, name="unmerged.txt")
+        git_run(repo, ["checkout", "main", "-q"], env)
 
-    def test_returns_true_when_force_and_branch_exists(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        assert branch_can_delete(repo, "unmerged", env=env) is False
+        assert branch_can_delete(repo, "unmerged", force=True, env=env) is True
+
+    def test_branch_merged_into_head_without_upstream_is_deletable(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        monkeypatch.setattr("agm.vcs.git.local_branch_exists", lambda repo, b, env=None: True)
-        result = branch_can_delete(tmp_path, "feature", force=True)
-        assert result is True
+        repo = init_repo(tmp_path / "repo", env)
+        git_run(repo, ["branch", "merged"], env)
+        assert _branch_upstream(repo, "merged", env=env) is None
 
-    def test_returns_true_when_merged_into_upstream(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        assert branch_can_delete(repo, "merged", env=env) is True
+
+    def test_branch_merged_into_its_upstream_is_deletable_though_head_is_behind(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        monkeypatch.setattr("agm.vcs.git.local_branch_exists", lambda repo, b, env=None: True)
-        monkeypatch.setattr("agm.vcs.git._branch_upstream", lambda repo, b, env=None: "origin/main")
-        monkeypatch.setattr("agm.vcs.git._is_ancestor", lambda repo, a, d, env=None: True)
-        result = branch_can_delete(tmp_path, "feature")
-        assert result is True
+        source, clone = clone_local_remote(tmp_path, env)
+        commit_file(source, env, name="later.txt")
+        git_run(clone, ["fetch", "-q"], env)
+        # feature sits on the advanced origin/main it tracks, while the checked
+        # out main still points at the older commit.
+        git_run(clone, ["branch", "--track", "feature", "origin/main"], env)
 
-    def test_returns_true_when_merged_into_head_no_upstream(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        assert branch_can_delete(clone, "feature", env=env) is True
+
+    def test_branch_ahead_of_its_upstream_is_not_deletable_even_when_checked_out(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        monkeypatch.setattr("agm.vcs.git.local_branch_exists", lambda repo, b, env=None: True)
-        monkeypatch.setattr("agm.vcs.git._branch_upstream", lambda repo, b, env=None: None)
-        is_ancestor_calls: list[tuple[str, str]] = []
+        _source, clone = clone_local_remote(tmp_path, env)
+        git_run(clone, ["checkout", "-b", "feature", "--track", "origin/main", "-q"], env)
+        commit_file(clone, env, name="ahead.txt")
+        # HEAD is the branch itself, so only consulting the upstream can tell
+        # that the branch carries a commit the upstream has not taken.
+        assert current_branch(clone, env=env) == "feature"
 
-        def fake_is_ancestor(
-            repo: Path, ancestor: str, descendant: str, *, env: object = None
-        ) -> bool:
-            is_ancestor_calls.append((ancestor, descendant))
-            return True
-
-        monkeypatch.setattr("agm.vcs.git._is_ancestor", fake_is_ancestor)
-        result = branch_can_delete(tmp_path, "feature")
-        assert result is True
-        # Should check against HEAD when no upstream
-        assert is_ancestor_calls == [("feature", "HEAD")]
-
-    def test_returns_false_when_not_merged_into_upstream(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        monkeypatch.setattr("agm.vcs.git.local_branch_exists", lambda repo, b, env=None: True)
-        monkeypatch.setattr(
-            "agm.vcs.git._branch_upstream",
-            lambda repo, b, env=None: "origin/main",
-        )
-        monkeypatch.setattr("agm.vcs.git._is_ancestor", lambda repo, a, d, env=None: False)
-        result = branch_can_delete(tmp_path, "feature")
-        assert result is False
-
-    def test_uses_upstream_over_head_when_upstream_set(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        monkeypatch.setattr("agm.vcs.git.local_branch_exists", lambda repo, b, env=None: True)
-        monkeypatch.setattr(
-            "agm.vcs.git._branch_upstream",
-            lambda repo, b, env=None: "origin/develop",
-        )
-        is_ancestor_calls: list[tuple[str, str]] = []
-
-        def fake_is_ancestor(
-            repo: Path, ancestor: str, descendant: str, *, env: object = None
-        ) -> bool:
-            is_ancestor_calls.append((ancestor, descendant))
-            return True
-
-        monkeypatch.setattr("agm.vcs.git._is_ancestor", fake_is_ancestor)
-        branch_can_delete(tmp_path, "feature")
-        assert is_ancestor_calls == [("feature", "origin/develop")]
+        assert branch_can_delete(clone, "feature", env=env) is False
 
 
 # ---------------------------------------------------------------------------
@@ -1032,12 +987,12 @@ class TestBranchCanDelete:
 class TestLocalBranchExists:
     def test_returns_true_when_branch_exists(self, tmp_path: Path, env: dict[str, str]) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         assert local_branch_exists(repo, "main", env=env) is True
 
     def test_returns_false_when_branch_missing(self, tmp_path: Path, env: dict[str, str]) -> None:
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         assert local_branch_exists(repo, "nonexistent", env=env) is False
 
 
@@ -1063,28 +1018,19 @@ class TestRemoteBranchExists:
 
 
 class TestDefaultRemoteBranchRef:
-    def test_returns_default_ref_when_symbolic_ref_non_empty(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_returns_the_tracking_ref_of_origins_default_branch(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        monkeypatch.setattr(
-            "agm.vcs.git.require_capture",
-            lambda cmd, **kwargs: "origin/main\n",
-        )
-        result = default_remote_branch_ref(tmp_path)
-        assert result == "origin/main"
+        _source, clone = clone_local_remote(tmp_path, env)
+        assert default_remote_branch_ref(clone, env=env) == "origin/main"
 
+    def test_follows_a_non_main_default_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
+        _source, clone = clone_local_remote(tmp_path, env, default_branch="develop")
+        assert default_remote_branch_ref(clone, env=env) == "origin/develop"
+
+    # Kept as a behavioral fake: git's symbolic-ref either resolves the ref or
+    # fails, so the empty-answer guard cannot be reached through a real repo.
     def test_exits_when_symbolic_ref_returns_empty(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        monkeypatch.setattr(
-            "agm.vcs.git.require_capture",
-            lambda cmd, **kwargs: "\n",
-        )
-        with pytest.raises(SystemExit) as exc_info:
-            default_remote_branch_ref(tmp_path)
-        assert exc_info.value.code == 1
-
-    def test_exits_when_symbolic_ref_returns_whitespace_only(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         monkeypatch.setattr(
@@ -1095,17 +1041,6 @@ class TestDefaultRemoteBranchRef:
             default_remote_branch_ref(tmp_path)
         assert exc_info.value.code == 1
 
-    def test_queries_origin_head_ref(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        captured: list[list[str]] = []
-
-        def fake_require_capture(cmd: list[str], **kwargs: object) -> str:
-            captured.append(cmd)
-            return "origin/main\n"
-
-        monkeypatch.setattr("agm.vcs.git.require_capture", fake_require_capture)
-        default_remote_branch_ref(tmp_path)
-        assert "refs/remotes/origin/HEAD" in captured[0]
-
 
 # ---------------------------------------------------------------------------
 # remote_unmerged_branches
@@ -1113,14 +1048,26 @@ class TestDefaultRemoteBranchRef:
 
 
 class TestRemoteUnmergedBranches:
-    def test_returns_non_empty_lines(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        monkeypatch.setattr(
-            "agm.vcs.git.require_capture",
-            lambda cmd, **kwargs: "origin/feature-a\norigin/feature-b\n",
-        )
-        result = remote_unmerged_branches(tmp_path, base_ref="origin/main")
-        assert result == ["origin/feature-a", "origin/feature-b"]
+    def test_lists_remote_branches_not_merged_into_the_base_ref(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        _source, clone = clone_local_remote(tmp_path, env, branches=["feature-a", "feature-b"])
 
+        from_main = remote_unmerged_branches(clone, base_ref="origin/main", env=env)
+        from_feature_a = remote_unmerged_branches(clone, base_ref="origin/feature-a", env=env)
+
+        assert set(from_main) == {"origin/feature-a", "origin/feature-b"}
+        # feature-a and everything it contains drop out once it is the base.
+        assert set(from_feature_a) == {"origin/feature-b"}
+
+    def test_returns_empty_when_every_remote_branch_is_merged(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        _source, clone = clone_local_remote(tmp_path, env)
+        assert remote_unmerged_branches(clone, base_ref="origin/main", env=env) == []
+
+    # Kept as a behavioral fake: real `git for-each-ref` never emits empty
+    # lines, so the filtering guard can only be exercised on synthetic output.
     def test_filters_empty_lines(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setattr(
             "agm.vcs.git.require_capture",
@@ -1129,30 +1076,6 @@ class TestRemoteUnmergedBranches:
         result = remote_unmerged_branches(tmp_path, base_ref="origin/main")
         assert result == ["origin/branch"]
 
-    def test_returns_empty_list_for_no_output(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        monkeypatch.setattr(
-            "agm.vcs.git.require_capture",
-            lambda cmd, **kwargs: "",
-        )
-        result = remote_unmerged_branches(tmp_path, base_ref="origin/main")
-        assert result == []
-
-    def test_passes_base_ref_as_no_merged_flag(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        captured: list[list[str]] = []
-
-        def fake_require_capture(cmd: list[str], **kwargs: object) -> str:
-            captured.append(cmd)
-            return ""
-
-        monkeypatch.setattr("agm.vcs.git.require_capture", fake_require_capture)
-        remote_unmerged_branches(tmp_path, base_ref="origin/develop")
-        assert "--no-merged=origin/develop" in captured[0]
-        assert "refs/remotes/origin" in captured[0]
-
 
 # ---------------------------------------------------------------------------
 # create_tracking_branch
@@ -1160,22 +1083,24 @@ class TestRemoteUnmergedBranches:
 
 
 class TestCreateTrackingBranch:
-    # Kept as a behavioral fake: create_tracking_branch tracks a remote-tracking
-    # ref (origin/<branch>), which only exists after fetching from a real remote.
-    # Setting up a remote + fetch to assert the tracking config is disproportionate
-    # for this thin wrapper, so the fake verifies the invocation.
-    def test_calls_require_success_with_correct_args(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_creates_a_local_branch_tracking_the_remote_ref(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        captured: list[list[str]] = []
-        monkeypatch.setattr(
-            "agm.vcs.git.require_success",
-            lambda cmd, **kwargs: captured.append(cmd),
+        _source, clone = clone_local_remote(tmp_path, env, branches=["feature"])
+        # git's own automatic upstream setup is switched off, so tracking can
+        # only come from the helper itself.
+        Path(env["HOME"], ".gitconfig").write_text(
+            "[branch]\n\tautoSetupMerge = false\n", encoding="utf-8"
         )
-        create_tracking_branch(tmp_path, "my-branch", "origin/my-branch")
-        _assert_git_repo_command(
-            captured[0], tmp_path, "branch", "--track", "my-branch", "origin/my-branch"
+        assert local_branch_exists(clone, "feature", env=env) is False
+
+        create_tracking_branch(clone, "feature", "origin/feature", env=env)
+
+        assert local_branch_exists(clone, "feature", env=env) is True
+        assert git_output(clone, ["rev-parse", "feature"], env) == git_output(
+            clone, ["rev-parse", "origin/feature"], env
         )
+        assert _branch_upstream(clone, "feature", env=env) == "origin/feature"
 
 
 # ---------------------------------------------------------------------------
@@ -1184,31 +1109,17 @@ class TestCreateTrackingBranch:
 
 
 class TestSymbolicRef:
-    def test_returns_stripped_output(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        monkeypatch.setattr(
-            "agm.vcs.git.require_capture",
-            lambda cmd, **kwargs: "origin/main\n",
-        )
-        result = symbolic_ref(tmp_path, "refs/remotes/origin/HEAD")
-        assert result == "origin/main"
+    def test_resolves_head_to_the_checked_out_branch(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        repo = init_repo(tmp_path / "repo", env)
+        assert symbolic_ref(repo, "HEAD", env=env) == "main"
 
-    # Kept as a behavioral fake: the ref symbolic_ref is exercised with here
-    # (refs/remotes/origin/HEAD) is a remote-tracking ref that only exists after
-    # cloning/fetching from a real remote, so a focused fake of the output is the
-    # right tool rather than standing up a remote.
-    def test_passes_ref_in_command(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        captured: list[list[str]] = []
-
-        def fake_require_capture(cmd: list[str], **kwargs: object) -> str:
-            captured.append(cmd)
-            return "origin/main\n"
-
-        monkeypatch.setattr("agm.vcs.git.require_capture", fake_require_capture)
-        symbolic_ref(tmp_path, "refs/remotes/origin/HEAD")
-        assert "refs/remotes/origin/HEAD" in captured[0]
-        assert "--quiet" in captured[0]
-        assert "--short" in captured[0]
-        assert "symbolic-ref" in captured[0]
+    def test_resolves_origin_head_to_the_remote_tracking_ref(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        _source, clone = clone_local_remote(tmp_path, env)
+        assert symbolic_ref(clone, "refs/remotes/origin/HEAD", env=env) == "origin/main"
 
 
 # ---------------------------------------------------------------------------
@@ -1222,7 +1133,7 @@ class TestLsRemoteHead:
         # repository path with no network access, so a real repo exercises the
         # helper end to end.
         repo = tmp_path / "repo"
-        _init_repo(repo, env)
+        init_repo(repo, env)
         result = ls_remote_head(str(repo), env=env)
         # HEAD symbolically resolves to refs/heads/main, plus the HEAD sha line.
         assert "ref: refs/heads/main\tHEAD" in result
@@ -1235,79 +1146,39 @@ class TestLsRemoteHead:
 
 
 class TestFindFirstGitRepo:
-    def test_finds_first_git_repo_in_sorted_order(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_finds_the_repo_among_plain_directories(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        alpha = tmp_path / "alpha"
-        beta = tmp_path / "beta"
-        alpha.mkdir()
-        beta.mkdir()
+        (tmp_path / "beta").mkdir()
+        init_repo(tmp_path / "gamma", env)
 
-        # alpha is a git repo, beta is not
-        def fake_run_capture(cmd: list[str], **kwargs: object) -> tuple[int, str, str]:
-            path_arg = cmd[2]  # "git -C <path> rev-parse ..."
-            if path_arg == str(alpha):
-                return (0, "true\n", "")
-            return (128, "", "not a git repo")
+        assert find_first_git_repo(tmp_path) == tmp_path / "gamma"
 
-        monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
-        result = find_first_git_repo(tmp_path)
-        assert result == alpha
-
-    def test_returns_first_alphabetically_when_multiple_repos(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_returns_the_first_repo_in_sorted_order(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        aaa = tmp_path / "aaa"
-        bbb = tmp_path / "bbb"
-        aaa.mkdir()
-        bbb.mkdir()
+        init_repo(tmp_path / "aaa", env)
+        init_repo(tmp_path / "bbb", env)
 
-        monkeypatch.setattr(
-            "agm.vcs.git.run_capture",
-            lambda cmd, **kwargs: (0, "true\n", ""),
-        )
-        result = find_first_git_repo(tmp_path)
-        assert result == aaa
+        assert find_first_git_repo(tmp_path) == tmp_path / "aaa"
 
-    def test_exits_when_no_git_repo_found(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_searches_nested_directories(self, tmp_path: Path, env: dict[str, str]) -> None:
+        nested = init_repo(tmp_path / "outer" / "inner", env)
+
+        assert find_first_git_repo(tmp_path) == nested
+
+    def test_exits_when_no_git_repo_found(self, tmp_path: Path) -> None:
         (tmp_path / "notarepo").mkdir()
-        monkeypatch.setattr(
-            "agm.vcs.git.run_capture",
-            lambda cmd, **kwargs: (128, "", "not a git repo"),
-        )
         with pytest.raises(SystemExit) as exc_info:
             find_first_git_repo(tmp_path)
         assert exc_info.value.code == 1
 
-    def test_exits_when_parent_dir_is_empty(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        monkeypatch.setattr(
-            "agm.vcs.git.run_capture",
-            lambda cmd, **kwargs: (0, "true\n", ""),
-        )
+    def test_exits_when_parent_dir_is_empty(self, tmp_path: Path) -> None:
         empty_dir = tmp_path / "empty"
         empty_dir.mkdir()
         with pytest.raises(SystemExit) as exc_info:
             find_first_git_repo(empty_dir)
         assert exc_info.value.code == 1
-
-    def test_searches_nested_directories(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        nested = tmp_path / "outer" / "inner"
-        nested.mkdir(parents=True)
-
-        def fake_run_capture(cmd: list[str], **kwargs: object) -> tuple[int, str, str]:
-            if cmd[2] == str(nested):
-                return (0, "true\n", "")
-            return (128, "", "not a git repo")
-
-        monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
-        result = find_first_git_repo(tmp_path)
-        assert result == nested
 
 
 # ---------------------------------------------------------------------------
@@ -1316,75 +1187,38 @@ class TestFindFirstGitRepo:
 
 
 class TestFetchOutput:
-    def test_delegates_to_run_capture(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_captures_the_output_of_a_command_run_in_cwd(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        expected = (0, "stdout text", "stderr text")
-        monkeypatch.setattr(
-            "agm.vcs.git.run_capture",
-            lambda cmd, **kwargs: expected,
+        repo = init_repo(tmp_path / "repo", env)
+
+        returncode, stdout, stderr = fetch_output(
+            ["git", "rev-parse", "--show-toplevel"], cwd=repo, env=env
         )
-        result = fetch_output(["git", "fetch"])
-        assert result == expected
 
-    def test_passes_cwd_and_env(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        received: dict[str, object] = {}
+        assert returncode == 0
+        assert Path(stdout.strip()) == repo
+        assert stderr == ""
 
-        def fake_run_capture(
-            cmd: list[str],
-            *,
-            cwd: Path | None = None,
-            env: dict[str, str] | None = None,
-        ) -> tuple[int, str, str]:
-            received["cwd"] = cwd
-            received["env"] = env
-            return (0, "", "")
+    def test_uses_the_supplied_environment(self, tmp_path: Path, env: dict[str, str]) -> None:
+        repo = init_repo(tmp_path / "repo", env)
+        probe_env = {**env, "GIT_AUTHOR_NAME": "Env Probe"}
 
-        monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
-        custom_env = {"GIT_SSH": "/usr/bin/ssh"}
-        fetch_output(["git", "fetch"], cwd=tmp_path, env=custom_env)
-        assert received["cwd"] == tmp_path
-        assert received["env"] == custom_env
-
-    def test_returns_nonzero_exit_code(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(
-            "agm.vcs.git.run_capture",
-            lambda cmd, **kwargs: (1, "", "error occurred"),
+        returncode, stdout, _stderr = fetch_output(
+            ["git", "var", "GIT_AUTHOR_IDENT"], cwd=repo, env=probe_env
         )
-        code, stdout, stderr = fetch_output(["git", "fetch"])
-        assert code == 1
-        assert stderr == "error occurred"
 
+        assert returncode == 0
+        assert "Env Probe" in stdout
 
-# ---------------------------------------------------------------------------
-# WorktreeInfo dataclass
-# ---------------------------------------------------------------------------
+    def test_reports_the_failure_of_the_command(self, tmp_path: Path, env: dict[str, str]) -> None:
+        returncode, stdout, stderr = fetch_output(
+            ["git", "-C", str(tmp_path / "missing"), "status"], env=env
+        )
 
-
-class TestWorktreeInfo:
-    def test_frozen_dataclass_fields(self, tmp_path: Path) -> None:
-        wt = WorktreeInfo(path=tmp_path, branch="main")
-        assert wt.path == tmp_path
-        assert wt.branch == "main"
-
-    def test_branch_can_be_none(self, tmp_path: Path) -> None:
-        wt = WorktreeInfo(path=tmp_path, branch=None)
-        assert wt.branch is None
-
-    def test_frozen_prevents_mutation(self, tmp_path: Path) -> None:
-        wt = WorktreeInfo(path=tmp_path, branch="main")
-        with pytest.raises(Exception):
-            setattr(wt, "branch", "other")
-
-    def test_equality(self, tmp_path: Path) -> None:
-        a = WorktreeInfo(path=tmp_path, branch="main")
-        b = WorktreeInfo(path=tmp_path, branch="main")
-        assert a == b
-
-    def test_inequality_different_branch(self, tmp_path: Path) -> None:
-        a = WorktreeInfo(path=tmp_path, branch="main")
-        b = WorktreeInfo(path=tmp_path, branch="develop")
-        assert a != b
+        assert returncode != 0
+        assert stdout == ""
+        assert stderr != ""
 
 
 # ---------------------------------------------------------------------------

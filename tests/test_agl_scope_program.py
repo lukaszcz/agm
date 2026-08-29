@@ -2134,11 +2134,11 @@ class TestModuleQualifiedCall:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: resolver.py _resolve_field_access and _resolve_cross_module_type_name
+# Qualified constructor references and field access across modules
 # ---------------------------------------------------------------------------
 
 
-class TestFieldAccessCoverage:
+class TestQualifiedConstructorReferences:
     def test_self_ref_field_access_in_non_entry_module(self, tmp_path: Path) -> None:
         """A non-entry module can resolve a self-qualified constructor ref."""
         graph = _make_graph_from_files(
@@ -2152,10 +2152,10 @@ class TestFieldAccessCoverage:
         )
         result = resolve_program(graph)
         assert ENTRY_ID in result.modules
-        # The self-ref ::Color::Red within mylib has a constructor-chain result.
+        # The self-ref ::Color::Red within mylib resolves to the Red member.
         mylib_id = ModuleId.from_path("mylib")
         mylib_resolved = result.modules[mylib_id].resolved
-        assert len(mylib_resolved.constructor_refs) > 0
+        assert [ref.owner_name for ref in mylib_resolved.constructor_refs.values()] == ["Red"]
 
     def test_unrecognized_qualifier_in_field_access_errors(self, tmp_path: Path) -> None:
         """An unknown module qualifier in a constructor ref is rejected."""
@@ -2206,10 +2206,10 @@ class TestFieldAccessCoverage:
             resolve_program(graph)
 
     def test_non_type_exported_name_in_field_access_falls_through(self, tmp_path: Path) -> None:
-        """Coverage: non-constructor export in qualified field access.
+        """A qualified name that exports a function resolves as a value, not a type.
 
-        ``mylib::compute.value`` where ``compute`` is a function (not a type) exercises
-        the ``kind != constructor_binding`` path in _resolve_cross_module_type_name.
+        ``mylib::compute.value`` names a function, so the qualifier resolves to the
+        imported binding and ``.value`` stays an ordinary field access.
         """
         graph = _make_graph_from_files(
             tmp_path,

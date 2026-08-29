@@ -442,7 +442,8 @@ class TestUncaughtAgentCallErrorSpan:
             exec_run(args)
         assert exc_info.value.code == 2
         err = capsys.readouterr().err
-        assert "at line 3" in err
+        assert "AgentCallError" in err
+        assert "line 3" in err
 
 
 class TestDiagnosticType:
@@ -885,14 +886,6 @@ class TestWarningsThreadedOnFailurePaths:
         assert all(d.severity == "error" for d in result.diagnostics)
 
 
-class TestAgentRegistryDispatch:
-    """dispatch resolves named agents, ask, and the default fallback."""
-
-
-class TestAgentRequestFieldOrder:
-    """The request dataclass keeps its documented positional field order."""
-
-
 class TestParamBindingInvariant:
     """The runtime relies on the checker recording every param's binding type."""
 
@@ -1023,7 +1016,7 @@ class TestCapabilitiesBuiltFromRegistrations:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: render.py — render_value / _scalar_text
+# Rendering AgL values as text
 # ---------------------------------------------------------------------------
 
 
@@ -1635,12 +1628,12 @@ class TestRenderValue:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: serialize.py — value_to_json_obj and dumps_exact branches
+# JSON serialization of AgL values
 # ---------------------------------------------------------------------------
 
 
 class TestSerialize:
-    """Coverage for serialize.py branches not exercised by higher-level tests."""
+    """AgL values convert to JSON-shaped objects and to exact JSON text."""
 
     def test_bool_value_serialized(self) -> None:
         from agm.agl.runtime.serialize import value_to_json_obj
@@ -1675,11 +1668,6 @@ class TestSerialize:
             )
         )
         assert result == {"msg": "hi"}
-
-    def test_pretty_array_serialized(self) -> None:
-        from agm.agl.runtime.serialize import dumps_exact
-
-        assert dumps_exact([1, 2], indent=2) == "[\n  1,\n  2\n]"
 
     def test_enum_nullary_value_serialized(self) -> None:
         from agm.agl.runtime.serialize import value_to_json_obj
@@ -1727,57 +1715,35 @@ class TestSerialize:
 
         assert value_to_json_obj(pair) == {"left": {"value": 1}, "right": {"value": 1}}
 
-    def test_dumps_exact_bool_true(self) -> None:
+    @pytest.mark.parametrize(
+        ("obj", "indent", "expected"),
+        [
+            (True, 2, "true"),
+            (False, 2, "false"),
+            ([], 2, "[]"),
+            ({}, 2, "{}"),
+            ([1, 2], None, "[1, 2]"),
+            ({"k": 1}, None, '{"k": 1}'),
+            ([1, 2], 2, "[\n  1,\n  2\n]"),
+            ({"k": [1]}, 2, '{\n  "k": [\n    1\n  ]\n}'),
+        ],
+    )
+    def test_dumps_exact_renders_json_text(
+        self, obj: object, indent: int | None, expected: str
+    ) -> None:
+        """``indent=None`` writes one line; an indent writes a nested block."""
         from agm.agl.runtime.serialize import dumps_exact
 
-        assert dumps_exact(True) == "true"
-
-    def test_dumps_exact_bool_false(self) -> None:
-        from agm.agl.runtime.serialize import dumps_exact
-
-        assert dumps_exact(False) == "false"
-
-    def test_dumps_exact_array_empty(self) -> None:
-        from agm.agl.runtime.serialize import dumps_exact
-
-        assert dumps_exact([]) == "[]"
-
-    def test_dumps_exact_array_no_indent(self) -> None:
-        from agm.agl.runtime.serialize import dumps_exact
-
-        result = dumps_exact([1, 2], indent=None)
-        assert "1" in result
-        assert "2" in result
-
-    def test_dumps_exact_dict_empty(self) -> None:
-        from agm.agl.runtime.serialize import dumps_exact
-
-        assert dumps_exact({}) == "{}"
-
-    def test_dumps_exact_dict_no_indent(self) -> None:
-        from agm.agl.runtime.serialize import dumps_exact
-
-        result = dumps_exact({"k": 1}, indent=None)
-        assert "k" in result
-        assert "1" in result
+        assert dumps_exact(obj, indent=indent) == expected
 
 
 # ---------------------------------------------------------------------------
-# Coverage: agents.py — AgentResponse returned directly (not str)
-# ---------------------------------------------------------------------------
-
-
-class TestAgentResponseDirectReturn:
-    """Cover the branch in AgentRegistry.dispatch that returns AgentResponse directly."""
-
-
-# ---------------------------------------------------------------------------
-# Coverage: contract.py — ValueError when codec not found
+# Output contracts: codec resolution
 # ---------------------------------------------------------------------------
 
 
 class TestMaterializeContractMissingCodec:
-    """Cover the ValueError branch when the codec is not in the registry."""
+    """A contract naming an unregistered codec cannot be materialized."""
 
     def test_missing_codec_raises_value_error(self) -> None:
         from agm.agl.runtime.codec import TextCodec
@@ -1805,7 +1771,7 @@ class TestEngineSettingDefaults:
     def test_unknown_engine_seed_is_rejected(self) -> None:
         from agm.agl.runtime.params import build_engine_config_seeds
 
-        with pytest.raises(ValueError, match="unknown engine key"):
+        with pytest.raises(ValueError, match="engine key"):
             build_engine_config_seeds({"unknown": True})
 
     def test_engine_default_settings_has_no_default_agent_floor(self) -> None:
@@ -1816,15 +1782,17 @@ class TestEngineSettingDefaults:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: pipeline.py — generic exception handlers and error paths
+# Unexpected stage failures surface as diagnostics, not crashes
 # ---------------------------------------------------------------------------
 
 
 class TestRuntimeErrorPaths:
-    """Cover the generic exception handler branches in PipelineDriver.run."""
+    """An unexpected failure in any pipeline stage is reported as a diagnostic."""
 
-    def test_generic_parse_exception_covered(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Generic (non-AglSyntaxError) exception in parse step → ok=False."""
+    def test_unexpected_parse_failure_is_a_diagnostic(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unexpected failure while parsing is reported instead of crashing."""
         import agm.agl.modules.loader as parser_mod
 
         def bad_parse(*args: object, **kwargs: object) -> object:
@@ -1848,8 +1816,10 @@ class TestRuntimeErrorPaths:
         assert len(tab_warns) == 1
         assert tab_warns[0].line == 1
 
-    def test_generic_scope_exception_covered(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Generic (non-AglScopeError) exception in scope step → ok=False."""
+    def test_unexpected_scope_failure_is_a_diagnostic(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unexpected failure while resolving scopes is reported instead of crashing."""
         import agm.agl.scope.program as scope_mod
 
         def bad_resolve(program: object) -> object:
@@ -1859,10 +1829,12 @@ class TestRuntimeErrorPaths:
         rt = PipelineDriver()
         result = run_inline_command(rt, "let x = 1")
         assert result.ok is False
-        assert any("Scope error" in d.message for d in result.diagnostics)
+        assert any("unexpected scope error" in d.message for d in result.diagnostics)
 
-    def test_generic_typecheck_exception_covered(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Generic (non-AglTypeError) exception in typecheck step → ok=False."""
+    def test_unexpected_typecheck_failure_is_a_diagnostic(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unexpected failure while typechecking is reported instead of crashing."""
         import agm.agl.typecheck.program as tc_mod
 
         def bad_check(resolved: object, caps: object) -> object:
@@ -1872,7 +1844,7 @@ class TestRuntimeErrorPaths:
         rt = PipelineDriver()
         result = run_inline_command(rt, "let x = 1")
         assert result.ok is False
-        assert any("Type error" in d.message for d in result.diagnostics)
+        assert any("unexpected type error" in d.message for d in result.diagnostics)
 
     def test_contract_error_returns_not_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Contract materialization error → ok=False with contract error diagnostic."""
@@ -1889,7 +1861,7 @@ class TestRuntimeErrorPaths:
         rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
         result = run_inline_command(rt, 'ask "hi"')
         assert result.ok is False
-        assert any("Contract error" in d.message for d in result.diagnostics)
+        assert any("bad contract" in d.message for d in result.diagnostics)
 
     def test_uncaught_agl_raise_in_run(self) -> None:
         """AglRaise propagating from the interpreter → RunResult with error."""
@@ -1916,7 +1888,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.types import TextType
 
-        with pytest.raises(ValueError, match="expected a text value"):
+        with pytest.raises(ValueError, match="text"):
             convert_param_value("msg", 42, TextType(), type_table_for())
 
     def test_int_param_decimal_integral_widened(self) -> None:
@@ -1935,7 +1907,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.types import IntType
 
-        with pytest.raises(ValueError, match="not of type 'integer'"):
+        with pytest.raises(ValueError, match="'integer'"):
             convert_param_value("n", "1.5", IntType(), type_table_for())
 
     def test_decimal_param_from_int(self) -> None:
@@ -1955,7 +1927,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.types import DecimalType
 
-        with pytest.raises(ValueError, match="not of type 'number'"):
+        with pytest.raises(ValueError, match="'number'"):
             convert_param_value("d", "true", DecimalType(), type_table_for())
 
     def test_bool_param_invalid_type_fails(self) -> None:
@@ -1963,7 +1935,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.types import BoolType
 
-        with pytest.raises(ValueError, match="not of type 'boolean'"):
+        with pytest.raises(ValueError, match="'boolean'"):
             convert_param_value("b", "1", BoolType(), type_table_for())
 
     def test_bool_param_true_succeeds(self) -> None:
@@ -2500,12 +2472,12 @@ class TestLegacyAgentRegistry:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: schema.py — derive_schema branches not exercised higher up
+# JSON Schema derived from AgL types
 # ---------------------------------------------------------------------------
 
 
 class TestDeriveSchema:
-    """Unit tests for derive_schema covering all type branches."""
+    """Every AgL type either derives a JSON Schema or is rejected as non-data."""
 
     def test_bool_type(self) -> None:
         from agm.agl.semantics.types import BoolType
@@ -2577,12 +2549,12 @@ class TestDeriveSchema:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: type_schema.py — build_param_decoder and build_format_instructions
+# Param decoding and agent-facing format instructions
 # ---------------------------------------------------------------------------
 
 
 class TestBuildParamDecoder:
-    """Direct tests for build_param_decoder (previously zero direct references)."""
+    """A param decoder describes how an external value is read into its type."""
 
     def test_text_type_is_verbatim(self) -> None:
         """TextType params are taken verbatim — text_verbatim is True."""
@@ -2668,55 +2640,34 @@ class TestBuildParamDecoder:
 
 
 class TestBuildFormatInstructions:
-    """Direct tests for build_format_instructions (previously zero direct references)."""
+    """Format instructions tell the agent what JSON shape to return."""
 
-    def test_empty_schema_returns_no_schema_message(self) -> None:
-        """An empty schema dict produces the 'Return exactly one JSON value.' message."""
+    def test_unconstrained_schema_asks_for_json_without_a_fence(self) -> None:
+        """With no schema to show there is nothing to fence."""
         from agm.agl.type_schema import build_format_instructions
 
         result = build_format_instructions({})
-        assert "Return exactly one JSON value." in result
-
-    def test_empty_schema_no_code_fence(self) -> None:
-        """Empty schema message must NOT contain a JSON code fence."""
-        from agm.agl.type_schema import build_format_instructions
-
-        result = build_format_instructions({})
+        assert "Return exactly one JSON value" in result
         assert "```json" not in result
 
-    def test_non_empty_schema_embeds_json_fence(self) -> None:
-        """A non-empty schema dict produces output with a ```json code fence."""
-        from agm.agl.type_schema import build_format_instructions
-
-        schema: dict[str, object] = {"type": "object", "required": ["x"]}
-        result = build_format_instructions(schema)
-        assert "```json" in result
-
-    def test_non_empty_schema_embeds_schema_content(self) -> None:
-        """The schema JSON is embedded verbatim in the output."""
+    def test_schema_is_embedded_verbatim_in_a_json_fence(self) -> None:
         import json
 
         from agm.agl.type_schema import build_format_instructions
 
-        schema: dict[str, object] = {"type": "integer"}
+        schema: dict[str, object] = {"type": "object", "required": ["x"]}
         result = build_format_instructions(schema)
-        schema_text = json.dumps(schema, indent=2, ensure_ascii=False)
-        assert schema_text in result
-
-    def test_non_empty_schema_contains_json_value_instruction(self) -> None:
-        """Non-empty output also says 'Return exactly one JSON value conforming…'."""
-        from agm.agl.type_schema import build_format_instructions
-
-        result = build_format_instructions({"type": "string"})
         assert "Return exactly one JSON value" in result
+        assert "```json" in result
+        assert json.dumps(schema, indent=2, ensure_ascii=False) in result
 
 
 # ---------------------------------------------------------------------------
-# Coverage: serialize.py — AglNonDataValue branches
+# Values that have no JSON form
 # ---------------------------------------------------------------------------
 
 
-class TestSerializeV2OpaqueValues:
+class TestSerializeOpaqueValues:
     """Unit, agent, constructor, function, and iterator values have no JSON
     representation — each raises :class:`AglNonDataValue` with the matching
     user-facing ``kind``."""
@@ -2766,23 +2717,24 @@ class TestSerializeV2OpaqueValues:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: pipeline.py — uncovered branches and current properties
+# Host metadata and contracts threaded through IR execution
 # ---------------------------------------------------------------------------
 
 
-class TestIrHostMetadataCoverage:
+class TestIrHostMetadata:
     def test_invalid_external_param_shapes_are_diagnostics(self) -> None:
         text_result = run_inline_command(
             PipelineDriver(), "param value: text\nprint value", param_values={"value": 3}
         )
         assert not text_result.ok
-        assert "text value" in text_result.diagnostics[0].message
+        assert "text" in text_result.diagnostics[0].message
+        assert "value" in text_result.diagnostics[0].message
 
         json_result = run_inline_command(
             PipelineDriver(), "param value: int\nprint value", param_values={"value": {1, 2}}
         )
         assert not json_result.ok
-        assert "JSON-compatible" in json_result.diagnostics[0].message
+        assert "JSON" in json_result.diagnostics[0].message
 
     def test_missing_ir_codec_materialization_is_diagnostic(self) -> None:
         from agm.agl.ir.contracts import ContractRequest
@@ -2940,7 +2892,7 @@ class TestConvertInputUnsupportedType:
 # ---------------------------------------------------------------------------
 
 
-class TestV2UserDefinedFunctions:
+class TestUserDefinedFunctions:
     """Def expressions: first-class functions, recursion, call depth limit."""
 
     def test_def_call_basic(self) -> None:
@@ -2968,7 +2920,7 @@ class TestV2UserDefinedFunctions:
         assert result.ok is False
 
 
-class TestV2ExecStructuredForm:
+class TestExecStructuredForm:
     """Structured exec form: let x: T = exec ... raises on nonzero."""
 
     def test_exec_text_form_captures_stdout(self, capsys: pytest.CaptureFixture[str]) -> None:
@@ -2986,7 +2938,7 @@ class TestV2ExecStructuredForm:
         assert result.error is not None
 
 
-class TestV2AgentMethodAsk:
+class TestAgentMethodAsk:
     """``Agent::ask`` dispatches to its receiver."""
 
     def test_ask_dispatches_to_its_receiver(self) -> None:
@@ -3274,12 +3226,12 @@ class TestDiscoverParamsGraph:
 
 
 # ---------------------------------------------------------------------------
-# coverage gap tests for defensive/exceptional paths
+# Failures inside the prepare / discover / run entry points
 # ---------------------------------------------------------------------------
 
 
-class TestPreparedProgramDefensivePaths:
-    """Edge-case coverage for PreparedProgram properties and prepare_program error paths."""
+class TestPrepareProgramFailures:
+    """A failure while preparing a program lands in the prepared diagnostics."""
 
     def test_prepare_single_program_agl_error_retains_related_notes(self) -> None:
         """The module parse path uses AglError.to_diagnostic()."""
@@ -3361,8 +3313,8 @@ class TestPreparedProgramDefensivePaths:
         assert "resolve fail" in prepared.diagnostics[0].message
 
 
-class TestDiscoverParamsDefensivePaths:
-    """Edge-case coverage for discover_params and discover_params."""
+class TestDiscoverParamsFailures:
+    """A failure while discovering params is reported through the discovery result."""
 
     def test_discover_params_missing_entry_in_checked(self, tmp_path: pathlib.Path) -> None:
         """discover_params returns diagnostic when checked graph has no entry module."""
@@ -3380,7 +3332,7 @@ class TestDiscoverParamsDefensivePaths:
         with patch("agm.agl.typecheck.program.check_program", return_value=fake_checked):
             discovery = rt.discover_params(prepared)
         assert len(discovery.diagnostics) >= 1
-        assert "Entry module not found" in discovery.diagnostics[0].message
+        assert "Entry module" in discovery.diagnostics[0].message
 
     def test_discover_params_typecheck_failure(self, tmp_path: pathlib.Path) -> None:
         """discover_params returns diagnostics when typecheck fails."""
@@ -3498,8 +3450,8 @@ class TestDiscoverParamsDefensivePaths:
         assert "graph type crash" in discovery.diagnostics[0].message
 
 
-class TestRunPreparedDefensivePaths:
-    """Edge-case coverage for run_prepared (module) and run_prepared."""
+class TestRunPreparedEdgeCases:
+    """run_prepared honours precomputed artifacts and reports failures."""
 
     def test_run_prepared_with_precomputed_compiled(self) -> None:
         """run_prepared skips static passes when a compiled artifact is passed."""

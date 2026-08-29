@@ -687,6 +687,21 @@ class TestTypeExpressions:
         assert isinstance(let.type_ann.params[0], FuncT)
         assert isinstance(let.type_ann.result, BoolT)
 
+    def test_lowercase_name_is_a_named_type(self) -> None:
+        """A lowercase name that is not a keyword annotates as a named type."""
+        let = first(parse("let x: mytype = 1"))
+        assert isinstance(let, LetDecl)
+        assert isinstance(let.type_ann, NameT)
+        assert let.type_ann.name == "mytype"
+
+    def test_dict_key_must_be_text(self) -> None:
+        """dict keys must be text; the rejection names the type as it was written."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse("let x: dict[int, text] = 1")
+        msg = str(exc_info.value)
+        assert "'int'" in msg
+        assert "IntT" not in msg
+
 
 # ---------------------------------------------------------------------------
 # Declarations: record / enum / type alias / param / program / agent / config
@@ -808,6 +823,13 @@ class TestDeclarations:
         assert ok.name == "Ok"
         assert len(ok.fields) == 1
         assert isinstance(ok.fields[0], Param)
+
+    def test_enum_variant_with_empty_payload(self) -> None:
+        prog = parse("enum E\n  | Empty()")
+        en = first(prog)
+        assert isinstance(en, EnumDef)
+        assert en.members[0].name == "Empty"
+        assert en.members[0].fields == ()
 
     def test_enum_member_references(self) -> None:
         en = first(
@@ -2007,13 +2029,15 @@ class TestTypedCalls:
         assert isinstance(call, Call)
         assert len(call.args) == 1
 
-    def test_typed_call_preserves_array_literal_juxt(self) -> None:
-        # ``::`` introduces the typed form without disturbing array-literal
-        # juxtaposition (``print [1,2,3]`` still parses).
-        call = first(parse("print [1,2,3]"))
+    def test_typed_call_array_literal_juxt_preserved(self) -> None:
+        # ``::[...]`` introduces the typed form without disturbing
+        # array-literal juxtaposition of the argument that follows it.
+        call = first(parse("f::[int] [1,2,3]"))
         assert isinstance(call, Call)
-        assert isinstance(call.callee, VarRef)
-        assert call.callee.name == "print"
+        assert isinstance(call.callee, TypeApply)
+        assert isinstance(call.callee.expr, VarRef)
+        assert call.callee.expr.name == "f"
+        assert isinstance(call.callee.type_args[0], IntT)
         assert isinstance(call.args[0], ArrayLit)
 
     def test_typed_call_accepts_field_access_callee(self) -> None:
@@ -2336,6 +2360,28 @@ class TestBinaryOperators:
         assert e.qualifier is not None
         assert e.qualifier.route_segments == ("Review",)
         assert e.variant == "Pass"
+        assert not e.negated
+
+    def test_is_not_qualified(self) -> None:
+        e = first(parse("x is not Review::Pass"))
+        assert isinstance(e, IsTest)
+        assert e.qualifier is not None
+        assert e.qualifier.route_segments == ("Review",)
+        assert e.variant == "Pass"
+        assert e.negated
+
+    @pytest.mark.parametrize(
+        ("src", "op"),
+        [
+            ("x - 1", BinOp.SUB),
+            ("x / 2", BinOp.DIV),
+            ("x >= 0", BinOp.GE),
+        ],
+    )
+    def test_operator_spelling_selects_its_binop(self, src: str, op: BinOp) -> None:
+        e = first(parse(src))
+        assert isinstance(e, BinaryOp)
+        assert e.op == op
 
     def test_in(self) -> None:
         e = first(parse("x in [1, 2, 3]"))
@@ -2367,14 +2413,6 @@ class TestBinaryOperators:
         """Chained comparisons are non-associative in AgL."""
         with pytest.raises(AglSyntaxError, match="non-associative"):
             parse(src)
-
-    def test_chained_comparison_full_message(self) -> None:
-        """Pins the full designed wording for the chained-comparison diagnostic."""
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse("x == y == z")
-        assert str(exc_info.value) == (
-            "Comparisons are non-associative; parenthesize explicitly, e.g. `(x == y) == z`."
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -2575,6 +2613,12 @@ class TestParenthesizedBlock:
         assert len(e.value.items) == 1
         assert isinstance(e.value.items[0], binder_type)
 
+    def test_parenthesized_expression_is_its_inner_expression(self) -> None:
+        """A single parenthesized expression is not wrapped in a block."""
+        e = first(parse("(1 + 2)"))
+        assert isinstance(e, BinaryOp)
+        assert e.op == BinOp.ADD
+
 
 # ---------------------------------------------------------------------------
 # Control flow: try_expr
@@ -2655,6 +2699,12 @@ class TestTryExpr:
         with pytest.raises(AglSyntaxError):
             parse(source)
 
+    def test_inline_try_body_with_several_expressions_is_a_block(self) -> None:
+        e = first(parse("try x; y catch _ => err"))
+        assert isinstance(e, Try)
+        assert isinstance(e.body, Block)
+        assert len(e.body.items) == 2
+
 
 # ---------------------------------------------------------------------------
 # raise_expr
@@ -2703,10 +2753,27 @@ class TestReturnExpr:
 
 
 class TestPatterns:
-    def test_literal_int_pattern(self) -> None:
-        e = first(parse("case x of | 1 => a | 2 => b"))
+    @pytest.mark.parametrize(
+        ("literal", "literal_type", "value"),
+        [
+            ("1", IntLit, 1),
+            ("3.14", DecimalLit, decimal.Decimal("3.14")),
+            ("true", BoolLit, True),
+            ("false", BoolLit, False),
+            ("null", NullLit, None),
+            ('"hello"', StringLit, "hello"),
+        ],
+    )
+    def test_every_literal_form_is_a_pattern(
+        self, literal: str, literal_type: type[object], value: object
+    ) -> None:
+        e = first(parse(f"case x of | {literal} => a"))
         assert isinstance(e, Case)
-        assert isinstance(e.branches[0].pattern, LiteralPattern)
+        pat = e.branches[0].pattern
+        assert isinstance(pat, LiteralPattern)
+        assert isinstance(pat.literal, literal_type)
+        if not isinstance(pat.literal, NullLit):
+            assert pat.literal.value == value
 
     def test_as_patterns_wrap_complete_patterns_and_chain(self) -> None:
         expr = first(parse("case r of | Rect(w, h) as rect as shape => shape"))
@@ -2972,6 +3039,39 @@ class TestReplSeam:
     def test_is_incomplete_source_typed_call_missing_parens_is_real_error(self) -> None:
         assert not is_incomplete_source("None::[int]")
 
+    def test_is_incomplete_source_is_stable_across_repeated_calls(self) -> None:
+        """The incompleteness verdict is cached, and the cache returns the same answer."""
+        text = "let x ="
+        assert is_incomplete_source(text) is True
+        assert is_incomplete_source(text) is True
+
+    def test_is_incomplete_source_untokenizable_input(self) -> None:
+        """Input the lexer rejects is a real error, not a continuation prompt."""
+        assert not is_incomplete_source("~~~")
+
+    def test_is_incomplete_source_unexpected_parser_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Unexpected residual Lark errors are complete so the REPL shows them."""
+        from lark.exceptions import LarkError
+
+        import agm.agl.parser.parser as parser_mod
+
+        def fail_parse(_text: str) -> object:
+            raise LarkError("synthetic parser failure")
+
+        monkeypatch.setattr(parser_mod, "_incomplete_cache", None)
+        monkeypatch.setattr(parser_mod._PARSER, "parse", fail_parse)
+        assert not is_incomplete_source("synthetic lark fallback")
+
+    @pytest.mark.parametrize("quote", ['"""', "'''"])
+    def test_is_incomplete_source_unterminated_triple_quote(self, quote: str) -> None:
+        """Triple-quoted string EOF is incomplete for REPL continuation."""
+        source = f"let text = {quote}hello"
+        assert has_unterminated_triple_quoted_string(source)
+        assert is_incomplete_source(source)
+        assert not has_unterminated_triple_quoted_string(f"{source}{quote}")
+
 
 # ---------------------------------------------------------------------------
 # Negative cases (parse errors)
@@ -3016,6 +3116,24 @@ class TestNegativeCases:
         """A lambda cannot be a bare juxt argument (it starts with fn, a keyword)."""
         with pytest.raises(AglSyntaxError):
             parse("print fn(x: int) => x")
+
+    def test_untokenizable_character_is_a_syntax_error(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse("@@@")
+
+    def test_missing_function_body_indent_does_not_report_newline_width(self) -> None:
+        """A newline after ``=`` must not surface the layout token's width value."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("def f() -> int =\n11\n")
+        msg = str(exc_info.value)
+        assert "indented block" in msg
+        assert "Unexpected '0'" not in msg
+
+    def test_unexpected_newline_does_not_report_indentation_width(self) -> None:
+        """Unexpected layout newlines should be named, not rendered as ``'0'``."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("let x =\n11\n")
+        assert str(exc_info.value) == "Unexpected newline."
 
 
 # ---------------------------------------------------------------------------
@@ -3073,250 +3191,46 @@ class TestFullPrograms:
 
 
 # ---------------------------------------------------------------------------
-# Coverage-gap tests — Fix 3
+# Syntax error reporting: spans and message mapping
 # ---------------------------------------------------------------------------
 
 
-class TestBinaryOperatorsCoverage:
-    """Covers binary operators not yet tested: >=, -, /."""
+class TestSyntaxErrorSpans:
+    """A syntax error locates itself with a 1-based span."""
 
-    def test_bin_ge(self) -> None:
-        """x >= 0 produces BinaryOp(GE)."""
-        e = first(parse("x >= 0"))
-        assert isinstance(e, BinaryOp)
-        assert e.op == BinOp.GE
-
-    def test_bin_sub(self) -> None:
-        """x - 1 produces BinaryOp(SUB)."""
-        e = first(parse("x - 1"))
-        assert isinstance(e, BinaryOp)
-        assert e.op == BinOp.SUB
-
-    def test_bin_div(self) -> None:
-        """x / 2 produces BinaryOp(DIV)."""
-        e = first(parse("x / 2"))
-        assert isinstance(e, BinaryOp)
-        assert e.op == BinOp.DIV
-
-    def test_is_not_qualified(self) -> None:
-        "x is not Review::Pass produces a negated, qualified IsTest."
-        e = first(parse("x is not Review::Pass"))
-        assert isinstance(e, IsTest)
-        assert e.qualifier is not None
-        assert e.qualifier.route_segments == ("Review",)
-        assert e.variant == "Pass"
-        assert e.negated
-
-
-class TestLiteralPatternsCoverage:
-    """Covers literal patterns other than int: decimal, true, false, null, string."""
-
-    def test_literal_decimal_pattern(self) -> None:
-        e = first(parse("case x of | 3.14 => a"))
-        assert isinstance(e, Case)
-        pat = e.branches[0].pattern
-        assert isinstance(pat, LiteralPattern)
-        assert isinstance(pat.literal, DecimalLit)
-
-    def test_literal_true_pattern(self) -> None:
-        e = first(parse("case x of | true => a"))
-        assert isinstance(e, Case)
-        assert isinstance(e.branches[0].pattern, LiteralPattern)
-        assert isinstance(e.branches[0].pattern.literal, BoolLit)
-        assert e.branches[0].pattern.literal.value is True
-
-    def test_literal_false_pattern(self) -> None:
-        e = first(parse("case x of | false => a"))
-        assert isinstance(e, Case)
-        pat = e.branches[0].pattern
-        assert isinstance(pat, LiteralPattern)
-        assert isinstance(pat.literal, BoolLit)
-        assert pat.literal.value is False
-
-    def test_literal_null_pattern(self) -> None:
-        e = first(parse("case x of | null => a"))
-        assert isinstance(e, Case)
-        pat = e.branches[0].pattern
-        assert isinstance(pat, LiteralPattern)
-        assert isinstance(pat.literal, NullLit)
-
-    def test_literal_string_pattern(self) -> None:
-        e = first(parse('case x of | "hello" => a'))
-        assert isinstance(e, Case)
-        pat = e.branches[0].pattern
-        assert isinstance(pat, LiteralPattern)
-        assert isinstance(pat.literal, StringLit)
-        assert pat.literal.value == "hello"
-
-
-class TestTypeExprCoverage:
-    """Covers type expression paths not yet tested."""
-
-    def test_named_type_via_varname(self) -> None:
-        """A lowercase VAR_NAME that isn't a keyword maps to NameT."""
-        let = first(parse("let x: mytype = 1"))
-        assert isinstance(let, LetDecl)
-        assert isinstance(let.type_ann, NameT)
-        assert let.type_ann.name == "mytype"
-
-    def test_dict_type_bad_key_raises(self) -> None:
-        """dict[int, text] raises — dict keys must be text; message shows source spelling."""
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse("let x: dict[int, text] = 1")
-        msg = str(exc_info.value)
-        assert "'int'" in msg
-        assert "IntT" not in msg
-
-
-class TestCallsCoverage:
-    """Covers call paths not yet tested."""
-
-    def test_paren_expr_unwrap(self) -> None:
-        """(expr) parses as the inner expr (paren_expr rule unwraps)."""
-        e = first(parse("(1 + 2)"))
-        assert isinstance(e, BinaryOp)
-        assert e.op == BinOp.ADD
-
-
-class TestVariantPayloadCoverage:
-    """Covers the empty variant_payload () path."""
-
-    def test_empty_variant_payload(self) -> None:
-        """Variant with empty payload () produces a VariantDef with no fields."""
-        prog = parse("enum E\n  | Empty()")
-        en = first(prog)
-        assert isinstance(en, EnumDef)
-        assert en.members[0].name == "Empty"
-        assert en.members[0].fields == ()
-
-
-class TestTryBodyCoverage:
-    """Covers try_body with multiple semicolon-separated or_exprs."""
-
-    def test_try_body_multi_stmt_wraps_block(self) -> None:
-        """try x; y catch _ => err wraps the two exprs in a Block."""
-        src = "try x; y catch _ => err"
-        e = first(parse(src))
-        assert isinstance(e, Try)
-        assert isinstance(e.body, Block)
-        assert len(e.body.items) == 2
-
-
-class TestReplSeamCoverage:
-    """Covers is_incomplete_source cache-hit and LexError paths."""
-
-    def test_is_incomplete_source_cache_hit(self) -> None:
-        """Calling is_incomplete_source twice with the same text uses the cache."""
-        text = "let x ="
-        result1 = is_incomplete_source(text)
-        result2 = is_incomplete_source(text)
-        assert result1 == result2
-        assert result1 is True  # dangling '=' is incomplete
-
-    def test_is_incomplete_source_lex_error(self) -> None:
-        """Input that causes a LexError returns False (real error, not incomplete)."""
-        assert not is_incomplete_source("~~~")
-
-    def test_is_incomplete_source_lark_error_fallback(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Unexpected residual Lark errors are complete so the REPL shows them."""
-        from lark.exceptions import LarkError
-
-        import agm.agl.parser.parser as parser_mod
-
-        def fail_parse(_text: str) -> object:
-            raise LarkError("synthetic parser failure")
-
-        monkeypatch.setattr(parser_mod, "_incomplete_cache", None)
-        monkeypatch.setattr(parser_mod._PARSER, "parse", fail_parse)
-        assert not is_incomplete_source("synthetic lark fallback")
-
-    @pytest.mark.parametrize("quote", ['"""', "'''"])
-    def test_is_incomplete_source_unterminated_triple_quote(self, quote: str) -> None:
-        """Triple-quoted string EOF is incomplete for REPL continuation."""
-        source = f"let text = {quote}hello"
-        assert has_unterminated_triple_quoted_string(source)
-        assert is_incomplete_source(source)
-        assert not has_unterminated_triple_quoted_string(f"{source}{quote}")
-
-
-class TestParserErrorCoverage:
-    """Covers parser error paths not yet tested."""
-
-    def test_lex_error_in_parse_raises(self) -> None:
-        """A character the lexer cannot tokenize raises AglSyntaxError."""
-        with pytest.raises(AglSyntaxError):
-            parse("@@@")
-
-    def test_missing_function_body_indent_does_not_report_newline_width(self) -> None:
-        """A newline after ``=`` must not surface the layout token's width value."""
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program("def f() -> int =\n11\n")
-        msg = str(exc_info.value)
-        assert "indented block" in msg
-        assert "Unexpected '0'" not in msg
-
-    def test_unexpected_newline_does_not_report_indentation_width(self) -> None:
-        """Unexpected layout newlines should be named, not rendered as ``'0'``."""
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program("let x =\n11\n")
-        assert str(exc_info.value) == "Unexpected newline."
-
-
-# ---------------------------------------------------------------------------
-# errors.py coverage gap tests
-# ---------------------------------------------------------------------------
-
-
-class TestAglSyntaxErrorSourceSpan:
-    """Covers AglSyntaxError.source_span returning a valid SourceSpan."""
-
-    def test_source_span_returns_span(self) -> None:
-        """source_span returns the same SourceSpan object as .span."""
+    def test_source_span_is_the_error_span(self) -> None:
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program("x = y")
         err = exc_info.value
         assert err.span is not None
         assert err.source_span is err.span
 
-    def test_source_span_is_1based(self) -> None:
-        """source_span on a parse error has a valid 1-based line and column."""
+    def test_source_span_points_at_the_offending_source(self) -> None:
         with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program("x = y")
+            parse_program("let a = 1\nx = y")
         span = exc_info.value.source_span
-        assert span.start_line >= 1
+        assert span.start_line == 2
         assert span.start_col >= 1
 
 
-class TestInlineCompoundElseBranch:
-    """Covers the else branch of the inline-compound error dispatch.
+class TestInlineCompoundInExpressionPosition:
+    """An `if` used as an operand is rejected with the inline-compound advice.
 
-    The else branch fires when the unexpected inline-blocked token is NOT
-    ``case`` AND the parser is in an *expression* context (stmt_context=False),
-    i.e. ``if`` appearing as an operand inside an arithmetic or unary
-    expression.  The message is identical to the stmt_context=True branch
-    but reaches a different code path.
+    The same guidance must appear whether the compound form is met in statement
+    position or nested inside an expression.
     """
 
-    def test_inline_if_in_arithmetic_expression(self) -> None:
-        """`1 + if x => y` triggers the else branch with stmt_context=False."""
+    @pytest.mark.parametrize("src", ["1 + if x => y", "not if x => y"])
+    def test_inline_if_as_an_operand_is_rejected(self, src: str) -> None:
         with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program("1 + if x => y")
+            parse_program(src)
         msg = str(exc_info.value)
         assert "`if` is not allowed inline here" in msg
         assert "indented block" in msg
 
-    def test_inline_if_after_unary_not(self) -> None:
-        """`not if x => y` also gives stmt_context=False for the `if` token."""
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program("not if x => y")
-        msg = str(exc_info.value)
-        assert "`if` is not allowed inline here" in msg
 
-
-class TestSyntaxErrorFromLarkDirect:
-    """Covers syntax_error_from_lark handlers not reachable via parse_program.
+class TestLarkErrorMapping:
+    """Lark exceptions map to AgL syntax errors with usable spans.
 
     The custom AglLexer pre-empts Lark's character-level lexer, so
     UnexpectedCharacters, UnexpectedEOF, and generic LarkError are never
@@ -4403,16 +4317,6 @@ class TestQualifiedTypeRefs:
 
 
 class TestFieldAssignmentSyntax:
-    def test_paren_call_named_arg_eq(self) -> None:
-        """Named arguments use ``=``."""
-        call = first(parse("f(x, option = reviewer)"))
-        assert isinstance(call, Call)
-        assert len(call.args) == 1
-        assert len(call.named_args) == 1
-        na = call.named_args[0]
-        assert isinstance(na, NamedArg)
-        assert na.name == "option"
-
     def test_paren_call_multiple_named_eq(self) -> None:
         call = first(parse("f(x, option = rev, format = json)"))
         assert isinstance(call, Call)
@@ -4467,17 +4371,6 @@ class TestFieldAssignmentSyntax:
         assert isinstance(field0.pattern, VarPattern)
         assert field0.pattern.name == "t"
 
-    def test_pattern_field_shorthand_binds_field_name(self) -> None:
-        """Bare name in pattern position becomes a positional sub-pattern."""
-        src = "case r of | Issue(title) => ok"
-        e = first(parse(src))
-        assert isinstance(e, Case)
-        pat = e.branches[0].pattern
-        assert isinstance(pat, ConstructorPattern)
-        assert len(pat.positional) == 1
-        assert isinstance(pat.positional[0], VarPattern)
-        assert pat.positional[0].name == "title"
-
     def test_pattern_field_full_form_nested(self) -> None:
         src = "case r of | Box(at = Pt(x = px)) => ok"
         e = first(parse(src))
@@ -4488,12 +4381,6 @@ class TestFieldAssignmentSyntax:
         assert isinstance(inner, ConstructorPattern)
         assert inner.name == "Pt"
         assert inner.named[0].name == "x"
-
-    def test_equality_parses_to_bin_eq(self) -> None:
-        """'==' is the equality operator, mapping to BinOp.EQ."""
-        e = first(parse("x == y"))
-        assert isinstance(e, BinaryOp)
-        assert e.op == BinOp.EQ
 
     def test_single_eq_is_not_equality_in_paren(self) -> None:
         """A single '=' is no longer an expression operator; '(x = 3)' as a

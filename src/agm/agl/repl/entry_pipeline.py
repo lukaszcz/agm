@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.host_settings import HostSettingsPolicy
     from agm.agl.runtime.trace import TraceStore
     from agm.agl.runtime.types import HostEnvironment
-    from agm.agl.scope.program import ResolvedProgram
+    from agm.agl.scope.program import ResolvedModule, ResolvedProgram
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import Frame, Value
@@ -53,7 +53,9 @@ class EntryPipelineCtx(Protocol):
     """The minimal ReplSession surface the program pipeline needs."""
 
     _loaded_lib_modules: dict[ModuleId, LoadedModule]
-    _bootstrap_checked_modules: dict[ModuleId, CheckedModule]
+    _library_resolved_modules: dict[ModuleId, ResolvedModule]
+    _library_checked_modules: dict[ModuleId, CheckedModule]
+    _last_match_compilation: MatchCompiledProgram | None
     _active_imported_params: dict[SymbolId, IrParam]
     _accumulated_imports: list[tuple[ImportDecl, ...]]
     _accumulated_scoped_imports: list[tuple[ImportDecl | ScopeRegion, ...]]
@@ -244,17 +246,13 @@ class EntryPipeline:
             raise OverrideRejected(override_diagnostics)
 
         resolved_program = self._resolve_program(graph)
-        bootstrap_modules = self._ctx._bootstrap_checked_modules
-        static_module_ids = frozenset(graph.modules) - {graph.entry_id}
-        cached_checked_modules = (
-            bootstrap_modules if static_module_ids == frozenset(bootstrap_modules) else None
-        )
         checked_program = check_program(
             resolved_program,
             host_env.capabilities,
             entry_seed_env=self._ctx._type_env,
-            cached_checked_modules=cached_checked_modules,
+            cached_checked_modules=self._ctx._library_checked_modules,
         )
+        self._retain_library_image(resolved_program, checked_program)
         return LoadedCheckedProgram(
             checked_program=checked_program,
             new_modules=new_modules,
@@ -338,7 +336,7 @@ class EntryPipeline:
 
         from agm.agl.matchcompile import compile_program_matches, diagnostics_from_match_issues
 
-        match_result = compile_program_matches(checked_program)
+        match_result = compile_program_matches(checked_program, self._ctx._last_match_compilation)
         if match_result.compiled is None:
             return self._ctx._fail(
                 list(diagnostics_from_match_issues(match_result.issues)), warnings
@@ -347,6 +345,9 @@ class EntryPipeline:
         from agm.agl.matchcompile import MatchCompiledProgram
 
         assert isinstance(compiled, MatchCompiledProgram)
+        # Retained for the next entry: its library modules are the same checked
+        # objects, so their compiled sites carry over on identity alone.
+        self._ctx._last_match_compilation = compiled
 
         checked = self._checked_program_from_module(entry_cm)
         if check_only:
@@ -415,8 +416,28 @@ class EntryPipeline:
         )
         resolved_program = self._resolve_program(graph)
         return check_program(
-            resolved_program, host_env.capabilities, entry_seed_env=self._ctx._type_env
+            resolved_program,
+            host_env.capabilities,
+            entry_seed_env=self._ctx._type_env,
+            cached_checked_modules=self._ctx._library_checked_modules,
         )
+
+    def _retain_library_image(
+        self, resolved_program: "ResolvedProgram", checked_program: "CheckedProgram"
+    ) -> None:
+        """Retain every non-entry module of this compilation for later entries.
+
+        Scope resolution and type checking of a library module depend only on
+        that module and the modules it imports, so a later entry that carries
+        the same ``Program`` object reuses the artifact instead of rebuilding
+        it. The reuse guards live in the passes themselves and key on object
+        identity, so a reparsed, spliced or superseded module simply misses.
+        """
+        for module_id, checked in checked_program.modules.items():
+            if module_id.is_entry:
+                continue
+            self._ctx._library_resolved_modules[module_id] = resolved_program.modules[module_id]
+            self._ctx._library_checked_modules[module_id] = checked
 
     def _resolve_program(
         self,
@@ -438,6 +459,7 @@ class EntryPipeline:
             entry_repl_session_scope=self._ctx._session_scope,
             entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,
             entry_repl_session_type_paths=self._ctx._session_type_paths,
+            cached_modules=self._ctx._library_resolved_modules,
         )
 
     @staticmethod

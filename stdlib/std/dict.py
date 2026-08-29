@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from agl import AglException, array, dict as agl_dict, nominals
+from agl import AglException, array, nominals
+from agl import dict as agl_dict
 
 KeyError = nominals.std.core.KeyError
 Option = nominals.std.option.Option

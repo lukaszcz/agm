@@ -1953,59 +1953,56 @@ class AstBuilder(Transformer):
     # Binary operators
     # ------------------------------------------------------------------
 
-    def _op(
-        self, meta: Meta, args: _Args, name: str, builtin: syntax.BinOp | None
-    ) -> _InfixOperator:
+    def _op(self, meta: Meta, args: _Args, name: str) -> _InfixOperator:
         return _InfixOperator(
             name=name,
-            builtin=builtin,
             callee_node_id=self._next_id(),
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
     def op_or(self, meta: Meta, args: _Args) -> _InfixOperator:
-        return self._op(meta, args, "or", syntax.BinOp.OR)
+        return self._op(meta, args, "or")
 
     def op_and(self, meta: Meta, args: _Args) -> _InfixOperator:
-        return self._op(meta, args, "and", syntax.BinOp.AND)
+        return self._op(meta, args, "and")
 
     def op_in(self, meta: Meta, args: _Args) -> _InfixOperator:
-        return self._op(meta, args, "in", syntax.BinOp.IN)
+        return self._op(meta, args, "in")
 
     def op_eq(self, meta: Meta, args: _Args) -> _InfixOperator:
-        return self._op(meta, args, "==", syntax.BinOp.EQ)
+        return self._op(meta, args, "==")
 
     def op_neq(self, meta: Meta, args: _Args) -> _InfixOperator:
-        return self._op(meta, args, "!=", syntax.BinOp.NEQ)
+        return self._op(meta, args, "!=")
 
     def op_lt(self, meta: Meta, args: _Args) -> _InfixOperator:
-        return self._op(meta, args, "<", syntax.BinOp.LT)
+        return self._op(meta, args, "<")
 
     def op_le(self, meta: Meta, args: _Args) -> _InfixOperator:
-        return self._op(meta, args, "<=", syntax.BinOp.LE)
+        return self._op(meta, args, "<=")
 
     def op_gt(self, meta: Meta, args: _Args) -> _InfixOperator:
-        return self._op(meta, args, ">", syntax.BinOp.GT)
+        return self._op(meta, args, ">")
 
     def op_ge(self, meta: Meta, args: _Args) -> _InfixOperator:
-        return self._op(meta, args, ">=", syntax.BinOp.GE)
+        return self._op(meta, args, ">=")
 
     def op_add(self, meta: Meta, args: _Args) -> _InfixOperator:
-        return self._op(meta, args, "+", syntax.BinOp.ADD)
+        return self._op(meta, args, "+")
 
     def op_sub(self, meta: Meta, args: _Args) -> _InfixOperator:
-        return self._op(meta, args, "-", syntax.BinOp.SUB)
+        return self._op(meta, args, "-")
 
     def op_mul(self, meta: Meta, args: _Args) -> _InfixOperator:
-        return self._op(meta, args, "*", syntax.BinOp.MUL)
+        return self._op(meta, args, "*")
 
     def op_div(self, meta: Meta, args: _Args) -> _InfixOperator:
-        return self._op(meta, args, "/", syntax.BinOp.DIV)
+        return self._op(meta, args, "/")
 
     def op_user(self, meta: Meta, args: _Args) -> _InfixOperator:
         tok = next(a for a in args if isinstance(a, Token))
-        return self._op(meta, args, str(tok), None)
+        return self._op(meta, args, str(tok))
 
     def not_prefix(self, meta: Meta, args: _Args) -> syntax.RawPrefixNot:
         return syntax.RawPrefixNot(span=self._span_from_meta(meta), node_id=self._next_id())

@@ -19,6 +19,7 @@ externs are not executable yet.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -28,9 +29,9 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.parser import parse_program
 from agm.agl.scope.program import resolve_program
-from agm.agl.scope.symbols import AglScopeError, ModuleResolution, ScopeNode
+from agm.agl.scope.symbols import AglScopeError
 from agm.agl.semantics.types import CastSpec
-from agm.agl.syntax.nodes import Block, FuncDef, Program, VarPattern
+from agm.agl.syntax.nodes import Block, FuncDef, VarPattern
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck import (
     AglTypeError,
@@ -49,7 +50,6 @@ from agm.agl.typecheck.env import (
 )
 from tests.agl.ir_harness import make_graph_from_files, write_companion_file
 from tests.agl.module_graph import (
-    check_resolved,
     resolve_and_check_inline_program_ast,
     resolve_inline_entry,
     resolve_inline_program_ast,
@@ -781,48 +781,26 @@ class TestExternRejectionFixtures:
         assert "identifier" in str(err).lower()
 
 
-# ---------------------------------------------------------------------------
-# Defensive guard unreachable from the parser
-# ---------------------------------------------------------------------------
-
-
 class TestExternDefensiveGuards:
-    """Cover the extern-specific defensive guard unreachable from the parser.
+    """Cover the extern return-type guard the grammar makes unreachable.
 
-    The grammar always requires a return type for ``extern def`` (mirroring
-    ``builtin def`` — see ``extern_func_def`` in the grammar), so the
-    checker's defensive check can only be exercised by constructing the AST
-    directly, bypassing the parser, mirroring
+    ``extern_func_def`` always requires a return type, so an ``extern def``
+    without one is a syntax error long before the checker sees it. The guard
+    still stands because ``check_program`` accepts a caller-supplied AST, and
+    this is the only way to hand it one. It mirrors
     ``TestDefensiveGuards.test_builtin_funcdef_without_return_type_rejected_defensively``
-    in ``test_agl_typecheck.py``.
+    in ``test_agl_typecheck.py``, which covers the ``builtin def`` half of the
+    same rule.
     """
 
     def test_extern_funcdef_without_return_type_rejected_defensively(self) -> None:
-        sp = SourceSpan(
-            start_line=1,
-            start_col=1,
-            end_line=1,
-            end_col=2,
-            start_offset=0,
-            end_offset=1,
-        )
-        fd = FuncDef(
-            name="f",
-            params=(),
-            return_type=None,
-            body=None,
-            span=sp,
-            node_id=1,
-            is_extern=True,
-        )
-        block = Block(items=(fd,), span=sp, node_id=2)
-        prog = Program(body=block, span=sp, node_id=3)
-        resolved = ModuleResolution(
-            program=prog,
-            resolution={},
-            builtin_calls={},
-            root_scope=ScopeNode(node_id=prog.node_id),
-            declared_functions={"f": fd},
-        )
-        with pytest.raises(AglTypeError, match="must declare a return type"):
-            check_resolved(resolved, _CAPS)
+        program = parse_program("extern def f() -> int\nf()")
+        declaration = program.body.items[0]
+        assert isinstance(declaration, FuncDef)
+        stripped = replace(declaration, return_type=None)
+        body = replace(program.body, items=(stripped, *program.body.items[1:]))
+
+        with pytest.raises(AglTypeError, match="return type"):
+            resolve_and_check_inline_program_ast(
+                replace(program, body=body), _CAPS, origin_path=_PATH
+            )

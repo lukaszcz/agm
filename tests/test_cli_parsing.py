@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
@@ -1771,7 +1772,7 @@ class TestTopLevel:
             assert result.exit_code == 0
 
 
-class TestHelpTextCoverage:
+class TestEveryCommandHasHelpText:
     def test_every_canonical_command_has_help_text(self) -> None:
         from agm.cli import _HELP_TEXTS
 
@@ -2230,87 +2231,66 @@ class TestMainEntryPoint:
         assert exc_info.value.code == 0
 
 
-class TestParseLoopArgsExtraPromptFlags:
-    """Cover --extra-prompt, --extra-prompt-file, --extra-selector-prompt,
-    --extra-selector-prompt-file flags in _parse_loop_args."""
+class TestLoopExtraPromptFlags:
+    """`loop` and `loop select` map the extra-prompt flags onto command fields."""
 
-    def test_extra_prompt_flag(self) -> None:
-        args = cli._parse_loop_args(
-            ["--extra-prompt", "extra context", "cmd"], command_path=["loop"]
-        )
-        assert args.extra_prompt == "extra context"
-        assert args.extra_prompt_file is None
+    @pytest.mark.parametrize(
+        ("parse", "command_path"),
+        [
+            (cli._parse_loop_args, ["loop"]),
+            (cli._parse_loop_select_args, ["loop", "select"]),
+        ],
+        ids=("loop", "loop-select"),
+    )
+    @pytest.mark.parametrize(
+        ("flag", "field", "other_field"),
+        [
+            ("--extra-prompt", "extra_prompt", "extra_prompt_file"),
+            ("--extra-prompt-file", "extra_prompt_file", "extra_prompt"),
+            ("--extra-selector-prompt", "extra_selector_prompt", "extra_selector_prompt_file"),
+            (
+                "--extra-selector-prompt-file",
+                "extra_selector_prompt_file",
+                "extra_selector_prompt",
+            ),
+        ],
+    )
+    def test_flag_value_lands_in_its_own_field(
+        self,
+        parse: Callable[..., RecordedArgs],
+        command_path: list[str],
+        flag: str,
+        field: str,
+        other_field: str,
+    ) -> None:
+        args = parse([flag, "value", "cmd"], command_path=command_path)
+        assert getattr(args, field) == "value"
+        assert getattr(args, other_field) is None
 
-    def test_extra_prompt_file_flag(self) -> None:
-        args = cli._parse_loop_args(
-            ["--extra-prompt-file", "/tmp/extra.md", "cmd"], command_path=["loop"]
-        )
-        assert args.extra_prompt_file == "/tmp/extra.md"
-        assert args.extra_prompt is None
-
-    def test_extra_selector_prompt_flag(self) -> None:
-        args = cli._parse_loop_args(
-            ["--extra-selector-prompt", "extra select", "cmd"], command_path=["loop"]
-        )
-        assert args.extra_selector_prompt == "extra select"
-        assert args.extra_selector_prompt_file is None
-
-    def test_extra_selector_prompt_file_flag(self) -> None:
-        args = cli._parse_loop_args(
-            ["--extra-selector-prompt-file", "/tmp/sel.md", "cmd"], command_path=["loop"]
-        )
-        assert args.extra_selector_prompt_file == "/tmp/sel.md"
-        assert args.extra_selector_prompt is None
-
-    def test_extra_prompt_and_extra_prompt_file_mutually_exclusive(self) -> None:
+    @pytest.mark.parametrize(
+        ("parse", "command_path"),
+        [
+            (cli._parse_loop_args, ["loop"]),
+            (cli._parse_loop_select_args, ["loop", "select"]),
+        ],
+        ids=("loop", "loop-select"),
+    )
+    @pytest.mark.parametrize(
+        ("text_flag", "file_flag"),
+        [
+            ("--extra-prompt", "--extra-prompt-file"),
+            ("--extra-selector-prompt", "--extra-selector-prompt-file"),
+        ],
+    )
+    def test_text_and_file_forms_are_mutually_exclusive(
+        self,
+        parse: Callable[..., RecordedArgs],
+        command_path: list[str],
+        text_flag: str,
+        file_flag: str,
+    ) -> None:
         with pytest.raises(SystemExit):
-            cli._parse_loop_args(
-                ["--extra-prompt", "text", "--extra-prompt-file", "file.md", "cmd"],
-                command_path=["loop"],
-            )
-
-    def test_extra_selector_prompt_and_file_mutually_exclusive(self) -> None:
-        with pytest.raises(SystemExit):
-            cli._parse_loop_args(
-                [
-                    "--extra-selector-prompt",
-                    "text",
-                    "--extra-selector-prompt-file",
-                    "file.md",
-                    "cmd",
-                ],
-                command_path=["loop"],
-            )
-
-
-class TestParseLoopSelectArgsExtraPromptFlags:
-    """Cover --extra-prompt* flags in _parse_loop_select_args."""
-
-    def test_extra_prompt_flag(self) -> None:
-        args = cli._parse_loop_select_args(
-            ["--extra-prompt", "extra context", "cmd"], command_path=["loop", "select"]
-        )
-        assert args.extra_prompt == "extra context"
-        assert args.extra_prompt_file is None
-
-    def test_extra_prompt_file_flag(self) -> None:
-        args = cli._parse_loop_select_args(
-            ["--extra-prompt-file", "/tmp/extra.md", "cmd"], command_path=["loop", "select"]
-        )
-        assert args.extra_prompt_file == "/tmp/extra.md"
-
-    def test_extra_selector_prompt_flag(self) -> None:
-        args = cli._parse_loop_select_args(
-            ["--extra-selector-prompt", "extra sel", "cmd"], command_path=["loop", "select"]
-        )
-        assert args.extra_selector_prompt == "extra sel"
-
-    def test_extra_selector_prompt_file_flag(self) -> None:
-        args = cli._parse_loop_select_args(
-            ["--extra-selector-prompt-file", "/tmp/sel.md", "cmd"],
-            command_path=["loop", "select"],
-        )
-        assert args.extra_selector_prompt_file == "/tmp/sel.md"
+            parse([text_flag, "text", file_flag, "file.md", "cmd"], command_path=command_path)
 
 
 class TestExecModulePathOption:

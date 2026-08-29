@@ -31,6 +31,7 @@ from agm.cli_support.args import (
     WorktreeRemoveArgs,
 )
 from agm.core import dry_run as dry_run_module
+from tests._git_helpers import init_repo
 
 # ---------------------------------------------------------------------------
 # agm.commands.tmux.close
@@ -105,11 +106,7 @@ class TestWorktreeNewRun:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, env: dict[str, str]
     ) -> None:
         repo = tmp_path / "repo"
-        repo.mkdir()
-        subprocess.run(["git", "init", "-b", "main"], cwd=repo, env=env, check=True)
-        (repo / "README.md").write_text("main\n", encoding="utf-8")
-        subprocess.run(["git", "add", "README.md"], cwd=repo, env=env, check=True)
-        subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, env=env, check=True)
+        init_repo(repo, env)
         monkeypatch.chdir(repo)
 
         worktrees_dir = tmp_path / "external-worktrees"
@@ -175,11 +172,7 @@ class TestWorktreeRemoveRun:
     ) -> None:
         repo = tmp_path / "repo"
         worktree = tmp_path / "worktrees" / "feature"
-        repo.mkdir()
-        subprocess.run(["git", "init", "-b", "main"], cwd=repo, env=env, check=True)
-        (repo / "README.md").write_text("main\n", encoding="utf-8")
-        subprocess.run(["git", "add", "README.md"], cwd=repo, env=env, check=True)
-        subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, env=env, check=True)
+        init_repo(repo, env)
         subprocess.run(
             ["git", "worktree", "add", "-b", "feature", str(worktree)],
             cwd=repo,
@@ -216,10 +209,7 @@ class TestSetupRun:
         config = project / "config"
         repo.mkdir(parents=True)
         config.mkdir()
-        subprocess.run(["git", "init", "-b", "main"], cwd=repo, env=env, check=True)
-        (repo / "README.md").write_text("main\n", encoding="utf-8")
-        subprocess.run(["git", "add", "README.md"], cwd=repo, env=env, check=True)
-        subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, env=env, check=True)
+        init_repo(repo, env)
         marker = tmp_path / "setup-ran"
         setup_script = config / "setup.sh"
         setup_script.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")

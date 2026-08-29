@@ -523,7 +523,9 @@ class TestPersistence:
         result = s.eval_entry("k := 2")
 
         assert not result.ok
-        assert "cannot assign" in result.diagnostics[0].message.lower()
+        message = result.diagnostics[0].message.lower()
+        assert "k" in message
+        assert "assign" in message
         assert _int(dict((n, v) for n, _t, v in s.bindings())["k"]) == 1
 
     def test_new_constructor_does_not_shadow_persisted_value(self) -> None:
@@ -545,7 +547,9 @@ class TestPersistence:
         result = s.eval_entry("let other = 2\nrecord Widget\n  x: int")
 
         assert not result.ok
-        assert "already declared" in result.diagnostics[0].message.lower()
+        message = result.diagnostics[0].message
+        assert "Widget" in message
+        assert "declared" in message
         # The complaint locates the colliding declaration, not a placeholder line.
         assert result.diagnostics[0].line == 2
 
@@ -1003,7 +1007,9 @@ class TestCrossEntryScopeCollision:
         result = s.eval_entry("A::B::x")
 
         assert not result.ok
-        assert any("not a member of 'A::B'" in d.message for d in result.diagnostics)
+        assert any(
+            "A::B" in d.message and "member" in d.message.lower() for d in result.diagnostics
+        )
 
 
 class TestBareConstructorVisibilityAcrossEntries:
@@ -1465,7 +1471,9 @@ class TestBuiltinIdentityWithStandardLibrary:
         s = open_session()
         declare = s.eval_entry(f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}")
         assert not declare.ok
-        assert any("ExecResult" in d.message for d in declare.diagnostics)
+        assert any(
+            "ExecResult" in d.message and "declared" in d.message for d in declare.diagnostics
+        )
 
     def test_scoped_builtin_record_declared_with_stdlib_types_and_mints_consistently(
         self,
@@ -2342,7 +2350,7 @@ enum Agent
         use = s.eval_entry("let y: Box[int] = Box(x = 1)")
 
         assert not use.ok
-        assert any("does not take type arguments" in d.message for d in use.diagnostics)
+        assert any("Box" in d.message and "type argument" in d.message for d in use.diagnostics)
 
     def test_redeclaring_a_generic_record_as_non_generic_gives_the_name_to_the_new_one(
         self,
@@ -2383,6 +2391,11 @@ enum Agent
         fresh = s.eval_entry("R::V(b = 4)")
 
         assert not stale.ok
+        # Naming the rejected spelling is the point: without it the entry still
+        # fails, but with an empty message that says nothing about why.
+        [stale_diagnostic] = stale.diagnostics
+        assert "R" in stale_diagnostic.message
+        assert "constructor" in stale_diagnostic.message
         assert fresh.ok, fresh.diagnostics
 
     def test_redeclaring_an_enum_as_a_record_drops_stale_variants(self) -> None:
@@ -2716,10 +2729,7 @@ class TestRecursiveTypesAcrossEntries:
         current = s.eval_entry("[Choice::Yes, Choice::No]", check_only=True)
 
         assert not current.ok
-        assert any(
-            "annotate the literal with its enum type" in diagnostic.message.lower()
-            for diagnostic in current.diagnostics
-        )
+        assert any("annotate" in diagnostic.message.lower() for diagnostic in current.diagnostics)
 
         assert s.eval_entry("let yes = Choice::Yes\nlet no = Choice::No").ok
         assert s.eval_entry("enum Choice\n  | Maybe").ok
@@ -2728,8 +2738,7 @@ class TestRecursiveTypesAcrossEntries:
 
         assert not mismatch.ok
         assert all(
-            "annotate the literal with its enum type" not in diagnostic.message.lower()
-            for diagnostic in mismatch.diagnostics
+            "annotate" not in diagnostic.message.lower() for diagnostic in mismatch.diagnostics
         )
 
     def test_type_qualified_variant_pattern_names_the_newest_enum_declaration(self) -> None:
@@ -3684,7 +3693,7 @@ class TestParams:
         assert not r.ok
         assert r.diagnostics
         assert "name" in r.diagnostics[0].message
-        assert "Missing required param" in r.diagnostics[0].message
+        assert "required" in r.diagnostics[0].message
 
     def test_unset_param_diagnostic_names_the_prompt_entry_namespace(self) -> None:
         """The prompt has no module name, so its params read as ``@entry::``.
@@ -3718,7 +3727,7 @@ class TestParams:
         result = session.eval_entry("import settings\n()")
 
         assert not result.ok
-        assert "Missing required param" in result.diagnostics[0].message
+        assert "required" in result.diagnostics[0].message
         assert "token" in result.diagnostics[0].message
 
     def test_import_cycle_param_default_dependency_cycle_is_diagnostic(
@@ -3737,7 +3746,7 @@ class TestParams:
         assert not result.ok
         assert result.error is None
         assert len(result.diagnostics) == 1
-        assert "parameter defaults form a dependency cycle" in result.diagnostics[0].message.lower()
+        assert "cycle" in result.diagnostics[0].message.lower()
 
     def test_later_import_validates_active_params_without_reinstalling_them(
         self, tmp_path: Path
@@ -3866,7 +3875,7 @@ class TestParams:
         assert not r.ok
         assert r.diagnostics
         assert "A::p" in r.diagnostics[0].message
-        assert "Missing required param" in r.diagnostics[0].message
+        assert "required" in r.diagnostics[0].message
         after = s.eval_entry('"still alive"')
         assert after.ok
         assert _text(after.value) == "still alive"
@@ -4367,7 +4376,7 @@ class TestContractError:
         s.register_codec(BadCodec())
         r = s.eval_entry('let x = ask("hi", format = "bad")')
         assert not r.ok
-        assert any("Contract error" in d.message for d in r.diagnostics)
+        assert any("bad contract" in d.message for d in r.diagnostics)
         # Atomic: nothing promoted.
         assert s.bindings() == []
 
@@ -4424,7 +4433,7 @@ class TestAgentCancellation:
         assert result.diagnostics
         message = result.diagnostics[0].message.lower()
         assert "interrupted" in message
-        assert "agent call" not in message
+        assert "cancelled" not in message, "an interrupt is not an agent cancellation"
         assert session.eval_entry("2 + 2").ok
 
     def test_declined_agent_aborts_entry_with_diagnostic(self) -> None:
@@ -4433,7 +4442,9 @@ class TestAgentCancellation:
         assert not r.ok
         assert r.error is None
         assert r.diagnostics
-        assert "cancelled" in r.diagnostics[0].message.lower()
+        message = r.diagnostics[0].message.lower()
+        assert "cancelled" in message
+        assert "interrupted" not in message, "a declined agent is not a bare interrupt"
 
     def test_declined_agent_leaves_bindings_unchanged(self) -> None:
         s = open_session(agent_dispatcher=_CancellingAgent())
@@ -4621,7 +4632,7 @@ class TestParamRedeclaration:
         ins2 = {name: val for name, _t, val in s.declared_params()}
         assert _int(ins2["x"]) == 10
 
-    def test_redeclare_param_then_reference_raises_unset_guard(self) -> None:
+    def test_redeclare_param_then_reference_uses_the_new_value(self) -> None:
         s = open_session()
         s.eval_entry("param x: int = 5")
         s.eval_entry("param x: int = 10")
@@ -4629,13 +4640,21 @@ class TestParamRedeclaration:
         assert r.ok
         assert _int(r.value) == 11
 
-    def test_redeclare_param_then_reset_works(self) -> None:
+    def test_reset_after_redeclaring_a_param_clears_it(self) -> None:
         s = open_session()
         s.eval_entry("param x: int = 5")
         s.eval_entry("param x: int = 10")
+        s.reset()
+        assert s.declared_params() == []
+        # The redeclared param is gone from the value scope too, so the name
+        # no longer resolves and can be redeclared from scratch.
+        gone = s.eval_entry("x + 1")
+        assert not gone.ok
+        again = s.eval_entry("param x: int = 7")
+        assert again.ok
         r = s.eval_entry("x + 1")
         assert r.ok
-        assert _int(r.value) == 11
+        assert _int(r.value) == 8
 
 
 # ---------------------------------------------------------------------------
@@ -5161,8 +5180,8 @@ class TestImports:
 
         assert not result.ok
         messages = " | ".join(d.message for d in result.diagnostics)
-        assert "only allowed in a method's receiver type parameters" in messages
-        assert "needs a name" in messages
+        assert "Box" in messages, "the diagnostic names the declaration carrying the '_' slot"
+        assert "receiver" in messages, "'_' is a receiver-slot spelling, not a type parameter"
 
     def test_import_persists_across_entries(self, tmp_path: Path) -> None:
         lib = tmp_path / "util.agl"
@@ -6187,7 +6206,7 @@ class TestImports:
             'ask("hi", agent = helper, format = "bad")'
         )
         assert not r.ok
-        assert any("Contract error" in d.message for d in r.diagnostics)
+        assert any("bad contract" in d.message for d in r.diagnostics)
 
     def test_parse_error_in_imported_module_has_source_label(self, tmp_path: Path) -> None:
         # Regression: parse error in an imported module must surface
@@ -6211,6 +6230,7 @@ class TestImports:
         assert not r.ok
         assert len(r.diagnostics) >= 1
         assert "nonexistent_module_xyz" in r.diagnostics[0].message
+        assert "not found" in r.diagnostics[0].message.lower()
 
     def test_wildcard_and_plain_import_coexist(self, tmp_path: Path) -> None:
         # Regression: import foo/* in entry1 and import foo in entry2
@@ -6678,7 +6698,11 @@ class TestExternRepl:
 
         assert result.ok is False
         assert result.diagnostics
-        assert "companion" in result.diagnostics[0].message.lower()
+        message = result.diagnostics[0].message
+        # The module is named, and so is the companion file that is missing --
+        # `extlib.py`, not the `extlib.agl` that does exist.
+        assert "extlib" in message
+        assert str(tmp_path / "extlib.py") in message
         assert result.diagnostics[0].line == 1
 
     def test_companion_import_failure_leaves_the_repl_entry_unsuccessful(
@@ -7386,7 +7410,7 @@ class TestBareTypeEntry:
         r = s.eval_entry("nope")
         assert not r.ok
         assert r.kind != "type"
-        assert any("not defined" in d.message for d in r.diagnostics)
+        assert any("nope" in d.message and "not defined" in d.message for d in r.diagnostics)
 
     def test_type_entry_does_not_mutate_session_state(self) -> None:
         # Like ``:type``, a bare type entry must not promote, advance node ids,
@@ -7678,6 +7702,7 @@ class TestSessionOpen:
 
         diagnostics = ReplSession(stdlib_root=stdlib, cwd=workspace).open()
         assert diagnostics
+        assert "std/core" in diagnostics[0].message
         assert "ambiguous" in diagnostics[0].message.lower()
 
     def test_open_rechecks_wildcard_root_discovery_after_a_cached_bootstrap(

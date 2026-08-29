@@ -10,6 +10,7 @@ import pytest
 import agm.commands.workspace.close as close_module
 from agm.cli_support.args import CloseArgs
 from agm.commands.workspace.close import close_workspace
+from tests._git_helpers import init_repo
 
 
 def _make_git_close_project(
@@ -24,12 +25,7 @@ def _make_git_close_project(
     repo_dir = project_dir / "repo"
     worktree_dir = project_dir / "worktrees" / branch
     (project_dir / "config").mkdir(parents=True)
-    repo_dir.mkdir()
-
-    subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, env=env, check=True)
-    (repo_dir / "README.md").write_text("main\n", encoding="utf-8")
-    subprocess.run(["git", "add", "README.md"], cwd=repo_dir, env=env, check=True)
-    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo_dir, env=env, check=True)
+    init_repo(repo_dir, env)
     subprocess.run(
         ["git", "worktree", "add", "-b", branch, str(worktree_dir)],
         cwd=repo_dir,

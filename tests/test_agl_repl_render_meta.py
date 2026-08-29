@@ -449,12 +449,20 @@ class TestSetOptions:
         assert outcome.text is not None
         assert "usage" in outcome.text.lower()
 
-    def test_set_unknown_form_gives_usage(self) -> None:
-        outcome = meta_mod.dispatch_meta(":set foo", _session_ctx())
-        assert "usage" in (outcome.text or "").lower()
-
-    def test_set_empty_assignment_gives_usage(self) -> None:
-        outcome = meta_mod.dispatch_meta(":set =5", _session_ctx())
+    @pytest.mark.parametrize(
+        "arg",
+        ("foo", "=5", "foo=", "", "echo", "echo on off"),
+        ids=(
+            "missing-equals",
+            "empty-name",
+            "empty-value",
+            "no-argument",
+            "echo-without-state",
+            "echo-with-extra-words",
+        ),
+    )
+    def test_set_non_echo_forms_give_usage(self, arg: str) -> None:
+        outcome = meta_mod.dispatch_meta(f":set {arg}".rstrip(), _session_ctx())
         assert "usage" in (outcome.text or "").lower()
 
 
@@ -619,14 +627,6 @@ class TestSet:
         s.eval_entry("param count: int")
         outcome = meta_mod.dispatch_meta(":set count=oops", _session_ctx(s))
         assert outcome.text is not None
-
-    def test_set_missing_equals_gives_usage(self) -> None:
-        outcome = meta_mod.dispatch_meta(":set foo", _session_ctx())
-        assert "usage" in (outcome.text or "").lower()
-
-    def test_set_empty_name_gives_usage(self) -> None:
-        outcome = meta_mod.dispatch_meta(":set =5", _session_ctx())
-        assert "usage" in (outcome.text or "").lower()
 
     def test_set_echo_off_then_on_toggles_ctx(self) -> None:
         ctx = _session_ctx()

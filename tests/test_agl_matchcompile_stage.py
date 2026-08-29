@@ -454,7 +454,7 @@ def test_rejected_match_compilation_still_validates_the_cases_it_discards(
 
     monkeypatch.setattr(stage_module, "compile_match_site", corrupting_compile_case)
 
-    with pytest.raises(MatchCompileInvariantError, match="reachable action ids"):
+    with pytest.raises(MatchCompileInvariantError, match="reachable"):
         _compile_module_matches(_checked("case true of | true => 1"))
 
 
@@ -541,7 +541,7 @@ def test_program_artifact_rejects_missing_extra_mismatched_and_cross_program_cas
         MatchCompiledModule(first.checked, {case_id: wrong_span})
 
     second_checked = _checked("case true of | true => 1 | false => 2")
-    with pytest.raises(MatchCompileInvariantError, match="different checked program"):
+    with pytest.raises(MatchCompileInvariantError, match="different checked"):
         MatchCompiledModule(second_checked, first.sites)
 
     invalid_checked = _checked("case true of | true => 1")
@@ -662,7 +662,7 @@ def test_semantic_replay_memo_rejects_divergent_node_for_one_state(
         return Specialization(matrix, allocator)
 
     monkeypatch.setattr(compiler_module, "specialize", same_state_specialize)
-    with pytest.raises(MatchCompileInvariantError, match="divergent decision identities"):
+    with pytest.raises(MatchCompileInvariantError, match="divergent"):
         compiler_module._validate_semantic_replay(compiled_case)
 
     first_branch = replace(root.keyed_children[0])

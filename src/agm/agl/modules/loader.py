@@ -9,7 +9,10 @@ phase of the AgL module system:
    to its canonical file via :func:`~agm.agl.modules.resolver.resolve_module` (or
    :func:`~agm.agl.modules.resolver.expand_wildcard` for ``/*`` imports),
    parsing each file with a monotonically growing ``start_id`` seed so that
-   **node ids are disjoint across all modules in the graph**.
+   **node ids are disjoint across all modules in the graph**. A module under a
+   standard-library root comes instead from the process-global cache in
+   :mod:`agm.agl.modules.parsed_module_cache`, whose reserved id band keeps it
+   disjoint from every graph it is served into.
 4. Terminate traversal when a module id is already loaded — this makes cycles
    finite and safe.
 5. Reject any import whose canonical file identity equals the entry file.
@@ -25,6 +28,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 
 import agm.agl.syntax as syntax
@@ -36,6 +40,7 @@ from agm.agl.modules.errors import (
     PackageImportVisibilityError,
 )
 from agm.agl.modules.ids import ENTRY_ID, STD_BUILTIN_METHODS_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.parsed_module_cache import cached_library_module
 from agm.agl.modules.resolver import expand_wildcard, resolve_module
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import AglSyntaxError, build_infix_operator_table, resolve_infix_chains
@@ -768,8 +773,19 @@ def _reject_obvious_scoped_reexport_cycles(graph: ModuleGraph) -> None:
 def _resolve_graph_infix(
     graph: ModuleGraph,
     session_infix: Mapping[str, _InfixFixity] | None = None,
+    already_resolved: frozenset[ModuleId] = frozenset(),
 ) -> ModuleGraph:
-    """Resolve each raw module chain with the fixity visible at that module."""
+    """Resolve each raw module chain with the fixity visible at that module.
+
+    Modules in *already_resolved* keep their programs untouched. A module
+    reaches that set only by having been resolved here in an earlier
+    compilation, in a graph that held every module it depends on; since an
+    unresolvable chain raises rather than surviving, such a program holds no
+    raw chain left to rewrite, and no module it cannot see can change the
+    operators visible to it. Their operator declarations still take part in
+    the fixity fixed point below, because modules that *are* being resolved
+    may import them.
+    """
     declarations = {
         mid: _operator_declarations(loaded.program) for mid, loaded in graph.modules.items()
     }
@@ -822,6 +838,9 @@ def _resolve_graph_infix(
     modules: dict[ModuleId, LoadedModule] = {}
     entry_infix_ambient: dict[str, _InfixFixity] = {}
     for mid, loaded in graph.modules.items():
+        if mid in already_resolved:
+            modules[mid] = loaded
+            continue
         chain_tables: dict[int, dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]]] = {}
         chain_conflicts: dict[int, frozenset[str]] = {}
         own_names = {decl.name for decl in declarations[mid]}
@@ -940,6 +959,45 @@ def _tarjan_sccs(
     return _compute_sccs(graph, key=_mid_sort_key)
 
 
+def _parse_library_module(
+    module_id: ModuleId,
+    path: Path,
+    start_id: int,
+    *,
+    default_stdlib: bool,
+) -> tuple[LoadedModule, int]:
+    """Read and parse one library module, seeding its node ids from *start_id*.
+
+    Returns the module together with the first node id it did not consume.
+    This is the whole per-module load step, so the standard-library module
+    cache can own an identical module without the loader duplicating it.
+    """
+    file_source_id = SourceId(label=str(path))
+    source_text = normalize_newlines(fs.read_text(path))
+    with spaced_qualifier_collector() as spaced_sink:
+        program, next_id = parse_program_seeded(
+            source_text,
+            start_id=start_id,
+            source=file_source_id,
+            resolve_infix=False,
+        )
+    if default_stdlib and module_id != STD_CORE_ID:
+        program = _with_default_stdlib_import(program, import_node_id=next_id)
+        next_id += 1
+    loaded = LoadedModule(
+        module_id=module_id,
+        program=program,
+        path=path,
+        source=file_source_id,
+        imports=_extract_imports(program),
+        export_decls=_extract_exports(program),
+        source_text=source_text,
+        spaced_qualifiers=tuple(spaced_sink),
+        companion_path=_companion_path_for(module_id, program, path),
+    )
+    return loaded, next_id
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -1047,30 +1105,13 @@ def _load_into_graph(
         if canonical_entry_path is not None and canon_path == canonical_entry_path:
             raise ImportEntryError(mid, canonical_entry_path, span=decl.span)
 
-        file_source_id = SourceId(label=str(canon_path))
-        source_text = normalize_newlines(fs.read_text(canon_path))
-        with spaced_qualifier_collector() as spaced_sink:
-            program, next_id = parse_program_seeded(
-                source_text,
-                start_id=next_id,
-                source=file_source_id,
-                resolve_infix=False,
+        build = partial(_parse_library_module, mid, canon_path, default_stdlib=default_stdlib)
+        if roots.is_standard_library_path(canon_path):
+            loaded = cached_library_module(
+                mid, canon_path, default_stdlib=default_stdlib, build=build
             )
-        if default_stdlib and mid != STD_CORE_ID:
-            program = _with_default_stdlib_import(program, import_node_id=next_id)
-            next_id += 1
-        imports = _extract_imports(program)
-        loaded = LoadedModule(
-            module_id=mid,
-            program=program,
-            path=canon_path,
-            source=file_source_id,
-            imports=imports,
-            export_decls=_extract_exports(program),
-            source_text=source_text,
-            spaced_qualifiers=tuple(spaced_sink),
-            companion_path=_companion_path_for(mid, program, canon_path),
-        )
+        else:
+            loaded, next_id = build(next_id)
         modules[mid] = loaded
         newly_loaded[mid] = loaded
         _resolve_dependencies(mid, (*loaded.imports, *loaded.export_decls))
@@ -1104,7 +1145,9 @@ def _load_into_graph(
     )
     if preflight_reexport_cycles:
         _reject_obvious_scoped_reexport_cycles(graph)
-    resolved_graph = _resolve_graph_infix(graph, session_infix)
+    resolved_graph = _resolve_graph_infix(
+        graph, session_infix, already_resolved=frozenset(seed_modules)
+    )
     resolved_newly_loaded = {mid: resolved_graph.modules[mid] for mid in newly_loaded}
     return resolved_graph, next_id, resolved_newly_loaded
 

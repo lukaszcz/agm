@@ -65,7 +65,7 @@ from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import ImportEnv
 from agm.agl.scope.program import ResolvedProgram
-from agm.agl.scope.symbols import ModuleResolution, is_qualified_function_member
+from agm.agl.scope.symbols import ModuleResolution
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
 from agm.agl.semantics.type_table import (
@@ -200,9 +200,20 @@ def _assert_checked_module_closed(module: CheckedModule) -> None:
     module.type_env.assert_closed()
 
 
-def assert_checked_program_closed(checked: CheckedProgram) -> None:
-    """Assert that all program-level checked output is safe to lower."""
-    for module in checked.modules.values():
+def assert_checked_program_closed(
+    checked: CheckedProgram, reused_modules: frozenset[ModuleId] = frozenset()
+) -> None:
+    """Assert that all program-level checked output is safe to lower.
+
+    A module named in *reused_modules* arrived unchanged from an earlier
+    compilation that already sealed it. Its artifact is the very object that
+    was validated then and is immutable, so re-asserting it can only reach the
+    same conclusion; the whole-program tables below are rebuilt every call and
+    are always validated.
+    """
+    for module_id, module in checked.modules.items():
+        if module_id in reused_modules:
+            continue
         _assert_checked_module_closed(module)
     _assert_checked_types_closed(checked.program_type_table.values(), owner="checked module graph")
     # The remaining whole-program tables (the shared TypeTable and the generic /
@@ -685,7 +696,7 @@ def _build_program_func_sig_table(
     signatures can safely seed every module environment, making explicitly
     annotated cross-module recursion independent of module traversal order.
     """
-    from agm.agl.typecheck.checker import _BUILTIN_FUNC_NAMES, _BUILTIN_TYPE_NAMES
+    from agm.agl.typecheck.checker import _BUILTIN_TYPE_NAMES
 
     result: dict[int, FunctionSignatureRecord] = {}
 
@@ -721,20 +732,10 @@ def _build_program_func_sig_table(
             if item.is_synthetic:
                 continue
             receiver_owner = rmod.resolved.receiver_owner_for(mid, item)
-            # Defer invalid declarations to the checker. Scope-classified methods
-            # have their own namespace, so they still need program-header metadata
-            # when their name matches a global builtin.
-            if receiver_owner is None and (
-                item.name in _BUILTIN_TYPE_NAMES
-                or (
-                    item.name in _BUILTIN_FUNC_NAMES
-                    and not item.is_builtin
-                    and not is_qualified_function_member(
-                        mid == resolved.entry_id,
-                        tuple(segment.name for segment in item.scope_path),
-                    )
-                )
-            ):
+            # A builtin declaration may reuse a builtin type name -- std spells
+            # Agent and Session that way -- and such an item carries no function
+            # header metadata.
+            if receiver_owner is None and item.name in _BUILTIN_TYPE_NAMES:
                 continue
             if item.return_type is None:
                 continue
@@ -1105,10 +1106,12 @@ def check_program(
     # candidate subset once and share it across every module check.
     candidate_records = candidate_records_for(program_func_sig_table)
     checked_modules: dict[ModuleId, CheckedModule] = {}
+    reused_modules: set[ModuleId] = set()
     for mid in ordered_mids:
         cached = cached_checked_modules.get(mid) if cached_checked_modules is not None else None
         if cached is not None and cached.resolved.program is resolved.modules[mid].resolved.program:
             checked_modules[mid] = cached
+            reused_modules.add(mid)
             continue
         rmod = resolved.modules[mid]
         cp = _check_prepared_module(
@@ -1150,5 +1153,5 @@ def check_program(
         runtime_modules=runtime_modules,
     )
     if self_validation_enabled():
-        assert_checked_program_closed(checked)
+        assert_checked_program_closed(checked, frozenset(reused_modules))
     return checked

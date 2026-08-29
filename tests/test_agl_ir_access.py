@@ -161,9 +161,8 @@ def test_index_set_dict_wrong_index() -> None:
 def test_record_field_access() -> None:
     """Record field access: p.x on a record.
 
-    Constructor call lowering (IrMakeRecord) is supported, so this test is
-    fully covered.  The IrField node is also tested directly
-    in test_agl_ir_interpreter.py::TestIrField.
+    The IrField node is also tested directly in
+    test_agl_ir_interpreter.py::TestIrField.
     """
     source = """\
 record Point
@@ -256,11 +255,7 @@ let x: text = "n is %{n}"
 
 
 def test_template_with_record_interpolation() -> None:
-    """Template with a record value interpolation.
-
-    Constructor call lowering (IrMakeRecord) is supported, so this test is
-    fully covered.
-    """
+    """Template with a record value interpolation."""
     source = """\
 record Point
   x: int

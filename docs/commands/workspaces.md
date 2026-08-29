@@ -110,5 +110,8 @@ config, workspace config, dependency environment, setup scripts, and tmux sessio
 `agm init` split layout notes:
 
 - without `REPO_URL`, AGM initializes `repo/` as an empty git repository
+- AGM writes a `.agent-files` entry into `repo/.gitignore` and into the repository's
+  `info/exclude`, leaving the tracked tree untouched. The `info/exclude` copy is what
+  every branch worktree inherits, so agent artifacts never make a workspace look dirty
 - `--no-repo-git` skips the empty `repo/` git repository initialization
 - `--no-git-init` includes `--no-repo-git`, `--no-config-git`, and `--no-notes-git`

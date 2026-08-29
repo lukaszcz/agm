@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,18 @@ from agm.commands.init import (
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+
+
+def run_git_init_for_real(cmd: list[str], **_kw: object) -> None:
+    """Stand in for ``require_success`` while still creating real repositories.
+
+    ``configure_project_dir`` records a per-clone ignore rule in the repository's
+    common git directory, which only exists in a real repository. A stub that
+    swallows ``git init`` leaves the layout looking like a repository without
+    being one, so these tests let the init commands through and drop the rest.
+    """
+    if cmd[:2] == ["git", "init"]:
+        subprocess.run(cmd, check=True, capture_output=True)
 
 
 def make_args(
@@ -342,15 +355,15 @@ class TestConfigureProjectDirWorkspace:
     def test_adds_agent_files_to_workspace_repo_gitignore(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(init_module, "require_success", lambda _cmd, **_kw: None)
-        monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: True)
+        monkeypatch.setattr(init_module, "require_success", run_git_init_for_real)
 
         project_dir = tmp_path / "proj"
-        (project_dir / "repo" / ".git").mkdir(parents=True)
         configure_project_dir(project_dir, embedded=False)
 
         lines = (project_dir / "repo" / ".gitignore").read_text(encoding="utf-8").splitlines()
         assert ".agent-files" in lines
+        exclude = project_dir / "repo" / ".git" / "info" / "exclude"
+        assert ".agent-files" in exclude.read_text(encoding="utf-8").splitlines()
 
     def test_creates_config_files(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(init_module, "require_success", lambda _cmd, **_kw: None)
@@ -875,6 +888,7 @@ class TestConfigureProjectDirAlternatives:
             nonlocal seen_repo_init
             if cmd == ["git", "init", "-q", str(project_dir / "repo")]:
                 seen_repo_init = True
+            run_git_init_for_real(cmd)
 
         def fake_is_git_repo(path: Path) -> bool:
             return path == project_dir / "repo" and seen_repo_init

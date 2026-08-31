@@ -94,7 +94,25 @@ typecheck:
     MYPYPATH=src:stubs uv run mypy src/agm/ --strict --python-version 3.12
 
 # Run type-checking, linting, dead-code checks, tests
-check: typecheck lint vulture test
+#
+# The static checks read the tree while the suite runs it, so they are
+# independent and run alongside it: on a green tree their cost disappears behind
+# the suite's runtime entirely. Their output is still reported the moment they
+# finish -- well before the suite does -- so a type or lint error surfaces as
+# early as it would have when the gates ran one after another.
+check:
+    static_log=$(mktemp); \
+    trap 'rm -f "$static_log"' EXIT; \
+    ( just typecheck && just lint && just vulture ) > "$static_log" 2>&1 & \
+    static=$!; \
+    just test & \
+    tests=$!; \
+    static_status=0; \
+    wait "$static" || static_status=$?; \
+    cat "$static_log"; \
+    tests_status=0; \
+    wait "$tests" || tests_status=$?; \
+    exit $(( static_status | tests_status ))
 
 # Install the agm CLI into an isolated environment
 install-agm:

@@ -44,6 +44,7 @@ class RootSet:
     _module_roots_by_root: dict[Path, tuple[Path, ...]] = field(
         init=False, repr=False, compare=False
     )
+    _standard_library_paths: dict[Path, bool] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         sorted_roots: tuple[Path, ...] = tuple(sorted(self.roots))
@@ -61,6 +62,8 @@ class RootSet:
         object.__setattr__(self, "_sorted_roots", sorted_roots)
         object.__setattr__(self, "_package_names_by_root", frozen_package_names_by_root)
         object.__setattr__(self, "_module_roots_by_root", tupled_module_roots_by_root)
+        standard_library_paths: dict[Path, bool] = {}
+        object.__setattr__(self, "_standard_library_paths", standard_library_paths)
 
     def sorted_roots(self) -> tuple[Path, ...]:
         """Return roots sorted lexicographically for deterministic diagnostics."""
@@ -93,9 +96,22 @@ class RootSet:
         return any(path.is_relative_to(module_root) for module_root in mounted_module_roots)
 
     def is_standard_library_path(self, path: Path) -> bool:
-        """Return whether *path* belongs to a host-selected standard-library root."""
+        """Return whether *path* belongs to a host-selected standard-library root.
+
+        Canonicalizing a path reaches the filesystem, and every compilation asks
+        this of every module it loaded -- once for each pass that consults the
+        library image. The answer cannot change for a given root set, so it is
+        remembered per path.
+        """
+        remembered = self._standard_library_paths.get(path)
+        if remembered is not None:
+            return remembered
         canonical_path = path.resolve()
-        return any(canonical_path.is_relative_to(stdlib_root) for stdlib_root in self.stdlib_roots)
+        answer = any(
+            canonical_path.is_relative_to(stdlib_root) for stdlib_root in self.stdlib_roots
+        )
+        self._standard_library_paths[path] = answer
+        return answer
 
 
 def _canonicalize(path: Path) -> Path:

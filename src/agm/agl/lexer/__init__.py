@@ -8,6 +8,8 @@ Public API
   layout filter.
 - :func:`tokenize` — convenience helper: tokenize a source string and return
   the full token list (useful for tests and diagnostics).
+- :func:`lex_comment_spans` — offsets of the ``#`` comments the scan skipped
+  (comments carry no token, so highlighters read them from here).
 - :class:`SpacedQualifier` / :func:`spaced_qualifier_collector` — lexical
   advisories for qualifier runs broken by whitespace before ``::``.
 """
@@ -27,13 +29,14 @@ from agm.agl.lexer.lexer import (
     tab_warning_collector,
     unclosed_scope_path,
 )
-from agm.agl.lexer.scanner import lex_tab_warnings, scan
+from agm.agl.lexer.scanner import lex_comment_spans, lex_tab_warnings, scan
 from agm.agl.syntax.advisories import SpacedQualifier
 
 __all__ = [
     "AglLexer",
     "LexError",
     "SpacedQualifier",
+    "lex_comment_spans",
     "lex_tab_warnings",
     "spaced_qualifier_collector",
     "tab_warning_collector",

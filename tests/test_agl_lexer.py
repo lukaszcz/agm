@@ -16,6 +16,7 @@ from agm.agl.lexer import (
     AglLexer,
     LexError,
     SpacedQualifier,
+    lex_comment_spans,
     lex_tab_warnings,
     spaced_qualifier_collector,
     tab_warning_collector,
@@ -3107,3 +3108,41 @@ class TestSpacedQualifierAdvisories:
 
     def test_a_non_name_member_records_nothing(self) -> None:
         assert self._advisories("config ::(x)") == []
+
+
+# ---------------------------------------------------------------------------
+# Comment spans
+# ---------------------------------------------------------------------------
+
+
+class TestCommentSpans:
+    @staticmethod
+    def comments(source: str) -> list[str]:
+        """Return the source text of every comment span, in source order."""
+        return [source[start:end] for start, end in lex_comment_spans(source)]
+
+    def test_source_without_comments_has_no_spans(self) -> None:
+        assert lex_comment_spans("let x = 1\n") == []
+
+    def test_trailing_comment_span_covers_the_comment(self) -> None:
+        assert self.comments("let x = 1  # note\n") == ["# note"]
+
+    def test_comment_only_line_is_reported_once(self) -> None:
+        assert self.comments("let x = 1\n# note\nlet y = 2\n") == ["# note"]
+
+    def test_leading_and_indented_comment_lines_are_reported(self) -> None:
+        source = "# head\nrecord R\n    # inner\n    x: int\n"
+        assert self.comments(source) == ["# head", "# inner"]
+
+    def test_comment_at_end_of_input_without_newline(self) -> None:
+        assert self.comments("let x = 1  # tail") == ["# tail"]
+
+    def test_hash_inside_a_string_is_not_a_comment(self) -> None:
+        assert lex_comment_spans('let x = "a # b"\n') == []
+
+    def test_hash_inside_a_raw_tail_is_not_a_comment(self) -> None:
+        assert lex_comment_spans("exec$ echo # not a comment\n") == []
+
+    def test_spans_from_the_valid_prefix_survive_a_lex_error(self) -> None:
+        # A half-typed REPL entry still highlights the comments it already has.
+        assert self.comments("let x = 1  # note\nlet y = \u200bbad\n") == ["# note"]

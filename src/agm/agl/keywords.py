@@ -1,9 +1,14 @@
-"""Dependency-free canonical inventory of reserved AgL keywords.
+"""Dependency-free canonical inventory of AgL keywords, reserved and soft.
 
-Editor syntax/keyword definitions mirror this inventory and must be updated
-alongside it: `config/micro/agl.yaml` (Micro syntax highlighting) and
-`config/emacs/agl-mode.el` (`agl-keywords` and the other keyword-inventory
-constants near the top of that file).
+`KEYWORDS` holds the reserved words, which are always keywords; `SOFT_KEYWORDS`
+holds the spellings the lexer promotes contextually and that stay ordinary names
+everywhere else.
+
+Every syntax-highlighting definition mirrors both inventories and must be
+updated alongside them: `config/micro/agl.yaml` (Micro), `config/emacs/agl-mode.el`
+(`agl-keywords`, `agl-soft-keywords`, and the other keyword-inventory constants
+near the top of that file), and the REPL prompt highlighter in
+`agm.agl.repl.console`.
 """
 
 from __future__ import annotations
@@ -56,6 +61,17 @@ KW_DOWNTO = "downto"
 KW_BY = "by"
 KW_WITH = "with"
 
+# Soft keywords: promoted to their own token type only inside a promotion
+# window (item start, or a module header), and ordinary names everywhere else.
+# `at`, which introduces an infix priority, is contextual too but is never
+# promoted -- it stays a NAME token and is recognized by the AST builder.
+KW_IMPORT = "import"
+KW_USE = "use"
+KW_EXPORT = "export"
+KW_HIDING = "hiding"
+KW_SCOPE = "scope"
+KW_END = "end"
+
 KEYWORDS: frozenset[str] = frozenset(
     {
         KW_RECORD,
@@ -103,5 +119,16 @@ KEYWORDS: frozenset[str] = frozenset(
         KW_DOWNTO,
         KW_BY,
         KW_WITH,
+    }
+)
+
+SOFT_KEYWORDS: frozenset[str] = frozenset(
+    {
+        KW_IMPORT,
+        KW_USE,
+        KW_EXPORT,
+        KW_HIDING,
+        KW_SCOPE,
+        KW_END,
     }
 )

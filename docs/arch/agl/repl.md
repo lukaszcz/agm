@@ -95,7 +95,10 @@ Two front ends wire that seam to different I/O:
 
 - `agm.agl.repl.console` — the only module that imports prompt_toolkit. It
   builds a `PromptSession` (lexer, completer, key bindings, history, styling)
-  and wires its prompt/print as reader and writer.
+  and wires its prompt/print as reader and writer. Highlighting and completion
+  drive the real lexer and classify against the canonical keyword inventories,
+  so a contextual keyword colours exactly where the lexer promoted it; the
+  editor modes under `config/` mirror those same inventories.
 - `agm.agl.repl.plain_console` — a styling-free line front end for a pipe,
   comint buffer, or other non-terminal consumer. It reads from a text stream
   and accumulates continuation lines with the same predicate; since it sees one

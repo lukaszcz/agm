@@ -41,9 +41,15 @@ from prompt_toolkit.key_binding.key_processor import KeyPressEvent
 from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.output import Output
 
-from agm.agl.keywords import KEYWORDS
-from agm.agl.lexer import tokenize
-from agm.agl.lexer.tokens import RAW_TAIL_NAME
+from agm.agl.keywords import KEYWORDS, SOFT_KEYWORDS
+from agm.agl.lexer import lex_comment_spans, tokenize
+from agm.agl.lexer.tokens import (
+    MODPATH,
+    MODQUAL,
+    RAW_TAIL_NAME,
+    SOFT_KEYWORD_TOKENS,
+    WILDCARD,
+)
 from agm.agl.repl import meta as meta_mod
 from agm.agl.repl.loop import CONTINUATION, PROMPT, is_incomplete, run_repl_loop
 from agm.agl.repl.themes import get_style
@@ -59,9 +65,10 @@ if TYPE_CHECKING:
     from agm.agl.repl.session import ReplSession
 
 
-# AgL keywords offered by the completer (the reserved-word set, sorted for a
-# stable suggestion order).
-_KEYWORDS: tuple[str, ...] = tuple(sorted(KEYWORDS))
+# AgL keywords offered by the completer: the reserved words plus the soft
+# keywords, which are spelled out in full at a prompt just like reserved ones.
+# Sorted for a stable suggestion order.
+_KEYWORDS: tuple[str, ...] = tuple(sorted(KEYWORDS | SOFT_KEYWORDS))
 
 # Word-prefix pattern for completion: AgL identifiers, including the hyphenated
 # built-in call name ``ask-request``.  It is anchored to the cursor so
@@ -92,6 +99,10 @@ _NUMBER_TOKENS: frozenset[str] = frozenset({"INT", "DECIMAL"})
 _OPERATOR_TOKENS: frozenset[str] = frozenset(
     {
         "ARROW",
+        "THIN_ARROW",
+        "ASSIGN",
+        "DCOLON",
+        "AT",
         "EQ",
         "NEQ",
         "LE",
@@ -116,12 +127,23 @@ _OPERATOR_TOKENS: frozenset[str] = frozenset(
         "EQ_EQ",
         "PLACEHOLDER",
         "PLACEHOLDER_NUM",
+        WILDCARD,
     }
 )
+# Merged module-path tokens: a header path (``std/text``) and the qualifier
+# prefix of a qualified reference (``foo/bar::``).  Both are name references,
+# so they colour like any other name rather than falling through unstyled.
+_MODULE_PATH_TOKENS: frozenset[str] = frozenset({MODPATH, MODQUAL})
+# Token types that colour as keywords: the reserved words (whose token type is
+# the keyword itself), the soft keywords the lexer promoted, and a raw-tail
+# introducer such as ``exec$``.
+_KEYWORD_TOKENS: frozenset[str] = KEYWORDS | SOFT_KEYWORD_TOKENS | {RAW_TAIL_NAME}
 # Layout tokens carry no styleable text and are transparent to look-ahead.
 _LAYOUT_TOKENS: frozenset[str] = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
 # Keywords that introduce a type declaration whose following NAME is the type.
-_DECL_TYPE_KEYWORDS: frozenset[str] = frozenset({"record", "enum", "type"})
+_DECL_TYPE_KEYWORDS: frozenset[str] = frozenset({"record", "enum", "exception", "type"})
+# Declaration keywords whose name is both the type and its sole constructor.
+_DECL_CONSTRUCTOR_KEYWORDS: frozenset[str] = frozenset({"record", "exception"})
 # A NAME that names a constructor is rendered as one when its next significant
 # token starts a call/construction: ``Box(…)`` (LPAR) or ``Box::[…](…)`` (DCOLON).
 _CALL_LOOKAHEAD: frozenset[str] = frozenset({"LPAR", "DCOLON"})
@@ -149,10 +171,14 @@ def _style_class_for(
       first-class value — renders as a constructor;
     - any other ``NAME``/``OP_NAME`` is plain.
 
+    A soft keyword colours as a keyword whenever the lexer promoted it, and as an
+    ordinary name outside its promotion window — the promotion decides, not the
+    spelling.
+
     When no session is available both sets are empty, so only the builtin types
     colour.
     """
-    if token_type in KEYWORDS or token_type == RAW_TAIL_NAME:
+    if token_type in _KEYWORD_TOKENS:
         return "class:agl.keyword"
     if token_type in _STRING_TOKENS:
         return "class:agl.string"
@@ -160,6 +186,8 @@ def _style_class_for(
         return "class:agl.number"
     if token_type in _OPERATOR_TOKENS:
         return "class:agl.operator"
+    if token_type in _MODULE_PATH_TOKENS:
+        return "class:agl.name"
     if token_type in ("NAME", "OP_NAME"):
         known_type = token_text in BUILTIN_TYPE_NAMES or token_text in type_names
         known_constructor = token_text in constructor_names
@@ -255,6 +283,11 @@ def _styled_spans(
     type/constructor sets so their *references* in the same buffer colour too.
     Every other token is classified by :func:`_style_class_for`.
 
+    Comments carry no token, so their spans come from the scan's comment side
+    channel (:func:`agm.agl.lexer.lex_comment_spans`) rather than from the token
+    stream; a ``#`` inside a string or a raw tail is content, and the scanner is
+    what knows the difference.
+
     Synthetic zero-width tokens (INDENT/DEDENT/NEWLINE) and unstyled token types
     are skipped.  A lexer error on a half-typed entry yields no spans (plain
     text), never a raise.
@@ -273,7 +306,9 @@ def _styled_spans(
     constructors = constructor_names | local_constructors
     next_sig = _next_significant_types(tokens)
 
-    spans: list[tuple[int, int, str]] = []
+    spans: list[tuple[int, int, str]] = [
+        (start, end, "class:agl.comment") for start, end in lex_comment_spans(text)
+    ]
     for index, token in enumerate(tokens):
         start = token.start_pos
         end = token.end_pos
@@ -370,11 +405,12 @@ def _decl_site_styles(
     classifier), and the two sets collect the buffer's locally-declared type and
     constructor names so their references colour too.
 
-    Rules: the NAME after ``record`` is a type and a constructor; after ``enum``
-    a type (and opens the variant context); after ``type`` a type alias.  Inside
-    the variant context, a NAME directly after ``|`` is a constructor.  The flat
-    enum variant list carries no keywords, so any keyword closes the context —
-    ensuring the ``|`` of a later ``case``/``if`` is never mistaken for a variant.
+    Rules: the NAME after ``record`` or ``exception`` is a type and a constructor;
+    after ``enum`` a type (and opens the variant context); after ``type`` a type
+    alias.  Inside the variant context, a NAME directly after ``|`` is a
+    constructor.  The flat enum variant list carries no keywords, so any keyword
+    closes the context — ensuring the ``|`` of a later ``case``/``if`` is never
+    mistaken for a variant.
     """
     forced: dict[int, str] = {}
     types: set[str] = set()
@@ -404,17 +440,12 @@ def _decl_site_styles(
 
         if is_name:
             name = text[token.start_pos : token.end_pos]
-            if expect == "record":
+            if expect in _DECL_TYPE_KEYWORDS:
                 forced[index] = "class:agl.type"
                 types.add(name)
-                constructors.add(name)
-            elif expect == "enum":
-                forced[index] = "class:agl.type"
-                types.add(name)
-                in_enum_variants = True
-            elif expect == "type":
-                forced[index] = "class:agl.type"
-                types.add(name)
+                if expect in _DECL_CONSTRUCTOR_KEYWORDS:
+                    constructors.add(name)
+                in_enum_variants = expect == "enum"
             elif in_enum_variants and prev_sig == "PIPE":
                 forced[index] = "class:agl.constructor"
                 constructors.add(name)

@@ -246,6 +246,11 @@ class _Scanner:
         # literal string content is exempt).  The lexer is the sole producer of
         # these; there is no separate TAB scan pass.
         self._tab_warnings: list[Diagnostic] = []
+        # ``(start, end)`` offsets of every ``#`` comment skipped during this
+        # scan, in source order.  Comments carry no token, so this side channel
+        # is the only record of where they were; the scanner is their sole
+        # producer, which keeps ``#`` inside a string or a raw tail out.
+        self._comment_spans: list[tuple[int, int]] = []
         # True once at least one real (non-layout) token has been emitted; used
         # to suppress the leading ``_NEWLINE`` of comment/blank-only prefixes.
         self._emitted_real = False
@@ -263,6 +268,23 @@ class _Scanner:
     def tab_warnings(self) -> list[Diagnostic]:
         """TAB advisories collected so far during the scan."""
         return self._tab_warnings
+
+    @property
+    def comment_spans(self) -> list[tuple[int, int]]:
+        """Comment offsets collected so far during the scan."""
+        return self._comment_spans
+
+    def _skip_comment(self) -> None:
+        """Consume the comment at the scan position and record its span.
+
+        The scan position must be at the opening ``#``; on return it is at the
+        line's newline (or end of input).  TAB advisories are recorded for the
+        comment's own tabs, which are as discouraged as any other.
+        """
+        start = self._pos
+        while not self._at_end() and self._peek() != "\n":
+            self._advance()
+        self._comment_spans.append((start, self._pos))
 
     def _record_tab(self) -> None:
         """Record a TAB advisory for the ``\\t`` at the current scan position.
@@ -406,10 +428,7 @@ class _Scanner:
                 continue
             if ch == "#":
                 # Comment-only line — skip to end of line and try next
-                while self._pos < len(self._src) and self._src[self._pos] != "\n":
-                    if self._src[self._pos] == "\t":
-                        self._record_tab()
-                    self._pos += 1
+                self._skip_comment()
                 if self._pos < len(self._src):
                     self._pos += 1
                     self._line += 1
@@ -1217,8 +1236,7 @@ class _Scanner:
 
             # Comments — skip to end of line
             if ch == "#":
-                while not self._at_end() and self._peek() != "\n":
-                    self._advance()
+                self._skip_comment()
                 continue
 
             # Newline — emit _NEWLINE with next real line's indentation
@@ -1343,6 +1361,26 @@ def _apply_triple_dedent_with_map(text: str, min_indent: int) -> tuple[str, list
 def scan(source: str) -> Iterator[Token]:
     """Yield raw tokens from *source* (code mode, with ``_NEWLINE`` signals)."""
     return _Scanner(source).scan()
+
+
+def lex_comment_spans(source: str) -> list[tuple[int, int]]:
+    """Return the ``(start, end)`` offsets of every ``#`` comment in *source*.
+
+    Drives the real lexer scan — the single source of truth for which ``#`` opens
+    a comment and which is ordinary string or raw-tail content — and returns the
+    spans it skipped, in source order.  Offsets index the *normalized* source and
+    are end-exclusive; the span runs from the ``#`` to the end of its line.
+
+    A lexical error ends collection rather than propagating, so a half-typed
+    entry still reports the comments in the prefix that scanned cleanly.
+    """
+    scanner = _Scanner(source)
+    try:
+        for _ in scanner.scan():
+            pass
+    except LexError:
+        pass
+    return scanner.comment_spans
 
 
 def lex_tab_warnings(source: str) -> list[Diagnostic]:

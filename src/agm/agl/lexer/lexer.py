@@ -37,7 +37,15 @@ from lark import Lark
 from lark.lexer import Lexer, LexerState, Token
 
 from agm.agl.diagnostics import Diagnostic, SourceSpan
-from agm.agl.keywords import KW_AS
+from agm.agl.keywords import (
+    KW_AS,
+    KW_END,
+    KW_EXPORT,
+    KW_HIDING,
+    KW_IMPORT,
+    KW_SCOPE,
+    KW_USE,
+)
 from agm.agl.lexer.errors import LexError
 from agm.agl.lexer.layout import layout
 from agm.agl.lexer.scanner import _Scanner
@@ -318,17 +326,17 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
 
         if tt == NAME:
             at_item_start = prev_type is None or prev_type in _ITEM_START_TYPES
-            if tv == "import" and at_item_start:
+            if tv == KW_IMPORT and at_item_start:
                 tok = _retype(tok, IMPORT)
-            elif tv == "use" and at_item_start and _is_use_declaration(tokens, index):
+            elif tv == KW_USE and at_item_start and _is_use_declaration(tokens, index):
                 tok = _retype(tok, USE)
-            elif tv == "export" and at_item_start:
+            elif tv == KW_EXPORT and at_item_start:
                 tok = _retype(tok, EXPORT)
-            elif tv == "scope" and at_item_start and _is_scope_path(tokens, index + 1):
+            elif tv == KW_SCOPE and at_item_start and _is_scope_path(tokens, index + 1):
                 tok = _retype(tok, SCOPE)
                 scope_layouts.append(layout_depth)
             elif (
-                tv == "end"
+                tv == KW_END
                 and at_item_start
                 and scope_layouts
                 and layout_depth == scope_layouts[-1]
@@ -373,7 +381,7 @@ def _promote_hiding(tokens: list[Token]) -> list[Token]:
             and not hiding_promoted
             and brace_depth == 0
             and tok.type == NAME
-            and str(tok) == "hiding"
+            and str(tok) == KW_HIDING
             and result
             and (
                 result[-1].type in {STAR, WILDCARD, "RBRACE"}

@@ -71,10 +71,9 @@ Canonical source: `src/agm/agl/keywords.py' (the `KEYWORDS' frozenset).")
   "AgL soft (contextually promoted) keywords.
 
 Ordinary identifiers outside their promotion window.  Canonical
-source: the module/scope soft-keyword table in
-`docs/agl/reference/lexical-structure.md', mirrored by
-`src/agm/agl/lexer/tokens.py' (IMPORT, USE, HIDING, EXPORT, SCOPE,
-END).")
+source: `src/agm/agl/keywords.py' (the `SOFT_KEYWORDS' frozenset),
+whose promoted token types are `src/agm/agl/lexer/tokens.py''s
+`SOFT_KEYWORD_TOKENS' (IMPORT, USE, HIDING, EXPORT, SCOPE, END).")
 
 (defconst agl-contextual-builtins
   '("print" "render" "exec" "ask" "ask-request"

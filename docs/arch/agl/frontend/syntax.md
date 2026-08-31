@@ -22,7 +22,10 @@ explicit ambient table instead. Scope and every later pass see only resolved
 applications.
 
 `import`, `use`, `export`, `hiding`, `scope`, and `end` are contextual header
-words. They remain ordinary names outside their declaration contexts. Item-start
+words. They remain ordinary names outside their declaration contexts. The
+keyword module is the single inventory of both word classes — reserved words
+and these soft keywords — and the lexer, the grammar token contract, and every
+syntax highlighter derive from it rather than repeating spellings. Item-start
 `use` promotion is decided from its header token shape; the grammar then
 requires a suffix for every declared use. Qualified use paths use the ordinary
 module-qualifier token contract, and the AST preserves their unresolved target,
@@ -48,8 +51,9 @@ prefixes its already-built child declarations.
 
 ## Code Entry Points
 
-- `src/agm/agl/keywords.py` and `src/agm/agl/lexer/` — keyword inventory and
-  indentation-aware lexing.
+- `src/agm/agl/keywords.py` and `src/agm/agl/lexer/` — the reserved and soft
+  keyword inventories, and indentation-aware lexing. Comments produce no token,
+  so the scan also exposes their spans as a side channel for highlighters.
 - `src/agm/agl/grammar/` and `src/agm/agl/parser/` — grammar, parsing, AST
   construction, and inline-source wrapping.
 - `src/agm/agl/syntax/` — AST nodes, function receiver types, spans, advisories,

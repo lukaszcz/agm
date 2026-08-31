@@ -496,6 +496,91 @@ class TestLexer:
         fragments = AglPromptLexer().lex_document(Document("let p: Pt = q"))(0)
         assert self._style_of(fragments, "Pt") == "class:agl.name"
 
+    @pytest.mark.parametrize(
+        ("source", "word"),
+        [
+            ("import std/text", "import"),
+            ("use std/text::foo", "use"),
+            ("export std/text", "export"),
+            ("import std/text hiding foo", "hiding"),
+        ],
+    )
+    def test_module_header_soft_keyword_is_styled(self, source: str, word: str) -> None:
+        # Soft keywords are contextually promoted rather than reserved, so they
+        # are absent from the reserved-word set; they must still colour like the
+        # keywords they are inside their promotion window.
+        fragments = AglPromptLexer().lex_document(Document(source))(0)
+        assert self._style_of(fragments, word) == "class:agl.keyword"
+
+    def test_scope_region_soft_keywords_are_styled(self) -> None:
+        text = "scope a::b\nlet x = 1\nend a::b"
+        getter = AglPromptLexer().lex_document(Document(text))
+        assert self._style_of(getter(0), "scope") == "class:agl.keyword"
+        assert self._style_of(getter(2), "end") == "class:agl.keyword"
+
+    def test_soft_keyword_outside_its_window_stays_plain(self) -> None:
+        # Outside their promotion window the same spellings are ordinary names.
+        fragments = AglPromptLexer().lex_document(Document("let x = import + end"))(0)
+        assert self._style_of(fragments, "import") == "class:agl.name"
+        assert self._style_of(fragments, "end") == "class:agl.name"
+
+    def test_module_header_path_is_styled_as_a_name(self) -> None:
+        # The lexer merges a header path into one token; it is a name reference,
+        # not an unstyled gap between the keyword and the rest of the line.
+        fragments = AglPromptLexer().lex_document(Document("import std/text"))(0)
+        assert self._style_of(fragments, "std/text") == "class:agl.name"
+
+    def test_module_qualifier_is_styled_as_a_name(self) -> None:
+        # `foo/bar::baz` used to colour only `baz`, leaving the merged qualifier
+        # prefix as an unstyled hole.
+        fragments = AglPromptLexer().lex_document(Document("let z = foo/bar::baz"))(0)
+        assert self._style_of(fragments, "foo/bar::") == "class:agl.name"
+        assert self._style_of(fragments, "baz") == "class:agl.name"
+
+    def test_wildcard_module_tail_is_styled_as_an_operator(self) -> None:
+        fragments = AglPromptLexer().lex_document(Document("import std/text/*"))(0)
+        assert self._style_of(fragments, "/*") == "class:agl.operator"
+
+    @pytest.mark.parametrize(
+        ("source", "operator"),
+        [
+            ("let f: (int) -> int = g", "->"),
+            ("var y := 1", ":="),
+            ("let m = M::[int](1)", "::"),
+            ("def f(a, @named, b: int) = a", "@"),
+        ],
+    )
+    def test_operator_is_styled(self, source: str, operator: str) -> None:
+        fragments = AglPromptLexer().lex_document(Document(source))(0)
+        assert self._style_of(fragments, operator) == "class:agl.operator"
+
+    def test_trailing_comment_is_styled(self) -> None:
+        fragments = AglPromptLexer().lex_document(Document("let x = 1  # note"))(0)
+        assert self._style_of(fragments, "# note") == "class:agl.comment"
+        assert self._style_of(fragments, "let") == "class:agl.keyword"
+        assert "".join(text for _style, text in fragments) == "let x = 1  # note"
+
+    def test_comment_only_line_is_styled(self) -> None:
+        getter = AglPromptLexer().lex_document(Document("# note\nlet x = 1"))
+        assert self._style_of(getter(0), "# note") == "class:agl.comment"
+        assert self._style_of(getter(1), "let") == "class:agl.keyword"
+
+    def test_hash_inside_a_string_is_not_styled_as_a_comment(self) -> None:
+        source = 'let x = "a # b"'
+        fragments = AglPromptLexer().lex_document(Document(source))(0)
+        styles = {style for style, _text in fragments}
+        assert "class:agl.comment" not in styles
+        assert "".join(text for _style, text in fragments) == source
+
+    def test_exception_name_colours_by_position(self) -> None:
+        # An exception declares a type and a constructor, exactly like a record.
+        lexer = AglPromptLexer()
+        declaration = lexer.lex_document(Document("exception Boom\n  msg: text"))(0)
+        assert self._style_of(declaration, "Boom") == "class:agl.type"
+
+        construction = lexer.lex_document(Document('exception Boom\nraise Boom(msg: "x")'))(1)
+        assert self._style_of(construction, "Boom") == "class:agl.constructor"
+
 
 class TestHistory:
     def test_none_path_uses_in_memory_history(self) -> None:
@@ -554,6 +639,18 @@ class TestCompleter:
     def test_no_completion_for_unknown_word(self) -> None:
         completer = AglCompleter(ReplSession())
         assert _completions(completer, "zzzzz") == []
+
+    def test_completes_soft_keywords(self) -> None:
+        # Soft keywords are contextually promoted, so they are absent from the
+        # reserved-word set the completer is built from; they must still be
+        # offered — a user typing ``impo`` expects ``import``.
+        completer = AglCompleter(ReplSession())
+        for name in ("import", "use", "export", "hiding", "scope", "end"):
+            assert name in _completions(completer, "")
+
+    def test_completes_import_prefix(self) -> None:
+        completer = AglCompleter(ReplSession())
+        assert "import" in _completions(completer, "impo")
 
     def test_completes_builtin_calls(self) -> None:
         # Builtin call names are not reserved keywords and are not promoted

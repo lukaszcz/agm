@@ -21,6 +21,13 @@ Contextual keywords:
     ``ask`` and ``exec`` are NOT reserved; they lex as plain NAME tokens.
     The scope pass gives them their built-in meaning.
 
+Soft keywords:
+    The spellings in ``SOFT_KEYWORDS`` are promoted to the token types in
+    ``SOFT_KEYWORD_TOKENS`` inside their promotion window, and lex as plain
+    NAME tokens outside it.  Unlike a reserved word, a soft keyword's token
+    type is its spelling UPPER-cased, because the grammar ``%declare``s these
+    tokens rather than writing them as string terminals.
+
 Identifiers:
     NAME -- any identifier (case-neutral: both upper- and lower-case start are NAME).
     OP_NAME -- any operator-name identifier, formed from operator characters.
@@ -45,7 +52,17 @@ Operators / punctuation:
 
 from __future__ import annotations
 
-from agm.agl.keywords import KEYWORDS, KW_AS_QUESTION
+from agm.agl.keywords import (
+    KEYWORDS,
+    KW_AS_QUESTION,
+    KW_END,
+    KW_EXPORT,
+    KW_HIDING,
+    KW_IMPORT,
+    KW_SCOPE,
+    KW_USE,
+    SOFT_KEYWORDS,
+)
 
 # ---------------------------------------------------------------------------
 # Layout tokens (synthetic; produced by INDENT/DEDENT filter)
@@ -127,15 +144,21 @@ DO_LSQB = "DO_LSQB"  # [ opening a do-loop bound
 # ---------------------------------------------------------------------------
 # Module system tokens (contextual / synthetic — %declare in grammar)
 # ---------------------------------------------------------------------------
-IMPORT = "IMPORT"  # contextual: 'import' at item-start
-USE = "USE"  # contextual: 'use' at item-start
-HIDING = "HIDING"  # contextual: 'hiding' in a module header
-EXPORT = "EXPORT"  # contextual: 'export' at item-start
-SCOPE = "SCOPE"  # contextual: 'scope' at item-start before a scope path
-END = "END"  # contextual: 'end' at item-start while a scope region is open
+# A promoted soft keyword's token type is its spelling upper-cased, so the
+# inventory in :mod:`agm.agl.keywords` stays the single source of truth.
+IMPORT = KW_IMPORT.upper()  # contextual: 'import' at item-start
+USE = KW_USE.upper()  # contextual: 'use' at item-start
+HIDING = KW_HIDING.upper()  # contextual: 'hiding' in a module header
+EXPORT = KW_EXPORT.upper()  # contextual: 'export' at item-start
+SCOPE = KW_SCOPE.upper()  # contextual: 'scope' at item-start before a scope path
+END = KW_END.upper()  # contextual: 'end' at item-start while a scope region is open
 MODQUAL = "MODQUAL"  # synthetic: merged qualifier prefix (e.g. "foo/bar::")
 MODPATH = "MODPATH"  # synthetic: merged module path in a header (e.g. "foo/bar")
 WILDCARD = "WILDCARD"  # synthetic: adjacent "/*" tail of a wildcard module header
+
+#: Token types a promoted soft keyword can carry.  Highlighters classify against
+#: this set the way they classify reserved words against ``KEYWORDS``.
+SOFT_KEYWORD_TOKENS: frozenset[str] = frozenset(kw.upper() for kw in SOFT_KEYWORDS)
 
 # ---------------------------------------------------------------------------
 # Grammar token-type mapping

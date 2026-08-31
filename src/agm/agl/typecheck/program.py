@@ -62,6 +62,11 @@ from typing import Generic, Mapping, TypeVar, cast
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
+from agm.agl.library_cache import (
+    checked_library_modules,
+    library_module_sources,
+    retain_checked_library_modules,
+)
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import ImportEnv
 from agm.agl.scope.program import ResolvedProgram
@@ -977,6 +982,11 @@ def check_program(
         Checked library modules from an unchanged REPL bootstrap image. Their
         bodies are immutable and can be reused after this call has rebuilt the
         whole-program declaration and signature context for the fresh entry.
+        Whatever this leaves uncovered is looked up in the process-global
+        library image, and this pass's own library results are retained there
+        for the next compilation -- except under an ``entry_seed_env``, whose
+        session types this call seeds the shared type table from, so its
+        results are not a function of the library alone.
 
     Returns
     -------
@@ -988,6 +998,14 @@ def check_program(
     AglTypeError
         On the first static type violation in any module (first-error abort).
     """
+    # An earlier compilation in this process already checked the library behind
+    # this program; a caller-supplied image (a REPL session's) wins over it.
+    library = library_module_sources(resolved.graph)
+    reusable: dict[ModuleId, CheckedModule] = dict(checked_library_modules(library, capabilities))
+    if cached_checked_modules is not None:
+        reusable.update(cached_checked_modules)
+    cached_checked_modules = reusable
+
     # One TypeTable shared by every module in this program: the type pre-pass
     # dual-writes into it below, and Phase 4 re-checks each module's own
     # declarations against the SAME instance, so the whole program's declarations
@@ -1109,7 +1127,7 @@ def check_program(
     reused_modules: set[ModuleId] = set()
     for mid in ordered_mids:
         cached = cached_checked_modules.get(mid) if cached_checked_modules is not None else None
-        if cached is not None and cached.resolved.program is resolved.modules[mid].resolved.program:
+        if cached is not None and cached.resolved is resolved.modules[mid].resolved:
             checked_modules[mid] = cached
             reused_modules.add(mid)
             continue
@@ -1154,4 +1172,6 @@ def check_program(
     )
     if self_validation_enabled():
         assert_checked_program_closed(checked, frozenset(reused_modules))
+    if entry_seed_env is None:
+        retain_checked_library_modules(library, capabilities, checked_modules)
     return checked

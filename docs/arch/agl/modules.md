@@ -103,10 +103,33 @@ inventory follow source-authored import/export edges, so a directly imported
 registry member stays visible while loader-injected modules and transitive
 ambient implementations do not.
 
+## The Library Image
+
+Almost every compilation in a process sees the same standard library behind a
+different entry, so re-deriving the library's artifacts dominates the cost of a
+short program. `library_cache.py` is a process-global, bounded LRU store of what
+the passes derived for library modules: resolved modules, checked modules, and
+compiled match sites. Scope, typecheck, and match compilation each consult it
+through the `cached_modules`/`cached_checked_modules`/`cached_sites` parameters
+they already accepted for the REPL, and refresh it with what they produced; a
+caller-supplied image (a REPL session's) takes precedence.
+
+An artifact is reusable because it is a pure function of the library modules it
+was derived from, never of the entry. So each is retained alongside the loaded
+modules its derivation could read — the module, its transitive dependencies, and
+the ambient method modules — and is served again only while every one of those
+is the very same object. The parsed-module cache is what makes that identity
+hold across compilations. Nothing is keyed by root set: a root set naming a
+different standard library yields different loaded modules and misses, while one
+that merely adds unrelated user roots hits. Host capabilities are not derivable
+from modules, so they key the artifacts checked against them.
+
 ## Code Entry Points
 
 - `src/agm/agl/modules/` — module identities, roots, resolution, graph loading, and the
   parsed standard-library cache (`parsed_module_cache.py`).
+- `src/agm/agl/library_cache.py` — the cross-compilation library artifact image; tests in
+  `tests/test_agl_library_image.py`.
 - `src/agm/agl/scope/` — import contributions, exports, and whole-program name resolution.
 - `src/agm/agl/pipeline.py` — orchestration of the program passes.
 - `src/agm/config/module_roots.py` and `src/agm/packages/` — configured and package-mounted roots.

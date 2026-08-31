@@ -24,6 +24,11 @@ from agm.agl.eval.ir_interpreter import (
     IrInterpreter,
     ParameterDefaultCycleError,
 )
+from agm.agl.library_cache import (
+    library_match_sites,
+    library_module_sources,
+    retain_library_match_sites,
+)
 from agm.agl.recursion import NestingTooDeepError, frontend_recursion_boundary
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.params import _materialize_ir_contracts, _prepare_ir_params
@@ -867,7 +872,13 @@ class PipelineDriver:
 
         companion_paths = {mid: lm.companion_path for mid, lm in graph.modules.items()}
         return PreparedProgram(
-            entry_source, entry_path, roots, resolved, (), warnings, companion_paths
+            entry_source,
+            entry_path,
+            roots,
+            resolved,
+            (),
+            warnings,
+            companion_paths,
         )
 
     @staticmethod
@@ -994,7 +1005,9 @@ class PipelineDriver:
             )
 
         if compiled is None:
-            compiled, match_diagnostics = _run_matchcompile_program(checked)
+            compiled, match_diagnostics = _run_matchcompile_program(
+                checked, prepared.resolved.graph, capabilities
+            )
             if compiled is None:
                 return ParamDiscovery(
                     params=(),
@@ -1327,7 +1340,9 @@ class PipelineDriver:
         _append_checker_warnings(warnings, checked)
 
         if compiled is None:
-            compiled, match_diagnostics = _run_matchcompile_program(checked)
+            compiled, match_diagnostics = _run_matchcompile_program(
+                checked, resolved.graph, capabilities
+            )
             if compiled is None:
                 return (
                     RunResult(
@@ -1775,33 +1790,44 @@ def _run_typecheck_program(
 
     try:
         with frontend_recursion_boundary():
-            return check_program(resolved, capabilities), ()
+            checked = check_program(resolved, capabilities)
     except AglError as exc:
         return None, (exc.to_diagnostic(),)
     except Exception as exc:
         diagnostic = Diagnostic(message=f"Type error: {exc}", line=1)
         return None, (diagnostic,)
+    return checked, ()
 
 
 def _run_matchcompile_program(
     checked: "CheckedProgram",
+    graph: "ModuleGraph",
+    capabilities: "HostCapabilities",
 ) -> "tuple[MatchCompiledProgram | None, tuple[Diagnostic, ...]]":
-    """Run program-level match compilation without raising."""
+    """Run program-level match compilation without raising.
+
+    The sites an earlier compilation of the same library left behind are offered
+    per module; each is carried over only while it still holds the very checked
+    module this program carries.
+    """
     from agm.agl.matchcompile import (
         MatchCompiledProgram,
+        cached_module_sites,
         compile_program_matches,
         diagnostics_from_match_issues,
     )
 
+    library = library_module_sources(graph)
     try:
-        result = compile_program_matches(checked)
+        result = compile_program_matches(checked, library_match_sites(library, capabilities))
         if result.compiled is None:
             return None, diagnostics_from_match_issues(result.issues)
         if not isinstance(result.compiled, MatchCompiledProgram):
             raise TypeError("program match compilation returned a module artifact")
-        return result.compiled, ()
     except Exception as exc:
         return None, (Diagnostic(message=f"Match compilation error: {exc}", line=1),)
+    retain_library_match_sites(library, capabilities, cached_module_sites(result.compiled))
+    return result.compiled, ()
 
 
 def _materialize_custom_contract_payloads(

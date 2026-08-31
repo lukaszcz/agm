@@ -192,6 +192,23 @@ class TestLibraryReuse:
         for module_id, resolved in first.items():
             assert session._library_resolved_modules[module_id] is resolved
 
+    def test_a_reset_session_reuses_the_library_it_reloads(
+        self, resolved_modules: list[ModuleId]
+    ) -> None:
+        """A reset drops session state, not the artifacts describing the library.
+
+        Reopening reloads the very same library modules, so the retained
+        resolutions still describe them exactly and are reused.
+        """
+        session = _open_session()
+        assert session.eval_entry("let x = 1").ok
+        session.reset()
+        resolved_modules.clear()
+
+        assert session.eval_entry("let y = 2").ok
+
+        assert _library(resolved_modules) == []
+
 
 # ---------------------------------------------------------------------------
 # The reuse stops when the library image changes
@@ -271,15 +288,27 @@ class TestLibraryInvalidation:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(30)
 
-    def test_a_reset_session_recompiles_its_library(self, resolved_modules: list[ModuleId]) -> None:
-        session = _open_session()
-        assert session.eval_entry("let x = 1").ok
+    def test_a_reset_session_rereads_a_module_whose_file_changed(self, tmp_path: Path) -> None:
+        """Reuse survives a reset only for modules the reopened session reloads."""
+        module = tmp_path / "shifting.agl"
+        module.write_text("def answer() -> int = 1\n")
+        session = _session_with_root(tmp_path)
+        assert session.eval_entry("import shifting::*\nanswer()").value == IntValue(1)
+
         session.reset()
-        resolved_modules.clear()
+        module.write_text("def answer() -> int = 2\n")
+        session._roots = assemble_roots(
+            invocation_root=tmp_path,
+            stdlib_root=_STDLIB,
+            lib_root=None,
+            configured=[],
+            cli=[],
+            cwd=tmp_path,
+        )
+        result = session.eval_entry("import shifting::*\nanswer()")
 
-        assert session.eval_entry("let y = 2").ok
-
-        assert _library(resolved_modules) != []
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(2)
 
 
 # ---------------------------------------------------------------------------

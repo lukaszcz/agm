@@ -27,7 +27,7 @@ check_cpu_budget := "15"
 test:
     cleanup_coverage() { find . -maxdepth 1 -type f -name '.coverage*' -delete; }; trap cleanup_coverage EXIT; \
     AGM_TEST_MAX_CPU_SECONDS={{check_cpu_budget}} \
-    uv run python -m pytest tests/ -q -n auto --cov=agm --cov=stdlib/std --cov-branch --cov-fail-under={{check_coverage}} --cov-report=term:skip-covered
+    uv run python -m pytest tests/ -q -n auto --dist worksteal --cov=agm --cov=stdlib/std --cov-branch --cov-fail-under={{check_coverage}} --cov-report=term:skip-covered
 
 test_cpu_budget := ""
 test_report_top := "25"
@@ -41,12 +41,12 @@ test_report_top := "25"
 test-budget:
     cleanup_coverage() { find . -maxdepth 1 -type f -name '.coverage*' -delete; }; trap cleanup_coverage EXIT; \
     AGM_TEST_REPORT_TOP={{test_report_top}} AGM_TEST_MAX_CPU_SECONDS={{test_cpu_budget}} \
-    uv run python -m pytest tests/ -q -n auto --cov=agm --cov=stdlib/std --cov-branch --cov-fail-under=0 --cov-report=
+    uv run python -m pytest tests/ -q -n auto --dist worksteal --cov=agm --cov=stdlib/std --cov-branch --cov-fail-under=0 --cov-report=
 
 # Re-run the suite with neutrally named temp directories, so any assertion that
 # passes only because pytest names tmp_path after the test itself fails
 test-neutral-tmp *args:
-    AGM_TEST_NEUTRAL_TMP_PATH=1 uv run python -m pytest tests/ -q -n auto --no-cov {{args}}
+    AGM_TEST_NEUTRAL_TMP_PATH=1 uv run python -m pytest tests/ -q -n auto --dist worksteal --no-cov {{args}}
 
 # Lint and check formatting with ruff
 lint:

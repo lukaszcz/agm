@@ -32,7 +32,7 @@ from agm.agl.semantics.values import ExceptionValue, TextValue, Value
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.core.process import ProcessCaptureResult
-from tests._agl_helpers import parse_inline_command
+from tests._agl_helpers import agl_roots, parse_inline_command
 from tests.agl.module_graph import build_module_graph, build_module_graph_from_program
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[2] / "stdlib"
@@ -202,8 +202,7 @@ def nominal_id_for(program: ExecutableProgram, display_name: str) -> NominalId:
 
 
 def _roots(*paths: Path, include_stdlib: bool = True) -> RootSet:
-    roots = (*paths, _REPO_STDLIB_ROOT) if include_stdlib else paths
-    return RootSet(roots=frozenset(roots))
+    return agl_roots(*paths, include_stdlib=include_stdlib)
 
 
 def base_caps() -> HostCapabilities:

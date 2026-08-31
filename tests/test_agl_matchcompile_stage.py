@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import decimal
-from collections.abc import Callable, MutableMapping
+from collections.abc import Callable, Mapping, MutableMapping
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -14,6 +14,7 @@ import agm.agl.matchcompile as matchcompile
 import agm.agl.matchcompile.compiler as compiler_module
 import agm.agl.matchcompile.stage as stage_module
 from agm.agl.matchcompile import (
+    CachedModuleSites,
     CaseSite,
     CompiledMatchSite,
     LetSite,
@@ -43,7 +44,7 @@ from agm.agl.matchcompile.model import (
     SourceAction,
 )
 from agm.agl.matchcompile.normalize import MatchCompileInvariantError, normalize_case
-from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import (
     PipelineDriver,
@@ -65,6 +66,7 @@ from tests.agl.module_graph import resolve_and_check_inline_entry
 def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
     assert set(matchcompile.__all__) == {
         "BoolConstructor",
+        "CachedModuleSites",
         "BoolWitness",
         "CaseSite",
         "CompiledMatchSite",
@@ -100,6 +102,7 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "RefutableLetIssue",
         "WildcardWitness",
         "WitnessField",
+        "cached_module_sites",
         "compile_program_matches",
         "diagnostic_from_match_issue",
         "diagnostics_from_match_issues",
@@ -879,9 +882,10 @@ def test_pipeline_nonraising_helpers_defend_against_wrong_artifact_kind(
     checked = check_program(resolve_program(graph), base_caps())
     single_result = MatchCompilationResult(compiled=single, issues=())
     monkeypatch.setattr(
-        "agm.agl.matchcompile.compile_program_matches", lambda _checked: single_result
+        "agm.agl.matchcompile.compile_program_matches",
+        lambda _checked, _cached=None: single_result,
     )
-    compiled, diagnostics = _run_matchcompile_program(checked)
+    compiled, diagnostics = _run_matchcompile_program(checked, graph, base_caps())
     assert compiled is None
     assert "module artifact" in diagnostics[0].message
 
@@ -911,10 +915,13 @@ def test_single_discovery_and_cached_run_compile_matches_once(
 ) -> None:
     compile_count = 0
 
-    def counted_compile(checked: CheckedProgram) -> MatchCompilationResult:
+    def counted_compile(
+        checked: CheckedProgram,
+        cached_sites: Mapping[ModuleId, CachedModuleSites] | None = None,
+    ) -> MatchCompilationResult:
         nonlocal compile_count
         compile_count += 1
-        return compile_program_matches(checked)
+        return compile_program_matches(checked, cached_sites)
 
     monkeypatch.setattr(
         "agm.agl.matchcompile.compile_program_matches",
@@ -943,10 +950,13 @@ def test_program_discovery_and_cached_run_compile_matches_once(
 ) -> None:
     compile_count = 0
 
-    def counted_compile(checked: CheckedProgram) -> MatchCompilationResult:
+    def counted_compile(
+        checked: CheckedProgram,
+        cached_sites: Mapping[ModuleId, CachedModuleSites] | None = None,
+    ) -> MatchCompilationResult:
         nonlocal compile_count
         compile_count += 1
-        return compile_program_matches(checked)
+        return compile_program_matches(checked, cached_sites)
 
     monkeypatch.setattr(
         "agm.agl.matchcompile.compile_program_matches",
@@ -974,10 +984,13 @@ def test_discovery_and_execution_reuse_one_graph_match_compilation(
 ) -> None:
     compile_count = 0
 
-    def counted_compile(checked: CheckedProgram) -> MatchCompilationResult:
+    def counted_compile(
+        checked: CheckedProgram,
+        cached_sites: Mapping[ModuleId, CachedModuleSites] | None = None,
+    ) -> MatchCompilationResult:
         nonlocal compile_count
         compile_count += 1
-        return compile_program_matches(checked)
+        return compile_program_matches(checked, cached_sites)
 
     monkeypatch.setattr(
         "agm.agl.matchcompile.compile_program_matches",

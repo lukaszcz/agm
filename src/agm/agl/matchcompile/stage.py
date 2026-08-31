@@ -85,6 +85,18 @@ class MatchCompiledProgram:
             validate_match_compiled_program(self)
 
 
+@dataclass(frozen=True, slots=True)
+class CachedModuleSites:
+    """One module's compiled match sites and the checked module they came from.
+
+    Compiled sites are a pure function of the checked module they were compiled
+    from, so pairing the two is the whole condition for reusing them.
+    """
+
+    owner: CheckedModule
+    sites: Mapping[int, CompiledMatchSite]
+
+
 MatchCompiledArtifact: TypeAlias = MatchCompiledModule | MatchCompiledProgram
 
 
@@ -156,14 +168,27 @@ def _rejected(
     return MatchCompilationResult(compiled=None, issues=issues)
 
 
+def cached_module_sites(
+    previous: MatchCompiledProgram | None,
+) -> dict[ModuleId, CachedModuleSites]:
+    """Adapt an earlier whole-program artifact to the per-module reuse seam."""
+    if previous is None:
+        return {}
+    return {
+        module_id: CachedModuleSites(previous.checked.modules[module_id], sites)
+        for module_id, sites in previous.sites_by_module.items()
+        if module_id in previous.checked.modules
+    }
+
+
 def compile_program_matches(
     checked: CheckedProgram,
-    previous: MatchCompiledProgram | None = None,
+    cached_sites: Mapping[ModuleId, CachedModuleSites] | None = None,
 ) -> MatchCompilationResult:
     """Compile every match site in every reachable checked module.
 
-    A module carries its sites over from *previous*, an artifact of an earlier
-    compilation, only while that artifact holds the very
+    A module carries its sites over from *cached_sites*, the artifacts of an
+    earlier compilation, only while the pairing still holds the very
     :class:`~agm.agl.typecheck.env.CheckedModule` this program carries;
     compiled sites are a pure function of that module, so identity is the whole
     condition. Only a compilation that produced an artifact can be offered
@@ -173,8 +198,9 @@ def compile_program_matches(
     reused_modules: set[ModuleId] = set()
     issues: list[MatchIssue] = []
     for module_id, checked_module in checked.modules.items():
-        if previous is not None and previous.checked.modules.get(module_id) is checked_module:
-            sites_by_module[module_id] = previous.sites_by_module[module_id]
+        cached = cached_sites.get(module_id) if cached_sites is not None else None
+        if cached is not None and cached.owner is checked_module:
+            sites_by_module[module_id] = cached.sites
             reused_modules.add(module_id)
             continue
         module_sites, module_issues = _compile_owner_sites(checked_module)
@@ -295,6 +321,8 @@ __all__ = [
     "MatchCompiledArtifact",
     "MatchCompiledProgram",
     "MatchCompiledModule",
+    "CachedModuleSites",
+    "cached_module_sites",
     "compile_program_matches",
     "diagnostic_from_match_issue",
     "diagnostics_from_match_issues",

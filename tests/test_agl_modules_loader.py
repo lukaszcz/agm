@@ -25,6 +25,7 @@ from agm.agl.syntax.nodes import ImportDecl
 from agm.agl.syntax.spans import SourceId
 from agm.packages.manifest import load_manifest
 from agm.packages.model import PackageInfo
+from tests._agl_helpers import agl_roots
 from tests._timeouts import fail_if_slow
 
 # ---------------------------------------------------------------------------
@@ -35,7 +36,7 @@ _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 
 
 def _roots(*paths: Path) -> RootSet:
-    return RootSet(roots=frozenset((*paths, _REPO_STDLIB_ROOT)))
+    return agl_roots(*paths)
 
 
 def _write_agl(path: Path, source: str = "") -> None:

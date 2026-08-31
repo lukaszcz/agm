@@ -20,6 +20,7 @@ from agm.agl.syntax.resources import ResourceError, resolve_resource
 from agm.packages.discipline import DisciplineError, validate_package
 from agm.packages.manifest import PackageManifest
 from agm.packages.model import PackageInfo
+from tests._agl_helpers import agl_roots
 
 _STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
 
@@ -54,7 +55,7 @@ program def main() -> unit =
   print prompt
 """
 
-    result = _run_file(source, entry, roots=RootSet(roots=frozenset({_STDLIB})))
+    result = _run_file(source, entry, roots=agl_roots())
 
     assert result.ok
     assert result.bindings["prompt"] == TextValue(str(resource.resolve()))
@@ -71,7 +72,7 @@ program def main() -> unit =
   print prompt
 """
 
-    result = _run_file(source, entry, roots=RootSet(roots=frozenset({_STDLIB})))
+    result = _run_file(source, entry, roots=agl_roots())
 
     assert result.ok
     assert result.bindings["prompt"] == TextValue(str(resource.resolve()))
@@ -129,7 +130,7 @@ def test_resource_calls_require_safe_literal_paths(call: str) -> None:
   print path
 """
 
-    result = _run_file(source, Path("main.agl"), roots=RootSet(roots=frozenset({_STDLIB})))
+    result = _run_file(source, Path("main.agl"), roots=agl_roots())
 
     assert not result.ok
     assert result.diagnostics
@@ -147,7 +148,7 @@ def test_resource_rejects_windows_drive_relative_paths(path: str, tmp_path: Path
     result = _run_file(
         source,
         tmp_path / "main.agl",
-        roots=RootSet(roots=frozenset({_STDLIB})),
+        roots=agl_roots(),
     )
 
     assert not result.ok
@@ -160,7 +161,7 @@ def test_missing_resource_is_a_link_error(tmp_path: Path) -> None:
   print resource("missing.md")
 """
 
-    result = _run_file(source, entry, roots=RootSet(roots=frozenset({_STDLIB})))
+    result = _run_file(source, entry, roots=agl_roots())
 
     assert not result.ok
     assert result.diagnostics

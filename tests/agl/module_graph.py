@@ -67,7 +67,7 @@ from agm.agl.typecheck import CheckedModule
 from agm.agl.typecheck.checker import _check_prepared_module
 from agm.agl.typecheck.env import TypeEnvironment
 from agm.agl.typecheck.program import check_program
-from tests._agl_helpers import parse_inline_command
+from tests._agl_helpers import agl_roots, parse_inline_command
 
 # A general-purpose capability set (default agent, shell exec, json/text
 # codecs) for a test that does not care which capabilities back its checked
@@ -95,7 +95,7 @@ _std_core_next_start_id: int = 0
 
 
 def _roots() -> RootSet:
-    return RootSet(roots=frozenset({_REPO_STDLIB_ROOT}))
+    return agl_roots()
 
 
 def _cached_std_core() -> tuple[dict[ModuleId, LoadedModule], int]:

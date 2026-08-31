@@ -41,10 +41,12 @@ from .model import (
     OccurrenceId,
 )
 from .stage import (
+    CachedModuleSites,
     MatchCompilationResult,
     MatchCompiledArtifact,
     MatchCompiledModule,
     MatchCompiledProgram,
+    cached_module_sites,
     compile_program_matches,
     diagnostic_from_match_issue,
     diagnostics_from_match_issues,
@@ -87,6 +89,8 @@ __all__ = [
     "RefutableLetIssue",
     "WildcardWitness",
     "WitnessField",
+    "CachedModuleSites",
+    "cached_module_sites",
     "compile_program_matches",
     "diagnostic_from_match_issue",
     "diagnostics_from_match_issues",

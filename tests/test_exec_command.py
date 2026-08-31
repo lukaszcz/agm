@@ -1134,12 +1134,10 @@ class TestExecParsesSourceOnce:
                 source_text=source_text,
             )
 
-        def counting_resolve_program(
-            graph: ModuleGraph,
-        ) -> ResolvedProgram:
+        def counting_resolve_program(graph: ModuleGraph, **kwargs: Any) -> ResolvedProgram:
             nonlocal resolve_program_calls
             resolve_program_calls += 1
-            return real_resolve_program(graph)
+            return real_resolve_program(graph, **kwargs)
 
         monkeypatch.setattr(loader_mod, "build_repl_graph", counting_build_repl_graph)
         monkeypatch.setattr(scope_graph_mod, "resolve_program", counting_resolve_program)

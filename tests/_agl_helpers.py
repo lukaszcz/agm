@@ -460,3 +460,23 @@ def agent_value(variant: str, **fields: str) -> RecordValue:
         display_name=f"{'Agent'}::{variant}",
         fields={name: TextValue(value) for name, value in fields.items()},
     )
+
+
+REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+
+
+def agl_roots(*paths: Path, include_stdlib: bool = True) -> RootSet:
+    """Assemble a search-root set the way a real invocation does.
+
+    Every production caller assembles roots through
+    :func:`~agm.agl.modules.roots.assemble_roots`, which designates the
+    standard library's path in ``stdlib_roots``.  That designation is what
+    tells the loader and the process-global caches which modules are library
+    code, so a test that merely *searches* the repository standard library
+    without designating it compiles a configuration production never runs.
+    """
+    roots = (*paths, REPO_STDLIB_ROOT) if include_stdlib else paths
+    return RootSet(
+        roots=frozenset(roots),
+        stdlib_roots=frozenset({REPO_STDLIB_ROOT}) if include_stdlib else frozenset(),
+    )

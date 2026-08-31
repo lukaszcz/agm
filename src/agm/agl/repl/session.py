@@ -1846,9 +1846,15 @@ class ReplSession:
             program, next_node_id, host_env, spaced_qualifiers=tuple(spaced_sink)
         )
         checked = checked_program.modules[ENTRY_ID]
-        from agm.agl.matchcompile import compile_program_matches, diagnostics_from_match_issues
+        from agm.agl.matchcompile import (
+            cached_module_sites,
+            compile_program_matches,
+            diagnostics_from_match_issues,
+        )
 
-        match_result = compile_program_matches(checked_program, self._last_match_compilation)
+        match_result = compile_program_matches(
+            checked_program, cached_module_sites(self._last_match_compilation)
+        )
         if match_result.compiled is None:
             diagnostic = diagnostics_from_match_issues(match_result.issues)[0]
             raise AglError(diagnostic.message, span=match_result.issues[0].span)

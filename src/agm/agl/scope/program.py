@@ -30,10 +30,15 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
+from agm.agl.library_cache import (
+    library_module_sources,
+    resolved_library_modules,
+    retain_resolved_library_modules,
+)
 from agm.agl.modules.ids import ModuleId
 
 if TYPE_CHECKING:
-    from agm.agl.modules.loader import ModuleGraph
+    from agm.agl.modules.loader import LoadedModule, ModuleGraph
 from agm.agl.scope.imports import (
     EMPTY_IMPORT_ENV,
     ImportEnv,
@@ -775,6 +780,22 @@ _DeclInfo = dict[QName, tuple[int, SourceSpan, BinderKind, bool]]
 # ---------------------------------------------------------------------------
 
 
+def _reusable(
+    cached_modules: Mapping[ModuleId, ResolvedModule] | None,
+    module_id: ModuleId,
+    loaded: LoadedModule,
+) -> ResolvedModule | None:
+    """Return an earlier resolution of *loaded*, when it is the very same module.
+
+    Identity of the ``Program`` node is the whole condition: a reparse, a REPL
+    splice or a redeclaration produces a different node and misses.
+    """
+    cached = cached_modules.get(module_id) if cached_modules is not None else None
+    if cached is not None and cached.resolved.program is loaded.program:
+        return cached
+    return None
+
+
 def resolve_program(
     graph: ModuleGraph,
     *,
@@ -818,9 +839,12 @@ def resolve_program(
         rendered alias target or to None for a nominal type. Scope needs the
         distinction to reject a method receiver in an alias scope.
     cached_modules:
-        Resolutions from an earlier compilation of the same modules. A cached
-        entry is reused only while it holds the very ``Program`` node this
-        graph carries, so any reparse, splice or redeclaration misses it.
+        Resolutions from an earlier compilation of the same modules -- a REPL
+        session's own image. A cached entry is reused only while it holds the
+        very ``Program`` node this graph carries, so any reparse, splice or
+        redeclaration misses it. Whatever this leaves uncovered is looked up in
+        the process-global library image, and this pass's own library results
+        are retained there for the next compilation.
 
     Returns
     -------
@@ -836,6 +860,12 @@ def resolve_program(
     # ------------------------------------------------------------------
     # Step 1: Build local export maps (own declarations only).
     # ------------------------------------------------------------------
+    library = library_module_sources(graph)
+    reusable: dict[ModuleId, ResolvedModule] = dict(resolved_library_modules(library))
+    if cached_modules is not None:
+        reusable.update(cached_modules)
+    cached_modules = reusable
+
     export_maps: dict[ModuleId, dict[NameAtom, QName]] = {}
     scope_export_maps: dict[ModuleId, dict[NameAtom, ScopeOrigins]] = {}
     type_origins: set[QName] = set()
@@ -870,6 +900,13 @@ def resolve_program(
     # ------------------------------------------------------------------
     import_envs: dict[ModuleId, ImportEnv] = {}
     for mid, loaded in graph.modules.items():
+        cached = _reusable(cached_modules, mid, loaded)
+        if cached is not None:
+            # An import environment is a function of the module's own import
+            # declarations and the exports of what they name -- exactly what a
+            # reusable resolution was built against -- so it is reused with it.
+            import_envs[mid] = cached.import_env
+            continue
         decls = loaded.imports
         # Build a targets mapping scoped to this module's declarations.
         module_targets: dict[int, ImportTarget] = {
@@ -960,8 +997,8 @@ def resolve_program(
     resolved_modules: dict[ModuleId, ResolvedModule] = {}
 
     for mid, loaded in graph.modules.items():
-        cached = cached_modules.get(mid) if cached_modules is not None else None
-        if cached is not None and cached.resolved.program is loaded.program:
+        cached = _reusable(cached_modules, mid, loaded)
+        if cached is not None:
             resolved_modules[mid] = cached
             continue
         is_entry = mid.is_entry
@@ -1022,6 +1059,7 @@ def resolve_program(
             source_text=graph.modules[mid].source_text,
         )
 
+    retain_resolved_library_modules(library, resolved_modules)
     return ResolvedProgram(
         modules=resolved_modules,
         entry_id=graph.entry_id,

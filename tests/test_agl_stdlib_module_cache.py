@@ -325,3 +325,22 @@ def test_cache_evicts_least_recently_used_entries(tmp_path: Path) -> None:
     )
 
     assert len(calls) == 3
+
+
+def test_infix_chain_module_keeps_one_resolved_program_across_compilations(
+    tmp_path: Path, library_parses: list[str]
+) -> None:
+    """A library module whose bodies hold infix chains is resolved once.
+
+    Infix-chain resolution rewrites a module's program, so a library module
+    re-resolved per compilation would hand every later pass a fresh object and
+    silently defeat the identity-keyed scope and type-check reuse guards.
+    """
+    path = _write_module(tmp_path, "lib/a", "def f(x: int) -> int = x + 1 + 2\n")
+    roots = _stdlib_roots(tmp_path)
+
+    first = _load(roots)
+    second = _load(roots)
+
+    assert _library_parse_count(library_parses, path) == 1
+    assert second.program is first.program

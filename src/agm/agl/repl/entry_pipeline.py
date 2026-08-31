@@ -334,9 +334,15 @@ class EntryPipeline:
         # Collect warnings from all passes.
         warnings: list[Diagnostic] = [*tab_warnings, *checked_program.warnings]
 
-        from agm.agl.matchcompile import compile_program_matches, diagnostics_from_match_issues
+        from agm.agl.matchcompile import (
+            cached_module_sites,
+            compile_program_matches,
+            diagnostics_from_match_issues,
+        )
 
-        match_result = compile_program_matches(checked_program, self._ctx._last_match_compilation)
+        match_result = compile_program_matches(
+            checked_program, cached_module_sites(self._ctx._last_match_compilation)
+        )
         if match_result.compiled is None:
             return self._ctx._fail(
                 list(diagnostics_from_match_issues(match_result.issues)), warnings

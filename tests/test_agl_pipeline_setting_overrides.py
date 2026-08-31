@@ -22,13 +22,13 @@ from agm.agl.parser import AglSyntaxError
 from agm.agl.pipeline import ParsedEntry, PipelineDriver, PreparedProgram
 from agm.agl.semantics.values import RecordValue, TextValue
 from agm.agl.setting_overrides import SettingOverride
-from tests._agl_helpers import prepare_inline_command, run_inline_command
+from tests._agl_helpers import agl_roots, prepare_inline_command, run_inline_command
 
 _STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
 
 
 def _roots() -> RootSet:
-    return RootSet(roots=frozenset({_STDLIB}))
+    return agl_roots()
 
 
 def _prepare(

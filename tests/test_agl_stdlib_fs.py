@@ -19,6 +19,7 @@ from agm.agl.typecheck.program import check_program
 from agm.core import dry_run
 from agm.packages.manifest import PackageManifest
 from agm.packages.model import PackageInfo
+from tests._agl_helpers import agl_roots
 
 _STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
 
@@ -60,7 +61,7 @@ program def main() -> unit =
   print(fs::list("."))
 """,
         entry,
-        roots=RootSet(roots=frozenset({_STDLIB})),
+        roots=agl_roots(),
     )
 
     assert result.ok
@@ -93,7 +94,7 @@ program def main() -> unit =
   let _ = {call}
 """,
         tmp_path / "main.agl",
-        roots=RootSet(roots=frozenset({_STDLIB})),
+        roots=agl_roots(),
     )
 
     assert not result.ok
@@ -130,7 +131,7 @@ program def main() -> unit =
   let _ = {call}
 """,
         tmp_path / "main.agl",
-        roots=RootSet(roots=frozenset({_STDLIB})),
+        roots=agl_roots(),
     )
 
     assert not result.ok
@@ -149,7 +150,7 @@ def test_fs_optional_read_of_an_invalid_path_returns_none(
 program def main() -> unit = print(fs::read?("invalid\\u0000path"))
 """,
         tmp_path / "main.agl",
-        roots=RootSet(roots=frozenset({_STDLIB})),
+        roots=agl_roots(),
     )
 
     assert result.ok
@@ -164,7 +165,7 @@ program def main() -> unit =
   let _ = fs::read_option("file.txt")
 """,
         tmp_path / "main.agl",
-        roots=RootSet(roots=frozenset({_STDLIB})),
+        roots=agl_roots(),
     )
 
     assert not result.ok
@@ -192,7 +193,7 @@ program def main() -> unit =
   fs::remove("nested/deep/moved.txt")
 """,
         tmp_path / "main.agl",
-        roots=RootSet(roots=frozenset({_STDLIB})),
+        roots=agl_roots(),
     )
 
     assert result.ok
@@ -220,7 +221,7 @@ program def main() -> unit =
   fs::remove("missing.txt")
 """,
         tmp_path / "main.agl",
-        roots=RootSet(roots=frozenset({_STDLIB})),
+        roots=agl_roots(),
     )
 
     assert result.ok
@@ -240,7 +241,7 @@ def test_fs_externs_honor_the_existing_extern_capability_gate() -> None:
     graph = load_graph(
         'import std/fs\nprogram def main() -> unit =\n  let _ = fs::exists("file")\n',
         entry_path=None,
-        roots=RootSet(roots=frozenset({_STDLIB})),
+        roots=agl_roots(),
     )
     checked = check_program(resolve_program(graph), HostCapabilities(supports_extern=False))
 

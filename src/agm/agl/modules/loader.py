@@ -40,7 +40,12 @@ from agm.agl.modules.errors import (
     PackageImportVisibilityError,
 )
 from agm.agl.modules.ids import ENTRY_ID, STD_BUILTIN_METHODS_ID, STD_CORE_ID, ModuleId
-from agm.agl.modules.parsed_module_cache import cached_library_module
+from agm.agl.modules.parsed_module_cache import (
+    InfixSignature,
+    cached_chain_scope_paths,
+    cached_infix_resolution,
+    cached_library_module,
+)
 from agm.agl.modules.resolver import expand_wildcard, resolve_module
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import AglSyntaxError, build_infix_operator_table, resolve_infix_chains
@@ -734,6 +739,20 @@ def _raw_chain_scope_paths(program: syntax.Program) -> dict[int, _OperatorPath]:
     return paths
 
 
+def _library_module(graph: ModuleGraph, loaded: LoadedModule) -> bool:
+    """Return whether *loaded* came from one of the graph's standard-library roots."""
+    return loaded.path is not None and graph.roots.is_standard_library_path(loaded.path)
+
+
+def _chain_scope_paths(graph: ModuleGraph, loaded: LoadedModule) -> dict[int, _OperatorPath]:
+    """Return the scope owning each raw chain, memoized for a library module."""
+    if _library_module(graph, loaded):
+        return cached_chain_scope_paths(
+            loaded, build=lambda: _raw_chain_scope_paths(loaded.program)
+        )
+    return _raw_chain_scope_paths(loaded.program)
+
+
 def _reject_obvious_scoped_reexport_cycles(graph: ModuleGraph) -> None:
     """Reject unrestricted scoped re-export cycles before resolving infix chains.
 
@@ -768,6 +787,33 @@ def _reject_obvious_scoped_reexport_cycles(graph: ModuleGraph) -> None:
                         raise AglSyntaxError(
                             "cyclic re-export expansion does not converge", span=declaration.span
                         )
+
+
+_OperatorTable = dict[str, tuple[int, "syntax.InfixAssoc", "syntax.BinOp | None"]]
+
+
+def _infix_signature(
+    root_table: _OperatorTable,
+    root_conflicts: set[str],
+    chain_tables: dict[int, _OperatorTable],
+    chain_conflicts: dict[int, frozenset[str]],
+) -> InfixSignature:
+    """Return everything besides the program that decides one module's rewrite.
+
+    Two graphs that show a module the same operators rewrite it identically, so
+    this is the whole cache key beside the module itself.
+    """
+    return (
+        tuple(sorted(root_table.items())),
+        tuple(sorted(root_conflicts)),
+        tuple(
+            (chain_id, tuple(sorted(table.items())))
+            for chain_id, table in sorted(chain_tables.items())
+        ),
+        tuple(
+            (chain_id, tuple(sorted(names))) for chain_id, names in sorted(chain_conflicts.items())
+        ),
+    )
 
 
 def _resolve_graph_infix(
@@ -844,7 +890,7 @@ def _resolve_graph_infix(
         chain_tables: dict[int, dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]]] = {}
         chain_conflicts: dict[int, frozenset[str]] = {}
         own_names = {decl.name for decl in declarations[mid]}
-        for chain_id, scope_path in _raw_chain_scope_paths(loaded.program).items():
+        for chain_id, scope_path in _chain_scope_paths(graph, loaded).items():
             ambient: dict[str, _InfixFixity] = {}
             conflicts: set[str] = set()
             for name, origins in visible_at(mid, scope_path).items():
@@ -868,18 +914,36 @@ def _resolve_graph_infix(
         root_conflicts.difference_update(own_names)
         if mid == ENTRY_ID:
             entry_infix_ambient = root_ambient
-        resolved_program = resolve_infix_chains(
-            loaded.program,
-            build_infix_operator_table(declarations[mid], root_ambient),
-            conflicting_operators=frozenset(root_conflicts),
-            operator_tables=chain_tables,
-            conflicting_operators_by_chain=chain_conflicts,
-        )
-        modules[mid] = (
-            loaded
-            if resolved_program == loaded.program
-            else replace(loaded, program=resolved_program)
-        )
+        root_table = build_infix_operator_table(declarations[mid], root_ambient)
+
+        # Called synchronously below — on this iteration's values — or not at all.
+        def resolve() -> LoadedModule:
+            resolved_program = resolve_infix_chains(
+                loaded.program,
+                root_table,
+                conflicting_operators=frozenset(root_conflicts),
+                operator_tables=chain_tables,
+                conflicting_operators_by_chain=chain_conflicts,
+            )
+            return (
+                loaded
+                if resolved_program == loaded.program
+                else replace(loaded, program=resolved_program)
+            )
+
+        # A library module's rewrite is the same on every compilation that shows
+        # it the same operators, and repeating it would hand the later passes a
+        # fresh program object, defeating their identity-keyed reuse guards.
+        if _library_module(graph, loaded):
+            modules[mid] = cached_infix_resolution(
+                loaded,
+                signature=_infix_signature(
+                    root_table, root_conflicts, chain_tables, chain_conflicts
+                ),
+                resolve=resolve,
+            )
+        else:
+            modules[mid] = resolve()
     return replace(graph, modules=modules, entry_infix_ambient=entry_infix_ambient)
 
 

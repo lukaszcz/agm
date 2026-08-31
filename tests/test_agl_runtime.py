@@ -30,7 +30,12 @@ from agm.agl.semantics.types import Type
 from agm.agl.semantics.values import TextValue
 from agm.agl.typecheck import AglTypeError
 from agm.commands import exec_program as exec_engine
-from tests._agl_helpers import prepare_inline_command, run_inline_command, type_table_for
+from tests._agl_helpers import (
+    agl_roots,
+    prepare_inline_command,
+    run_inline_command,
+    type_table_for,
+)
 
 if TYPE_CHECKING:
     from agm.agl.runtime.codec import OutputCodec
@@ -867,8 +872,8 @@ class TestWarningsThreadedOnFailurePaths:
         real_check = tc_mod.check_program
         warning = Diagnostic(message="a checker warning", line=1, severity="warning")
 
-        def check_with_warning(resolved: object, caps: object) -> object:
-            checked = real_check(resolved, caps)
+        def check_with_warning(resolved: object, caps: object, **kwargs: object) -> object:
+            checked = real_check(resolved, caps, **kwargs)
             return replace(checked, warnings=(*checked.warnings, warning))
 
         monkeypatch.setattr(tc_mod, "check_program", check_with_warning)
@@ -1822,7 +1827,7 @@ class TestRuntimeErrorPaths:
         """An unexpected failure while resolving scopes is reported instead of crashing."""
         import agm.agl.scope.program as scope_mod
 
-        def bad_resolve(program: object) -> object:
+        def bad_resolve(program: object, **_: object) -> object:
             raise RuntimeError("unexpected scope error")
 
         monkeypatch.setattr(scope_mod, "resolve_program", bad_resolve)
@@ -1837,7 +1842,7 @@ class TestRuntimeErrorPaths:
         """An unexpected failure while typechecking is reported instead of crashing."""
         import agm.agl.typecheck.program as tc_mod
 
-        def bad_check(resolved: object, caps: object) -> object:
+        def bad_check(resolved: object, caps: object, **_: object) -> object:
             raise RuntimeError("unexpected type error")
 
         monkeypatch.setattr(tc_mod, "check_program", bad_check)
@@ -2968,10 +2973,9 @@ class TestPrepareProgram:
         self, tmp_path: pathlib.Path
     ) -> None:
         """A module program with no imports produces a valid PreparedProgram."""
-        from agm.agl.modules.roots import RootSet
         from agm.agl.pipeline import PreparedProgram
 
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
+        roots = agl_roots()
         prepared = prepare_inline_command("let x = 1\nx", entry_path=None, roots=roots)
         assert isinstance(prepared, PreparedProgram)
         assert prepared.resolved is not None
@@ -2979,18 +2983,16 @@ class TestPrepareProgram:
 
     def test_prepare_program_syntax_error_captured(self, tmp_path: pathlib.Path) -> None:
         """A syntax error is captured as a diagnostic, not raised."""
-        from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
+        roots = agl_roots()
         prepared = prepare_inline_command("let x = !!!", entry_path=None, roots=roots)
         assert prepared.resolved is None
         assert len(prepared.diagnostics) >= 1
 
     def test_prepare_program_missing_import_captured(self, tmp_path: pathlib.Path) -> None:
         """A missing import is captured as a diagnostic, not raised."""
-        from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
+        roots = agl_roots()
         prepared = prepare_inline_command(
             "import nonexistent/module::*\nlet x = 1\nx",
             entry_path=None,
@@ -3002,13 +3004,12 @@ class TestPrepareProgram:
 
     def test_prepare_program_with_valid_import(self, tmp_path: pathlib.Path) -> None:
         """A valid import resolves when the module file exists on disk."""
-        from agm.agl.modules.roots import RootSet
 
         lib_dir = tmp_path / "lib"
         lib_dir.mkdir()
         (lib_dir / "mymod.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
 
-        roots = RootSet(roots=frozenset({lib_dir, _STDLIB_ROOT}))
+        roots = agl_roots(lib_dir)
         entry = "import mymod::*\nlet r = add(2, 3)\nr"
         prepared = prepare_inline_command(entry, entry_path=None, roots=roots)
         assert prepared.resolved is not None
@@ -3016,9 +3017,8 @@ class TestPrepareProgram:
 
     def test_prepare_program_captures_syntax_error(self) -> None:
         """A parse failure is captured as a diagnostic, not raised."""
-        from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
+        roots = agl_roots()
         prepared = prepare_inline_command("let x = = =", entry_path=None, roots=roots)
         assert prepared.resolved is None
         assert prepared.diagnostics
@@ -3029,10 +3029,9 @@ class TestRunPreparedProgram:
 
     def test_single_entry_graph_behaves_like_run(self, tmp_path: pathlib.Path) -> None:
         """A module program via run_prepared returns same result as run()."""
-        from agm.agl.modules.roots import RootSet
 
         rt = PipelineDriver()
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
+        roots = agl_roots()
         prepared = prepare_inline_command("let x = 1\nx", entry_path=None, roots=roots)
         result = rt.run_prepared(prepared)
         assert result.ok is True
@@ -3056,9 +3055,8 @@ class TestRunPreparedProgram:
 
     def test_graph_failure_propagated(self, tmp_path: pathlib.Path) -> None:
         """When the load phase captured a scope error, run_prepared reports it."""
-        from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
+        roots = agl_roots()
         prepared = prepare_inline_command("let x = undefined_name", entry_path=None, roots=roots)
         rt = PipelineDriver()
         result = rt.run_prepared(prepared)
@@ -3068,9 +3066,8 @@ class TestRunPreparedProgram:
 
     def test_graph_missing_import_propagated(self, tmp_path: pathlib.Path) -> None:
         """A missing import error from prepare_program flows through run_prepared."""
-        from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
+        roots = agl_roots()
         prepared = prepare_inline_command(
             "import missing/module::*\nlet x = 1\nx", entry_path=None, roots=roots
         )
@@ -3081,9 +3078,8 @@ class TestRunPreparedProgram:
 
     def test_graph_check_only_returns_call_inventory(self, tmp_path: pathlib.Path) -> None:
         """check_only=True produces call_sites from the entry module."""
-        from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
+        roots = agl_roots()
         prepared = prepare_inline_command(
             'let r = ask("hello")\nprint r', entry_path=None, roots=roots
         )
@@ -3132,9 +3128,8 @@ class TestDiscoverParamsGraph:
 
     def test_discover_params_no_params(self, tmp_path: pathlib.Path) -> None:
         """discover_params returns empty params for a program with no params."""
-        from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
+        roots = agl_roots()
         prepared = prepare_inline_command("let x = 1\nx", entry_path=None, roots=roots)
         rt = PipelineDriver()
         discovery = rt.discover_params(prepared)
@@ -3143,9 +3138,8 @@ class TestDiscoverParamsGraph:
 
     def test_discover_params_with_declared_param(self, tmp_path: pathlib.Path) -> None:
         """discover_params discovers typed param declarations."""
-        from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
+        roots = agl_roots()
         prepared = prepare_inline_command(
             "param name: text\nprint name",
             entry_path=None,
@@ -3214,9 +3208,8 @@ class TestDiscoverParamsGraph:
 
     def test_discover_params_failure_returns_diagnostics(self, tmp_path: pathlib.Path) -> None:
         """discover_params returns diagnostics when the prepare phase failed."""
-        from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
+        roots = agl_roots()
         prepared = prepare_inline_command(
             "import no_such_module\nlet x = 1", entry_path=None, roots=roots
         )
@@ -3320,9 +3313,7 @@ class TestDiscoverParamsFailures:
         """discover_params returns diagnostic when checked graph has no entry module."""
         from unittest.mock import MagicMock, patch
 
-        from agm.agl.modules.roots import RootSet
-
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
+        roots = agl_roots()
         prepared = prepare_inline_command("let x = 1\nx", entry_path=None, roots=roots)
         rt = PipelineDriver()
         # Patch check_program to return a graph with no ENTRY_ID.
@@ -3367,10 +3358,9 @@ class TestDiscoverParamsFailures:
         """The graph typecheck boundary uses AglError.to_diagnostic()."""
         from unittest.mock import MagicMock, patch
 
-        from agm.agl.modules.roots import RootSet
         from agm.agl.pipeline import PreparedProgram
 
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
+        roots = agl_roots()
         prepared = PreparedProgram(
             source="let x = 1",
             entry_path=None,
@@ -3422,10 +3412,9 @@ class TestDiscoverParamsFailures:
         """_run_typecheck_program captures generic exceptions as diagnostics."""
         from unittest.mock import MagicMock, patch
 
-        from agm.agl.modules.roots import RootSet
         from agm.agl.pipeline import PreparedProgram
 
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
+        roots = agl_roots()
         # Build a PreparedProgram with a fake resolved so we reach check_program.
         fake_rg = MagicMock()
         fake_rg.warnings = ()
@@ -3485,7 +3474,6 @@ class TestRunPreparedEdgeCases:
         """run_prepared exits early when custom pre-lower materialization fails."""
         from unittest.mock import patch
 
-        from agm.agl.modules.roots import RootSet
         from agm.agl.runtime.codec import TextCodec
 
         class BadCodec(TextCodec):
@@ -3493,7 +3481,7 @@ class TestRunPreparedEdgeCases:
             def name(self) -> str:
                 return "bad"
 
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
+        roots = agl_roots()
         prepared = prepare_inline_command(
             'let r = ask("hi", format = "bad")\nr', entry_path=None, roots=roots
         )
@@ -3509,10 +3497,9 @@ class TestRunPreparedEdgeCases:
     ) -> None:
         """A precompiled graph executes supplied params through IR metadata."""
         from agm.agl.matchcompile import MatchCompiledProgram, compile_program_matches
-        from agm.agl.modules.roots import RootSet
         from agm.agl.typecheck.program import check_program as real_check_program
 
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
+        roots = agl_roots()
         prepared = prepare_inline_command("param n: int\nprint n", entry_path=None, roots=roots)
         rt = PipelineDriver()
         env = rt.host_environment()

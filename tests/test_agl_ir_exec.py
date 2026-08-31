@@ -12,7 +12,7 @@ import pytest
 
 from agm.agl.semantics.exceptions import AglRaise
 from agm.core.process import ProcessCaptureResult
-from tests._agl_helpers import let_root_capture
+from tests._agl_helpers import agl_roots, let_root_capture
 from tests.agl.ir_harness import (
     evaluate_ir_raises_with_shell,
     evaluate_ir_with_shell,
@@ -500,14 +500,13 @@ def test_exec_with_an_extended_environment_reaches_the_process_boundary() -> Non
     from unittest.mock import patch
 
     from agm.agl import PipelineDriver
-    from agm.agl.modules.roots import RootSet
     from tests._agl_helpers import run_inline_command
 
     with patch("agm.core.process.run_capture_result", side_effect=fake_shell):
         result = run_inline_command(
             PipelineDriver(),
             source,
-            roots=RootSet(roots=frozenset({Path(__file__).resolve().parents[1] / "stdlib"})),
+            roots=agl_roots(),
             process_environment={"base": "original", "preserved": "kept"},
         )
 

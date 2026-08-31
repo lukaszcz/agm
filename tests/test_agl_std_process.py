@@ -11,12 +11,13 @@ import pytest
 
 from agm.agl import PipelineDriver
 from agm.agl.modules.roots import RootSet
+from tests._agl_helpers import agl_roots
 
 _STDLIB = Path(__file__).resolve().parents[1] / "stdlib"
 
 
 def _roots() -> RootSet:
-    return RootSet(roots=frozenset({_STDLIB}))
+    return agl_roots()
 
 
 def _exit_program(call: str) -> str:

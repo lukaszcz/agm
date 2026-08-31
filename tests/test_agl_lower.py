@@ -120,6 +120,7 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import check_program
+from tests._agl_helpers import agl_roots
 from tests.agl.ir_harness import _compiled_checked, compile_checked_module, lower_compiled_module
 from tests.agl.module_graph import resolve_and_check_inline_entry
 
@@ -2296,7 +2297,6 @@ class TestLowerGraph:
         from agm.agl.lower.program import lower_program
         from agm.agl.modules.ids import ModuleId
         from agm.agl.modules.loader import load_graph
-        from agm.agl.modules.roots import RootSet
         from agm.agl.scope.program import resolve_program
         from agm.agl.typecheck.program import check_program
 
@@ -2330,7 +2330,7 @@ class TestLowerGraph:
         mg = load_graph(
             entry_source,
             entry_path=None,
-            roots=RootSet(roots=frozenset({root, _REPO_STDLIB_ROOT})),
+            roots=agl_roots(root),
         )
         rg = resolve_program(mg)
         cg = check_program(rg, _caps())
@@ -2392,7 +2392,6 @@ class TestLowerGraph:
         from agm.agl.lower.program import lower_program
         from agm.agl.modules.ids import ModuleId
         from agm.agl.modules.loader import load_graph
-        from agm.agl.modules.roots import RootSet
         from agm.agl.scope.program import resolve_program
         from agm.agl.typecheck.program import check_program
 
@@ -2408,7 +2407,7 @@ class TestLowerGraph:
         graph = load_graph(
             entry_source,
             entry_path=None,
-            roots=RootSet(roots=frozenset({root, _REPO_STDLIB_ROOT})),
+            roots=agl_roots(root),
         )
         checked = check_program(resolve_program(graph), _caps())
         link = _LinkState()
@@ -2459,7 +2458,6 @@ class TestLowerGraph:
         from agm.agl.lower.program import lower_program
         from agm.agl.modules.ids import ModuleId
         from agm.agl.modules.loader import load_graph
-        from agm.agl.modules.roots import RootSet
         from agm.agl.scope.program import resolve_program
         from agm.agl.typecheck.program import check_program
 
@@ -2493,7 +2491,7 @@ class TestLowerGraph:
         mg = load_graph(
             entry_source,
             entry_path=None,
-            roots=RootSet(roots=frozenset({root, _REPO_STDLIB_ROOT})),
+            roots=agl_roots(root),
         )
         rg = resolve_program(mg)
         cg = check_program(rg, _caps())

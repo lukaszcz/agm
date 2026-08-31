@@ -94,6 +94,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
             "scope",
             (
                 "agm.agl.diagnostics",
+                "agm.agl.library_cache",
                 "agm.agl.modules",
                 "agm.agl.scope",
                 "agm.agl.semantics",
@@ -107,6 +108,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
                 "agm.agl.diagnostics",
                 "agm.agl.ir.ids",
                 "agm.agl.ir.reserved_nominals",
+                "agm.agl.library_cache",
                 "agm.agl.modules.ids",
                 "agm.agl.scope",
                 "agm.agl.self_validation",
@@ -159,6 +161,12 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
     ],
 )
 def test_execution_package_dependency_contract(package: str, allowed: tuple[str, ...]) -> None:
+    """Keep each pass on the layers below it.
+
+    ``agm.agl.library_cache`` is admitted into the scope and type-check passes
+    because it is a leaf: it imports nothing at run time, so consulting it
+    couples a pass to no other layer.
+    """
     violations = [
         f"{path.relative_to(AGL_ROOT)} imports {module}"
         for path, module in _agl_imports(package)

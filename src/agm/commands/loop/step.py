@@ -496,8 +496,22 @@ def _runner_target(
     return runner_env, runner_target
 
 
-def cleanup_runtime(runtime: LoopStepRuntime) -> None:
-    cleanup_temp_files(runtime.temp_files)
+def cleanup_runtime(runtime: LoopStepRuntime | None) -> None:
+    """Discard a runtime's temporary files, tolerating one never prepared.
+
+    A loop command's ``finally`` reaches here even when ``prepare_runtime``
+    itself failed, so the absent runtime is this function's case to handle.
+    """
+    if runtime is not None:
+        cleanup_temp_files(runtime.temp_files)
+
+
+def report_interrupt(runtime: LoopStepRuntime | None) -> None:
+    """Announce an interruption, logging it against a prepared runtime."""
+    message = "\nInterrupted\n"
+    print(message, end="")
+    if runtime is not None:
+        append_log(runtime.log_file, message)
 
 
 def run(args: LoopArgs) -> None:
@@ -510,11 +524,7 @@ def run(args: LoopArgs) -> None:
         print_startup(runtime)
         execute_single_step(runtime, step_number=1)
     except KeyboardInterrupt:
-        message = "\nInterrupted\n"
-        print(message, end="")
-        if runtime is not None:
-            append_log(runtime.log_file, message)
+        report_interrupt(runtime)
         raise SystemExit(130)
     finally:
-        if runtime is not None:
-            cleanup_runtime(runtime)
+        cleanup_runtime(runtime)

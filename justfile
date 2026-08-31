@@ -11,22 +11,28 @@ default:
 
 # Create the virtualenv and install the project with dev dependencies
 setup:
-    uv venv .venv --python 3.12
+    uv venv .venv --python 3.14
     uv pip install --python .venv/bin/python -e ".[dev]" --group dev
 
 check_coverage := "100"
 
-# Ceiling on any one test's CPU cost, in the configuration below -- coverage
-# tracing included, which multiplies the numbers by roughly four to eight. The
-# most expensive test today costs about 11 CPU seconds, so this fails a test
-# that regresses well past today's worst without tripping on scheduling noise.
+# Measure coverage through sys.monitoring rather than the C trace function.
+# It is the difference between a suite that costs its own runtime again and one
+# where measurement is nearly free. The trade is that it does not observe the
+# arc into a `with` body; `[tool.coverage.report] partial_also` in pyproject.toml
+# records those lines as one-sided so the gate stays at a real 100%.
+coverage_core := "sysmon"
+
+# Ceiling on any one test's CPU cost, in the configuration below. The most
+# expensive test today costs about 12 CPU seconds, so this fails a test that
+# regresses well past today's worst without tripping on scheduling noise.
 # Run `just test-budget` to see the ranking this number is calibrated against.
 check_cpu_budget := "15"
 
 # Run the test suite
 test:
     cleanup_coverage() { find . -maxdepth 1 -type f -name '.coverage*' -delete; }; trap cleanup_coverage EXIT; \
-    AGM_TEST_MAX_CPU_SECONDS={{check_cpu_budget}} \
+    COVERAGE_CORE={{coverage_core}} AGM_TEST_MAX_CPU_SECONDS={{check_cpu_budget}} \
     uv run python -m pytest tests/ -q -n auto --dist worksteal --cov=agm --cov=stdlib/std --cov-branch --cov-fail-under={{check_coverage}} --cov-report=term:skip-covered
 
 test_cpu_budget := ""
@@ -34,13 +40,13 @@ test_report_top := "25"
 
 # Cost is CPU seconds — this process plus the subprocesses it reaped — not wall
 # clock, so a number means the same thing on a busy machine as on an idle one
-# and is safe to enforce. Coverage tracing roughly quadruples it, so a budget is
+# and is safe to enforce. Coverage measurement still shifts it, so a budget is
 # only meaningful against this recipe's configuration; see tests/_durations.py.
 #
 # Report the most expensive tests, or fail any that overrun a CPU budget
 test-budget:
     cleanup_coverage() { find . -maxdepth 1 -type f -name '.coverage*' -delete; }; trap cleanup_coverage EXIT; \
-    AGM_TEST_REPORT_TOP={{test_report_top}} AGM_TEST_MAX_CPU_SECONDS={{test_cpu_budget}} \
+    COVERAGE_CORE={{coverage_core}} AGM_TEST_REPORT_TOP={{test_report_top}} AGM_TEST_MAX_CPU_SECONDS={{test_cpu_budget}} \
     uv run python -m pytest tests/ -q -n auto --dist worksteal --cov=agm --cov=stdlib/std --cov-branch --cov-fail-under=0 --cov-report=
 
 # Re-run the suite with neutrally named temp directories, so any assertion that

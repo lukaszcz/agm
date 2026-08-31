@@ -111,13 +111,22 @@ def fetch_archive(
         primary_failure = True
         raise
     finally:
-        if archive is not None:
-            try:
-                archive.unlink(missing_ok=True)
-            except OSError as exc:
-                if not primary_failure:
-                    error = FetchError(f"fetch failed for {requirement}: cleanup failed: {exc}")
-                    raise error from exc
+        _discard_archive(archive, requirement, primary_failure=primary_failure)
+
+
+def _discard_archive(archive: Path | None, requirement: str, *, primary_failure: bool) -> None:
+    """Remove a transfer's temporary archive, if one was ever created.
+
+    A cleanup failure is reported only when nothing else already failed: the
+    transfer's own error is what the caller needs to see.
+    """
+    if archive is None:
+        return
+    try:
+        archive.unlink(missing_ok=True)
+    except OSError as exc:
+        if not primary_failure:
+            raise FetchError(f"fetch failed for {requirement}: cleanup failed: {exc}") from exc
 
 
 @dataclass(slots=True)

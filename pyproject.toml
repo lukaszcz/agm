@@ -38,6 +38,9 @@ testpaths = ["tests"]
 addopts = ["--cov=agm", "--cov=stdlib/std", "--cov-branch", "--cov-fail-under=100"]
 
 [tool.mypy]
+# The toolchain runs on 3.14 -- coverage's sys.monitoring core needs it to
+# measure branches -- but analysis stays on the `requires-python` floor, so the
+# oldest interpreter the project claims to support keeps being checked.
 python_version = "3.12"
 strict = true
 warn_return_any = true
@@ -50,6 +53,12 @@ disallow_any_generics = true
 disallow_any_decorated = true
 disallow_subclassing_any = true
 disallow_untyped_calls = true
+
+[tool.coverage.report]
+# Branches are measured through sys.monitoring (see the `test` recipe in the
+# justfile), which does not report the arc into a `with` body. Those lines are
+# recorded as one-sided rather than left as gaps no test could ever close.
+partial_also = ["^\\s*(async\\s+)?with\\b"]
 
 [tool.ruff]
 line-length = 100

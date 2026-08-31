@@ -219,8 +219,13 @@ def _write_archive_in_open_parent(
             raise ArchiveError(f"cannot write package archive {destination}: {exc}") from exc
         raise
     finally:
-        if parent_fd is not None:
-            os.close(parent_fd)
+        _close_parent(parent_fd)
+
+
+def _close_parent(parent_fd: int | None) -> None:
+    """Release the bound parent directory, tolerating one never opened."""
+    if parent_fd is not None:
+        os.close(parent_fd)
 
 
 def _preserve_destination(destination_name: str, parent_fd: int) -> str | None:

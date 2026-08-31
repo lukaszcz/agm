@@ -4,7 +4,7 @@ AGM is an Agent Project Management CLI tool.
 
 ## Tech stack
 
-- Python 3.12
+- Python 3.14
 - Plumbum
 - Typer
 
@@ -22,7 +22,7 @@ The primary purpose of architecture docs in docs/arch/**/*.md is to provide agen
 
 Use `just` for the standard workflow:
 
-- `just setup` creates `.venv` with Python 3.12 and installs the project plus dev dependencies via `uv`
+- `just setup` creates `.venv` with Python 3.14 and installs the project plus dev dependencies via `uv`
 - `just lint` runs `ruff check src/ tests/ stdlib/` and `ruff format --check src/ tests/ stdlib/` (run `uv run ruff format src/ tests/ stdlib/` to fix formatting)
 - `just test` runs the test suite
 - `just typecheck` runs strict `mypy` with `MYPYPATH=src:stubs`

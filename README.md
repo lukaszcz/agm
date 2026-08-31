@@ -10,7 +10,7 @@ or in an interactive REPL (`agm repl`).
 - `git`
 - `bash`
 - `tmux` for `agm open` and `agm tmux ...`
-- Python 3.12
+- Python 3.14
 - [`uv`](https://docs.astral.sh/uv/)
 - [`just`](https://github.com/casey/just)
 - [`srt`](https://github.com/anthropic-experimental/sandbox-runtime) for sandboxed `agm run`

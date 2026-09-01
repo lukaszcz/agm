@@ -34,13 +34,13 @@ def _parse(raw: str, *, lenient: bool) -> object:
         _parse_error(raw, exc.message)
 
 
-def parse_strict(raw: str) -> object:
+def parse(raw: str) -> object:
     return _parse(raw, lenient=False)
 
 
-def parse_strict_option(raw: str) -> object:
+def parse_option(raw: str) -> object:
     try:
-        return _some(parse_strict(raw))
+        return _some(parse(raw))
     except AglException:
         return _none()
 
@@ -106,9 +106,9 @@ __all__ = [
     "has",
     "keys",
     "kind",
+    "parse",
     "parse_lenient",
     "parse_lenient_option",
-    "parse_strict",
-    "parse_strict_option",
+    "parse_option",
     "size",
 ]

@@ -247,7 +247,7 @@ def repeat(value: object, count: int) -> object:
     return array([value] * max(count, 0))
 
 
-def range_values(start: int, end: int) -> object:
+def range(start: int, end: int) -> object:
     step = 1 if start <= end else -1
     return array(list(builtins.range(start, end + step, step)))
 
@@ -283,7 +283,7 @@ __all__ = [
     "map_in_place",
     "pop",
     "pop_option",
-    "range_values",
+    "range",
     "remove_at",
     "repeat",
     "reverse",

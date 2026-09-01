@@ -152,7 +152,9 @@ either is a static error.
   selected codec (`text`, `json`, or `extern`), and optionally whether a JSON Schema is
   attached (`schema: yes`) and the effective parse-failure policy (`abort` or
   `retry[N]`; not applicable to extern calls). When no such call sites are present, no
-  inventory is printed.
+  inventory is printed. Standard-library methods backed by externs (`[1].size()`,
+  `"a".trim()`) are listed at the call site in your own source; the standard library's
+  internal calls are not inventoried unless the program imports the module explicitly.
 
 ### Agents
 

@@ -3,9 +3,6 @@ scope IntInternals
 end IntInternals
 
 scope DecimalInternals
-  extern def floor(self: decimal) -> int
-  extern def ceil(self: decimal) -> int
-  extern def round(self: decimal, digits: int) -> decimal
   extern def sqrt(self: decimal) -> decimal
   extern def pow(self: decimal, exponent: int) -> decimal
 end DecimalInternals
@@ -46,9 +43,9 @@ def decimal::sign(self) -> int =
     | self < 0 => -1
     | self > 0 => 1
     | else => 0
-def decimal::floor(self) -> int = DecimalInternals::floor(self)
-def decimal::ceil(self) -> int = DecimalInternals::ceil(self)
-def decimal::round(self, digits: int = 0) -> decimal = DecimalInternals::round(self, digits)
+extern def decimal::floor(self) -> int
+extern def decimal::ceil(self) -> int
+extern def decimal::round(self, digits: int = 0) -> decimal
 def decimal::sqrt(self) -> decimal =
   if self < 0 => raise RangeError(message = "square root requires a non-negative decimal") else =>
     DecimalInternals::sqrt(self)

@@ -122,12 +122,19 @@ def test_ambient_builtin_methods_are_inferred_before_consumers_without_source_im
     assert selected.checked is not None, selected.diagnostics
 
 
-def test_dry_run_omits_extern_calls_in_ambient_method_modules() -> None:
+def test_dry_run_attributes_ambient_method_externs_to_the_calling_module() -> None:
+    """A builtin method backed by an extern is inventoried where the call is written.
+
+    The ambient module declaring the method contributes no call sites of its own,
+    so the inventory describes the program's own source rather than the standard
+    library's internals.
+    """
     prepared = PipelineDriver.prepare_program("program def main() -> unit = print([1].size())\n")
     discovery = PipelineDriver().discover_params(prepared)
 
     assert discovery.compiled is not None, discovery.diagnostics
-    assert lower_program(discovery.compiled).dry_run_inventory == ()
+    inventory = lower_program(discovery.compiled).dry_run_inventory
+    assert [(entry.module, entry.callee) for entry in inventory] == [(ENTRY_ID, "size")]
 
 
 def test_dry_run_keeps_source_reachable_ambient_registry_modules() -> None:

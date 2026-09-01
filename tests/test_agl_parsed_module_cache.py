@@ -14,6 +14,7 @@ from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import LoadedModule, load_graph
 from agm.agl.modules.parsed_module_cache import (
     RESERVED_NODE_ID_BASE,
+    ModuleDerivationCache,
     ParsedModuleCache,
     clear_parsed_module_cache,
 )
@@ -362,6 +363,27 @@ def test_cache_evicts_least_recently_used_entries(tmp_path: Path) -> None:
     )
 
     assert len(calls) == 3
+
+
+def test_derivation_cache_evicts_least_recently_used_entries(tmp_path: Path) -> None:
+    """A bounded derivation store drops its coldest entry rather than growing."""
+    _write_module(tmp_path, "lib/a", _LIB_SOURCE)
+    module = _load(_stdlib_roots(tmp_path))
+    cache: ModuleDerivationCache[str, int] = ModuleDerivationCache(capacity=1)
+    builds: list[str] = []
+
+    def build(key: str) -> Callable[[], int]:
+        def run() -> int:
+            builds.append(key)
+            return len(builds)
+
+        return run
+
+    cache.get_or_build(module, key="first", build=build("first"))
+    cache.get_or_build(module, key="second", build=build("second"))
+    cache.get_or_build(module, key="first", build=build("first"))
+
+    assert builds == ["first", "second", "first"]
 
 
 def test_infix_chain_module_keeps_one_resolved_program_across_compilations(

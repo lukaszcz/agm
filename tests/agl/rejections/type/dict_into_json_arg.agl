@@ -1,4 +1,5 @@
 def take(x: json) -> unit = ()
+
 program def main() -> unit =
   let d: dict[text, int] = {"a": 1}
   take(d)

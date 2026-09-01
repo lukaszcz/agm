@@ -1,9 +1,11 @@
 scope Inner
-def member() -> int = 1
+  def member() -> int = 1
 end Inner
+
 scope Outer
-use Inner::*
-def use() -> int = member()
+  use Inner::*
+  def use() -> int = member()
 end Outer
+
 program def main() -> unit =
   member()

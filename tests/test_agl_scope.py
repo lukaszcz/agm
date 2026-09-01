@@ -337,7 +337,12 @@ def reject_program(*items: Item) -> AglScopeError:
 class TestScopeRegions:
     def test_regions_and_shorthand_collect_members_in_one_scope(self) -> None:
         resolved = parse_and_resolve(
-            "scope Point\ndef distance() -> int = 0\nend Point\ndef Point::length() -> int = 0\n()"
+            "scope Point\n"
+            "  def distance() -> int = 0\n"
+            "end Point\n"
+            "\n"
+            "def Point::length() -> int = 0\n"
+            "()"
         )
 
         members = {
@@ -350,8 +355,9 @@ class TestScopeRegions:
 
     def test_repeated_regions_extend_the_same_scope(self) -> None:
         resolved = parse_and_resolve(
-            "scope Point\ndef x() -> int = 0\nend Point\n"
-            "scope Point\ndef y() -> int = 0\nend Point\n()"
+            "scope Point\n  def x() -> int = 0\nend Point\n"
+            "\n"
+            "scope Point\n  def y() -> int = 0\nend Point\n\n()"
         )
 
         assert {
@@ -360,7 +366,7 @@ class TestScopeRegions:
 
     def test_type_scope_merges_with_a_region_and_collects_variants(self) -> None:
         resolved = parse_and_resolve(
-            "scope Result\ndef describe() -> int = 0\nend Result\nenum Result = ok | error\n()"
+            "scope Result\n  def describe() -> int = 0\nend Result\n\nenum Result = ok | error\n()"
         )
 
         assert (ENTRY_ID, (), "Result") in resolved.declarations
@@ -370,13 +376,19 @@ class TestScopeRegions:
 
     def test_type_then_region_merges_into_the_type_scope(self) -> None:
         resolved = parse_and_resolve(
-            "enum Result = ok | error\nscope Result\ndef describe() -> int = 0\nend Result\n()"
+            "enum Result = ok | error\n"
+            "\n"
+            "scope Result\n"
+            "  def describe() -> int = 0\n"
+            "end Result\n"
+            "\n"
+            "()"
         )
 
         assert set(resolved.scope_nodes[("Result",)].members) == {"ok", "error", "describe"}
 
     def test_nested_type_establishes_a_nested_scope(self) -> None:
-        resolved = parse_and_resolve("scope A\nenum T = value\nend A\n()")
+        resolved = parse_and_resolve("scope A\n  enum T = value\nend A\n\n()")
 
         assert (ENTRY_ID, ("A",), "T") in resolved.declarations
         assert (ENTRY_ID, ("A", "T"), "value") in resolved.declarations
@@ -405,12 +417,13 @@ class TestScopeRegions:
         ("source", "name", "line"),
         (
             (
-                "scope Point\ndef distance() -> int = 0\nend Point\n"
+                "scope Point\n  def distance() -> int = 0\nend Point\n"
+                "\n"
                 "def Point::distance() -> int = 1",
                 "distance",
-                4,
+                5,
             ),
-            ("scope Point\nend Point\ndef Point() -> int = 0", "Point", 3),
+            ("scope Point\nend Point\n\ndef Point() -> int = 0", "Point", 4),
             ("record Point()\ndef Point() -> int = 0", "Point", 2),
             ("enum Point = one | one", "one", 1),
         ),
@@ -443,50 +456,64 @@ class TestScopedBindings:
     """
 
     def test_bare_visible_inside_its_own_region(self) -> None:
-        resolved = parse_and_resolve("scope A\nlet x = 1\ndef read() -> int = x\nend A\nA::read()")
+        resolved = parse_and_resolve(
+            "scope A\n  let x = 1\n  def read() -> int = x\nend A\n\nA::read()"
+        )
         assert _ref(resolved, "x").kind is BinderKind.let_binding
         assert _ref(resolved, "x").scope_path == ("A",)
 
     def test_bare_visible_from_a_nested_region_via_the_outward_walk(self) -> None:
         resolved = parse_and_resolve(
-            "scope A\nlet x = 1\nscope B\ndef read() -> int = x\nend B\nend A\nA::B::read()"
+            "scope A\n"
+            "  let x = 1\n"
+            "\n"
+            "  scope B\n"
+            "    def read() -> int = x\n"
+            "  end B\n"
+            "end A\n"
+            "\n"
+            "A::B::read()"
         )
         assert _ref(resolved, "x").kind is BinderKind.let_binding
 
     def test_double_colon_anchors_at_the_module_root_from_inside_a_region(self) -> None:
         resolved = parse_and_resolve_file(
-            "param x: int\nscope A\nlet x = 2\ndef read() -> int = ::x\nend A"
+            "param x: int\n\nscope A\n  let x = 2\n  def read() -> int = ::x\nend A"
         )
         assert _ref(resolved, "x").scope_path == ()
 
     def test_exact_path_reference_from_outside_the_region(self) -> None:
-        resolved = parse_and_resolve("scope A\nlet x = 1\nend A\nlet y = A::x\ny")
+        resolved = parse_and_resolve("scope A\n  let x = 1\nend A\n\nlet y = A::x\ny")
         assert _ref(resolved, "x").scope_path == ("A",)
         assert _ref(resolved, "x").kind is BinderKind.let_binding
 
     def test_shorthand_rhs_sees_an_earlier_regions_member_bare(self) -> None:
         """A root shorthand's RHS resolves in its own scope path's layer."""
-        resolved = parse_and_resolve_file("scope A\nlet base = 1\nend A\nvar A::next = base + 1")
+        resolved = parse_and_resolve_file(
+            "scope A\n  let base = 1\nend A\n\nvar A::next = base + 1"
+        )
         assert set(resolved.scope_nodes[("A",)].members) == {"base", "next"}
         assert _ref(resolved, "base").scope_path == ("A",)
 
     def test_region_sees_an_earlier_shorthands_member_bare(self) -> None:
         resolved = parse_and_resolve_file(
-            "let A::base = 1\nscope A\ndef read() -> int = base\nend A"
+            "let A::base = 1\n\nscope A\n  def read() -> int = base\nend A"
         )
         assert set(resolved.scope_nodes[("A",)].members) == {"base", "read"}
 
     def test_repeated_region_blocks_extend_the_same_scope(self) -> None:
-        resolved = parse_and_resolve("scope A\nlet x = 1\nend A\nscope A\nlet y = x\nend A\n()")
+        resolved = parse_and_resolve(
+            "scope A\n  let x = 1\nend A\n\nscope A\n  let y = x\nend A\n\n()"
+        )
         assert set(resolved.scope_nodes[("A",)].members) == {"x", "y"}
 
     @pytest.mark.parametrize(
         ("source", "name"),
         (
-            ("scope A\ndef f() -> int = 0\nlet f = 1\nend A\n()", "f"),
-            ("scope A\nlet x = 1\nlet x = 2\nend A\n()", "x"),
-            ("scope A\nrecord R()\nlet R = 1\nend A\n()", "R"),
-            ("scope A\nvar x = 1\nvar x = 2\nend A\n()", "x"),
+            ("scope A\n  def f() -> int = 0\n  let f = 1\nend A\n\n()", "f"),
+            ("scope A\n  let x = 1\n  let x = 2\nend A\n\n()", "x"),
+            ("scope A\n  record R()\n  let R = 1\nend A\n\n()", "R"),
+            ("scope A\n  var x = 1\n  var x = 2\nend A\n\n()", "x"),
         ),
         ids=("binding-vs-def", "binding-vs-binding", "binding-vs-type", "binding-vs-binding-var"),
     )
@@ -501,12 +528,29 @@ class TestScopedBindings:
     @pytest.mark.parametrize(
         "source",
         (
-            "scope A\nlet B = 1\nscope B\ndef q() -> int = 2\nend B\nend A\n()",
-            "scope A\nscope B\ndef q() -> int = 2\nend B\nlet B = 1\nend A\n()",
-            "scope A\ndef B() -> int = 1\nscope B\ndef q() -> int = 2\nend B\nend A\n()",
-            "scope A\nscope B\ndef q() -> int = 2\nend B\ndef B() -> int = 1\nend A\n()",
-            "let A::B = 1\nscope A\nscope B\ndef q() -> int = 2\nend B\nend A\n()",
-            "scope A\nscope B\ndef q() -> int = 2\nend B\nend A\nlet A::B = 1\n()",
+            "scope A\n  let B = 1\n\n  scope B\n    def q() -> int = 2\n  end B\nend A\n\n()",
+            "scope A\n\n  scope B\n    def q() -> int = 2\n  end B\n\n  let B = 1\nend A\n\n()",
+            "scope A\n"
+            "  def B() -> int = 1\n"
+            "\n"
+            "  scope B\n"
+            "    def q() -> int = 2\n"
+            "  end B\n"
+            "end A\n"
+            "\n"
+            "()",
+            "scope A\n"
+            "\n"
+            "  scope B\n"
+            "    def q() -> int = 2\n"
+            "  end B\n"
+            "\n"
+            "  def B() -> int = 1\n"
+            "end A\n"
+            "\n"
+            "()",
+            "let A::B = 1\n\nscope A\n\n  scope B\n    def q() -> int = 2\n  end B\nend A\n\n()",
+            "scope A\n\n  scope B\n    def q() -> int = 2\n  end B\nend A\n\nlet A::B = 1\n()",
         ),
         ids=(
             "region-let-before-nested-scope",
@@ -533,12 +577,12 @@ class TestScopedBindings:
     def test_earlier_block_cannot_see_a_later_blocks_binding(self) -> None:
         with pytest.raises(AglScopeError):
             parse_and_resolve(
-                "scope A\ndef f() -> int = A::y\nend A\nscope A\nlet y = 1\nend A\nA::f()"
+                "scope A\n  def f() -> int = A::y\nend A\n\nscope A\n  let y = 1\nend A\n\nA::f()"
             )
 
     def test_reverse_order_of_repeated_blocks_succeeds(self) -> None:
         resolved = parse_and_resolve(
-            "scope A\nlet y = 1\nend A\nscope A\ndef f() -> int = A::y\nend A\nA::f()"
+            "scope A\n  let y = 1\nend A\n\nscope A\n  def f() -> int = A::y\nend A\n\nA::f()"
         )
         assert set(resolved.scope_nodes[("A",)].members) == {"y", "f"}
 
@@ -549,11 +593,12 @@ class TestScopedBindings:
     def test_destructuring_let_in_a_region_contributes_every_selected_binder(self) -> None:
         resolved = parse_and_resolve(
             "scope A\n"
-            "record Point\n"
-            "  x: int\n"
-            "  y: int\n"
-            "let Point(x, y) = Point(x = 1, y = 2)\n"
+            "  record Point\n"
+            "    x: int\n"
+            "    y: int\n"
+            "  let Point(x, y) = Point(x = 1, y = 2)\n"
             "end A\n"
+            "\n"
             "A::x\n"
             "A::y\n"
         )
@@ -584,7 +629,8 @@ class TestScopedParam:
 
     def test_bare_visible_inside_its_own_region(self) -> None:
         resolved = parse_and_resolve(
-            "scope Deploy\nparam region: text\ndef read() -> text = region\nend Deploy\n"
+            "scope Deploy\n  param region: text\n  def read() -> text = region\nend Deploy\n"
+            "\n"
             "Deploy::read()"
         )
         assert _ref(resolved, "region").kind is BinderKind.param_binding
@@ -592,40 +638,44 @@ class TestScopedParam:
 
     def test_bare_visible_from_a_nested_region_via_the_outward_walk(self) -> None:
         resolved = parse_and_resolve(
-            "scope Deploy\nparam region: text\nscope Inner\n"
-            "def read() -> text = region\nend Inner\nend Deploy\nDeploy::Inner::read()"
+            "scope Deploy\n  param region: text\n\n  scope Inner\n"
+            "    def read() -> text = region\n  end Inner\nend Deploy\n\nDeploy::Inner::read()"
         )
         assert _ref(resolved, "region").kind is BinderKind.param_binding
 
     def test_exact_path_reference_from_outside_the_region(self) -> None:
-        resolved = parse_and_resolve("scope Deploy\nparam region: text\nend Deploy\nDeploy::region")
+        resolved = parse_and_resolve(
+            "scope Deploy\n  param region: text\nend Deploy\n\nDeploy::region"
+        )
         assert _ref(resolved, "region").scope_path == ("Deploy",)
         assert _ref(resolved, "region").kind is BinderKind.param_binding
 
     def test_visible_after_use(self) -> None:
         resolved = parse_and_resolve(
-            "use Deploy::*\nscope Deploy\nparam region: text\nend Deploy\nregion"
+            "use Deploy::*\n\nscope Deploy\n  param region: text\nend Deploy\n\nregion"
         )
         assert _ref(resolved, "region").scope_path == ("Deploy",)
 
     def test_repeated_region_blocks_extend_the_same_scope(self) -> None:
         resolved = parse_and_resolve(
-            "scope Deploy\nparam region: text\nend Deploy\n"
-            "scope Deploy\nparam replicas: int\nend Deploy\n()"
+            "scope Deploy\n  param region: text\nend Deploy\n"
+            "\n"
+            "scope Deploy\n  param replicas: int\nend Deploy\n\n()"
         )
         assert set(resolved.scope_nodes[("Deploy",)].members) == {"region", "replicas"}
 
     def test_earlier_block_cannot_see_a_later_blocks_param(self) -> None:
         with pytest.raises(AglScopeError):
             parse_and_resolve(
-                "scope A\ndef f() -> text = A::region\nend A\n"
-                "scope A\nparam region: text\nend A\nA::f()"
+                "scope A\n  def f() -> text = A::region\nend A\n"
+                "\n"
+                "scope A\n  param region: text\nend A\n\nA::f()"
             )
 
     def test_reference_textually_before_the_param_is_rejected(self) -> None:
         with pytest.raises(AglScopeError):
             parse_and_resolve_file(
-                "def f() -> text = Deploy::region\nscope Deploy\nparam region: text\nend Deploy"
+                "def f() -> text = Deploy::region\n\nscope Deploy\n  param region: text\nend Deploy"
             )
 
     def test_param_rejected_inside_a_function_body(self) -> None:
@@ -653,21 +703,33 @@ class TestScopedBindingUsePrecedence:
         ``scope B`` block, so even the live scope-use re-check finds nothing."""
         with pytest.raises(AglScopeError):
             parse_and_resolve(
-                "scope B\nuse A::*\ndef get() -> int = x\nend B\n"
-                "scope A\nlet x = 1\nend A\nB::get()"
+                "scope B\n  use A::*\n  def get() -> int = x\nend B\n"
+                "\n"
+                "scope A\n  let x = 1\nend A\n\nB::get()"
             )
 
     def test_use_after_the_binding_sees_it(self) -> None:
         resolved = parse_and_resolve(
-            "scope A\nlet x = 1\nend A\nscope B\nuse A::*\ndef get() -> int = x\nend B\nB::get()"
+            "scope A\n"
+            "  let x = 1\n"
+            "end A\n"
+            "\n"
+            "scope B\n"
+            "  use A::*\n"
+            "  def get() -> int = x\n"
+            "end B\n"
+            "\n"
+            "B::get()"
         )
         assert _ref(resolved, "x").scope_path == ("A",)
 
     def test_use_before_a_declaration_still_sees_it(self) -> None:
         """Declarations stay order-independent even when a scope use precedes their block."""
         resolved = parse_and_resolve(
-            "scope B\nuse A::*\ndef get() -> int = f()\nend B\n"
-            "scope A\ndef f() -> int = 0\nend A\n"
+            "scope B\n  use A::*\n  def get() -> int = f()\nend B\n"
+            "\n"
+            "scope A\n  def f() -> int = 0\nend A\n"
+            "\n"
             "B::get()"
         )
         assert _ref(resolved, "f").scope_path == ("A",)
@@ -677,7 +739,7 @@ class TestScopedBindingUsePrecedence:
         root, so its own member snapshot cannot yet hold ``x``; the bare
         reference below is walked after ``scope A`` registers it, so the live
         re-check reaches it instead of falling through to an error."""
-        resolved = parse_and_resolve("use A::*\nscope A\nvar x = 1\nend A\nx := x + 1\nx")
+        resolved = parse_and_resolve("use A::*\n\nscope A\n  var x = 1\nend A\n\nx := x + 1\nx")
         assert _ref(resolved, "x").scope_path == ("A",)
         assert _ref(resolved, "x").kind is BinderKind.var_binding
 
@@ -688,14 +750,14 @@ class TestScopedBindingUsePrecedence:
         live lookup, so a selected tail failed at the ``use`` site for a
         member its equivalent glob form already reaches.
         """
-        resolved = parse_and_resolve("use A::{x}\nscope A\nvar x = 1\nend A\nx := x + 1\nx")
+        resolved = parse_and_resolve("use A::{x}\n\nscope A\n  var x = 1\nend A\n\nx := x + 1\nx")
         assert _ref(resolved, "x").scope_path == ("A",)
         assert _ref(resolved, "x").kind is BinderKind.var_binding
 
     def test_hiding_use_before_the_binding_sees_the_non_hidden_later_reference(self) -> None:
         """A filtered ``hiding`` use reaches::* its non-hidden member too, live."""
         resolved = parse_and_resolve(
-            "use A::* hiding y\nscope A\nvar x = 1\nvar y = 2\nend A\nx := x + 1\nx"
+            "use A::* hiding y\n\nscope A\n  var x = 1\n  var y = 2\nend A\n\nx := x + 1\nx"
         )
         assert _ref(resolved, "x").scope_path == ("A",)
         assert _ref(resolved, "x").kind is BinderKind.var_binding
@@ -705,11 +767,11 @@ class TestScopedBindingUsePrecedence:
         registered after the ``use``, live, exactly as the exposed sibling
         member is reached live."""
         with pytest.raises(AglScopeError):
-            parse_and_resolve("use A::* hiding y\nscope A\nvar x = 1\nvar y = 2\nend A\ny")
+            parse_and_resolve("use A::* hiding y\n\nscope A\n  var x = 1\n  var y = 2\nend A\n\ny")
 
     def test_hiding_rejects_a_member_missing_after_the_scope_is_complete(self) -> None:
         with pytest.raises(AglScopeError):
-            parse_and_resolve("use A::* hiding missing\nscope A\nlet x = 1\nend A\n()")
+            parse_and_resolve("use A::* hiding missing\n\nscope A\n  let x = 1\nend A\n\n()")
 
     def test_selected_use_before_the_binding_does_not_see_a_reference_before_it(self) -> None:
         """Textual precedence holds for selected tails too: a reference walked
@@ -717,16 +779,18 @@ class TestScopedBindingUsePrecedence:
         textually precedes both."""
         with pytest.raises(AglScopeError):
             parse_and_resolve(
-                "scope B\nuse A::{x}\ndef get() -> int = x\nend B\n"
-                "scope A\nlet x = 1\nend A\nB::get()"
+                "scope B\n  use A::{x}\n  def get() -> int = x\nend B\n"
+                "\n"
+                "scope A\n  let x = 1\nend A\n\nB::get()"
             )
 
     def test_hiding_use_before_the_binding_does_not_see_a_reference_before_it(self) -> None:
         """Textual precedence holds for ``hiding`` too."""
         with pytest.raises(AglScopeError):
             parse_and_resolve(
-                "scope B\nuse A::* hiding y\ndef get() -> int = x\nend B\n"
-                "scope A\nlet x = 1\nlet y = 2\nend A\nB::get()"
+                "scope B\n  use A::* hiding y\n  def get() -> int = x\nend B\n"
+                "\n"
+                "scope A\n  let x = 1\n  let y = 2\nend A\n\nB::get()"
             )
 
     def test_scope_use_sees_a_member_added_in_a_later_reopening(self) -> None:
@@ -736,9 +800,12 @@ class TestScopedBindingUsePrecedence:
         re-check must answer correctly at that later point, not from
         whatever region A looked like when the ``use`` itself was walked."""
         resolved = parse_and_resolve(
-            "scope B\nuse A::*\nend B\n"
-            "scope A\nvar x = 1\nend A\n"
-            "scope B\ndef get() -> int = x\nend B\n"
+            "scope B\n  use A::*\nend B\n"
+            "\n"
+            "scope A\n  var x = 1\nend A\n"
+            "\n"
+            "scope B\n  def get() -> int = x\nend B\n"
+            "\n"
             "B::get()"
         )
         assert _ref(resolved, "x").scope_path == ("A",)
@@ -749,10 +816,14 @@ class TestScopedBindingUsePrecedence:
         reference resolves against the region as it stands then, and the
         second must still reach the member registered after it."""
         resolved = parse_and_resolve(
-            "scope A\nvar x = 1\nend A\n"
-            "scope B\nuse A::*\ndef first() -> int = x\nend B\n"
-            "scope A\nvar y = 2\nend A\n"
-            "scope B\ndef second() -> int = y\nend B\n"
+            "scope A\n  var x = 1\nend A\n"
+            "\n"
+            "scope B\n  use A::*\n  def first() -> int = x\nend B\n"
+            "\n"
+            "scope A\n  var y = 2\nend A\n"
+            "\n"
+            "scope B\n  def second() -> int = y\nend B\n"
+            "\n"
             "B::first() + B::second()"
         )
         assert _ref(resolved, "x").scope_path == ("A",)
@@ -766,21 +837,24 @@ class TestScopedBindingUsePrecedence:
         forms share one implementation, so this pins the two branches against
         each other for an identical item set."""
         resolved_using = parse_and_resolve(
-            "use A::{x, y}\nscope A\nvar x = 1\nvar y = 2\nvar z = 3\nend A\n"
+            "use A::{x, y}\n\nscope A\n  var x = 1\n  var y = 2\n  var z = 3\nend A\n"
+            "\n"
             "x := x + 1\ny := y + 1\nx + y"
         )
         assert _ref(resolved_using, "x").scope_path == ("A",)
         assert _ref(resolved_using, "y").scope_path == ("A",)
         with pytest.raises(AglScopeError):
-            parse_and_resolve("use A::{x, y}\nscope A\nvar x = 1\nvar y = 2\nvar z = 3\nend A\nz")
+            parse_and_resolve(
+                "use A::{x, y}\n\nscope A\n  var x = 1\n  var y = 2\n  var z = 3\nend A\n\nz"
+            )
 
         resolved_hiding = parse_and_resolve(
-            "use A::* hiding x, y\nscope A\nvar x = 1\nvar y = 2\nvar z = 3\nend A\nz"
+            "use A::* hiding x, y\n\nscope A\n  var x = 1\n  var y = 2\n  var z = 3\nend A\n\nz"
         )
         assert _ref(resolved_hiding, "z").scope_path == ("A",)
         with pytest.raises(AglScopeError):
             parse_and_resolve(
-                "use A::* hiding x, y\nscope A\nvar x = 1\nvar y = 2\nvar z = 3\nend A\nx"
+                "use A::* hiding x, y\n\nscope A\n  var x = 1\n  var y = 2\n  var z = 3\nend A\n\nx"
             )
 
     def test_hiding_use_reaches_the_non_hidden_member_before_the_hidden_one_is_registered(
@@ -791,10 +865,14 @@ class TestScopedBindingUsePrecedence:
         non-hidden member resolves correctly through a live reference walked
         while the hidden member has not yet been registered."""
         resolved = parse_and_resolve(
-            "scope B\nuse A::* hiding y\nend B\n"
-            "scope A\nvar x = 1\nend A\n"
-            "scope B\ndef mid() -> int = x\nend B\n"
-            "scope A\nvar y = 2\nend A\n"
+            "scope B\n  use A::* hiding y\nend B\n"
+            "\n"
+            "scope A\n  var x = 1\nend A\n"
+            "\n"
+            "scope B\n  def mid() -> int = x\nend B\n"
+            "\n"
+            "scope A\n  var y = 2\nend A\n"
+            "\n"
             "B::mid()"
         )
         assert _ref(resolved, "x").scope_path == ("A",)
@@ -824,14 +902,15 @@ class TestScopedConstructorCandidateUnion:
     ) -> None:
         resolved = parse_and_resolve(
             "scope S\n"
-            "enum A\n"
-            "  | V(x: int)\n"
-            "enum B\n"
-            "  | V(y: text)\n"
-            "def f(a: A) -> int =\n"
-            "  case a of\n"
-            "  | V(x) => x\n"
+            "  enum A\n"
+            "    | V(x: int)\n"
+            "  enum B\n"
+            "    | V(y: text)\n"
+            "  def f(a: A) -> int =\n"
+            "    case a of\n"
+            "    | V(x) => x\n"
             "end S\n"
+            "\n"
             "S::f(S::A::V(x = 1))\n"
         )
         pattern = self._pattern(resolved)
@@ -843,14 +922,15 @@ class TestScopedConstructorCandidateUnion:
         """A scope's own record and a child enum's variant sharing a name both survive."""
         resolved = parse_and_resolve(
             "scope Config\n"
-            "record V\n"
-            "  n: int\n"
-            "enum E\n"
-            "  | V(m: int)\n"
-            "def pick(x: V) -> int =\n"
-            "  case x of\n"
-            "  | V(n) => n\n"
+            "  record V\n"
+            "    n: int\n"
+            "  enum E\n"
+            "    | V(m: int)\n"
+            "  def pick(x: V) -> int =\n"
+            "    case x of\n"
+            "    | V(n) => n\n"
             "end Config\n"
+            "\n"
             "Config::pick(Config::V(n = 1))\n"
         )
         pattern = self._pattern(resolved)
@@ -862,16 +942,18 @@ class TestScopedConstructorCandidateUnion:
         """A nested scope's own same-named record shadows an ancestor's."""
         resolved = parse_and_resolve(
             "scope A\n"
-            "record Item\n"
-            "  label: text\n"
-            "scope B\n"
-            "record Item\n"
-            "  value: int\n"
-            "def pick(i: Item) -> int =\n"
-            "  case i of\n"
-            "  | Item(value) => value\n"
-            "end B\n"
+            "  record Item\n"
+            "    label: text\n"
+            "\n"
+            "  scope B\n"
+            "    record Item\n"
+            "      value: int\n"
+            "    def pick(i: Item) -> int =\n"
+            "      case i of\n"
+            "      | Item(value) => value\n"
+            "  end B\n"
             "end A\n"
+            "\n"
             "A::B::pick(A::B::Item(value = 5))\n"
         )
         region_a = resolved.program.body.items[0]
@@ -921,7 +1003,7 @@ class TestScopedAssignment:
         return resolved.resolution[assign.node_id]
 
     def test_qualified_assign_to_scoped_var_at_root(self) -> None:
-        resolved = parse_and_resolve("scope A\nvar count = 0\nend A\nA::count := 1\nA::count")
+        resolved = parse_and_resolve("scope A\n  var count = 0\nend A\n\nA::count := 1\nA::count")
         ref = self._assign_ref(resolved)
         assert ref.mutable is True
         assert ref.scope_path == ("A",)
@@ -929,7 +1011,7 @@ class TestScopedAssignment:
 
     def test_qualified_assign_resolves_use_alias(self) -> None:
         resolved = parse_and_resolve(
-            "use A as X\nscope A\nvar count = 0\nend A\nX::count := 1\nX::count"
+            "use A as X\n\nscope A\n  var count = 0\nend A\n\nX::count := 1\nX::count"
         )
         ref = self._assign_ref(resolved)
         assert ref.mutable is True
@@ -938,7 +1020,15 @@ class TestScopedAssignment:
 
     def test_qualified_assign_to_multi_segment_scoped_var(self) -> None:
         resolved = parse_and_resolve(
-            "scope A\nscope B\nvar count = 0\nend B\nend A\nA::B::count := 1\nA::B::count"
+            "scope A\n"
+            "\n"
+            "  scope B\n"
+            "    var count = 0\n"
+            "  end B\n"
+            "end A\n"
+            "\n"
+            "A::B::count := 1\n"
+            "A::B::count"
         )
         ref = self._assign_ref(resolved)
         assert ref.scope_path == ("A", "B")
@@ -946,11 +1036,12 @@ class TestScopedAssignment:
     def test_bare_assign_inside_own_region_resolves(self) -> None:
         resolved = parse_and_resolve(
             "scope A\n"
-            "var count = 0\n"
-            "def bump() -> unit =\n"
-            "  count := count + 1\n"
-            "  ()\n"
+            "  var count = 0\n"
+            "  def bump() -> unit =\n"
+            "    count := count + 1\n"
+            "    ()\n"
             "end A\n"
+            "\n"
             "A::bump()"
         )
         assign = next(
@@ -962,7 +1053,7 @@ class TestScopedAssignment:
         assert ref.mutable is True
 
     def test_qualified_assign_to_unknown_member_is_a_focused_error(self) -> None:
-        err = reject_scope("scope A\nvar count = 0\nend A\nA::missing := 2\n()")
+        err = reject_scope("scope A\n  var count = 0\nend A\n\nA::missing := 2\n()")
         _, msg = diag(err)
         assert "missing" in msg
         assert "A" in msg
@@ -974,11 +1065,13 @@ class TestScopeUseEnumOwners:
     def test_is_test_resolves_enum_owner_contributed_by_a_scope_use(self) -> None:
         r = parse_and_resolve(
             "use A::*\n"
+            "\n"
             "scope A\n"
-            "enum Status\n"
-            "  | Good\n"
-            "  | Bad\n"
+            "  enum Status\n"
+            "    | Good\n"
+            "    | Bad\n"
             "end A\n"
+            "\n"
             "let s = Status::Good\n"
             "s is Status::Good\n"
         )
@@ -994,11 +1087,13 @@ class TestScopeUseEnumOwners:
     def test_case_pattern_resolves_enum_owner_contributed_by_a_scope_use(self) -> None:
         r = parse_and_resolve(
             "use A::*\n"
+            "\n"
             "scope A\n"
-            "enum Status\n"
-            "  | Good\n"
-            "  | Bad\n"
+            "  enum Status\n"
+            "    | Good\n"
+            "    | Bad\n"
             "end A\n"
+            "\n"
             "let s = Status::Good\n"
             "case s of\n"
             "  | Status::Good => 1\n"
@@ -1490,7 +1585,7 @@ class TestBuiltinVarPlacement:
         """The region relaxation lifts only the scope-path clause; the module
         restriction stands, so a scoped ``builtin var`` outside ``std/config``
         is rejected the same way as a root one."""
-        err = reject_scope("scope Region\nbuiltin var max-iters: int\nend Region\n()")
+        err = reject_scope("scope Region\n  builtin var max-iters: int\nend Region\n\n()")
         line, message = diag(err)
         assert "std/config" in message
         assert line == 2
@@ -1512,15 +1607,15 @@ class TestBuiltinVarPlacement:
 class TestScopedBuiltinDeclarations:
     def test_builtin_def_bare_visible_inside_its_own_region(self) -> None:
         resolved = parse_and_resolve(
-            "scope Host\nbuiltin def native() -> int\n"
-            "def read() -> int = native()\nend Host\nHost::read()"
+            "scope Host\n  builtin def native() -> int\n"
+            "  def read() -> int = native()\nend Host\n\nHost::read()"
         )
         assert _ref(resolved, "native").kind is BinderKind.function_binding
         assert _ref(resolved, "native").scope_path == ("Host",)
 
     def test_builtin_def_exact_path_reference_from_outside(self) -> None:
         resolved = parse_and_resolve(
-            "scope Host\nbuiltin def native() -> int\nend Host\nHost::native()"
+            "scope Host\n  builtin def native() -> int\nend Host\n\nHost::native()"
         )
         ref = resolved.resolution[
             next(
@@ -1533,7 +1628,7 @@ class TestScopedBuiltinDeclarations:
 
     def test_builtin_def_visible_after_use(self) -> None:
         resolved = parse_and_resolve(
-            "use Host::*\nscope Host\nbuiltin def native() -> int\nend Host\nnative()"
+            "use Host::*\n\nscope Host\n  builtin def native() -> int\nend Host\n\nnative()"
         )
         call = resolved.program.body.items[2]
         assert isinstance(call, Call)
@@ -1544,27 +1639,34 @@ class TestScopedBuiltinDeclarations:
         ("source", "name"),
         (
             (
-                "scope A\nbuiltin def print[T](value: T) -> unit\n"
-                "builtin def print[T](value: T) -> unit\nend A\n()",
+                "scope A\n  builtin def print[T](value: T) -> unit\n"
+                "  builtin def print[T](value: T) -> unit\nend A\n\n()",
                 "print",
             ),
             (
-                "scope A\nbuiltin\nrecord ExecResult\n  x: int\nlet ExecResult = 1\nend A\n()",
+                "scope A\n"
+                "  builtin\n"
+                "  record ExecResult\n"
+                "    x: int\n"
+                "  let ExecResult = 1\n"
+                "end A\n"
+                "\n"
+                "()",
                 "ExecResult",
             ),
             (
-                "scope A\nbuiltin\nrecord ExecResult\n  x: int\n"
-                "builtin\nrecord ExecResult\n  y: int\nend A\n()",
+                "scope A\n  builtin\n  record ExecResult\n    x: int\n"
+                "  builtin\n  record ExecResult\n    y: int\nend A\n\n()",
                 "ExecResult",
             ),
             (
-                "scope A\nbuiltin\nenum ParsePolicy =\n  | Abort\n"
-                "builtin\nenum ParsePolicy =\n  | Abort\nend A\n()",
+                "scope A\n  builtin\n  enum ParsePolicy =\n    | Abort\n"
+                "  builtin\n  enum ParsePolicy =\n    | Abort\nend A\n\n()",
                 "ParsePolicy",
             ),
             (
-                "scope A\nbuiltin exception RangeError extends Exception()\n"
-                "builtin exception RangeError extends Exception()\nend A\n()",
+                "scope A\n  builtin exception RangeError extends Exception()\n"
+                "  builtin exception RangeError extends Exception()\nend A\n\n()",
                 "RangeError",
             ),
         ),
@@ -1593,16 +1695,26 @@ class TestScopedBuiltinUsedAsValueRejected:
 
     def test_qualified_reference_used_as_a_value_is_rejected(self) -> None:
         err = reject_scope(
-            "scope H\nbuiltin def render[T](value: T) -> text\nend H\nlet f = H::render\nprint(f)"
+            "scope H\n"
+            "  builtin def render[T](value: T) -> text\n"
+            "end H\n"
+            "\n"
+            "let f = H::render\n"
+            "print(f)"
         )
         line, message = diag(err)
         assert "render" in message
         assert "value" in message, "rejected for being used as a value, not for being unknown"
-        assert line == 4
+        assert line == 5
 
     def test_bare_reference_inside_its_own_region_used_as_a_value_is_rejected(self) -> None:
         err = reject_scope(
-            "scope H\nbuiltin def render[T](value: T) -> text\nlet f = render\nend H\nprint(H::f)"
+            "scope H\n"
+            "  builtin def render[T](value: T) -> text\n"
+            "  let f = render\n"
+            "end H\n"
+            "\n"
+            "print(H::f)"
         )
         line, message = diag(err)
         assert "render" in message
@@ -1611,19 +1723,20 @@ class TestScopedBuiltinUsedAsValueRejected:
 
     def test_qualified_reference_with_a_type_argument_used_as_a_value_is_rejected(self) -> None:
         err = reject_scope(
-            "scope H\nbuiltin def render[T](value: T) -> text\nend H\n"
+            "scope H\n  builtin def render[T](value: T) -> text\nend H\n"
+            "\n"
             "let f = H::render[json]\nprint(f)"
         )
         line, message = diag(err)
         assert "render" in message
         assert "value" in message, "rejected for being used as a value, not for being unknown"
-        assert line == 4
+        assert line == 5
 
     def test_qualified_call_to_a_scoped_builtin_def_is_unaffected(self) -> None:
         """The value-use rejection must not reject the legitimate call form
         it is easy to conflate it with: resolution must still succeed."""
         resolved = parse_and_resolve(
-            'scope H\nbuiltin def render[T](value: T) -> text\nend H\nprint(H::render("1"))'
+            'scope H\n  builtin def render[T](value: T) -> text\nend H\n\nprint(H::render("1"))'
         )
         call_item = resolved.program.body.items[1]
         assert isinstance(call_item, Call)
@@ -1634,7 +1747,7 @@ class TestQualifiedMembersSharingBuiltinNames:
 
     def test_qualified_scope_member_named_after_a_builtin_is_accepted(self) -> None:
         resolved = parse_and_resolve(
-            "scope Codec\ndef render(value: int) -> int = value\nend Codec\nCodec::render(1)"
+            "scope Codec\n  def render(value: int) -> int = value\nend Codec\n\nCodec::render(1)"
         )
 
         qualified = _find_varref(resolved.program, "render")
@@ -1649,7 +1762,8 @@ class TestQualifiedMembersSharingBuiltinNames:
 
     def test_opened_member_does_not_intercept_the_bare_builtin(self) -> None:
         resolved = parse_and_resolve(
-            "use Codec::*\nscope Codec\ndef render(value: int) -> int = value\nend Codec\n"
+            "use Codec::*\n\nscope Codec\n  def render(value: int) -> int = value\nend Codec\n"
+            "\n"
             "let value = render(1)\nCodec::render(1)"
         )
 
@@ -1816,8 +1930,8 @@ class TestBuiltinCallClassification:
         """A scoped ``builtin def print`` called bare, from within its own
         region, still dispatches to the host implementation."""
         r = parse_and_resolve(
-            "scope Host\nbuiltin def print[T](value: T) -> unit\n"
-            "def announce() -> unit = print(1)\nend Host\nHost::announce()"
+            "scope Host\n  builtin def print[T](value: T) -> unit\n"
+            "  def announce() -> unit = print(1)\nend Host\n\nHost::announce()"
         )
         region = r.program.body.items[0]
         assert isinstance(region, ScopeRegion)
@@ -1831,7 +1945,7 @@ class TestBuiltinCallClassification:
         """A scoped ``builtin def print`` called through its full path still
         dispatches to the host implementation."""
         r = parse_and_resolve(
-            "scope Host\nbuiltin def print[T](value: T) -> unit\nend Host\nHost::print(1)"
+            "scope Host\n  builtin def print[T](value: T) -> unit\nend Host\n\nHost::print(1)"
         )
         call_item = r.program.body.items[1]
         assert isinstance(call_item, Call)
@@ -1842,14 +1956,16 @@ class TestBuiltinCallClassification:
         the qualifier for real, not fall through to host dispatch just
         because the tail name happens to be reserved."""
         with pytest.raises(AglScopeError):
-            parse_and_resolve("scope Host\nend Host\nHost::print(1)")
+            parse_and_resolve("scope Host\nend Host\n\nHost::print(1)")
 
     def test_two_scoped_builtin_defs_at_different_paths_both_classified(self) -> None:
         """Same-named builtin defs at different paths do not collide, and each
         still dispatches to the host implementation via its own path."""
         r = parse_and_resolve(
-            "scope A\nbuiltin def print[T](value: T) -> unit\nend A\n"
-            "scope B\nbuiltin def print[T](value: T) -> unit\nend B\n"
+            "scope A\n  builtin def print[T](value: T) -> unit\nend A\n"
+            "\n"
+            "scope B\n  builtin def print[T](value: T) -> unit\nend B\n"
+            "\n"
             "A::print(1)\nB::print(2)"
         )
         a_call, b_call = r.program.body.items[2], r.program.body.items[3]
@@ -2049,9 +2165,11 @@ class TestMethodReceiverClassification:
         resolved = parse_and_resolve(
             "record Point()\n"
             "def Point::shorthand(self) -> int = 1\n"
+            "\n"
             "scope Point\n"
-            "def region(self) -> int = 2\n"
+            "  def region(self) -> int = 2\n"
             "end Point\n"
+            "\n"
             "()"
         )
 
@@ -3863,10 +3981,11 @@ class TestScopedNominalAliases:
     def test_scoped_alias_of_an_enum_publishes_no_constructor(self) -> None:
         source = (
             "scope A\n"
-            "enum Color\n"
-            "  | Red\n"
-            "type Alias = Color\n"
+            "  enum Color\n"
+            "    | Red\n"
+            "  type Alias = Color\n"
             "end A\n"
+            "\n"
             "let c: A::Alias = A::Color::Red\n"
             "c\n"
         )
@@ -3882,10 +4001,11 @@ class TestScopedNominalAliases:
     def test_scoped_alias_of_a_record_stays_constructible(self) -> None:
         source = (
             "scope A\n"
-            "record Point\n"
-            "  x: int\n"
-            "type Alias = Point\n"
+            "  record Point\n"
+            "    x: int\n"
+            "  type Alias = Point\n"
             "end A\n"
+            "\n"
             "let p: A::Alias = A::Alias(x = 1)\n"
             "p.x\n"
         )

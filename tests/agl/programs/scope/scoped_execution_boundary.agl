@@ -4,10 +4,10 @@ use Workflow::*
 use Workflow::Status::*
 
 scope Workflow
-record Task
-  name: text
-  children: array[Task]
-let reviewer: Agent = AgentCommand("reviewer")
+  record Task
+    name: text
+    children: array[Task]
+  let reviewer: Agent = AgentCommand("reviewer")
 end Workflow
 
 enum Workflow::Status

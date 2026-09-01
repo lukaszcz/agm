@@ -185,6 +185,7 @@ contains it — a genuine reference cycle:
 
 ```agl
 record Node(children: array[Node])
+
 program def main() -> unit =
   var xs: array[Node] = [Node(children = [])]
   let n = Node(children = xs)
@@ -866,8 +867,9 @@ let p1: mylib::Point = mylib::origin()
 let p2: M::Point     = M::origin()
 
 scope A
-record Token()
+  record Token()
 end A
+
 let token: A::Token = A::Token()
 ```
 

@@ -1,4 +1,5 @@
 def encode[T](xs: array[T]) -> json = xs as json
+
 program def main() -> unit =
   let j = encode::[int]([1])
   j

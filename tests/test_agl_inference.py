@@ -543,9 +543,11 @@ def test_qualified_generic_member_infers_without_shadowing_a_bare_builtin() -> N
     """A qualified generic function owns its spelling, while bare ``render`` stays builtin."""
     checked = resolve_and_check_inline_entry(
         "use Codec::*\n"
+        "\n"
         "scope Codec\n"
-        "def render[T](value: T) -> array[T] = [value]\n"
+        "  def render[T](value: T) -> array[T] = [value]\n"
         "end Codec\n"
+        "\n"
         "let values = Codec::render(1)\n"
         "let text: text = render(1)\n"
         "values",

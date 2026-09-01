@@ -1,8 +1,8 @@
 scope Local
-import outer::{E}
-def show() -> unit =
-  let value: E = Shared(value = 5)
-  print value
+  import outer::{E}
+  def show() -> unit =
+    let value: E = Shared(value = 5)
+    print value
 end Local
 
 program def main() -> unit = Local::show()

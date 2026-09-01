@@ -1,4 +1,5 @@
 def f() -> int = 1
+
 program def main() -> unit =
   let fs: array[() -> int] = [f]
   let j = fs as json

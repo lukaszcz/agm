@@ -15,14 +15,14 @@ extern def text::slice(self, start: int, end: int) -> text
 extern def text::repeat(self, count: int) -> text
 
 scope TextInternals
-extern def trim_start(self: text) -> text
-extern def trim_end(self: text) -> text
-extern def starts_with(self: text, prefix: text) -> bool
-extern def ends_with(self: text, suffix: text) -> bool
-extern def index_of(self: text, substring: text) -> int
-extern def index_of_option(self: text, substring: text) -> Option[int]
-extern def pad_start(self: text, length: int, fill: text) -> text
-extern def pad_end(self: text, length: int, fill: text) -> text
+  extern def trim_start(self: text) -> text
+  extern def trim_end(self: text) -> text
+  extern def starts_with(self: text, prefix: text) -> bool
+  extern def ends_with(self: text, suffix: text) -> bool
+  extern def index_of(self: text, substring: text) -> int
+  extern def index_of_option(self: text, substring: text) -> Option[int]
+  extern def pad_start(self: text, length: int, fill: text) -> text
+  extern def pad_end(self: text, length: int, fill: text) -> text
 end TextInternals
 
 def text::is-empty(self) -> bool = self.size() == 0

@@ -52,6 +52,7 @@ exception DetailedProblem extends Problem
 
 def Problem::label(self) -> text = "problem %{self.code}"
 def DetailedProblem::detail_label(self) -> text = self.label() + ": %{self.detail}"
+
 program def main() -> unit =
   let problem = DetailedProblem(message = "failed", code = 7, detail = "network")
   let _ = print(problem.label())

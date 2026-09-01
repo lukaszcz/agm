@@ -13,14 +13,15 @@ ends with the same path:
 
 ```agl
 scope Geometry
-record Point(x: int, y: int)
+  record Point(x: int, y: int)
 
-def origin() -> Point = ::Geometry::Point(0, 0)
+  def origin() -> Point = ::Geometry::Point(0, 0)
 
-scope Format
-def label(point: ::Geometry::Point) -> text = "%{point.x},%{point.y}"
-end Format
+  scope Format
+    def label(point: ::Geometry::Point) -> text = "%{point.x},%{point.y}"
+  end Format
 end Geometry
+
 def Geometry::translate(point: Geometry::Point) -> Geometry::Point =
   Geometry::Point(point.x + 1, point.y)
 
@@ -43,9 +44,11 @@ scope:
 
 ```agl
 scope Text
-def normalize(value: text) -> text = value
+  def normalize(value: text) -> text = value
 end Text
+
 def Text::display(value: text) -> text = "[%{normalize(value)}]"
+
 program def main() -> unit =
   let _ = print(Text::display("ready"))
 ```
@@ -63,8 +66,8 @@ root, and an explicit annotation is checked against it on either spelling:
 
 ```agl
 scope Config
-let retries = 3
-var attempts: int = 0
+  let retries = 3
+  var attempts: int = 0
 end Config
 ```
 
@@ -74,8 +77,8 @@ declaration-path shorthand available for `def` and the type forms:
 
 ```agl
 scope Config
-let retries = 3
-var attempts = 0
+  let retries = 3
+  var attempts = 0
 end Config
 ```
 
@@ -101,9 +104,11 @@ pattern selects as a member of that scope:
 
 ```agl
 record Bounds(low: int, high: int)
+
 scope Config
-let Bounds(low, high) = Bounds(low = 0, high = 10)
+  let Bounds(low, high) = Bounds(low = 0, high = 10)
 end Config
+
 program def main() -> unit =
   let _ = print(Config::low)
   let _ = print(Config::high)
@@ -122,9 +127,10 @@ shorthand — only the region form:
 
 ```agl
 scope Deploy
-param region: text = "eu"
-param replicas: int
+  param region: text = "eu"
+  param replicas: int
 end Deploy
+
 program def main() -> unit =
   let _ = print("%{Deploy::region} x %{Deploy::replicas}")
 ```
@@ -169,14 +175,15 @@ by the automatically injected `std/core` prelude:
 
 ```agl
 scope Host
-builtin record ExecResult
-  stdout: text
-  exit_code: int
-  stderr: text
-  timed_out: bool
+  builtin record ExecResult
+    stdout: text
+    exit_code: int
+    stderr: text
+    timed_out: bool
 
-builtin def print[T](value: T) -> unit
+  builtin def print[T](value: T) -> unit
 end Host
+
 program def main() -> unit =
   let result = Host::ExecResult(stdout = "x", exit_code = 0, stderr = "", timed_out = false)
   let _ = Host::print(result.stdout)
@@ -249,8 +256,9 @@ def Point::shift(self, amount: int) -> Point =
   Point(x = self.x + amount, y = self.y)
 
 scope Point
-def total(self) -> int = self.x + self.y
+  def total(self) -> int = self.x + self.y
 end Point
+
 program def main() -> unit =
   let point = Point(x = 2, y = 3)
   let shifted = point.shift(4)
@@ -287,15 +295,19 @@ a header declaration, so it appears before the region's other items.
 ```agl
 use Math::*
 use Text::{show as format}
+
 scope Math
-def add(left: int, right: int) -> int = left + right
-scope Metrics
-def scale(value: int) -> int = value * 2
-end Metrics
+  def add(left: int, right: int) -> int = left + right
+
+  scope Metrics
+    def scale(value: int) -> int = value * 2
+  end Metrics
 end Math
+
 scope Text
-def show(value: int) -> text = "value %{value}"
+  def show(value: int) -> text = "value %{value}"
 end Text
+
 program def main() -> unit =
   let result = add(1, 2) + Metrics::scale(3)
   let _ = print(format(result))

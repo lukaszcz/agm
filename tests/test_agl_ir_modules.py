@@ -33,7 +33,7 @@ from tests.agl.ir_harness import (
 @pytest.mark.parametrize(
     "scoped_bindings",
     (
-        "scope Static\nlet constant = 1\nvar offset = 1\nend Static\n",
+        "scope Static\n  let constant = 1\n  var offset = 1\nend Static\n",
         "let Static::constant = 1\nvar Static::offset = 1\n",
     ),
     ids=("region", "shorthand"),
@@ -64,7 +64,7 @@ _COUNTING_INITIALIZER = (
 @pytest.mark.parametrize(
     "scoped_bindings",
     (
-        "scope Static\nvar calls = 0\nlet value = bump()\nend Static\n",
+        "scope Static\n  var calls = 0\n  let value = bump()\nend Static\n",
         "var Static::calls = 0\nlet Static::value = bump()\n",
     ),
     ids=("region", "shorthand"),
@@ -88,7 +88,7 @@ def test_inline_scoped_bindings_may_compute_their_initializers(scoped_bindings: 
 @pytest.mark.parametrize(
     "root_bindings",
     (
-        "scope Static\nlet value = 1 + 1\nend Static\n",
+        "scope Static\n  let value = 1 + 1\nend Static\n",
         "let Static::value = 1 + 1\n",
         "let value = 1 + 1\n",
     ),

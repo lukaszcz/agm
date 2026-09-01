@@ -3,9 +3,9 @@
 use A::*
 
 scope A
-enum Status
-  | Good
-  | Bad
+  enum Status
+    | Good
+    | Bad
 end A
 
 program def main() -> unit =

@@ -1,5 +1,6 @@
 record P
   n: int
+
 program def main() -> unit =
   let p = P(n = 1, extra = 2)
   p

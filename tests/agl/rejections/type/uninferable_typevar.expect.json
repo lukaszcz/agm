@@ -1,6 +1,6 @@
 {
   "diagnostic": {
-    "line": 3,
+    "line": 4,
     "message_contains": [
       "Cannot infer type argument",
       "empty"

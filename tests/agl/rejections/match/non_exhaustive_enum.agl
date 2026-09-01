@@ -1,6 +1,7 @@
 enum Choice
   | none
   | some(value: int)
+
 program def main() -> unit =
   let value: Choice = none
   case value of

@@ -117,7 +117,7 @@ available. Import the module first when its target is not local.
 use Math::*
 
 scope Math
-def add(left: int, right: int) -> int = left + right
+  def add(left: int, right: int) -> int = left + right
 end Math
 
 program def main() -> unit =
@@ -152,9 +152,9 @@ enclosing region and nested regions.
 <!-- agl-check: fragment -->
 ```agl
 scope Vec
-import geom/planar::{Point}
-use Point::*
-def norm(p: Point) -> float = mag(p)
+  import geom/planar::{Point}
+  use Point::*
+  def norm(p: Point) -> float = mag(p)
 end Vec
 ```
 

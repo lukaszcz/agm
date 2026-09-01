@@ -4,10 +4,10 @@ def sqrt(value: decimal) -> decimal = value
 
 scope Point
 
-def distance(p1: Point, p2: Point) -> decimal =
-  let dx = p1.x - p2.x
-  let dy = p1.y - p2.y
-  sqrt (dx * dx + dy * dy)
+  def distance(p1: Point, p2: Point) -> decimal =
+    let dx = p1.x - p2.x
+    let dy = p1.y - p2.y
+    sqrt (dx * dx + dy * dy)
 
 end Point
 
@@ -17,44 +17,44 @@ def Point::distance'(p1: Point, p2: Point) -> decimal =
   sqrt (dx * dx + dy * dy)
 
 scope Point
-def scale(value: int) -> int = value * 2
+  def scale(value: int) -> int = value * 2
 end Point
 
 scope Tools
-record Token()
-enum Signal
-  | ready
-let helper: Agent = AgentCommand("helper")
-def greeting() -> text = "hello"
-def retain(value: Tools::Token) -> Tools::Token = value
+  record Token()
+  enum Signal
+    | ready
+  let helper: Agent = AgentCommand("helper")
+  def greeting() -> text = "hello"
+  def retain(value: Tools::Token) -> Tools::Token = value
 end Tools
 
 def root_value() -> int = 3
 
 scope Outer
-def root_value() -> int = 4
+  def root_value() -> int = 4
 
-scope Utility
-def nested_value() -> int = 7
-end Utility
+  scope Utility
+    def nested_value() -> int = 7
+  end Utility
 
-scope Inner
-def root_value() -> int = 5
-def enclosing_value() -> int = ::root_value()
-def nearest_value() -> int = root_value()
-def sibling_value() -> int = Utility::nested_value()
-enum Flag | inner
+  scope Inner
+    def root_value() -> int = 5
+    def enclosing_value() -> int = ::root_value()
+    def nearest_value() -> int = root_value()
+    def sibling_value() -> int = Utility::nested_value()
+    enum Flag | inner
 
-def nearest_flag(flag: Flag) -> bool =
-  case flag of
-    | Flag::inner => flag is Flag::inner
-end Inner
+    def nearest_flag(flag: Flag) -> bool =
+      case flag of
+        | Flag::inner => flag is Flag::inner
+  end Inner
 
-enum Flag | outer
+  enum Flag | outer
 
-def outer_flag(flag: ::Outer::Flag) -> bool =
-  case flag of
-    | ::Outer::Flag::outer => flag is ::Outer::Flag::outer
+  def outer_flag(flag: ::Outer::Flag) -> bool =
+    case flag of
+      | ::Outer::Flag::outer => flag is ::Outer::Flag::outer
 end Outer
 
 program def main() -> unit =

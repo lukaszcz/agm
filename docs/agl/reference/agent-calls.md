@@ -267,6 +267,7 @@ the same codec, schema, and validation as writing that concrete target directly:
 
 ```agl
 def select[T](first: T, second: T) -> T = first
+
 program def main() -> unit =
   let count = select(ask("Choose a count."), 1)
 ```

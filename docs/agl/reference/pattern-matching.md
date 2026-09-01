@@ -324,6 +324,7 @@ that explicitly raises the exception ([Exceptions](exceptions.md)):
 enum Response
   | Complete
   | Rejected
+
 program def main() -> unit =
   let response: Response = Complete
   let _ = case response of

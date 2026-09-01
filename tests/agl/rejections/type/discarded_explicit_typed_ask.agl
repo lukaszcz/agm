@@ -1,5 +1,6 @@
 def demonstrate() -> unit =
   ask::[text]("Produce a value.")
   ()
+
 program def main() -> unit =
   demonstrate()

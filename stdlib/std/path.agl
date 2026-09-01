@@ -1,17 +1,17 @@
 import std/option::Option
 
 scope PathInternals
-extern def join(parts: array[text]) -> text
-extern def dirname(path: text) -> text
-extern def basename(path: text) -> text
-extern def extension_option(path: text) -> Option[text]
-extern def with_extension(path: text, extension: text) -> text
-extern def absolute(path: text) -> text
-extern def normalize(path: text) -> text
-extern def relative(path: text, base: text) -> text
-extern def is_absolute(path: text) -> bool
-extern def parts(path: text) -> array[text]
-extern def home() -> text
+  extern def join(parts: array[text]) -> text
+  extern def dirname(path: text) -> text
+  extern def basename(path: text) -> text
+  extern def extension_option(path: text) -> Option[text]
+  extern def with_extension(path: text, extension: text) -> text
+  extern def absolute(path: text) -> text
+  extern def normalize(path: text) -> text
+  extern def relative(path: text, base: text) -> text
+  extern def is_absolute(path: text) -> bool
+  extern def parts(path: text) -> array[text]
+  extern def home() -> text
 end PathInternals
 
 def join(parts: array[text]) -> text = PathInternals::join(parts)

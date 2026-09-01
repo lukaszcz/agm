@@ -5,11 +5,11 @@
 record Pair[T](first: T, second: T)
 
 scope A
-record Pair[T](first: T, second: T)
+  record Pair[T](first: T, second: T)
 
-def make_local() -> Pair[text] =
-  let build = Pair::[text]
-  build("a", "b")
+  def make_local() -> Pair[text] =
+    let build = Pair::[text]
+    build("a", "b")
 end A
 
 program def main() -> unit =

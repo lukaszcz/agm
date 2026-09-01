@@ -207,7 +207,7 @@ class TestFreshImportSeesTheCurrentDeclaration:
             ("from agl import R, nominals\ndef visible():\n    return R is nominals.entry.E.R\n"),
         )
         s = _make_session_with_root(tmp_path)
-        declaration = "scope E\nrecord R(value: int)\nend E\nenum E = ::E::R"
+        declaration = "scope E\n  record R(value: int)\nend E\n\nenum E = ::E::R"
         assert s.eval_entry(declaration).ok
         assert s.eval_entry("enum E = ::E::R").ok
 

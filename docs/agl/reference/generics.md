@@ -73,6 +73,7 @@ def Box::get[E](self) -> E = self.value
 def Box::map[E, U](self, f: E -> U) -> Box[U] = Box(value = f(self.value))
 def Box::size[_](self) -> int = 1
 def Outcome::is_ok[_, _](self) -> bool = self is ok
+
 program def main() -> unit =
   let box = Box(value = 7)
   let mapped = box.map::[text](fn(value: int) -> text => "v=%{value}")
@@ -97,6 +98,7 @@ record Box[T]
   value: T
 
 def Box::build[U](value: U) -> Box[U] = Box(value = value)
+
 program def main() -> unit =
   let box = Box::build("ready")
   let _ = print(box.value)
@@ -116,6 +118,7 @@ record Box[T]
 enum Outcome[T, E]
   | ok(value: T)
   | err(error: E)
+
 program def main() -> unit =
   let bi: Box[int] = Box(value = 1)
   let bt: Box[text] = Box(value = "hi")
@@ -149,6 +152,7 @@ record Box[T]
   value: T
 
 def apply[T](f: T -> T, value: T) -> T = f(value)
+
 program def main() -> unit =
   let _ = print(id(5))
   let _ = print(id("hi"))
@@ -213,6 +217,7 @@ explicitly:
 def id[T](x: T) -> T = x
 def singleton[T](x: T) -> array[T] = [x]
 def map_one[A, B](f: (A) -> B, xs: array[A]) -> array[B] = [f(xs[0])]
+
 program def main() -> unit =
   let keep_ints: (array[int]) -> array[int] = map_one(id, ?)
   let _ = print(keep_ints([5])[0])
@@ -286,6 +291,7 @@ enum Option[T]
   | some(value: T)
 def build[T](factory: (T) -> Option[T], value: T) -> Option[T] = factory(value)
 def fallback[T](value: Option[T], item: T) -> Option[T] = value
+
 program def main() -> unit =
   let present = build(some, 7)
   let missing = fallback(none, 7)
@@ -305,6 +311,7 @@ for generic functions. A field-bearing member becomes a function value:
 enum Option[T]
   | none
   | some(value: T)
+
 program def main() -> unit =
   let mk = some::[int]
   let v = mk(7)

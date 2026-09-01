@@ -2,14 +2,14 @@ exception TimeParseError extends Exception
   raw: text
 
 scope TimeInternals
-extern def now() -> decimal
-extern def now_iso() -> text
-extern def monotonic() -> decimal
-extern def sleep(seconds: decimal) -> unit
-extern def parse_iso(value: text) -> decimal
-extern def format_iso(epoch: decimal) -> text
-extern def format(epoch: decimal, fmt: text) -> text
-extern def parse(value: text, fmt: text) -> decimal
+  extern def now() -> decimal
+  extern def now_iso() -> text
+  extern def monotonic() -> decimal
+  extern def sleep(seconds: decimal) -> unit
+  extern def parse_iso(value: text) -> decimal
+  extern def format_iso(epoch: decimal) -> text
+  extern def format(epoch: decimal, fmt: text) -> text
+  extern def parse(value: text, fmt: text) -> decimal
 end TimeInternals
 
 def now() -> decimal = TimeInternals::now()

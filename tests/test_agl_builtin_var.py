@@ -271,7 +271,7 @@ class TestScopedBuiltinVar:
             "std/config::Region::max-iters := 3\n"
             "let n = std/config::Region::max-iters\n"
             "n",
-            "scope Region\nbuiltin var max-iters: int\nend Region",
+            "scope Region\n  builtin var max-iters: int\nend Region",
             tmp_path,
         )
         assert result.ok, f"expected success but got: {result.error!r}"
@@ -280,7 +280,7 @@ class TestScopedBuiltinVar:
     def test_scoped_builtin_var_is_bare_after_use(self, tmp_path: Path) -> None:
         result = _run_with_std_config(
             "import std/config::*\nuse std/config::Region::*\nmax-iters := 4\nlet n = max-iters\nn",
-            "scope Region\nbuiltin var max-iters: int\nend Region",
+            "scope Region\n  builtin var max-iters: int\nend Region",
             tmp_path,
         )
         assert result.ok, f"expected success but got: {result.error!r}"
@@ -292,7 +292,7 @@ class TestScopedBuiltinVar:
             'std/config::Region::runner := "updated"\n'
             "let value = std/config::Region::runner\n"
             "value",
-            'scope Region\nbuiltin var runner: text = "declared"\nend Region',
+            'scope Region\n  builtin var runner: text = "declared"\nend Region',
             tmp_path,
         )
 
@@ -305,8 +305,9 @@ class TestScopedBuiltinVar:
             "std/config::First::max-iters := 3\n"
             "let second = std/config::Second::max-iters\n"
             "second",
-            "scope First\nbuiltin var max-iters: int = 1\nend First\n"
-            "scope Second\nbuiltin var max-iters: int = 2\nend Second",
+            "scope First\n  builtin var max-iters: int = 1\nend First\n"
+            "\n"
+            "scope Second\n  builtin var max-iters: int = 2\nend Second",
             tmp_path,
         )
 
@@ -323,7 +324,7 @@ class TestScopedBuiltinVar:
             "do\n"
             "  i := i + 1\n"
             "until i >= 2\n",
-            "scope Region\nbuiltin var max-iters: int = 0\nend Region",
+            "scope Region\n  builtin var max-iters: int = 0\nend Region",
             tmp_path,
             default_loop_limit=1,
         )
@@ -335,7 +336,7 @@ class TestScopedBuiltinVar:
     def test_scoped_declaration_still_confined_to_std_config(self, tmp_path: Path) -> None:
         """A scoped ``builtin var`` outside ``std/config`` is rejected, same as a root one."""
         (tmp_path / "mylib.agl").write_text(
-            "scope Region\nbuiltin var max-iters: int\nend Region\n", encoding="utf-8"
+            "scope Region\n  builtin var max-iters: int\nend Region\n", encoding="utf-8"
         )
         result = _run_program(
             "import mylib\nprint 1",
@@ -353,7 +354,11 @@ class TestScopedBuiltinVar:
             "let root_setting = std/config::max-iters\n"
             "let scoped = std/config::Region::max-iters\n"
             "()",
-            "builtin var max-iters: int\nscope Region\nbuiltin var max-iters: int = 0\nend Region",
+            "builtin var max-iters: int\n"
+            "\n"
+            "scope Region\n"
+            "  builtin var max-iters: int = 0\n"
+            "end Region",
             tmp_path,
         )
         assert result.ok, f"expected success but got: {result.error!r}"

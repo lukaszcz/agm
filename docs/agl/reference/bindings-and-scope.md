@@ -446,10 +446,10 @@ let ExecResult = 0          # allowed — declared in another module
 def Retry(n: int) -> int = n + 1
 
 scope Collision
-record Widget
-  x: int
+  record Widget
+    x: int
 
-let Widget = 1              # error: 'Widget' is already declared in this scope
+  let Widget = 1              # error: 'Widget' is already declared in this scope
 end Collision
 ```
 

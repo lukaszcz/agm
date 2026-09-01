@@ -1,5 +1,6 @@
 enum Pair
   | pair(left: bool, right: bool)
+
 program def main() -> unit =
   let value = pair(left = false, right = false)
   case value of

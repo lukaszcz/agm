@@ -136,7 +136,7 @@ class TestPersistence:
 
     def test_scoped_type_persists_with_a_same_named_root_type(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope A\nrecord Token()\nend A").ok
+        assert s.eval_entry("scope A\n  record Token()\nend A").ok
         assert s.eval_entry("record Token()").ok
 
         scoped = s.eval_entry("let token: A::Token = A::Token()")
@@ -150,7 +150,7 @@ class TestPersistence:
     def test_later_entry_extends_a_retained_scope_with_a_generic_type(self) -> None:
         s = open_session()
         assert s.eval_entry("scope A\nend A").ok
-        assert s.eval_entry("scope A\nrecord Box[T]\n  value: T\nend A").ok
+        assert s.eval_entry("scope A\n  record Box[T]\n    value: T\nend A").ok
 
         result = s.eval_entry("let box: A::Box[int] = A::Box(value = 1)")
 
@@ -341,7 +341,7 @@ class TestPersistence:
     def test_scoped_members_accumulate_by_path_across_block_and_shorthand_entries(self) -> None:
         s = open_session()
         assert s.eval_entry("def Shape::area() -> int = 1").ok
-        assert s.eval_entry("scope Shape\ndef perimeter() -> int = 2\nend Shape").ok
+        assert s.eval_entry("scope Shape\n  def perimeter() -> int = 2\nend Shape").ok
 
         result = s.eval_entry("Shape::area() + Shape::perimeter()")
 
@@ -351,7 +351,7 @@ class TestPersistence:
     def test_replacing_scoped_member_keeps_siblings_at_the_same_path(self) -> None:
         s = open_session()
         assert s.eval_entry(
-            "scope Shape\ndef area() -> int = 1\ndef perimeter() -> int = 2\nend Shape"
+            "scope Shape\n  def area() -> int = 1\n  def perimeter() -> int = 2\nend Shape"
         ).ok
         assert s.eval_entry("def Shape::area() -> int = 3").ok
 
@@ -364,7 +364,7 @@ class TestPersistence:
         s = open_session()
         assert s.eval_entry("def Left::measure() -> int = 1").ok
         assert s.eval_entry("def Right::measure() -> int = 2").ok
-        assert s.eval_entry("scope Left\ndef measure() -> int = 3\nend Left").ok
+        assert s.eval_entry("scope Left\n  def measure() -> int = 3\nend Left").ok
 
         result = s.eval_entry("Left::measure() + Right::measure()")
 
@@ -373,7 +373,7 @@ class TestPersistence:
 
     def test_use_exposes_scope_members_in_later_entries(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope Tools\ndef twice(x: int) -> int = x * 2\nend Tools").ok
+        assert s.eval_entry("scope Tools\n  def twice(x: int) -> int = x * 2\nend Tools").ok
         assert s.eval_entry("use Tools::*").ok
 
         result = s.eval_entry("twice(3)")
@@ -384,8 +384,8 @@ class TestPersistence:
     def test_use_exposes_scope_members_in_later_scope_extensions(self) -> None:
         s = open_session()
         assert s.eval_entry("def Source::value() -> int = 2").ok
-        assert s.eval_entry("scope Target\nuse Source::*\nend Target").ok
-        assert s.eval_entry("scope Target\ndef doubled() -> int = value() * 2\nend Target").ok
+        assert s.eval_entry("scope Target\n  use Source::*\nend Target").ok
+        assert s.eval_entry("scope Target\n  def doubled() -> int = value() * 2\nend Target").ok
 
         result = s.eval_entry("Target::doubled()")
 
@@ -394,7 +394,7 @@ class TestPersistence:
 
     def test_type_of_scoped_record_displays_its_qualified_name(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope Geometry\nrecord Point(x: int)\nend Geometry").ok
+        assert s.eval_entry("scope Geometry\n  record Point(x: int)\nend Geometry").ok
 
         assert s.type_of("Geometry::Point(x = 1)") == "record Geometry::Point\n  x: int"
 
@@ -662,9 +662,9 @@ class TestScopedBindingRetention:
 
     def test_region_form_binding_visible_bare_and_by_path_in_a_later_entry(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope A\nlet x = 1\nend A").ok
+        assert s.eval_entry("scope A\n  let x = 1\nend A").ok
 
-        bare = s.eval_entry("scope A\ndef read() -> int = x\nend A")
+        bare = s.eval_entry("scope A\n  def read() -> int = x\nend A")
         by_path = s.eval_entry("A::x")
 
         assert bare.ok, bare.diagnostics
@@ -678,7 +678,7 @@ class TestScopedBindingRetention:
         s = open_session()
         assert s.eval_entry("let A::y = 2").ok
 
-        bare = s.eval_entry("scope A\ndef read() -> int = y\nend A")
+        bare = s.eval_entry("scope A\n  def read() -> int = y\nend A")
         by_path = s.eval_entry("A::y")
 
         assert bare.ok, bare.diagnostics
@@ -690,7 +690,7 @@ class TestScopedBindingRetention:
 
     def test_region_and_shorthand_forms_retain_identically(self) -> None:
         region = open_session()
-        assert region.eval_entry("scope A\nlet x = 1\nend A").ok
+        assert region.eval_entry("scope A\n  let x = 1\nend A").ok
         region_result = region.eval_entry("A::x")
 
         shorthand = open_session()
@@ -715,7 +715,7 @@ class TestScopedBindingRetention:
     def test_same_entry_duplicate_scoped_binding_is_still_an_error(self) -> None:
         s = open_session()
 
-        result = s.eval_entry("scope A\nlet z = 1\nlet z = 2\nend A")
+        result = s.eval_entry("scope A\n  let z = 1\n  let z = 2\nend A")
 
         assert not result.ok
 
@@ -723,7 +723,7 @@ class TestScopedBindingRetention:
         s = open_session()
         assert s.eval_entry("let A::x = 1").ok
 
-        result = s.eval_entry("scope A\nlet z = 2\nlet z = 3\nend A")
+        result = s.eval_entry("scope A\n  let z = 2\n  let z = 3\nend A")
 
         assert not result.ok
 
@@ -751,9 +751,9 @@ class TestScopedBindingRetention:
 
     def test_region_form_redeclaration_across_entries_replaces_the_retained_member(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope A\nlet x = 1\nend A").ok
+        assert s.eval_entry("scope A\n  let x = 1\nend A").ok
 
-        replaced = s.eval_entry("scope A\nlet x = 99\nend A")
+        replaced = s.eval_entry("scope A\n  let x = 99\nend A")
         result = s.eval_entry("A::x")
 
         assert replaced.ok, replaced.diagnostics
@@ -784,9 +784,9 @@ class TestScopedBindingRetention:
 
     def test_retained_member_cannot_be_reopened_as_a_nested_scope(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope A\nlet B = 1\nend A").ok
+        assert s.eval_entry("scope A\n  let B = 1\nend A").ok
 
-        reopened = s.eval_entry("scope A::B\nlet x = 2\nend A::B")
+        reopened = s.eval_entry("scope A::B\n  let x = 2\nend A::B")
 
         assert not reopened.ok
         original = s.eval_entry("A::B")
@@ -822,7 +822,7 @@ class TestScopedBindingRetention:
 
     def test_retained_scoped_var_assignable_by_path_in_a_later_entry(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope A\nvar counter = 0\nend A").ok
+        assert s.eval_entry("scope A\n  var counter = 0\nend A").ok
 
         assign = s.eval_entry("A::counter := A::counter + 1")
         result = s.eval_entry("A::counter")
@@ -833,7 +833,7 @@ class TestScopedBindingRetention:
 
     def test_retained_scoped_var_assignable_bare_after_use_in_a_later_entry(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope A\nvar counter = 0\nend A").ok
+        assert s.eval_entry("scope A\n  var counter = 0\nend A").ok
         assert s.eval_entry("A::counter := 5").ok
 
         assign = s.eval_entry("use A::*\ncounter := counter + 1")
@@ -872,13 +872,13 @@ class TestScopedBindingRetention:
 
     def test_retained_relative_use_keeps_its_resolved_scope_target(self) -> None:
         session = open_session()
-        assert session.eval_entry("scope Source\ndef value() -> int = 1\nend Source").ok
-        assert session.eval_entry("scope Outer\nuse Source::*\nend Outer").ok
+        assert session.eval_entry("scope Source\n  def value() -> int = 1\nend Source").ok
+        assert session.eval_entry("scope Outer\n  use Source::*\nend Outer").ok
         assert session.eval_entry(
-            "scope Outer\nscope Source\ndef value() -> int = 2\nend Source\nend Outer"
+            "scope Outer\n\n  scope Source\n    def value() -> int = 2\n  end Source\nend Outer"
         ).ok
 
-        declared = session.eval_entry("scope Outer\ndef selected() -> int = value()\nend Outer")
+        declared = session.eval_entry("scope Outer\n  def selected() -> int = value()\nend Outer")
         result = session.eval_entry("Outer::selected()")
 
         assert declared.ok, declared.diagnostics
@@ -888,9 +888,9 @@ class TestScopedBindingRetention:
     def test_retained_use_sees_a_member_promoted_by_a_later_entry(self) -> None:
         """A retained use resolves a member a later entry adds to its target."""
         s = open_session()
-        assert s.eval_entry("scope A\nvar x = 1\nend A").ok
+        assert s.eval_entry("scope A\n  var x = 1\nend A").ok
         assert s.eval_entry("use A::*").ok
-        assert s.eval_entry("scope A\nvar y = 2\nend A").ok
+        assert s.eval_entry("scope A\n  var y = 2\nend A").ok
 
         result = s.eval_entry("y")
 
@@ -899,10 +899,10 @@ class TestScopedBindingRetention:
 
     def test_replacing_a_scoped_use_discards_its_empty_prior_region(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope A\ndef member() -> int = 1\nend A").ok
-        assert s.eval_entry("scope B\nuse A::*\nend B").ok
+        assert s.eval_entry("scope A\n  def member() -> int = 1\nend A").ok
+        assert s.eval_entry("scope B\n  use A::*\nend B").ok
 
-        replacement = s.eval_entry("scope B\nuse A::*\nend B")
+        replacement = s.eval_entry("scope B\n  use A::*\nend B")
 
         assert replacement.ok, replacement.diagnostics
 
@@ -910,7 +910,7 @@ class TestScopedBindingRetention:
         s = open_session()
         assert s.eval_entry("let A::x = 1").ok
 
-        added = s.eval_entry("scope A\ndef doubled() -> int = x * 2\nend A")
+        added = s.eval_entry("scope A\n  def doubled() -> int = x * 2\nend A")
         result = s.eval_entry("A::doubled()")
 
         assert added.ok, added.diagnostics
@@ -959,7 +959,7 @@ class TestCrossEntryScopeCollision:
 
     def test_shorthand_let_cannot_claim_a_retained_nested_scopes_path(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope A\nscope B\ndef q() -> int = 2\nend B\nend A").ok
+        assert s.eval_entry("scope A\n\n  scope B\n    def q() -> int = 2\n  end B\nend A").ok
 
         result = s.eval_entry("let A::B = 1")
 
@@ -970,7 +970,7 @@ class TestCrossEntryScopeCollision:
 
     def test_shorthand_def_cannot_claim_a_retained_nested_scopes_path(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope A\nscope B\ndef q() -> int = 2\nend B\nend A").ok
+        assert s.eval_entry("scope A\n\n  scope B\n    def q() -> int = 2\n  end B\nend A").ok
 
         result = s.eval_entry("def A::B() -> int = 1")
 
@@ -988,7 +988,7 @@ class TestCrossEntryScopeCollision:
         declared there earlier, rather than colliding with or displacing it.
         """
         s = open_session()
-        assert s.eval_entry("scope A\nscope B\ndef q() -> int = 2\nend B\nend A").ok
+        assert s.eval_entry("scope A\n\n  scope B\n    def q() -> int = 2\n  end B\nend A").ok
         assert s.eval_entry("record A::B()").ok
 
         result = s.eval_entry("A::B::q()")
@@ -1022,7 +1022,7 @@ class TestBareConstructorVisibilityAcrossEntries:
 
     def test_record_in_a_named_scope_is_not_bare_across_entries(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope S\nrecord Inner(v: int)\nend S").ok
+        assert s.eval_entry("scope S\n  record Inner(v: int)\nend S").ok
 
         bare = s.eval_entry("Inner(v = 1)")
         qualified = s.eval_entry("S::Inner(v = 1)")
@@ -1033,13 +1033,13 @@ class TestBareConstructorVisibilityAcrossEntries:
     def test_record_in_a_named_scope_is_not_bare_within_one_entry(self) -> None:
         s = open_session()
 
-        result = s.eval_entry("scope S\nrecord Inner(v: int)\nend S\nInner(v = 1)")
+        result = s.eval_entry("scope S\n  record Inner(v: int)\nend S\n\nInner(v = 1)")
 
         assert not result.ok
 
     def test_constructible_alias_in_a_named_scope_is_not_bare_across_entries(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope S\nrecord Inner(v: int)\ntype Wrap = Inner\nend S").ok
+        assert s.eval_entry("scope S\n  record Inner(v: int)\n  type Wrap = Inner\nend S").ok
 
         bare = s.eval_entry("Wrap(v = 1)")
         qualified = s.eval_entry("S::Wrap(v = 1)")
@@ -1051,7 +1051,7 @@ class TestBareConstructorVisibilityAcrossEntries:
         s = open_session()
 
         result = s.eval_entry(
-            "scope S\nrecord Inner(v: int)\ntype Wrap = Inner\nend S\nWrap(v = 1)"
+            "scope S\n  record Inner(v: int)\n  type Wrap = Inner\nend S\n\nWrap(v = 1)"
         )
 
         assert not result.ok
@@ -1077,7 +1077,7 @@ class TestBareConstructorVisibilityAcrossEntries:
 
     def test_root_enum_reference_to_a_scoped_record_stays_bare_across_entries(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope M\nrecord Go(amount: int)\nend M\nenum Step\n  | M::Go").ok
+        assert s.eval_entry("scope M\n  record Go(amount: int)\nend M\n\nenum Step\n  | M::Go").ok
 
         bare = s.eval_entry("Go(amount = 1)")
 
@@ -1089,7 +1089,7 @@ class TestBareConstructorVisibilityAcrossEntries:
         s = open_session()
 
         result = s.eval_entry(
-            "scope M\nrecord Go(amount: int)\nend M\nenum Step\n  | M::Go\nGo(amount = 1)"
+            "scope M\n  record Go(amount: int)\nend M\n\nenum Step\n  | M::Go\nGo(amount = 1)"
         )
 
         assert result.ok, result.diagnostics
@@ -1544,14 +1544,14 @@ class TestBuiltinIdentityWithStandardLibrary:
         s = open_session()
         declare = s.eval_entry(
             "scope A\n"
-            "builtin exception RangeError extends Exception()\n"
-            "def trigger(step: int) -> unit =\n"
-            "  try\n"
-            "    for i in 1 to 5 by step do\n"
+            "  builtin exception RangeError extends Exception()\n"
+            "  def trigger(step: int) -> unit =\n"
+            "    try\n"
+            "      for i in 1 to 5 by step do\n"
+            "        ()\n"
+            "      done\n"
+            "    catch RangeError as error =>\n"
             "      ()\n"
-            "    done\n"
-            "  catch RangeError as error =>\n"
-            "    ()\n"
             "end A\n"
         )
         assert declare.ok, declare.diagnostics
@@ -2772,12 +2772,12 @@ class TestRecursiveTypesAcrossEntries:
         readable through its own (old) field — after the redeclaration.
         """
         s = open_session()
-        assert s.eval_entry("scope A\nrecord R(n: int)\nend A").ok
-        assert s.eval_entry("scope A\ndef make() -> A::R = A::R(1)\nend A").ok
+        assert s.eval_entry("scope A\n  record R(n: int)\nend A").ok
+        assert s.eval_entry("scope A\n  def make() -> A::R = A::R(1)\nend A").ok
         call = s.eval_entry("A::make().n")
         assert call.ok
         assert call.value == IntValue(1)
-        assert s.eval_entry("scope A\nrecord R(m: text)\nend A").ok
+        assert s.eval_entry("scope A\n  record R(m: text)\nend A").ok
 
         still_old = s.eval_entry("A::make().n")
         missing_new_field = s.eval_entry("A::make().m")
@@ -3017,7 +3017,9 @@ class TestTypeOf:
 
     def test_type_of_scoped_nominal_displays_its_path(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope Left\nrecord Token()\nend Left\nlet token = Left::Token()").ok
+        assert s.eval_entry(
+            "scope Left\n  record Token()\nend Left\n\nlet token = Left::Token()"
+        ).ok
 
         assert s.type_of("token") == "record Left::Token()"
 
@@ -3266,12 +3268,14 @@ class TestFailureEffects:
 
         failed = session.eval_entry(
             "scope A\n"
-            "record T(value: int)\n"
+            "  record T(value: int)\n"
             "end A\n"
+            "\n"
             "def keep(value: A::T) -> A::T = value\n"
             'let stop: int = raise Abort(message = "stop")\n'
+            "\n"
             "scope B\n"
-            "record T(value: int)\n"
+            "  record T(value: int)\n"
             "end B"
         )
 
@@ -3631,7 +3635,7 @@ class TestAgentDeclarations:
         agent = CountingAgent("done")
         s = open_session(agent_dispatcher=agent)
 
-        declared = s.eval_entry('scope Tools\nlet helper = AgentCommand("helper")\nend Tools')
+        declared = s.eval_entry('scope Tools\n  let helper = AgentCommand("helper")\nend Tools')
         assert declared.ok, declared.diagnostics
         ref = s._session_scope_nodes[("Tools",)].members["helper"]
         handle = s._link_image.symbol_for_decl(ref.decl_node_id)
@@ -3871,7 +3875,7 @@ class TestParams:
         # root param and leave the session alive for later entries, not crash
         # with an unhandled IR error.
         s = open_session()
-        r = s.eval_entry("scope A\nparam p: int\nend A\nprint(A::p)")
+        r = s.eval_entry("scope A\n  param p: int\nend A\n\nprint(A::p)")
         assert not r.ok
         assert r.diagnostics
         assert "A::p" in r.diagnostics[0].message
@@ -3882,7 +3886,7 @@ class TestParams:
 
     def test_declared_params_lists_scoped_param_by_full_path(self) -> None:
         s = open_session()
-        s.eval_entry("scope A\nparam p: int = 5\nend A")
+        s.eval_entry("scope A\n  param p: int = 5\nend A")
         ins = s.declared_params()
         assert len(ins) == 1
         name, typ, val = ins[0]
@@ -3892,9 +3896,9 @@ class TestParams:
 
     def test_scoped_param_metadata_is_removed_when_another_member_replaces_it(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope A\nparam x: int = 1\nend A").ok
+        assert s.eval_entry("scope A\n  param x: int = 1\nend A").ok
 
-        replacement = s.eval_entry("scope A\nlet x = 2\nend A")
+        replacement = s.eval_entry("scope A\n  let x = 2\nend A")
 
         assert replacement.ok, replacement.diagnostics
         assert s.declared_params() == []
@@ -3916,9 +3920,9 @@ class TestParams:
 
     def test_let_binding_displaces_same_keyed_scoped_param_in_later_entry(self) -> None:
         s = open_session()
-        assert s.eval_entry('scope Deploy\nparam region: text = "eu"\nend Deploy').ok
+        assert s.eval_entry('scope Deploy\n  param region: text = "eu"\nend Deploy').ok
 
-        result = s.eval_entry('scope Deploy\nlet region = "us"\nend Deploy')
+        result = s.eval_entry('scope Deploy\n  let region = "us"\nend Deploy')
 
         assert result.ok, result.diagnostics
         assert s.declared_params() == []
@@ -3929,12 +3933,12 @@ class TestParams:
     def test_single_entry_displaces_root_and_scoped_param_together(self) -> None:
         s = open_session()
         setup = s.eval_entry(
-            'param count: int = 1\nscope Deploy\nparam region: text = "eu"\nend Deploy'
+            'param count: int = 1\n\nscope Deploy\n  param region: text = "eu"\nend Deploy'
         )
         assert setup.ok, setup.diagnostics
         assert {name for name, _t, _v in s.declared_params()} == {"count", "Deploy::region"}
 
-        result = s.eval_entry('let count = 5\nscope Deploy\nlet region = "us"\nend Deploy')
+        result = s.eval_entry('let count = 5\n\nscope Deploy\n  let region = "us"\nend Deploy')
 
         assert result.ok, result.diagnostics
         assert s.declared_params() == []
@@ -3953,7 +3957,7 @@ class TestParams:
         # A scoped param whose default raises must not be promoted; the next
         # entry must degrade gracefully rather than crash on an unbound symbol.
         s = open_session()
-        first = s.eval_entry('scope A\nparam p: int = "x" as int\nend A')
+        first = s.eval_entry('scope A\n  param p: int = "x" as int\nend A')
         assert not first.ok
         assert s.declared_params() == []
         second = s.eval_entry("let q = A::p + 1")
@@ -3999,13 +4003,13 @@ class TestReset:
 
     def test_reset_clears_retained_uses(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope Tools\ndef twice(x: int) -> int = x * 2\nend Tools").ok
+        assert s.eval_entry("scope Tools\n  def twice(x: int) -> int = x * 2\nend Tools").ok
         assert s.eval_entry("use Tools::*").ok
         assert s.eval_entry("twice(3)").ok
 
         s.reset()
 
-        assert s.eval_entry("scope Tools\ndef twice(x: int) -> int = x * 2\nend Tools").ok
+        assert s.eval_entry("scope Tools\n  def twice(x: int) -> int = x * 2\nend Tools").ok
         result = s.eval_entry("twice(3)")
         assert not result.ok
 
@@ -4102,7 +4106,7 @@ class TestLoadFile:
 
     def test_load_file_round_trips_a_use_after_a_declaration(self, tmp_path: Path) -> None:
         original = open_session()
-        assert original.eval_entry("scope S\ndef value() -> int = 1\nend S").ok
+        assert original.eval_entry("scope S\n  def value() -> int = 1\nend S").ok
         assert original.eval_entry("use S::*").ok
         transcript = tmp_path / "session.agl"
         transcript.write_text(original.dump_source(), encoding="utf-8")
@@ -4907,11 +4911,11 @@ class TestFuncDef:
         usable; a region after the failure never took effect.
         """
         s = open_session()
-        before = s.eval_entry("scope A\nrecord Token()\nend A\n1 / 0")
+        before = s.eval_entry("scope A\n  record Token()\nend A\n\n1 / 0")
         assert not before.ok
         assert s.eval_entry("A::Token()").ok
 
-        after = s.eval_entry("let z: decimal = 1 / 0\nscope B\nrecord Later()\nend B")
+        after = s.eval_entry("let z: decimal = 1 / 0\n\nscope B\n  record Later()\nend B")
         assert not after.ok
         assert not s.eval_entry("B::Later()").ok
 
@@ -4923,7 +4927,7 @@ class TestFuncDef:
         must not be treated as completed merely because it shares the region.
         """
         s = open_session()
-        failed = s.eval_entry("scope A\nlet a = 1\nvar b = 1 / 0\nend A")
+        failed = s.eval_entry("scope A\n  let a = 1\n  var b = 1 / 0\nend A")
         assert not failed.ok
         assert s.eval_entry("A::a").value == IntValue(1)
         assert not s.eval_entry("A::b").ok
@@ -4938,7 +4942,7 @@ class TestFuncDef:
         instead of diagnosing cleanly.
         """
         s = open_session()
-        failed = s.eval_entry("scope A\nlet a = 1\nvar c = 1 / 0\nlet d = 4\nend A")
+        failed = s.eval_entry("scope A\n  let a = 1\n  var c = 1 / 0\n  let d = 4\nend A")
         assert not failed.ok
         r = s.eval_entry("A::d")
         assert not r.ok
@@ -4949,7 +4953,16 @@ class TestFuncDef:
         """The region-form ``let`` fix also holds across nested regions."""
         s = open_session()
         failed = s.eval_entry(
-            "scope A\nlet a = 1\nscope B\nvar c = 1 / 0\nlet d = 4\nend B\nlet e = 5\nend A"
+            "scope A\n"
+            "  let a = 1\n"
+            "\n"
+            "  scope B\n"
+            "    var c = 1 / 0\n"
+            "    let d = 4\n"
+            "  end B\n"
+            "\n"
+            "  let e = 5\n"
+            "end A"
         )
         assert not failed.ok
         assert not s.eval_entry("A::e").ok
@@ -4960,14 +4973,16 @@ class TestFuncDef:
     ) -> None:
         """The region-form ``let`` fix also holds when the same scope is reopened."""
         s = open_session()
-        failed = s.eval_entry("scope A\nlet a = 1\nend A\nscope A\nvar b = 1 / 0\nlet c = 4\nend A")
+        failed = s.eval_entry(
+            "scope A\n  let a = 1\nend A\n\nscope A\n  var b = 1 / 0\n  let c = 4\nend A"
+        )
         assert not failed.ok
         assert not s.eval_entry("A::c").ok
 
     def test_runtime_failure_after_scoped_var_in_region_gives_clean_diagnostic(self) -> None:
         """Control: a ``var`` past a failing sibling was already handled correctly."""
         s = open_session()
-        failed = s.eval_entry("scope A\nlet a = 1\nvar c = 1 / 0\nvar d = 4\nend A")
+        failed = s.eval_entry("scope A\n  let a = 1\n  var c = 1 / 0\n  var d = 4\nend A")
         assert not failed.ok
         assert not s.eval_entry("A::d").ok
 
@@ -5058,7 +5073,7 @@ class TestInfixDecl:
         (root / "operators.agl").write_text(
             "infixl %% at 5\ndef %%(x: int, y: int) -> int = x + y\n"
         )
-        (root / "facade.agl").write_text("scope Public\nexport operators::{%%}\nend Public\n")
+        (root / "facade.agl").write_text("scope Public\n  export operators::{%%}\nend Public\n")
         s = ReplSession()
         s._roots = assemble_roots(
             invocation_root=root,
@@ -5277,23 +5292,31 @@ class TestImports:
         assert session.eval_entry("def Source::old() -> int = 1").ok
         assert session.eval_entry("def Source::new() -> int = 2").ok
         assert session.eval_entry(
-            "scope Outer\nimport lib\nscope Inner\nuse ::Source::{old}\nend Inner\nend Outer"
+            "scope Outer\n"
+            "  import lib\n"
+            "\n"
+            "  scope Inner\n"
+            "    use ::Source::{old}\n"
+            "  end Inner\n"
+            "end Outer"
         ).ok
 
         replacement = session.eval_entry(
             "scope Outer\n"
-            "scope Inner\n"
-            "use ::Source::new as selected\n"
-            "def read() -> int = selected()\n"
-            "end Inner\n"
+            "\n"
+            "  scope Inner\n"
+            "    use ::Source::new as selected\n"
+            "    def read() -> int = selected()\n"
+            "  end Inner\n"
             "end Outer\n"
+            "\n"
             "Outer::Inner::read()"
         )
 
         assert replacement.ok, replacement.diagnostics
         assert replacement.value == IntValue(2)
         assert not session.eval_entry(
-            "scope Outer\nscope Inner\ndef stale() -> int = old()\nend Inner\nend Outer"
+            "scope Outer\n\n  scope Inner\n    def stale() -> int = old()\n  end Inner\nend Outer"
         ).ok
 
     def test_unrelated_import_alias_does_not_key_a_local_use(self, tmp_path: Path) -> None:
@@ -5313,13 +5336,13 @@ class TestImports:
         session = open_session()
         assert session.eval_entry("def Outer::Source::old() -> int = 1").ok
         assert session.eval_entry("def Outer::Source::new() -> int = 2").ok
-        assert session.eval_entry("scope Outer\nuse Source::{old}\nend Outer").ok
+        assert session.eval_entry("scope Outer\n  use Source::{old}\nend Outer").ok
 
-        replacement = session.eval_entry("scope Outer\nuse ::Outer::Source::{new}\nend Outer")
+        replacement = session.eval_entry("scope Outer\n  use ::Outer::Source::{new}\nend Outer")
 
         assert replacement.ok, replacement.diagnostics
         assert not session.eval_entry(
-            "scope Outer\ndef read() -> int = old()\nend Outer\nOuter::read()"
+            "scope Outer\n  def read() -> int = old()\nend Outer\n\nOuter::read()"
         ).ok
 
     def test_relative_use_does_not_replace_retained_target_after_nearer_scope_appears(
@@ -5327,14 +5350,15 @@ class TestImports:
     ) -> None:
         session = open_session()
         assert session.eval_entry("def Source::old() -> int = 1").ok
-        assert session.eval_entry("scope Outer\nuse Source::{old}\nend Outer").ok
+        assert session.eval_entry("scope Outer\n  use Source::{old}\nend Outer").ok
         assert session.eval_entry("def Outer::Source::new() -> int = 2").ok
 
         result = session.eval_entry(
             "scope Outer\n"
-            "use Source::{new}\n"
-            "def both() -> int = old() + new()\n"
+            "  use Source::{new}\n"
+            "  def both() -> int = old() + new()\n"
             "end Outer\n"
+            "\n"
             "Outer::both()"
         )
 
@@ -5345,10 +5369,10 @@ class TestImports:
         session = open_session()
         assert session.eval_entry("def Source::old() -> int = 1").ok
         assert session.eval_entry("def Source::new() -> int = 2").ok
-        assert session.eval_entry("scope Outer\nuse Source::{old}\nend Outer").ok
+        assert session.eval_entry("scope Outer\n  use Source::{old}\nend Outer").ok
 
         replacement = session.eval_entry(
-            "scope Outer\nuse Source::{new}\ndef captured() -> int = old()\nend Outer"
+            "scope Outer\n  use Source::{new}\n  def captured() -> int = old()\nend Outer"
         )
 
         assert not replacement.ok
@@ -5358,25 +5382,31 @@ class TestImports:
         self, tmp_path: Path
     ) -> None:
         (tmp_path / "lib.agl").write_text(
-            "scope Source\ndef old() -> int = 9\nend Source\n", encoding="utf-8"
+            "scope Source\n  def old() -> int = 9\nend Source\n", encoding="utf-8"
         )
         session = self._make_session_with_root(tmp_path)
         assert session.eval_entry("def Right::Source::old() -> int = 1").ok
         assert session.eval_entry("def Right::Source::new() -> int = 2").ok
         assert session.eval_entry(
-            "scope Left\nimport lib::{Source}\nend Left\nscope Right\nuse Source::{old}\nend Right"
+            "scope Left\n"
+            "  import lib::{Source}\n"
+            "end Left\n"
+            "\n"
+            "scope Right\n"
+            "  use Source::{old}\n"
+            "end Right"
         ).ok
 
-        replacement = session.eval_entry("scope Right\nuse ::Right::Source::{new}\nend Right")
+        replacement = session.eval_entry("scope Right\n  use ::Right::Source::{new}\nend Right")
 
         assert replacement.ok, replacement.diagnostics
         assert not session.eval_entry(
-            "scope Right\ndef read() -> int = old()\nend Right\nRight::read()"
+            "scope Right\n  def read() -> int = old()\nend Right\n\nRight::read()"
         ).ok
 
     def test_glob_imported_scope_use_is_replaced_by_anchored_target(self, tmp_path: Path) -> None:
         (tmp_path / "lib.agl").write_text(
-            "scope Source\ndef old() -> int = 1\ndef new() -> int = 2\nend Source\n",
+            "scope Source\n  def old() -> int = 1\n  def new() -> int = 2\nend Source\n",
             encoding="utf-8",
         )
         session = self._make_session_with_root(tmp_path)
@@ -5461,7 +5491,7 @@ class TestImports:
         self, tmp_path: Path
     ) -> None:
         (tmp_path / "lib.agl").write_text(
-            "scope S\ndef value() -> int = 1\nend S\n", encoding="utf-8"
+            "scope S\n  def value() -> int = 1\nend S\n", encoding="utf-8"
         )
         session = self._make_session_with_root(tmp_path)
         assert session.eval_entry("import lib\nuse lib::S::*").ok
@@ -5477,7 +5507,7 @@ class TestImports:
         self, tmp_path: Path
     ) -> None:
         (tmp_path / "lib.agl").write_text(
-            "scope Nested\ndef value() -> int = 1\nend Nested\n", encoding="utf-8"
+            "scope Nested\n  def value() -> int = 1\nend Nested\n", encoding="utf-8"
         )
         session = self._make_session_with_root(tmp_path)
         assert session.eval_entry("import lib as Old").ok
@@ -5491,8 +5521,9 @@ class TestImports:
 
     def test_import_tail_rename_canonicalizes_use_replacement(self, tmp_path: Path) -> None:
         (tmp_path / "lib.agl").write_text(
-            "scope Source\ndef old() -> int = 1\ndef new() -> int = 2\nend Source\n"
-            "scope Other\ndef value() -> int = 3\nend Other\n",
+            "scope Source\n  def old() -> int = 1\n  def new() -> int = 2\nend Source\n"
+            "\n"
+            "scope Other\n  def value() -> int = 3\nend Other\n",
             encoding="utf-8",
         )
         session = self._make_session_with_root(tmp_path)
@@ -5565,11 +5596,11 @@ class TestImports:
         constructors a wildcard selection exposes."""
         (tmp_path / "lib.agl").write_text("enum Color\n  | Red\n  | Blue\n", encoding="utf-8")
         session = self._make_session_with_root(tmp_path)
-        assert session.eval_entry("import lib\nscope Outer\nuse lib::*\nend Outer").ok
+        assert session.eval_entry("import lib\n\nscope Outer\n  use lib::*\nend Outer").ok
 
         declared = session.eval_entry(
             "scope Outer\n"
-            "def describe(c: Color) -> int = case c of | Color::Red => 1 | Color::Blue => 2\n"
+            "  def describe(c: Color) -> int = case c of | Color::Red => 1 | Color::Blue => 2\n"
             "end Outer"
         )
         assert declared.ok, declared.diagnostics
@@ -5587,17 +5618,17 @@ class TestImports:
         removed.write_text("def second() -> int = 2\n", encoding="utf-8")
         session = self._make_session_with_root(tmp_path)
         assert session.eval_entry(
-            "import pkg/* as Facade\nscope Outer\nuse Facade::*\nend Outer"
+            "import pkg/* as Facade\n\nscope Outer\n  use Facade::*\nend Outer"
         ).ok
         removed.unlink()
 
-        declared = session.eval_entry("scope Outer\ndef readFirst() -> int = first()\nend Outer")
+        declared = session.eval_entry("scope Outer\n  def readFirst() -> int = first()\nend Outer")
         assert declared.ok, declared.diagnostics
         result = session.eval_entry("Outer::readFirst()")
         assert result.ok, result.diagnostics
         assert result.value == IntValue(1)
 
-        stale = session.eval_entry("scope Outer\ndef readSecond() -> int = second()\nend Outer")
+        stale = session.eval_entry("scope Outer\n  def readSecond() -> int = second()\nend Outer")
         assert not stale.ok
 
     def test_named_scope_retained_wildcard_facade_use_survives_direct_reimport_of_its_members(
@@ -5614,15 +5645,15 @@ class TestImports:
         (package / "b.agl").write_text("def second() -> int = 2\n", encoding="utf-8")
         session = self._make_session_with_root(tmp_path)
         assert session.eval_entry(
-            "import pkg/* as Facade\nscope Outer\nuse Facade::*\nend Outer"
+            "import pkg/* as Facade\n\nscope Outer\n  use Facade::*\nend Outer"
         ).ok
 
         assert session.eval_entry("import pkg/a as Q1\nimport pkg/b as Q2").ok
 
         declared = session.eval_entry(
             "scope Outer\n"
-            "def readFirst() -> int = first()\n"
-            "def readSecond() -> int = second()\n"
+            "  def readFirst() -> int = first()\n"
+            "  def readSecond() -> int = second()\n"
             "end Outer"
         )
         assert declared.ok, declared.diagnostics
@@ -5639,7 +5670,9 @@ class TestImports:
         triggers the replay."""
         package = tmp_path / "pkg"
         package.mkdir()
-        (package / "a.agl").write_text("scope S\ndef value() -> int = 1\nend S\n", encoding="utf-8")
+        (package / "a.agl").write_text(
+            "scope S\n  def value() -> int = 1\nend S\n", encoding="utf-8"
+        )
         (package / "b.agl").write_text("def other() -> int = 2\n", encoding="utf-8")
         removed = package / "a.agl"
         session = self._make_session_with_root(tmp_path)
@@ -5671,17 +5704,25 @@ class TestImports:
         )
         session = self._make_session_with_root(tmp_path)
         assert session.eval_entry(
-            "import a\nimport b\nscope Outer\nuse a::*\nuse /a::*\nuse b::*\nuse /b::*\nend Outer"
+            "import a\n"
+            "import b\n"
+            "\n"
+            "scope Outer\n"
+            "  use a::*\n"
+            "  use /a::*\n"
+            "  use b::*\n"
+            "  use /b::*\n"
+            "end Outer"
         ).ok
 
         narrowed = session.eval_entry(
             "scope Outer\n"
-            "use a::{onlyA}\nuse /a::{onlyA}\nuse b::{onlyB}\nuse /b::{onlyB}\nend Outer"
+            "  use a::{onlyA}\n  use /a::{onlyA}\n  use b::{onlyB}\n  use /b::{onlyB}\nend Outer"
         )
         assert narrowed.ok, narrowed.diagnostics
 
         result = session.eval_entry(
-            "scope Outer\ndef check() -> int = onlyA() + onlyB()\nend Outer"
+            "scope Outer\n  def check() -> int = onlyA() + onlyB()\nend Outer"
         )
         assert result.ok, result.diagnostics
         assert session.eval_entry("Outer::check()").value == IntValue(33)
@@ -5756,11 +5797,13 @@ class TestImports:
     def test_same_target_uses_in_different_regions_remain_independent(self) -> None:
         s = open_session()
         assert s.eval_entry("def Source::value() -> int = 3").ok
-        assert s.eval_entry("scope Left\nuse Source::*\nend Left").ok
-        assert s.eval_entry("scope Right\nuse Source::*\nend Right").ok
+        assert s.eval_entry("scope Left\n  use Source::*\nend Left").ok
+        assert s.eval_entry("scope Right\n  use Source::*\nend Right").ok
 
-        left = s.eval_entry("scope Left\ndef read() -> int = value()\nend Left\nLeft::read()")
-        right = s.eval_entry("scope Right\ndef read() -> int = value()\nend Right\nRight::read()")
+        left = s.eval_entry("scope Left\n  def read() -> int = value()\nend Left\n\nLeft::read()")
+        right = s.eval_entry(
+            "scope Right\n  def read() -> int = value()\nend Right\n\nRight::read()"
+        )
 
         assert left.ok, left.diagnostics
         assert left.value == IntValue(3)
@@ -6316,7 +6359,7 @@ class TestImports:
         s = self._make_session_with_root(tmp_path)
 
         assert s.eval_entry(
-            "scope A\nimport mylib::*\ndef go() -> int = add(1, 2)\nend A\nA::go()"
+            "scope A\n  import mylib::*\n  def go() -> int = add(1, 2)\nend A\n\nA::go()"
         ).ok
         r = s.eval_entry("mylib::add(1, 2)")
         assert r.ok, r.diagnostics
@@ -6330,9 +6373,9 @@ class TestImports:
         s = self._make_session_with_root(tmp_path)
 
         assert s.eval_entry(
-            "scope A\nimport mylib::*\ndef go() -> int = add(1, 2)\nend A\nA::go()"
+            "scope A\n  import mylib::*\n  def go() -> int = add(1, 2)\nend A\n\nA::go()"
         ).ok
-        r = s.eval_entry("scope A\ndef go2() -> int = add(3, 4)\nend A\nA::go2()")
+        r = s.eval_entry("scope A\n  def go2() -> int = add(3, 4)\nend A\n\nA::go2()")
         assert r.ok, r.diagnostics
         assert _int(r.value) == 7
 
@@ -6340,13 +6383,13 @@ class TestImports:
         (tmp_path / "mylib.agl").write_text("def x() -> int = 1\ndef y() -> int = 2\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("scope A\nimport mylib::{x}\nend A").ok
-        replacement = s.eval_entry("scope A\nimport mylib::{y}\nend A")
+        assert s.eval_entry("scope A\n  import mylib::{x}\nend A").ok
+        replacement = s.eval_entry("scope A\n  import mylib::{y}\nend A")
 
         assert replacement.ok, replacement.diagnostics
-        old_selection = s.eval_entry("scope A\ndef old() -> int = x()\nend A")
+        old_selection = s.eval_entry("scope A\n  def old() -> int = x()\nend A")
         assert not old_selection.ok
-        new_selection = s.eval_entry("scope A\ndef new() -> int = y()\nend A\nA::new()")
+        new_selection = s.eval_entry("scope A\n  def new() -> int = y()\nend A\n\nA::new()")
         assert new_selection.ok, new_selection.diagnostics
         assert new_selection.value == IntValue(2)
 
@@ -6357,7 +6400,7 @@ class TestImports:
         (tmp_path / "mylib.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("scope A\nimport mylib::*\nend A").ok
+        assert s.eval_entry("scope A\n  import mylib::*\nend A").ok
         r = s.eval_entry("add(1, 2)")
         assert not r.ok
 
@@ -6373,9 +6416,9 @@ class TestImports:
         s = self._make_session_with_root(tmp_path)
 
         assert s.eval_entry(
-            "scope A\nimport mylib\ndef go() -> int = mylib::add(1, 2)\nend A\nA::go()"
+            "scope A\n  import mylib\n  def go() -> int = mylib::add(1, 2)\nend A\n\nA::go()"
         ).ok
-        r = s.eval_entry("scope A\ndef go2() -> int = mylib::add(3, 4)\nend A\nA::go2()")
+        r = s.eval_entry("scope A\n  def go2() -> int = mylib::add(3, 4)\nend A\n\nA::go2()")
 
         assert r.ok, r.diagnostics
         assert _int(r.value) == 7
@@ -6393,7 +6436,7 @@ class TestImports:
         (tmp_path / "other.agl").write_text("def mul(a: int, b: int) -> int = a * b\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("scope A\nimport mylib::*\nend A").ok
+        assert s.eval_entry("scope A\n  import mylib::*\nend A").ok
 
         r = s.eval_entry("import other\nother::mul(2, 3)")
 
@@ -6407,7 +6450,9 @@ class TestImports:
         (tmp_path / "other.agl").write_text("def val() -> int = 5\n")
         s = self._make_session_with_root(tmp_path)
 
-        assert s.eval_entry("scope Src\ndef v() -> int = 1\nend Src\nscope T\nuse Src::*\nend T").ok
+        assert s.eval_entry(
+            "scope Src\n  def v() -> int = 1\nend Src\n\nscope T\n  use Src::*\nend T"
+        ).ok
 
         r = s.eval_entry("import other\nother::val()")
 
@@ -6428,7 +6473,7 @@ class TestImports:
         s = self._make_session_with_root(tmp_path)
 
         assert s.eval_entry("import mylib::*\nadd(1, 2)").ok
-        assert s.eval_entry("scope A\nimport mylib\nend A").ok
+        assert s.eval_entry("scope A\n  import mylib\nend A").ok
 
         r = s.eval_entry("add(1, 2)")
 
@@ -6550,8 +6595,9 @@ class TestUnpromotedNominalDeclarationEffects:
 
         failed = s.eval_entry(
             "let z: decimal = 1 / 0\n"
+            "\n"
             "scope Failed\n"
-            "builtin exception RangeError extends Exception()\n"
+            "  builtin exception RangeError extends Exception()\n"
             "end Failed"
         )
         assert not failed.ok
@@ -6595,8 +6641,9 @@ class TestUnpromotedNominalDeclarationEffects:
 
         failed = s.eval_entry(
             "let z: decimal = 1 / 0\n"
+            "\n"
             "scope Failed\n"
-            "builtin exception RangeError extends Exception()\n"
+            "  builtin exception RangeError extends Exception()\n"
             "end Failed"
         )
         assert not failed.ok
@@ -7024,7 +7071,7 @@ class TestBareTypeEntry:
         from agm.agl.repl.render import render_entry_result
 
         session = open_session()
-        assert session.eval_entry("scope S\nrecord Box[T](value: T)\nend S").ok
+        assert session.eval_entry("scope S\n  record Box[T](value: T)\nend S").ok
         assert session.eval_entry("use S::*").ok
 
         result = session.eval_entry("Box")
@@ -7045,7 +7092,7 @@ class TestBareTypeEntry:
         from agm.agl.repl.render import render_entry_result
 
         session = open_session()
-        assert session.eval_entry("scope S\nrecord Box[T](value: T)\nend S").ok
+        assert session.eval_entry("scope S\n  record Box[T](value: T)\nend S").ok
         assert session.eval_entry(use_decl).ok
 
         result = session.eval_entry(query)
@@ -7058,7 +7105,7 @@ class TestBareTypeEntry:
 
     def test_hidden_use_generic_record_name_does_not_echo_definition(self) -> None:
         session = open_session()
-        assert session.eval_entry("scope S\nrecord Box[T](value: T)\nend S").ok
+        assert session.eval_entry("scope S\n  record Box[T](value: T)\nend S").ok
         assert session.eval_entry("use S::* hiding Box").ok
 
         assert not session.eval_entry("Box").ok
@@ -7067,7 +7114,7 @@ class TestBareTypeEntry:
         from agm.agl.repl.render import render_entry_result
 
         session = open_session()
-        assert session.eval_entry("scope S\nrecord Box[T](value: T)\nend S").ok
+        assert session.eval_entry("scope S\n  record Box[T](value: T)\nend S").ok
         assert session.eval_entry("use S as Alias").ok
 
         result = session.eval_entry("Alias::Box")
@@ -7079,7 +7126,7 @@ class TestBareTypeEntry:
 
     def test_use_alias_does_not_expose_another_qualifier(self) -> None:
         session = open_session()
-        assert session.eval_entry("scope S\nrecord Box[T](value: T)\nend S").ok
+        assert session.eval_entry("scope S\n  record Box[T](value: T)\nend S").ok
         assert session.eval_entry("use S as Alias").ok
 
         assert not session.eval_entry("Other::Box").ok
@@ -7087,8 +7134,8 @@ class TestBareTypeEntry:
     @pytest.mark.parametrize(
         "local_route",
         (
-            "use S as a\nscope S\nrecord Box[T](value: T)\nend S",
-            "scope a\nrecord Box[T](value: T)\nend a",
+            "use S as a\n\nscope S\n  record Box[T](value: T)\nend S",
+            "scope a\n  record Box[T](value: T)\nend a",
         ),
     )
     def test_qualified_unapplied_generic_rejects_distinct_local_and_import_routes(
@@ -7126,7 +7173,7 @@ class TestBareTypeEntry:
     def test_use_alias_nested_generic_record_name_echoes_definition(self) -> None:
         session = open_session()
         assert session.eval_entry(
-            "scope S\nscope Nested\nrecord Box[T](value: T)\nend Nested\nend S"
+            "scope S\n\n  scope Nested\n    record Box[T](value: T)\n  end Nested\nend S"
         ).ok
         assert session.eval_entry("use S as Alias").ok
 
@@ -7137,7 +7184,7 @@ class TestBareTypeEntry:
 
     def test_use_alias_non_generic_enum_falls_back_to_type_display(self) -> None:
         session = open_session()
-        assert session.eval_entry("scope S\nenum Status | ready\nend S").ok
+        assert session.eval_entry("scope S\n  enum Status | ready\nend S").ok
         assert session.eval_entry("use S as Alias").ok
 
         result = session.eval_entry("Alias::Status")
@@ -7155,7 +7202,7 @@ class TestBareTypeEntry:
         from agm.agl.repl.render import render_entry_result
 
         s = open_session()
-        s.eval_entry("scope A\nrecord Box[T]\n  value: T\nend A")
+        s.eval_entry("scope A\n  record Box[T]\n    value: T\nend A")
         r = s.eval_entry("A::Box")
         assert r.ok
         assert r.kind == "type"
@@ -7455,7 +7502,9 @@ class TestLocalUseNarrowing:
 
     def test_narrowing_local_use_retracts_a_member_exposed_by_an_earlier_glob_use(self) -> None:
         session = open_session()
-        assert session.eval_entry("scope S\ndef foo() -> int = 1\ndef bar() -> int = 2\nend S").ok
+        assert session.eval_entry(
+            "scope S\n  def foo() -> int = 1\n  def bar() -> int = 2\nend S"
+        ).ok
         assert session.eval_entry("use S::*").ok
         assert session.eval_entry("use S::{bar}").ok
 
@@ -7475,13 +7524,13 @@ class TestLocalUseNarrowing:
         session = open_session()
         assert session.eval_entry("type Source::Meters = int").ok
         assert session.eval_entry("type Source::Seconds = int").ok
-        assert session.eval_entry("scope Outer\nuse Source::{Meters}\nend Outer").ok
-        assert session.eval_entry("scope Outer\nuse Source::{Seconds}\nend Outer").ok
+        assert session.eval_entry("scope Outer\n  use Source::{Meters}\nend Outer").ok
+        assert session.eval_entry("scope Outer\n  use Source::{Seconds}\nend Outer").ok
 
-        result = session.eval_entry("scope Outer\nlet duration: Seconds = 1\nend Outer")
+        result = session.eval_entry("scope Outer\n  let duration: Seconds = 1\nend Outer")
         assert result.ok, result.diagnostics
 
-        assert not session.eval_entry("scope Outer\nlet distance: Meters = 1\nend Outer").ok
+        assert not session.eval_entry("scope Outer\n  let distance: Meters = 1\nend Outer").ok
 
     def test_a_narrower_use_supersedes_a_retained_local_scope_route_within_the_same_entry(
         self,
@@ -7494,7 +7543,14 @@ class TestLocalUseNarrowing:
         once the next entry rebuilds the scope from scratch."""
         session = open_session()
         assert session.eval_entry(
-            "scope A\nscope B\ndef value() -> int = 1\nend B\ndef direct() -> int = 5\nend A"
+            "scope A\n"
+            "\n"
+            "  scope B\n"
+            "    def value() -> int = 1\n"
+            "  end B\n"
+            "\n"
+            "  def direct() -> int = 5\n"
+            "end A"
         ).ok
         assert session.eval_entry("use A::*").ok
 
@@ -7516,31 +7572,32 @@ class TestLocalUseNarrowing:
         shares, and one a contribution owns outright."""
         session = open_session()
         assert session.eval_entry(
-            "scope SourceA\nrecord Point\n  x: int\ndef onlyA() -> int = 11\nend SourceA\n"
-            "scope SourceB\nrecord Point\n  y: int\ndef onlyB() -> int = 22\nend SourceB\n"
+            "scope SourceA\n  record Point\n    x: int\n  def onlyA() -> int = 11\nend SourceA\n"
+            "\n"
+            "scope SourceB\n  record Point\n    y: int\n  def onlyB() -> int = 22\nend SourceB\n"
         ).ok
         assert session.eval_entry(
             "scope Outer\n"
-            "use SourceA::*\nuse ::SourceA::*\nuse SourceB::*\nuse ::SourceB::*\n"
+            "  use SourceA::*\n  use ::SourceA::*\n  use SourceB::*\n  use ::SourceB::*\n"
             "end Outer"
         ).ok
 
         narrowed = session.eval_entry(
             "scope Outer\n"
-            "use SourceA::{onlyA}\nuse ::SourceA::{onlyA}\n"
-            "use SourceB::{onlyB}\nuse ::SourceB::{onlyB}\n"
+            "  use SourceA::{onlyA}\n  use ::SourceA::{onlyA}\n"
+            "  use SourceB::{onlyB}\n  use ::SourceB::{onlyB}\n"
             "end Outer"
         )
         assert narrowed.ok, narrowed.diagnostics
 
         result = session.eval_entry(
-            "scope Outer\ndef check() -> int = onlyA() + onlyB()\nend Outer"
+            "scope Outer\n  def check() -> int = onlyA() + onlyB()\nend Outer"
         )
         assert result.ok, result.diagnostics
         assert session.eval_entry("Outer::check()").value == IntValue(33)
 
         stale = session.eval_entry(
-            "scope Outer\ndef mk() -> int = case Point(x = 1) of | Point(x) => x\nend Outer"
+            "scope Outer\n  def mk() -> int = case Point(x = 1) of | Point(x) => x\nend Outer"
         )
         assert not stale.ok
 
@@ -7555,7 +7612,8 @@ class TestLocalUseNarrowing:
         failed = session.eval_entry(
             "let z: decimal = 1 / 0\n"
             "enum Color\n  | Red\n  | Blue\n"
-            "scope Outer\nuse Color::*\nend Outer\n"
+            "\n"
+            "scope Outer\n  use Color::*\nend Outer\n"
         )
         assert not failed.ok
 

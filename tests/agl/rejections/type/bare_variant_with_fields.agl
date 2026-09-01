@@ -1,6 +1,7 @@
 enum Box
   | Empty
   | Full(item: int)
+
 program def main() -> unit =
   let b: Box = Full(item = 1)
   case b of

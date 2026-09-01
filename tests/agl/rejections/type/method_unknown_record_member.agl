@@ -1,5 +1,6 @@
 record Point
   x: int
+
 program def main() -> unit =
   let point = Point(x = 1)
   point.missing

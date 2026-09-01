@@ -32,6 +32,7 @@ followed by `{` is literal; `\%` produces a literal percent sign.
 
 ```agl
 import std/text
+
 program def main() -> unit =
   let vars = {"name": "Ada"}
   let _ = print std/text::interp("Hello, \%{name}!", vars)

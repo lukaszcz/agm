@@ -1,4 +1,5 @@
 def take(x: json) -> unit = ()
+
 program def main() -> unit =
   let xs: array[int] = [1, 2]
   take(xs)

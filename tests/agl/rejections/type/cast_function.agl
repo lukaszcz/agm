@@ -1,4 +1,5 @@
 def f(x: int) -> int = x
+
 program def main() -> unit =
   let t = f as text
   t

@@ -63,6 +63,7 @@ constraint in the same enclosing expression:
 
 ```agl
 def choose[T](left: T, right: T) -> T = right
+
 program def main() -> unit =
   let items = choose([], [1])
 ```
@@ -248,6 +249,7 @@ record Box[T]
   value: T
 
 def build[T](factory: (T) -> Box[T], value: T) -> Box[T] = factory(value)
+
 program def main() -> unit =
   let b = build(Box(value = ?), 5)
 ```
@@ -320,6 +322,7 @@ value. Supply an explicit function when one is required:
 ```agl
 record R1()
 def invoke(factory: () -> R1) -> R1 = factory()
+
 program def main() -> unit =
   let result = invoke(fn() => R1)
 ```
@@ -354,6 +357,7 @@ record Meter
   var value: int
 
 def Meter::add(self, amount: int) -> int = self.value + amount
+
 program def main() -> unit =
   let meter = Meter(value = 4)
   let value = meter.value

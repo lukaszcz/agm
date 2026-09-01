@@ -128,10 +128,12 @@ _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 _MIXED_ROOT_AND_SCOPED_DECLARATIONS = (
     "def root() -> int = 0\n"
     "agent root_agent\n"
+    "\n"
     "scope Group\n"
-    "def block_function() -> int = 0\n"
-    "agent block_agent\n"
+    "  def block_function() -> int = 0\n"
+    "  agent block_agent\n"
     "end Group\n"
+    "\n"
     "def Group::shorthand_function() -> int = 0\n"
     "agent Group::shorthand_agent\n"
     "()"
@@ -284,7 +286,7 @@ def test_lower_repl_trailing_binder_has_no_expression_marker() -> None:
 
 def test_lower_repl_trailing_scope_region_has_no_expression_marker() -> None:
     entry, _next_id, _root_scope, _checked = _repl_entry(
-        "scope Tools\ndef helper() -> int = 1\nend Tools"
+        "scope Tools\n  def helper() -> int = 1\nend Tools"
     )
 
     assert entry.trailing_expression is None
@@ -298,7 +300,7 @@ def _lower(source: str, *, default_stdlib: bool = True) -> ExecutableProgram:
 
 def test_scoped_only_function_has_no_public_name() -> None:
     """A function declared only inside a named scope must never surface a root binding."""
-    program = _lower("scope A\ndef f() -> int = 1\nend A\n()")
+    program = _lower("scope A\n  def f() -> int = 1\nend A\n\n()")
 
     public_names = {symbol.public_name for symbol in program.symbols.values()}
     assert "f" not in public_names
@@ -307,7 +309,7 @@ def test_scoped_only_function_has_no_public_name() -> None:
 
 def test_root_and_scoped_functions_with_same_name_do_not_collide_in_public_names() -> None:
     """A root ``f`` and a same-named scoped ``A::f`` must not collide: only the root wins."""
-    source = 'def f() -> int = 100\nscope A\ndef f() -> text = "scoped"\nend A\n()'
+    source = 'def f() -> int = 100\n\nscope A\n  def f() -> text = "scoped"\nend A\n\n()'
     program = _lower(source)
 
     matching = [symbol for symbol in program.symbols.values() if symbol.public_name == "f"]
@@ -324,11 +326,13 @@ def test_lowering_preserves_scoped_nominal_identity_for_generic_and_enum_types()
 
     source = """
 record Token()
+
 scope Left
-record Token()
-record Box[T](value: T)
-enum Flag | on
+  record Token()
+  record Box[T](value: T)
+  enum Flag | on
 end Left
+
 let box: Left::Box[int] = Left::Box(value = 1)
 let flag = Left::Flag::on
 case flag of | Left::Flag::on => box.value
@@ -1391,7 +1395,7 @@ class TestBuiltinNominalsTable:
         """
         from tests.agl.ir_harness import nominal_id_for
 
-        source = "scope A\nbuiltin exception RangeError extends Exception()\nend A\n()\n"
+        source = "scope A\n  builtin exception RangeError extends Exception()\nend A\n\n()\n"
         prog = _lower(source, default_stdlib=False)
         assert prog.builtin_nominals.nominal("RangeError") == nominal_id_for(prog, "A::RangeError")
 
@@ -1429,8 +1433,9 @@ class TestBuiltinNominalsTable:
 
         source = (
             "scope A\n"
-            "builtin exception RangeError extends Exception()\n"
+            "  builtin exception RangeError extends Exception()\n"
             "end A\n"
+            "\n"
             "let step = 0\n"
             "for i in 1 to 5 by step do\n"
             "  ()\n"
@@ -1457,15 +1462,16 @@ class TestBuiltinNominalsTable:
             ("()\n", True),
             ("()\n", False),
             ("builtin exception RangeError extends Exception()\n()\n", False),
-            ("scope A\nbuiltin exception RangeError extends Exception()\nend A\n()\n", False),
+            ("scope A\n  builtin exception RangeError extends Exception()\nend A\n\n()\n", False),
             (
                 "scope A\n"
-                "builtin record ExecResult\n"
-                "  stdout: text\n"
-                "  exit_code: int\n"
-                "  stderr: text\n"
-                "  timed_out: bool\n"
+                "  builtin record ExecResult\n"
+                "    stdout: text\n"
+                "    exit_code: int\n"
+                "    stderr: text\n"
+                "    timed_out: bool\n"
                 "end A\n"
+                "\n"
                 "()\n",
                 False,
             ),
@@ -2708,7 +2714,7 @@ class TestHostOpLowering:
     def test_scoped_param_public_name_is_its_full_path_spelling(self) -> None:
         """A scoped param's IrParam.public_name is its full `::` path, the
         external key CLI/config lookups use."""
-        source = 'scope Deploy\nparam region: text = "eu"\nend Deploy\nDeploy::region'
+        source = 'scope Deploy\n  param region: text = "eu"\nend Deploy\n\nDeploy::region'
         prog = _lower(source)
         assert len(prog.params) == 1
         p = prog.params[0]
@@ -2717,7 +2723,7 @@ class TestHostOpLowering:
     def test_scoped_param_symbol_public_name_matches_its_ir_param(self) -> None:
         """The allocated symbol's own public_name matches the IrParam's, so
         REPL echo/result collection stays keyed by the same external spelling."""
-        source = "scope A\nscope B\nparam x: int\nend B\nend A\nA::B::x"
+        source = "scope A\n\n  scope B\n    param x: int\n  end B\nend A\n\nA::B::x"
         prog = _lower(source)
         (p,) = prog.params
         assert p.public_name == "A::B::x"

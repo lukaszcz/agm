@@ -1,13 +1,13 @@
 import std/option::Option
 
 scope RandomInternals
-extern def seed(value: int) -> unit
-extern def below(upper: int) -> int
-extern def between(lower: int, upper: int) -> int
-extern def uniform() -> decimal
-extern def choice[T](values: array[T]) -> T
-extern def shuffle_in_place[T](values: array[T]) -> unit
-extern def uuid() -> text
+  extern def seed(value: int) -> unit
+  extern def below(upper: int) -> int
+  extern def between(lower: int, upper: int) -> int
+  extern def uniform() -> decimal
+  extern def choice[T](values: array[T]) -> T
+  extern def shuffle_in_place[T](values: array[T]) -> unit
+  extern def uuid() -> text
 end RandomInternals
 
 def seed(value: int) -> unit = RandomInternals::seed(value)

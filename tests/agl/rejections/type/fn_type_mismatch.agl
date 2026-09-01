@@ -1,4 +1,5 @@
 def dbl(n: int) -> int = n * 2
+
 program def main() -> unit =
   let g: (int) -> text = dbl
   g

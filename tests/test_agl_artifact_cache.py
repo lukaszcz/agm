@@ -1,6 +1,7 @@
 """A one-shot compilation reuses the artifacts an earlier one left behind.
 
 ``agm exec``, ``agm check`` and every other non-REPL caller compiles a whole
+
 program: the entry module plus everything behind it. Whatever of that is
 unchanged from the last compilation in this process -- the standard library
 almost always, the program's own imports whenever nothing edited them -- has its

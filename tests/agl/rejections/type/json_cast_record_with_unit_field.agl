@@ -2,5 +2,6 @@ record Bad
   nothing: unit
   x: int
 def encode(b: Bad) -> json = b as json
+
 program def main() -> unit =
   encode

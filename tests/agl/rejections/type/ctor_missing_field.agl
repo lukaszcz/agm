@@ -1,6 +1,7 @@
 record P
   n: int
   t: text
+
 program def main() -> unit =
   let p = P(n = 1)
   p

@@ -291,6 +291,7 @@ record Box[T]
 
 def Box::get[E](self: Box[E]) -> E = self.value
 def Box::size[_](self) -> int = 1
+
 program def main() -> unit =
   let box = Box(value = 7)
   let _ = print(box.get())
@@ -322,6 +323,7 @@ record Meter
 
 def Meter::add(self, amount: int) -> int = self.value + amount
 def apply(value: int, f: int -> int) -> int = f(value)
+
 program def main() -> unit =
   let meter = Meter(value = 4)
   let add = meter.add
@@ -422,8 +424,9 @@ declaration makes that scope's or module's members bare:
 <!-- agl-check: fragment -->
 ```agl
 use Codec::*
+
 scope Codec
-def render[T](value: T) -> array[T] = [value]
+  def render[T](value: T) -> array[T] = [value]
 end Codec
 
 let values = Codec::render(1)  # the scoped generic function
@@ -483,6 +486,7 @@ its instantiation. An expected function type does so for an annotated binding:
 
 ```agl
 def id[T](x: T) -> T = x
+
 program def main() -> unit =
   let f: text -> text = id
   let _ = print(f("via value"))
@@ -494,6 +498,7 @@ arguments, so a generic function occurrence is fresh at each use:
 ```agl
 def apply[T](f: T -> T, value: T) -> T = f(value)
 def id[T](value: T) -> T = value
+
 program def main() -> unit =
   let n = apply(id, 5)
 ```
@@ -589,6 +594,7 @@ arguments at the call site.
 def add(x: int, y: int) -> int = x + y
 def f(x: int, /, y: int) -> int = x + y
 def g(x: int, *, z: int) -> int = x + z
+
 program def main() -> unit =
   let r = add(3, 4)
   let s = add(3, y = 4)
@@ -605,6 +611,7 @@ position is an error:
 
 ```agl
 def h(a: int, *, key: text) -> text = "%{a}: %{key}"
+
 program def main() -> unit =
   let key = "hello"
   let _ = print(h(1, key))
@@ -648,6 +655,7 @@ expression are considered together, so this needs no intermediate annotation:
 
 ```agl
 def maker[T]() -> T -> T = fn(value: T) => value
+
 program def main() -> unit =
   let number = maker()(7)
 ```
@@ -667,6 +675,7 @@ functions, constructors, and function values.
 ```agl
 def add(a: int, b: int) -> int = a + b
 def digits(a: int, b: int, c: int) -> int = a * 100 + b * 10 + c
+
 program def main() -> unit =
   let inc: (int) -> int = add(?, 1)
   let _ = print(inc(4))
@@ -702,6 +711,7 @@ parameters:
 
 ```agl
 def shaped(x: int, *, y: int, z: int = 0) -> int = x * 100 + y * 10 + z
+
 program def main() -> unit =
   let fill_y: (int) -> int = shaped(3, y = ?, z = 9)
   let fill_x: (int) -> int = shaped(x = ?, y = 4)
@@ -756,6 +766,7 @@ underlying call is raised when the closure is invoked:
 def add(a: int, b: int) -> int = a + b
 def fail_created() -> int = raise Abort(message = "created")
 def fail_called(x: int) -> int = raise Abort(message = "called %{x}")
+
 program def main() -> unit =
   let _ = try
     let f = add(?, fail_created())
@@ -781,6 +792,7 @@ the `::[…]` form.
 def id[T](x: T) -> T = x
 def singleton[T](x: T) -> array[T] = [x]
 def map_one[A, B](f: (A) -> B, xs: array[A]) -> array[B] = [f(xs[0])]
+
 program def main() -> unit =
   let keep_ints: (array[int]) -> array[int] = map_one(id, ?)
   let _ = print(keep_ints([5])[0])

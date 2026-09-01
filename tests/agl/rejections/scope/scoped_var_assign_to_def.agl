@@ -1,5 +1,6 @@
 scope Config
-def show() -> int = 1
+  def show() -> int = 1
 end Config
+
 program def main() -> unit =
   Config::show := 4

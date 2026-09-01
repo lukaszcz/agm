@@ -2,24 +2,24 @@ import std/option::Option
 import std/pair::Pair
 
 scope DictInternals
-extern def size[V](self: dict[text, V]) -> int
-extern def get[V](self: dict[text, V], key: text) -> V
-extern def get_option[V](self: dict[text, V], key: text) -> Option[V]
-extern def remove[V](self: dict[text, V], key: text) -> V
-extern def set[V](self: dict[text, V], key: text, value: V) -> unit
-extern def remove_option[V](self: dict[text, V], key: text) -> Option[V]
-extern def contains[V](self: dict[text, V], key: text) -> bool
-extern def clear[V](self: dict[text, V]) -> unit
-extern def keys[V](self: dict[text, V]) -> array[text]
-extern def values[V](self: dict[text, V]) -> array[V]
-extern def entries[V](self: dict[text, V]) -> array[Pair[text, V]]
-extern def merge[V](self: dict[text, V], other: dict[text, V]) -> dict[text, V]
-extern def merge_in_place[V](self: dict[text, V], other: dict[text, V]) -> unit
-extern def map_values[V, U](self: dict[text, V], function: (V) -> U) -> dict[text, U]
-extern def filter[V](self: dict[text, V], predicate: (text, V) -> bool) -> dict[text, V]
-extern def filter_in_place[V](self: dict[text, V], predicate: (text, V) -> bool) -> unit
-extern def each[V](self: dict[text, V], function: (text, V) -> unit) -> unit
-extern def from_entries[V](values: array[Pair[text, V]]) -> dict[text, V]
+  extern def size[V](self: dict[text, V]) -> int
+  extern def get[V](self: dict[text, V], key: text) -> V
+  extern def get_option[V](self: dict[text, V], key: text) -> Option[V]
+  extern def remove[V](self: dict[text, V], key: text) -> V
+  extern def set[V](self: dict[text, V], key: text, value: V) -> unit
+  extern def remove_option[V](self: dict[text, V], key: text) -> Option[V]
+  extern def contains[V](self: dict[text, V], key: text) -> bool
+  extern def clear[V](self: dict[text, V]) -> unit
+  extern def keys[V](self: dict[text, V]) -> array[text]
+  extern def values[V](self: dict[text, V]) -> array[V]
+  extern def entries[V](self: dict[text, V]) -> array[Pair[text, V]]
+  extern def merge[V](self: dict[text, V], other: dict[text, V]) -> dict[text, V]
+  extern def merge_in_place[V](self: dict[text, V], other: dict[text, V]) -> unit
+  extern def map_values[V, U](self: dict[text, V], function: (V) -> U) -> dict[text, U]
+  extern def filter[V](self: dict[text, V], predicate: (text, V) -> bool) -> dict[text, V]
+  extern def filter_in_place[V](self: dict[text, V], predicate: (text, V) -> bool) -> unit
+  extern def each[V](self: dict[text, V], function: (text, V) -> unit) -> unit
+  extern def from_entries[V](values: array[Pair[text, V]]) -> dict[text, V]
 end DictInternals
 
 def dict[text, V]::size(self) -> int = DictInternals::size(self)

@@ -1,5 +1,6 @@
 scope Point
-def distance() -> int = 0
+  def distance() -> int = 0
 end Point
+
 program def main() -> unit =
   Point::missing()

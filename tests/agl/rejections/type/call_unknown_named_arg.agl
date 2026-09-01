@@ -1,3 +1,4 @@
 def greet(name: text) -> text = "hi"
+
 program def main() -> unit =
   greet(name = "Bob", extra = 1)

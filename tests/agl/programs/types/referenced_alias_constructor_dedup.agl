@@ -1,5 +1,5 @@
 scope One
-record Shared(value: int)
+  record Shared(value: int)
 end One
 
 type First = One::Shared

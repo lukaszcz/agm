@@ -1,5 +1,6 @@
 def f() -> int =
   return "bad"
   0
+
 program def main() -> unit =
   f()

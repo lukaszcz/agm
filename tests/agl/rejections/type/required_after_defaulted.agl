@@ -1,3 +1,4 @@
 def f(x: int = 0, y: int) -> int = x + y
+
 program def main() -> unit =
   print(f(y = 1))

@@ -1,22 +1,22 @@
 scope Math
 
-def factorial(n: int) =
-  if n == 0 => 1
-  else => n * factorial(n - 1)
+  def factorial(n: int) =
+    if n == 0 => 1
+    else => n * factorial(n - 1)
 
-def even(n: int) =
-  if n == 0 => true
-  else => odd(n - 1)
+  def even(n: int) =
+    if n == 0 => true
+    else => odd(n - 1)
 
-def odd(n: int) =
-  if n == 0 => false
-  else => even(n - 1)
+  def odd(n: int) =
+    if n == 0 => false
+    else => even(n - 1)
 
-def echo[T](value: T) = value
+  def echo[T](value: T) = value
 
-extern def increment(value: int) -> int
+  extern def increment(value: int) -> int
 
-let reviewer: Agent = AgentCommand("reviewer")
+  let reviewer: Agent = AgentCommand("reviewer")
 end Math
 
 program def main() -> unit =

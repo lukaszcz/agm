@@ -4,6 +4,7 @@ record Pair[A, B]
 enum Perfect[T]
   | Single(value: T)
   | Succ(next: Perfect[Pair[T, T]])
+
 program def main() -> unit =
   let raw: text = "{}"
   let x = raw as Perfect[int]

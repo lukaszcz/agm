@@ -1,6 +1,6 @@
 {
   "diagnostic": {
-    "line": 13,
+    "line": 14,
     "message_contains": [
       "ambiguous outside the pattern",
       "Red"

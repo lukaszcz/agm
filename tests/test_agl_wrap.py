@@ -46,9 +46,11 @@ exception Problem()
 type Count = int
 param input: text
 infixl |> at 12
+
 scope Shared
-def member() -> unit = ()
+  def member() -> unit = ()
 end Shared
+
 let value = 1
 var total = 0
 total := value
@@ -153,8 +155,10 @@ def test_wrap_inline_program_is_an_identity_when_a_program_def_is_present() -> N
     program, next_node_id = parse_program_seeded(
         """\
 scope Jobs
-program def run() -> unit = ()
+
+  program def run() -> unit = ()
 end Jobs
+
 let value = 1
 """,
         start_id=0,
@@ -170,8 +174,8 @@ let value = 1
     "source",
     (
         "Config::answer\nlet Config::answer = 42",
-        "Config::answer\nscope Config\nlet answer = 42\nend Config",
-        "Config::answer\nscope Config\nparam answer: int = 42\nend Config",
+        "Config::answer\n\nscope Config\n  let answer = 42\nend Config",
+        "Config::answer\n\nscope Config\n  param answer: int = 42\nend Config",
         "answer\nparam answer: int = 42",
     ),
     ids=("shorthand-let", "region-let", "scoped-param", "root-param"),

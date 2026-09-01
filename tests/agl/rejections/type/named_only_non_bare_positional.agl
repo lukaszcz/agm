@@ -1,3 +1,4 @@
 def g(x: int, *, z: int) -> int = x + z
+
 program def main() -> unit =
   g(1, 2 + 0)

@@ -43,7 +43,7 @@ def _declaration(source: str) -> Item:
 
 
 def test_region_and_shorthand_declarations_have_the_same_scope_path() -> None:
-    block_form = parse_program("scope A::B\ndef value() -> int = 0\nend A::B")
+    block_form = parse_program("scope A::B\n  def value() -> int = 0\nend A::B")
     shorthand = parse_program("def A::B::value() -> int = 0")
 
     (region,) = block_form.body.items
@@ -59,7 +59,7 @@ def test_region_and_shorthand_declarations_have_the_same_scope_path() -> None:
 
 
 def test_nested_region_declarations_accumulate_the_enclosing_scope_path() -> None:
-    program = parse_program("scope A\nscope B\ndef C::value() -> int = 0\nend B\nend A")
+    program = parse_program("scope A\n\n  scope B\n    def C::value() -> int = 0\n  end B\nend A")
 
     (outer,) = program.body.items
     assert isinstance(outer, ScopeRegion)
@@ -78,7 +78,7 @@ def test_nested_region_declarations_accumulate_the_enclosing_scope_path() -> Non
 def test_an_indented_region_body_parses_as_the_flat_one_does() -> None:
     """A region's items may sit in an indented block under their `scope` header."""
     indented = parse_program("scope A\n  def value() -> int = 0\nend A")
-    flat = parse_program("scope A\ndef value() -> int = 0\nend A")
+    flat = parse_program("scope A\n  def value() -> int = 0\nend A")
 
     assert indented == flat
 
@@ -88,6 +88,7 @@ def test_a_nested_indented_region_closes_at_its_own_level() -> None:
     source = (
         "scope Outer\n"
         "  def a() -> int = 1\n"
+        "\n"
         "  scope Inner\n"
         "    def b() -> int = 2\n"
         "  end Inner\n"
@@ -109,10 +110,10 @@ def test_a_nested_indented_region_closes_at_its_own_level() -> None:
 def test_a_region_body_may_mix_indented_and_flat_nesting() -> None:
     """An indented body admits a flat inner region, and the reverse."""
     indented_outer = parse_program(
-        "scope Outer\n  scope Inner\n  def b() -> int = 2\n  end Inner\nend Outer"
+        "scope Outer\n\n  scope Inner\n    def b() -> int = 2\n  end Inner\nend Outer"
     )
     flat_outer = parse_program(
-        "scope Outer\nscope Inner\n  def b() -> int = 2\nend Inner\nend Outer"
+        "scope Outer\n\n  scope Inner\n    def b() -> int = 2\n  end Inner\nend Outer"
     )
 
     assert indented_outer == flat_outer
@@ -187,7 +188,9 @@ def test_let_and_var_are_admitted_inside_a_scope_region(source: str, kind: type[
 
 
 def test_let_and_var_accumulate_scope_path_across_nested_regions() -> None:
-    program = parse_program("scope A\nscope B\nlet retries = 3\nvar attempts = 0\nend B\nend A")
+    program = parse_program(
+        "scope A\n\n  scope B\n    let retries = 3\n    var attempts = 0\n  end B\nend A"
+    )
 
     (outer,) = program.body.items
     assert isinstance(outer, ScopeRegion)
@@ -201,7 +204,7 @@ def test_let_and_var_accumulate_scope_path_across_nested_regions() -> None:
 
 
 def test_let_binder_path_shorthand_combines_with_enclosing_region_path() -> None:
-    program = parse_program("scope Outer\nlet Inner::x = 1\nend Outer")
+    program = parse_program("scope Outer\n  let Inner::x = 1\nend Outer")
 
     (region,) = program.body.items
     assert isinstance(region, ScopeRegion)
@@ -274,7 +277,7 @@ def test_var_binder_path_rejects_a_type_applied_segment() -> None:
 
 
 def test_param_is_admitted_inside_a_scope_region() -> None:
-    program = parse_program("scope Deploy\nparam region: text\nend Deploy")
+    program = parse_program("scope Deploy\n  param region: text\nend Deploy")
 
     (region,) = program.body.items
     assert isinstance(region, ScopeRegion)
@@ -285,7 +288,7 @@ def test_param_is_admitted_inside_a_scope_region() -> None:
 
 
 def test_param_accumulates_scope_path_across_nested_regions() -> None:
-    program = parse_program("scope A\nscope B\nparam x\nend B\nend A")
+    program = parse_program("scope A\n\n  scope B\n    param x\n  end B\nend A")
 
     (outer,) = program.body.items
     assert isinstance(outer, ScopeRegion)
@@ -297,7 +300,7 @@ def test_param_accumulates_scope_path_across_nested_regions() -> None:
 
 
 def test_param_accepts_a_multi_segment_region_header() -> None:
-    program = parse_program("scope A::B\nparam x\nend A::B")
+    program = parse_program("scope A::B\n  param x\nend A::B")
 
     (outer,) = program.body.items
     assert isinstance(outer, ScopeRegion)
@@ -347,7 +350,7 @@ def test_import_and_export_are_admitted_inside_a_scope_region(
 
 
 def test_import_and_export_accumulate_scope_path_across_nested_regions() -> None:
-    program = parse_program("scope A\nscope B\nimport lib\nexport lib\nend B\nend A")
+    program = parse_program("scope A\n\n  scope B\n    import lib\n    export lib\n  end B\nend A")
 
     (outer,) = program.body.items
     assert isinstance(outer, ScopeRegion)
@@ -361,7 +364,7 @@ def test_import_and_export_accumulate_scope_path_across_nested_regions() -> None
 
 
 def test_tailed_import_is_admitted_at_the_start_of_a_scope_region() -> None:
-    program = parse_program("scope A\nimport lib::*\ndef value() -> int = 0\nend A")
+    program = parse_program("scope A\n  import lib::*\n  def value() -> int = 0\nend A")
 
     (region,) = program.body.items
     assert isinstance(region, ScopeRegion)
@@ -370,7 +373,7 @@ def test_tailed_import_is_admitted_at_the_start_of_a_scope_region() -> None:
 
 def test_use_after_a_non_header_region_item_is_rejected() -> None:
     with pytest.raises(AglSyntaxError):
-        resolve_inline_entry("scope A\ndef value() -> int = 0\nuse B::*\nend A")
+        resolve_inline_entry("scope A\n  def value() -> int = 0\n  use B::*\nend A")
 
 
 @pytest.mark.parametrize(
@@ -381,9 +384,9 @@ def test_use_after_a_non_header_region_item_is_rejected() -> None:
         # module graph these are now built through can actually load the
         # import; content doesn't matter here since placement is checked
         # before any import content is consulted.
-        "scope A\ndef value() -> int = 0\nimport std/config\nend A",
-        "scope A\ndef value() -> int = 0\nimport std/config::*\nend A",
-        "scope A\ndef value() -> int = 0\nexport std/config\nend A",
+        "scope A\n  def value() -> int = 0\n  import std/config\nend A",
+        "scope A\n  def value() -> int = 0\n  import std/config::*\nend A",
+        "scope A\n  def value() -> int = 0\n  export std/config\nend A",
     ),
 )
 def test_import_after_a_non_header_region_item_is_rejected_by_the_scope_pass(source: str) -> None:
@@ -394,7 +397,7 @@ def test_import_after_a_non_header_region_item_is_rejected_by_the_scope_pass(sou
 
 def test_export_before_other_region_items_is_admitted() -> None:
     """Like `import` and `use`, `export` is confined to a region's header."""
-    program = parse_program("scope A\nexport lib\ndef value() -> int = 0\nend A")
+    program = parse_program("scope A\n  export lib\n  def value() -> int = 0\nend A")
 
     (region,) = program.body.items
     assert isinstance(region, ScopeRegion)
@@ -461,7 +464,7 @@ def test_use_declarations_accept_scope_references_and_clauses(
 
 
 def test_use_declarations_are_allowed_at_the_start_of_scope_regions() -> None:
-    program = parse_program("scope A\nuse B::{value as b}\ndef value() -> int = 0\nend A")
+    program = parse_program("scope A\n  use B::{value as b}\n  def value() -> int = 0\nend A")
 
     (region,) = program.body.items
     assert isinstance(region, ScopeRegion)
@@ -522,12 +525,14 @@ def test_import_and_export_clauses_accept_path_atoms(source: str, kind: type[obj
 
 def test_use_rejects_operator_alias_for_scope_route() -> None:
     with pytest.raises(AglScopeError):
-        resolve_inline_entry("use Point as >>\nscope Point\ndef distance() -> int = 1\nend Point")
+        resolve_inline_entry(
+            "use Point as >>\n\nscope Point\n  def distance() -> int = 1\nend Point"
+        )
 
 
 def test_use_contributes_local_scope_members() -> None:
     resolved = resolve_inline_entry(
-        "use Point::*\nscope Point\ndef distance() -> int = 1\nend Point\ndistance()"
+        "use Point::*\n\nscope Point\n  def distance() -> int = 1\nend Point\n\ndistance()"
     )
 
     assert any(ref.name == "distance" for ref in resolved.resolution.values())
@@ -536,8 +541,10 @@ def test_use_contributes_local_scope_members() -> None:
 def test_used_scope_members_clash_at_their_use_site() -> None:
     source = (
         "use Point::*\nuse Vector::*\n"
-        "scope Point\ndef distance() -> int = 1\nend Point\n"
-        "scope Vector\ndef distance() -> int = 2\nend Vector\ndistance()"
+        "\n"
+        "scope Point\n  def distance() -> int = 1\nend Point\n"
+        "\n"
+        "scope Vector\n  def distance() -> int = 2\nend Vector\n\ndistance()"
     )
 
     with pytest.raises(AglScopeError, match="ambiguous"):
@@ -630,7 +637,7 @@ def test_ast_walk_visits_use_and_export_selection_paths() -> None:
 def test_ast_walk_visits_a_scoped_params_scope_path_segments() -> None:
     from agm.agl.syntax.visitor import walk
 
-    program = parse_program("scope A::B\nparam x\nend A::B")
+    program = parse_program("scope A::B\n  param x\nend A::B")
     visited: list[object] = []
 
     walk(program, visited.append)
@@ -650,7 +657,7 @@ def test_scoped_declarations_do_not_generate_runtime_initializers() -> None:
 def test_library_scope_regions_apply_entry_only_declaration_restrictions(tmp_path: Path) -> None:
     root = tmp_path / "modules"
     root.mkdir()
-    write_module_file(root, "library", "scope A\nagent bot\nend A")
+    write_module_file(root, "library", "scope A\n  agent bot\nend A")
 
     result = run_inline_command(
         PipelineDriver(),
@@ -720,7 +727,13 @@ def test_builtin_forms_are_admitted_inside_a_scope_region(source: str, kind: typ
 
 def test_builtin_forms_accumulate_scope_path_across_nested_regions() -> None:
     program = parse_program(
-        "scope A\nscope B\nbuiltin def native() -> int\nbuiltin var setting: int\nend B\nend A"
+        "scope A\n"
+        "\n"
+        "  scope B\n"
+        "    builtin def native() -> int\n"
+        "    builtin var setting: int\n"
+        "  end B\n"
+        "end A"
     )
 
     (outer,) = program.body.items

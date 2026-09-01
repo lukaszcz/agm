@@ -12,8 +12,8 @@ exception DetailedProblem extends Problem
   detail: text
 
 scope Scoped
-exception Marker extends Exception
-  code: int
+  exception Marker extends Exception
+    code: int
 end Scoped
 
 def Problem::label(self) -> text = "problem %{self.code}"

@@ -1,6 +1,7 @@
 record Box[T]
   value: T
 def encode[T](b: Box[T]) -> json = b as json
+
 program def main() -> unit =
   let j = encode::[int](Box(value = 1))
   j

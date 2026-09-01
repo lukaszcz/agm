@@ -70,9 +70,11 @@ def test_constructor_consumers_resolve_whole_use_aliases(tmp_path: Path, express
         {
             "entry": (
                 "use S as X\n"
+                "\n"
                 "scope S\n"
-                "enum E\n  | A(value: int)\n  | B\n"
+                "  enum E\n    | A(value: int)\n    | B\n"
                 "end S\n"
+                "\n"
                 "let value: X::E = X::E::A(1)\n"
                 f"{expression}\n"
             ),
@@ -88,10 +90,12 @@ def test_bare_renamed_constructor_must_belong_to_matched_enum(tmp_path: Path) ->
         {
             "entry": (
                 "use S::{A::X as Renamed}\n"
+                "\n"
                 "scope S\n"
-                "enum A | X\n"
-                "enum B | Y\n"
+                "  enum A | X\n"
+                "  enum B | Y\n"
                 "end S\n"
+                "\n"
                 "let value: S::B = S::B::Y\n"
                 "case value of | Renamed => 1 | _ => 0\n"
             ),
@@ -110,9 +114,11 @@ def test_bare_renamed_fieldful_constructor_must_use_a_constructor_pattern(
         {
             "entry": (
                 "use S::{E::A as X}\n"
+                "\n"
                 "scope S\n"
-                "enum E | A(value: int)\n"
+                "  enum E | A(value: int)\n"
                 "end S\n"
+                "\n"
                 "let value: S::E = X(1)\n"
                 "case value of | X => 1 | _ => 0\n"
             ),
@@ -129,9 +135,11 @@ def test_constructor_consumers_honor_use_tail_renames(tmp_path: Path) -> None:
         {
             "entry": (
                 "use S::{E::A as X}\n"
+                "\n"
                 "scope S\n"
-                "enum E\n  | A(value: int)\n  | B\n"
+                "  enum E\n    | A(value: int)\n    | B\n"
                 "end S\n"
+                "\n"
                 "let value: S::E = X(1)\n"
                 "let selected = case value of | X(_ as item) => item | _ => 0\n"
                 "let matches = value is X\n"
@@ -152,12 +160,15 @@ def test_ambiguous_whole_use_alias_constructor_qualifier_is_rejected(tmp_path: P
             "entry": (
                 "use First as X\n"
                 "use Second as X\n"
+                "\n"
                 "scope First\n"
-                "enum E | A\n"
+                "  enum E | A\n"
                 "end First\n"
+                "\n"
                 "scope Second\n"
-                "enum E | A\n"
+                "  enum E | A\n"
                 "end Second\n"
+                "\n"
                 "let value = First::E::A\n"
                 "value is X::E::A\n"
             ),
@@ -181,9 +192,11 @@ def test_constructor_consumers_honor_use_hiding(tmp_path: Path, expression: str)
         {
             "entry": (
                 "use S::* hiding E::A\n"
+                "\n"
                 "scope S\n"
-                "enum E\n  | A(value: int)\n  | B\n"
+                "  enum E\n    | A(value: int)\n    | B\n"
                 "end S\n"
+                "\n"
                 "let value = S::E::A(1)\n"
                 f"{expression}\n"
             ),
@@ -201,12 +214,15 @@ def test_use_contributions_keep_type_and_value_namespaces_separate(tmp_path: Pat
             "entry": (
                 "use Types::*\n"
                 "use Values::*\n"
+                "\n"
                 "scope Types\n"
-                "enum T\n  | member\n"
+                "  enum T\n    | member\n"
                 "end Types\n"
+                "\n"
                 "scope Values\n"
-                "def T() -> int = 7\n"
+                "  def T() -> int = 7\n"
                 "end Values\n"
+                "\n"
                 "T()\n"
             ),
         },
@@ -235,10 +251,12 @@ def test_root_use_value_ignores_same_named_imported_type(tmp_path: Path) -> None
             "entry": (
                 "import types::*\n"
                 "use Values::*\n"
+                "\n"
                 "scope Values\n"
-                "record T\n"
-                "  value: int\n"
+                "  record T\n"
+                "    value: int\n"
                 "end Values\n"
+                "\n"
                 "T(7)\n"
             ),
             "types": "enum T | member\n",
@@ -253,7 +271,14 @@ def test_imported_value_ignores_same_named_root_use_type(tmp_path: Path) -> None
         tmp_path,
         {
             "entry": (
-                "import values::*\nuse Types::*\nscope Types\nenum T | member\nend Types\nT()\n"
+                "import values::*\n"
+                "use Types::*\n"
+                "\n"
+                "scope Types\n"
+                "  enum T | member\n"
+                "end Types\n"
+                "\n"
+                "T()\n"
             ),
             "values": "def T() -> int = 7\n",
         },
@@ -268,13 +293,16 @@ def test_inner_type_only_use_does_not_hide_root_imported_value(tmp_path: Path) -
         {
             "entry": (
                 "import values::{x}\n"
+                "\n"
                 "scope Inner\n"
-                "use Types::{x}\n"
-                "def call() -> int = x()\n"
+                "  use Types::{x}\n"
+                "  def call() -> int = x()\n"
                 "end Inner\n"
+                "\n"
                 "scope Types\n"
-                "enum x | member\n"
+                "  enum x | member\n"
                 "end Types\n"
+                "\n"
                 "Inner::call()\n"
             ),
             "values": "def x() -> int = 7\n",
@@ -299,13 +327,16 @@ def test_inner_type_only_use_preserves_outer_value_ambiguity(tmp_path: Path) -> 
             "entry": (
                 "import left::{x}\n"
                 "import right::{x}\n"
+                "\n"
                 "scope Inner\n"
-                "use Types::{x}\n"
-                "def call() -> int = x()\n"
+                "  use Types::{x}\n"
+                "  def call() -> int = x()\n"
                 "end Inner\n"
+                "\n"
                 "scope Types\n"
-                "enum x | member\n"
+                "  enum x | member\n"
                 "end Types\n"
+                "\n"
                 "Inner::call()\n"
             ),
             "left": "def x() -> int = 1\n",
@@ -323,16 +354,20 @@ def test_type_use_lookup_continues_past_inner_value_contribution(tmp_path: Path)
         {
             "entry": (
                 "use Types::*\n"
+                "\n"
                 "scope Inner\n"
-                "use Values::*\n"
-                "def identity(value: T) -> T = value\n"
+                "  use Values::*\n"
+                "  def identity(value: T) -> T = value\n"
                 "end Inner\n"
+                "\n"
                 "scope Types\n"
-                "enum T\n  | member\n"
+                "  enum T\n    | member\n"
                 "end Types\n"
+                "\n"
                 "scope Values\n"
-                "def T() -> int = 7\n"
+                "  def T() -> int = 7\n"
                 "end Values\n"
+                "\n"
                 "Inner::identity(Types::T::member)\n"
             ),
         },
@@ -347,19 +382,23 @@ def test_constructor_lookup_continues_past_inner_value_contribution(tmp_path: Pa
         {
             "entry": (
                 "use Types::{E::A as X}\n"
+                "\n"
                 "scope Inner\n"
-                "use Values::{X}\n"
-                "def selected(value: Types::E) -> int =\n"
-                "  case value of | X => 1 | _ => 0\n"
-                "def matches(value: Types::E) -> bool = value is X\n"
-                "def call() -> int = X()\n"
+                "  use Values::{X}\n"
+                "  def selected(value: Types::E) -> int =\n"
+                "    case value of | X => 1 | _ => 0\n"
+                "  def matches(value: Types::E) -> bool = value is X\n"
+                "  def call() -> int = X()\n"
                 "end Inner\n"
+                "\n"
                 "scope Types\n"
-                "enum E | A\n"
+                "  enum E | A\n"
                 "end Types\n"
+                "\n"
                 "scope Values\n"
-                "def X() -> int = 7\n"
+                "  def X() -> int = 7\n"
                 "end Values\n"
+                "\n"
                 "Inner::selected(Types::E::A)\n"
             ),
         },
@@ -374,9 +413,11 @@ def test_unbraced_single_member_use_tail_can_be_renamed(tmp_path: Path) -> None:
         {
             "entry": (
                 "use Scope::member as Alias\n"
+                "\n"
                 "scope Scope\n"
-                "def member() -> int = 1\n"
+                "  def member() -> int = 1\n"
                 "end Scope\n"
+                "\n"
                 "Alias()\n"
             ),
         },
@@ -389,7 +430,7 @@ def test_whole_target_alias_preserves_an_empty_local_scope(tmp_path: Path) -> No
     graph = make_graph_from_files(
         tmp_path,
         {
-            "entry": ("use Empty as Alias\nuse Alias::*\nscope Empty\nend Empty\n()\n"),
+            "entry": ("use Empty as Alias\nuse Alias::*\n\nscope Empty\nend Empty\n\n()\n"),
         },
     )
 
@@ -403,10 +444,13 @@ def test_local_use_can_expose_empty_nested_scope(tmp_path: Path) -> None:
             "entry": (
                 "use Outer::{Empty}\n"
                 "use Empty::*\n"
+                "\n"
                 "scope Outer\n"
-                "scope Empty\n"
-                "end Empty\n"
+                "\n"
+                "  scope Empty\n"
+                "  end Empty\n"
                 "end Outer\n"
+                "\n"
                 "()\n"
             ),
         },
@@ -422,10 +466,13 @@ def test_local_use_can_rename_empty_nested_scope(tmp_path: Path) -> None:
             "entry": (
                 "use Outer::{Empty as E}\n"
                 "use E::*\n"
+                "\n"
                 "scope Outer\n"
-                "scope Empty\n"
-                "end Empty\n"
+                "\n"
+                "  scope Empty\n"
+                "  end Empty\n"
                 "end Outer\n"
+                "\n"
                 "()\n"
             ),
         },
@@ -441,9 +488,11 @@ def test_single_member_alias_can_follow_local_scope_alias(tmp_path: Path) -> Non
             "entry": (
                 "use Outer as O\n"
                 "use O::member as Alias\n"
+                "\n"
                 "scope Outer\n"
-                "def member() -> int = 1\n"
+                "  def member() -> int = 1\n"
                 "end Outer\n"
+                "\n"
                 "Alias()\n"
             ),
         },
@@ -457,7 +506,7 @@ def test_single_member_alias_can_follow_imported_scope_alias(tmp_path: Path) -> 
         tmp_path,
         {
             "entry": "import lib\nuse lib::Outer as O\nuse O::member as Alias\nAlias()\n",
-            "lib": "scope Outer\ndef member() -> int = 1\nend Outer\n",
+            "lib": "scope Outer\n  def member() -> int = 1\nend Outer\n",
         },
     )
 
@@ -469,7 +518,7 @@ def test_unbraced_ordered_binding_use_tail_can_be_renamed(tmp_path: Path) -> Non
         tmp_path,
         {
             "entry": (
-                "use Scope::member as Alias\nscope Scope\nvar member = 1\nend Scope\nAlias\n"
+                "use Scope::member as Alias\n\nscope Scope\n  var member = 1\nend Scope\n\nAlias\n"
             ),
         },
     )
@@ -489,7 +538,7 @@ def test_unbraced_imported_member_use_tail_can_be_renamed(tmp_path: Path, use_de
         tmp_path,
         {
             "entry": f"{use_decl}Alias()\n",
-            "lib": "scope Scope\ndef member() -> int = 1\nend Scope\n",
+            "lib": "scope Scope\n  def member() -> int = 1\nend Scope\n",
         },
     )
 
@@ -500,7 +549,7 @@ def test_root_local_use_and_import_tail_collision_is_ambiguous(tmp_path: Path) -
     graph = make_graph_from_files(
         tmp_path,
         {
-            "entry": ("import lib::{x}\nuse S::*\nscope S\ndef x() -> int = 2\nend S\nx()\n"),
+            "entry": ("import lib::{x}\nuse S::*\n\nscope S\n  def x() -> int = 2\nend S\n\nx()\n"),
             "lib": "def x() -> int = 1\n",
         },
     )
@@ -513,7 +562,9 @@ def test_qualified_use_and_import_route_collision_is_ambiguous(tmp_path: Path) -
     graph = make_graph_from_files(
         tmp_path,
         {
-            "entry": ("import lib\nuse S as lib\nscope S\ndef x() -> int = 2\nend S\nlib::x()\n"),
+            "entry": (
+                "import lib\nuse S as lib\n\nscope S\n  def x() -> int = 2\nend S\n\nlib::x()\n"
+            ),
             "lib": "def x() -> int = 1\n",
         },
     )
@@ -530,9 +581,11 @@ def test_qualified_use_collision_preserves_ambiguous_import_verdict(tmp_path: Pa
                 "import a/lib\n"
                 "import b/lib\n"
                 "use S as lib\n"
+                "\n"
                 "scope S\n"
-                "def x() -> int = 3\n"
+                "  def x() -> int = 3\n"
                 "end S\n"
+                "\n"
                 "lib::x()\n"
             ),
             "a/lib": "def x() -> int = 1\n",
@@ -565,9 +618,11 @@ def test_qualified_constructor_use_and_import_route_collision_is_ambiguous(
             "entry": (
                 "import lib\n"
                 "use S as lib\n"
+                "\n"
                 "scope S\n"
-                "record X(value: int)\n"
+                "  record X(value: int)\n"
                 "end S\n"
+                "\n"
                 "let item = S::X(value = 1)\n"
                 "case item of\n"
                 "  | lib::X(value) => value\n"
@@ -586,7 +641,7 @@ def test_nested_constructor_use_and_import_route_collision_is_ambiguous(
     graph = make_graph_from_files(
         tmp_path,
         {
-            "entry": ("import lib\nuse S as lib\nscope S\nenum E | A\nend S\nlib::E::A\n"),
+            "entry": ("import lib\nuse S as lib\n\nscope S\n  enum E | A\nend S\n\nlib::E::A\n"),
             "lib": "enum E | A\n",
         },
     )
@@ -602,12 +657,15 @@ def test_qualified_pattern_with_colliding_use_routes_is_ambiguous(tmp_path: Path
             "entry": (
                 "use First as X\n"
                 "use Second as X\n"
+                "\n"
                 "scope First\n"
-                "enum E | A\n"
+                "  enum E | A\n"
                 "end First\n"
+                "\n"
                 "scope Second\n"
-                "enum E | A\n"
+                "  enum E | A\n"
                 "end Second\n"
+                "\n"
                 "let value = First::E::A\n"
                 "case value of | X::E::A => 1 | _ => 0\n"
             ),
@@ -625,9 +683,11 @@ def test_qualified_type_use_and_import_route_collision_is_ambiguous(tmp_path: Pa
             "entry": (
                 "import lib\n"
                 "use S as lib\n"
+                "\n"
                 "scope S\n"
-                "type T = int\n"
+                "  type T = int\n"
                 "end S\n"
+                "\n"
                 "def identity(value: lib::T) -> lib::T = value\n"
             ),
             "lib": "type T = text\n",
@@ -647,9 +707,11 @@ def test_qualified_applied_type_use_and_import_route_collision_is_ambiguous(
             "entry": (
                 "import lib\n"
                 "use S as lib\n"
+                "\n"
                 "scope S\n"
-                "record T[A](value: A)\n"
+                "  record T[A](value: A)\n"
                 "end S\n"
+                "\n"
                 "def identity(value: lib::T[int]) -> lib::T[int] = value\n"
             ),
             "lib": "record T[A](value: A)\n",
@@ -696,10 +758,12 @@ def test_inner_use_shadows_root_import_and_use_contributions(tmp_path: Path) -> 
                 "import a::{x}\n"
                 "use a::*\n"
                 "import b\n"
+                "\n"
                 "scope Inner\n"
-                "use b::*\n"
-                "def selected() -> int = x()\n"
+                "  use b::*\n"
+                "  def selected() -> int = x()\n"
                 "end Inner\n"
+                "\n"
                 "Inner::selected()\n"
             ),
             "a": "def x() -> int = 1\n",
@@ -782,7 +846,7 @@ def test_resolve_named_type_rejects_root_use_and_import_tail_collision(tmp_path:
     graph = make_graph_from_files(
         tmp_path,
         {
-            "entry": ("import lib::*\nuse S::*\nscope S\nrecord R(value: text)\nend S\n"),
+            "entry": ("import lib::*\nuse S::*\n\nscope S\n  record R(value: text)\nend S\n"),
             "lib": "record R(value: int)\n",
         },
     )
@@ -876,12 +940,15 @@ def test_use_can_target_local_scope_exposed_by_an_earlier_use(tmp_path: Path) ->
             "entry": (
                 "use Outer::*\n"
                 "use Inner::*\n"
+                "\n"
                 "scope Outer\n"
-                "def unrelated() -> int = 0\n"
-                "scope Inner\n"
-                "def value() -> int = 1\n"
-                "end Inner\n"
+                "  def unrelated() -> int = 0\n"
+                "\n"
+                "  scope Inner\n"
+                "    def value() -> int = 1\n"
+                "  end Inner\n"
                 "end Outer\n"
+                "\n"
                 "value()\n"
             ),
         },
@@ -894,7 +961,7 @@ def test_use_can_target_type_scope_exposed_by_an_earlier_use(tmp_path: Path) -> 
     graph = make_graph_from_files(
         tmp_path,
         {
-            "entry": ("use Outer::*\nuse R::*\nscope Outer\nrecord R(value: int)\nend Outer\n"),
+            "entry": ("use Outer::*\nuse R::*\n\nscope Outer\n  record R(value: int)\nend Outer\n"),
         },
     )
 
@@ -906,7 +973,7 @@ def test_use_rejects_an_ordinary_member_exposed_by_an_earlier_use(tmp_path: Path
         tmp_path,
         {
             "entry": (
-                "use Outer::*\nuse value::*\nscope Outer\ndef value() -> int = 1\nend Outer\n"
+                "use Outer::*\nuse value::*\n\nscope Outer\n  def value() -> int = 1\nend Outer\n"
             ),
         },
     )
@@ -923,15 +990,19 @@ def test_use_rejects_ambiguous_scopes_exposed_by_earlier_uses(tmp_path: Path) ->
                 "use First::*\n"
                 "use Second::*\n"
                 "use Shared::*\n"
+                "\n"
                 "scope First\n"
-                "scope Shared\n"
-                "def first() -> int = 1\n"
-                "end Shared\n"
+                "\n"
+                "  scope Shared\n"
+                "    def first() -> int = 1\n"
+                "  end Shared\n"
                 "end First\n"
+                "\n"
                 "scope Second\n"
-                "scope Shared\n"
-                "def second() -> int = 2\n"
-                "end Shared\n"
+                "\n"
+                "  scope Shared\n"
+                "    def second() -> int = 2\n"
+                "  end Shared\n"
                 "end Second\n"
             ),
         },
@@ -950,7 +1021,12 @@ def test_use_can_target_imported_scope_exposed_by_an_earlier_use(tmp_path: Path)
         {
             "entry": ("import library\nuse library::Outer::*\nuse Inner::*\nmember()\n"),
             "library": (
-                "scope Outer\nscope Inner\ndef member() -> int = 1\nend Inner\nend Outer\n"
+                "scope Outer\n"
+                "\n"
+                "  scope Inner\n"
+                "    def member() -> int = 1\n"
+                "  end Inner\n"
+                "end Outer\n"
             ),
         },
     )
@@ -972,11 +1048,13 @@ def test_use_can_target_renamed_nested_imported_scope_exposed_by_an_earlier_use(
             ),
             "library": (
                 "scope Outer\n"
-                "scope Inner\n"
-                "scope Nested\n"
-                "def member() -> int = 1\n"
-                "end Nested\n"
-                "end Inner\n"
+                "\n"
+                "  scope Inner\n"
+                "\n"
+                "    scope Nested\n"
+                "      def member() -> int = 1\n"
+                "    end Nested\n"
+                "  end Inner\n"
                 "end Outer\n"
             ),
         },
@@ -991,7 +1069,12 @@ def test_use_cannot_target_imported_scope_hidden_by_an_earlier_use(tmp_path: Pat
         {
             "entry": ("import library\nuse library::Outer::* hiding Inner\nuse Inner::*\n"),
             "library": (
-                "scope Outer\nscope Inner\ndef member() -> int = 1\nend Inner\nend Outer\n"
+                "scope Outer\n"
+                "\n"
+                "  scope Inner\n"
+                "    def member() -> int = 1\n"
+                "  end Inner\n"
+                "end Outer\n"
             ),
         },
     )
@@ -1013,8 +1096,22 @@ def test_use_rejects_ambiguous_imported_scopes_exposed_by_earlier_uses(
                 "use right::Outer::*\n"
                 "use Shared::*\n"
             ),
-            "left": ("scope Outer\nscope Shared\ndef left() -> int = 1\nend Shared\nend Outer\n"),
-            "right": ("scope Outer\nscope Shared\ndef right() -> int = 2\nend Shared\nend Outer\n"),
+            "left": (
+                "scope Outer\n"
+                "\n"
+                "  scope Shared\n"
+                "    def left() -> int = 1\n"
+                "  end Shared\n"
+                "end Outer\n"
+            ),
+            "right": (
+                "scope Outer\n"
+                "\n"
+                "  scope Shared\n"
+                "    def right() -> int = 2\n"
+                "  end Shared\n"
+                "end Outer\n"
+            ),
         },
     )
 
@@ -1032,7 +1129,7 @@ def test_use_rejects_ordinary_imported_member_exposed_by_an_earlier_use(
         tmp_path,
         {
             "entry": ("import library\nuse library::Outer::*\nuse member::*\n"),
-            "library": "scope Outer\ndef member() -> int = 1\nend Outer\n",
+            "library": "scope Outer\n  def member() -> int = 1\nend Outer\n",
         },
     )
 
@@ -1054,12 +1151,14 @@ def test_use_imported_nested_scope_selects_its_relative_public_subtree(tmp_path:
             ),
             "library": (
                 "def leaked() -> int = 0\n"
+                "\n"
                 "scope Scope\n"
-                "def visible() -> int = 1\n"
-                "def hidden() -> int = 2\n"
-                "scope Nested\n"
-                "def member() -> int = 3\n"
-                "end Nested\n"
+                "  def visible() -> int = 1\n"
+                "  def hidden() -> int = 2\n"
+                "\n"
+                "  scope Nested\n"
+                "    def member() -> int = 3\n"
+                "  end Nested\n"
                 "end Scope\n"
             ),
         },
@@ -1073,7 +1172,7 @@ def test_use_imported_nested_scope_selects_its_relative_public_subtree(tmp_path:
             {
                 "entry": f"import library\nuse library::Scope::* hiding hidden\n{blocked}()",
                 "library": (
-                    "def leaked() -> int = 0\nscope Scope\ndef hidden() -> int = 2\nend Scope"
+                    "def leaked() -> int = 0\n\nscope Scope\n  def hidden() -> int = 2\nend Scope"
                 ),
             },
         )
@@ -1126,9 +1225,11 @@ def test_type_anchors_select_module_routes_over_same_named_local_scopes(tmp_path
         {
             "entry": (
                 "import A\n"
+                "\n"
                 "scope A\n"
-                "record T(value: text)\n"
+                "  record T(value: text)\n"
                 "end A\n"
+                "\n"
                 "def keep(value: /A::T) -> /A::T = value\n"
                 "keep(/A::T(value = 1))"
             ),
@@ -1145,10 +1246,12 @@ def test_unanchored_type_scope_and_module_route_clash_requires_an_anchor(tmp_pat
         {
             "entry": (
                 "import A\n"
+                "\n"
                 "scope A\n"
-                "record T(value: text)\n"
-                "def keep(value: A::T) -> A::T = value\n"
+                "  record T(value: text)\n"
+                "  def keep(value: A::T) -> A::T = value\n"
                 "end A\n"
+                "\n"
                 "()"
             ),
             "A": "record T(value: int)",
@@ -1170,9 +1273,11 @@ def test_imported_type_route_keeps_its_missing_member_error_over_a_local_scope(
         {
             "entry": (
                 "import A\n"
+                "\n"
                 "scope A\n"
-                "def member() -> int = 1\n"
+                "  def member() -> int = 1\n"
                 "end A\n"
+                "\n"
                 "def use(value: A::Missing) -> int = 1"
             ),
             "A": "record Present()",
@@ -1194,10 +1299,12 @@ def test_unanchored_generic_type_scope_and_module_route_clash_requires_an_anchor
         {
             "entry": (
                 "import A\n"
+                "\n"
                 "scope A\n"
-                "record T[V](value: V)\n"
-                "def keep(value: A::T[int]) -> A::T[int] = value\n"
+                "  record T[V](value: V)\n"
+                "  def keep(value: A::T[int]) -> A::T[int] = value\n"
                 "end A\n"
+                "\n"
                 "()"
             ),
             "A": "record T[V](value: V)",

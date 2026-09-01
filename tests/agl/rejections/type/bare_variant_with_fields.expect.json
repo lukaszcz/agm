@@ -1,1 +1,10 @@
-{"diagnostic": {"line": 8, "message_contains": ["Full", "fields", "Full(...)"]}}
+{
+  "diagnostic": {
+    "line": 9,
+    "message_contains": [
+      "Full",
+      "fields",
+      "Full(...)"
+    ]
+  }
+}

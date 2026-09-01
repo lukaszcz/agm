@@ -3,5 +3,6 @@ builtin record ExecResult
   exit_code: int
   stderr: text
   timed_out: bool
+
 program def main() -> unit =
   ()

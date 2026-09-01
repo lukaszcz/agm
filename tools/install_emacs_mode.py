@@ -155,9 +155,7 @@ def run_emacs_install(emacs: str, archive: Path, *, home: Path | None) -> str:
             check=False,
         )
     if completed.returncode != 0:
-        raise SystemExit(
-            f"Error: emacs failed to install the package:\n{completed.stderr.strip()}"
-        )
+        raise SystemExit(f"Error: emacs failed to install the package:\n{completed.stderr.strip()}")
     # Surface Emacs's own warnings about the package sources, so an Elisp
     # regression is visible.  The generated descriptor is excluded: it uses
     # `define-package', which package.el still requires for a tar package
@@ -165,8 +163,7 @@ def run_emacs_install(emacs: str, archive: Path, *, home: Path | None) -> str:
     messages = [
         line
         for line in completed.stderr.splitlines()
-        if ("Warning:" in line or "Error:" in line)
-        and f"{PACKAGE_NAME}-pkg.el" not in line
+        if ("Warning:" in line or "Error:" in line) and f"{PACKAGE_NAME}-pkg.el" not in line
     ]
     return "\n".join(filter(None, [completed.stdout.strip(), *messages]))
 

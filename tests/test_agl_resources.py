@@ -271,7 +271,7 @@ def test_package_validation_rejects_missing_resource_exposed_by_import_tail_scop
     module_root = root / "package"
     module_root.mkdir(parents=True)
     (module_root / "resources.agl").write_text(
-        "scope Assets\nexport std/core::{resource as asset}\nend Assets\n",
+        "scope Assets\n  export std/core::{resource as asset}\nend Assets\n",
         encoding="utf-8",
     )
     (module_root / "main.agl").write_text(
@@ -294,11 +294,13 @@ def test_package_validation_rejects_missing_resource_through_an_ancestor_scoped_
     module_root.mkdir(parents=True)
     (module_root / "main.agl").write_text(
         "scope Assets\n"
-        "import std/core::{resource as asset}\n"
-        "scope Templates\n"
-        'let prompt = asset("prompts/missing.md")\n'
-        "end Templates\n"
+        "  import std/core::{resource as asset}\n"
+        "\n"
+        "  scope Templates\n"
+        '    let prompt = asset("prompts/missing.md")\n'
+        "  end Templates\n"
         "end Assets\n"
+        "\n"
         "program def main() -> unit = ()\n",
         encoding="utf-8",
     )
@@ -316,13 +318,16 @@ def test_scoped_function_blocks_scoped_resource_alias_during_nested_lookup(
     module_root.mkdir(parents=True)
     (module_root / "main.agl").write_text(
         "import std/core::{resource as asset}\n"
+        "\n"
         "scope Assets\n"
-        "import std/core::{resource as asset}\n"
-        "def asset(path: text) -> text = path\n"
-        "scope Templates\n"
-        'let prompt = asset("prompts/missing.md")\n'
-        "end Templates\n"
+        "  import std/core::{resource as asset}\n"
+        "  def asset(path: text) -> text = path\n"
+        "\n"
+        "  scope Templates\n"
+        '    let prompt = asset("prompts/missing.md")\n'
+        "  end Templates\n"
         "end Assets\n"
+        "\n"
         "program def main() -> unit = ()\n",
         encoding="utf-8",
     )
@@ -339,9 +344,11 @@ def test_package_validation_rejects_missing_resource_through_a_scoped_import_rou
     module_root.mkdir(parents=True)
     (module_root / "main.agl").write_text(
         "scope Assets\n"
-        "import std/core::{resource as asset}\n"
+        "  import std/core::{resource as asset}\n"
         "end Assets\n"
+        "\n"
         'let prompt = core::asset("prompts/missing.md")\n'
+        "\n"
         "program def main() -> unit = ()\n",
         encoding="utf-8",
     )

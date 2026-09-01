@@ -1,7 +1,9 @@
 scope Area
-scope Point
-def distance() -> int = 0
-end Point
+
+  scope Point
+    def distance() -> int = 0
+  end Point
 end Area
+
 program def main() -> unit =
   Point::distance()

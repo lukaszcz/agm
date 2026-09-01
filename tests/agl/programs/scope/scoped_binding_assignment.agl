@@ -6,15 +6,16 @@ use Config::*
 param increment: int
 
 scope Config
-let retries: int = 3
-var attempts: int = 0
-def bump() -> unit =
-  attempts := attempts + increment
-  ()
-def show() -> text = "%{retries}/%{attempts}"
-scope Nested
-def doubled() -> int = attempts * 2
-end Nested
+  let retries: int = 3
+  var attempts: int = 0
+  def bump() -> unit =
+    attempts := attempts + increment
+    ()
+  def show() -> text = "%{retries}/%{attempts}"
+
+  scope Nested
+    def doubled() -> int = attempts * 2
+  end Nested
 end Config
 
 program def main() -> unit =

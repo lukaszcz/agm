@@ -1,5 +1,6 @@
 enum Pair
   | P(*, a: int, b: int)
+
 program def main() -> unit =
   let p: Pair = P(a = 1, b = 2)
   case p of

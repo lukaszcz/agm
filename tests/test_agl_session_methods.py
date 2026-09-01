@@ -191,9 +191,10 @@ def test_non_session_receivers_do_not_gain_session_methods() -> None:
 def test_nested_session_constructor_and_regular_method_remain_user_defined() -> None:
     checked = _check(
         "scope User\n"
-        "record Session()\n"
-        "def Session::ask(self, prompt: text) -> text = prompt\n"
+        "  record Session()\n"
+        "  def Session::ask(self, prompt: text) -> text = prompt\n"
         "end User\n"
+        "\n"
         "let session = User::Session()\n"
         'session.ask("local")'
     )
@@ -205,11 +206,11 @@ def test_nested_session_constructor_and_regular_method_remain_user_defined() -> 
 def test_redeclared_session_builtin_method_is_not_a_host_method() -> None:
     error = _reject(
         "scope User\n"
-        "builtin record Session\n"
-        "  id: text\n"
-        "  agent: Agent\n"
-        "  transport: SessionTransport\n"
-        'builtin def Session::compact(self, instructions: text = "") -> unit\n'
+        "  builtin record Session\n"
+        "    id: text\n"
+        "    agent: Agent\n"
+        "    transport: SessionTransport\n"
+        '  builtin def Session::compact(self, instructions: text = "") -> unit\n'
         "end User"
     )
 
@@ -217,4 +218,6 @@ def test_redeclared_session_builtin_method_is_not_a_host_method() -> None:
 
 
 def test_builtin_method_headers_are_limited_to_registered_receivers() -> None:
-    _reject("scope User\nrecord Session()\nbuiltin def Session::unknown(self) -> unit\nend User")
+    _reject(
+        "scope User\n  record Session()\n  builtin def Session::unknown(self) -> unit\nend User"
+    )

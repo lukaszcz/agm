@@ -7,11 +7,12 @@ use Deploy::*
 param increment: int
 
 scope Deploy
-param region: text = "eu"
-param replicas: int
-scope Retry
-param attempts: int = 1
-end Retry
+  param region: text = "eu"
+  param replicas: int
+
+  scope Retry
+    param attempts: int = 1
+  end Retry
 end Deploy
 
 program def main() -> unit =

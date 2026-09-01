@@ -6,7 +6,7 @@
 record Root()
 
 scope S
-record Inner()
+  record Inner()
 end S
 
 enum E

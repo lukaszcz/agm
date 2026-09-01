@@ -1,6 +1,6 @@
 {
   "diagnostic": {
-    "line": 6,
+    "line": 7,
     "message_contains": [
       "incompatible types"
     ]

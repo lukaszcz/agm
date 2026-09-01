@@ -1331,7 +1331,8 @@ class TestExecCommandExitCodes:
         """A scoped `param Deploy::region` is supplied as `--Deploy::region`."""
         agl_file = tmp_path / "test.agl"
         write_file_program(
-            agl_file, 'scope Deploy\nparam region: text = "eu"\nend Deploy\nprint(Deploy::region)\n'
+            agl_file,
+            'scope Deploy\n  param region: text = "eu"\nend Deploy\n\nprint(Deploy::region)\n',
         )
 
         assert (
@@ -1356,7 +1357,8 @@ class TestExecCommandExitCodes:
         agl_file = tmp_path / "test.agl"
         write_file_program(
             agl_file,
-            'scope Deploy\nparam region: text = "eu"\nend Deploy\n'
+            'scope Deploy\n  param region: text = "eu"\nend Deploy\n'
+            "\n"
             "program def demo() -> unit = print(Deploy::region)\n",
         )
         monkeypatch.setattr(
@@ -3573,9 +3575,11 @@ class TestEntryModuleConfig:
         agl_file = tmp_path / "workflow.agl"
         agl_file.write_text(
             "param retries: int = 1\n"
+            "\n"
             "scope Deploy\n"
-            'param region: text = "eu"\n'
+            '  param region: text = "eu"\n'
             "end Deploy\n"
+            "\n"
             "program def main() -> unit = print(Deploy::region)\n"
         )
 
@@ -4075,8 +4079,10 @@ class TestExecProgramSelection:
         write_file_program(
             agl_file,
             'program def first() -> unit = print "first"\n'
+            "\n"
             "scope review\n"
-            'program def main() -> unit = print "review"\n'
+            "\n"
+            '  program def main() -> unit = print "review"\n'
             "end review\n",
         )
 

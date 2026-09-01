@@ -314,7 +314,7 @@ class TestGraphBuild:
         _write_module(root, "operators", "infixl %% at 5\n")
 
         graph = load_graph(
-            "scope Local\nimport operators::*\ndef apply(x: int, y: int) -> int = x %% y\n"
+            "scope Local\n  import operators::*\n  def apply(x: int, y: int) -> int = x %% y\n"
             "end Local\n",
             entry_path=None,
             roots=_roots(root),
@@ -337,7 +337,7 @@ class TestGraphBuild:
         root = tmp_path / "r"
         root.mkdir()
         _write_module(root, "operators", "infixl %% at 5\n")
-        _write_module(root, "facade", "scope Public\nexport operators::{%%}\nend Public\n")
+        _write_module(root, "facade", "scope Public\n  export operators::{%%}\nend Public\n")
 
         graph = load_graph(
             "import facade::*\nuse Public::*\n1 %% 2",
@@ -368,7 +368,7 @@ class TestGraphBuild:
         _write_module(
             root,
             "operators",
-            "infixl %% at 5\nscope Arithmetic\ndef %%(x: int, y: int) -> int = x + y\n"
+            "infixl %% at 5\n\nscope Arithmetic\n  def %%(x: int, y: int) -> int = x + y\n"
             "end Arithmetic\n",
         )
 
@@ -421,7 +421,7 @@ class TestGraphBuild:
         root = tmp_path / "r"
         root.mkdir()
         _write_module(root, "operators", "infixl %% at 5\ninfixl ^^ at 6\n")
-        _write_module(root, "facade", "scope Public\nexport operators\nend Public\n")
+        _write_module(root, "facade", "scope Public\n  export operators\nend Public\n")
 
         graph = load_graph(
             "import facade::*\nuse Public::*\n1 %% 2 ^^ 3",
@@ -452,7 +452,7 @@ class TestGraphBuild:
         _write_module(
             root,
             "facade",
-            "infixl ^^ at 4\nscope Public\nexport operators\nexport alternate\nend Public\n",
+            "infixl ^^ at 4\n\nscope Public\n  export operators\n  export alternate\nend Public\n",
         )
 
         graph = load_graph(
@@ -476,8 +476,8 @@ class TestGraphBuild:
         root.mkdir()
         _write_module(root, "left", "infixl %% at 5\n")
         _write_module(root, "right", "infixr %% at 5\n")
-        _write_module(root, "left_facade", "scope Public\nexport left::{%%}\nend Public\n")
-        _write_module(root, "right_facade", "scope Public\nexport right::{%%}\nend Public\n")
+        _write_module(root, "left_facade", "scope Public\n  export left::{%%}\nend Public\n")
+        _write_module(root, "right_facade", "scope Public\n  export right::{%%}\nend Public\n")
 
         with pytest.raises(AglSyntaxError):
             load_graph(
@@ -499,9 +499,9 @@ class TestGraphBuild:
         _write_module(
             root,
             "a",
-            "export operators\nscope Loop\nexport b\nend Loop\n",
+            "export operators\n\nscope Loop\n  export b\nend Loop\n",
         )
-        _write_module(root, "b", "scope Loop\nexport a\nend Loop\n")
+        _write_module(root, "b", "scope Loop\n  export a\nend Loop\n")
 
         with (
             fail_if_slow("operator re-export resolution did not terminate"),
@@ -522,11 +522,11 @@ class TestGraphBuild:
         root = tmp_path / "r"
         root.mkdir()
         _write_module(root, "operators", "infixl %% at 5\n")
-        _write_module(root, "facade", "scope Public\nexport operators::{%%}\nend Public\n")
+        _write_module(root, "facade", "scope Public\n  export operators::{%%}\nend Public\n")
 
         graph = load_graph(
-            "scope Local\nimport facade::{Public::%% as %%}\n"
-            "def apply(x: int, y: int) -> int = x %% y\nend Local\n",
+            "scope Local\n  import facade::{Public::%% as %%}\n"
+            "  def apply(x: int, y: int) -> int = x %% y\nend Local\n",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
@@ -581,7 +581,7 @@ class TestGraphBuild:
         root = tmp_path / "r"
         root.mkdir()
         _write_module(root, "libx")
-        entry = "scope A\nimport libx\nend A\n()"
+        entry = "scope A\n  import libx\nend A\n\n()"
         graph = load_graph(entry, entry_path=None, roots=_roots(root))
         entry_mod = graph.modules[ENTRY_ID]
         assert any(
@@ -1467,7 +1467,7 @@ class TestPreludeSupersession:
         self, tmp_path: Path
     ) -> None:
         graph = load_graph(
-            "scope Local\nimport std/core\nend Local",
+            "scope Local\n  import std/core\nend Local",
             entry_path=None,
             roots=_roots(tmp_path),
         )

@@ -1,6 +1,7 @@
 record Pair
   left: int
   right: text
+
 program def main() -> unit =
   let left = 1
   let right = "right"

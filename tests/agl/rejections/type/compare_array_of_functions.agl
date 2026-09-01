@@ -1,5 +1,6 @@
 def double(n: int) -> int = n * 2
 def triple(n: int) -> int = n * 3
+
 program def main() -> unit =
   let fs: array[(int) -> int] = [double, triple]
   let gs: array[(int) -> int] = [double]

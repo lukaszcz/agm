@@ -1,5 +1,6 @@
 scope Tools
-def value() -> int = 0
+  def value() -> int = 0
 end Tools
+
 program def main() -> unit =
   Tools[int]::value()

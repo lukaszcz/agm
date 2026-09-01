@@ -1,6 +1,7 @@
 enum Box
   | box(flag: bool)
   | empty
+
 program def main() -> unit =
   let value: Box = box(flag = false)
   case value of

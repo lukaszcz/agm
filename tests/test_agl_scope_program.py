@@ -378,7 +378,7 @@ class TestGlobImport:
             tmp_path,
             {
                 "entry": "import mylib::{A::Token as T}\nlet t = T(n = 1)",
-                "mylib": "scope A\nrecord Token(n: int)\nend A",
+                "mylib": "scope A\n  record Token(n: int)\nend A",
             },
         )
         result = resolve_program(graph)
@@ -402,7 +402,7 @@ class TestGlobImport:
             tmp_path,
             {
                 "entry": "import mylib::{A::Status::Good as X}\n()",
-                "mylib": "scope A\nenum Status\n  | Good\n  | Bad\nend A",
+                "mylib": "scope A\n  enum Status\n    | Good\n    | Bad\nend A",
             },
         )
         result = resolve_program(graph)
@@ -531,7 +531,13 @@ class TestQualifiedAccess:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\nscope mylib\ndef foo() -> int = 1\nend mylib\nmylib::foo()",
+                "entry": "import mylib\n"
+                "\n"
+                "scope mylib\n"
+                "  def foo() -> int = 1\n"
+                "end mylib\n"
+                "\n"
+                "mylib::foo()",
                 "mylib": "def foo() -> int = 2",
             },
         )
@@ -553,7 +559,13 @@ class TestQualifiedAccess:
             tmp_path,
             {
                 "entry": (
-                    "import mylib\nscope mylib\nvar counter = 0\nend mylib\nmylib::counter := 1"
+                    "import mylib\n"
+                    "\n"
+                    "scope mylib\n"
+                    "  var counter = 0\n"
+                    "end mylib\n"
+                    "\n"
+                    "mylib::counter := 1"
                 ),
                 "mylib": "def counter() -> int = 2",
             },
@@ -570,11 +582,14 @@ class TestQualifiedAccess:
             {
                 "entry": (
                     "import alpha/beta\n"
+                    "\n"
                     "scope alpha\n"
-                    "scope beta\n"
-                    "def member() -> int = 1\n"
-                    "end beta\n"
+                    "\n"
+                    "  scope beta\n"
+                    "    def member() -> int = 1\n"
+                    "  end beta\n"
                     "end alpha\n"
+                    "\n"
                     "alpha::beta::member()"
                 ),
                 "alpha/beta": "def member() -> int = 2",
@@ -587,11 +602,14 @@ class TestQualifiedAccess:
     def test_import_route_is_not_a_suffix_matched_local_scope(self, tmp_path: Path) -> None:
         entry_source = (
             "import beta\n"
+            "\n"
             "scope alpha\n"
-            "scope beta\n"
-            "def local() -> int = 1\n"
-            "end beta\n"
+            "\n"
+            "  scope beta\n"
+            "    def local() -> int = 1\n"
+            "  end beta\n"
             "end alpha\n"
+            "\n"
             "let result = beta::remote()"
         )
 
@@ -607,11 +625,14 @@ class TestQualifiedAccess:
             {
                 "entry": (
                     "import alpha/beta\n"
+                    "\n"
                     "scope alpha\n"
-                    "scope beta\n"
-                    "def member() -> int = 1\n"
-                    "end beta\n"
+                    "\n"
+                    "  scope beta\n"
+                    "    def member() -> int = 1\n"
+                    "  end beta\n"
                     "end alpha\n"
+                    "\n"
                     "::alpha::beta::member()"
                 ),
                 "alpha/beta": "def member() -> int = 2",
@@ -628,12 +649,15 @@ class TestQualifiedAccess:
             {
                 "entry": (
                     "import alpha/beta/Color\n"
+                    "\n"
                     "scope alpha\n"
-                    "scope beta\n"
-                    "enum Color\n"
-                    "  | red\n"
-                    "end beta\n"
+                    "\n"
+                    "  scope beta\n"
+                    "    enum Color\n"
+                    "      | red\n"
+                    "  end beta\n"
                     "end alpha\n"
+                    "\n"
                     "alpha::beta::Color::red"
                 ),
                 "alpha/beta/Color": "def red() -> int = 2",
@@ -651,12 +675,15 @@ class TestQualifiedAccess:
             {
                 "entry": (
                     "import alpha/beta/Color\n"
+                    "\n"
                     "scope alpha\n"
-                    "scope beta\n"
-                    "enum Color\n"
-                    "  | red\n"
-                    "end beta\n"
+                    "\n"
+                    "  scope beta\n"
+                    "    enum Color\n"
+                    "      | red\n"
+                    "  end beta\n"
                     "end alpha\n"
+                    "\n"
                     "::alpha::beta::Color::red"
                 ),
                 "alpha/beta/Color": "def red() -> int = 2",
@@ -670,7 +697,13 @@ class TestQualifiedAccess:
             tmp_path,
             {
                 "entry": (
-                    "import mylib\nscope mylib\ndef foo() -> int = 1\nend mylib\n::mylib::foo()"
+                    "import mylib\n"
+                    "\n"
+                    "scope mylib\n"
+                    "  def foo() -> int = 1\n"
+                    "end mylib\n"
+                    "\n"
+                    "::mylib::foo()"
                 ),
                 "mylib": "def foo() -> int = 2",
             },
@@ -719,8 +752,9 @@ class TestClashDeferred:
         files = {
             "entry": "import lib\nuse lib::{One as X, Two as X}\n()",
             "lib": (
-                "scope One\ndef first() -> int = 1\nend One\n"
-                "scope Two\ndef second() -> int = 2\nend Two"
+                "scope One\n  def first() -> int = 1\nend One\n"
+                "\n"
+                "scope Two\n  def second() -> int = 2\nend Two"
             ),
         }
 
@@ -735,7 +769,7 @@ class TestClashDeferred:
             tmp_path,
             {
                 "entry": "import core::{S}\nimport facade::{S}\nuse S::*\nmember()",
-                "core": "scope S\ndef member() -> int = 1\nend S",
+                "core": "scope S\n  def member() -> int = 1\nend S",
                 "facade": "export core::{S}",
             },
         )
@@ -781,7 +815,7 @@ class TestClashDeferred:
             tmp_path,
             {
                 "entry": ("import core::{S}\nimport facade::{S}\nuse S::*\nalpha() + beta()"),
-                "core": ("scope S\ndef alpha() -> int = 1\ndef beta() -> int = 2\nend S"),
+                "core": ("scope S\n  def alpha() -> int = 1\n  def beta() -> int = 2\nend S"),
                 "facade": "export core hiding S::beta",
             },
         )
@@ -1064,10 +1098,11 @@ class TestStaticModuleRoots:
                     "let root = 1\n"
                     "var total = 0\n"
                     "param retry: int = 3\n"
+                    "\n"
                     "scope Review\n"
-                    'let title = "review"\n'
-                    "var attempts = 0\n"
-                    "param limit: int = 2\n"
+                    '  let title = "review"\n'
+                    "  var attempts = 0\n"
+                    "  param limit: int = 2\n"
                     "end Review"
                 ),
             },
@@ -1168,7 +1203,8 @@ class TestHeaderOnlyImports:
                 "entry": "import mylib::*\n()",
                 "mylib": (
                     "def helper() -> int = 1\n"
-                    "scope A\nimport libB::*\ndef foo() -> int = bar()\nend A"
+                    "\n"
+                    "scope A\n  import libB::*\n  def foo() -> int = bar()\nend A"
                 ),
                 "libB": "def bar() -> int = 42",
             },
@@ -1274,7 +1310,7 @@ class TestScopedImportBareNarrowing:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "scope A\nimport pkg/*::*\nend A",
+                "entry": "scope A\n  import pkg/*::*\nend A",
                 "pkg/one": "def alpha() -> int = 1",
                 "pkg/two": "def alpha() -> int = 2",
             },
@@ -1289,7 +1325,7 @@ class TestScopedImportBareNarrowing:
             tmp_path,
             {
                 "entry": (
-                    "scope A\nimport pkg/*::*\ndef show() -> int = alpha()\nend A\nA::show()"
+                    "scope A\n  import pkg/*::*\n  def show() -> int = alpha()\nend A\n\nA::show()"
                 ),
                 "pkg/one": "def alpha() -> int = 1",
                 "pkg/two": "def alpha() -> int = 2",
@@ -1302,7 +1338,9 @@ class TestScopedImportBareNarrowing:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": ("scope A\nimport mylib::*\ndef show() -> int = foo()\nend A\nA::show()"),
+                "entry": (
+                    "scope A\n  import mylib::*\n  def show() -> int = foo()\nend A\n\nA::show()"
+                ),
                 "mylib": "def foo() -> int = 1",
             },
         )
@@ -1313,7 +1351,7 @@ class TestScopedImportBareNarrowing:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": ("scope A\nimport mylib::*\nend A\nfoo()"),
+                "entry": ("scope A\n  import mylib::*\nend A\n\nfoo()"),
                 "mylib": "def foo() -> int = 1",
             },
         )
@@ -1325,8 +1363,9 @@ class TestScopedImportBareNarrowing:
             tmp_path,
             {
                 "entry": (
-                    "scope A\nimport mylib::*\nend A\n"
-                    "scope B\ndef show() -> int = foo()\nend B\nB::show()"
+                    "scope A\n  import mylib::*\nend A\n"
+                    "\n"
+                    "scope B\n  def show() -> int = foo()\nend B\n\nB::show()"
                 ),
                 "mylib": "def foo() -> int = 1",
             },
@@ -1341,7 +1380,7 @@ class TestScopedImportBareNarrowing:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": ("scope A\nimport mylib\nend A\nlet x = mylib::foo()"),
+                "entry": ("scope A\n  import mylib\nend A\n\nlet x = mylib::foo()"),
                 "mylib": "def foo() -> int = 1",
             },
         )
@@ -1353,7 +1392,9 @@ class TestScopedImportBareNarrowing:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": ("scope A\nimport mylib\ndef show() -> int = foo()\nend A\nA::show()"),
+                "entry": (
+                    "scope A\n  import mylib\n  def show() -> int = foo()\nend A\n\nA::show()"
+                ),
                 "mylib": "def foo() -> int = 1",
             },
         )
@@ -1365,7 +1406,12 @@ class TestScopedImportBareNarrowing:
             tmp_path,
             {
                 "entry": (
-                    "scope A\nimport mylib::{foo as f}\ndef show() -> int = f()\nend A\nA::show()"
+                    "scope A\n"
+                    "  import mylib::{foo as f}\n"
+                    "  def show() -> int = f()\n"
+                    "end A\n"
+                    "\n"
+                    "A::show()"
                 ),
                 "mylib": "def foo() -> int = 1",
             },
@@ -1378,8 +1424,8 @@ class TestScopedImportBareNarrowing:
             tmp_path,
             {
                 "entry": (
-                    "scope A\nimport mylib::* hiding secret\n"
-                    "def show() -> int = foo()\nend A\nA::show()"
+                    "scope A\n  import mylib::* hiding secret\n"
+                    "  def show() -> int = foo()\nend A\n\nA::show()"
                 ),
                 "mylib": "def foo() -> int = 1\ndef secret() -> int = 2",
             },
@@ -1395,8 +1441,8 @@ class TestScopedImportBareNarrowing:
             tmp_path,
             {
                 "entry": (
-                    "scope A\nimport mylib::*\n"
-                    "def foo() -> int = 2\ndef show() -> int = foo()\nend A\nA::show()"
+                    "scope A\n  import mylib::*\n"
+                    "  def foo() -> int = 2\n  def show() -> int = foo()\nend A\n\nA::show()"
                 ),
                 "mylib": "def foo() -> int = 1",
             },
@@ -1415,10 +1461,10 @@ class TestScopedImportBareNarrowing:
             tmp_path,
             {
                 "entry": (
-                    "scope A\nimport mylib::*\n"
-                    "def make() -> Geo::Point = Geo::Point(x = 1)\nend A\nA::make()"
+                    "scope A\n  import mylib::*\n"
+                    "  def make() -> Geo::Point = Geo::Point(x = 1)\nend A\n\nA::make()"
                 ),
-                "mylib": "scope Geo\nrecord Point(x: int)\nend Geo",
+                "mylib": "scope Geo\n  record Point(x: int)\nend Geo",
             },
         )
         result = resolve_program(graph)
@@ -1432,7 +1478,12 @@ class TestScopedImportBareNarrowing:
             tmp_path,
             {
                 "entry": (
-                    "scope Vec\nimport lib2::*\ndef pick() -> Color = Green\nend Vec\nVec::pick()"
+                    "scope Vec\n"
+                    "  import lib2::*\n"
+                    "  def pick() -> Color = Green\n"
+                    "end Vec\n"
+                    "\n"
+                    "Vec::pick()"
                 ),
                 "lib2": "enum Color\n  | Red\n  | Green",
             },
@@ -1448,10 +1499,10 @@ class TestScopedImportBareNarrowing:
             tmp_path,
             {
                 "entry": (
-                    "scope Vec\nimport lib2::*\n"
-                    "def classify(c: Color) -> int = case c of | Red() => 0 | Green => 1\n"
-                    "def run() -> int = classify(Green)\n"
-                    "end Vec\nVec::run()"
+                    "scope Vec\n  import lib2::*\n"
+                    "  def classify(c: Color) -> int = case c of | Red() => 0 | Green => 1\n"
+                    "  def run() -> int = classify(Green)\n"
+                    "end Vec\n\nVec::run()"
                 ),
                 "lib2": "enum Color\n  | Red\n  | Green",
             },
@@ -1472,7 +1523,7 @@ class TestScopedImportBareNarrowing:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": ('scope A\nimport lib4::*\nlet e = Red(msg = "boom")\nend A'),
+                "entry": ('scope A\n  import lib4::*\n  let e = Red(msg = "boom")\nend A'),
                 "lib4": "enum Status\n  | Red\n  | Green\n\nexception Red\n  msg: text",
             },
         )
@@ -1487,10 +1538,10 @@ class TestScopedImportBareNarrowing:
             tmp_path,
             {
                 "entry": (
-                    "scope A\nimport libg::*\nuse Geo::*\n"
-                    "def show() -> int = dist()\nend A\nA::show()"
+                    "scope A\n  import libg::*\n  use Geo::*\n"
+                    "  def show() -> int = dist()\nend A\n\nA::show()"
                 ),
-                "libg": "scope Geo\ndef dist() -> int = 5\nend Geo",
+                "libg": "scope Geo\n  def dist() -> int = 5\nend Geo",
             },
         )
         result = resolve_program(graph)
@@ -1511,11 +1562,12 @@ class TestScopedImportBareNarrowing:
             tmp_path,
             {
                 "entry": (
-                    "scope A\nimport libg::*\nimport otherlib::*\nuse Geo::*\n"
-                    "def show() -> int = dist()\nend A\nA::show()\n"
-                    "scope B\nimport thirdlib::*\nend B"
+                    "scope A\n  import libg::*\n  import otherlib::*\n  use Geo::*\n"
+                    "  def show() -> int = dist()\nend A\n\nA::show()\n"
+                    "\n"
+                    "scope B\n  import thirdlib::*\nend B"
                 ),
-                "libg": "scope Geo\ndef dist() -> int = 5\nend Geo",
+                "libg": "scope Geo\n  def dist() -> int = 5\nend Geo",
                 "otherlib": "def helper() -> int = 9",
                 "thirdlib": "def unused() -> int = 0",
             },
@@ -1632,7 +1684,7 @@ class TestWildcardImports:
                 "entry": "import pkg/* as F\nimport other::{F}\nuse F::*",
                 "pkg/alpha": "def first() -> int = 1",
                 "pkg/beta": "def second() -> int = 2",
-                "other": "scope F\ndef third() -> int = 3\nend F",
+                "other": "scope F\n  def third() -> int = 3\nend F",
             },
         )
 
@@ -2041,7 +2093,7 @@ class TestMethodOrphanRule:
             tmp_path,
             {
                 "entry": (
-                    "scope A\nimport shapes::*\n\ndef Point::tag(self) -> int = self.x\nend A"
+                    "scope A\n  import shapes::*\n\n  def Point::tag(self) -> int = self.x\nend A"
                 ),
                 "shapes": "record Point\n  x: int",
             },
@@ -2078,8 +2130,8 @@ class TestMethodOrphanRule:
             tmp_path,
             {
                 "entry": (
-                    "scope A\nimport shapes::*\nend A\n\n"
-                    "scope B\ndef Point::tag(self) -> int = self.x\nend B"
+                    "scope A\n  import shapes::*\nend A\n\n"
+                    "scope B\n  def Point::tag(self) -> int = self.x\nend B"
                 ),
                 "shapes": "record Point\n  x: int",
             },
@@ -2300,7 +2352,7 @@ class TestExceptionDefInGraph:
         "entry",
         (
             "import mylib::{A::E as E}\nlet value: E = X",
-            "scope Local\nimport mylib::{A::E as E}\nlet value: E = X\nend Local",
+            "scope Local\n  import mylib::{A::E as E}\n  let value: E = X\nend Local",
         ),
     )
     def test_selective_enum_import_keeps_variant_that_collides_with_unselected_exception(
@@ -2310,7 +2362,7 @@ class TestExceptionDefInGraph:
             tmp_path,
             {
                 "entry": entry,
-                "mylib": "scope A\nenum E | X | Y\nend A\nexception X extends Exception()",
+                "mylib": "scope A\n  enum E | X | Y\nend A\n\nexception X extends Exception()",
             },
         )
 
@@ -2323,7 +2375,7 @@ class TestExceptionDefInGraph:
             tmp_path,
             {
                 "entry": ('import library\nuse library::A::*\nlet error = X(message = "boom")'),
-                "library": ("scope A\nenum E | X | Y\nexception X extends Exception()\nend A"),
+                "library": ("scope A\n  enum E | X | Y\n  exception X extends Exception()\nend A"),
             },
         )
 
@@ -2338,7 +2390,7 @@ class TestExceptionDefInGraph:
                 "entry": (
                     'import library::{A::E as E, A::X as X}\nlet error = X(message = "boom")'
                 ),
-                "library": ("scope A\nenum E | X | Y\nexception X extends Exception()\nend A"),
+                "library": ("scope A\n  enum E | X | Y\n  exception X extends Exception()\nend A"),
             },
         )
 
@@ -2497,7 +2549,7 @@ class TestExportDecl:
     @pytest.mark.parametrize(
         "declaration",
         (
-            "scope Public\ndef hidden() -> int = 1\nend Public",
+            "scope Public\n  def hidden() -> int = 1\nend Public",
             "def Public::hidden() -> int = 1",
         ),
         ids=("region", "shorthand"),
@@ -2524,7 +2576,7 @@ class TestExportDecl:
             tmp_path,
             {
                 "entry": "import lib hiding Public\nuse lib::Public::*\n()",
-                "lib": "scope Public\ndef member() -> int = 1\nend Public",
+                "lib": "scope Public\n  def member() -> int = 1\nend Public",
             },
             default_stdlib=False,
         )
@@ -2544,7 +2596,7 @@ class TestExportDecl:
                     "use visible::Public::*\n"
                     "member()"
                 ),
-                "lib": "scope Public\ndef member() -> int = 1\nend Public",
+                "lib": "scope Public\n  def member() -> int = 1\nend Public",
             },
             default_stdlib=False,
         )
@@ -2625,7 +2677,7 @@ class TestExportDecl:
             {
                 "entry": "import facade\n()",
                 "facade": "export lib::{Api as Public, Api::read as fetch}",
-                "lib": "scope Api\ndef read() -> int = 1\ndef write() -> int = 2\nend Api",
+                "lib": "scope Api\n  def read() -> int = 1\n  def write() -> int = 2\nend Api",
             },
         )
 
@@ -2643,7 +2695,8 @@ class TestExportDecl:
                 "entry": "import facade\n()",
                 "facade": "export lib::{Api::read as fetch, write}",
                 "lib": (
-                    "scope Api\ndef read() -> int = 1\ndef hidden() -> int = 2\nend Api\n"
+                    "scope Api\n  def read() -> int = 1\n  def hidden() -> int = 2\nend Api\n"
+                    "\n"
                     "def write() -> int = 3"
                 ),
             },
@@ -2666,7 +2719,7 @@ class TestExportDecl:
             {
                 "entry": "import facade\nuse facade::A::*\n()",
                 "facade": "export lib::{A::B}",
-                "lib": "scope A\nscope B\nend B\nend A",
+                "lib": "scope A\n\n  scope B\n  end B\nend A",
             },
             default_stdlib=False,
         )
@@ -2687,8 +2740,8 @@ class TestExportDecl:
                 "entry": ("import facade\nuse facade::A::*\nuse B::*\nchosen()"),
                 "facade": "export lib::{A::B::chosen}",
                 "lib": (
-                    "scope A\nscope B\ndef chosen() -> int = 1\n"
-                    "def hidden() -> int = 2\nend B\nend A"
+                    "scope A\n\n  scope B\n    def chosen() -> int = 1\n"
+                    "    def hidden() -> int = 2\n  end B\nend A"
                 ),
             },
             default_stdlib=False,
@@ -2708,7 +2761,7 @@ class TestExportDecl:
             {
                 "entry": "import facade\n()",
                 "facade": "export lib::{A::B}\ndef A() -> int = 1",
-                "lib": "scope A\nscope B\nend B\nend A",
+                "lib": "scope A\n\n  scope B\n  end B\nend A",
             },
             default_stdlib=False,
         )
@@ -2724,9 +2777,11 @@ class TestExportDecl:
             {
                 "entry": ("import facade\nuse facade::Outer::*\nuse Public::*\nchosen()"),
                 "facade": (
-                    "scope Outer\nexport lib::{A::B as Public, A::B::chosen as selected}\nend Outer"
+                    "scope Outer\n"
+                    "  export lib::{A::B as Public, A::B::chosen as selected}\n"
+                    "end Outer"
                 ),
-                "lib": "scope A\nscope B\ndef chosen() -> int = 1\nend B\nend A",
+                "lib": "scope A\n\n  scope B\n    def chosen() -> int = 1\n  end B\nend A",
             },
             default_stdlib=False,
         )
@@ -2798,8 +2853,8 @@ class TestExportDecl:
             tmp_path,
             {
                 "entry": "import a\n()",
-                "a": "export c\nscope Loop\nexport b\nend Loop",
-                "b": "scope Loop\nexport a\nend Loop",
+                "a": "export c\n\nscope Loop\n  export b\nend Loop",
+                "b": "scope Loop\n  export a\nend Loop",
                 "c": "def resource() -> int = 1",
             },
         )
@@ -2840,10 +2895,18 @@ class TestExportDecl:
                 ),
                 "facade": "export source/*::{Chosen}",
                 "source/a": (
-                    "scope Chosen\ndef alpha() -> int = 1\nend Chosen\ndef excluded_a() -> int = 0"
+                    "scope Chosen\n"
+                    "  def alpha() -> int = 1\n"
+                    "end Chosen\n"
+                    "\n"
+                    "def excluded_a() -> int = 0"
                 ),
                 "source/b": (
-                    "scope Chosen\ndef beta() -> int = 2\nend Chosen\ndef excluded_b() -> int = 0"
+                    "scope Chosen\n"
+                    "  def beta() -> int = 2\n"
+                    "end Chosen\n"
+                    "\n"
+                    "def excluded_b() -> int = 0"
                 ),
             },
             default_stdlib=False,
@@ -2941,7 +3004,7 @@ class TestExportDecl:
             tmp_path,
             {
                 "entry": "import facade\n()",
-                "facade": "export lib::{member as Public}\nscope Public\nend Public",
+                "facade": "export lib::{member as Public}\n\nscope Public\nend Public",
                 "lib": "def member() -> int = 1",
             },
             default_stdlib=False,
@@ -2975,8 +3038,9 @@ class TestExportDecl:
                 ),
                 "facade": (
                     "export lib::{Source as Public}\n"
+                    "\n"
                     "scope Public\n"
-                    "def read() -> int = 1\n"
+                    "  def read() -> int = 1\n"
                     "end Public"
                 ),
                 "lib": "record Source(value: int)",
@@ -2994,7 +3058,7 @@ class TestExportDecl:
                     "import facade\nlet value = facade::Public(value = 1)\nfacade::Public::read()"
                 ),
                 "facade": "export lib::{Source as Public}\nrecord Public(value: int)",
-                "lib": "scope Source\ndef read() -> int = 1\nend Source",
+                "lib": "scope Source\n  def read() -> int = 1\nend Source",
             },
             default_stdlib=False,
         )
@@ -3049,7 +3113,7 @@ class TestExportDecl:
             tmp_path,
             {
                 "entry": "import facade::*\n()",
-                "facade": "scope Geo\nexport lib::{foo}\nend Geo",
+                "facade": "scope Geo\n  export lib::{foo}\nend Geo",
                 "lib": "def foo() -> int = 1\ndef bar() -> int = 2",
             },
         )
@@ -3067,7 +3131,7 @@ class TestExportDecl:
             tmp_path,
             {
                 "entry": "import facade::*\n()",
-                "facade": "scope Geo\nexport lib\nend Geo",
+                "facade": "scope Geo\n  export lib\nend Geo",
                 "lib": "def foo() -> int = 1\ndef bar() -> int = 2",
             },
         )
@@ -3083,7 +3147,7 @@ class TestExportDecl:
             tmp_path,
             {
                 "entry": "import facade::*\n()",
-                "facade": "scope Geo\nexport lib hiding secret\nend Geo",
+                "facade": "scope Geo\n  export lib hiding secret\nend Geo",
                 "lib": "def foo() -> int = 1\ndef secret() -> int = 0",
             },
         )
@@ -3100,7 +3164,7 @@ class TestExportDecl:
             tmp_path,
             {
                 "entry": "import facade::*\n()",
-                "facade": "scope Geo\nexport lib::{foo as plus}\nend Geo",
+                "facade": "scope Geo\n  export lib::{foo as plus}\nend Geo",
                 "lib": "def foo() -> int = 1",
             },
         )
@@ -3119,7 +3183,7 @@ class TestExportDecl:
             tmp_path,
             {
                 "entry": "import facade\nlet x = facade::Geo::foo()",
-                "facade": "scope Geo\nexport lib::{foo}\nend Geo",
+                "facade": "scope Geo\n  export lib::{foo}\nend Geo",
                 "lib": "def foo() -> int = 42",
             },
         )
@@ -3236,7 +3300,7 @@ def test_scoped_invalid_referenced_member_does_not_create_a_constructor_candidat
     graph = _make_graph_from_files(
         tmp_path,
         {
-            "entry": "import lib::*\nscope Local\nimport lib::{E}\nend Local\n()",
+            "entry": "import lib::*\n\nscope Local\n  import lib::{E}\nend Local\n\n()",
             "lib": "import target\nenum E = target::NotRecord",
             "target": "enum NotRecord\n  | variant",
         },
@@ -3292,11 +3356,17 @@ class TestDiagnosticSpans:
             pytest.param(
                 {
                     "entry": (
-                        "import mylib\nscope mylib\ndef foo() -> int = 1\nend mylib\nmylib::foo()"
+                        "import mylib\n"
+                        "\n"
+                        "scope mylib\n"
+                        "  def foo() -> int = 1\n"
+                        "end mylib\n"
+                        "\n"
+                        "mylib::foo()"
                     ),
                     "mylib": "def foo() -> int = 2",
                 },
-                (5, 1, 5, 11),
+                (7, 1, 7, 11),
                 id="scope-and-route-clash",
             ),
             pytest.param(

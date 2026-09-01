@@ -1,6 +1,7 @@
 enum Status
   | Open(days: int)
   | Closed
+
 program def main() -> unit =
   let s: Status = Open(days = 3)
   let t = s with days = 4

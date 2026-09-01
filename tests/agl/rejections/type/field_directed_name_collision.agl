@@ -3,6 +3,7 @@ enum Flag
   | off
 enum Packet
   | packet(on: Flag)
+
 program def main() -> unit =
   let item = packet(on = Flag::on)
   case item of

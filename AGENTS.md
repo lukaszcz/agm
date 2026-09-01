@@ -23,7 +23,8 @@ The primary purpose of architecture docs in docs/arch/**/*.md is to provide agen
 Use `just` for the standard workflow:
 
 - `just setup` creates `.venv` with Python 3.14 and installs the project plus dev dependencies via `uv`
-- `just lint` runs `ruff check src/ tests/ stdlib/` and `ruff format --check src/ tests/ stdlib/` (run `uv run ruff format src/ tests/ stdlib/` to fix formatting)
+- `just lint` runs `ruff check src/ tests/ stdlib/ tools/`, `ruff format --check src/ tests/ stdlib/ tools/`, and `just agl-style` (run `uv run ruff format src/ tests/ stdlib/ tools/` to fix formatting)
+- `just agl-style` checks the layout style of every AgL source, doc snippet, and embedded test snippet; `just agl-style-fix` rewrites them into it
 - `just test` runs the test suite
 - `just typecheck` runs strict `mypy` with `MYPYPATH=src:stubs`
 - `just check` runs linting, tests, and type checking together
@@ -34,6 +35,7 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 ## Coding Style & Naming Conventions
 
 - Formatting: ruff (line length 100)
+- AgL layout, everywhere AgL is written (`.agl` files, ```agl fences in docs, snippets inside Python strings): indent a scope region's items under its header, leave a blank line after a region's closer and before a `program def`, and indent a function body written on its own line. `just agl-style-fix` applies it; `just lint` enforces it.
 - Typing: strict discipline (`mypy` strict); modern union syntax (`str | None`, `dict[str, int]`, `list[str]`)
 - Do NOT use `type: ignore` comments. If ignoring a type rule is necessary, ALWAYS ask the user for permission and explain why.
 - Do NOT use `noqa` comment. If ignoring a lint rule is necessary, ALWAYS ask the user for permission and explain why.

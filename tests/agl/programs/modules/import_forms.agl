@@ -15,7 +15,7 @@ use num/arith::Operations::*
 use Local::*
 
 scope Local
-def scope_value() -> int = 99
+  def scope_value() -> int = 99
 end Local
 
 param x: int

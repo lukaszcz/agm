@@ -962,7 +962,7 @@ class TestDeclarations:
 
 class TestScopeRegions:
     def test_flat_region_contains_declarations(self) -> None:
-        region = first(parse("scope Point\ndef distance() -> int = 0\nend Point"))
+        region = first(parse("scope Point\n  def distance() -> int = 0\nend Point"))
 
         assert isinstance(region, ScopeRegion)
         assert region.segment.name == "Point"
@@ -971,7 +971,7 @@ class TestScopeRegions:
         assert isinstance(region.items[0], FuncDef)
 
     def test_region_contains_program_func_def(self) -> None:
-        region = first(parse("scope App\nprogram def main() -> unit = ()\nend App"))
+        region = first(parse("scope App\n\n  program def main() -> unit = ()\nend App"))
 
         assert isinstance(region, ScopeRegion)
         (member,) = region.items
@@ -981,7 +981,9 @@ class TestScopeRegions:
 
     def test_textually_nested_regions_preserve_nesting(self) -> None:
         region = first(
-            parse("scope Outer\nscope Inner\ndef value() -> int = 1\nend Inner\nend Outer")
+            parse(
+                "scope Outer\n\n  scope Inner\n    def value() -> int = 1\n  end Inner\nend Outer"
+            )
         )
 
         assert isinstance(region, ScopeRegion)
@@ -990,7 +992,7 @@ class TestScopeRegions:
         assert (region.segment.name, inner.segment.name) == ("Outer", "Inner")
 
     def test_multisegment_region_normalizes_to_nested_regions(self) -> None:
-        region = first(parse("scope A::B\ndef value() -> int = 1\nend A::B"))
+        region = first(parse("scope A::B\n  def value() -> int = 1\nend A::B"))
 
         assert isinstance(region, ScopeRegion)
         inner = region.items[0]
@@ -1005,7 +1007,13 @@ class TestScopeRegions:
 
     def test_repeated_region_paths_remain_distinct_ast_regions(self) -> None:
         program = parse(
-            "scope Point\ndef x() -> int = 1\nend Point\nscope Point\ndef y() -> int = 2\nend Point"
+            "scope Point\n"
+            "  def x() -> int = 1\n"
+            "end Point\n"
+            "\n"
+            "scope Point\n"
+            "  def y() -> int = 2\n"
+            "end Point"
         )
 
         assert len(program.body.items) == 2
@@ -1014,7 +1022,7 @@ class TestScopeRegions:
     @pytest.mark.parametrize(
         ("source", "expected"),
         (
-            ("scope Point\ndef value() -> int = 1\nend Line", "end Point"),
+            ("scope Point\n  def value() -> int = 1\nend Line", "end Point"),
             ("scope Point\ndef value() -> int = 1", "end Point"),
             ("end Point", "scope region"),
         ),
@@ -1033,8 +1041,8 @@ class TestScopeRegions:
     @pytest.mark.parametrize(
         "source",
         (
-            "def f() -> int\n  scope Inner\n  def value() -> int = 1\n  end Inner",
-            "if true\n  scope Inner\n  def value() -> int = 1\n  end Inner",
+            "def f() -> int\n\n  scope Inner\n    def value() -> int = 1\n  end Inner",
+            "if true\n\n  scope Inner\n    def value() -> int = 1\n  end Inner",
         ),
         ids=("function-suite", "branch-suite"),
     )
@@ -1104,7 +1112,7 @@ class TestScopeRegions:
         assert [segment.name for segment in member.scope_path] == ["Point"]
 
     def test_region_admits_param(self) -> None:
-        region = first(parse("scope Point\nparam value\nend Point"))
+        region = first(parse("scope Point\n  param value\nend Point"))
 
         assert isinstance(region, ScopeRegion)
         (member,) = region.items
@@ -1113,7 +1121,9 @@ class TestScopeRegions:
 
     def test_region_preserves_end_identifiers_in_declaration_suites(self) -> None:
         region = first(
-            parse("scope Point\nrecord R\n  end: int\ndef f() -> int\n  end Thing\nend Point")
+            parse(
+                "scope Point\n  record R\n    end: int\n  def f() -> int\n    end Thing\nend Point"
+            )
         )
 
         assert isinstance(region, ScopeRegion)
@@ -1551,7 +1561,7 @@ class TestFuncDef:
 
     def test_bare_self_has_the_same_ast_in_declaration_and_region_forms(self) -> None:
         direct = first(parse("def Point::x(self) -> int = 1"))
-        region = first(parse("scope Point\ndef x(self) -> int = 1\nend Point"))
+        region = first(parse("scope Point\n  def x(self) -> int = 1\nend Point"))
         assert isinstance(direct, FuncDef)
         assert isinstance(region, ScopeRegion)
         scoped = region.items[0]
@@ -3955,7 +3965,7 @@ class TestImportDecl:
         assert decl.alias == "Alias"
 
     def test_prefixed_scope_preserves_a_use_declaration(self) -> None:
-        (region,) = items(parse("scope A::B\nuse C::*\nend A::B"))
+        (region,) = items(parse("scope A::B\n  use C::*\nend A::B"))
         assert isinstance(region, syntax.ScopeRegion)
         nested = region.items[0]
         assert isinstance(nested, syntax.ScopeRegion)

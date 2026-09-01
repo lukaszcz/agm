@@ -3158,9 +3158,12 @@ class TestDiscoverParamsGraph:
         (tmp_path / "helper.agl").write_text("program def helper() -> unit = ()\n")
         source = (
             "import helper\n"
+            "\n"
             "scope review\n"
-            "program def main() -> unit = ()\n"
+            "\n"
+            "  program def main() -> unit = ()\n"
             "end review\n"
+            "\n"
             "program def top() -> unit = ()\n"
         )
         prepared = PipelineDriver.prepare_program(
@@ -3517,11 +3520,13 @@ class TestScopedAgentValues:
     ) -> None:
         source = """\
 scope A
-let bot = AgentCommand("a-bot")
+  let bot = AgentCommand("a-bot")
 end A
+
 scope B
-let bot = AgentCommand("b-bot")
+  let bot = AgentCommand("b-bot")
 end B
+
 print(A::bot.ask("first"))
 print(B::bot.ask("second"))
 """
@@ -3543,10 +3548,11 @@ print(B::bot.ask("second"))
 
         source = """\
 scope A
-let bot = AgentCommand("a-bot")
+  let bot = AgentCommand("a-bot")
 end A
+
 scope B
-let bot = AgentCommand("b-bot")
+  let bot = AgentCommand("b-bot")
 end B
 """
         result = run_inline_command(PipelineDriver(), source)
@@ -3561,9 +3567,11 @@ end B
 
         source = """\
 let bot = 42
+
 scope A
-let bot = AgentCommand("a-bot")
+  let bot = AgentCommand("a-bot")
 end A
+
 print(A::bot.ask("hi"))
 """
         runtime = PipelineDriver(agent_dispatcher=lambda _request: "hi there")
@@ -3588,9 +3596,10 @@ class TestScopedBindingPublicName:
         source = """\
 let x = 1
 var y = 2
+
 scope A
-let x = 10
-var y = 20
+  let x = 10
+  var y = 20
 end A
 """
         result = run_inline_command(PipelineDriver(), source)
@@ -3606,7 +3615,7 @@ end A
 
         region_source = """\
 scope A
-let x = 1
+  let x = 1
 end A
 """
         shorthand_source = "let A::x = 1"
@@ -3625,8 +3634,9 @@ end A
 record Point
   x: int
   y: int
+
 scope A
-let Point(x, y) = Point(x = 1, y = 2)
+  let Point(x, y) = Point(x = 1, y = 2)
 end A
 """
         result = run_inline_command(PipelineDriver(), source)

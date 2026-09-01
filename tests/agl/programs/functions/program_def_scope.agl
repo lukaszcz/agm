@@ -1,3 +1,4 @@
 scope App
-program def entry() = print "scoped"
+
+  program def entry() = print "scoped"
 end App

@@ -1,6 +1,6 @@
 {
   "diagnostic": {
-    "line": 6,
+    "line": 8,
     "message_contains": [
       "Token",
       "Left::Token"

@@ -965,9 +965,11 @@ def test_malformed_checked_constructor_metadata_raise_invariants() -> None:
 def test_renamed_constructor_rejects_unknown_canonical_variant_metadata() -> None:
     checked = _check(
         "use S::{E::some as X}\n"
+        "\n"
         "scope S\n"
-        "enum E | some(value: int)\n"
+        "  enum E | some(value: int)\n"
         "end S\n"
+        "\n"
         "let value: S::E = X(value = 1)\n"
         "case value of | X(value = _ as captured) => captured | _ => 0"
     )

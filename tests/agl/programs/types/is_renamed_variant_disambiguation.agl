@@ -3,13 +3,13 @@
 use Variants::{First::A as X, Second::B as X}
 
 scope Variants
-enum First
-  | A
-  | Other
+  enum First
+    | A
+    | Other
 
-enum Second
-  | B
-  | Other
+  enum Second
+    | B
+    | Other
 end Variants
 
 program def main() -> unit =

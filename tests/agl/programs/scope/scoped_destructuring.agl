@@ -6,37 +6,37 @@ param mode: text
 record Bounds(low: int, high: int)
 
 scope A
-record Point(x: int, y: int)
+  record Point(x: int, y: int)
 end A
 
 scope B
 end B
 
 scope C
-enum Status
-  | Idle(reason: text)
+  enum Status
+    | Idle(reason: text)
 end C
 
 scope D
-exception Oops extends Exception
-  code: int
-def use(offset: int) -> int =
-  try
-    raise Oops(message = "boom", code = 5 + offset)
-  catch Oops as e =>
-    e.code
+  exception Oops extends Exception
+    code: int
+  def use(offset: int) -> int =
+    try
+      raise Oops(message = "boom", code = 5 + offset)
+    catch Oops as e =>
+      e.code
 end D
 
 scope E
-record Range(low: int, high: int)
+  record Range(low: int, high: int)
 
-def pick(r: Range) -> int =
-  case r of
-  | Range(low, high) => low + high
+  def pick(r: Range) -> int =
+    case r of
+    | Range(low, high) => low + high
 
-def unqualified_let_destructure(r: Range) -> int =
-  let Range(low, high) = r
-  low - high
+  def unqualified_let_destructure(r: Range) -> int =
+    let Range(low, high) = r
+    low - high
 end E
 
 program def main() -> unit =

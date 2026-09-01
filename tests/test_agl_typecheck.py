@@ -1199,7 +1199,7 @@ class TestTypeEnvironment:
         )
         assert env.resolve_binding(ref) is None
 
-    _SCOPED_ENUM_LIB_SOURCE = "scope A\nenum Status\n  | Good\n  | Bad\nend A\n"
+    _SCOPED_ENUM_LIB_SOURCE = "scope A\n  enum Status\n    | Good\n    | Bad\nend A\n"
 
     def _check_scoped_enum_import(self, root: Path, entry: str) -> CheckedProgram:
         """Check a real two-module graph whose entry renames a scoped enum.
@@ -1424,8 +1424,9 @@ class TestScopedBindingTypes:
     def test_enum_declaration_preserves_a_standalone_record_in_its_scope(self) -> None:
         checked = accept_type(
             "scope Color\n"
-            "record Meta(value: int)\n"
+            "  record Meta(value: int)\n"
             "end Color\n"
+            "\n"
             "enum Color | Red\n"
             "let meta: Color::Meta = Color::Meta(value = 1)\n"
             "meta.value"
@@ -1442,14 +1443,14 @@ class TestScopedBindingTypes:
         assert checked.node_types[checked.resolved.program.body.items[3].node_id] == IntType()
 
     def test_type_inferred_from_initializer(self) -> None:
-        r = accept_type("scope Config\nlet retries = 3\nend Config\nConfig::retries")
+        r = accept_type("scope Config\n  let retries = 3\nend Config\n\nConfig::retries")
         region = r.resolved.program.body.items[0]
         assert isinstance(region, ScopeRegion)
         let_decl = next(item for item in region.items if isinstance(item, LetDecl))
         assert r.type_env.get_binding_type(let_decl.pattern.node_id) == IntType()
 
     def test_annotation_accepted_on_region_form(self) -> None:
-        r = accept_type("scope Config\nvar attempts: int = 0\nend Config\nConfig::attempts")
+        r = accept_type("scope Config\n  var attempts: int = 0\nend Config\n\nConfig::attempts")
         region = r.resolved.program.body.items[0]
         assert isinstance(region, ScopeRegion)
         var_decl = next(item for item in region.items if isinstance(item, VarDecl))
@@ -1463,7 +1464,7 @@ class TestScopedBindingTypes:
     @pytest.mark.parametrize(
         ("source", "line"),
         (
-            ('scope Config\nvar attempts: int = "nope"\nend Config\n()', 2),
+            ('scope Config\n  var attempts: int = "nope"\nend Config\n\n()', 2),
             ('var Config::attempts: int = "nope"\n()', 1),
         ),
         ids=("region", "shorthand"),
@@ -1477,12 +1478,15 @@ class TestScopedBindingTypes:
     def test_visible_from_nested_region_qualified_path_and_after_open(self) -> None:
         r = accept_type(
             "use Config::*\n"
+            "\n"
             "scope Config\n"
-            "let retries = 3\n"
-            "scope Inner\n"
-            "def read() -> int = retries\n"
-            "end Inner\n"
+            "  let retries = 3\n"
+            "\n"
+            "  scope Inner\n"
+            "    def read() -> int = retries\n"
+            "  end Inner\n"
             "end Config\n"
+            "\n"
             "let a = Config::retries\n"
             "let b = retries\n"
             "let c = Config::Inner::read()\n"
@@ -1500,9 +1504,10 @@ class TestScopedBindingTypes:
     def test_scoped_binding_holding_a_function_is_callable(self) -> None:
         r = accept_type(
             "scope Config\n"
-            "def helper() -> int = 5\n"
-            "let value_fn = helper\n"
+            "  def helper() -> int = 5\n"
+            "  let value_fn = helper\n"
             "end Config\n"
+            "\n"
             "Config::value_fn()"
         )
         region = r.resolved.program.body.items[0]
@@ -1514,7 +1519,7 @@ class TestScopedBindingTypes:
         assert r.node_types[r.resolved.program.body.items[1].node_id] == IntType()
 
     def test_region_form_annotation_resolves_a_bare_sibling_record(self) -> None:
-        r = accept_type("scope A\nrecord R(v: int)\nlet x: R = R(v = 1)\nend A\nA::x.v")
+        r = accept_type("scope A\n  record R(v: int)\n  let x: R = R(v = 1)\nend A\n\nA::x.v")
         region = r.resolved.program.body.items[0]
         assert isinstance(region, ScopeRegion)
         let_decl = next(item for item in region.items if isinstance(item, LetDecl))
@@ -1524,7 +1529,7 @@ class TestScopedBindingTypes:
         assert r.node_types[r.resolved.program.body.items[1].node_id] == IntType()
 
     def test_region_form_var_annotation_resolves_a_bare_sibling_record(self) -> None:
-        r = accept_type("scope A\nrecord R(v: int)\nvar x: R = R(v = 1)\nend A\nA::x.v")
+        r = accept_type("scope A\n  record R(v: int)\n  var x: R = R(v = 1)\nend A\n\nA::x.v")
         region = r.resolved.program.body.items[0]
         assert isinstance(region, ScopeRegion)
         var_decl = next(item for item in region.items if isinstance(item, VarDecl))
@@ -1534,7 +1539,7 @@ class TestScopedBindingTypes:
         assert r.node_types[r.resolved.program.body.items[1].node_id] == IntType()
 
     def test_shorthand_form_annotation_resolves_a_bare_sibling_record(self) -> None:
-        r = accept_type("scope A\nrecord R(v: int)\nend A\nlet A::x: R = A::R(v = 1)\nA::x.v")
+        r = accept_type("scope A\n  record R(v: int)\nend A\n\nlet A::x: R = A::R(v = 1)\nA::x.v")
         decl = r.resolved.program.body.items[1]
         assert isinstance(decl, LetDecl)
         binding_type = r.type_env.get_binding_type(decl.pattern.node_id)
@@ -1543,7 +1548,7 @@ class TestScopedBindingTypes:
         assert r.node_types[r.resolved.program.body.items[2].node_id] == IntType()
 
     def test_shorthand_form_var_annotation_resolves_a_bare_sibling_record(self) -> None:
-        r = accept_type("scope A\nrecord R(v: int)\nend A\nvar A::x: R = A::R(v = 1)\nA::x.v")
+        r = accept_type("scope A\n  record R(v: int)\nend A\n\nvar A::x: R = A::R(v = 1)\nA::x.v")
         decl = r.resolved.program.body.items[1]
         assert isinstance(decl, VarDecl)
         binding_type = r.type_env.get_binding_type(decl.node_id)
@@ -1554,7 +1559,7 @@ class TestScopedBindingTypes:
     def test_shorthand_pattern_binder_annotation_resolves_a_bare_sibling_record(self) -> None:
         """The ``let A::r: R = A::R(v = 1)`` shorthand names both the binder and
         its own type with the same bare sibling spelling."""
-        r = accept_type("scope A\nrecord R(v: int)\nend A\nlet A::r: R = A::R(v = 1)\nA::r.v")
+        r = accept_type("scope A\n  record R(v: int)\nend A\n\nlet A::r: R = A::R(v = 1)\nA::r.v")
         decl = r.resolved.program.body.items[1]
         assert isinstance(decl, LetDecl)
         binding_type = r.type_env.get_binding_type(decl.pattern.node_id)
@@ -1565,7 +1570,12 @@ class TestScopedBindingTypes:
 
     def test_region_form_annotation_resolves_a_generic_application(self) -> None:
         r = accept_type(
-            "scope A\nrecord Box[T](value: T)\nlet b: Box[int] = Box(value = 1)\nend A\nA::b.value"
+            "scope A\n"
+            "  record Box[T](value: T)\n"
+            "  let b: Box[int] = Box(value = 1)\n"
+            "end A\n"
+            "\n"
+            "A::b.value"
         )
         region = r.resolved.program.body.items[0]
         assert isinstance(region, ScopeRegion)
@@ -1579,9 +1589,10 @@ class TestScopedBindingTypes:
     def test_region_form_annotation_resolves_a_function_type(self) -> None:
         r = accept_type(
             "scope A\n"
-            "record R(v: int)\n"
-            "let f: (R) -> int = fn(r: R) -> int => r.v\n"
+            "  record R(v: int)\n"
+            "  let f: (R) -> int = fn(r: R) -> int => r.v\n"
             "end A\n"
+            "\n"
             "A::f(A::R(v = 1))"
         )
         region = r.resolved.program.body.items[0]
@@ -1598,10 +1609,11 @@ class TestScopedBindingTypes:
     def test_region_form_cast_target_resolves_a_bare_sibling_record(self) -> None:
         r = accept_type(
             "scope A\n"
-            "record R(v: int)\n"
-            'let j: json = exec("ls", format = "json")\n'
-            "let r = j as R\n"
+            "  record R(v: int)\n"
+            '  let j: json = exec("ls", format = "json")\n'
+            "  let r = j as R\n"
             "end A\n"
+            "\n"
             "A::r.v"
         )
         region = r.resolved.program.body.items[0]
@@ -1615,9 +1627,10 @@ class TestScopedBindingTypes:
     def test_region_form_exec_result_type_resolves_a_bare_sibling_record(self) -> None:
         r = accept_type(
             "scope A\n"
-            "record Out(value: int)\n"
-            'let o: Out = exec("run", format = "json")\n'
+            "  record Out(value: int)\n"
+            '  let o: Out = exec("run", format = "json")\n'
             "end A\n"
+            "\n"
             "A::o.value"
         )
         region = r.resolved.program.body.items[0]
@@ -1630,7 +1643,7 @@ class TestScopedBindingTypes:
         assert r.node_types[r.resolved.program.body.items[1].node_id] == IntType()
 
     def test_region_form_annotation_resolves_a_bare_sibling_type_alias(self) -> None:
-        r = accept_type("scope A\ntype Alias = int\nlet x: Alias = 3\nend A\nA::x")
+        r = accept_type("scope A\n  type Alias = int\n  let x: Alias = 3\nend A\n\nA::x")
         region = r.resolved.program.body.items[0]
         assert isinstance(region, ScopeRegion)
         let_decl = next(item for item in region.items if isinstance(item, LetDecl))
@@ -1644,11 +1657,12 @@ class TestScopedBindingTypes:
         not reset to the module root."""
         r = accept_type(
             "scope A\n"
-            "record R(v: int)\n"
-            "def f() -> int =\n"
-            "  let x: R = R(v = 1)\n"
-            "  x.v\n"
+            "  record R(v: int)\n"
+            "  def f() -> int =\n"
+            "    let x: R = R(v = 1)\n"
+            "    x.v\n"
             "end A\n"
+            "\n"
             "A::f()"
         )
         region = r.resolved.program.body.items[0]
@@ -1665,7 +1679,7 @@ class TestScopedBindingTypes:
         """Already enforced by the scope pass; pinned here so the collision is
         confirmed not to reach typechecking as an unresolved-reference crash."""
         with pytest.raises(AglScopeError):
-            parse_resolve_check("scope Config\ndef f() -> int = 0\nlet f = 1\nend Config\n()")
+            parse_resolve_check("scope Config\n  def f() -> int = 0\n  let f = 1\nend Config\n\n()")
 
 
 class TestQualifiedGenericFunctionBuiltinCollisions:
@@ -1730,35 +1744,36 @@ class TestScopedParamTypes:
         assert "engine setting name" in err.to_diagnostic().message
 
     def test_annotation_and_default_combine(self) -> None:
-        r = accept_type('scope Deploy\nparam region: text = "eu"\nend Deploy\nDeploy::region')
+        r = accept_type('scope Deploy\n  param region: text = "eu"\nend Deploy\n\nDeploy::region')
         region = r.resolved.program.body.items[0]
         assert isinstance(region, ScopeRegion)
         (param_decl,) = [item for item in region.items if isinstance(item, ParamDecl)]
         assert r.type_env.get_binding_type(param_decl.node_id) == TextType()
 
     def test_type_inferred_from_default_without_annotation(self) -> None:
-        r = accept_type("scope Deploy\nparam replicas = 3\nend Deploy\nDeploy::replicas")
+        r = accept_type("scope Deploy\n  param replicas = 3\nend Deploy\n\nDeploy::replicas")
         region = r.resolved.program.body.items[0]
         assert isinstance(region, ScopeRegion)
         (param_decl,) = [item for item in region.items if isinstance(item, ParamDecl)]
         assert r.type_env.get_binding_type(param_decl.node_id) == IntType()
 
     def test_defaults_to_text_without_annotation_or_default(self) -> None:
-        r = accept_type("scope Deploy\nparam region\nend Deploy\nDeploy::region")
+        r = accept_type("scope Deploy\n  param region\nend Deploy\n\nDeploy::region")
         region = r.resolved.program.body.items[0]
         assert isinstance(region, ScopeRegion)
         (param_decl,) = [item for item in region.items if isinstance(item, ParamDecl)]
         assert r.type_env.get_binding_type(param_decl.node_id) == TextType()
 
     def test_annotation_mismatch_reports_the_params_span(self) -> None:
-        err = reject_type('scope Deploy\nparam region: int = "eu"\nend Deploy\n()')
+        err = reject_type('scope Deploy\n  param region: int = "eu"\nend Deploy\n\n()')
         d = err.to_diagnostic()
         assert d.line == 2
         assert "int" in d.message and "text" in d.message
 
     def test_annotation_resolves_a_bare_sibling_type_declared_in_the_same_region(self) -> None:
         r = accept_type(
-            "scope Deploy\nrecord Target(name: text)\nparam target: Target\nend Deploy\n"
+            "scope Deploy\n  record Target(name: text)\n  param target: Target\nend Deploy\n"
+            "\n"
             "Deploy::target"
         )
         region = r.resolved.program.body.items[0]
@@ -1773,7 +1788,7 @@ class TestScopedParamTypes:
         """Already enforced by the scope pass; pinned here so the collision is
         confirmed not to reach typechecking as an unresolved-reference crash."""
         with pytest.raises(AglScopeError):
-            parse_resolve_check("scope Deploy\ndef f() -> int = 0\nparam f\nend Deploy\n()")
+            parse_resolve_check("scope Deploy\n  def f() -> int = 0\n  param f\nend Deploy\n\n()")
 
 
 _EXEC_RESULT_FIELDS = "  stdout: text\n  exit_code: int\n  stderr: text\n  timed_out: bool\n"
@@ -1802,7 +1817,8 @@ class TestScopedBuiltinTypes:
 
     def test_scoped_builtin_enum_matches_at_its_own_path(self) -> None:
         r = accept_type(
-            "scope A\nbuiltin\nenum ParsePolicy =\n  | Abort\n  | Retry(n: int)\nend A\n"
+            "scope A\n  builtin\n  enum ParsePolicy =\n    | Abort\n    | Retry(n: int)\nend A\n"
+            "\n"
             "def classify(value: A::ParsePolicy) -> text =\n"
             "  case value of\n"
             '    | A::ParsePolicy::Abort => "abort"\n'
@@ -1894,13 +1910,14 @@ class TestScopedBuiltinTypes:
     def test_scoped_builtin_exception_raises_and_catches_at_its_own_path(self) -> None:
         r = accept_type(
             "scope A\n"
-            "builtin exception RangeError extends Exception()\n"
-            "def trigger() -> text =\n"
-            "  try\n"
-            '    raise RangeError(message = "boom")\n'
-            "  catch RangeError as e =>\n"
-            "    e.message\n"
+            "  builtin exception RangeError extends Exception()\n"
+            "  def trigger() -> text =\n"
+            "    try\n"
+            '      raise RangeError(message = "boom")\n'
+            "    catch RangeError as e =>\n"
+            "      e.message\n"
             "end A\n"
+            "\n"
             "A::trigger()\n",
             default_stdlib=False,
         )
@@ -1912,14 +1929,14 @@ class TestScopedBuiltinTypes:
     def test_scoped_builtin_record_unknown_bare_name_rejected(self) -> None:
         """The canonical-name whitelist still applies to a scoped declaration."""
         err = reject_type(
-            "scope A\nbuiltin\nrecord Bogus\n  x: int\nend A\n()", default_stdlib=False
+            "scope A\n  builtin\n  record Bogus\n    x: int\nend A\n\n()", default_stdlib=False
         )
         assert "bogus" in err.to_diagnostic().message.lower()
 
     def test_scoped_builtin_record_shape_mismatch_rejected(self) -> None:
         """A scoped ``builtin`` declaration must still match the canonical shape."""
         err = reject_type(
-            "scope A\nbuiltin\nrecord ExecResult\n  x: int\nend A\n()", default_stdlib=False
+            "scope A\n  builtin\n  record ExecResult\n    x: int\nend A\n\n()", default_stdlib=False
         )
         assert "ExecResult" in err.to_diagnostic().message
 
@@ -1937,13 +1954,20 @@ class TestScopedBuiltinTypes:
         invalid shape, not crash re-homing a handle to a bare ``TypeDef`` that
         never gets registered under its scoped key."""
         err = reject_type(
-            "scope A\nbuiltin record ExecResult[T]\n  x: T\nend A\n()", default_stdlib=False
+            "scope A\n  builtin record ExecResult[T]\n    x: T\nend A\n\n()", default_stdlib=False
         )
         assert "ExecResult" in err.to_diagnostic().message
 
     def test_scoped_generic_builtin_enum_is_rejected_with_a_proper_diagnostic(self) -> None:
         err = reject_type(
-            "scope A\nbuiltin\nenum ParsePolicy[T] =\n  | Abort\n  | Retry(n: T)\nend A\n()",
+            "scope A\n"
+            "  builtin\n"
+            "  enum ParsePolicy[T] =\n"
+            "    | Abort\n"
+            "    | Retry(n: T)\n"
+            "end A\n"
+            "\n"
+            "()",
             default_stdlib=False,
         )
         assert "ParsePolicy" in err.to_diagnostic().message
@@ -1953,7 +1977,7 @@ class TestScopedBuiltinTypes:
         declaring it as a record must report a clean diagnostic, not an
         internal ``AssertionError`` with no message."""
         err = reject_type(
-            "scope A\nbuiltin\nrecord RangeError\n  x: int\nend A\n()", default_stdlib=False
+            "scope A\n  builtin\n  record RangeError\n    x: int\nend A\n\n()", default_stdlib=False
         )
         assert "RangeError" in err.to_diagnostic().message
 
@@ -1968,12 +1992,13 @@ class TestScopedBuiltinTypes:
         (path-``()``) hierarchy once re-rooted."""
         r = accept_type(
             "scope A\n"
-            "builtin\n"
-            "exception Exception\n"
-            "  *\n"
-            "  message: text\n"
-            "builtin exception Abort extends Exception()\n"
+            "  builtin\n"
+            "  exception Exception\n"
+            "    *\n"
+            "    message: text\n"
+            "  builtin exception Abort extends Exception()\n"
             "end A\n"
+            "\n"
             "()\n",
             default_stdlib=False,
         )
@@ -1987,13 +2012,15 @@ class TestScopedBuiltinTypes:
         shape check must still reject it."""
         err = reject_type(
             "scope A\n"
-            "exception Exception\n"
-            "  *\n"
-            "  message: text\n"
-            "scope B\n"
-            "builtin exception Abort extends Exception()\n"
-            "end B\n"
+            "  exception Exception\n"
+            "    *\n"
+            "    message: text\n"
+            "\n"
+            "  scope B\n"
+            "    builtin exception Abort extends Exception()\n"
+            "  end B\n"
             "end A\n"
+            "\n"
             "()\n",
             default_stdlib=False,
         )
@@ -2005,19 +2032,20 @@ class TestScopedBuiltinTypes:
         compare equal to the canonical shape once re-rooted."""
         r = accept_type(
             "scope A\n"
-            "builtin\n"
-            "record OutputContract\n"
-            "  target_type: text\n"
-            "  codec_name: text\n"
-            "  strict_json: json\n"
-            "  format_instructions: text\n"
-            "  json_schema: json\n"
-            "  structured_exec: bool\n"
-            "builtin\n"
-            "enum OutputContractOption =\n"
-            "  | None\n"
-            "  | Some(value: OutputContract)\n"
+            "  builtin\n"
+            "  record OutputContract\n"
+            "    target_type: text\n"
+            "    codec_name: text\n"
+            "    strict_json: json\n"
+            "    format_instructions: text\n"
+            "    json_schema: json\n"
+            "    structured_exec: bool\n"
+            "  builtin\n"
+            "  enum OutputContractOption =\n"
+            "    | None\n"
+            "    | Some(value: OutputContract)\n"
             "end A\n"
+            "\n"
             "()\n",
             default_stdlib=False,
         )
@@ -2053,22 +2081,23 @@ class TestScopedBuiltinTypes:
         """
         r = accept_type(
             "scope A\n"
-            "builtin enum Agent\n"
-            "  | AgentCommand(command: text)\n"
-            "  | AgentClaude(model: text, thinking: text)\n"
-            "  | AgentCodex(model: text, thinking: text)\n"
-            "  | AgentPi(provider: text, model: text, thinking: text)\n"
-            "builtin enum ParsePolicy\n"
-            "  | Abort\n"
-            "  | Retry(n: int)\n"
-            "builtin def Agent::ask[T](\n"
-            "  self,\n"
-            "  prompt: text,\n"
-            '  format: text = "",\n'
-            "  strict_json: bool = false,\n"
-            "  on_parse_error: ParsePolicy = ParsePolicy::Abort,\n"
-            ") -> T\n"
+            "  builtin enum Agent\n"
+            "    | AgentCommand(command: text)\n"
+            "    | AgentClaude(model: text, thinking: text)\n"
+            "    | AgentCodex(model: text, thinking: text)\n"
+            "    | AgentPi(provider: text, model: text, thinking: text)\n"
+            "  builtin enum ParsePolicy\n"
+            "    | Abort\n"
+            "    | Retry(n: int)\n"
+            "  builtin def Agent::ask[T](\n"
+            "    self,\n"
+            "    prompt: text,\n"
+            '    format: text = "",\n'
+            "    strict_json: bool = false,\n"
+            "    on_parse_error: ParsePolicy = ParsePolicy::Abort,\n"
+            "  ) -> T\n"
             "end A\n"
+            "\n"
             "()\n",
             default_stdlib=False,
         )
@@ -2092,7 +2121,8 @@ class TestScopedBuiltinTypes:
         shape and must be rejected."""
         err = reject_type(
             f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
-            "scope B\nbuiltin def exec(command: text) -> A::ExecResult\nend B\n"
+            "scope B\n  builtin def exec(command: text) -> A::ExecResult\nend B\n"
+            "\n"
             "()\n",
             default_stdlib=False,
         )
@@ -2117,8 +2147,10 @@ class TestBuiltinDeclarationUniqueness:
 
     def test_same_builtin_function_at_distinct_scoped_names_is_accepted(self) -> None:
         r = accept_type(
-            "scope A\nbuiltin def print[T](value: T) -> unit\nend A\n"
-            "scope B\nbuiltin def print[T](value: T) -> unit\nend B\n"
+            "scope A\n  builtin def print[T](value: T) -> unit\nend A\n"
+            "\n"
+            "scope B\n  builtin def print[T](value: T) -> unit\nend B\n"
+            "\n"
             "()\n",
             default_stdlib=False,
         )
@@ -2231,15 +2263,16 @@ class TestCaughtExceptionShadowedByBuiltinRedeclaration:
         """
         err = reject_type(
             "scope A\n"
-            "builtin\n"
-            "exception ExecError extends Exception\n"
-            "  *\n"
-            "  command: text\n"
-            "  exit_code: int\n"
-            "  stdout: text\n"
-            "  stderr: text\n"
-            "  timed_out: bool\n"
+            "  builtin\n"
+            "  exception ExecError extends Exception\n"
+            "    *\n"
+            "    command: text\n"
+            "    exit_code: int\n"
+            "    stdout: text\n"
+            "    stderr: text\n"
+            "    timed_out: bool\n"
             "end A\n"
+            "\n"
             "def f() -> int =\n"
             "  try\n"
             "    1\n"
@@ -2256,20 +2289,21 @@ class TestCaughtExceptionShadowedByBuiltinRedeclaration:
         the identity the host mints there -- so it is unaffected."""
         r = accept_type(
             "scope A\n"
-            "builtin\n"
-            "exception ExecError extends Exception\n"
-            "  *\n"
-            "  command: text\n"
-            "  exit_code: int\n"
-            "  stdout: text\n"
-            "  stderr: text\n"
-            "  timed_out: bool\n"
-            "def f() -> int =\n"
-            "  try\n"
-            "    1\n"
-            "  catch ExecError as e =>\n"
-            "    2\n"
+            "  builtin\n"
+            "  exception ExecError extends Exception\n"
+            "    *\n"
+            "    command: text\n"
+            "    exit_code: int\n"
+            "    stdout: text\n"
+            "    stderr: text\n"
+            "    timed_out: bool\n"
+            "  def f() -> int =\n"
+            "    try\n"
+            "      1\n"
+            "    catch ExecError as e =>\n"
+            "      2\n"
             "end A\n"
+            "\n"
             "A::f()\n"
         )
         assert r.resolved.program is not None
@@ -2295,14 +2329,15 @@ class TestCaughtExceptionShadowedByBuiltinRedeclaration:
         collides with a built-in one."""
         r = accept_type(
             "scope A\n"
-            "exception ExecError extends Exception\n"
-            "  code: int\n"
-            "def f() -> int =\n"
-            "  try\n"
-            '    raise ExecError(message = "boom", code = 5)\n'
-            "  catch ExecError as e =>\n"
-            "    e.code\n"
+            "  exception ExecError extends Exception\n"
+            "    code: int\n"
+            "  def f() -> int =\n"
+            "    try\n"
+            '      raise ExecError(message = "boom", code = 5)\n'
+            "    catch ExecError as e =>\n"
+            "      e.code\n"
             "end A\n"
+            "\n"
             "A::f()\n"
         )
         region = r.resolved.program.body.items[0]
@@ -6604,12 +6639,15 @@ class TestIsTest:
     def test_is_test_rejects_variant_alias_owned_by_another_enum(self) -> None:
         reject_type(
             "use First::F::A as AliasForFirstA\n"
+            "\n"
             "scope First\n"
-            "enum F | A\n"
+            "  enum F | A\n"
             "end First\n"
+            "\n"
             "scope Second\n"
-            "enum E | A\n"
+            "  enum E | A\n"
             "end Second\n"
+            "\n"
             "let value = Second::E::A\n"
             "value is AliasForFirstA",
             default_stdlib=False,
@@ -6618,11 +6656,13 @@ class TestIsTest:
     def test_is_test_rejects_ambiguous_alias_set_owned_by_other_enums(self) -> None:
         err = reject_type(
             "use S::{First::A as X, Second::B as X}\n"
+            "\n"
             "scope S\n"
-            "enum First | A\n"
-            "enum Second | B\n"
-            "enum Third | C\n"
+            "  enum First | A\n"
+            "  enum Second | B\n"
+            "  enum Third | C\n"
             "end S\n"
+            "\n"
             "let value: S::Third = S::Third::C\n"
             "value is X",
             default_stdlib=False,
@@ -7022,9 +7062,11 @@ class TestConstructorRefDispatch:
     def test_bare_variant_pattern_aliasing_distinct_variants_of_owner_is_ambiguous(self) -> None:
         err = reject_type(
             "use S::{E::A as X, E::B as X}\n"
+            "\n"
             "scope S\n"
-            "enum E | A | B\n"
+            "  enum E | A | B\n"
             "end S\n"
+            "\n"
             "let value: S::E = S::E::A\n"
             "case value of | X => 1 | _ => 0"
         )
@@ -7035,9 +7077,11 @@ class TestConstructorRefDispatch:
     ) -> None:
         err = reject_type(
             "use S::{E::A as X, E::B as X}\n"
+            "\n"
             "scope S\n"
-            "enum E | A(value: int) | B(value: int)\n"
+            "  enum E | A(value: int) | B(value: int)\n"
             "end S\n"
+            "\n"
             "let value: S::E = S::E::A(value = 1)\n"
             "case value of | X(value = _) => 1 | _ => 0"
         )
@@ -7046,10 +7090,12 @@ class TestConstructorRefDispatch:
     def test_applied_variant_pattern_alias_is_disambiguated_by_enum_owner(self) -> None:
         result = accept_type(
             "use S::{First::A as X, Second::B as X}\n"
+            "\n"
             "scope S\n"
-            "enum First | A(value: int)\n"
-            "enum Second | B(value: int)\n"
+            "  enum First | A(value: int)\n"
+            "  enum Second | B(value: int)\n"
             "end S\n"
+            "\n"
             "let value = S::First::A(value = 1)\n"
             "case value of | X(value = _) => 1"
         )
@@ -8625,15 +8671,15 @@ class TestHostContractBuiltinIdentity:
         its own scoped declaration."""
         r = accept_type(
             "scope A\n"
-            "builtin exception RangeError extends Exception()\n"
-            "def trigger(step: int) -> unit =\n"
-            "  try\n"
-            "    for i in 1 to 5 by step do\n"
+            "  builtin exception RangeError extends Exception()\n"
+            "  def trigger(step: int) -> unit =\n"
+            "    try\n"
+            "      for i in 1 to 5 by step do\n"
+            "        ()\n"
+            "      done\n"
+            "    catch RangeError as e =>\n"
             "      ()\n"
-            "    done\n"
-            "  catch RangeError as e =>\n"
-            "    ()\n"
-            "end A\n()\n"
+            "end A\n\n()\n"
         )
         region = r.resolved.program.body.items[0]
         assert isinstance(region, ScopeRegion)
@@ -8649,14 +8695,14 @@ class TestHostContractBuiltinIdentity:
         readable."""
         r = accept_type(
             "scope A\n"
-            "builtin exception AgentCallError extends Exception\n"
-            "  *\n  agent: Agent\n  cause: text\n  metadata: json\n"
-            "def trigger() -> text =\n"
-            "  try\n"
-            '    ask("hi")\n'
-            "  catch AgentCallError as e =>\n"
-            "    render(e.agent)\n"
-            "end A\n()\n"
+            "  builtin exception AgentCallError extends Exception\n"
+            "    *\n    agent: Agent\n    cause: text\n    metadata: json\n"
+            "  def trigger() -> text =\n"
+            "    try\n"
+            '      ask("hi")\n'
+            "    catch AgentCallError as e =>\n"
+            "      render(e.agent)\n"
+            "end A\n\n()\n"
         )
         region = r.resolved.program.body.items[0]
         assert isinstance(region, ScopeRegion)

@@ -1,5 +1,6 @@
 scope Outer
-def member() -> int = 1
-use Missing::*
+  def member() -> int = 1
+  use Missing::*
 end Outer
+
 program def main() -> unit = ()

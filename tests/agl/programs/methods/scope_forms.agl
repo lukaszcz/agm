@@ -9,7 +9,7 @@ record Plain(value: int)
 def Plain::path_add(self, amount: int) -> int = self.value + amount
 
 scope Plain
-def region_add(self, amount: int) -> int = self.value + amount
+  def region_add(self, amount: int) -> int = self.value + amount
 end Plain
 
 record Box[T](value: T)
@@ -21,8 +21,8 @@ def Box::path_size[_](self) -> int = 1
 def Box::Entry::make[T](value: T) -> Box::Entry[T] = Box::Entry(value = value)
 
 scope Box
-def region_value[T](self) -> T = self.value
-def region_size[_](self) -> int = 1
+  def region_value[T](self) -> T = self.value
+  def region_size[_](self) -> int = 1
 end Box
 
 enum Signal
@@ -33,9 +33,9 @@ def Signal::path_text(self) -> text =
     | ready(value) => "ready %{value}"
 
 scope Signal
-def region_text(self) -> text =
-  case self of
-    | ready(value) => "ready %{value}"
+  def region_text(self) -> text =
+    case self of
+      | ready(value) => "ready %{value}"
 end Signal
 
 exception Notice extends Exception
@@ -44,23 +44,24 @@ exception Notice extends Exception
 def Notice::path_text(self) -> text = "notice %{self.code}"
 
 scope Notice
-def region_text(self) -> text = "notice %{self.code}"
+  def region_text(self) -> text = "notice %{self.code}"
 end Notice
 
 scope A
-record T(value: int)
+  record T(value: int)
 end A
 
 def A::T::path_value(self) -> int = self.value
 
 scope A::T
-def region_value(self) -> int = self.value
+  def region_value(self) -> int = self.value
 end A::T
 
 scope A
-scope T
-def nested_value(self) -> int = self.value
-end T
+
+  scope T
+    def nested_value(self) -> int = self.value
+  end T
 end A
 
 program def main() -> unit =

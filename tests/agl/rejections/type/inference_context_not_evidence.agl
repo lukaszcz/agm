@@ -1,4 +1,5 @@
 def id[T](x: T) -> T = x
+
 program def main() -> unit =
   let value: text = id(1)
   value

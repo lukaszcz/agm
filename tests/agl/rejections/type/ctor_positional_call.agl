@@ -2,6 +2,7 @@ record R
   *
   x: int
 def f() -> int = 1
+
 program def main() -> unit =
   let r = R(f())
   print r.x

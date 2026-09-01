@@ -1030,8 +1030,8 @@ class TestScopedModuleSelections:
         self, tmp_path: Path
     ) -> None:
         """Two import tails contributing the same scope make ``use A::*`` ambiguous."""
-        (tmp_path / "lib1.agl").write_text("scope A\ndef one() -> int = 1\nend A\n")
-        (tmp_path / "lib2.agl").write_text("scope A\ndef two() -> int = 2\nend A\n")
+        (tmp_path / "lib1.agl").write_text("scope A\n  def one() -> int = 1\nend A\n")
+        (tmp_path / "lib2.agl").write_text("scope A\n  def two() -> int = 2\nend A\n")
 
         result = _run_program(
             "import lib1::*\nimport lib2::*\nuse A::*\nprint one()\n",
@@ -1045,7 +1045,7 @@ class TestScopedModuleSelections:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """A module route onto a scoped generic is a route, not a type qualifier."""
-        (tmp_path / "boxes.agl").write_text("scope A\nrecord Box[T](v: T)\nend A\n")
+        (tmp_path / "boxes.agl").write_text("scope A\n  record Box[T](v: T)\nend A\n")
 
         result = _run_program(
             "import boxes\nlet build = boxes::A::Box::[int]\nprint build(3).v\n",
@@ -1132,7 +1132,13 @@ class TestCrossModuleScopedPaths:
         (tmp_path / "Point.agl").write_text("def distance() -> int = 9\n")
 
         ambiguous = _run_program(
-            "import Point\nscope Point\ndef distance() -> int = 7\nend Point\nPoint::distance()\n",
+            "import Point\n"
+            "\n"
+            "scope Point\n"
+            "  def distance() -> int = 7\n"
+            "end Point\n"
+            "\n"
+            "Point::distance()\n",
             roots_dirs=[tmp_path],
         )
         assert ambiguous.ok is False
@@ -1143,9 +1149,11 @@ class TestCrossModuleScopedPaths:
 
         repaired = _run_program(
             "import Point\n"
+            "\n"
             "scope Point\n"
-            "def distance() -> int = 7\n"
+            "  def distance() -> int = 7\n"
             "end Point\n"
+            "\n"
             "print /Point::distance()\n"
             "print ::Point::distance()\n",
             roots_dirs=[tmp_path],
@@ -1282,15 +1290,19 @@ class TestScopeUses:
     ) -> None:
         result = _run_program(
             "use A::Flag::*\n"
+            "\n"
             "scope B\n"
-            "use Flag::*\n"
-            "def value() -> B::Flag = Ready\n"
-            "enum Flag | Ready\n"
+            "  use Flag::*\n"
+            "  def value() -> B::Flag = Ready\n"
+            "  enum Flag | Ready\n"
             "end B\n"
+            "\n"
             "def root_value() -> A::Flag = Ready\n"
+            "\n"
             "scope A\n"
-            "enum Flag | Ready\n"
+            "  enum Flag | Ready\n"
             "end A\n"
+            "\n"
             "print B::value()\n"
             "print root_value()\n",
             roots_dirs=[tmp_path],
@@ -1328,8 +1340,13 @@ class TestScopeUses:
         (
             "import geo\nuse geo::Point::{missing}\n()",
             "import geo\nuse geo::Missing::*\n()",
-            "scope Point\ndef distance() -> int = 1\nend Point\nuse Point::{missing}\n()",
-            "scope Point\ndef secret() -> int = 1\nend Point\nuse Point::* hiding secret\nsecret()",
+            "scope Point\n  def distance() -> int = 1\nend Point\n\nuse Point::{missing}\n()",
+            "scope Point\n"
+            "  def secret() -> int = 1\n"
+            "end Point\n"
+            "\n"
+            "use Point::* hiding secret\n"
+            "secret()",
         ),
     )
     def test_scope_use_rejects_unknown_scopes_and_unselected_members(
@@ -1395,13 +1412,15 @@ class TestScopeUses:
     ) -> None:
         source = (
             "scope Shapes\n"
-            "record Point\n"
-            "  value: int\n"
+            "  record Point\n"
+            "    value: int\n"
             "end Shapes\n"
+            "\n"
             "scope Measurements\n"
-            "use Shapes::*\n"
-            "def value(point: Point) -> int = point.value\n"
+            "  use Shapes::*\n"
+            "  def value(point: Point) -> int = point.value\n"
             "end Measurements\n"
+            "\n"
             "print Measurements::value(Shapes::Point(value = 3))\n"
         )
 
@@ -1413,13 +1432,15 @@ class TestScopeUses:
     def test_used_scope_type_does_not_leak_from_its_region(self, tmp_path: Path) -> None:
         source = (
             "scope Shapes\n"
-            "record Point\n"
-            "  value: int\n"
+            "  record Point\n"
+            "    value: int\n"
             "end Shapes\n"
+            "\n"
             "scope Measurements\n"
-            "use Shapes::*\n"
-            "def value(point: Point) -> int = point.value\n"
+            "  use Shapes::*\n"
+            "  def value(point: Point) -> int = point.value\n"
             "end Measurements\n"
+            "\n"
             "def leaked(point: Point) -> int = point.value\n"
             "()\n"
         )
@@ -1429,14 +1450,18 @@ class TestScopeUses:
     def test_used_imported_scope_type_honors_selection_and_rename(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        (tmp_path / "geo.agl").write_text("scope Shapes\nrecord Point\n  value: int\nend Shapes\n")
+        (tmp_path / "geo.agl").write_text(
+            "scope Shapes\n  record Point\n    value: int\nend Shapes\n"
+        )
 
         result = _run_program(
             "import geo\n"
+            "\n"
             "scope Measurements\n"
-            "use geo::Shapes::{Point as Coordinate}\n"
-            "def value(point: Coordinate) -> int = point.value\n"
+            "  use geo::Shapes::{Point as Coordinate}\n"
+            "  def value(point: Coordinate) -> int = point.value\n"
             "end Measurements\n"
+            "\n"
             "print Measurements::value(geo::Shapes::Point(value = 5))\n",
             roots_dirs=[tmp_path],
         )
@@ -1449,10 +1474,12 @@ class TestScopeUses:
     ) -> None:
         source = (
             "use Shapes::{Box as Container}\n"
+            "\n"
             "scope Shapes\n"
-            "record Box[T]\n"
-            "  value: T\n"
+            "  record Box[T]\n"
+            "    value: T\n"
             "end Shapes\n"
+            "\n"
             "def value(box: Container[int]) -> int = box.value\n"
             "print value(Shapes::Box(value = 7))\n"
         )
@@ -1463,7 +1490,7 @@ class TestScopeUses:
         assert capsys.readouterr().out == "7\n"
 
     def test_used_scope_function_does_not_resolve_as_a_type(self, tmp_path: Path) -> None:
-        (tmp_path / "geo.agl").write_text("scope Shapes\ndef Point() -> int = 1\nend Shapes\n")
+        (tmp_path / "geo.agl").write_text("scope Shapes\n  def Point() -> int = 1\nend Shapes\n")
 
         source = "import geo\nuse geo::Shapes::*\ndef value(point: Point) -> int = point\n()\n"
 
@@ -1472,10 +1499,12 @@ class TestScopeUses:
     def test_used_generic_type_requires_arguments(self, tmp_path: Path) -> None:
         source = (
             "use Shapes::{Box as Container}\n"
+            "\n"
             "scope Shapes\n"
-            "record Box[T]\n"
-            "  value: T\n"
+            "  record Box[T]\n"
+            "    value: T\n"
             "end Shapes\n"
+            "\n"
             "def value(box: Container) -> int = box.value\n"
             "()\n"
         )
@@ -1485,10 +1514,12 @@ class TestScopeUses:
     def test_used_non_generic_type_rejects_arguments(self, tmp_path: Path) -> None:
         source = (
             "use Shapes::{Point as Coordinate}\n"
+            "\n"
             "scope Shapes\n"
-            "record Point\n"
-            "  value: int\n"
+            "  record Point\n"
+            "    value: int\n"
             "end Shapes\n"
+            "\n"
             "def value(point: Coordinate[int]) -> int = point.value\n"
             "()\n"
         )
@@ -1499,8 +1530,11 @@ class TestScopeUses:
         source = (
             "use First::{Point as Coordinate}\n"
             "use Second::{Point as Coordinate}\n"
-            "scope First\nrecord Point\n  value: int\nend First\n"
-            "scope Second\nrecord Point\n  value: int\nend Second\n"
+            "\n"
+            "scope First\n  record Point\n    value: int\nend First\n"
+            "\n"
+            "scope Second\n  record Point\n    value: int\nend Second\n"
+            "\n"
             "def value(point: Coordinate) -> int = point.value\n"
             "()\n"
         )
@@ -1512,11 +1546,13 @@ class TestScopeUses:
     ) -> None:
         source = (
             "use Shapes::{Wrapper as Container}\n"
+            "\n"
             "scope Shapes\n"
-            "record Box[T]\n"
-            "  value: T\n"
-            "type Wrapper[T] = Shapes::Box[T]\n"
+            "  record Box[T]\n"
+            "    value: T\n"
+            "  type Wrapper[T] = Shapes::Box[T]\n"
             "end Shapes\n"
+            "\n"
             "def value(box: Container[int]) -> int = box.value\n"
             "print value(Shapes::Box(value = 9))\n"
         )

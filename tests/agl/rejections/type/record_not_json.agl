@@ -1,5 +1,6 @@
 record P
   n: int
+
 program def main() -> unit =
   let j: json = P(n = 1)
   j

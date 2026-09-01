@@ -1,9 +1,9 @@
 use Variants::{E::A as X, E::B as X}
 
 scope Variants
-enum E
-  | A
-  | B
+  enum E
+    | A
+    | B
 end Variants
 
 program def main() -> unit =

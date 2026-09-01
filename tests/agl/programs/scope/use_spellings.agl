@@ -5,11 +5,12 @@ use ::A::B as Anchored
 use A::B::* hiding hidden
 
 scope A
-scope B
-def value() -> int = 1
-def other() -> int = 2
-def hidden() -> int = 99
-end B
+
+  scope B
+    def value() -> int = 1
+    def other() -> int = 2
+    def hidden() -> int = 99
+  end B
 end A
 
 program def main() -> unit =

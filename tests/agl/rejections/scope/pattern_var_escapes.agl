@@ -1,6 +1,7 @@
 enum R
   | Pass
   | Fail(issues: array[text])
+
 program def main() -> unit =
   let r: R = Fail(issues = ["a"])
   case r of

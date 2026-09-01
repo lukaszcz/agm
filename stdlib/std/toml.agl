@@ -6,9 +6,9 @@ exception TomlParseError extends Exception
 exception TomlRenderError extends Exception()
 
 scope TomlInternals
-extern def parse(value: text) -> json
-extern def parse_option(value: text) -> Option[json]
-extern def render(value: json) -> text
+  extern def parse(value: text) -> json
+  extern def parse_option(value: text) -> Option[json]
+  extern def render(value: json) -> text
 end TomlInternals
 
 def parse(value: text) -> json = TomlInternals::parse(value)

@@ -139,14 +139,16 @@ def test_opened_alias_resolves_while_its_type_body_is_being_built(tmp_path: Path
         {
             "entry": (
                 "scope Z\n"
-                "record Box[T]\n"
-                "  value: T\n"
-                "type Alias[T] = Z::Box[T]\n"
+                "  record Box[T]\n"
+                "    value: T\n"
+                "  type Alias[T] = Z::Box[T]\n"
                 "end Z\n"
+                "\n"
                 "scope A\n"
-                "use Z::{Alias as Bare}\n"
-                "type Wrapper[T] = Bare[T]\n"
+                "  use Z::{Alias as Bare}\n"
+                "  type Wrapper[T] = Bare[T]\n"
                 "end A\n"
+                "\n"
                 "()"
             )
         },
@@ -1034,16 +1036,17 @@ def test_cross_module_owner_applied_inline_member_rejects_a_second_type_applicat
 def test_inline_member_records_resolve_in_local_type_positions() -> None:
     checked = _check(
         "scope Forest\n"
-        "record Box[T](value: T)\n"
-        "enum Outer[T] | Member\n"
-        "enum Tree[T]\n"
-        "  | Leaf\n"
-        "  | Node(value: T, transform: (T) -> T, boxed: Forest::Box[T], parent: Outer[T]::Member)\n"
-        "record Holder\n"
-        "  leaf: Tree::Leaf\n"
-        "  node: Tree::Node[int]\n"
-        "def identity(node: Tree::Node[int]) -> Tree::Node[int] = node\n"
+        "  record Box[T](value: T)\n"
+        "  enum Outer[T] | Member\n"
+        "  enum Tree[T]\n"
+        "    | Leaf\n"
+        "    | Node(value: T, mapper: (T) -> T, boxed: Forest::Box[T], parent: Outer[T]::Member)\n"
+        "  record Holder\n"
+        "    leaf: Tree::Leaf\n"
+        "    node: Tree::Node[int]\n"
+        "  def identity(node: Tree::Node[int]) -> Tree::Node[int] = node\n"
         "end Forest\n"
+        "\n"
         "()"
     )
 

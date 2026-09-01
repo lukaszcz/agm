@@ -1,4 +1,5 @@
 def choose[T](left: T, right: T) -> T = left
+
 program def main() -> unit =
   let value: decimal = choose(1, 2.5)
   value

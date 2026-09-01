@@ -78,8 +78,9 @@ def test_session_statics_reject_invalid_arguments(source: str) -> None:
 def test_session_open_rejects_lookalike_option_some_record() -> None:
     _reject(
         "scope Fake\n"
-        "record Some[T](foo: T)\n"
+        "  record Some[T](foo: T)\n"
         "end Fake\n"
+        "\n"
         'let agent = Agent::AgentCommand(command = "agent")\n'
         "Session::open(agent, transport = Fake::Some(SessionTransport::Rpc))"
     )
@@ -93,7 +94,7 @@ def test_session_unknown_static_reports_a_static_diagnostic() -> None:
 
 @pytest.mark.parametrize("call", ["Session::ping()", "::Session::ping()"])
 def test_user_scope_named_session_can_call_its_own_members(call: str) -> None:
-    checked = _check("scope Session\ndef ping() -> int = 1\nend Session\n" + call)
+    checked = _check("scope Session\n  def ping() -> int = 1\nend Session\n" + call)
 
     assert checked.node_types[checked.resolved.program.body.items[-1].node_id].kind == "int"
 
@@ -131,7 +132,7 @@ def test_nested_user_session_does_not_shadow_prelude_session_static(
 
 def test_non_prelude_session_static_header_is_not_a_builtin() -> None:
     message = _reject(
-        "scope User\nrecord Session()\nbuiltin def Session::open() -> Session\nend User"
+        "scope User\n  record Session()\n  builtin def Session::open() -> Session\nend User"
     )
     assert "unknown builtin" in message.lower()
 
@@ -140,7 +141,7 @@ def test_replacement_std_core_scope_is_not_the_session_static_owner(tmp_path: Pa
     """A same-path scope in replacement ``std/core`` cannot impersonate Session."""
     (tmp_path / "std").mkdir()
     (tmp_path / "std" / "core.agl").write_text(
-        "scope Session\nbuiltin def default() -> Session\nend Session\n",
+        "scope Session\n  builtin def default() -> Session\nend Session\n",
         encoding="utf-8",
     )
 

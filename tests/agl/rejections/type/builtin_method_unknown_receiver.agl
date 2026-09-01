@@ -1,2 +1,3 @@
 def bytes[int]::copy(self) -> bytes[int] = self
+
 program def main() -> unit = ()

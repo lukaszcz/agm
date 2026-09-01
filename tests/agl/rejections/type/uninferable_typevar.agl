@@ -1,4 +1,5 @@
 def empty[T]() -> array[T] = []
+
 program def main() -> unit =
   let xs = empty()
   xs

@@ -1,4 +1,5 @@
 exception Boom extends Exception
   code: int
 let Boom = 1
+
 program def main() -> unit = print Boom

@@ -2,6 +2,7 @@ enum Review
   | Same
 enum TestResult
   | Same
+
 program def main() -> unit =
   let x = Same
   x

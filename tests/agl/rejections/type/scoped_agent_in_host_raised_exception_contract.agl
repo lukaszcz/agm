@@ -1,26 +1,27 @@
 scope A
-builtin enum Agent
-  | AgentCommand(command: text)
-  | AgentClaude(model: text, thinking: text)
-  | AgentCodex(model: text, thinking: text)
-  | AgentPi(provider: text, model: text, thinking: text)
+  builtin enum Agent
+    | AgentCommand(command: text)
+    | AgentClaude(model: text, thinking: text)
+    | AgentCodex(model: text, thinking: text)
+    | AgentPi(provider: text, model: text, thinking: text)
 
-builtin
-exception AgentCallError extends Exception
-  *
-  agent: Agent
-  cause: text
-  metadata: json
+  builtin
+  exception AgentCallError extends Exception
+    *
+    agent: Agent
+    cause: text
+    metadata: json
 
-def trigger() -> text =
-  try
-    ask("hi")
-  catch AgentCallError as e =>
-    case e.agent of
-      | AgentCommand(command) => command
-      | AgentClaude(model, thinking) => model
-      | AgentCodex(model, thinking) => model
-      | AgentPi(provider, model, thinking) => model
+  def trigger() -> text =
+    try
+      ask("hi")
+    catch AgentCallError as e =>
+      case e.agent of
+        | AgentCommand(command) => command
+        | AgentClaude(model, thinking) => model
+        | AgentCodex(model, thinking) => model
+        | AgentPi(provider, model, thinking) => model
 end A
+
 program def main() -> unit =
   print A::trigger()

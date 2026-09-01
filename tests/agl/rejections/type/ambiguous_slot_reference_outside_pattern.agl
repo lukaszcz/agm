@@ -6,6 +6,7 @@ enum Signal
   | Green
 enum Wrap
   | wrap(shade: Color)
+
 program def main() -> unit =
   let w = wrap(Color::Blue)
   case w of

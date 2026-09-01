@@ -200,7 +200,7 @@ class TestValueDirectedBoundary:
             "record Box(value: text)\n"
             "\n"
             "scope Box\n"
-            "record Inner(label: text)\n"
+            "  record Inner(label: text)\n"
             "end Box\n"
             "\n"
             "extern def make_box() -> Box\n"

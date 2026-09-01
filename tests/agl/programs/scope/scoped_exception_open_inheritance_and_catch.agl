@@ -1,9 +1,11 @@
 # A scope use makes its exceptions available for `extends` and `catch`.
 use A::*
+
 scope A
-exception Base extends Exception
-  code: int
+  exception Base extends Exception
+    code: int
 end A
+
 exception Child extends Base
   detail: text
 

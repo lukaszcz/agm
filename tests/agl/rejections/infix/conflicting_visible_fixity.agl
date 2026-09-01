@@ -1,4 +1,5 @@
 import first::*
 import second::*
+
 program def main() -> unit =
   1 %% 2

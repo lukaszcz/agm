@@ -1,3 +1,4 @@
 def choose[T](left: T, right: T) -> T = left
+
 program def main() -> unit =
   choose(1, "text")

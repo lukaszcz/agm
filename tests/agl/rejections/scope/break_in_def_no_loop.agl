@@ -1,4 +1,5 @@
 def count() -> int =
   break
+
 program def main() -> unit =
   count()

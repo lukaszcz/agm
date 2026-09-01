@@ -230,10 +230,12 @@ def test_scoped_generic_enum_does_not_claim_the_root_type_or_constructor_namespa
 def test_type_references_inside_a_scope_use_the_nearest_scoped_type() -> None:
     checked = _check(
         "record T(value: text)\n"
+        "\n"
         "scope A\n"
-        "record T(value: int)\n"
-        "def build(value: T) -> T = value\n"
+        "  record T(value: int)\n"
+        "  def build(value: T) -> T = value\n"
         "end A\n"
+        "\n"
         "A::build(A::T(value = 1))"
     )
 
@@ -252,10 +254,12 @@ def test_standalone_current_module_type_anchor_bypasses_nested_scope_during_lowe
     assert (
         evaluate_ir_output(
             "record T(value: int)\n"
+            "\n"
             "scope A\n"
-            "record T(value: text)\n"
-            "def root(value: ::T) -> ::T = value\n"
+            "  record T(value: text)\n"
+            "  def root(value: ::T) -> ::T = value\n"
             "end A\n"
+            "\n"
             "print(A::root(T(value = 1)).value)"
         )
         == "1\n"
@@ -265,10 +269,11 @@ def test_standalone_current_module_type_anchor_bypasses_nested_scope_during_lowe
 def test_scoped_aliases_are_available_to_scoped_function_signatures() -> None:
     checked = _check(
         "scope A\n"
-        "type Count = int\n"
-        "record Marker()\n"
-        "def keep(value: Count) -> Count = value\n"
+        "  type Count = int\n"
+        "  record Marker()\n"
+        "  def keep(value: Count) -> Count = value\n"
         "end A\n"
+        "\n"
         "A::keep(1)"
     )
 
@@ -297,7 +302,7 @@ def test_program_type_table_keys_keep_root_and_scoped_nominals_distinct(tmp_path
 
 
 def test_scoped_type_context_restores_after_a_type_error(tmp_path: Path) -> None:
-    source = "scope A\nrecord Broken(value: Missing)\nend A"
+    source = "scope A\n  record Broken(value: Missing)\nend A"
 
     with pytest.raises(AglTypeError):
         _check(source)
@@ -310,9 +315,10 @@ def test_scoped_generic_type_applications_resolve_in_module_and_program_contexts
 ) -> None:
     source = (
         "scope A\n"
-        "record G[T](value: T)\n"
-        "def keep(value: A::G[int]) -> A::G[int] = value\n"
+        "  record G[T](value: T)\n"
+        "  def keep(value: A::G[int]) -> A::G[int] = value\n"
         "end A\n"
+        "\n"
         "A::G::[int](value = 1)"
     )
 

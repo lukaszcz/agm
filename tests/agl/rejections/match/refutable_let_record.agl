@@ -1,5 +1,6 @@
 record R
   x: int
+
 program def main() -> unit =
   let R(0) = R(1)
   ()

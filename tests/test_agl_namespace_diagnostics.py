@@ -40,10 +40,10 @@ def test_use_target_without_tail_or_alias_is_a_syntax_error() -> None:
 
 
 def test_use_bare_target_ambiguity_suggests_a_reachable_module_anchor(tmp_path: Path) -> None:
-    modules = {"library": "scope Scope\ndef remote() -> int = 1\nend Scope"}
+    modules = {"library": "scope Scope\n  def remote() -> int = 1\nend Scope"}
     ambiguous = _graph(
         tmp_path,
-        "import library::{Scope}\nuse Scope::*\nscope Scope\ndef local() -> int = 2\nend Scope",
+        "import library::{Scope}\nuse Scope::*\n\nscope Scope\n  def local() -> int = 2\nend Scope",
         modules,
     )
 
@@ -65,8 +65,8 @@ def test_use_bare_target_ambiguity_suggests_a_reachable_module_anchor(tmp_path: 
     local_scope = _graph(
         tmp_path,
         (
-            "import library::{Scope}\nuse ::Scope::*\nscope Scope\ndef local() -> int = 2\n"
-            "end Scope\nlocal()"
+            "import library::{Scope}\nuse ::Scope::*\n\nscope Scope\n  def local() -> int = 2\n"
+            "end Scope\n\nlocal()"
         ),
         modules,
     )
@@ -508,13 +508,13 @@ class TestAmbiguityRepairsAreSpellable:
         "use Y::*\n"
         "\n"
         "scope X\n"
-        "enum Flag\n"
-        "  | Good\n"
+        "  enum Flag\n"
+        "    | Good\n"
         "end X\n"
         "\n"
         "scope Y\n"
-        "enum Flag\n"
-        "  | Good\n"
+        "  enum Flag\n"
+        "    | Good\n"
         "end Y\n"
     )
 

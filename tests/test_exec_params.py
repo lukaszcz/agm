@@ -109,7 +109,11 @@ class TestSourceDiscovery:
         from agm.cli_support.exec_params import discover_params_from_source
 
         params = discover_params_from_source(
-            'scope Deploy\nparam region: text = "eu"\nend Deploy\nprogram def main() -> unit = ()'
+            "scope Deploy\n"
+            '  param region: text = "eu"\n'
+            "end Deploy\n"
+            "\n"
+            "program def main() -> unit = ()"
         )
 
         assert [param.name for param in params] == ["Deploy::region"]
@@ -118,7 +122,14 @@ class TestSourceDiscovery:
         from agm.cli_support.exec_params import discover_params_from_source
 
         params = discover_params_from_source(
-            "scope A\nscope B\nparam x: int\nend B\nend A\nprogram def main() -> unit = ()"
+            "scope A\n"
+            "\n"
+            "  scope B\n"
+            "    param x: int\n"
+            "  end B\n"
+            "end A\n"
+            "\n"
+            "program def main() -> unit = ()"
         )
 
         assert [param.name for param in params] == ["A::B::x"]
@@ -127,7 +138,8 @@ class TestSourceDiscovery:
         from agm.cli_support.exec_params import discover_params_from_source
 
         params = discover_params_from_source(
-            'param increment: int\nscope Deploy\nparam region: text = "eu"\nend Deploy\n'
+            'param increment: int\n\nscope Deploy\n  param region: text = "eu"\nend Deploy\n'
+            "\n"
             "program def main() -> unit = ()"
         )
 

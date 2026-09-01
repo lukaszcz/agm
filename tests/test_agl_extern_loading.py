@@ -138,7 +138,7 @@ class TestCompanionPathDerivation:
     @pytest.mark.parametrize(
         "source",
         (
-            "scope Group\nextern def f(x: int) -> int\nend Group\n()",
+            "scope Group\n  extern def f(x: int) -> int\nend Group\n\n()",
             "extern def Group::f(x: int) -> int\n()",
         ),
         ids=("region", "shorthand"),

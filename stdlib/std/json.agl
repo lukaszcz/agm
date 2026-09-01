@@ -1,16 +1,16 @@
 import std/option::Option
 
 scope JsonInternals
-extern def parse_strict(value: text) -> json
-extern def parse_strict_option(value: text) -> Option[json]
-extern def parse_lenient(value: text) -> json
-extern def parse_lenient_option(value: text) -> Option[json]
-extern def kind(self: json) -> text
-extern def size(self: json) -> int
-extern def keys(self: json) -> array[text]
-extern def has(self: json, key: text) -> bool
-extern def get(self: json, key: text) -> json
-extern def get_option(self: json, key: text) -> Option[json]
+  extern def parse_strict(value: text) -> json
+  extern def parse_strict_option(value: text) -> Option[json]
+  extern def parse_lenient(value: text) -> json
+  extern def parse_lenient_option(value: text) -> Option[json]
+  extern def kind(self: json) -> text
+  extern def size(self: json) -> int
+  extern def keys(self: json) -> array[text]
+  extern def has(self: json, key: text) -> bool
+  extern def get(self: json, key: text) -> json
+  extern def get_option(self: json, key: text) -> Option[json]
 end JsonInternals
 
 def parse(value: text) -> json = JsonInternals::parse_strict(value)

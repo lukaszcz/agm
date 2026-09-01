@@ -39,7 +39,7 @@ def test_scope_at_item_start_with_a_path_is_promoted() -> None:
 
 
 def test_use_in_a_scope_region_is_promoted_and_keeps_its_header_window() -> None:
-    assert _non_layout_tokens("scope Outer\nuse Shared::* hiding member\nend Outer") == [
+    assert _non_layout_tokens("scope Outer\n  use Shared::* hiding member\nend Outer") == [
         ("SCOPE", "scope"),
         ("NAME", "Outer"),
         ("USE", "use"),
@@ -131,7 +131,9 @@ def test_end_is_promoted_only_while_a_scope_region_is_open() -> None:
 
 
 def test_nested_scope_regions_track_depth_until_the_last_end() -> None:
-    assert _non_layout_tokens("scope Outer\nscope Inner\nend Inner\nend Outer\nend Stray") == [
+    assert _non_layout_tokens(
+        "scope Outer\n\n  scope Inner\n  end Inner\nend Outer\n\nend Stray"
+    ) == [
         ("SCOPE", "scope"),
         ("NAME", "Outer"),
         ("SCOPE", "scope"),
@@ -146,7 +148,7 @@ def test_nested_scope_regions_track_depth_until_the_last_end() -> None:
 
 
 def test_end_is_promoted_only_at_the_open_region_layout_level() -> None:
-    assert _non_layout_tokens("scope Point\nrecord R\n  end: int\nend Point") == [
+    assert _non_layout_tokens("scope Point\n  record R\n    end: int\nend Point") == [
         ("SCOPE", "scope"),
         ("NAME", "Point"),
         ("record", "record"),
@@ -160,7 +162,7 @@ def test_end_is_promoted_only_at_the_open_region_layout_level() -> None:
 
 
 def test_end_expression_in_a_declaration_suite_remains_names() -> None:
-    assert _non_layout_tokens("scope Point\ndef f() -> int\n  end Thing\nend Point") == [
+    assert _non_layout_tokens("scope Point\n  def f() -> int\n    end Thing\nend Point") == [
         ("SCOPE", "scope"),
         ("NAME", "Point"),
         ("def", "def"),
@@ -177,7 +179,7 @@ def test_end_expression_in_a_declaration_suite_remains_names() -> None:
 
 
 def test_end_requires_a_complete_closer_line() -> None:
-    assert _non_layout_tokens("scope Point\nend Point extra\nend Point") == [
+    assert _non_layout_tokens("scope Point\n  end Point extra\nend Point") == [
         ("SCOPE", "scope"),
         ("NAME", "Point"),
         ("NAME", "end"),

@@ -1,1 +1,8 @@
-{"diagnostic": {"line": 13, "message_contains": ["Ambiguous"]}}
+{
+  "diagnostic": {
+    "line": 14,
+    "message_contains": [
+      "Ambiguous"
+    ]
+  }
+}

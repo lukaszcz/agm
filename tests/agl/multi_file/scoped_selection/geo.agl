@@ -5,6 +5,7 @@ def Point::secret() -> int = 99
 def Point::public_secret() -> int = secret()
 enum Point::Color
   | red
+
 scope Shapes
-record Point(x: int)
+  record Point(x: int)
 end Shapes

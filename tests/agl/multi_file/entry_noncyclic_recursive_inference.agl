@@ -1,3 +1,4 @@
 import inference/factorial_consumer::*
+
 program def main() -> unit =
   print increment_factorial(4)

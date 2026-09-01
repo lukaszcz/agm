@@ -1,5 +1,6 @@
 scope Config
-let retries = 3
+  let retries = 3
 end Config
+
 program def main() -> unit =
   Config::retries := 4

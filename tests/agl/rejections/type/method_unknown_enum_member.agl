@@ -1,5 +1,6 @@
 enum Signal
   | ready
+
 program def main() -> unit =
   let signal = Signal::ready()
   signal.missing

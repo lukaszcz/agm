@@ -2,6 +2,7 @@ def f(n: int) -> int = n
 record Task
   name: text
   handler: (int) -> int
+
 program def main() -> unit =
   let t1 = Task(name = "a", handler = f)
   let t2 = Task(name = "b", handler = f)

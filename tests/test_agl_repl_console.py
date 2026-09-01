@@ -513,7 +513,7 @@ class TestLexer:
         assert self._style_of(fragments, word) == "class:agl.keyword"
 
     def test_scope_region_soft_keywords_are_styled(self) -> None:
-        text = "scope a::b\nlet x = 1\nend a::b"
+        text = "scope a::b\n  let x = 1\nend a::b"
         getter = AglPromptLexer().lex_document(Document(text))
         assert self._style_of(getter(0), "scope") == "class:agl.keyword"
         assert self._style_of(getter(2), "end") == "class:agl.keyword"

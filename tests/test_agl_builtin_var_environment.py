@@ -85,8 +85,9 @@ def test_pipeline_run_accepts_module_keyed_host_seeds(tmp_path: Path) -> None:
 def test_repl_accepts_scoped_module_qualified_host_seeds(tmp_path: Path) -> None:
     (tmp_path / "std").mkdir()
     (tmp_path / "std" / "state.agl").write_text(
-        "scope First\nbuiltin var value: int\nend First\n"
-        "scope Second\nbuiltin var value: int\nend Second\n",
+        "scope First\n  builtin var value: int\nend First\n"
+        "\n"
+        "scope Second\n  builtin var value: int\nend Second\n",
         encoding="utf-8",
     )
     session = ReplSession(

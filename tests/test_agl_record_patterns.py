@@ -224,9 +224,9 @@ def test_simple_let_name_binds_even_when_it_matches_a_nullary_constructor() -> N
         ("import lib\nuse lib::*\nlet instance = R(value = 1)\nlet R(value) = instance\n"),
         (
             "scope Region\n"
-            "import lib::*\n"
-            "let instance = R(value = 1)\n"
-            "let R(value) = instance\n"
+            "  import lib::*\n"
+            "  let instance = R(value = 1)\n"
+            "  let R(value) = instance\n"
             "end Region\n"
         ),
     ],
@@ -447,9 +447,10 @@ def test_scoped_record_pattern_selects_its_scope_member() -> None:
     """``A::Point(x)`` destructures the record declared in named scope ``A``."""
     checked = accept(
         "scope A\n"
-        "record Point\n"
-        "  x: int\n"
+        "  record Point\n"
+        "    x: int\n"
         "end A\n"
+        "\n"
         "let p: A::Point = A::Point(x = 4)\n"
         "let A::Point(x) = p\n"
         "x\n"
@@ -473,14 +474,15 @@ def test_unqualified_pattern_selects_a_nominal_declared_in_the_same_scope() -> N
     """
     checked = accept(
         "scope Config\n"
-        "record Bounds(low: int, high: int)\n"
-        "def pick(b: Bounds) -> int =\n"
-        "  case b of\n"
-        "  | Bounds(low, high) => low\n"
-        "def unpick(b: Bounds) -> int =\n"
-        "  let Bounds(low, high) = b\n"
-        "  high\n"
+        "  record Bounds(low: int, high: int)\n"
+        "  def pick(b: Bounds) -> int =\n"
+        "    case b of\n"
+        "    | Bounds(low, high) => low\n"
+        "  def unpick(b: Bounds) -> int =\n"
+        "    let Bounds(low, high) = b\n"
+        "    high\n"
         "end Config\n"
+        "\n"
         "()\n"
     )
     region = checked.resolved.program.body.items[0]
@@ -502,10 +504,12 @@ def test_scoped_record_pattern_rejects_a_same_named_root_record() -> None:
     reject(
         "record Point\n"
         "  x: int\n"
+        "\n"
         "scope A\n"
-        "record Point\n"
-        "  label: text\n"
+        "  record Point\n"
+        "    label: text\n"
         "end A\n"
+        "\n"
         "let p = Point(x = 1)\n"
         "case p of | A::Point(label) => 0 | _ => 1\n"
     )
@@ -522,13 +526,15 @@ def test_bare_pattern_in_a_region_is_shadowed_by_its_own_scoped_variant() -> Non
     reject(
         "record Point\n"
         "  x: int\n"
+        "\n"
         "scope A\n"
-        "enum E\n"
-        "  | Point(label: text)\n"
-        "def from_root(p: Point) -> int =\n"
-        "  case p of\n"
-        "  | Point(x) => x\n"
+        "  enum E\n"
+        "    | Point(label: text)\n"
+        "  def from_root(p: Point) -> int =\n"
+        "    case p of\n"
+        "    | Point(x) => x\n"
         "end A\n"
+        "\n"
         "A::from_root(Point(x = 1))\n"
     )
 
@@ -565,10 +571,11 @@ def test_scoped_pattern_naming_a_non_constructor_member_is_rejected() -> None:
     """``A::helper(x)`` reaches a scope member that owns no constructor."""
     reject(
         "scope A\n"
-        "def helper(x: int) -> int = x\n"
-        "record Point\n"
-        "  x: int\n"
+        "  def helper(x: int) -> int = x\n"
+        "  record Point\n"
+        "    x: int\n"
         "end A\n"
+        "\n"
         "let p: A::Point = A::Point(x = 1)\n"
         "case p of | A::helper(x) => x | _ => 0\n"
     )

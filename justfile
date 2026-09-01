@@ -54,10 +54,19 @@ test-budget:
 test-neutral-tmp *args:
     AGM_TEST_NEUTRAL_TMP_PATH=1 uv run python -m pytest tests/ -q -n auto --dist worksteal --no-cov {{args}}
 
-# Lint and check formatting with ruff
+# Lint and check formatting with ruff, and AgL layout style
 lint:
-    uv run ruff check src/ tests/ stdlib/
-    uv run ruff format --check src/ tests/ stdlib/
+    uv run ruff check src/ tests/ stdlib/ tools/
+    uv run ruff format --check src/ tests/ stdlib/ tools/
+    just agl-style
+
+# Check the layout style of every AgL source, doc snippet, and test snippet
+agl-style:
+    uv run python tools/agl_style.py --check
+
+# Rewrite every AgL source, doc snippet, and test snippet in the layout style
+agl-style-fix:
+    uv run python tools/agl_style.py --fix
 
 # Check for dead code in the application package
 vulture:
@@ -91,7 +100,7 @@ test-micro:
 
 # Type-check with mypy
 typecheck:
-    MYPYPATH=src:stubs uv run mypy src/agm/ --strict --python-version 3.12
+    MYPYPATH=src:stubs uv run mypy src/agm/ tools/ --strict --python-version 3.12
 
 # Run type-checking, linting, dead-code checks, tests
 #

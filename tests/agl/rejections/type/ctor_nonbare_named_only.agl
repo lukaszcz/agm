@@ -1,5 +1,6 @@
 enum E
   | Fail(*, x: int, y: int)
+
 program def main() -> unit =
   let e = Fail(1, 2)
   print e

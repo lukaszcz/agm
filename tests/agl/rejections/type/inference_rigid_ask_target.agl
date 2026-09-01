@@ -1,3 +1,4 @@
 def fetch[T](prompt: text) -> T = ask::[T](prompt)
+
 program def main() -> unit =
   fetch::[int]("Give an integer.")

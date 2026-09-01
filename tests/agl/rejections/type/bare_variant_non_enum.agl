@@ -1,6 +1,7 @@
 enum Color
   | Red
   | Green
+
 program def main() -> unit =
   let x: int = 5
   case x of

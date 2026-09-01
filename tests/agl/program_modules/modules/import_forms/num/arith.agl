@@ -7,5 +7,5 @@ def _secret(n: int) -> int = n * n
 def via_secret(n: int) -> int = _secret(n)
 
 scope Operations
-def difference(left: int, right: int) -> int = left - right
+  def difference(left: int, right: int) -> int = left - right
 end Operations

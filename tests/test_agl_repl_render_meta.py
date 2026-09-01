@@ -892,7 +892,7 @@ class TestScopedDeclarationEcho:
 
     def test_scope_region_entry_echoes_its_path(self) -> None:
         s = _open_session()
-        r = s.eval_entry("scope Tools\ndef twice(x: int) -> int = x * 2\nend Tools")
+        r = s.eval_entry("scope Tools\n  def twice(x: int) -> int = x * 2\nend Tools")
 
         assert r.ok, r.diagnostics
         assert render_mod.render_entry_result(r, echo=True) == "Tools declared"
@@ -900,7 +900,7 @@ class TestScopedDeclarationEcho:
     def test_check_only_scope_region_entry_echoes_its_path(self) -> None:
         s = _open_session()
         r = s.eval_entry(
-            "scope Tools\ndef twice(x: int) -> int = x * 2\nend Tools", check_only=True
+            "scope Tools\n  def twice(x: int) -> int = x * 2\nend Tools", check_only=True
         )
 
         assert r.ok, r.diagnostics
@@ -915,7 +915,7 @@ class TestScopedDeclarationEcho:
 
     def test_multi_segment_scope_region_entry_echoes_the_full_path(self) -> None:
         s = _open_session()
-        r = s.eval_entry("scope Outer::Inner\ndef value() -> int = 1\nend Outer::Inner")
+        r = s.eval_entry("scope Outer::Inner\n  def value() -> int = 1\nend Outer::Inner")
 
         assert r.ok, r.diagnostics
         assert render_mod.render_entry_result(r, echo=True) == "Outer::Inner declared"
@@ -923,7 +923,7 @@ class TestScopedDeclarationEcho:
     def test_region_with_its_own_member_echoes_only_the_outer_path(self) -> None:
         s = _open_session()
         r = s.eval_entry(
-            "scope Outer\ndef value() -> int = 1\nscope Inner\nend Inner\nend Outer",
+            "scope Outer\n  def value() -> int = 1\n\n  scope Inner\n  end Inner\nend Outer",
         )
 
         assert r.ok, r.diagnostics

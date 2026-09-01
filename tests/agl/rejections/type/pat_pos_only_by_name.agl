@@ -1,5 +1,6 @@
 enum E
   | V(a: int, /, b: int)
+
 program def main() -> unit =
   let e: E = V(1, 2)
   case e of

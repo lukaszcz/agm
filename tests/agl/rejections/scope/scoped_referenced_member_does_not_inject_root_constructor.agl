@@ -1,6 +1,6 @@
 scope Outer
-record Shared(value: int)
-enum E = ::Shared
+  record Shared(value: int)
+  enum E = ::Shared
 end Outer
 
 program def main() -> unit = Shared

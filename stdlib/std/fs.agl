@@ -16,9 +16,9 @@ extern def move(source: text, destination: text) -> unit
 extern def glob(pattern: text) -> array[text]
 
 scope FsInternals
-extern def read_option(path: text) -> Option[text]
-extern def is_file(path: text) -> bool
-extern def is_dir(path: text) -> bool
+  extern def read_option(path: text) -> Option[text]
+  extern def is_file(path: text) -> bool
+  extern def is_dir(path: text) -> bool
 end FsInternals
 
 def read?(path: text) -> Option[text] = FsInternals::read_option(path)

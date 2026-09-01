@@ -1871,32 +1871,34 @@ def test_scoped_builtin_hierarchy_declared_in_the_entry_module_catches_a_host_ra
 
     program = (
         "scope Host\n"
-        "builtin\n"
-        "exception Exception\n"
-        "  *\n"
-        "  message: text\n"
-        "builtin\n"
-        "exception ExecError extends Exception\n"
-        "  *\n"
-        "  command: text\n"
-        "  exit_code: int\n"
-        "  stdout: text\n"
-        "  stderr: text\n"
-        "  timed_out: bool\n"
-        "builtin record ExecResult\n"
-        "  stdout: text\n"
-        "  exit_code: int\n"
-        "  stderr: text\n"
-        "  timed_out: bool\n"
-        "builtin def exec(command: text) -> ExecResult\n"
-        "def run(cmd: text) -> text =\n"
-        "  try\n"
-        "    let out: text = exec(cmd)\n"
-        "    out\n"
-        "  catch ExecError as e =>\n"
-        '    "caught"\n'
+        "  builtin\n"
+        "  exception Exception\n"
+        "    *\n"
+        "    message: text\n"
+        "  builtin\n"
+        "  exception ExecError extends Exception\n"
+        "    *\n"
+        "    command: text\n"
+        "    exit_code: int\n"
+        "    stdout: text\n"
+        "    stderr: text\n"
+        "    timed_out: bool\n"
+        "  builtin record ExecResult\n"
+        "    stdout: text\n"
+        "    exit_code: int\n"
+        "    stderr: text\n"
+        "    timed_out: bool\n"
+        "  builtin def exec(command: text) -> ExecResult\n"
+        "  def run(cmd: text) -> text =\n"
+        "    try\n"
+        "      let out: text = exec(cmd)\n"
+        "      out\n"
+        "    catch ExecError as e =>\n"
+        '      "caught"\n'
         "end Host\n"
+        "\n"
         "builtin def print[T](value: T) -> unit\n"
+        "\n"
         "program def main() -> unit =\n"
         '  print(Host::run("false"))\n'
     )
@@ -1926,8 +1928,10 @@ def test_program_def_entries_execute_via_agm_exec(tmp_path: Path) -> None:
     selected = tmp_path / "selected.agl"
     selected.write_text(
         'program def first() -> unit = print "first"\n'
+        "\n"
         "scope review\n"
-        'program def main() -> unit = print "review"\n'
+        "\n"
+        '  program def main() -> unit = print "review"\n'
         "end review\n"
     )
 

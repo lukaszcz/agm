@@ -1,6 +1,6 @@
 {
   "diagnostic": {
-    "line": 4,
+    "line": 5,
     "message_contains": [
       "x",
       "duplicate"

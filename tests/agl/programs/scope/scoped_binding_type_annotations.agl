@@ -2,14 +2,14 @@
 # annotations. Runtime parsing and scoped-type construction use those types
 # from the program body.
 scope A
-record R(v: int)
-record Box[T](value: T)
-type Alias = int
+  record R(v: int)
+  record Box[T](value: T)
+  type Alias = int
 
-let x: R = R(v = 1)
-var y: R = R(v = 2)
-let boxed: Box[int] = Box(value = 3)
-let a: Alias = 4
+  let x: R = R(v = 1)
+  var y: R = R(v = 2)
+  let boxed: Box[int] = Box(value = 3)
+  let a: Alias = 4
 end A
 
 program def main() -> unit =

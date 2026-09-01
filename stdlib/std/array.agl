@@ -2,48 +2,48 @@ import std/option::Option
 import std/pair::Pair
 
 scope ArrayInternals
-extern def size[E](self: array[E]) -> int
-extern def first[E](self: array[E]) -> E
-extern def first_option[E](self: array[E]) -> Option[E]
-extern def last[E](self: array[E]) -> E
-extern def last_option[E](self: array[E]) -> Option[E]
-extern def append[E](self: array[E], value: E) -> unit
-extern def insert[E](self: array[E], index: int, value: E) -> unit
-extern def pop[E](self: array[E]) -> E
-extern def pop_option[E](self: array[E]) -> Option[E]
-extern def remove_at[E](self: array[E], index: int) -> E
-extern def clear[E](self: array[E]) -> unit
-extern def contains[E](self: array[E], value: E) -> bool
-extern def index_of[E](self: array[E], value: E) -> int
-extern def index_of_option[E](self: array[E], value: E) -> Option[int]
-extern def count[E](self: array[E], predicate: (E) -> bool) -> int
-extern def map[E, U](self: array[E], function: (E) -> U) -> array[U]
-extern def map_in_place[E](self: array[E], function: (E) -> E) -> unit
-extern def filter[E](self: array[E], predicate: (E) -> bool) -> array[E]
-extern def filter_in_place[E](self: array[E], predicate: (E) -> bool) -> unit
-extern def each[E](self: array[E], function: (E) -> unit) -> unit
-extern def fold[E, B](self: array[E], initial: B, function: (B, E) -> B) -> B
-extern def fold_right[E, B](self: array[E], initial: B, function: (B, E) -> B) -> B
-extern def any[E](self: array[E], predicate: (E) -> bool) -> bool
-extern def all[E](self: array[E], predicate: (E) -> bool) -> bool
-extern def find[E](self: array[E], predicate: (E) -> bool) -> Option[E]
-extern def find_index[E](self: array[E], predicate: (E) -> bool) -> Option[int]
-extern def reverse[E](self: array[E]) -> array[E]
-extern def reverse_in_place[E](self: array[E]) -> unit
-extern def sort[E](self: array[E], comparator: (E, E) -> int) -> array[E]
-extern def sort_in_place[E](self: array[E], comparator: (E, E) -> int) -> unit
-extern def slice[E](self: array[E], start: int, end: int) -> array[E]
-extern def take[E](self: array[E], count: int) -> array[E]
-extern def drop[E](self: array[E], count: int) -> array[E]
-extern def concat[E](self: array[E], other: array[E]) -> array[E]
-extern def extend[E](self: array[E], other: array[E]) -> unit
-extern def zip[E, F](self: array[E], other: array[F]) -> array[Pair[E, F]]
-extern def enumerate[E](self: array[E]) -> array[Pair[int, E]]
-extern def join(values: array[text], separator: text) -> text
-extern def flatten[T](values: array[array[T]]) -> array[T]
-extern def unzip[A, B](values: array[Pair[A, B]]) -> Pair[array[A], array[B]]
-extern def repeat[T](value: T, count: int) -> array[T]
-extern def range_values(start: int, end: int) -> array[int]
+  extern def size[E](self: array[E]) -> int
+  extern def first[E](self: array[E]) -> E
+  extern def first_option[E](self: array[E]) -> Option[E]
+  extern def last[E](self: array[E]) -> E
+  extern def last_option[E](self: array[E]) -> Option[E]
+  extern def append[E](self: array[E], value: E) -> unit
+  extern def insert[E](self: array[E], index: int, value: E) -> unit
+  extern def pop[E](self: array[E]) -> E
+  extern def pop_option[E](self: array[E]) -> Option[E]
+  extern def remove_at[E](self: array[E], index: int) -> E
+  extern def clear[E](self: array[E]) -> unit
+  extern def contains[E](self: array[E], value: E) -> bool
+  extern def index_of[E](self: array[E], value: E) -> int
+  extern def index_of_option[E](self: array[E], value: E) -> Option[int]
+  extern def count[E](self: array[E], predicate: (E) -> bool) -> int
+  extern def map[E, U](self: array[E], function: (E) -> U) -> array[U]
+  extern def map_in_place[E](self: array[E], function: (E) -> E) -> unit
+  extern def filter[E](self: array[E], predicate: (E) -> bool) -> array[E]
+  extern def filter_in_place[E](self: array[E], predicate: (E) -> bool) -> unit
+  extern def each[E](self: array[E], function: (E) -> unit) -> unit
+  extern def fold[E, B](self: array[E], initial: B, function: (B, E) -> B) -> B
+  extern def fold_right[E, B](self: array[E], initial: B, function: (B, E) -> B) -> B
+  extern def any[E](self: array[E], predicate: (E) -> bool) -> bool
+  extern def all[E](self: array[E], predicate: (E) -> bool) -> bool
+  extern def find[E](self: array[E], predicate: (E) -> bool) -> Option[E]
+  extern def find_index[E](self: array[E], predicate: (E) -> bool) -> Option[int]
+  extern def reverse[E](self: array[E]) -> array[E]
+  extern def reverse_in_place[E](self: array[E]) -> unit
+  extern def sort[E](self: array[E], comparator: (E, E) -> int) -> array[E]
+  extern def sort_in_place[E](self: array[E], comparator: (E, E) -> int) -> unit
+  extern def slice[E](self: array[E], start: int, end: int) -> array[E]
+  extern def take[E](self: array[E], count: int) -> array[E]
+  extern def drop[E](self: array[E], count: int) -> array[E]
+  extern def concat[E](self: array[E], other: array[E]) -> array[E]
+  extern def extend[E](self: array[E], other: array[E]) -> unit
+  extern def zip[E, F](self: array[E], other: array[F]) -> array[Pair[E, F]]
+  extern def enumerate[E](self: array[E]) -> array[Pair[int, E]]
+  extern def join(values: array[text], separator: text) -> text
+  extern def flatten[T](values: array[array[T]]) -> array[T]
+  extern def unzip[A, B](values: array[Pair[A, B]]) -> Pair[array[A], array[B]]
+  extern def repeat[T](value: T, count: int) -> array[T]
+  extern def range_values(start: int, end: int) -> array[int]
 end ArrayInternals
 
 def array[E]::size(self) -> int = ArrayInternals::size(self)

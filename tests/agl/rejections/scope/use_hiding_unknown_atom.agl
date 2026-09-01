@@ -1,5 +1,7 @@
 use Scope::* hiding missing
+
 scope Scope
-def known() -> int = 1
+  def known() -> int = 1
 end Scope
+
 program def main() -> unit = ()

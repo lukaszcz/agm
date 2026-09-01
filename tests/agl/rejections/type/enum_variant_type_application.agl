@@ -1,5 +1,6 @@
 enum Box[T]
   | empty
+
 program def main() -> unit =
   let build = Box::empty::[int, text]
   print build

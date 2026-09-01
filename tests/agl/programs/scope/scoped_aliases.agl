@@ -3,12 +3,12 @@
 record Holder(value: Codec::Encoded)
 
 scope Codec
-record Frame(payload: text)
-type Encoded = Frame
-record Pair[T](first: T)
-type Boxed[T] = Pair[T]
+  record Frame(payload: text)
+  type Encoded = Frame
+  record Pair[T](first: T)
+  type Boxed[T] = Pair[T]
 
-def wrap(payload: text) -> Encoded = Frame("w:" + payload)
+  def wrap(payload: text) -> Encoded = Frame("w:" + payload)
 end Codec
 
 program def main() -> unit =

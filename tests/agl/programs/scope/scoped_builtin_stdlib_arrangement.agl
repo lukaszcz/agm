@@ -7,40 +7,40 @@
 # dispatching to a scoped `builtin record` (`ExecResult`) at a real host
 # boundary, and a scoped `builtin enum` (`ParsePolicy`) matched by case.
 scope Stdlib
-builtin record ExecResult
-  stdout: text
-  exit_code: int
-  stderr: text
-  timed_out: bool
+  builtin record ExecResult
+    stdout: text
+    exit_code: int
+    stderr: text
+    timed_out: bool
 
-builtin
-enum ParsePolicy =
-  | Abort
-  | Retry(n: int)
+  builtin
+  enum ParsePolicy =
+    | Abort
+    | Retry(n: int)
 
-builtin
-exception Exception
-  *
-  message: text
+  builtin
+  exception Exception
+    *
+    message: text
 
-builtin exception RangeError extends Exception()
+  builtin exception RangeError extends Exception()
 
-builtin def print[T](value: T) -> unit
+  builtin def print[T](value: T) -> unit
 
-builtin def exec(command: text) -> ExecResult
+  builtin def exec(command: text) -> ExecResult
 
-def report(code: int) -> text =
-  try
-    if code != 0 =>
-      raise RangeError(message = "bad code")
-    "ok"
-  catch RangeError as e =>
-    e.message
+  def report(code: int) -> text =
+    try
+      if code != 0 =>
+        raise RangeError(message = "bad code")
+      "ok"
+    catch RangeError as e =>
+      e.message
 
-def classify(policy: ParsePolicy) -> text =
-  case policy of
-    | ParsePolicy::Abort => "abort"
-    | ParsePolicy::Retry(n) => "retry %{n}"
+  def classify(policy: ParsePolicy) -> text =
+    case policy of
+      | ParsePolicy::Abort => "abort"
+      | ParsePolicy::Retry(n) => "retry %{n}"
 end Stdlib
 
 param code: int

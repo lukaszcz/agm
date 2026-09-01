@@ -4,6 +4,7 @@ enum Color
 enum Box
   | Empty
   | Full(item: int)
+
 program def main() -> unit =
   let c: Color = Red
   case c of

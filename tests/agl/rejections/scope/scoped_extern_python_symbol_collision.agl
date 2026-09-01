@@ -1,7 +1,7 @@
 scope Alpha
-extern def invoke(value: int) -> int
+  extern def invoke(value: int) -> int
 end Alpha
 
 scope Beta
-extern def invoke(value: int) -> int
+  extern def invoke(value: int) -> int
 end Beta

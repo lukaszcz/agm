@@ -261,7 +261,7 @@ def test_long_qualified_expression_retains_all_segments() -> None:
 
 def test_current_module_anchor_uses_root_binding_without_import_environment() -> None:
     resolution = resolve_inline_entry(
-        "def root() -> int = 1\nscope Nested\ndef use(root: int) -> int = ::root()\nend Nested"
+        "def root() -> int = 1\n\nscope Nested\n  def use(root: int) -> int = ::root()\nend Nested"
     )
     program = resolution.program
     nested = next(item for item in program.body.items if isinstance(item, ScopeRegion))
@@ -275,10 +275,12 @@ def test_current_module_anchor_uses_root_binding_without_import_environment() ->
 def test_generic_constructor_ignores_unrelated_same_named_scope() -> None:
     resolve_inline_entry(
         "scope Other\n"
-        "scope A\n"
-        "def ignored() -> int = 0\n"
-        "end A\n"
+        "\n"
+        "  scope A\n"
+        "    def ignored() -> int = 0\n"
+        "  end A\n"
         "end Other\n"
+        "\n"
         "enum A[T]\n"
         "  | make(value: T)\n"
         "A[int]::make(value = 1)"
@@ -316,12 +318,15 @@ def test_scoped_enum_members_and_nested_type_members_run_through_the_full_pipeli
 
     output = evaluate_ir_output(
         "enum Option[T] | none | some(value: T)\n"
+        "\n"
         "scope Option\n"
-        "def is_empty(value: Option[int]) -> bool = value is Option[int]::none\n"
+        "  def is_empty(value: Option[int]) -> bool = value is Option[int]::none\n"
         "end Option\n"
+        "\n"
         "scope A\n"
-        "enum T[U] | value\n"
+        "  enum T[U] | value\n"
         "end A\n"
+        "\n"
         "let option: Option[int] = Option[int]::some(value = 1)\n"
         "case option of\n"
         "  | Option[int]::some(value) => print value\n"
@@ -352,13 +357,13 @@ def test_nonconstructible_scoped_type_falls_back_to_the_legacy_constructor_diagn
 @pytest.mark.parametrize(
     "source",
     (
-        "scope Tools\ndef f() -> int = 0\nend Tools\nTools[int]::f()",
-        "scope Tools\ndef f() -> int = 0\nend Tools\nlet value: Tools[int]::T = null",
+        "scope Tools\n  def f() -> int = 0\nend Tools\n\nTools[int]::f()",
+        "scope Tools\n  def f() -> int = 0\nend Tools\n\nlet value: Tools[int]::T = null",
         (
-            "scope Tools\ndef f() -> int = 0\nend Tools\nlet value = 1\n"
+            "scope Tools\n  def f() -> int = 0\nend Tools\n\nlet value = 1\n"
             "case value of | Tools[int]::f => 1"
         ),
-        "scope Tools\ndef f() -> int = 0\nend Tools\nvalue is Tools[int]::f",
+        "scope Tools\n  def f() -> int = 0\nend Tools\n\nvalue is Tools[int]::f",
     ),
 )
 def test_type_arguments_on_a_plain_scope_are_rejected_in_every_chain_position(
@@ -401,7 +406,7 @@ def test_imported_scoped_enum_owner_retains_its_scope_path_for_is_and_case(
                 '  | lib::A::Status::Good => "good"\n'
                 '  | lib::A::Status::Bad => "bad")\n'
             ),
-            "lib": "scope A\nenum Status\n  | Good\n  | Bad\nend A\n",
+            "lib": "scope A\n  enum Status\n    | Good\n    | Bad\nend A\n",
         },
     )
 
@@ -423,13 +428,15 @@ def test_explicit_module_route_use_is_not_masked_by_a_same_named_local_scope() -
             "entry": (
                 "import geo/shapes\n"
                 "use /geo/shapes::Point::*\n"
+                "\n"
                 "scope Point\n"
-                "def area() -> int = 1\n"
+                "  def area() -> int = 1\n"
                 "end Point\n"
+                "\n"
                 "def foreign() -> text = describe()\n"
                 "def local() -> int = Point::area()\n"
             ),
-            "geo/shapes": 'scope Point\ndef describe() -> text = "point"\nend Point\n',
+            "geo/shapes": 'scope Point\n  def describe() -> text = "point"\nend Point\n',
         }
     )
 
@@ -457,7 +464,7 @@ def test_use_resolves_aliases_suffixes_anchored_routes_and_nested_scopes(tmp_pat
                 "def renamed_route() -> int = P::ping()\n"
             ),
             "pkg/tools": (
-                "def ping() -> int = 1\nscope Nested\ndef child() -> int = 2\nend Nested\n"
+                "def ping() -> int = 1\n\nscope Nested\n  def child() -> int = 2\nend Nested\n"
             ),
         },
     )
@@ -488,7 +495,9 @@ def test_use_wildcard_alias_facade_preserves_member_ambiguity(tmp_path: Path) ->
 def test_use_target_local_module_ambiguity_requires_an_anchor(tmp_path: Path) -> None:
     modules = {
         "Point": "def remote() -> int = 1\n",
-        "entry": ("import Point\nuse Point::*\nscope Point\ndef local() -> int = 2\nend Point\n"),
+        "entry": (
+            "import Point\nuse Point::*\n\nscope Point\n  def local() -> int = 2\nend Point\n"
+        ),
     }
 
     del tmp_path
@@ -544,10 +553,11 @@ def test_selective_import_does_not_expose_unselected_nested_scope_to_later_use(
                 "entry": "import lib::{A::ok}\nuse A::*\nuse Secret::*",
                 "lib": (
                     "scope A\n"
-                    "def ok() -> int = 1\n"
-                    "scope Secret\n"
-                    "def hidden() -> int = 2\n"
-                    "end Secret\n"
+                    "  def ok() -> int = 1\n"
+                    "\n"
+                    "  scope Secret\n"
+                    "    def hidden() -> int = 2\n"
+                    "  end Secret\n"
                     "end A"
                 ),
             },
@@ -563,10 +573,11 @@ def test_selective_import_keeps_unselected_nested_scope_qualified_use_route(
             "entry": ("import lib::{A::ok}\nuse A::*\nuse lib::A::Secret::*\nhidden()"),
             "lib": (
                 "scope A\n"
-                "def ok() -> int = 1\n"
-                "scope Secret\n"
-                "def hidden() -> int = 2\n"
-                "end Secret\n"
+                "  def ok() -> int = 1\n"
+                "\n"
+                "  scope Secret\n"
+                "    def hidden() -> int = 2\n"
+                "  end Secret\n"
                 "end A"
             ),
         },
@@ -599,8 +610,8 @@ def test_use_accepts_one_facade_scope_with_multiple_defining_modules(tmp_path: P
                 "import facade::{Scope}\nuse Scope::*\ndef selected() -> int = alpha() + beta()"
             ),
             "facade": "export source/a::{Scope}\nexport source/b::{Scope}",
-            "source/a": "scope Scope\ndef alpha() -> int = 1\nend Scope",
-            "source/b": "scope Scope\ndef beta() -> int = 2\nend Scope",
+            "source/a": "scope Scope\n  def alpha() -> int = 1\nend Scope",
+            "source/b": "scope Scope\n  def beta() -> int = 2\nend Scope",
         },
     )
 
@@ -615,7 +626,9 @@ def test_use_keeps_distinct_targets_from_one_module_ambiguous() -> None:
                     "use Scope::*\n"
                     "def selected() -> int = member()"
                 ),
-                "lib": ("def member() -> int = 1\nscope Scope\ndef member() -> int = 2\nend Scope"),
+                "lib": (
+                    "def member() -> int = 1\n\nscope Scope\n  def member() -> int = 2\nend Scope"
+                ),
             }
         )
 
@@ -638,7 +651,9 @@ def test_use_target_suffix_ambiguity_has_no_preferred_module_route() -> None:
 def test_use_bare_contributions_narrow_to_their_scope_region(tmp_path: Path) -> None:
     modules = {
         "lib": "def value() -> int = 1\n",
-        "entry": ("import lib\nscope A\nuse lib::*\ndef available() -> int = value()\nend A\n"),
+        "entry": (
+            "import lib\n\nscope A\n  use lib::*\n  def available() -> int = value()\nend A\n"
+        ),
     }
     del tmp_path
     _resolve_without_loader(modules)
@@ -657,13 +672,16 @@ def test_use_selection_hiding_and_renames_are_additive() -> None:
                 "use Local::{Nested::member as renamed}\n"
                 "use Local::shown\n"
                 "use Local as L\n"
+                "\n"
                 "scope Local\n"
-                "def shown() -> int = 1\n"
-                "def hidden() -> int = 2\n"
-                "scope Nested\n"
-                "def member() -> int = 3\n"
-                "end Nested\n"
+                "  def shown() -> int = 1\n"
+                "  def hidden() -> int = 2\n"
+                "\n"
+                "  scope Nested\n"
+                "    def member() -> int = 3\n"
+                "  end Nested\n"
                 "end Local\n"
+                "\n"
                 "def all_members() -> int = Nested::member()\n"
                 "def selected_member() -> int = renamed()\n"
                 "def single_member() -> int = shown()\n"
@@ -676,7 +694,11 @@ def test_use_selection_hiding_and_renames_are_additive() -> None:
         _resolve_without_loader(
             {
                 "entry": (
-                    "use Local::* hiding missing\nscope Local\ndef shown() -> int = 1\nend Local\n"
+                    "use Local::* hiding missing\n"
+                    "\n"
+                    "scope Local\n"
+                    "  def shown() -> int = 1\n"
+                    "end Local\n"
                 )
             }
         )
@@ -688,10 +710,12 @@ def test_local_use_rename_collision_is_ambiguous_when_used() -> None:
             {
                 "entry": (
                     "use S::{first as chosen, second as chosen}\n"
+                    "\n"
                     "scope S\n"
-                    "def first() -> int = 1\n"
-                    "def second() -> int = 2\n"
+                    "  def first() -> int = 1\n"
+                    "  def second() -> int = 2\n"
                     "end S\n"
+                    "\n"
                     "def selected() -> int = chosen()"
                 )
             }
@@ -703,11 +727,12 @@ def test_region_tailed_import_keeps_routes_global_and_bare_names_regional() -> N
         "lib": "def value() -> int = 1\n",
         "entry": (
             "scope A\n"
-            "import lib::*\n"
-            "def bare() -> int = value()\n"
+            "  import lib::*\n"
+            "  def bare() -> int = value()\n"
             "end A\n"
+            "\n"
             "scope B\n"
-            "def routed() -> int = lib::value()\n"
+            "  def routed() -> int = lib::value()\n"
             "end B\n"
         ),
     }
@@ -768,14 +793,17 @@ def test_unrelated_nested_scope_does_not_mask_a_root_import_route(tmp_path: Path
         {
             "entry": (
                 "import lib\n"
+                "\n"
                 "scope X\n"
-                "scope lib\n"
-                "def g() -> int = 1\n"
-                "end lib\n"
+                "\n"
+                "  scope lib\n"
+                "    def g() -> int = 1\n"
+                "  end lib\n"
                 "end X\n"
+                "\n"
                 "print(lib::A::f())\n"
             ),
-            "lib": "scope A\ndef f() -> int = 7\nend A\n",
+            "lib": "scope A\n  def f() -> int = 7\nend A\n",
         },
     )
 
@@ -798,7 +826,7 @@ def test_type_arguments_are_rejected_on_imported_route_and_scope_segments(
     with pytest.raises(AglScopeError, match="Type arguments cannot be applied"):
         resolve_program(
             make_graph_from_files(
-                tmp_path, {"entry": entry_source, "lib": "scope A\ndef f() -> int = 7\nend A\n"}
+                tmp_path, {"entry": entry_source, "lib": "scope A\n  def f() -> int = 7\nend A\n"}
             )
         )
 
@@ -811,7 +839,7 @@ def test_hidden_generic_does_not_validate_an_unrelated_plain_scope(tmp_path: Pat
                 "entry": (
                     "import one/shared\nimport two/shared hiding Box\nshared::Box[int]::describe()"
                 ),
-                "one/shared": "scope Box\ndef describe() -> int = 7\nend Box",
+                "one/shared": "scope Box\n  def describe() -> int = 7\nend Box",
                 "two/shared": "record Box[T](value: T)",
             },
         )

@@ -50,7 +50,17 @@
   "Regexp matching a branch marker that continues the enclosing construct.
 
 The markers are `|', `else', `catch', `until', and `done' (see the
-layout rules in docs/agl/reference/lexical-structure.md).")
+layout rules in docs/agl/reference/lexical-structure.md).  A scope
+region's `end' also closes what a header opened, but it names the region
+it closes rather than continuing the nearest construct, so it is placed
+by `agl--scope-closer-indent' instead.")
+
+(defconst agl--marker-or-closer-re
+  (concat "\\(?:" agl--branch-marker-re "\\|end\\)")
+  "Regexp matching a branch marker or a scope region's closer.
+
+Both change which construct the line being typed belongs to, so both are
+worth re-indenting on as soon as the word is complete.")
 
 (defconst agl--block-opener-symbol-re
   "\\(?:=>\\|->\\|[=:]\\)[ \t]*$"
@@ -212,6 +222,39 @@ line aligns just past that bracket."
            ;; identifier (`done-with' is one name).
            (agl--ident-boundary-after-p (match-end 0))))))
 
+(defun agl--first-word-p (word)
+  "Return non-nil when WORD is the current line\='s first whole token."
+  (save-excursion
+    (beginning-of-line)
+    (skip-chars-forward " \t")
+    (and (looking-at-p (regexp-quote word))
+         (agl--ident-boundary-after-p (+ (point) (length word))))))
+
+(defun agl--scope-closer-line-p ()
+  "Return non-nil if the current line closes a scope region."
+  (agl--first-word-p "end"))
+
+(defun agl--scope-closer-indent ()
+  "Return the column this line\='s `end\=' should sit at.
+
+An `end\=' closes the nearest scope region still open above it, which the
+enclosing indentation cannot name: a region\='s last item may itself be a
+`record\=' or `case\=' header whose own body is deeper, and that header is
+not what the `end\=' closes.  The owner is therefore found structurally,
+by walking back over the preceding code lines and letting each `end\='
+skip the `scope\=' it already closed."
+  (save-excursion
+    (beginning-of-line)
+    (let ((depth 0)
+          (column nil))
+      (while (and (null column) (agl--goto-previous-code-line))
+        (cond ((agl--scope-closer-line-p) (setq depth (1+ depth)))
+              ((agl--first-word-p "scope")
+               (if (> depth 0)
+                   (setq depth (1- depth))
+                 (setq column (current-indentation))))))
+      (or column 0))))
+
 (defun agl--branch-owner ()
   "Return (INDENT . OPENS-BLOCK) for the construct a branch marker continues.
 
@@ -309,6 +352,8 @@ whether the spelling it found is a whole AgL token."
     (cond
      ;; Inside a bracket the logical line continues.
      ((agl--enclosing-bracket-column))
+     ;; A scope closer aligns with the region header it closes.
+     ((agl--scope-closer-line-p) (agl--scope-closer-indent))
      ;; A branch marker aligns with the construct it continues.
      ((agl--branch-marker-line-p) (agl--branch-marker-indent))
      (t
@@ -363,8 +408,9 @@ header: the first line is what chooses the level, so re-indenting it to
 the one computed target would rewrite well-formatted source.  That holds
 for a block body and equally for a `|\=' branch, whose markers commonly
 align under an inline first marker (`if | a => x\=').  The terminators
-`else\=', `catch\=', `until\=' and `done\=' continue the construct itself rather
-than opening a body, so they stay subject to the levels above."
+`else\=', `catch\=', `until\=', `done\=' and `end\=' continue or close the construct
+itself rather than opening a body, so they stay subject to the levels
+above."
   (let ((column (current-indentation)))
     (or (memq column (agl--indent-levels))
         (save-excursion
@@ -411,17 +457,17 @@ verbatim."
   "Re-indent the current line after a branch marker is completed.
 
 Typing `|' at the start of a line, or finishing one of the words
-`else', `catch', `until', or `done' there, changes which construct the
-line belongs to, so the line is re-indented immediately.  The marker is
-matched here rather than through a predicate, so the check never depends
-on `match-data' surviving another call."
+`else', `catch', `until', `done', or `end' there, changes which construct
+the line belongs to, so the line is re-indented immediately.  The marker
+is matched here rather than through a predicate, so the check never
+depends on `match-data' surviving another call."
   (when (and (eq major-mode 'agl-mode)
              (not (agl--opaque-line-p))
              (let ((end (point)))
                (save-excursion
                  (beginning-of-line)
                  (skip-chars-forward " \t")
-                 (and (looking-at agl--branch-marker-re)
+                 (and (looking-at agl--marker-or-closer-re)
                       (= end (match-end 0))
                       (or (eq (char-after) ?|)
                           (agl--ident-boundary-after-p (match-end 0)))))))

@@ -3,9 +3,9 @@
 ;;; Commentary:
 
 ;; Scenario tables for the AgL indentation engine: block opening and
-;; closing, branch-marker alignment for every marker, bracket
-;; continuation, TAB cycling, electric re-indent, and the immunity of
-;; raw-tail payloads and multi-line templates.  See the layout rules in
+;; closing, branch-marker alignment for every marker, scope regions and
+;; their closers, bracket continuation, TAB cycling, electric re-indent,
+;; and the immunity of raw-tail payloads and multi-line templates.  See the layout rules in
 ;; docs/agl/reference/lexical-structure.md.
 
 ;;; Code:
@@ -134,6 +134,46 @@ indented; the resulting indentation column is returned."
 (ert-deftest agl-ind-marker-is-not-a-longer-identifier ()
   ;; `done-with' is one AgL identifier, not the `done' marker.
   (should (= (agl-ind--indent-of "def f() -> unit =\n  done-with()\n" 2) 2)))
+
+;; --- Scope regions ---
+
+(ert-deftest agl-ind-body-after-scope-header-is-indented ()
+  (should (= (agl-ind--indent-of "scope A\ndef f() -> int = 1\n" 2) 2)))
+
+(ert-deftest agl-ind-scope-closer-aligns-with-its-header ()
+  (should (= (agl-ind--indent-of "scope A\n  def f() -> int = 1\nend A\n" 3) 0)))
+
+(ert-deftest agl-ind-scope-closer-skips-a-deeper-declaration-body ()
+  ;; The region's last item is a `record' whose fields are deeper still;
+  ;; the `end' closes the region, not that record.
+  (should (= (agl-ind--indent-of "scope A\n  record R\n    x: int\nend A\n" 4) 0)))
+
+(ert-deftest agl-ind-nested-scope-closer-aligns-with-its-own-header ()
+  (should (= (agl-ind--indent-of
+              "scope A\n  scope B\n    def f() -> int = 1\n  end B\n" 4)
+             2)))
+
+(ert-deftest agl-ind-outer-scope-closer-skips-a-closed-region ()
+  (should (= (agl-ind--indent-of
+              "scope A\n  scope B\n    def f() -> int = 1\n  end B\nend A\n" 5)
+             0)))
+
+(ert-deftest agl-ind-scope-closer-without-a-header-falls-back-to-column-zero ()
+  (should (= (agl-ind--indent-of "def f() -> int =\n  1\nend A\n" 3) 0)))
+
+(ert-deftest agl-ind-scope-closer-is-not-a-longer-identifier ()
+  ;; `endpoint' is one AgL identifier, not the region closer.
+  (should (= (agl-ind--indent-of "scope A\n  let endpoint = 1\n  endpoint\n" 3) 2)))
+
+(ert-deftest agl-ind-indented-region-round-trips ()
+  (let ((text (concat "scope A\n"
+                      "  record R(x: int)\n"
+                      "\n"
+                      "  scope B\n"
+                      "    def f() -> int = 1\n"
+                      "  end B\n"
+                      "end A\n")))
+    (should (equal (agl-ind--reindented text) text))))
 
 ;; --- Bracket continuation ---
 

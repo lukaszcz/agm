@@ -1,54 +1,45 @@
 # AgL Language Implementation
 
-AgL is the statically typed workflow language that AGM programs are written in. Its programs orchestrate agents and shell commands as ordinary typed expressions. The implementation is a conventional compiler frontend followed by a typeless execution layer and a host runtime, exposed through two commands — `agm exec` (run a whole program) and `agm repl` (evaluate incrementally).
-
-This document gives the shape of the AgL subsystem. Read the focused documents below for each part.
+AgL is the statically typed workflow language AGM programs are written in; agent and shell calls are ordinary typed expressions. The implementation is a conventional compiler frontend, a typeless execution layer, and a host runtime, driven by one pipeline orchestrator that `agm exec`, `agm repl`, `agm check`, package validation, and registered package commands all share.
 
 ## Compilation Pipeline
 
-Every AgL program flows through one pipeline, whether run as a whole or one REPL entry at a time:
+Every AgL program flows through one pipeline, whether run whole or one REPL entry at a time:
 
 ```
 source (.agl)
-  → lexer        (INDENT/DEDENT, string interpolation, NAME/OP_NAME tokens)
+  → lexer        (INDENT/DEDENT, string interpolation, one NAME token class)
   → parser       (Lark LALR grammar)
-  → AST          (plain dataclasses — the firewall)
-  → scope        (name resolution; full static pass)
-  → typecheck    (full static pass; selects concrete operations)
-  → match compile (exhaustiveness, redundancy, and decision artifacts)
+  → AST          (frozen dataclasses — the firewall)
+  → scope        (whole-program name resolution)
+  → typecheck    (whole-program checking; selects concrete operations)
+  → match compile (exhaustiveness, redundancy, decision DAGs)
   → lower + link (closed, typeless executable program)
   → IR eval      (interpreter over the linked program)
-        ↘ host runtime: agents, shell execution, the Python FFI registry, codecs, rendering, trace store
+        ↘ host runtime: agents and sessions, shell, Python FFI, codecs, rendering, tracing
 ```
 
-The linked IR is the only execution format; checked frontend objects are never fed to the evaluator. Scope emits immutable shared pattern slots for uncertain field-directed names and candidate sets for ambiguous bare `is` variants; typecheck selects their concrete binders or constructors from nominal types, and consumers resolve them through checked-artifact accessors. No pass rewrites another pass's resolution tables.
+The linked IR is the only execution format; checked frontend objects never reach the evaluator. Each pass wraps the previous pass's artifact and records its conclusions in side tables keyed by stable node ids. No pass mutates the AST or rewrites another pass's tables; where scope cannot decide (a field-directed pattern name, an ambiguous bare constructor), it emits a slot or candidate set that typecheck resolves and later passes read through checked-artifact accessors.
 
 ## The Firewall
 
-The lexer and parser are the only Lark-aware code. The AST is the firewall: every pass from scope onward depends solely on the AST dataclasses, never on the parser's types. This is what makes the front end replaceable without touching the static passes or the evaluator.
-
-Two consequences shape the whole codebase:
-
-- **Identifier case carries no semantic category.** Identifiers are case-sensitive (distinct spellings are distinct names), but capitalization never classifies a name. The lexer emits `NAME` for word-starting identifiers and `OP_NAME` for operator-character names; types, constructors, and variables are distinguished by their declaration and binding namespace, not by spelling style. No pass branches on the case of a name.
-- **Passes never mutate the AST.** Later passes attach their results in *side tables* keyed by a stable per-node id, carried in the resolved/checked program objects rather than written back onto nodes.
+The lexer and parser are the only Lark-aware code. Every pass from scope onward depends solely on the AST dataclasses, so the front end is replaceable without touching the static passes or the evaluator. One consequence shapes the whole codebase: identifier case carries no semantic category. Types, constructors, and variables are told apart by their declaration and binding namespace, never by spelling, and no pass branches on capitalization.
 
 ## Shared AGM Layers
 
-The firewall is *semantic*, not an I/O boundary: it isolates the static passes from the parser, not AgL from the rest of AGM. AgL reuses AGM's lower layers rather than reimplementing them — the host runtime and pipeline build on the shared primitives, while AgL-only types sit on top:
+The firewall is semantic, not an I/O boundary. AgL reuses AGM's lower layers rather than reimplementing them:
 
-- **Agent invocation** uses `agm.agent.session`: free and explicit asks own persistent or ephemeral conversation handles, while backend-neutral service operations select the CLI adapter or Pi RPC implementation. Each selected agent is an `Agent` member `RecordValue` decoded by `runtime/agents.py`; CLI asks reuse `agm.agent.runner`, and `runtime/sessions.py` bridges AgL values and supplies the dispatcher-backed host used where no session service exists. An omitted free-`ask` agent comes from the snapshotted default session, initially seeded from `std/config::default-agent` by `exec`/`repl` configuration or `--agent`.
-- **Primitives** come from `agm.core`: shell `exec` and CLI agent subprocesses use `core.process`, environments use `core.env`, and file and trace I/O use `core.fs`/`core.log`, so AgL participates in dry-run for free. The streaming Pi RPC backend directly owns its long-lived process and equivalent process-group cleanup. Generic helpers (`util.text`, `util.graph`) are reused for newline normalization and SCC computation (module-cycle detection and the type-table's finiteness/schema-planning analyses).
-- **Configuration** is loaded and layered by `agm.config`. Host-backed `builtin var` bindings belong to their standard-library domain module and are keyed by module, scope path, and name; an optional constant initializer supplies the default only when no host seed is present. Engine settings specifically remain at the root of `std/config`. The checker's constant-expression predicate (`syntax/constants.py`, a syntax-layer leaf) validates a `builtin var` default without reaching outside the frontend. A host-supplied AgL literal (`--agent`/`[exec] default-agent`) is not parsed by a separate pipeline: `agm.agl.setting_overrides.SettingOverride` pairs the source text with an origin label and a `required` flag, and `PipelineDriver.prepare_parsed_entry`'s `setting_overrides` parameter splices it in as the target `builtin var`'s default before scope resolution, so it is resolved, type-checked, and constant-checked by the program's own single compilation, with a rejection diagnostic naming the origin. `pipeline.apply_setting_overrides` is the public seam both `PipelineDriver.prepare_parsed_entry` and `EntryPipeline.load_and_check_program` (REPL) call: it owns the splice-once apply condition and module-cache reconciliation, and decides whether a graph with no loaded `std/config` is silently inert (a non-`required` override, e.g. `[exec] default-agent`) or still a diagnostic (a `required` override, e.g. `--agent` — a per-run request the host cannot silently drop). The evaluator reads and writes settings through `IrBuiltinLoad`/`IrBuiltinStore`, backing runtime-live settings with live interpreter fields and host-consumed settings with registers; `default-agent` is register-only and does not reconfigure a host service (see [repl.md](repl.md)). The `exec`/`repl` commands seed the initial values from the CLI and config-file layers; a source write overrides them from its program point onward. `IrInterpreter.__init__` additionally validates the winning `default-agent` value (whichever of a host seed or a declared/spliced default wins) before any statement runs: an `AgentCommand` whose command text does not shell-split raises `HostConfigurationError`, which `PipelineDriver`/`EntryPipeline` turn into a pre-execution diagnostic rather than the `AgentCallError` an equivalent runtime source write raises only when actually dispatched. `[exec] runner`'s command text is shell-split the same way even earlier, in `cli_support/engine_seeds.py`, before any module loads.
+- **Agents** come from `agm.agent`: `Agent` values decode into host specs, asks dispatch through the shared runner or the session service, and `runtime/sessions.py` bridges AgL session values to it ([agents.md](../agents.md)).
+- **Primitives** come from `agm.core`: shell `exec` and CLI agent subprocesses use `core.process`, environments `core.env`, files and trace logs `core.fs`/`core.log`, so AgL participates in dry-run for free. `util.graph` and `util.text` supply SCC computation and newline normalization.
+- **Configuration** comes from `agm.config`: the engine-key catalog and qualified config tables feed the hosts' seeds ([hosting.md](hosting.md)).
 
 ## Expression-Oriented Design
 
-AgL has no separate statement category. Every construct — bindings, assignment, `print`, loops, `if` without `else` — is an expression with a type, and a block yields the value of its last item. Built-ins such as `print`, `exec`, and `ask` are ordinary calls classified during resolution rather than special syntax. Method selection is type-directed for both nominal and builtin receivers; an ordinary selected method lowers as a receiver-first call, while a host-backed selection uses its existing builtin route with the receiver operand. The raw-tail `exec$` and `ask$` forms desugar to calls in the parser. This uniformity is why the AST has a single call node and why the type system carries a unit type for side-effecting expressions.
+AgL has no statement category. Bindings, assignment, loops, and `if` without `else` are expressions with a type, and a block yields its last item. Built-ins such as `print`, `exec`, and `ask` are ordinary calls classified during resolution, and the raw-tail forms (`exec$`, `ask$`) desugar to calls in the parser. Methods are selected by receiver type for nominal and builtin receivers alike. This uniformity is why the AST has a single call node and why the type system carries a unit type.
 
 ## Programs and Modules
 
-A **program** is the entry module together with its transitive import and re-export dependencies. A `program def` remains an ordinary callable function but is also a host-discoverable entry; `exec` selects an entry-module declaration after the linked modules initialize, within the evaluator's normal execution boundary. Unless the host disables it or a module explicitly imports `std/core` directly or through wildcard expansion, every loaded entry and library module except `std/core` itself receives the automatic `import std/core::*` prelude. The production pipeline always loads that program and runs program-level scope, typecheck, match compilation, and lowering passes. A **module** is one unit within the program. Scope, typecheck, match compilation, and lowering run only as whole-program passes over the graph; their per-module steps are internal workers with no standalone entry point, so no caller — production or test — can run them in a configuration the program passes do not. `ModuleGraph` remains the loader's data structure. Parameter inventories follow each selected program module's transitive import/export subgraph; their descriptors retain module identity for host CLI disambiguation. Module loading and program passes are described in [modules.md](modules.md), including the
-process-global artifact cache that lets a second compilation skip the passes over every module
-whose source is unchanged.
+A **program** is the entry module plus its transitive import and re-export dependencies; scope, typecheck, match compilation, and lowering are whole-program passes with no standalone per-module entry point. A `program def` is an ordinary function that is also a host-discoverable entry. Every module except `std/core` receives the `std/core` prelude unless the host disables it. Module loading, visibility, and the compilation caches are in [modules.md](modules.md).
 
 ## Package Map
 
@@ -59,24 +50,24 @@ whose source is unchanged.
 | AST | `src/agm/agl/syntax/` |
 | Scope / name resolution | `src/agm/agl/scope/` |
 | Type checking | `src/agm/agl/typecheck/` |
-| Pattern-match compilation, artifacts, and diagnostics | `src/agm/agl/matchcompile/` |
-| Semantic foundation (values, types, exceptions, text literals, cycle detection, value copying) | `src/agm/agl/semantics/` |
+| Match compilation | `src/agm/agl/matchcompile/` |
+| Semantic foundation (values, types, type table, analyses, exceptions) | `src/agm/agl/semantics/` |
 | Lowering / linking | `src/agm/agl/lower/` |
-| Execution IR (data model) | `src/agm/agl/ir/` |
+| Execution IR | `src/agm/agl/ir/` |
 | Evaluator | `src/agm/agl/eval/` |
-| Host runtime services | `src/agm/agl/runtime/` |
+| Host runtime services and FFI | `src/agm/agl/runtime/` |
 | Module loading | `src/agm/agl/modules/` |
 | REPL | `src/agm/agl/repl/` |
-| Pipeline orchestrator | `src/agm/agl/pipeline.py` |
+| Pipeline orchestrator and host leaves | `src/agm/agl/pipeline.py`, `capabilities.py`, `diagnostics.py`, `setting_overrides.py`, `type_schema.py`, `artifact_cache.py`, `self_validation.py` |
 
-Package layering is enforced by a dependency-contract test (`tests/test_agl_dependencies.py`): `semantics` is the semantic foundation layer and the single owner of the AgL text-literal surface, `syntax` is a leaf over its own AST nodes, `typecheck` reaches only scope's output, the frontend layers beneath it, and the IR's id leaf (never the pipeline, parser, lowering, or evaluator), the IR depends only on its own data, module ids, and the pure shared engine-key catalog, the evaluator never imports the frontend, the runtime is eval-free, and the pipeline sits on top. `artifact_cache` is an
-import-free leaf, so the scope and typecheck passes consult it without coupling to another layer.
+Layering is enforced by `tests/test_agl_dependencies.py`: `semantics` is the foundation, `syntax` is an AST-only leaf, `typecheck` reaches only scope's output and the layers beneath it, `matchcompile` imports nothing downstream, the IR depends only on its own data and the engine-key catalog, the evaluator never imports the frontend, the runtime is eval-free, and the pipeline sits on top.
 
 ## What To Read Next
 
-- Read [frontend/index.md](frontend/index.md) for the static passes — lexer, parser, AST, scope, typecheck, and match compilation.
-- Read [execution/index.md](execution/index.md) for lowering, the IR, the evaluator, value rendering, and the host runtime.
-- Read [modules.md](modules.md) for the file-based module system and the program-level passes.
-- Read [repl.md](repl.md) for the incremental REPL session, `agm exec` parameter/agent wiring, and engine settings.
+- [frontend/index.md](frontend/index.md) — lexer, parser, AST, scope, typecheck, match compilation.
+- [execution/index.md](execution/index.md) — lowering, the IR, the evaluator, the host runtime, and the Python FFI.
+- [modules.md](modules.md) — the file-based module system, the standard library's surfaces, and the compilation caches.
+- [hosting.md](hosting.md) — the pipeline orchestrator, host capabilities, parameters, engine settings, diagnostics.
+- [repl.md](repl.md) — the incremental REPL session and its front ends.
 
-The language grammar and surface syntax are documented from the user's perspective in the AgL reference (`docs/agl/reference/grammar.md` and `docs/agl/reference/lexical-structure.md`). The dependency-free canonical keyword inventory lives in `src/agm/agl/keywords.py`; the remaining implementation-level token contract and the lexer's merge/disambiguation passes live in `src/agm/agl/lexer/tokens.py` and the pass docstrings in `src/agm/agl/lexer/lexer.py`.
+The language itself is documented for users in `docs/agl/reference/`; the standard library's sources under `stdlib/std/` are its own reference.

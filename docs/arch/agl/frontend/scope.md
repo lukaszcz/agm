@@ -1,90 +1,25 @@
 # AgL Name Resolution
 
-The scope pass resolves every name in an AgL program and records the results
-in immutable side tables. It runs after parsing and before typecheck, over the
-whole module graph when a program imports files.
+The scope pass resolves every name in the program, over the whole module graph, and publishes immutable side tables. Typecheck consumes them and never re-resolves; scope in turn never guesses — any ambiguous bare or qualified route is a static error.
 
 ## Namespaces and Scopes
 
-Collection builds module-root and named-scope layers and pre-populates them
-with static function/type declarations and constructors. Bindings and
-parameters are installed during the subsequent ordered resolution walk, which
-preserves their textual visibility. Declarations in a named scope are addressed
-by their complete `::` path; repeated scope regions extend the same namespace.
-The resolver applies lexical visibility for bindings and resolves qualified
-chains through local scope paths and imported module routes. Ambiguous bare or
-qualified routes are static errors.
+Collection builds module-root and named-scope layers pre-populated with static declarations and constructors; bindings and parameters are then installed by an ordered walk that preserves textual visibility. Named-scope declarations are addressed by their full `::` path, and repeated `scope` regions extend one namespace. Type and value namespaces are looked up independently through lexical layers, so a type-only contribution never hides an outer value.
 
-Inline enum members are nominal record declarations beneath their owning enum
-scope. Scope resolution gives each local, imported, built-in, or REPL-retained
-constructor a canonical `ConstructorRef` for that record declaration. The
-reference carries module, scope path, terminal name, and declaration identity
-separately; display spellings are never used as identity. A local injected
-constructor shadows automatic `std/core` prelude constructors with the same
-bare spelling. Patterns and `is` tests retain candidate sets when their matched
-enum type must select the member.
+Inline enum members are nominal record declarations beneath their enum's scope. Every constructor reference resolves to a canonical `ConstructorRef` carrying module, scope path, terminal name, and declaration identity; display spellings are never identity. Where a bare constructor spelling in a pattern or `is` test is ambiguous, scope keeps a candidate set and typecheck selects from the matched nominal type.
 
 ## Imports and `use`
 
-`scope/imports.py` builds contribution environments for import declarations.
-Program resolution publishes named-scope identities separately from declaration exports on each resolved
-module. Region and declaration-path spellings establish the same identities; selective re-exports keep
-their exposed scope paths prefix-closed after renaming and regional re-rooting. Re-exports preserve all
-origins when several scopes form one facade and enforce the same ordinary-name collisions as local
-scope identities, while preserving type-owned namespaces. Import environments retain scope identities
-per qualified route, so selection and hiding govern whether a scope is a `use` target without affecting another route.
-An imported or re-exported empty scope remains nameable without becoming a value. An import contributes
-its full public qualified surface, except paths hidden by that
-declaration. A positive
-import tail or `use` declaration contributes selected bare names without
-narrowing qualified access. A wildcard import alias retains its source declaration
-identity as a shared facade, including through an incremental host's exact-module
-expansion; routes through that facade may converge on the same origin, while unrelated
-imports that reuse an alias remain ambiguous. `use` selects
-from an already nameable local scope or imported route,
-with one target lookup determining both its reachable routes and whether a
-trailing alias names that route or one of its ordinary members,
-including a scope route exposed by an earlier `use`; imported `use` surfaces retain every filtered
-member and scope-route candidate on the owning lexical region, so colliding renamed routes remain
-ambiguous when subsequently used and selective bare imports cannot expose unselected nested scopes.
-Type aliases follow targets through the import environment of the module that declared the alias, so
-consumers select the same constructor even when that target is module-qualified or a referenced enum member.
-The module's qualified route remains complete. Incremental replay falls back to that route only when
-the retained use target is no longer nameable through the current import spelling. `use` does not
-create a module-loading edge. Bare import-tail and `use` routes at the same region are
-resolved together: routes to one declaration deduplicate, while distinct origins
-are ambiguous. Bare lookup follows lexical layers independently in the type and
-value namespaces: a nearer regional contribution shadows outer routes only in the
-namespace it contributes, so a type-only use does not hide an outer value.
-Region-scoped bare contributions apply within that region and its nested regions,
-while imports still make their qualified routes available to the module.
+An import contributes a module's full public qualified surface minus what its `hiding` clause removes. Import tails and `use` declarations add bare names to the lexical region that declares them without narrowing qualified access; `use` selects from routes that are already nameable and never loads a module. Exports and re-exports are resolved program-wide with the same collision rules as local names; routes to one declaration deduplicate, distinct origins stay ambiguous. Loading-level rules are in [modules.md](../modules.md).
 
-Scope resolution also classifies declarations, bindings, constructors, and
-built-ins for typecheck. A built-in call is recognized by resolving its callee
-to a `builtin def` declaration, never by name alone; a module or named-scope
-member may reuse that spelling through its qualified namespace, while bare
-lookup still selects the built-in. A `self`-receiver `def` in a nominal scope
-is classified as a method, including an applied builtin receiver such as
-`array[E]::map`, whose type form and standard-library ownership typecheck
-validates later. Host-backed `builtin var` declarations are admitted in any
-standard-library module, at its root or in a named scope region; only root
-`std/config` bindings are engine-setting registers, while every other
-host-backed binding is an ordinary ambient value. Ambiguous bare constructor
-spellings in patterns and `is` tests remain candidate sets; typecheck selects
-them using the matched nominal type. It records each `use` target's semantic
-local path or imported routes so incremental hosts retain target identity
-without re-deriving it from syntax. It publishes resolved program artifacts
-rather than rewriting source nodes.
+## Classification
 
-`IndexTarget` and `FieldTarget` receiver expressions resolve as ordinary reads
-and introduce no binding; typecheck owns container, field, and mutability rules.
+Scope classifies what typecheck will type: a built-in call is recognized by resolving its callee to a `builtin def` declaration, never by spelling; a `self`-receiver `def` in a nominal scope or on an applied builtin receiver is a method; `builtin var` bindings are host-backed values, of which only root `std/config` bindings are engine settings. Index and field assignment receivers resolve as ordinary reads; typecheck owns container, field, and mutability rules.
 
 ## Code Entry Points
 
-- `src/agm/agl/scope/` — whole-program resolution and resolution side tables.
+- `src/agm/agl/scope/resolver.py` — declaration collection, `use` selection, regional bare contributions.
 - `src/agm/agl/scope/imports.py` — import contribution environments and qualified resolution.
-- `src/agm/agl/scope/program.py` — export maps, re-exports, and cross-module resolution.
-- `src/agm/agl/scope/resolver.py` — declaration collection, `use` selection, and regional bare
-  contributions.
-- Tests: `tests/test_agl_scope*.py`, `tests/test_agl_namespace_*.py`, and
-  `tests/test_agl_qualifier_*.py`.
+- `src/agm/agl/scope/program.py` — export maps, re-exports, cross-module resolution.
+- `src/agm/agl/scope/symbols.py` — builtin call names and symbol kinds.
+- Tests: `tests/test_agl_scope*.py`, `test_agl_namespace_*.py`, `test_agl_qualifier_*.py`.

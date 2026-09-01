@@ -1,40 +1,28 @@
 # AgL Match Compilation
 
-The match compiler turns every checked source match site — a `case` or destructuring immutable `let` — into an immutable decision DAG. Lowering consumes the same decisions in action mode for cases and binding mode for lets. It is the last static pass: it runs after type checking, consumes checked pattern metadata only, and depends on nothing downstream — not lowering, the IR, the evaluator, or runtime services. See [index.md](../index.md) for the surrounding pipeline.
+The match compiler turns every checked match site — a `case` or a destructuring immutable `let` — into an immutable decision DAG that lowering executes. It is the last static pass: it consumes checked pattern metadata only and depends on nothing downstream.
 
 ## Compilation Model
 
-Source patterns are normalized from the checker's final binder/constructor classifications into typed pattern matrices, retaining every binder for each matched occurrence, and compilation decomposes the matrices into a decision DAG: it preserves source priority while choosing tests with a deterministic heuristic (the `qba` composite from Maranget's decision-tree paper), and shares decision nodes rather than expanding paths, so compiled decisions stay compact even for overlapping patterns. Normalization consumes the checker's classifications as answers, never re-deriving them: a constructor pattern's owner is compared against the published resolved nominal rather than re-selected from scope candidates. Enum, record, and boolean domains use complete checked signatures from the type table; scalar and type-variable domains remain open. Each enum-member constructor is keyed by its member-record declaration, so an enum signature is its substituted member-record set and a record signature is its one record constructor. When a selected closed signature has exactly one nominal constructor — every record and a true single-member enum — the DAG emits `DecisionDecompose`: it exposes declaration-order child occurrences without a runtime discriminant test, records only child fields demanded by its continuation, and retains the parent/child provenance needed for dominance validation. `DecisionSwitch` remains the discriminant node for alternatives and open literal domains. Lowering materializes the resulting occurrence graph uniformly for case actions and let bindings.
+Patterns are normalized from the checker's binder and constructor classifications into typed pattern matrices, then decomposed into a decision DAG that preserves source priority, chooses tests with Maranget's column-selection heuristic, and shares decision nodes rather than expanding paths. Enum, record, and boolean domains are closed, with signatures from the type table (each enum member keyed by its member-record declaration); scalar and type-variable domains are open. A single-constructor signature — any record, a single-member enum — decomposes without a runtime test; alternatives and literals become switches.
 
 ## Diagnostics Cannot Disagree with Execution
 
-The same DAG provides reachable-arm information and deterministic structured witnesses, so exhaustiveness and redundancy diagnostics are derived from the exact decision structure that will execute — they can never disagree with it. Diagnostics carry structured issues and witnesses adapted into ordinary static diagnostics. Enum and record witnesses retain a checked, import-aware source owner spelling so rendered patterns remain checker-accepted.
+Reachable-arm information and missing-pattern witnesses are derived from the same DAG that will execute, so exhaustiveness and redundancy diagnostics can never disagree with runtime behavior. A refutable `let` is a static diagnostic carrying the same witness form as case exhaustiveness. Any issue yields diagnostics and no artifact, so lowering only ever sees fully compiled programs.
 
 ## Whole-Program Artifacts
 
-Whole-program entry points visit every nested case and every destructuring immutable `let` after type checking, including sites in all reachable modules — entry code never calling a site does not exempt it. A `let` whose pattern is a bare name or `_` is irrefutable and binds at most one name by construction, so it is never compiled into a decision DAG — it would cost a full matrix, occurrence allocation, and DAG derivation to describe a binding the lowering layer emits as one instruction. Skipping them keeps match compilation proportional to the patterns a program actually destructures rather than to its binding count. Success yields a `MatchCompiledModule` or `MatchCompiledProgram` wrapping the exact checked artifact plus a total immutable match-site-to-DAG mapping for the collected sites. Each site carries a sealed per-kind payload rather than a kind tag: a case payload holds ordered arm actions, a let payload holds its single binding action. Consumers narrow the payload once and the compiler rejects any consumer that fails to handle a kind, so a new match-site form cannot be added without visiting every site that must change.
-
-A destructuring let is normalized as one row over its initializer occurrence. A reachable DAG failure is a static refutable-let diagnostic carrying the same structured missing-pattern witness as case exhaustiveness; accepted lets therefore have failure-free decisions. No runtime match failure, continuation capture, lowering, or evaluation is introduced at this stage. Any issue yields sorted static diagnostics and no artifact, so lowering can only ever see fully compiled programs. Downstream pipelines reuse a static artifact only when its resolved-program identity and host capabilities match the consuming pipeline; otherwise they recheck before lowering.
-
-Artifact validation — source kind and ownership, mapping totality, provenance, and decision semantic replay — is a self-check gated by the AgL self-validation toggle ([testing.md](../../testing.md)), so the suite re-verifies every compiled match site while production lowering trusts the artifact.
-
-## Package Boundary
-
-The package API is deliberately limited to whole-program artifacts and stage entry points, structured issues/witnesses with their diagnostic adapters, and the small decision contract lowering consumes. Matrix and heuristic machinery, normalization, and validation helpers stay internal to their defining submodules and are reached only by white-box tests.
+The stage visits every site in every reachable module. A `let` with a bare-name or `_` pattern is irrefutable and is skipped; lowering emits it as one bind. The result wraps the checked artifact plus a total site-to-DAG mapping whose per-kind payloads (case arms, let binding) are sealed, so a new site kind cannot be added without visiting every consumer. Artifact validation is a self-check under the self-validation toggle ([testing.md](../../testing.md)).
 
 ## References
 
-The implementation follows Luc Maranget's pattern-matching compilation work:
-
-- *Compiling Pattern Matching to Good Decision Trees* (ACM SIGPLAN Workshop on ML, 2008) — matrix specialization/default decomposition, the `qba` column-selection heuristic, and decision-node sharing.
-- *Warnings for Pattern Matching* (Journal of Functional Programming 17(3), 2007) — the exhaustiveness/redundancy witness formulation; here the witnesses are reconstructed from the compiled DAG rather than computed by a separate usefulness pass.
+- Luc Maranget, *Compiling Pattern Matching to Good Decision Trees* (ML Workshop 2008) — matrix decomposition, the `qba` heuristic, node sharing.
+- Luc Maranget, *Warnings for Pattern Matching* (JFP 17(3), 2007) — the witness formulation; here witnesses are reconstructed from the compiled DAG.
 
 ## Code Entry Points
 
-- `src/agm/agl/matchcompile/model.py` — canonical constructor identities, including singleton record constructors.
-- `src/agm/agl/matchcompile/normalize.py` — checked patterns and closed signatures.
-- `src/agm/agl/matchcompile/matrix.py` — matrix decomposition and column selection.
-- `src/agm/agl/matchcompile/compiler.py` and `diagnostics.py` — decision DAGs, issues, and witnesses.
+- `src/agm/agl/matchcompile/model.py`, `normalize.py` — constructor identities, checked patterns, closed signatures.
+- `src/agm/agl/matchcompile/matrix.py`, `compiler.py`, `diagnostics.py` — decomposition, decision DAGs, issues and witnesses.
 - `src/agm/agl/matchcompile/stage.py` — whole-program artifacts and diagnostic adaptation.
-- `src/agm/agl/lower/` — the consumer side: decision DAGs lowered into switches, projections, case actions, or immutable let bindings ([execution/lowering.md](../execution/lowering.md)).
+- `src/agm/agl/lower/` — the consumer ([execution/lowering.md](../execution/lowering.md)).
 - Tests: `tests/test_agl_matchcompile_*.py`.

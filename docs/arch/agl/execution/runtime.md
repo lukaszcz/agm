@@ -1,76 +1,28 @@
-# AgL Host Runtime and Pipeline
+# AgL Host Runtime
 
-The runtime package is the eval-free services layer: value-driven agents, session-host adapters, codecs, parameter conversion, host-environment assembly, and rendering. It imports neither the evaluator nor the pipeline, which keeps the services reusable and the dependency graph acyclic. `runtime/sessions.py` bridges opaque AgL session values to the agent session service, resolves an agent's default transport from its host specification, and supplies the dispatcher-backed host used where no session service exists. The package otherwise builds on AGM's shared agent runner and core primitives rather than reimplementing them ([index.md](../index.md)).
+The runtime package is the eval-free services layer: agent dispatch and session bridging, codecs, parameter conversion, host-environment types, rendering, serialization, tracing, and the Python FFI registry. It imports neither the evaluator nor the pipeline, and it builds on AGM's shared agent and core layers rather than reimplementing them.
+
+## Agents and Sessions
+
+`runtime/agents.py` decodes an `Agent` member record into a host spec from `agent/spec.py` and runs the spec's argv through the shared prompt and process seam. `runtime/sessions.py` bridges AgL `Session` values to the agent session service ([agents.md](../../agents.md)), resolves an agent's default transport from its spec, and supplies a dispatcher-backed host for embeddings without a session service. Agent prompts and shell commands are text rendering, not JSON serialization.
 
 ## Codecs
 
-Built-in JSON contracts consume the typeless schema/decode data compiled during lowering. Custom codecs are materialized through their own `make_contract` hook before lowering, while checker types are still available, and then run from the embedded typeless payload — with compatibility shims for older host codecs. `runtime/codec.py` also exposes the codec's JSON-text recovery adapter for `std/json`; its strict parser remains separate, so explicit strict parsing cannot silently repair input while structured agent and shell output retains its configured leniency.
+Built-in JSON contracts consume the typeless schema and decode data compiled during lowering. `runtime/codec.py` keeps strict parsing and lenient recovery separate: agent and shell output use the configured policy, casts always parse strictly, and `std/json` exposes both explicitly.
 
-## Value Rendering
+## Rendering and Serialization
 
-All value display — string interpolation, `print`, `render`, `as text`, and REPL echo — goes through one recursive renderer producing AgL-native syntax. The text-literal surface encoder is shared from `semantics/text_literal.py` with lexer decoding and match diagnostics, so interpolation escaping has one owner. Nominal fields are normalized into declaration order at construction, so the renderer needs no type information and every consumer (rendering, `as json`, equality) agrees on field order. Enum-typed values are their selected member `RecordValue`s, never enum wrappers. Inline members render with their enum-qualified record names (`Tree::Leaf`, `Tree::Node(...)`), while referenced members retain their record declaration's display name. Encode plans add `$case` only for enum-typed slots; record-typed slots remain plain objects. Unit values carry a display flag distinguishing explicit `()` from the `void` produced by statement-like effects, which lets the REPL suppress echo.
+All value display — interpolation, `print`, `render`, `as text`, REPL echo — goes through one renderer producing AgL-native syntax; the text-literal encoder is shared with the lexer. Nominal fields are normalized to declaration order at construction, so rendering, JSON, and equality agree without type information. Serialization follows lowered encode plans, adding `$case` only in enum-typed slots. Both walks thread the shared cycle guard; trace logging and in-flight error reporting degrade cycles and non-data values to markers rather than turning a working run into a failing one.
 
-Rendering and JSON serialization (`runtime/render.py`, `runtime/serialize.py`) both recurse through arrays/dicts/nominal fields and so both thread the shared cycle guard from `semantics/cycles.py`, lazily allocated so an acyclic value never pays for it; a detected cycle surfaces as a Python-level sentinel that each caller (the interpreter, casts, agent/exec prompt rendering, trace logging, error reporting, the REPL echo) converts into the catchable `CyclicValueError`, or — for trace logging and in-flight error reporting, which must never turn a working run into a failing one — degrades to a marker in place of the value. Lowered JSON casts and scalar JSON coercions use one encode plan — a schema walk plus the reusable definitions its references resolve against — which recursively selects object fields and adds an enum slot's `$case` from its member declaration. A source with a finite instantiation closure gets zero-parameter definitions keyed like its JSON Schema `$defs`; a growing polymorphic-recursive one gets declaration templates whose type-parameter slots each reference binds, so no infinite instantiation closure is needed and record-versus-enum slot context and the member-selected `$case` tag survive either way. The linked program keys host exception field plans by nominal identity, so agent errors preserve their tagged wire field through catches, storage, and later re-raises without reporting inspecting nominal display text. Agent prompts and shell commands are text rendering, not JSON serialization; the Python FFI has its separate value-directed representation.
+## Host-Backed Values and Tracing
 
-The Python FFI is split between `runtime/externs.py`, which loads companions, dispatches calls, and supplies interpreter-scoped companion state, and `runtime/boundary.py`, which converts values at the boundary. A cached companion's ordinary Python module globals are registry-scoped and shared, whereas its `runtime.state` values are interpreter-scoped. The companion cache is keyed by canonical path and the file's identity stamp, so two module ids sharing one companion run its top level once, while a rewritten companion is imported again and callables resolved from the superseded module are dropped. Conversion is value-directed: AgL `Value` subclasses encode to distinct Python representations and concrete Python types decode back to AgL values. Every enum member — inline or referenced — crosses as its own plain record class built from its descriptor; the synthesized enum class is a pure namespace over its members (`Step.Go`), never a member base class. The registry synthesizes one nominal class per identity, once, and never re-shapes it — an identity's layout is fixed at its declaration — so a class a companion already captured — a module global, a closure, a default argument — keeps constructing and recognizing values of the declaration it was captured from even after a redeclaration mints a fresh identity with a class of its own. Which identity currently bears a shared name path (for a companion's bare/dotted lookup at import time) is decided by the type table's name index, threaded through lowering as a per-descriptor flag, rather than by insertion order. That an identity is never re-registered under a different shape — the premise of synthesizing once — is asserted by a self-check gated on the AgL self-validation toggle ([testing.md](../../testing.md)). Each class carries its own descriptor, so decoding consults no call-scoped state: nominal values cross correctly at companion import time, from worker threads, and after a call has returned. Fields live in one dict keyed by the original AgL field spellings. Classes are exposed with `array`, `dict`, `json`, and a `runtime` state accessor through a temporary `agl` module during companion import; unique final names are direct `agl` attributes, and the complete module/scope identity tree is available under `agl.nominals`, where a nominal whose name is also a scope segment doubles as that scope's namespace. The evaluator creates one state bag per interpreter and activates it with a `ContextVar` around each extern call, so a cached companion can keep mutable state without leaking it between concurrent interpreters that share a registry; direct companion use receives a detached host state instead. The registry retains no extern signature schema after lowering. Arrays and dicts cross as lazy mutable views over their containers; views hold no call scope, are not revoked, and compare/hash by their container identity. A `json` payload crosses uncopied and unchecked in both directions: the companion is trusted to hand over a JSON-shaped payload and not to retain and mutate one, so nothing walks it at the boundary. The direct `agl` attributes for `array`, `dict`, `json`, `runtime`, `nominals`, and the `AglException` carrier are reserved companion APIs; a nominal colliding with one remains available only through `agl.nominals`.
-
-A record descriptor with any `var` field synthesizes a live, unhashable view
-instead of an immutable snapshot class. Reads encode the current underlying
-`RecordValue`, including nested callable proxies supplied by the evaluator;
-writes decode and store only declared `var` fields, and decoding the view returns
-the same record value. Records without `var` fields retain snapshot equality and
-hashing, while exceptions remain field-immutable.
-
-The same boundary represents an AgL closure passed to an extern as a Python callable proxy. The evaluator supplies the proxy's closure execution hook and owns its per-interpreter call window, while `runtime/externs.py` owns argument/result conversion and checks that window, preserving the runtime package's eval-free boundary. A proxy can run only on its owning interpreter thread while an extern invocation is active; a companion may retain it and invoke it from a later extern invocation, or return that evaluator-owned proxy unchanged for AgL to recover its original closure, but an expired or worker-thread invocation fails on the Python side before it touches interpreter state. Encoding a closure needs the interpreter, which the eval-free boundary never holds, so the extern-call chokepoint publishes its encoder as call-scoped ambient state for the invocation's extent rather than every crossing value carrying its own: a view a companion constructs itself, and a closure that reaches Python inside an array or dict, encode through the active call's encoder like any other. Reading a function out of a value with no interpreter behind it — from a worker thread, or after the outermost call returned — is a boundary error, not a proxy that fails later. A bare Python callable has no reverse AgL representation and remains a boundary error. `boundary.py` also defines the companion-visible `AglException` carrier: a callback's `AglRaise` becomes that carrier before Python frames see it, and an escaping carrier becomes a fresh `AglRaise` around the same `ExceptionValue`. The carrier accepts a synthesized exception object as well, allowing companions to initiate typed AgL raises without classifying ordinary Python exceptions differently; every other Python value is rejected with its public `TypeError`.
-
-Array-view membership and index lookup decode their companion probe and use the semantic value-equality helper, rather than Python view or JSON equality, so companion-backed array operations agree with AgL operators for nested arrays and JSON values.
-
-A second sentinel, `AglNonDataValue` (`runtime/serialize.py`), covers the other way JSON serialization can fail: a value kind with no JSON representation at all (`unit`, constructor, function, iterator). Unlike the cycle sentinel it has no catchable-exception form, because every evaluator route into serialization is statically gated by `is_json_convertible` — it can only arrive via the two ungated reporters, trace logging and in-flight error reporting, which degrade it to a marker exactly as they do a cycle. A record or exception field may legitimately hold such a value even though casting its type to `json` is a static error.
-
-## Tracing and Live Trace Settings
-
-`runtime/trace.py` writes best-effort JSONL records. Every record starts with
-`ts`, `run_id`, and `kind`; the store records only run boundaries, `print`
-stdout, agent requests and responses, shell executions, and exceptions that
-escape uncaught. It deliberately does not trace ordinary expression evaluation
-or attach a `trace_id` to records or exception values. `std/process::exit`
-accepts only the portable `0..255` process-status range, then propagates its
-`SystemExit` through the FFI; both `PipelineDriver` and `ReplSession` write the
-matching `run_end` record before re-raising it, so their host receives the
-requested status after trace finalization.
-
-`eval/effects.py` is the agent logging seam: it composes the prompt, records the
-request before dispatch, and records every response path, including unit calls,
-transport failures, and cancellation. `runtime/agents.py` remains the
-value-driven transport boundary and sends that composed prompt verbatim.
-
-The trace destination is the sole live host service configured by an AgL `builtin var` write. The engine-key catalog names its `log`/`log-file` register pair explicitly; either write repoints the same trace store, while other host-consumed settings remain registers read on demand. `runtime/host_settings.py` applies the command-supplied trace-path policy without importing the command layer.
-
-## Host-backed standard-library values
-
-`builtin var` bindings are identified in the linked IR by their defining module,
-scope path, and name. Root `std/config` keys retain their dedicated engine-setting
-registers and live effects; scoped `std/config` and other standard-library bindings
-use ordinary host-backed values with declared defaults. `agm exec` and `agm repl` take one full `os.environ`
-snapshot at startup and pass it to the interpreter for `std/env::environ`.
-The interpreter constructs the typed `Environ` value after linking, so the host
-snapshot never mutates and AgL `setenv`/`unsetenv` remain in-process language
-state. A host that suppresses the standard library has no `std/env` binding,
-so no process seed is installed. `PipelineDriver.run` and `run_prepared` expose
-strongly typed `builtin_var_seeds` keyed by `(ModuleId, scope_path, name)` for all such
-bindings, and `ReplSession` exposes the same seed API; the older engine-name
-`builtin_host_settings` input remains a
-compatibility adapter. A non-engine binding with neither kind of seed nor a
-declared default reports a host-configuration diagnostic when read.
-
-## Pipeline Orchestrator
-
-The pipeline sits on top: it drives the compile → lower → evaluate sequence and assembles the host environment, and it is the public entry point used by `agm exec` and the REPL. Programs are parameterized by `param` declarations resolved at evaluation time (external value > default expression > error for a required param), and its discovery artifact also records `program def` declarations with their module and scope paths so a host can select an entry before execution; the selected entry runs after module initialization within the interpreter's normal execution boundary ([repl.md](../repl.md)). Every artifact a pass produces is handed forward rather than recomputed, so however many times a host resumes the pipeline, the program compiles and lowers exactly once. A preflight executable's source and host-capability provenance stays in a pipeline-owned sidecar rather than the typeless IR: only the issuing pipeline can resume it against the same prepared resolution, while changed capabilities invalidate it and trigger fresh checking and lowering. Pure compile-time schema and format-instruction generation lives in its own helper so lowering stays independent of runtime execution. `PipelineDriver.check_prepared` is a narrower public entry point for a static checker (`agm check`): it drives the same compile → lower sequence but stops there, binding and validating no host param and executing nothing, so a required `param` with no default is accepted rather than reported.
+`builtin var` bindings are identified by module, scope path, and name. Root `std/config` bindings are engine-setting registers with live effects; all others are ambient values with declared defaults that a host may seed — `std/env::environ`, for instance, is a startup snapshot of the process environment, so AgL `setenv` stays in-process. The trace store (`runtime/trace.py`) writes best-effort JSONL for run boundaries, `print`, agent requests and responses, shell executions, and escaping exceptions — never ordinary evaluation. A write to `log` or `log-file` repoints it live through `runtime/host_settings.py`; `std/process::exit` propagates its `SystemExit` after the final trace record.
 
 ## Code Entry Points
 
-- `src/agm/agl/eval/effects.py` — the evaluator's observable-effect seam for agent request/response logging and shell execution.
-- `src/agm/agl/runtime/agents.py` — decodes `Agent` member `RecordValue`s and runs their builder-produced argv through the shared prompt/process seam; `runtime/trace.py` writes the JSONL trace records.
-- `src/agm/agl/runtime/` — codecs, parameter conversion, host-environment types, and the renderer; `runtime/externs.py` owns extern loading/dispatch and `runtime/boundary.py` owns boundary conversion and live views.
-- `src/agm/agl/pipeline.py` — the orchestrator; `src/agm/agl/type_schema.py` — compile-time schema/format generation.
-- Tests: `tests/test_agl_runtime.py`, `tests/test_agl_codec.py`, `tests/test_agl_pipeline_*.py`, `tests/test_agl_extern_boundary.py`, `tests/test_agl_extern_views.py`.
+- `src/agm/agl/runtime/agents.py`, `sessions.py`, `request.py` — agent dispatch, session bridging, request/response types.
+- `src/agm/agl/runtime/codec.py`, `contract.py`, `convert.py`, `params.py` — codecs, contracts, conversion, parameter values.
+- `src/agm/agl/runtime/render.py`, `serialize.py` — rendering and JSON serialization.
+- `src/agm/agl/runtime/trace.py`, `host_settings.py`, `types.py`, `option.py` — tracing, live settings, host environment types, `Option` construction.
+- `src/agm/agl/runtime/externs.py`, `boundary.py` — the FFI ([ffi.md](ffi.md)).
+- Tests: `tests/test_agl_runtime.py`, `test_agl_codec.py`, `test_agl_trace.py`, `test_agl_session_runtime.py`, `test_agl_builtin_var_*.py`.

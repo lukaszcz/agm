@@ -1,62 +1,25 @@
 # AgL Syntax: Lexer, Parser, and AST
 
-The syntax frontend turns AgL source into the AST consumed by every later
-pass. The hand-written lexer handles indentation, templates, raw tails, and
-tight slash-path and qualifier syntax. The Lark LALR parser recognizes the
-resulting token stream, and the AST builder validates and constructs the
-language's source forms.
+The hand-written lexer handles layout (INDENT/DEDENT), string templates with `%{}` interpolation, raw tails (`exec$`, `ask$`), and the tight slash-path and `::` qualifier syntax. A Lark LALR grammar recognizes the token stream, and the AST builder validates and constructs frozen dataclass nodes with stable ids. Comments produce no tokens, but their spans are exposed as a side channel for highlighters.
 
-## Syntax Boundary
+## Keywords
 
-The lexer and parser are the only Lark-aware layers. Their output is a family
-of frozen AST dataclasses, which forms the frontend firewall: scope, typecheck,
-and later passes depend on AST nodes rather than parser types. Nodes have
-stable ids, and later passes attach conclusions in side tables instead of
-mutating the AST.
+`keywords.py` is the single inventory of reserved words and of the contextual header words (`import`, `use`, `export`, `hiding`, `scope`, `end`), which are ordinary names outside their declaration contexts. The lexer, the grammar's token contract, the REPL highlighter, and the editor modes all derive from it rather than repeating spellings.
 
-User-operator chains cross that boundary unresolved: the builder keeps them as
-raw infix-chain nodes, and module-graph assembly rewrites them into ordinary
-applications at each chain's lexical scope, using local declarations plus every
-bare-visible operator fixity. Standalone parser callers may resolve against an
-explicit ambient table instead. Scope and every later pass see only resolved
-applications.
+## What the AST Preserves
 
-`import`, `use`, `export`, `hiding`, `scope`, and `end` are contextual header
-words. They remain ordinary names outside their declaration contexts. The
-keyword module is the single inventory of both word classes — reserved words
-and these soft keywords — and the lexer, the grammar token contract, and every
-syntax highlighter derive from it rather than repeating spellings. Item-start
-`use` promotion is decided from its header token shape; the grammar then
-requires a suffix for every declared use. Qualified use paths use the ordinary
-module-qualifier token contract, and the AST preserves their unresolved target,
-tails, hiding clauses, aliases, and scope paths for scope resolution to decide
-their visibility.
+The AST records source structure faithfully so later passes never reconstruct spellings:
 
-Qualified expressions, types, patterns, and `is` tests share a structured
-`QualifierChain`; every segment retains its span and optional type arguments.
-Enum members preserve whether the source declared an inline `VariantDef` or
-referenced a record through `VariantRef`. A record or enum-member field may be
-prefixed with `var`; `Param` preserves that marker independently of its
-constructor zone. Assignment targets keep their distinct name, index, or
-`FieldTarget` shape; a field target retains an arbitrary postfix receiver and
-the selected field name. The marker is rejected on exception fields. Let
-bindings retain a complete pattern, while declarations and region items carry
-canonical scope paths, so
-later passes do not reconstruct source spellings.
+- User-operator chains cross the parser unresolved as raw infix-chain nodes; module-graph assembly rewrites them into ordinary applications once import-visible fixities are known ([modules.md](../modules.md)). Scope and later passes see only resolved applications.
+- Qualified expressions, types, patterns, and `is` tests share one qualifier-chain node with per-segment spans and type arguments.
+- Declarations and scope-region items carry canonical scope paths; enum members record whether they were declared inline or reference an existing record; `var` field markers, parameter zones, complete `let` patterns, and assignment-target shapes (name, index, field) are all retained.
+- A function header may carry an applied builtin receiver (`array[E]::map`) beside its `self` parameter; scope classifies it once the full declaration path is known.
 
-A function header can retain an applied builtin receiver (`array[E]::map` or
-`dict[text, V]::get`) alongside an ordinary `self` parameter; scope
-classification waits for the completed declaration path, because a scope region
-prefixes its already-built child declarations.
+An inline-source host (`agm exec -c`, the REPL) wraps statement-oriented source with a pure syntactic wrapper in `parser/wrap.py` before the static passes run.
 
 ## Code Entry Points
 
-- `src/agm/agl/keywords.py` and `src/agm/agl/lexer/` — the reserved and soft
-  keyword inventories, and indentation-aware lexing. Comments produce no token,
-  so the scan also exposes their spans as a side channel for highlighters.
-- `src/agm/agl/grammar/` and `src/agm/agl/parser/` — grammar, parsing, AST
-  construction, and inline-source wrapping.
-- `src/agm/agl/syntax/` — AST nodes, function receiver types, spans, advisories,
-  and syntax-only helpers.
-- Tests: `tests/test_agl_lexer.py`, `tests/test_agl_parser.py`, and
-  `tests/test_agl_ast.py`.
+- `src/agm/agl/keywords.py`, `src/agm/agl/lexer/` — keyword inventories and indentation-aware lexing.
+- `src/agm/agl/grammar/agl.lark`, `src/agm/agl/parser/` — grammar, parsing, AST construction, inline-source wrapping.
+- `src/agm/agl/syntax/` — AST nodes, spans, advisories, the constant-expression predicate, and resource-call classification.
+- Tests: `tests/test_agl_lexer.py`, `test_agl_parser.py`, `test_agl_ast.py`, `test_agl_wrap.py`.

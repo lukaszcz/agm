@@ -1,124 +1,25 @@
-# AgL REPL and Program Hosting
+# AgL REPL
 
-`agm exec` runs a complete AgL program; `agm repl` evaluates one entry at a
-time. Both use the same compilation pipeline and runtime. This document covers
-the host behavior that makes the REPL incremental.
+`agm repl` evaluates one entry at a time on the same pipeline and runtime as `agm exec`. This document covers the host behavior that makes it incremental.
 
 ## Incremental Sessions
 
-A REPL session retains successful declarations, bindings, types, and runtime
-state, so later entries can refer to earlier entries without replaying them.
-A later declaration at the same reachable path supersedes the earlier one.
-Static failures do not promote their entry; completed runtime effects retain
-their ordinary REPL behavior. Nominal redeclarations receive fresh declaration
-identities, so retained values and methods keep the exact record, enum-member,
-or exception shape against which they were checked.
+`ReplSession` keeps a persistent environment: each entry is compiled and evaluated exactly once against accumulated symbols, types, declarations, and runtime values, so agent calls never replay. Successful declarations, bindings, imports, and `use` declarations persist; a later declaration at the same path supersedes the earlier one with a fresh declaration identity, so values and methods retained from before keep the exact shape they were checked against. A failed entry leaves the prior generation intact. `:reset` clears everything, closes agent sessions, and replaces the extern registry.
 
-Each evaluated entry still creates a fresh `IrInterpreter`. The shared extern
-registry keeps a loaded companion module and its ordinary Python globals for
-the session, but the companion `runtime.state` accessor reaches an
-interpreter-owned bag through the extern call's `ContextVar`; that bag lives
-for one entry only. `:reset` also replaces the registry, so companions and
-their module globals reload on a later import.
-
-Imports and `use` declarations also persist after a successful entry. A later
-import replaces retained declarations for the modules it names at the same
-scope path. A later `use` replaces a retained use with the same resolved target
-at that path, even when an import alias changes. Retained replay compares prior
-semantic identities only with one another and leaves current-versus-retained
-replacement to scope classification before the effective entry is compiled, so
-single-member aliases replace their semantic parent target immediately while
-nested whole-target aliases remain distinct. Retained wildcard-facade uses also
-carry their source wildcard identity: replay refreshes routes added by that
-wildcard without adopting modules from a later wildcard that reuses its alias,
-while still falling back to their retained semantic routes when imports are
-renamed or replaced. Retained generations carry semantic identities rather than
-reconstructing them from import headers; a failed replacement entry still
-leaves the prior generation intact, and uses and imports at other paths remain. `:reset`
-clears retained declarations, imports, uses, and session runtime state, closing agent backends and starting a fresh lazy default-session generation. Saved transcripts preserve
-and replay their original entry boundaries, including declaration-wide forward references; ordinary
-source files loaded with `:load` still replay each top-level item independently. Retained explicit
-`std/core` imports suppress the normal per-entry prelude; `--no-stdlib`
-disables that prelude for the whole session.
-
-## Hosts and Settings
-
-`exec` discovers a program's parameters and selects its entry function. The
-REPL obtains imported parameter values from configuration and requires defaults
-for entry-local parameters. Both hosts seed engine settings and use the shared
-runtime for agents, shell commands, and standard-library services. Agent enum
-members cross the host boundary as their nominal record values rather than as
-enum wrappers.
-
-Engine settings — `default-agent`, `log`, `log-file`, `strict-json`,
-`max-iters`, `timeout` — are root `builtin var` bindings of `std/config`;
-scoped `std/config` bindings and other standard-library host-backed bindings
-are module-, scope-, and name-keyed values rather than engine settings. Because
-a write is an ordinary statement, settings take effect in program order and a
-completed REPL write persists across entries. The session also snapshots the
-process environment once at startup and supplies it as `std/env::environ`, so
-later AgL environment mutations stay inside the session. `std/process::exit`
-ends the REPL host: its `SystemExit` is re-raised only after the entry trace
-receives its final `run_end`, matching batch execution.
-
-Fresh default-stdlib sessions in one host process reuse an unchanged checked
-bootstrap image from a small per-process LRU cache; changed source content,
-missing required extern companions, changed canonical module paths, changed
-root discovery, setting overrides, roots, and host capabilities each select a
-fresh image. Retained user `infixl`/`infixr` fixity resolves relative
-priorities against the same bare-visible assembly table used for the submitted
-entry, without retaining imported operators as session declarations.
+Each entry runs in a fresh interpreter. Engine-setting writes persist across entries because they are ordinary statements; the process environment is snapshotted once at startup for `std/env::environ`. Saved transcripts replay their original entry boundaries.
 
 ## Retained Library Image
 
-Every entry compiles a whole program — the entry module plus every library
-module the session has loaded — but the library half is compiled once. The
-session retains each library module's infix-resolved source, scope resolution,
-checked artifact, and compiled match sites, and each pass reuses one only while
-the graph still holds the very AST object that artifact was derived from. A
-reparse, a setting-override splice, or a redeclaration therefore misses and
-recompiles, and reuse can never bridge supersession, whose fresh declaration
-identities live in fresh nodes. Reuse is per module rather than all-or-nothing,
-so importing a module mid-session recompiles only that module; the entry module
-itself is never reused. Self-validation follows the same line, sealing what an
-entry actually built rather than re-sealing objects it already sealed.
+Every entry compiles a whole program — the entry plus every library module the session has loaded — but the library half is compiled once. The session retains each library module's resolved, checked, and match-compiled artifacts and reuses one only while the graph still holds the very AST object it was derived from; a reparse, a setting-override splice, or a redeclaration misses and recompiles that module alone. Fresh default-stdlib sessions in one process additionally start from a cached checked bootstrap image.
 
 ## Front-End Seam
 
-The loop body — meta-command dispatch, the blank/comment no-op, entry
-evaluation, and result rendering — exists once, in the UI-free
-`agm.agl.repl.loop` module, along with the prompt spellings, the banner, the
-multiline-continuation predicate, and the agent-confirmation callback. It is
-parameterized by a reader, a writer, and an `on_theme_change` hook.
-
-Two front ends wire that seam to different I/O:
-
-- `agm.agl.repl.console` — the only module that imports prompt_toolkit. It
-  builds a `PromptSession` (lexer, completer, key bindings, history, styling)
-  and wires its prompt/print as reader and writer. Highlighting and completion
-  drive the real lexer and classify against the canonical keyword inventories,
-  so a contextual keyword colours exactly where the lexer promoted it; the
-  editor modes under `config/` mirror those same inventories.
-- `agm.agl.repl.plain_console` — a styling-free line front end for a pipe,
-  comint buffer, or other non-terminal consumer. It reads from a text stream
-  and accumulates continuation lines with the same predicate; since it sees one
-  line at a time rather than a whole pasted buffer, an entry whose latest line
-  is indented stays open until a blank line or end of input closes it, which is
-  the only way a layout block can end. It also owns the engagement predicate (non-tty
-  stdin/stdout, or `TERM=dumb`) that `agm.commands.repl` uses to pick a front
-  end unless `--plain` forces it; nothing forces prompt_toolkit onto a pipe.
-
-`agm.commands.repl` builds the session once and hands it to whichever front end
-is chosen; the `console` import is local, so a plain session never loads
-prompt_toolkit.
+The loop body — meta-command dispatch, entry evaluation, result rendering, the continuation predicate, the agent-confirmation callback — exists once in the UI-free `repl/loop.py`, parameterized by a reader and a writer. Two front ends wire it: `repl/console.py`, the only module that imports prompt_toolkit, drives the real lexer for highlighting and completion; `repl/plain_console.py` is a styling-free line front end for pipes and editor buffers, chosen automatically on a non-tty or `TERM=dumb` and forced by `--plain`.
 
 ## Code Entry Points
 
-- `src/agm/agl/repl/` — session state, entry pipeline, the shared loop core,
-  the two front ends, rendering, agent confirmation, and themes (the UI-free
-  `theme_selection.py` leaf plus the prompt_toolkit-touching `themes.py`).
-- `src/agm/agl/pipeline.py` — shared preparation and execution pipeline.
-- `src/agm/commands/exec.py` and `src/agm/commands/repl.py` — CLI hosts,
-  including REPL front-end selection.
-- `src/agm/cli_support/` — execution parameters and host engine-setting seeds.
-- Tests: `tests/test_agl_repl_*.py` and `tests/test_exec_command.py`.
+- `src/agm/agl/repl/session.py` — the incremental session core; `entry_pipeline.py` — the multi-module entry pipeline over `PipelineDriver`.
+- `src/agm/agl/repl/loop.py`, `console.py`, `plain_console.py` — the shared loop and the two front ends; `meta.py`, `render.py`, `themes.py`, `agentmode.py` — meta commands, echo rendering, themes, agent confirmation.
+- `src/agm/agl/lower/repl.py` — incremental linking.
+- `src/agm/commands/repl.py` — the CLI host and front-end selection.
+- Tests: `tests/test_agl_repl_*.py`, `test_repl_command.py`.

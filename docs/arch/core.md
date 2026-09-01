@@ -1,39 +1,32 @@
 # Core Primitives
 
-Two foundation packages sit beneath everything else, and *both* are shared by both halves of AGM — the project-management commands and the AgL runtime alike. `core/` holds the OS-facing building blocks: process execution, environment handling, filesystem and TOML/dotenv I/O, logging, lifecycle cleanup, and a cross-cutting dry-run facility; AgL's host runtime runs shell commands and agents, clones environments, writes files, and emits JSONL trace logs through these same primitives. `util/` holds pure, stdlib-only generic helpers that import nothing from `agm`.
+Two foundation packages sit beneath everything else and serve both halves of AGM. `core/` holds the OS-facing building blocks — process execution, environment handling, filesystem and TOML/dotenv I/O, logging, lifecycle cleanup, and the dry-run facility; AgL's host runtime runs shell commands and agents, writes files, and emits trace logs through these same primitives. `util/` holds pure, stdlib-only helpers that import nothing from `agm`.
 
 ## Process Execution
 
-Ordinary foreground and captured subprocess work goes through the shared process module. It distinguishes terminal-inheriting commands from captured output, offers "require success" variants, and manages process groups so interruption tears down descendants. A caller may also register a cleanup command for a resource it owns but does not contain — `agm run` registers the stop of the transient systemd scope it creates. Such a command only runs while unwinding, so for as long as one is registered the process module delivers SIGTERM and SIGHUP as `KeyboardInterrupt`, and issues the command before killing the process group; a nested AGM signalled by its parent would otherwise die outright and leak the scope along with everything inside it. The persistent Pi RPC session is the deliberate exception: `agent/session/rpc.py` owns a raw streaming `Popen`, nonblocking bounded writes, and reader threads because the request/response process must outlive one capture call; it still tears its child down through the shared process-group teardown.
+Foreground and captured subprocess work goes through one process module. It distinguishes terminal-inheriting from captured runs, offers require-success variants, and manages process groups so an interruption tears down descendants. A caller may register a cleanup command for a resource it owns but does not contain (`agm run` registers the stop of its transient systemd scope); while one is registered, SIGTERM and SIGHUP are delivered as `KeyboardInterrupt` so the cleanup runs before the group is killed. The persistent Pi RPC session in `agent/session/rpc.py` is the one deliberate exception that owns its own streaming process, because that process must outlive a single capture call.
 
 ## Environment Handling
 
-The environment module owns construction and resolution of process environments: cloning the ambient environment, resolving variable references, sourcing bash env files in a single shell to capture their effect, validating shell-safe identifiers, and locating the AGM installation prefix from the path AGM was invoked through, so each build resolves its own prefix rather than an unrelated AGM on PATH. Environments are passed explicitly as dictionaries through the call chain, so each command controls exactly what its subprocesses see.
+The environment module clones the ambient environment, resolves variable references, sources bash env files in one shell to capture their effect, validates shell-safe names, and locates the AGM installation prefix from the path AGM was invoked through. Environments are passed explicitly as dictionaries, so each command controls exactly what its subprocesses see.
 
 ## Filesystem, TOML, and Dotenv I/O
 
-Filesystem mutations (mkdir, write, copy files or trees, chmod, remove, glob) and TOML/dotenv reads and writes are wrapped so they participate in dry-run and present a consistent interface. Copy helpers preserve file metadata; tree copies preserve descendant links rather than dereferencing them and refuse linked roots or destinations, so install-like flows do not need package-local `shutil` calls. TOML handling uses round-trip parsing so that updating a single key preserves the rest of a config file. Dotenv helpers upsert individual `.env` lines.
+Filesystem mutations and TOML/dotenv reads and writes are wrapped so they participate in dry-run and share one interface. TOML uses round-trip parsing so updating one key preserves the rest of a file; dotenv helpers upsert individual lines; tree copies preserve links instead of dereferencing them.
 
-## Cleanup
+## Dry Run and Cleanup
 
-The cleanup helper runs resource release without replacing an exception already in flight: cleanup failures remain visible on clean exits and are attached to program, cancellation, or interrupt failures. The AgL interpreter and its `exec`/`repl` command hosts use it when closing agent sessions.
-
-## Dry Run
-
-Dry-run is a global, cross-cutting mode set from the `--dry-run` CLI flag. The primitives consult it: when enabled, process and filesystem operations print the action they *would* take instead of performing it. Because the check lives in the primitives, every command inherits dry-run support without implementing it individually.
+Dry-run is a global mode set from `--dry-run`. Because the process and filesystem primitives consult it, every command inherits dry-run support without implementing it. The cleanup helper releases resources without masking an exception already in flight; the AgL interpreter and the `exec`/`repl` hosts use it when closing agent sessions.
 
 ## Generic Utilities
 
-`util/` is a dependency-free leaf: pure algorithms and string helpers with zero `agm` imports, deliberately usable from any layer without creating a cycle. It provides generic graph algorithms (Tarjan strongly-connected components, Kahn topological sort, and a deterministic breadth-first search for the nearest node satisfying a predicate), used by AgL module loading and the program-level passes for deterministic dependency ordering ([agl/modules.md](agl/modules.md)) and by the AgL type table to name the culprit declaration in whole-type diagnostics; universal-newline normalization shared by the AgL lexer and runtime diagnostics so both index source text identically; the shared AgL identifier grammar and `%{name}` interpolation parser; and a context-variable scoping guard used wherever a value is published ambiently for a dynamic extent (the lexer's advisory sinks, the extern boundary's companion state and closure encoder).
+`util/` is a dependency-free leaf usable from any layer: graph algorithms (Tarjan SCC, Kahn toposort, nearest-hit BFS) used by AgL module loading and type-table analyses; newline normalization shared by the lexer and diagnostics; the AgL identifier grammar; the `%{name}` interpolation parser shared by prompts, runner commands, config paths, and AgL; and a `ContextVar` scoping guard.
 
 ## Code Entry Points
 
-- `src/agm/core/process.py` — foreground/capture execution, success requirements, process-group termination.
-- `src/agm/core/env.py` — environment cloning/resolution, env-file sourcing, shell-name validation, installation prefix.
-- `src/agm/core/fs.py` — dry-run-aware filesystem operations.
-- `src/agm/core/path.py` — CLI path resolution, user-facing path display, and the shared safe-relative-path predicate behind archive entries, `RECORD` paths, and AgL resource paths.
-- `src/agm/core/toml.py` and `src/agm/core/dotenv.py` — round-trip TOML and dotenv read/write helpers.
-- `src/agm/core/cleanup.py` — primary-error-preserving lifecycle cleanup.
-- `src/agm/core/dry_run.py` — global dry-run state and planned-command printing.
-- `src/agm/core/log.py` — logging setup and JSONL append support. AgL trace paths use `.jsonl`; ordinary command text logs retain `.log`.
-- `src/agm/util/graph.py` — generic Tarjan SCC, Kahn toposort, and nearest-hit BFS; `src/agm/util/text.py` — newline normalization; `src/agm/util/ident.py` — AgL identifier grammar; `src/agm/util/interp.py` — `%{name}` template splitting into literal/hole segments and strict, lenient, and unresolved-reporting rendering; `src/agm/util/scoping.py` — `ScopedVar`, a slotted context manager that binds a `ContextVar` for a `with` block. All are pure and `agm`-import-free.
+- `src/agm/core/process.py` — foreground/capture execution, success requirements, process-group termination, cleanup-command registration.
+- `src/agm/core/env.py` — environment cloning/resolution, env-file sourcing, installation prefix.
+- `src/agm/core/fs.py` — dry-run-aware filesystem operations; `src/agm/core/path.py` — path resolution, display, and the safe-relative-path predicate shared by archives, `RECORD` files, and AgL resources.
+- `src/agm/core/toml.py`, `src/agm/core/dotenv.py` — round-trip TOML and dotenv helpers.
+- `src/agm/core/cleanup.py` — primary-error-preserving cleanup; `src/agm/core/dry_run.py` — global dry-run state; `src/agm/core/log.py` — logging and JSONL append.
+- `src/agm/util/graph.py`, `text.py`, `ident.py`, `interp.py`, `scoping.py` — the pure helpers.

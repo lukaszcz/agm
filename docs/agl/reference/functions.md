@@ -41,10 +41,9 @@ def classify(n: int) -> text =
     | n < 0  => "neg"
     | else   => "zero"
 
-def summarize(doc: text, limit: int = 3) -> text =
-  let head = ask "Summarize: %{doc}"
-  let tagged = "[%{limit}] %{head}"
-  tagged
+def summarize(doc: text, sentences: int = 3) -> text =
+  let prompt = "Summarize in at most %{sentences} sentences:\n%{doc}"
+  ask(prompt)
 
 def double(n: int) = n * 2
 
@@ -429,8 +428,8 @@ scope Codec
   def render[T](value: T) -> array[T] = [value]
 end Codec
 
-let values = Codec::render(1)  # the scoped generic function
-let text = render(1)           # the built-in render
+let wrapped = Codec::render(1)  # the scoped generic function
+let shown = render(1)           # the built-in render
 ```
 
 An ordinary user `def` at the selected entry module's root cannot use a
@@ -572,7 +571,7 @@ print review          # equivalent to print(review)
 ask "Hello?"          # equivalent to ask("Hello?")
 print res.stdout      # field-access path is a valid sugar argument
 print classify(x)     # equivalent to print(classify(x))
-f Opt::Some(x = 1)      # equivalent to f(Opt::Some(x = 1))
+f Option::Some(value = 1)  # equivalent to f(Option::Some(value = 1))
 ```
 
 Application binds **tighter than all operators**:
@@ -622,8 +621,8 @@ program def main() -> unit =
 supplied in any order:
 
 ```agl
-def format_msg(text: text, prefix: text = "[INFO]") -> text =
-  "%{prefix} %{text}"
+def format_msg(message: text, prefix: text = "[INFO]") -> text =
+  "%{prefix} %{message}"
 
 program def main() -> unit =
   let _ = format_msg("Done.")
@@ -898,10 +897,6 @@ from a function like `make_policy` cannot be passed to it.
 ## Complete example
 
 ```agl
-record Issue
-  title: text
-  severity: int
-
 enum Review
   | Pass
   | Fail(issues: array[text])

@@ -185,7 +185,7 @@ not move to that field; use a named sub-pattern to select it.
 
 <!-- agl-check: fragment -->
 ```agl
-enum Result
+enum Outcome
   | Ok(value: int)
   | Err(reason: text, fatal: bool)
 
@@ -238,18 +238,18 @@ Constructor patterns work on instances of **generic** enums and records
 and qualified form. A transparent record alias is also a constructor-pattern
 spelling for its target. When the scrutinee is a concrete instance such as
 `Option[int]` or `Box[int]`, a destructured field is bound at the
-**instantiated** type — matching `some(value)` against an `Option[int]` binds
+**instantiated** type — matching `Some(value)` against an `Option[int]` binds
 `value: int`:
 
 ```agl
 enum Option[T]
-  | none
-  | some(value: T)
+  | None
+  | Some(value: T)
 
 def describe_option(o: Option[int]) -> text =
   case o of
-    | Option::none => "missing"
-    | Option::some(value) => "found %{value}"   # value: int, so it can be interpolated
+    | Option::None => "missing"
+    | Option::Some(value) => "found %{value}"   # value: int, so it can be interpolated
 ```
 
 The qualifier (`Option::`) explicitly names the owning enum. It is optional
@@ -357,7 +357,7 @@ same way as in a pattern:
 
 <!-- agl-check: fragment -->
 ```agl
-let probe: Option[int] = some(value = 99)
-if probe is Option::some => print "probe is some"
-if probe is not Option::none => print "probe is not none"
+let probe: Option[int] = Some(value = 99)
+if probe is Option::Some => print "probe is some"
+if probe is not Option::None => print "probe is not none"
 ```

@@ -11,9 +11,11 @@ higher-ranked type quantifiers.
 This page collects the whole generics story: declaring type parameters, type
 application, inference and the explicit `::[…]` override, generic constructors
 and constructor values, what may be done with a value of a type parameter,
-invariance, and the rules around names. Identifier capitalization is
-irrelevant throughout (`Box`/`box`, `Option`/`option`, `some`/`Some` are all
-equally valid); see [Lexical structure](lexical-structure.md).
+invariance, and the rules around names. Identifier capitalization classifies
+nothing — `Box` and `box` are equally valid names for a type or a value, though
+they remain two distinct names; see [Lexical structure](lexical-structure.md).
+Examples here follow the standard library's convention of capitalized type and
+constructor names.
 
 ## Declaring type parameters
 
@@ -29,10 +31,10 @@ record Box[T]
   value: T
 
 enum Option[T]
-  | none
-  | some(value: T)
+  | None
+  | Some(value: T)
 
-type Pair[A, B] = dict[text, json]
+type Transform[A, B] = A -> B
 ```
 
 A declaration may have several parameters (`def apply[A, B](…)`,
@@ -67,17 +69,17 @@ record Box[T]
   value: T
 
 enum Outcome[A, B]
-  | ok(value: A)
-  | err(error: B)
+  | Ok(value: A)
+  | Err(error: B)
 def Box::get[E](self) -> E = self.value
 def Box::map[E, U](self, f: E -> U) -> Box[U] = Box(value = f(self.value))
 def Box::size[_](self) -> int = 1
-def Outcome::is_ok[_, _](self) -> bool = self is ok
+def Outcome::is_ok[_, _](self) -> bool = self is Ok
 
 program def main() -> unit =
   let box = Box(value = 7)
   let mapped = box.map::[text](fn(value: int) -> text => "v=%{value}")
-  let outcome: Outcome[int, text] = ok(value = 1)
+  let outcome: Outcome[int, text] = Ok(value = 1)
   let _ = print(box.get())
   let _ = print(box.size())
   let _ = print(mapped.value)
@@ -116,8 +118,8 @@ record Box[T]
   value: T
 
 enum Outcome[T, E]
-  | ok(value: T)
-  | err(error: E)
+  | Ok(value: T)
+  | Err(error: E)
 
 program def main() -> unit =
   let bi: Box[int] = Box(value = 1)
@@ -177,13 +179,13 @@ def apply[A, B](x: A, f: A -> B) -> B = f(x)
 record Box[T]
   value: T
 enum Option[T]
-  | none
-  | some(value: T)
+  | None
+  | Some(value: T)
 
 print(id::[int](9))
 let be = Box::[int](value = 99)
-let s = some::[int](value = 8)
-let qs = Option[int]::some(value = 13)
+let s = Some::[int](value = 8)
+let qs = Option[int]::Some(value = 13)
 let _r = apply::[int, int](10, fn(n: int) -> int => n + 1)
 print be.value
 ```
@@ -202,9 +204,9 @@ infer its type arguments from the expected enum type:
 
 ```agl
 enum Option[T]
-  | none
-  | some(value: T)
-let e: Option[int] = none          # T inferred from the annotation
+  | None
+  | Some(value: T)
+let e: Option[int] = None          # T inferred from the annotation
 ```
 
 Partial application placeholders participate in the same inference. Non-hole
@@ -287,14 +289,17 @@ Evidence may come from a later sibling argument or the enclosing result:
 
 ```agl
 enum Option[T]
-  | none
-  | some(value: T)
+  | None
+  | Some(value: T)
 def build[T](factory: (T) -> Option[T], value: T) -> Option[T] = factory(value)
-def fallback[T](value: Option[T], item: T) -> Option[T] = value
+def or-default[T](candidate: Option[T], fallback: T) -> T =
+  case candidate of
+    | None => fallback
+    | Some(value) => value
 
 program def main() -> unit =
-  let present = build(some, 7)
-  let missing = fallback(none, 7)
+  let present = build(Some, 7)
+  let chosen = or-default(None, 7)
 ```
 
 A binding is an inference boundary: `let f = id` is an error even if a later
@@ -309,30 +314,30 @@ for generic functions. A field-bearing member becomes a function value:
 
 ```agl
 enum Option[T]
-  | none
-  | some(value: T)
+  | None
+  | Some(value: T)
 
 program def main() -> unit =
-  let mk = some::[int]
+  let mk = Some::[int]
   let v = mk(7)
-  let z = Option[int]::none
+  let z = Option[int]::None
 ```
 
 A direct inline member application accepts either the type parameters that
 member captures or the owning enum's full parameter list. The full form
 substitutes its arguments through the member's captured parameters, so
-`none::[int]` constructs `Option::none` and `ok::[int, text]` constructs the
-`ok[int]` member of `Outcome[int, text]` when `ok` captures only `T`.
-`Option[int]::some` and `Option[int]::none` provide the same owner-applied
+`None::[int]` constructs `Option::None` and `Ok::[int, text]` constructs the
+`Ok[int]` member of `Outcome[int, text]` when `Ok` captures only `T`.
+`Option[int]::Some` and `Option[int]::None` provide the same owner-applied
 qualification. A standalone record constructor accepts only its own type
 parameters, and a referenced enum member is applied through its record
 constructor rather than through an enum owner. In this explicit
 applied-type-qualified constructor form, the applied type name must be
 immediately followed by `[` (`NAME[`):
-`Option[int]::some` is valid, but `Option [int]::some` is invalid. This rule
+`Option[int]::Some` is valid, but `Option [int]::Some` is invalid. This rule
 applies only to this constructor form; ordinary applied type expressions may
 have whitespace, so both `Option[int]` and `Option [int]` are valid type
-expressions. Both `Option` and the constructor (`some`/`none`) must be `NAME`,
+expressions. Both `Option` and the constructor (`Some`/`None`) must be `NAME`,
 not `OP_NAME`. The result is an ordinary function value for a field-bearing
 member or a constructed member-record value for a fieldless member. The latter can be
 passed as a value but is not callable; see
@@ -388,8 +393,8 @@ or mutual recursion when each recursive call uses the caller's type parameters
 unchanged and in declaration order:
 
 ```agl
-def first[T](value: T, more: bool) =
-  if more => first(value, false) else => value
+def last-of[T](values: array[T], index: int) =
+  if index + 1 < values.size() => last-of(values, index + 1) else => values[index]
 ```
 
 A recursive call at a different instantiation is polymorphic recursion and
@@ -513,22 +518,22 @@ it through the referenced record's own declaration path instead (for example,
 
 ```agl
 enum Option[T]
-  | none
-  | some(value: T)
+  | None
+  | Some(value: T)
 def describe_option(o: Option[int]) -> text =
   case o of
-    | Option::none => "missing"
-    | Option::some(value) => "found %{value}"
+    | Option::None => "missing"
+    | Option::Some(value) => "found %{value}"
 
 program def main() -> unit =
-  let d: Option[int] = Option::some(value = 11)
+  let d: Option[int] = Option::Some(value = 11)
   let line = describe_option(d)
   let _ = print line
 ```
 
 Qualification is accepted in expression, pattern, and `is`-test positions
-(`Option::some(value = 1)`, `case … | Option::none => …`,
-`probe is Option::some`). In an enum-member pattern or `is` test, the
+(`Option::Some(value = 1)`, `case … | Option::None => …`,
+`probe is Option::Some`). In an enum-member pattern or `is` test, the
 scrutinee's static enum type selects the member even when enums share a
 terminal name, so qualification is optional; when present, it must agree with
 that type. This is scrutinee-directed selection, not ordinary value-position

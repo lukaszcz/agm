@@ -131,12 +131,13 @@ arrays/dictionaries of JSON-shaped values. The literal `null` has type `json`.
 Records, enums, exceptions, and functions are **not** JSON-shaped.
 
 `null` is not assignable to `text`, `int`, `decimal`, `bool`, records, or
-enums. Use an enum for optionality:
+enums. Use an enum for optionality — the standard library's `Option[T]` is the
+general form of this shape:
 
 ```agl
 enum MaybeText
-  | None
-  | Some(value: text)
+  | Missing
+  | Present(value: text)
 ```
 
 ### `array[T]` and `dict[text, T]`
@@ -565,20 +566,20 @@ reference may apply the enum's type parameters, and aliases are transparent:
 record Saved(id: int)
 record Box[T](value: T)
 
-enum Result[T] = ::Saved | ::Box[T] | Fresh(value: T)
+enum Stored[T] = ::Saved | ::Box[T] | Fresh(value: T)
 ```
 
 A reference must name a record, including through a transparent type alias.
 An enum may not name the same member declaration twice, even with different
 type arguments, and its members must have distinct terminal names. The enum's
-scope contains only its inline declarations: `Result::Fresh` is available,
-while `Result::Saved` is not; `Saved` remains reachable at its original
+scope contains only its inline declarations: `Stored::Fresh` is available,
+while `Stored::Saved` is not; `Saved` remains reachable at its original
 declaration path. Referencing a record does not re-export it. Every member's
 terminal name is also an injected constructor and pattern candidate wherever
 the enum is visible.
 
 Each member is a record type. An inline member may appear in field, parameter,
-return, and generic-argument positions such as `array[Result::Fresh]`; a
+return, and generic-argument positions such as `array[Stored::Fresh]`; a
 referenced member retains its own record type and declaration path. Member
 records support record construction, field access, methods, `with`, casts, and
 standalone JSON decoding exactly like other records. `with` applies while a
@@ -604,21 +605,21 @@ regardless of arity. Single-value and multi-field members may both be
 constructed positionally or by name:
 
 ```agl
-enum Result
+enum Outcome
   | Ok(value: int)
   | Err(reason: text, fatal: bool)
 
-let ok = Result::Ok(42)
-let ok2 = Result::Ok(value = 42)
-let err = Result::Err("bad", false)
-let named_err = Result::Err(reason = "bad", fatal = false)
+let ok = Outcome::Ok(42)
+let ok2 = Outcome::Ok(value = 42)
+let err = Outcome::Err("bad", false)
+let named_err = Outcome::Err(reason = "bad", fatal = false)
 ```
 
 Zone markers and `var` are also available on inline member fields:
 
 ```agl
 enum Triple
-  | T(*, var a: int, b: int, c: int)   # all fields named-only
+  | Values(*, var a: int, b: int, c: int)   # all fields named-only
 ```
 
 Construction, qualification, and ambiguity rules are covered in
@@ -846,10 +847,10 @@ record Box[T]
   value: T
 
 enum Option[T]
-  | none
-  | some(value: T)
+  | None
+  | Some(value: T)
 
-type Pair[A, B] = dict[text, json]
+type Transform[A, B] = A -> B
 ```
 
 Each type parameter is an ordinary `name` in scope as a type throughout the

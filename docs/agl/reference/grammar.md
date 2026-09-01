@@ -529,12 +529,12 @@ pattern_field  ::= pattern              (* positional sub-pattern *)
 It has the lowest pattern precedence, may be chained, and cannot use `_` as
 its binder name. The binder is always a variable binder.
 
-A qualified member pattern (`Option::some(value)`,
-`module::Option::some(value)`, or `/module::Option::some(value)`) names a
+A qualified member pattern (`Option::Some(value)`,
+`module::Option::Some(value)`, or `/module::Option::Some(value)`) names a
 member record with `::`. A leading `/` is an anchored qualifier; without it,
 the qualifier is resolved as a suffix. The complete qualifier through `::` is
 byte-adjacent. A qualified pattern's argument list is optional
-(`Option::none` and `Option::none()` are both nullary matches) except at the
+(`Option::None` and `Option::None()` are both nullary matches) except at the
 root of a `let` pattern, where writing it or not distinguishes a match from a
 scoped binding — see [Bindings and scope](bindings-and-scope.md). Unqualified
 constructor ownership is selected by the scrutinee's static nominal type, even
@@ -674,15 +674,15 @@ A bare name atom is resolved by scope and position: it may name a variable, a
 record constructor, an injected enum-member constructor, or a generic
 `def`/constructor used as a first-class value. The typed postfix form carries
 explicit type arguments to a generic `def` or bare constructor
-(`id::[int](5)`, `some::[int](value = 1)`, `apply::[int, int](…)`), or
+(`id::[int](5)`, `Some::[int](value = 1)`, `apply::[int, int](…)`), or
 instantiates a generic function value (`id::[int]`). A member selected through
 its owning generic enum puts the type arguments on the type side
-(`Option[int]::some(value = 1)`).
+(`Option[int]::Some(value = 1)`).
 A qualifier that is a scope or module route rather than an owning type leaves
 the constructor's own spelling intact, so it carries type arguments exactly as
 the unqualified form does (`A::Pair::[int]`, `boxes::A::Box::[int]`). In that explicit
 type-qualified constructor form, the `[` is byte-adjacent to the applied type
-name: `Option[int]::some` is valid, while `Option [int]::some` is not. This
+name: `Option[int]::Some` is valid, while `Option [int]::Some` is not. This
 restriction does not apply to ordinary applied types, so both `Option[int]` and
 `Option [int]` are valid type expressions. Both the applied type name and
 constructor name are `NAME` (not `OP_NAME`). A `postfix "." field_name` is

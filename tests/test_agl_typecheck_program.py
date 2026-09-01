@@ -3469,21 +3469,21 @@ def test_cross_module_generic_enum_template_has_module_id(tmp_path: Path) -> Non
 
 
 def test_parameterized_alias_in_graph_mode(tmp_path: Path) -> None:
-    """A parameterized alias Pair[A,B] used in a record field typechecks via the graph path.
+    """A parameterized alias Loose[A,B] used in a record field typechecks via the graph path.
 
     Before the fix, collect_shells_only called register_alias(name, expr) without
     type_params. When the cross-module body resolver (_resolve_body_for_one) called
-    _ensure_built_record → resolve_type_expr(Pair[int,text]), it found Pair in
+    _ensure_built_record → resolve_type_expr(Loose[int,text]), it found Loose in
     _alias_targets with alias_params=() and raised 'requires 0 type argument(s)'.
     After the fix, type_params are threaded through collect_shells_only and the
     parameterized alias resolves correctly.
     """
     lib_id = ModuleId.from_path("lib")
     modules = {
-        # lib declares Pair[A,B] and uses it in a record field —
+        # lib declares Loose[A,B] and uses it in a record field —
         # this goes through _resolve_body_for_one → _ensure_built_record →
-        # resolve_type_expr(AppliedT("Pair", ...)) via the cross-module builder.
-        "lib": ("type Pair[A,B] = dict[text, json]\nrecord Wrapper\n  data: Pair[int,text]"),
+        # resolve_type_expr(AppliedT("Loose", ...)) via the cross-module builder.
+        "lib": ("type Loose[A,B] = dict[text, json]\nrecord Wrapper\n  data: Loose[int,text]"),
         "entry": ("import lib\n()"),
     }
     cg = _check_program(tmp_path, modules)

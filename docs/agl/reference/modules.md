@@ -154,7 +154,7 @@ enclosing region and nested regions.
 scope Vec
   import geom/planar::{Point}
   use Point::*
-  def norm(p: Point) -> float = mag(p)
+  def norm(p: Point) -> decimal = magnitude(p)
 end Vec
 ```
 

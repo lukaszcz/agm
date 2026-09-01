@@ -8105,7 +8105,7 @@ class TestTypeDeclarations:
         reject_type('type Wrap[A] = array[A]\nlet w: Wrap[int] = ["a"]\nw')
 
     def test_parameterized_alias_unused_params(self) -> None:
-        r = accept_type("type Pair[A, B] = dict[text, json]\nlet p: Pair[int, text] = {a: 1}\np")
+        r = accept_type("type Loose[A, B] = dict[text, json]\nlet p: Loose[int, text] = {a: 1}\np")
         decl = r.resolved.program.body.items[1]
         assert isinstance(decl, LetDecl)
         assert r.type_env.get_binding_type(decl.pattern.node_id) == DictType(value=JsonType())

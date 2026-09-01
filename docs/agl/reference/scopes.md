@@ -283,8 +283,8 @@ type is constructed through its full path or after a `use` selects its enclosing
 scope. A scope path is a route, not a type qualifier, so a scoped generic
 constructor takes explicit type arguments after its name just as an
 unqualified one does (`A::Pair::[int]`). An inline member may instead be
-selected from an applied enum owner (`Option[int]::some`); type arguments
-applied directly to a generic member follow that member (`Option::some::[int]`).
+selected from an applied enum owner (`Option[int]::Some`); type arguments
+applied directly to a generic member follow that member (`Option::Some::[int]`).
 
 ## Using a scope
 

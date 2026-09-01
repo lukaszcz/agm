@@ -62,10 +62,10 @@ may obtain its element type from an expected container type or another
 constraint in the same enclosing expression:
 
 ```agl
-def choose[T](left: T, right: T) -> T = right
+def second[T](left: T, right: T) -> T = right
 
 program def main() -> unit =
-  let items = choose([], [1])
+  let items = second([], [1])
 ```
 
 If no such constraint determines the element type before the enclosing
@@ -127,7 +127,7 @@ slots left to right; named arguments (`field = value`) follow. The optional
 value-position `::[…]` pins the type arguments of a generic constructor (see
 [Generic constructors](#generic-constructors)). In the explicit
 applied-type-qualified form, the `[` must be byte-adjacent to the type name:
-`Option[int]::some` is valid, while `Option [int]::some` is not. This
+`Option[int]::Some` is valid, while `Option [int]::Some` is not. This
 restriction does not apply to ordinary applied types, so both `Option[int]` and
 `Option [int]` are valid type expressions. This form requires `NAME` for both
 the applied type and constructor; it does not accept `OP_NAME` there.
@@ -185,14 +185,14 @@ unmarked member-record field is standard (positional or named), regardless of
 the number of fields.
 
 ```agl
-enum Result
+enum Outcome
   | Ok(value: int)
   | Err(reason: text, fatal: bool)
 
-let ok = Result::Ok(42)
-let ok2 = Result::Ok(value = 42)
-let err = Result::Err("bad", false)
-let named_err = Result::Err(reason = "bad", fatal = false)
+let ok = Outcome::Ok(42)
+let ok2 = Outcome::Ok(value = 42)
+let err = Outcome::Err("bad", false)
+let named_err = Outcome::Err(reason = "bad", fatal = false)
 ```
 
 ### Unqualified member ambiguity
@@ -205,13 +205,13 @@ with the member's declaring record or, for an inline member, its owning enum:
 
 ```agl
 enum Holder[T]
-  | empty
-  | tagged(by: T)
+  | Empty
+  | Tagged(by: T)
 
 enum Other
-  | tagged(name: text)
+  | Tagged(name: text)
 
-let h: Holder[int] = Holder::tagged(by = 7)   # qualified; unqualified 'tagged' is an error
+let h: Holder[int] = Holder::Tagged(by = 7)   # qualified; unqualified 'Tagged' is an error
 ```
 
 A nearer binding (a `let`/`var`/parameter of the same name) **shadows** a
@@ -259,12 +259,12 @@ owner-applied qualification) to determine the enum instantiation:
 
 ```agl
 enum Option[T]
-  | none
-  | some(value: T)
+  | None
+  | Some(value: T)
 
-let e: Option[int] = none          # T = int, fixed by the annotation
-let s = some::[int](value = 1)      # T pinned explicitly
-let q = Option[int]::some(value = 2) # qualification disambiguates the owner
+let e: Option[int] = None          # T = int, fixed by the annotation
+let s = Some::[int](value = 1)      # T pinned explicitly
+let q = Option[int]::Some(value = 2) # qualification disambiguates the owner
 ```
 
 ### Field-bearing constructors as values
@@ -296,7 +296,7 @@ print built.value
 A **generic** constructor used as a value needs expression-local evidence to
 fix its instantiation, exactly like a generic `def` used as a value. An
 annotation supplies that evidence, and a surrounding higher-order call may
-supply it through another argument or its result. A bare `let f = some` is a
+supply it through another argument or its result. A bare `let f = Some` is a
 static error because the binding has no such evidence.
 
 ### Fieldless constructor references
@@ -306,25 +306,26 @@ position. This applies uniformly to a standalone record and an enum member,
 whether bare or qualified:
 
 ```agl
-record R1()
-enum Tree
-  | Leaf
+record Marker()
+enum Status
+  | Ready
+  | Failed(reason: text)
 
-let record_value = R1
-let leaf = Leaf
-let qualified_leaf = Tree::Leaf
+let marker = Marker
+let ready = Ready
+let qualified_ready = Status::Ready
 ```
 
-Calls remain direct constructor calls, so `R1()` and `Tree::Leaf()` construct
-the same values. A fieldless constructor reference is not a `() -> T` function
+Calls remain direct constructor calls, so `Marker()` and `Status::Ready()`
+construct the same values as the bare references above. A fieldless constructor reference is not a `() -> T` function
 value. Supply an explicit function when one is required:
 
 ```agl
-record R1()
-def invoke(factory: () -> R1) -> R1 = factory()
+record Marker()
+def invoke(factory: () -> Marker) -> Marker = factory()
 
 program def main() -> unit =
-  let result = invoke(fn() => R1)
+  let result = invoke(fn() => Marker)
 ```
 
 A generic fieldless constructor may obtain its type arguments from context or
@@ -514,7 +515,7 @@ print review          # equivalent to print(review)
 ask "Hello?"          # equivalent to ask("Hello?")
 print res.stdout      # field-access path is valid sugar argument
 print classify(x)     # equivalent to print(classify(x))
-f Opt::Some(x = 1)      # equivalent to f(Opt::Some(x = 1))
+f Option::Some(value = 1)  # equivalent to f(Option::Some(value = 1))
 ```
 
 Application binds **tighter than all operators**:

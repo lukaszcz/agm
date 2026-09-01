@@ -83,7 +83,7 @@ positions.
 `for` clause) but are still accepted as **field names** (record/enum field
 definitions, named constructor arguments, dict shorthand keys, postfix field
 access, and pattern field keys). They cannot be used as variable, pattern, or
-catch binders. This preserves existing uses such as `tagged(by: value)`.
+catch binders. This preserves existing uses such as `Tagged(by: value)`.
 
 `with` (the record-update operator) is fully reserved: unlike `to`, `downto`,
 and `by`, it is not accepted as a field name.
@@ -242,7 +242,8 @@ identifier's first letter never classifies it: `option` and `Option`, `some`
 and `Some`, `box` and `Box` are all equally valid as type names, value names,
 constructors, or functions. Whether a name denotes a type or a value is
 determined entirely by how it is declared and the position it appears in, not
-by its spelling.
+by its spelling. Names are still matched exactly: `Some` and `some` are two
+distinct names, not two spellings of one.
 
 Type names and value names live in **separate namespaces**, so a `record` or
 `enum` declaration may introduce a type name and a same-spelled value

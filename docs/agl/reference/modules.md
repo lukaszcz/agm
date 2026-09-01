@@ -269,7 +269,30 @@ other module. Three have a language-level role:
   receiver methods ambient.
 
 Every other `std/*` module is imported explicitly and carries no special
-status.
+status:
+
+| Module | Provides |
+| ------ | -------- |
+| `std/option`, `std/pair`, `std/either`, `std/result` | `Option[T]`, `Pair[A, B]`, `Either[A, B]`, and `Result[T, E]`, all re-exported by `std/core` |
+| `std/array`, `std/dict`, `std/text`, `std/json` | the methods on the matching builtin type, plus that module's free functions |
+| `std/math` | numeric methods on `int` and `decimal`, aggregates, and constants |
+| `std/toml` | conversion between TOML documents and `json` |
+| `std/regex` | Python-compatible searching, rewriting, and splitting |
+| `std/time` | UTC clock, parsing, formatting, and sleeping |
+| `std/random` | a seedable pseudo-random sequence and UUIDs |
+| `std/path` | lexical path manipulation |
+| `std/fs` | UTF-8 filesystem and directory operations |
+| `std/env` | the ambient environment snapshot and its helpers |
+| `std/process` | process metadata and termination |
+
+Two naming conventions run through all of them. An operation that raises has a
+`?` counterpart returning `Option` where one is provided, and a `!` suffix
+marks an in-place operation — usually the counterpart of a copy-producing one,
+sometimes an inherently mutating operation with no copy-producing form. An
+operation with neither suffix may still mutate when that is its purpose, as
+`append` and `set` do.
+
+Each module's own source is its reference.
 
 ## Library modules and cycles
 

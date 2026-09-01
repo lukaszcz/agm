@@ -333,10 +333,12 @@ explicit import whose expansion includes `std/core` supplies the core
 contribution instead.
 
 `std/core` also re-exports `std/option`, `std/pair`, `std/either`, and
-`std/result`. Of those, `Option[T]` reaches the language surface: `null` is a
-value of type `json` only and ordinary AgL types are not nullable, so a value
-that may be absent has type `Option[T]`, and the `?` operations throughout the
-standard library return one.
+`std/result`, which supply the generic optional `Option[T]`, product
+`Pair[A, B]`, neutral sum `Either[A, B]`, and outcome `Result[T, E]`. Of those,
+`Option[T]` reaches the language surface: `null` is a value of type `json` only
+and ordinary AgL types are not nullable, so a value that may be absent has type
+`Option[T]`, and the `?` operations throughout the standard library return one.
+See [Modules](modules.md#standard-library-modules) for the rest of the library.
 
 ### `ExecResult`
 

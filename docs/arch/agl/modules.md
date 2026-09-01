@@ -37,15 +37,16 @@ graph carries both full import/export adjacency and explicit-source adjacency
 excluding loader injections, so execution uses the former while inventories use
 the latter.
 
-Modules resolved under a standard-library root are parsed once per process and
-served from a shared cache afterwards, since every compilation — `exec`,
-`check`, a REPL start, package validation — loads the whole library first.
-Cached modules draw node ids from a reserved high band ordinary graph
-allocation never reaches, so they stay disjoint from every graph they are
+Every imported module is parsed once per process and served from a shared cache
+afterwards. Nothing privileges the standard library: a module is cacheable
+because its source is unchanged, so user and package modules are served on the
+same terms. Cached modules draw node ids from a reserved high band ordinary
+graph allocation never reaches, so they stay disjoint from every graph they are
 served into, and they are cached before infix resolution, which still runs per
-graph. An entry is dropped as soon as its file's identity changes, so a
-replaced standard library is never served stale. User and package modules are
-never cached.
+graph. An entry is validated against the source text itself rather than the
+file's stat metadata, which cannot separate an in-place rewrite of the same
+length under a preserved modification time — the case a process that both
+writes and compiles modules actually reaches.
 
 Infix resolution runs per graph, but a caller that already resolved some of a
 graph's modules — the REPL, entry after entry — can name them, and their
@@ -103,33 +104,36 @@ inventory follow source-authored import/export edges, so a directly imported
 registry member stays visible while loader-injected modules and transitive
 ambient implementations do not.
 
-## The Library Image
+## The Artifact Cache
 
-Almost every compilation in a process sees the same standard library behind a
-different entry, so re-deriving the library's artifacts dominates the cost of a
-short program. `library_cache.py` is a process-global, bounded LRU store of what
-the passes derived for library modules: resolved modules, checked modules, and
-compiled match sites. Scope, typecheck, and match compilation each consult it
-through the `cached_modules`/`cached_checked_modules`/`cached_sites` parameters
-they already accepted for the REPL, and refresh it with what they produced; a
-caller-supplied image (a REPL session's) takes precedence.
+Almost every compilation in a process sees the same modules behind a different
+entry, so re-deriving their artifacts dominates the cost of a short program.
+`artifact_cache.py` is a process-global, bounded LRU store of what the passes
+derived per module: resolved modules, checked modules, and compiled match sites.
+Scope, typecheck, and match compilation each consult it through the
+`cached_modules`/`cached_checked_modules`/`cached_sites` parameters they already
+accepted for the REPL, and refresh it with what they produced; a caller-supplied
+image (a REPL session's) takes precedence.
 
-An artifact is reusable because it is a pure function of the library modules it
-was derived from, never of the entry. So each is retained alongside the loaded
-modules its derivation could read — the module, its transitive dependencies, and
-the ambient method modules — and is served again only while every one of those
-is the very same object. The parsed-module cache is what makes that identity
-hold across compilations. Nothing is keyed by root set: a root set naming a
-different standard library yields different loaded modules and misses, while one
-that merely adds unrelated user roots hits. Host capabilities are not derivable
-from modules, so they key the artifacts checked against them.
+An artifact is reusable because it is a pure function of the loaded modules it
+was derived from, never of the entry. So each is retained alongside the modules
+its derivation could read — the module, its transitive dependencies, and the
+ambient method modules — and is served again only while every one of those is
+the very same object. The parsed-module cache is what makes that identity hold
+across compilations. That identity condition is the whole condition, which is
+why nothing is keyed by root set and nothing is confined to the standard
+library: a root set naming different files yields different loaded modules and
+misses, one that merely adds unrelated roots hits, and a user module edited
+between two compilations reparses and so misses by construction. Only the entry
+module is excluded, being the thing compiled. Host capabilities are not
+derivable from modules, so they key the artifacts checked against them.
 
 ## Code Entry Points
 
 - `src/agm/agl/modules/` — module identities, roots, resolution, graph loading, and the
-  parsed standard-library cache (`parsed_module_cache.py`).
-- `src/agm/agl/library_cache.py` — the cross-compilation library artifact image; tests in
-  `tests/test_agl_library_image.py`.
+  parsed-module cache (`parsed_module_cache.py`); tests in `tests/test_agl_parsed_module_cache.py`.
+- `src/agm/agl/artifact_cache.py` — the cross-compilation artifact cache; tests in
+  `tests/test_agl_artifact_cache.py`.
 - `src/agm/agl/scope/` — import contributions, exports, and whole-program name resolution.
 - `src/agm/agl/pipeline.py` — orchestration of the program passes.
 - `src/agm/config/module_roots.py` and `src/agm/packages/` — configured and package-mounted roots.

@@ -378,8 +378,8 @@ class ReplSession:
         # retained across entries. Each pass reuses one only while the entry's
         # graph still holds the very AST object the artifact was derived from,
         # so a reparse, an override splice, or a redeclaration simply misses.
-        self._library_resolved_modules: dict[ModuleId, ResolvedModule] = {}
-        self._library_checked_modules: dict[ModuleId, CheckedModule] = {}
+        self._retained_resolved_modules: dict[ModuleId, ResolvedModule] = {}
+        self._retained_checked_modules: dict[ModuleId, CheckedModule] = {}
         self._last_match_compilation: MatchCompiledProgram | None = None
         # Imported params installed by successfully completed entries.  These
         # stay in the config-resolution inventory so later imports cannot make
@@ -553,8 +553,8 @@ class ReplSession:
                         if module.path is not None
                     ),
                     wildcard_matches=self._bootstrap_wildcard_matches(loaded.new_modules),
-                    resolved_modules=dict(self._library_resolved_modules),
-                    checked_modules=dict(self._library_checked_modules),
+                    resolved_modules=dict(self._retained_resolved_modules),
+                    checked_modules=dict(self._retained_checked_modules),
                 )
                 _bootstrap_cache.move_to_end(cache_key)
                 while len(_bootstrap_cache) > BOOTSTRAP_CACHE_MAX_ENTRIES:
@@ -688,8 +688,8 @@ class ReplSession:
         self._loaded_lib_modules.update(snapshot.modules)
         self._next_node_id = snapshot.next_node_id
         self._type_env = snapshot.type_env
-        self._library_resolved_modules = dict(snapshot.resolved_modules)
-        self._library_checked_modules = dict(snapshot.checked_modules)
+        self._retained_resolved_modules = dict(snapshot.resolved_modules)
+        self._retained_checked_modules = dict(snapshot.checked_modules)
 
     # ------------------------------------------------------------------
     # Core evaluation

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -92,16 +92,53 @@ def test_standard_library_module_is_parsed_once_across_compilations(
     assert second.program is first.program
 
 
-def test_non_standard_library_module_is_never_cached(
+def test_an_ordinary_module_is_parsed_once_across_compilations(
     tmp_path: Path, library_parses: list[str]
 ) -> None:
+    """Nothing about the standard library makes it uniquely cacheable.
+
+    An ordinary module under no standard-library root is reused on exactly the
+    same terms: for as long as its bytes are unchanged.
+    """
     path = _write_module(tmp_path, "lib/a", _LIB_SOURCE)
     roots = _loose_roots(tmp_path)
 
-    _load(roots)
-    _load(roots)
+    first = _load(roots)
+    second = _load(roots)
+
+    assert _library_parse_count(library_parses, path) == 1
+    assert second.program is first.program
+
+
+@pytest.mark.parametrize("build_roots", [_stdlib_roots, _loose_roots])
+def test_a_rewrite_under_a_restored_timestamp_is_reparsed(
+    tmp_path: Path, library_parses: list[str], build_roots: Callable[[Path], RootSet]
+) -> None:
+    """Stat metadata cannot separate these two sources, but the bytes can.
+
+    A file rewritten in place, to the same length, under its original
+    modification time presents an identical (mtime, size, inode) stamp. A cache
+    that trusted metadata would serve the stale parse; the window is narrow but
+    a process that both writes and compiles modules reaches it.
+    """
+    original = "def f() -> int = 1\n"
+    replacement = "def f() -> int = 7\n"
+    assert len(original) == len(replacement)
+    path = _write_module(tmp_path, "lib/a", original)
+    roots = build_roots(tmp_path)
+    before = path.stat()
+
+    first = _load(roots)
+    path.write_text(replacement)
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert path.stat().st_mtime_ns == before.st_mtime_ns
+    assert path.stat().st_ino == before.st_ino
+
+    second = _load(roots)
 
     assert _library_parse_count(library_parses, path) == 2
+    assert second.program is not first.program
+    assert "= 7" in second.source_text
 
 
 def test_modified_standard_library_file_is_reparsed(
@@ -281,7 +318,7 @@ def test_warm_cache_preserves_diagnostics() -> None:
 
 
 def _stub_builder(module: LoadedModule, consumed: int, calls: list[int]) -> object:
-    def build(start_id: int) -> tuple[LoadedModule, int]:
+    def build(start_id: int, source_text: str) -> tuple[LoadedModule, int]:
         calls.append(start_id)
         return module, start_id + consumed
 

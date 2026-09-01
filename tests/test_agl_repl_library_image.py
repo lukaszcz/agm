@@ -34,6 +34,8 @@ from agm.agl.scope import program as scope_program
 from agm.agl.semantics.values import BoolValue, IntValue, TextValue
 from agm.agl.syntax.spans import SourceId
 from agm.agl.typecheck import program as typecheck_program
+from agm.core import fs
+from agm.util.text import normalize_newlines
 
 _STDLIB = Path(__file__).resolve().parents[1] / "stdlib"
 
@@ -184,13 +186,13 @@ class TestLibraryReuse:
     def test_reused_library_resolutions_are_the_same_objects(self) -> None:
         session = _open_session()
         assert session.eval_entry("let x = 1").ok
-        first = dict(session._library_resolved_modules)
+        first = dict(session._retained_resolved_modules)
         assert first
 
         assert session.eval_entry("let y = 2").ok
 
         for module_id, resolved in first.items():
-            assert session._library_resolved_modules[module_id] is resolved
+            assert session._retained_resolved_modules[module_id] is resolved
 
     def test_a_reset_session_reuses_the_library_it_reloads(
         self, resolved_modules: list[ModuleId]
@@ -647,17 +649,18 @@ def _go_cold(monkeypatch: pytest.MonkeyPatch, *, reparse: bool) -> ReplSession:
     if reparse:
         next_reserved_id = [RESERVED_NODE_ID_BASE]
 
-        def cold_library_module(
+        def cold_parsed_module(
             module_id: ModuleId, path: Path, *, default_stdlib: bool, build: ModuleBuilder
         ) -> object:
-            module, next_reserved_id[0] = build(next_reserved_id[0])
+            source_text = normalize_newlines(fs.read_text(path))
+            module, next_reserved_id[0] = build(next_reserved_id[0], source_text)
             return module
 
-        monkeypatch.setattr(loader_module, "cached_library_module", cold_library_module)
+        monkeypatch.setattr(loader_module, "cached_parsed_module", cold_parsed_module)
 
     cold = _open_session()
-    cold._library_resolved_modules = _Discarding()
-    cold._library_checked_modules = _Discarding()
+    cold._retained_resolved_modules = _Discarding()
+    cold._retained_checked_modules = _Discarding()
     return cold
 
 

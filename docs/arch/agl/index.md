@@ -47,7 +47,8 @@ AgL has no separate statement category. Every construct — bindings, assignment
 ## Programs and Modules
 
 A **program** is the entry module together with its transitive import and re-export dependencies. A `program def` remains an ordinary callable function but is also a host-discoverable entry; `exec` selects an entry-module declaration after the linked modules initialize, within the evaluator's normal execution boundary. Unless the host disables it or a module explicitly imports `std/core` directly or through wildcard expansion, every loaded entry and library module except `std/core` itself receives the automatic `import std/core::*` prelude. The production pipeline always loads that program and runs program-level scope, typecheck, match compilation, and lowering passes. A **module** is one unit within the program. Scope, typecheck, match compilation, and lowering run only as whole-program passes over the graph; their per-module steps are internal workers with no standalone entry point, so no caller — production or test — can run them in a configuration the program passes do not. `ModuleGraph` remains the loader's data structure. Parameter inventories follow each selected program module's transitive import/export subgraph; their descriptors retain module identity for host CLI disambiguation. Module loading and program passes are described in [modules.md](modules.md), including the
-process-global library image that lets a second compilation skip the standard library's passes.
+process-global artifact cache that lets a second compilation skip the passes over every module
+whose source is unchanged.
 
 ## Package Map
 
@@ -68,7 +69,7 @@ process-global library image that lets a second compilation skip the standard li
 | REPL | `src/agm/agl/repl/` |
 | Pipeline orchestrator | `src/agm/agl/pipeline.py` |
 
-Package layering is enforced by a dependency-contract test (`tests/test_agl_dependencies.py`): `semantics` is the semantic foundation layer and the single owner of the AgL text-literal surface, `syntax` is a leaf over its own AST nodes, `typecheck` reaches only scope's output, the frontend layers beneath it, and the IR's id leaf (never the pipeline, parser, lowering, or evaluator), the IR depends only on its own data, module ids, and the pure shared engine-key catalog, the evaluator never imports the frontend, the runtime is eval-free, and the pipeline sits on top. `library_cache` is an
+Package layering is enforced by a dependency-contract test (`tests/test_agl_dependencies.py`): `semantics` is the semantic foundation layer and the single owner of the AgL text-literal surface, `syntax` is a leaf over its own AST nodes, `typecheck` reaches only scope's output, the frontend layers beneath it, and the IR's id leaf (never the pipeline, parser, lowering, or evaluator), the IR depends only on its own data, module ids, and the pure shared engine-key catalog, the evaluator never imports the frontend, the runtime is eval-free, and the pipeline sits on top. `artifact_cache` is an
 import-free leaf, so the scope and typecheck passes consult it without coupling to another layer.
 
 ## What To Read Next

@@ -18,16 +18,16 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, TypeVar
 
+from agm.agl.artifact_cache import (
+    retain_match_sites,
+    retained_match_sites,
+    retained_module_sources,
+)
 from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
 from agm.agl.eval.ir_interpreter import (
     HostConfigurationError,
     IrInterpreter,
     ParameterDefaultCycleError,
-)
-from agm.agl.library_cache import (
-    library_match_sites,
-    library_module_sources,
-    retain_library_match_sites,
 )
 from agm.agl.recursion import NestingTooDeepError, frontend_recursion_boundary
 from agm.agl.runtime.agents import AgentFn
@@ -1806,7 +1806,7 @@ def _run_matchcompile_program(
 ) -> "tuple[MatchCompiledProgram | None, tuple[Diagnostic, ...]]":
     """Run program-level match compilation without raising.
 
-    The sites an earlier compilation of the same library left behind are offered
+    The sites an earlier compilation of the same modules left behind are offered
     per module; each is carried over only while it still holds the very checked
     module this program carries.
     """
@@ -1817,16 +1817,16 @@ def _run_matchcompile_program(
         diagnostics_from_match_issues,
     )
 
-    library = library_module_sources(graph)
+    retainable = retained_module_sources(graph)
     try:
-        result = compile_program_matches(checked, library_match_sites(library, capabilities))
+        result = compile_program_matches(checked, retained_match_sites(retainable, capabilities))
         if result.compiled is None:
             return None, diagnostics_from_match_issues(result.issues)
         if not isinstance(result.compiled, MatchCompiledProgram):
             raise TypeError("program match compilation returned a module artifact")
     except Exception as exc:
         return None, (Diagnostic(message=f"Match compilation error: {exc}", line=1),)
-    retain_library_match_sites(library, capabilities, cached_module_sites(result.compiled))
+    retain_match_sites(retainable, capabilities, cached_module_sites(result.compiled))
     return result.compiled, ()
 
 

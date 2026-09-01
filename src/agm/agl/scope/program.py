@@ -30,10 +30,10 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-from agm.agl.library_cache import (
-    library_module_sources,
-    resolved_library_modules,
-    retain_resolved_library_modules,
+from agm.agl.artifact_cache import (
+    retain_resolved_modules,
+    retained_module_sources,
+    retained_resolved_modules,
 )
 from agm.agl.modules.ids import ModuleId
 
@@ -843,8 +843,8 @@ def resolve_program(
         session's own image. A cached entry is reused only while it holds the
         very ``Program`` node this graph carries, so any reparse, splice or
         redeclaration misses it. Whatever this leaves uncovered is looked up in
-        the process-global library image, and this pass's own library results
-        are retained there for the next compilation.
+        the process-global artifact cache, and this pass's own results are
+        retained there for the next compilation.
 
     Returns
     -------
@@ -860,8 +860,8 @@ def resolve_program(
     # ------------------------------------------------------------------
     # Step 1: Build local export maps (own declarations only).
     # ------------------------------------------------------------------
-    library = library_module_sources(graph)
-    reusable: dict[ModuleId, ResolvedModule] = dict(resolved_library_modules(library))
+    retainable = retained_module_sources(graph)
+    reusable: dict[ModuleId, ResolvedModule] = dict(retained_resolved_modules(retainable))
     if cached_modules is not None:
         reusable.update(cached_modules)
     cached_modules = reusable
@@ -1059,7 +1059,7 @@ def resolve_program(
             source_text=graph.modules[mid].source_text,
         )
 
-    retain_resolved_library_modules(library, resolved_modules)
+    retain_resolved_modules(retainable, resolved_modules)
     return ResolvedProgram(
         modules=resolved_modules,
         entry_id=graph.entry_id,

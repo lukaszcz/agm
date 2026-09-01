@@ -1,14 +1,17 @@
-"""A one-shot compilation reuses the library image an earlier one left behind.
+"""A one-shot compilation reuses the artifacts an earlier one left behind.
 
 ``agm exec``, ``agm check`` and every other non-REPL caller compiles a whole
-program: the entry module plus the standard library behind it. The library is
-the same on every compilation in a process, so its scope resolution, type
-checking and compiled match sites are reused rather than recomputed.
+program: the entry module plus everything behind it. Whatever of that is
+unchanged from the last compilation in this process -- the standard library
+almost always, the program's own imports whenever nothing edited them -- has its
+scope resolution, type checking and compiled match sites reused rather than
+recomputed.
 
 These tests pin both halves of that contract: that the reuse fires (a later
-compilation does no library work), and that it stops wherever the artifacts
-would no longer describe the library in front of it -- a different root set, a
-different host capability set, or a discarded image.
+compilation does no work for a module it already has), and that it stops
+wherever the artifacts would no longer describe the modules in front of it -- a
+different root set, an edited file, a different host capability set, or a
+discarded image.
 """
 
 from __future__ import annotations
@@ -19,8 +22,8 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl import library_cache
-from agm.agl.library_cache import clear_library_image_cache
+from agm.agl import artifact_cache
+from agm.agl.artifact_cache import clear_retained_artifacts
 from agm.agl.matchcompile import stage as match_stage
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.roots import RootSet, assemble_roots
@@ -31,14 +34,15 @@ from agm.agl.typecheck import program as typecheck_program
 from tests._agl_helpers import run_inline_command
 
 _STDLIB = Path(__file__).resolve().parents[1] / "stdlib"
+_HELPER_ID = ModuleId.from_path("helper")
 
 
 @pytest.fixture(autouse=True)
 def _cold_image() -> Iterator[None]:
     """Give every test an empty image and leave none behind."""
-    clear_library_image_cache()
+    clear_retained_artifacts()
     yield
-    clear_library_image_cache()
+    clear_retained_artifacts()
 
 
 @pytest.fixture
@@ -90,7 +94,7 @@ def compiled_match_owners(monkeypatch: pytest.MonkeyPatch) -> list[ModuleId]:
 
 
 def _library(module_ids: list[ModuleId]) -> list[ModuleId]:
-    """Keep only the standard-library modules — the ones the image is about."""
+    """Keep only the standard-library modules — the ones these cases are about."""
     return [module_id for module_id in module_ids if module_id.segments[:1] == ("std",)]
 
 
@@ -156,6 +160,53 @@ class TestLibraryReuse:
 # ---------------------------------------------------------------------------
 
 
+class TestOrdinaryModuleReuse:
+    """A user module is reused on exactly the terms a library module is.
+
+    Nothing about the standard library makes it uniquely reusable. What makes
+    an artifact reusable is that the modules it was derived from are unchanged,
+    which an ordinary module satisfies just as often between two compilations
+    that did not touch it.
+    """
+
+    def test_a_later_compilation_reuses_an_unchanged_user_module(
+        self,
+        tmp_path: Path,
+        resolved_modules: list[ModuleId],
+        checked_modules: list[ModuleId],
+    ) -> None:
+        (tmp_path / "helper.agl").write_text("def helper() -> int = 1\n")
+        roots = _roots(tmp_path, stdlib_root=_STDLIB)
+        _compile("import helper::*\nhelper()\n", roots=roots)
+        resolved_modules.clear()
+        checked_modules.clear()
+
+        _compile("import helper::*\nhelper() + 1\n", roots=roots)
+
+        assert _HELPER_ID not in resolved_modules
+        assert _HELPER_ID not in checked_modules
+
+    def test_an_edited_user_module_is_derived_afresh(
+        self,
+        tmp_path: Path,
+        resolved_modules: list[ModuleId],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The rewrite below keeps the byte count, so only the text separates them."""
+        path = tmp_path / "helper.agl"
+        path.write_text("def helper() -> int = 1\n")
+        roots = _roots(tmp_path, stdlib_root=_STDLIB)
+        _compile("import helper::*\nprint(helper())\n", roots=roots)
+        resolved_modules.clear()
+        capsys.readouterr()
+
+        path.write_text("def helper() -> int = 7\n")
+        _compile("import helper::*\nprint(helper())\n", roots=roots)
+
+        assert _HELPER_ID in resolved_modules
+        assert "7" in capsys.readouterr().out
+
+
 class _NullCodec(OutputCodec):
     """A host codec whose only purpose is to give a driver distinct capabilities."""
 
@@ -176,7 +227,7 @@ class TestLibraryInvalidation:
         self, resolved_modules: list[ModuleId], compiled_match_owners: list[ModuleId]
     ) -> None:
         _compile("let x = 1\n")
-        clear_library_image_cache()
+        clear_retained_artifacts()
         resolved_modules.clear()
         compiled_match_owners.clear()
 
@@ -254,8 +305,8 @@ def test_the_image_is_bounded_and_evicts_the_least_recently_used() -> None:
     The store is exercised directly: filling the production cap through real
     compilations would mean building hundreds of distinct standard libraries.
     """
-    store: library_cache._ArtifactStore[str] = library_cache._ArtifactStore(capacity=2)
-    sources: library_cache.Sources = ()
+    store: artifact_cache._ArtifactStore[str] = artifact_cache._ArtifactStore(capacity=2)
+    sources: artifact_cache.Sources = ()
     store.put(("a",), sources, "first")
     store.put(("b",), sources, "second")
     assert store.get(("a",), sources) == "first"

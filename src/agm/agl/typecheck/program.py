@@ -60,13 +60,13 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Generic, Mapping, TypeVar, cast
 
+from agm.agl.artifact_cache import (
+    retain_checked_modules,
+    retained_checked_modules,
+    retained_module_sources,
+)
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
-from agm.agl.library_cache import (
-    checked_library_modules,
-    library_module_sources,
-    retain_checked_library_modules,
-)
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import ImportEnv
 from agm.agl.scope.program import ResolvedProgram
@@ -979,14 +979,14 @@ def check_program(
         installed.  Used by the REPL program context to make prior session
         bindings available in program entries.
     cached_checked_modules:
-        Checked library modules from an unchanged REPL bootstrap image. Their
+        Checked non-entry modules from an unchanged REPL bootstrap image. Their
         bodies are immutable and can be reused after this call has rebuilt the
         whole-program declaration and signature context for the fresh entry.
         Whatever this leaves uncovered is looked up in the process-global
-        library image, and this pass's own library results are retained there
-        for the next compilation -- except under an ``entry_seed_env``, whose
-        session types this call seeds the shared type table from, so its
-        results are not a function of the library alone.
+        artifact cache, and this pass's own results are retained there for the
+        next compilation -- except under an ``entry_seed_env``, whose session
+        types this call seeds the shared type table from, so its results are
+        not a function of the loaded modules alone.
 
     Returns
     -------
@@ -998,10 +998,12 @@ def check_program(
     AglTypeError
         On the first static type violation in any module (first-error abort).
     """
-    # An earlier compilation in this process already checked the library behind
+    # An earlier compilation in this process already checked the modules behind
     # this program; a caller-supplied image (a REPL session's) wins over it.
-    library = library_module_sources(resolved.graph)
-    reusable: dict[ModuleId, CheckedModule] = dict(checked_library_modules(library, capabilities))
+    retainable = retained_module_sources(resolved.graph)
+    reusable: dict[ModuleId, CheckedModule] = dict(
+        retained_checked_modules(retainable, capabilities)
+    )
     if cached_checked_modules is not None:
         reusable.update(cached_checked_modules)
     cached_checked_modules = reusable
@@ -1173,5 +1175,5 @@ def check_program(
     if self_validation_enabled():
         assert_checked_program_closed(checked, frozenset(reused_modules))
     if entry_seed_env is None:
-        retain_checked_library_modules(library, capabilities, checked_modules)
+        retain_checked_modules(retainable, capabilities, checked_modules)
     return checked

@@ -53,8 +53,8 @@ class EntryPipelineCtx(Protocol):
     """The minimal ReplSession surface the program pipeline needs."""
 
     _loaded_lib_modules: dict[ModuleId, LoadedModule]
-    _library_resolved_modules: dict[ModuleId, ResolvedModule]
-    _library_checked_modules: dict[ModuleId, CheckedModule]
+    _retained_resolved_modules: dict[ModuleId, ResolvedModule]
+    _retained_checked_modules: dict[ModuleId, CheckedModule]
     _last_match_compilation: MatchCompiledProgram | None
     _active_imported_params: dict[SymbolId, IrParam]
     _accumulated_imports: list[tuple[ImportDecl, ...]]
@@ -250,9 +250,9 @@ class EntryPipeline:
             resolved_program,
             host_env.capabilities,
             entry_seed_env=self._ctx._type_env,
-            cached_checked_modules=self._ctx._library_checked_modules,
+            cached_checked_modules=self._ctx._retained_checked_modules,
         )
-        self._retain_library_image(resolved_program, checked_program)
+        self._retain_module_artifacts(resolved_program, checked_program)
         return LoadedCheckedProgram(
             checked_program=checked_program,
             new_modules=new_modules,
@@ -425,15 +425,15 @@ class EntryPipeline:
             resolved_program,
             host_env.capabilities,
             entry_seed_env=self._ctx._type_env,
-            cached_checked_modules=self._ctx._library_checked_modules,
+            cached_checked_modules=self._ctx._retained_checked_modules,
         )
 
-    def _retain_library_image(
+    def _retain_module_artifacts(
         self, resolved_program: "ResolvedProgram", checked_program: "CheckedProgram"
     ) -> None:
         """Retain every non-entry module of this compilation for later entries.
 
-        Scope resolution and type checking of a library module depend only on
+        Scope resolution and type checking of a module depend only on
         that module and the modules it imports, so a later entry that carries
         the same ``Program`` object reuses the artifact instead of rebuilding
         it. The reuse guards live in the passes themselves and key on object
@@ -442,8 +442,8 @@ class EntryPipeline:
         for module_id, checked in checked_program.modules.items():
             if module_id.is_entry:
                 continue
-            self._ctx._library_resolved_modules[module_id] = resolved_program.modules[module_id]
-            self._ctx._library_checked_modules[module_id] = checked
+            self._ctx._retained_resolved_modules[module_id] = resolved_program.modules[module_id]
+            self._ctx._retained_checked_modules[module_id] = checked
 
     def _resolve_program(
         self,
@@ -465,7 +465,7 @@ class EntryPipeline:
             entry_repl_session_scope=self._ctx._session_scope,
             entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,
             entry_repl_session_type_paths=self._ctx._session_type_paths,
-            cached_modules=self._ctx._library_resolved_modules,
+            cached_modules=self._ctx._retained_resolved_modules,
         )
 
     @staticmethod

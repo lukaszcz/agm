@@ -162,7 +162,7 @@ def _capability_key(capabilities: HostCapabilities) -> tuple[object, ...]:
 
 
 @pytest.fixture(scope="module", autouse=True)
-def share_checked_library_modules() -> Iterator[None]:
+def share_retained_checked_modules() -> Iterator[None]:
     """Type-check the standard library once per capability catalog, not per test.
 
     Every helper in :mod:`tests.agl.module_graph` builds a real module graph

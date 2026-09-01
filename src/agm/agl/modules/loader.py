@@ -44,7 +44,7 @@ from agm.agl.modules.parsed_module_cache import (
     InfixSignature,
     cached_chain_scope_paths,
     cached_infix_resolution,
-    cached_library_module,
+    cached_parsed_module,
 )
 from agm.agl.modules.resolver import expand_wildcard, resolve_module
 from agm.agl.modules.roots import RootSet
@@ -739,18 +739,9 @@ def _raw_chain_scope_paths(program: syntax.Program) -> dict[int, _OperatorPath]:
     return paths
 
 
-def _library_module(graph: ModuleGraph, loaded: LoadedModule) -> bool:
-    """Return whether *loaded* came from one of the graph's standard-library roots."""
-    return loaded.path is not None and graph.roots.is_standard_library_path(loaded.path)
-
-
-def _chain_scope_paths(graph: ModuleGraph, loaded: LoadedModule) -> dict[int, _OperatorPath]:
-    """Return the scope owning each raw chain, memoized for a library module."""
-    if _library_module(graph, loaded):
-        return cached_chain_scope_paths(
-            loaded, build=lambda: _raw_chain_scope_paths(loaded.program)
-        )
-    return _raw_chain_scope_paths(loaded.program)
+def _chain_scope_paths(loaded: LoadedModule) -> dict[int, _OperatorPath]:
+    """Return the scope owning each raw chain, memoized on the parsed module."""
+    return cached_chain_scope_paths(loaded, build=lambda: _raw_chain_scope_paths(loaded.program))
 
 
 def _reject_obvious_scoped_reexport_cycles(graph: ModuleGraph) -> None:
@@ -890,7 +881,7 @@ def _resolve_graph_infix(
         chain_tables: dict[int, dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]]] = {}
         chain_conflicts: dict[int, frozenset[str]] = {}
         own_names = {decl.name for decl in declarations[mid]}
-        for chain_id, scope_path in _chain_scope_paths(graph, loaded).items():
+        for chain_id, scope_path in _chain_scope_paths(loaded).items():
             ambient: dict[str, _InfixFixity] = {}
             conflicts: set[str] = set()
             for name, origins in visible_at(mid, scope_path).items():
@@ -931,19 +922,14 @@ def _resolve_graph_infix(
                 else replace(loaded, program=resolved_program)
             )
 
-        # A library module's rewrite is the same on every compilation that shows
-        # it the same operators, and repeating it would hand the later passes a
-        # fresh program object, defeating their identity-keyed reuse guards.
-        if _library_module(graph, loaded):
-            modules[mid] = cached_infix_resolution(
-                loaded,
-                signature=_infix_signature(
-                    root_table, root_conflicts, chain_tables, chain_conflicts
-                ),
-                resolve=resolve,
-            )
-        else:
-            modules[mid] = resolve()
+        # A module's rewrite is the same on every compilation that shows it the
+        # same operators, and repeating it would hand the later passes a fresh
+        # program object, defeating their identity-keyed reuse guards.
+        modules[mid] = cached_infix_resolution(
+            loaded,
+            signature=_infix_signature(root_table, root_conflicts, chain_tables, chain_conflicts),
+            resolve=resolve,
+        )
     return replace(graph, modules=modules, entry_infix_ambient=entry_infix_ambient)
 
 
@@ -1023,21 +1009,22 @@ def _tarjan_sccs(
     return _compute_sccs(graph, key=_mid_sort_key)
 
 
-def _parse_library_module(
+def _parse_imported_module(
     module_id: ModuleId,
     path: Path,
     start_id: int,
+    source_text: str,
     *,
     default_stdlib: bool,
 ) -> tuple[LoadedModule, int]:
-    """Read and parse one library module, seeding its node ids from *start_id*.
+    """Parse one imported module, seeding its node ids from *start_id*.
 
     Returns the module together with the first node id it did not consume.
-    This is the whole per-module load step, so the standard-library module
-    cache can own an identical module without the loader duplicating it.
+    This is the whole per-module load step, so the parsed-module cache can own
+    an identical module without the loader duplicating it; the cache reads the
+    file and passes the text in, so the source is read exactly once.
     """
     file_source_id = SourceId(label=str(path))
-    source_text = normalize_newlines(fs.read_text(path))
     with spaced_qualifier_collector() as spaced_sink:
         program, next_id = parse_program_seeded(
             source_text,
@@ -1169,13 +1156,8 @@ def _load_into_graph(
         if canonical_entry_path is not None and canon_path == canonical_entry_path:
             raise ImportEntryError(mid, canonical_entry_path, span=decl.span)
 
-        build = partial(_parse_library_module, mid, canon_path, default_stdlib=default_stdlib)
-        if roots.is_standard_library_path(canon_path):
-            loaded = cached_library_module(
-                mid, canon_path, default_stdlib=default_stdlib, build=build
-            )
-        else:
-            loaded, next_id = build(next_id)
+        build = partial(_parse_imported_module, mid, canon_path, default_stdlib=default_stdlib)
+        loaded = cached_parsed_module(mid, canon_path, default_stdlib=default_stdlib, build=build)
         modules[mid] = loaded
         newly_loaded[mid] = loaded
         _resolve_dependencies(mid, (*loaded.imports, *loaded.export_decls))

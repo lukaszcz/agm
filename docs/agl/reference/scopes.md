@@ -31,8 +31,15 @@ program def main() -> unit =
 
 The closer is mandatory and must repeat the complete header path: `scope
 A::B` closes with `end A::B`. A multi-segment region is equivalent to nested
-single-segment regions. Repeating a region, or mixing a region with declaration
-paths, extends the same scope:
+single-segment regions.
+
+A region's items may either sit in an indented block under the header, as
+above, or share the header's own layout level. Both spell the same region; the
+closer stands at the header's column either way. The indented form is the one
+this project writes.
+
+Repeating a region, or mixing a region with declaration paths, extends the same
+scope:
 
 ```agl
 scope Text

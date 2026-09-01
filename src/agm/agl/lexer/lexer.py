@@ -236,10 +236,14 @@ def _is_scope_path(tokens: list[Token], index: int) -> bool:
 
 
 def _is_scope_closer(tokens: list[Token], index: int) -> bool:
-    """Whether ``tokens[index]`` is followed by a complete, line-ending scope path."""
+    """Whether ``tokens[index]`` is followed by a complete, line-ending scope path.
+
+    An indented region body dedents before its closer, so a ``_DEDENT`` ends
+    the path exactly as a newline does.
+    """
     path_end = _scope_path_end(tokens, index + 1)
     return path_end is not None and (
-        path_end == len(tokens) or tokens[path_end].type in {"_NEWLINE", "SEMICOLON"}
+        path_end == len(tokens) or tokens[path_end].type in {"_NEWLINE", "SEMICOLON", "_DEDENT"}
     )
 
 

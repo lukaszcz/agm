@@ -150,12 +150,14 @@ _sep: _NEWLINE | SEMICOLON
 // Scope regions
 // ---------------------------------------------------------------------------
 
-// A region is flat rather than indented: its items share the enclosing layout
-// level and a matching ``end`` closes it. Scope paths arrive as a sequence of
-// MODQUAL tokens followed by a final NAME because the lexer merges each tight
-// ``NAME::`` run before parsing.
+// A region's items either share the enclosing layout level or sit in an
+// indented block under the header; either way a matching ``end`` closes it at
+// the header's own level. Scope paths arrive as a sequence of MODQUAL tokens
+// followed by a final NAME because the lexer merges each tight ``NAME::`` run
+// before parsing.
 scope_region: SCOPE scope_path _sep END scope_path
             | SCOPE scope_path _sep scope_item (_sep scope_item)* _sep? END scope_path
+            | SCOPE scope_path _INDENT scope_item (_sep scope_item)* _sep? _DEDENT _sep END scope_path
 
 scope_path: MODQUAL* NAME
 

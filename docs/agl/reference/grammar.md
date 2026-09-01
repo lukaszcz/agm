@@ -53,6 +53,9 @@ a loop's `until` condition.
 scope_region ::= "scope" scope_path (NEWLINE | ";")
                  [scope_item ((NEWLINE | ";") scope_item)* (NEWLINE | ";")?]
                  "end" scope_path
+               | "scope" scope_path INDENT
+                 scope_item ((NEWLINE | ";") scope_item)* (NEWLINE | ";")?
+                 DEDENT NEWLINE "end" scope_path
 scope_path   ::= NAME ("::" NAME)*
 scope_item   ::= scope_region | use_decl
                | import_decl                  (* header position only *)
@@ -67,7 +70,9 @@ scope_item   ::= scope_region | use_decl
 ```
 
 A scope region has a mandatory matching closer: `scope A::B` closes with
-`end A::B`. Regions may appear only as module-root items or as items of another
+`end A::B`. Its items either share the header's layout level or sit in an
+indented block beneath it; the closer stands at the header's own level either
+way. Regions may appear only as module-root items or as items of another
 scope region. They may nest, and a multi-segment header is equivalent to
 nested single-segment regions. Scope
 regions contain nested regions, header `use` and `import` declarations,

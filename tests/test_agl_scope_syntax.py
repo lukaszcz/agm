@@ -71,6 +71,75 @@ def test_nested_region_declarations_accumulate_the_enclosing_scope_path() -> Non
 
 
 # ---------------------------------------------------------------------------
+# Region body layout
+# ---------------------------------------------------------------------------
+
+
+def test_an_indented_region_body_parses_as_the_flat_one_does() -> None:
+    """A region's items may sit in an indented block under their `scope` header."""
+    indented = parse_program("scope A\n  def value() -> int = 0\nend A")
+    flat = parse_program("scope A\ndef value() -> int = 0\nend A")
+
+    assert indented == flat
+
+
+def test_a_nested_indented_region_closes_at_its_own_level() -> None:
+    """An inner `end` sits one level in, before the outer block's dedent."""
+    source = (
+        "scope Outer\n"
+        "  def a() -> int = 1\n"
+        "  scope Inner\n"
+        "    def b() -> int = 2\n"
+        "  end Inner\n"
+        "end Outer"
+    )
+
+    program = parse_program(source)
+
+    (outer,) = program.body.items
+    assert isinstance(outer, ScopeRegion)
+    inner = outer.items[1]
+    assert isinstance(inner, ScopeRegion)
+    (declaration,) = inner.items
+    assert isinstance(declaration, FuncDef)
+    assert declaration.name == "b"
+    assert [segment.name for segment in declaration.scope_path] == ["Outer", "Inner"]
+
+
+def test_a_region_body_may_mix_indented_and_flat_nesting() -> None:
+    """An indented body admits a flat inner region, and the reverse."""
+    indented_outer = parse_program(
+        "scope Outer\n  scope Inner\n  def b() -> int = 2\n  end Inner\nend Outer"
+    )
+    flat_outer = parse_program(
+        "scope Outer\nscope Inner\n  def b() -> int = 2\nend Inner\nend Outer"
+    )
+
+    assert indented_outer == flat_outer
+
+
+def test_an_indented_region_body_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    source = "scope A\n  def value() -> int = 7\nend A\n\nprint(A::value())"
+
+    assert run_inline_command(PipelineDriver(), source).ok is True
+    assert capsys.readouterr().out == "7\n"
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        # The closer is deeper than the body it closes.
+        "scope A\n  def value() -> int = 0\n  end A",
+        # The closer never arrives.
+        "scope A\n  def value() -> int = 0",
+    ),
+)
+def test_an_indented_region_still_requires_a_closer_at_the_header_level(source: str) -> None:
+    with pytest.raises(AglSyntaxError):
+        parse_program(source)
+
+
+# ---------------------------------------------------------------------------
 # `let`/`var` binder paths
 # ---------------------------------------------------------------------------
 

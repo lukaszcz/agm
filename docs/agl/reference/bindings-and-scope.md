@@ -327,7 +327,7 @@ program point onward, exactly like any `var` mutation. The `Option[text]` settin
 are set with `Some("…")` or `None`.
 
 Other standard-library modules may use `builtin var` for their own ambient
-host values. For example, [`std/env`](modules.md#stdenv) exposes an in-memory
+host values. For example, [`std/env`](../standard-library.md#stdenv) exposes an in-memory
 process-environment snapshot. See [Host environment](host-environment.md) for
 the engine settings table, their types and defaults, and how a source write
 combines with the host's CLI and config-file layers.

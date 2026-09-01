@@ -1,6 +1,6 @@
 # Standard Library
 
-[← Index](index.md)
+[← Language reference](reference/index.md)
 
 Standard-library modules are imported explicitly. `std/core` is the automatic
 prelude unless the host disables it. When that prelude is enabled, the loader
@@ -18,6 +18,12 @@ operation, usually the counterpart of a copy-producing operation; it can also
 name an inherently mutating operation with no copy-producing counterpart, such
 as `shuffle!`. Operations without either suffix may still mutate when their
 purpose is inherently mutating, such as `append` or `set`.
+
+A plain `import std/M` keeps a module's free functions qualified
+(`math::sum([1, 2, 3])`); `import std/M::*` also makes them bare. Methods are
+reached differently: they are ambient when the prelude injects
+`std/builtin-methods`, and otherwise require their owning module to be
+imported.
 
 ## `std/builtin-methods`
 
@@ -68,8 +74,8 @@ exec(command: text, env: Environ = std/env::environ,
 `copy` makes a deep copy that preserves sharing and cycles; `shallow_copy`
 copies only the outer value. `resource` reads a declared module resource and
 `resource-dir` returns that resource root. `ask`, `ask-request`, and `exec`
-are described in [Agent calls](agent-calls.md) and
-[Shell execution](shell-execution.md).
+are described in [Agent calls](reference/agent-calls.md) and
+[Shell execution](reference/shell-execution.md).
 
 `Exception` is the abstract, nonconstructible base type. Its named-only
 `message: text` field is inherited by every concrete exception. `std/core`
@@ -100,11 +106,15 @@ RangeError(message: text)
 CyclicValueError(message: text)
 ```
 
-See [Exceptions](exceptions.md) for their use.
+See [Exceptions](reference/exceptions.md) for their use.
 
 The infix functions are `|>[A, B](A, (A) -> B) -> B`,
 `<|[A, B]((A) -> B, A) -> B`, `>>[A, B, C]((A) -> B, (B) -> C) -> (A) -> C`,
-and `<<[A, B, C]((B) -> C, (A) -> B) -> (A) -> C`.
+and `<<[A, B, C]((B) -> C, (A) -> B) -> (A) -> C`. `|>` is left-associative at
+priority 5 and `<|` right-associative at priority 4, so `increment <| 2 |>
+double` is `increment(double(2))`; `>>` and `<<` compose left-to-right and
+right-to-left at priority 60, and a chain cannot mix them without parentheses.
+See [Operator precedence](reference/lexical-structure.md#operator-precedence).
 
 ## `std/option`
 
@@ -123,7 +133,14 @@ Option::each(f: (T) -> unit) -> unit
 Option::to-result[E](error: E) -> Result[T, E]
 ```
 
-`unwrap` raises `UnwrapError` for `None`.
+`null` is a value of type `json` only; ordinary AgL types are not nullable, so
+`Option[T]` is how an absent value is expressed. `map` transforms a present
+value, `and-then` chains an operation returning an `Option`, `filter` keeps a
+present value only when its predicate succeeds, and `or-else` supplies an
+alternative. `with-default` returns the contained value or its argument, while
+`unwrap` returns it or raises `UnwrapError`. `each` runs its callback only for
+`Some`, and `to-result(error)` maps `Some(value)` to `Ok(value)` and `None` to
+`Err(error)`.
 
 ## `std/pair`
 
@@ -133,6 +150,9 @@ Pair::map-first[C](f: (A) -> C) -> Pair[C, B]
 Pair::map-second[C](f: (B) -> C) -> Pair[A, C]
 Pair::swap() -> Pair[B, A]
 ```
+
+`map-first` and `map-second` transform one component and preserve the other;
+`swap` reverses them.
 
 ## `std/either`
 
@@ -146,6 +166,10 @@ Either::left?() -> Option[A]
 Either::right?() -> Option[B]
 Either::swap() -> Either[B, A]
 ```
+
+`Either` carries no error convention. `map-left` and `map-right` transform
+their branches, `is-left`/`is-right` test one, `left?`/`right?` project one as
+an `Option`, and `swap` exchanges them.
 
 ## `std/result`
 
@@ -164,8 +188,12 @@ Result::err?() -> Option[E]
 attempt[T](f: () -> T) -> Result[T, Exception]
 ```
 
-`Result::unwrap` raises `UnwrapError` for `Err`; `attempt` catches an
-`Exception` raised by its callback.
+`Result` represents an explicit successful or fallible outcome. `map`,
+`map-err`, `and-then`, and `or-else` transform or chain outcomes;
+`with-default` returns the success value or a fallback; `unwrap` returns it or
+raises `UnwrapError`; `is-ok`/`is-err` test the branch and `ok?`/`err?` project
+it as an `Option`. `attempt` calls a nullary function and returns `Ok` on
+success or `Err` holding the `Exception` it raised.
 
 ## `std/array`
 
@@ -207,9 +235,18 @@ range(start: int, end: int) -> array[int]
 ```
 
 `first`, `last`, and `pop` raise `IndexError` when empty, as does `index-of`
-for an absent value. Array positions support negative indexes; `slice` is
-half-open, `take` and `drop` clamp negative counts to zero, and `range` is
-inclusive in either direction. `zip` truncates to the shorter input.
+for an absent value; `contains` and `index-of` use AgL equality. Array
+positions support negative indexes, `remove-at` included; `insert` accepts
+boundaries from `-size()` through `size()` and raises `IndexError` outside
+them. `slice` is half-open, `take` and `drop` clamp negative counts to zero,
+`repeat` is empty for a negative count, and `range` is inclusive in either
+direction. `zip` truncates to the shorter input, and `enumerate` pairs each
+element with its zero-based index.
+
+`fold` and `fold-right` call `function(accumulator, element)`, reducing
+left-to-right and right-to-left respectively. Every callback-taking method
+invokes its closure in encounter order; a callback may capture local bindings
+and may raise normally.
 
 ## `std/dict`
 
@@ -235,7 +272,7 @@ from-entries[V](values: array[Pair[text, V]]) -> dict[text, V]
 
 `get` and `remove` raise `KeyError` for absent keys. `merge` overlays its
 receiver with `other`, whose values win; `from-entries` similarly retains the
-last value for a duplicate key.
+last value for a duplicate key. `filter` and `each` receive `(key, value)`.
 
 ## `std/text`
 
@@ -260,9 +297,16 @@ interp(template: text, vars: dict[text, text]) -> text
 ```
 
 Lengths, indexing, slices, padding, and `chars` operate on Unicode code
-points. `index-of` raises `IndexError` when absent; text slice bounds clamp,
-non-positive repeats are empty, and empty padding text leaves the receiver
-unchanged.
+points, and `lines` recognizes Unicode line boundaries and omits the
+terminators. `split` divides on an exact separator and `replace` rewrites every
+non-overlapping occurrence. `index-of` raises `IndexError` when absent, while
+`index-of?` returns `None`. Slice bounds clamp, non-positive repeats yield
+empty text, and padding truncates the repeated fill to reach the requested
+code-point length — an empty fill leaves the receiver unchanged.
+
+`interp` performs runtime name-only interpolation from an explicit
+`dict[text, text]`; see
+[Strings and interpolation](reference/strings-and-interpolation.md).
 
 ## `std/json`
 
@@ -276,12 +320,28 @@ json::keys() -> array[text]           json::has(key: text) -> bool
 json::get(key: text) -> json          json::get?(key: text) -> Option[json]
 ```
 
-`parse` accepts exactly one JSON value and raises `std/core`'s
-`JsonParseError`; its `?` form returns `None`. The lenient forms recover a JSON
-value from fenced or prose-wrapped text. `kind` is `null`, `bool`, `int`,
-`decimal`, `text`,
-`array`, or `object`; `size` is zero for scalars. `get` raises `KeyError` for
-a missing key or a non-object.
+```agl
+import std/json
+
+program def main() -> unit =
+  let strict = json::parse('{"count": 2}')
+  let recovered = json::parse-lenient("```json\n[1, 2]\n```")
+  print(strict)
+  print(recovered)
+```
+
+`parse` accepts exactly one JSON value, apart from surrounding whitespace, and
+raises `std/core`'s `JsonParseError`; its `?` form returns `None`. The lenient
+forms recover a JSON value from fenced or prose-wrapped text, using the same
+recovery rules as structured agent and shell output; the strict forms never
+recover or repair input. `kind` is `null`, `bool`, `int`, `decimal`, `text`,
+`array`, or `object`; `size` is zero for scalars, `keys` is empty for a
+non-object, and `has` is `false` for one. `get` raises `KeyError` for a missing
+key or a non-object.
+
+Rendering is not a `std/json` operation: use `render(value)` or `value as
+text`. Data access into a JSON tree is index-only — `value["key"]` and
+`value[index]`.
 
 ## `std/toml`
 
@@ -292,11 +352,28 @@ parse(value: text) -> json            parse?(value: text) -> Option[json]
 render(value: json) -> text
 ```
 
-`std/toml::parse` raises `TomlParseError` for malformed input; its `?` form
-returns `None`. TOML tables and arrays become JSON objects and arrays, floats
-become `decimal`, and temporal values become ISO-8601 text. `render` requires
-a JSON object root with no null values and raises `TomlRenderError` for values
-TOML cannot represent.
+```agl
+import std/toml
+
+program def main() -> unit =
+  let settings = toml::parse('''
+[server]
+port = 8080
+''')
+  print(toml::render(settings))
+```
+
+`parse` accepts one TOML document and returns its root table as `json`. Nested
+tables and arrays retain their JSON object and array shapes, floats become
+`decimal`, and date, time, and datetime values become ISO-8601 text. Malformed
+input raises `TomlParseError`; its `?` form returns `None`.
+
+`render` serializes a JSON object as a TOML document, and its output parses
+back to the same JSON representation. TOML has a table root and no null value,
+so a non-object root or any contained `null` raises `TomlRenderError`, as does
+an integer outside the signed 64-bit range. Decimals render as TOML floats,
+ordinary signed `nan` and infinity included; a signaling or payload NaN cannot
+be preserved and raises `TomlRenderError` too.
 
 ## `std/env`
 
@@ -314,10 +391,22 @@ setenv(name: text, value: text) -> unit
 unsetenv(name: text) -> unit
 ```
 
-`environ` is a startup snapshot. `set`, `unset`, and their free-function
-counterparts change only that AgL value, never the host process environment;
-`extended` returns an overlaid copy. `get` and `unset` raise `KeyError` when
-absent.
+<!-- agl-check: fragment -->
+```agl
+import std/env::*
+
+let _ = setenv("MODE", "test")
+let mode = getenv("MODE")
+let child_env = environ.extended({"DEBUG": "1"})
+let _ = unsetenv("MODE")
+```
+
+`environ` is seeded from one full snapshot of the host's startup process
+environment and does not change afterwards. It is independent of `os.environ`:
+`set`, `unset`, and their free-function counterparts change only that AgL
+value, never the host process. `extended` returns an overlaid copy. `get` and
+`unset` raise `KeyError` when absent, while `get?` returns `None`. With
+`--no-stdlib`, no ambient environment binding is installed.
 
 ## `std/process`
 
@@ -327,8 +416,21 @@ cwd() -> text                          pid() -> int
 hostname() -> text
 ```
 
-`exit` terminates the hosting process with a status from `0` through `255`;
-`cwd`, `pid`, and `hostname` report process metadata.
+```agl
+import std/process
+
+program def main() -> unit =
+  let directory = process::cwd()
+  let process_id = process::pid()
+  let host = process::hostname()
+  ()
+```
+
+`cwd`, `pid`, and `hostname` report process metadata. `exit` terminates the
+program and its host process and does not return to later expressions; zero
+indicates success and a nonzero code failure. The code must be in the portable
+`0..255` range so every host reports the same number — an out-of-range code is
+an ordinary runtime error and terminates nothing.
 
 ## `std/config`
 
@@ -340,7 +442,7 @@ builtin var timeout: Option[text] = Option[text]::None
 ```
 
 `std/config` provides the mutable engine settings described in
-[Host environment](host-environment.md).
+[Host environment](reference/host-environment.md).
 
 ## `std/math`
 
@@ -366,10 +468,12 @@ sum-decimal(values: array[decimal]) -> decimal
 pi: decimal                            e: decimal
 ```
 
-`compare` and `sign` return `-1`, `0`, or `1`. Integer powers require a
-non-negative exponent, `decimal::sqrt` requires a non-negative receiver, and
-`decimal::pow` requires a non-negative exponent on a zero base; each otherwise
-raises `std/core`'s `RangeError`. Any zero exponent yields `1`.
+`compare` and `sign` return `-1`, `0`, or `1`; `compare` serves directly as an
+`array::sort` comparator through `fn(left, right) => left.compare(right)`.
+`round`, `sqrt`, and `pow` work under the language decimal context. Integer
+powers require a non-negative exponent, `decimal::sqrt` requires a non-negative
+receiver, and `decimal::pow` requires a non-negative exponent on a zero base;
+each otherwise raises `std/core`'s `RangeError`. Any zero exponent yields `1`.
 
 ## `std/time`
 
@@ -382,9 +486,20 @@ parse(value: text, fmt: text) -> decimal
 format(epoch: decimal, fmt: text) -> text
 ```
 
-Time values are UTC Unix epoch seconds. `monotonic` is for elapsed-time
-measurement. Time parsers raise `TimeParseError`; offset-free parsed values
-are UTC.
+```agl
+import std/time
+
+program def main() -> unit =
+  let epoch = time::parse-iso("2024-01-02T03:04:05+00:00")
+  print(time::format(epoch, "%Y-%m-%d"))
+```
+
+Time values are UTC Unix epoch seconds. `monotonic` is a non-decreasing clock
+for measuring elapsed time, not a calendar timestamp. `parse-iso` accepts an
+ISO-8601 timestamp with or without an offset, and `parse`/`format` take
+Python-compatible `strptime` and `strftime` directives. A parsed value without
+an offset is UTC, as is every formatted epoch value. Invalid input or an
+out-of-range temporal conversion raises `TimeParseError`.
 
 ## `std/random`
 
@@ -395,10 +510,20 @@ choice[T](values: array[T]) -> T       choice?[T](values: array[T]) -> Option[T]
 shuffle![T](values: array[T]) -> unit  uuid() -> text
 ```
 
-Random draws use an interpreter-local seedable sequence: `below` is
-in `0..upper-1`, `between` includes both bounds, and `uniform` is in `[0, 1)`.
-`choice` raises `IndexError` for an empty array; `uuid` is independent of that
-sequence.
+```agl
+import std/random
+
+program def main() -> unit =
+  random::seed(42)
+  print(random::between(1, 6))
+```
+
+Each running interpreter owns an independent seedable sequence, which `seed`
+resets: `below` is in `0..upper-1`, `between` includes both bounds, and
+`uniform` is in `[0, 1)`. `choice` raises `IndexError` for an empty array and
+`choice?` returns `None`. `shuffle!` shuffles its receiver in place through the
+normal live array view. `uuid` returns a fresh UUIDv4 and is deliberately
+independent of the seedable sequence.
 
 ## `std/regex`
 
@@ -416,9 +541,31 @@ split(pattern: text, s: text) -> array[text]
 escape(s: text) -> text
 ```
 
-`std/regex` uses Python-compatible regular expressions and replacement
-syntax. Matches are zero-based and half-open. `find-all` is ordered and
-non-overlapping. Invalid patterns raise `RegexError`.
+```agl
+import std/regex
+
+program def main() -> unit =
+  case regex::find?("(?P<word>[A-Za-z]+)-([0-9]+)", "item-42") of
+    | Option::Some(value = _ as found) => print(found.named-groups["word"])
+    | Option::None => ()
+```
+
+`std/regex` uses Python's
+[`re`](https://docs.python.org/3/library/re.html) pattern and replacement
+syntax. `test` reports whether the pattern occurs anywhere, `find?` returns the
+first occurrence, and `find-all` returns non-overlapping occurrences left to
+right. A `Match` carries the matched text, zero-based half-open `start` and
+`end`, and `groups` in numbered-group order — `None` for a group that did not
+participate, `Some(text)` for one that did; `named-groups` holds the
+participating named groups.
+
+`replace` rewrites every match and supports backreferences such as `\1` and
+`\g<name>`. `split` follows Python `re.split`: boundary empty strings and
+captured separators are retained, and an unmatched captured separator becomes
+empty text because split results are text. `escape` returns a pattern matching
+its argument literally. Every pattern-taking operation raises `RegexError` when
+Python cannot compile it; compiled patterns are reused by a bounded internal
+cache with no AgL-visible state.
 
 ## `std/path`
 
@@ -450,9 +597,25 @@ remove(path: text) -> unit               copy(source: text, destination: text) -
 move(source: text, destination: text) -> unit
 ```
 
-`std/fs` reads and writes UTF-8 text relative to the invocation working
-directory. Failed non-optional operations raise `FsError`; `read?` returns
-`None` for a missing, unreadable, invalidly encoded, or NUL-containing path.
-`mkdir` creates missing parents, `remove` removes a file, symbolic link, or
-directory tree without following a symbolic link, and filesystem-changing
-operations honor AGM dry-run mode.
+<!-- agl-check: fragment -->
+```agl
+import std/fs
+
+program def main() -> unit =
+  let prompt = fs::read(resource("prompts/review.md"))
+  fs::write("draft.md", prompt)
+  fs::append("draft.md", "\n")
+  let names = fs::list(".")
+  print(fs::exists("draft.md"))
+```
+
+`std/fs` performs explicit UTF-8 filesystem effects. Every relative path
+resolves against the invocation working directory, not the importing module or
+a resource anchor, and a relative `list` or `glob` result stays relative while
+an absolute input yields absolute paths. Failed non-optional operations raise
+`FsError`, carrying the requested `path` and `operation`; `read?` returns
+`None` for a missing, unreadable, invalidly encoded, or NUL-containing path,
+and the predicates return `false` for a missing path. `mkdir` creates missing
+parents, `remove` removes a file, symbolic link, or directory tree without
+following a symbolic link, and filesystem-changing operations honor AGM dry-run
+mode.

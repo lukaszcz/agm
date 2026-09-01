@@ -1,7 +1,8 @@
-"""Static-compile guard for every AgL snippet in the reference docs.
+"""Static-compile guard for every AgL snippet in the AgL documentation.
 
-Every ```agl fenced block under ``docs/agl/reference/*.md`` is discovered and
-run through AgL's full static pipeline — the same passes ``agm exec --dry-run``
+Every ```agl fenced block under ``docs/agl/`` — the language reference and the
+standard-library reference beside it — is discovered and run through AgL's full
+static pipeline — the same passes ``agm exec --dry-run``
 performs (lex → parse → scope → typecheck → matchcompile → lower), with no
 agent ever executed. This keeps the documentation's examples from silently
 rotting as the language evolves.
@@ -39,7 +40,7 @@ import pytest
 from agm.agl import PipelineDriver
 from agm.agl.runtime.agents import AgentRequest
 
-_REFERENCE_DIR = Path(__file__).resolve().parents[1] / "docs" / "agl" / "reference"
+_DOCS_DIR = Path(__file__).resolve().parents[1] / "docs" / "agl"
 _FENCE = re.compile(r"^[ \t]*```agl\s*$")
 _MARKER = re.compile(r"<!--\s*agl-check:\s*(?P<kind>skip|fragment|error)\s*-->")
 
@@ -55,13 +56,13 @@ class Snippet:
 
     @property
     def id(self) -> str:
-        return f"{self.path.name}:{self.line}"
+        return f"{self.path.relative_to(_DOCS_DIR).as_posix()}:{self.line}"
 
 
 def _discover_snippets() -> list[Snippet]:
     """Collect every ```agl block and its compilation expectation."""
     snippets: list[Snippet] = []
-    for path in sorted(_REFERENCE_DIR.glob("*.md")):
+    for path in sorted(_DOCS_DIR.rglob("*.md")):
         lines = path.read_text(encoding="utf-8").splitlines()
         index = 0
         while index < len(lines):
@@ -95,9 +96,9 @@ _SNIPPETS = _discover_snippets()
 
 
 def test_reference_docs_do_not_skip_snippets() -> None:
-    """Every reference snippet must have an executable test expectation."""
+    """Every documented snippet must have an executable test expectation."""
     skipped = [snippet.id for snippet in _SNIPPETS if snippet.marker == "skip"]
-    assert not skipped, f"reference snippets must not opt out of testing: {skipped}"
+    assert not skipped, f"documentation snippets must not opt out of testing: {skipped}"
 
 
 def _unused_agent(request: AgentRequest) -> str:

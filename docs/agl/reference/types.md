@@ -101,7 +101,7 @@ An immutable Unicode string. Text indexing (`s[i]`) returns the Unicode code
 point at an integer index; negative indexes count from the end, and an
 out-of-range index raises `IndexError`. Text cannot be changed through indexed
 assignment. Untyped `ask` results default to `text` ([Agent calls](agent-calls.md)).
-See [`std/text`](#stdtext) for its methods.
+See [`std/text`](../standard-library.md#stdtext) for its methods.
 
 ### Numbers: `int` and `decimal`
 
@@ -323,104 +323,22 @@ are capability handles, not data.
 
 See [Functions](functions.md) for the declaration and call syntax.
 
-## Standard library types
+## Library types named by the language
 
-The following types are defined by `std/core`. Every loaded entry and library
-module except `std/core` itself receives an automatic `import std/core::*`, unless
-`--no-stdlib` disables it or an explicit import whose expansion includes `std/core`
-supplies the core contribution instead. `std/core` also re-exports
-`std/option`, `std/pair`, `std/either`, and `std/result`.
+The types below are declared by `std/core` and named by the language's own
+constructs — `exec`, `ask`, and sessions — so the reference describes them
+here. Every loaded entry and library module except `std/core` itself receives
+an automatic `import std/core::*`, unless `--no-stdlib` disables it or an
+explicit import whose expansion includes `std/core` supplies the core
+contribution instead.
 
-### `std/text`
-
-`std/text` owns methods on `text`. They are ambient only when the loader
-injects `std/builtin-methods`; otherwise, including with `--no-stdlib` or a
-custom standard library without that registry, import `std/text` before calling
-them. Importing it is also required for its free `interp(template, vars)`
-function. Text lengths, indexes, slices, padding, and `chars()` use Unicode
-code points. `lines()` recognizes Unicode line boundaries and omits line
-terminators.
-
-| Method | Result |
-| ------ | ------ |
-| `size()`, `is-empty()` | Code-point length or emptiness |
-| `chars()`, `lines()`, `split(separator)` | `array[text]` of code points, lines, or exact-separator fields |
-| `trim()`, `trim-start()`, `trim-end()` | Whitespace-trimmed text |
-| `upper()`, `lower()` | Unicode case conversion |
-| `starts-with(prefix)`, `ends-with(suffix)`, `contains(substring)` | Predicate result |
-| `index-of(substring)` | First code-point position; raises `IndexError` when absent |
-| `index-of?(substring)` | `Option[int]`, with `None` when absent |
-| `replace(old, new)` | Text with every non-overlapping `old` occurrence replaced |
-| `slice(start, end)` | End-exclusive text slice; negative and out-of-range bounds are clamped |
-| `repeat(count)` | Text repeated `count` times; non-positive counts yield empty text |
-| `pad-start(length, fill)`, `pad-end(length, fill)` | Pad to a code-point length, truncating repeated `fill` as needed; an empty fill leaves the text unchanged |
-
-`interp(template, vars)` keeps runtime name-only interpolation available for a
-`dict[text, text]`; see [Strings and interpolation](strings-and-interpolation.md).
-
-### `Option[T]`
-
-`std/option` defines the generic enum for optional values:
-
-```text
-enum Option[T]
-  | None
-  | Some(value: T)
-```
-
-`null` is only a value of type `json`; ordinary AgL types are not nullable.
-Use `Option[T]` when a value may be absent. `Option` is available through the
-prelude, directly from `std/option`, or through `import std/core::Option`.
-
-Its methods are `map`, `and-then`, `filter`, `or-else`, `with-default`,
-`unwrap`, `is-some`, `is-none`, `each`, and `to-result`. `map` transforms a
-present value; `and-then` chains an operation that returns an `Option`;
-`filter` retains a present value only when its predicate succeeds; and
-`or-else` supplies an alternative. `with-default` returns the contained value
-or its argument, while `unwrap` returns the contained value or raises
-`UnwrapError`. `each` invokes its callback only for `Some`. `to-result(error)`
-converts `Some(value)` to `Ok(value)` and `None` to `Err(error)`.
-
-### `Pair[A, B]`
-
-`std/pair` defines a two-field record:
-
-```text
-record Pair[A, B](first: A, second: B)
-```
-
-`map-first` and `map-second` transform one component while preserving the
-other; `swap` returns `Pair[B, A]` with the components reversed.
-
-### `Either[A, B]`
-
-`std/either` defines a neutral two-branch sum:
-
-```text
-enum Either[A, B]
-  | Left(value: A)
-  | Right(value: B)
-```
-
-It has no error convention. `map-left` and `map-right` transform their
-respective branches; `is-left` and `is-right` test the branch; `left?` and
-`right?` project a branch as an `Option`; and `swap` exchanges the branches.
-
-### `Result[T, E]`
-
-`std/result` represents an explicit successful or fallible outcome:
-
-```text
-enum Result[T, E]
-  | Ok(value: T)
-  | Err(error: E)
-```
-
-`map`, `map-err`, `and-then`, and `or-else` transform or chain outcomes.
-`with-default` returns the success value or a fallback; `unwrap` returns it or
-raises `UnwrapError`; `is-ok`/`is-err` test the branch; and `ok?`/`err?`
-project it as an `Option`. `attempt(f)` calls a nullary function and returns
-`Ok` on success or `Err` containing its raised `Exception`.
+`std/core` also re-exports `std/option`, `std/pair`, `std/either`, and
+`std/result`. Of those, `Option[T]` reaches the language surface: `null` is a
+value of type `json` only and ordinary AgL types are not nullable, so a value
+that may be absent has type `Option[T]`, and the `?` operations throughout the
+standard library return one. The [standard library
+reference](../standard-library.md) documents these types and the methods on
+`text`, `array`, `dict`, and `json`.
 
 ### `ExecResult`
 
@@ -1175,7 +1093,7 @@ interpret it as a JSON value. This is a total, no-parse cast.
 
 To parse the *contents* of a text as JSON, import `std/json` and use
 `json::parse("42")`. It produces the JSON number `42` and raises
-`JsonParseError` ([Modules](modules.md#stdjson)) on malformed input.
+`JsonParseError` ([`std/json`](../standard-library.md#stdjson)) on malformed input.
 
 ## Values and equality
 

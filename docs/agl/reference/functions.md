@@ -217,10 +217,10 @@ The standard library may also declare a method for a builtin receiver directly
 in its declaration head. This syntax is available to ordinary, `builtin`, and
 `extern` definitions. `array[E]::name` and `dict[text, V]::name` bind their
 receiver element or value parameter; `text`, `json`, `int`, `decimal`, and
-`bool` are bare receivers. Such a declaration belongs only in its owning
-module: `std/array`, `std/dict`, `std/text`, `std/json`, and `std/math`
-respectively. The standard library declares methods for every listed receiver
-except `bool`. A builtin receiver must use its bare generic form, so
+`bool` are bare receivers. Each builtin receiver has exactly one
+owning module, and such a declaration belongs only there; the same declaration
+in another module is rejected. A builtin receiver must use its bare generic
+form, so
 `array[int]::name` and `dict[text, array[int]]::name` are invalid. As with a
 nominal generic receiver, `_` may occupy an unused builtin receiver slot; it
 binds a private rigid parameter and cannot be named by the method body.
@@ -879,20 +879,19 @@ program def main() -> unit =
 `RecursionError` is catchable with `try`/`catch`. The limit counts
 activation frames across all `def` calls including mutual recursion.
 
-## Standard core types used with functions
+## Syntactic arguments
 
-The built-in `ParsePolicy` enum and the `ExecResult` record are described
-in the chapters that cover `ask` ([Agent calls](agent-calls.md)) and `exec`
-([Shell execution](shell-execution.md)), but they are ordinary values that
-can be stored in bindings and passed to functions:
+The types the language's own constructs name are ordinary values: a
+`ParsePolicy` or an `ExecResult` can be bound, passed to a function, and
+returned from one.
 
 ```agl
 def make_policy(retries: int) -> ParsePolicy =
   if retries == 0 => ParsePolicy::Abort else => Retry(n = retries)
 ```
 
-The `on_parse_error` argument of `ask`/`exec` is the exception: it requires a
-**syntactic** static constructor written at the call site (`Abort`, or
+The `on_parse_error` argument of `ask`/`exec` is the one exception: it requires
+a **syntactic** static constructor written at the call site (`Abort`, or
 `Retry(n = <int literal>)`), so a `ParsePolicy` held in a binding or returned
 from a function like `make_policy` cannot be passed to it.
 

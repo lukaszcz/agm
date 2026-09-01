@@ -27,8 +27,9 @@ followed by `{` is literal; `\%` produces a literal percent sign.
 
 ## Runtime interpolation
 
-`std/text` provides `interp`, which interpolates a template from an explicit
-`dict[text, text]` at runtime:
+A template can also be interpolated at runtime, against a dictionary of names
+supplied explicitly, through the standard library's
+[`interp`](../standard-library.md#stdtext):
 
 ```agl
 import std/text
@@ -55,12 +56,10 @@ hole raises a catchable `ExternError` from `std/text::interp`.
 
 Text indexes address Unicode code points: `"é😀"[0]` is `"é"` and
 `"é😀"[-1]` is `"😀"`. An out-of-range index raises `IndexError`; text is
-immutable, so indexed assignment is not allowed. When the standard-library
-prelude injects `std/builtin-methods`, `std/text` supplies ambient methods such
-as `chars()`, `lines()`, `split`, `trim`, case conversion, searching, slicing,
-repetition, and padding. Otherwise, import `std/text` before calling them. The
-complete API and its code-point length semantics are documented in
-[Types](types.md#stdtext).
+immutable, so indexed assignment is not allowed. Text methods are supplied by
+the standard library, ambient when the prelude injects `std/builtin-methods`
+and otherwise reached by importing their owning module; they are documented in
+the [standard library reference](../standard-library.md#stdtext).
 
 ## Uniform rendering rules
 

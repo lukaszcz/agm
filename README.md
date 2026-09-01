@@ -253,7 +253,8 @@ agm exec --dry-run workflow.agl   # static check only — no agent calls
 ```
 
 See `agm help exec` for options, exit codes, and config. The AgL language itself is
-documented in the [AgL language reference](docs/agl/reference/index.md).
+documented in the [AgL language reference](docs/agl/reference/index.md), and the modules
+it imports in the [AgL standard library reference](docs/agl/standard-library.md).
 
 ### `agm check`
 

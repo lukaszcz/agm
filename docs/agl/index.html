@@ -8,16 +8,19 @@
       rel="stylesheet"
       href="https://cdn.jsdelivr.net/npm/docsify@4/themes/vue.css"
     />
-    <title>AgL reference</title>
+    <title>AgL documentation</title>
   </head>
   <body>
     <div id="app"></div>
     <script>
       window.$docsify = {
-        name: 'AgL reference',
+        name: 'AgL',
         auto2top: true,
         loadSidebar: true,
-        subMaxLevel: 2
+        subMaxLevel: 2,
+        alias: {
+          '/.*/_sidebar.md': '/_sidebar.md'
+        }
       };
     </script>
     <script src="https://cdn.jsdelivr.net/npm/docsify@4"></script>

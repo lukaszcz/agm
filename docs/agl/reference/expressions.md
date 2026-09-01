@@ -587,9 +587,10 @@ coerced argument has type `json`.
 
 ## JSON parsing
 
-[`std/json`](modules.md#stdjson) provides strict and lenient text parsing for
-`json` values. Its `parse` functions are ordinary module functions and can be
-used as values where their function type is expected.
+The language has no parsing form for `json` values: text is parsed by ordinary
+standard-library functions, which are values like any other and can be passed
+where their function type is expected. See
+[`std/json`](../standard-library.md#stdjson).
 
 ## `resource` and `resource-dir`
 
@@ -604,7 +605,7 @@ module is imported from another project. A module with no backing file has no re
 anchor, so either call in such a module is a static error. Both calls are constant
 expressions and may initialize root bindings and `builtin var` defaults. They resolve
 during linking; a missing target is a static error. Package checks and package creation verify each
-literal resource target. `resource` produces a path only; use [`std/fs`](#stdfs) to
+literal resource target. `resource` produces a path only; use [`std/fs`](../standard-library.md#stdfs) to
 perform filesystem effects.
 
 <!-- agl-check: fragment -->
@@ -612,41 +613,6 @@ perform filesystem effects.
 let prompt_path = resource("prompts/review.md")
 let package_root = resource-dir()
 ```
-
-## `std/fs`
-
-`std/fs` provides explicit UTF-8 filesystem effects. Import it and call its
-functions through the module route or an import tail:
-
-<!-- agl-check: fragment -->
-```agl
-import std/fs
-
-program def main() -> unit =
-  let prompt = fs::read(resource("prompts/review.md"))
-  fs::write("draft.md", prompt)
-  fs::append("draft.md", "\n")
-  let names = fs::list(".")
-  print(fs::exists("draft.md"))
-```
-
-| Function | Result |
-| --- | --- |
-| `read(path: text)` / `read?(path: text)` | Reads valid UTF-8 text; `read?` returns `Option::None` when reading fails, including invalid UTF-8. |
-| `write(path: text, content: text)` | Replaces a file's text and returns `unit`. |
-| `append(path: text, content: text)` | Appends text to a file and returns `unit`. |
-| `exists(path: text)`, `is-file(path: text)`, `is-dir(path: text)` | Inspect a path. |
-| `list(path: text)` / `glob(pattern: text)` | Return immediate children or pattern matches as `array[text]`. |
-| `mkdir(path: text)` | Creates a directory and missing parent directories. |
-| `remove(path: text)`, `copy(source: text, destination: text)`, `move(source: text, destination: text)` | Change filesystem entries. |
-
-Every relative path is resolved against the invocation working directory, not
-the importing module or a resource anchor. A relative `list` or `glob` result
-remains relative; an absolute input yields absolute paths. Failed filesystem
-operations raise `FsError`, carrying the requested `path` and `operation`;
-`read?` instead returns `Option::None`, including for invalid UTF-8 input.
-Predicates return `false` for missing paths. `remove` unlinks symbolic links rather
-than following them. Hosts may suppress filesystem mutations in dry-run mode.
 
 ## `copy` and `shallow_copy`
 

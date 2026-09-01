@@ -92,10 +92,9 @@ program def main() -> unit =
 | [Host environment](host-environment.md) | Agents, params, host defaults, capability checking, tracing |
 | [Grammar](grammar.md) | The collected grammar |
 
-The `std/*` modules a program imports are documented separately, in the
-[standard library reference](../standard-library.md). This reference describes
-the language, and names a library type or function only where the language's
-own semantics depend on it.
+This reference describes the language. It names a library type or function only
+where the language's own semantics depend on it; the `std/*` modules themselves
+are documented by their sources.
 
 ## Notation
 

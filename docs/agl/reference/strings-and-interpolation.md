@@ -28,8 +28,7 @@ followed by `{` is literal; `\%` produces a literal percent sign.
 ## Runtime interpolation
 
 A template can also be interpolated at runtime, against a dictionary of names
-supplied explicitly, through the standard library's
-[`interp`](../standard-library.md#stdtext):
+supplied explicitly, through a standard-library function:
 
 ```agl
 import std/text
@@ -58,8 +57,7 @@ Text indexes address Unicode code points: `"é😀"[0]` is `"é"` and
 `"é😀"[-1]` is `"😀"`. An out-of-range index raises `IndexError`; text is
 immutable, so indexed assignment is not allowed. Text methods are supplied by
 the standard library, ambient when the prelude injects `std/builtin-methods`
-and otherwise reached by importing their owning module; they are documented in
-the [standard library reference](../standard-library.md#stdtext).
+and otherwise reached by importing their owning module.
 
 ## Uniform rendering rules
 

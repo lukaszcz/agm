@@ -589,8 +589,7 @@ coerced argument has type `json`.
 
 The language has no parsing form for `json` values: text is parsed by ordinary
 standard-library functions, which are values like any other and can be passed
-where their function type is expected. See
-[`std/json`](../standard-library.md#stdjson).
+where their function type is expected.
 
 ## `resource` and `resource-dir`
 
@@ -605,7 +604,7 @@ module is imported from another project. A module with no backing file has no re
 anchor, so either call in such a module is a static error. Both calls are constant
 expressions and may initialize root bindings and `builtin var` defaults. They resolve
 during linking; a missing target is a static error. Package checks and package creation verify each
-literal resource target. `resource` produces a path only; use [`std/fs`](../standard-library.md#stdfs) to
+literal resource target. `resource` produces a path only; use `std/fs` to
 perform filesystem effects.
 
 <!-- agl-check: fragment -->

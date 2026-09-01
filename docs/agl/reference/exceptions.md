@@ -433,7 +433,7 @@ it reports whether the cast would succeed as a `bool`.
 ### `JsonParseError`
 
 A `std/json` parsing function received text that is not a well-formed JSON
-document ([`std/json`](../standard-library.md#stdjson)).
+document.
 
 ```text
 raw: text   # the input text that failed to parse
@@ -442,7 +442,7 @@ raw: text   # the input text that failed to parse
 ### `TomlParseError`
 
 A `std/toml` parsing function received text that is not a well-formed TOML
-document ([`std/toml`](../standard-library.md#stdtoml)).
+document.
 
 ```text
 raw: text   # the input text that failed to parse
@@ -461,8 +461,7 @@ fields.
 
 ### `RegexError`
 
-A `std/regex` operation received a pattern that Python `re` cannot compile
-([`std/regex`](../standard-library.md#stdregex)).
+A `std/regex` operation received a pattern that Python `re` cannot compile.
 
 ```text
 pattern: text   # the pattern that failed to compile

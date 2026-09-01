@@ -269,8 +269,7 @@ other module. Three have a language-level role:
   receiver methods ambient.
 
 Every other `std/*` module is imported explicitly and carries no special
-status. The [standard library reference](../standard-library.md) documents
-what each one declares.
+status.
 
 ## Library modules and cycles
 

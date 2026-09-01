@@ -101,7 +101,7 @@ An immutable Unicode string. Text indexing (`s[i]`) returns the Unicode code
 point at an integer index; negative indexes count from the end, and an
 out-of-range index raises `IndexError`. Text cannot be changed through indexed
 assignment. Untyped `ask` results default to `text` ([Agent calls](agent-calls.md)).
-See [`std/text`](../standard-library.md#stdtext) for its methods.
+Its methods are supplied by the standard library.
 
 ### Numbers: `int` and `decimal`
 
@@ -336,9 +336,7 @@ contribution instead.
 `std/result`. Of those, `Option[T]` reaches the language surface: `null` is a
 value of type `json` only and ordinary AgL types are not nullable, so a value
 that may be absent has type `Option[T]`, and the `?` operations throughout the
-standard library return one. The [standard library
-reference](../standard-library.md) documents these types and the methods on
-`text`, `array`, `dict`, and `json`.
+standard library return one.
 
 ### `ExecResult`
 
@@ -1093,7 +1091,7 @@ interpret it as a JSON value. This is a total, no-parse cast.
 
 To parse the *contents* of a text as JSON, import `std/json` and use
 `json::parse("42")`. It produces the JSON number `42` and raises
-`JsonParseError` ([`std/json`](../standard-library.md#stdjson)) on malformed input.
+`JsonParseError` (`std/json`) on malformed input.
 
 ## Values and equality
 

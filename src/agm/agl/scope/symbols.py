@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import TypeAlias as TypingTypeAlias
 
 from agm.agl.diagnostics import AglError
-from agm.agl.modules.ids import ENTRY_ID, STD_PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.types import EnumType, RecordType, TypeVarType
 from agm.agl.syntax.nodes import (
     EnumDef,
@@ -135,11 +135,14 @@ BUILTIN_CALL_NAMES: dict[str, BuiltinKind] = {
     "resource-dir": BuiltinKind.RESOURCE_DIR,
 }
 
-# Built-in statics are registered by their owning prelude nominal's structured
-# identity, so similarly named user types and enum variants remain ordinary
-# declarations. Their final segments therefore remain ordinary names.
-BUILTIN_TYPE_STATICS: dict[tuple[ModuleId, ScopePath], dict[str, BuiltinStaticKind]] = {
-    (STD_PRELUDE_ID, ("Session",)): {
+# Built-in statics are registered by their owning nominal's declaration path,
+# so similarly named user types and enum variants remain ordinary
+# declarations. Their final segments therefore remain ordinary names. The
+# owning module is not part of the key: whichever standard-library module
+# declares the built-in nominal owns its statics, and the host's reserved
+# fallback identity owns them when no source declares it.
+BUILTIN_TYPE_STATICS: dict[ScopePath, dict[str, BuiltinStaticKind]] = {
+    ("Session",): {
         "open": BuiltinStaticKind.SESSION_OPEN,
         "default": BuiltinStaticKind.SESSION_DEFAULT,
     },
@@ -148,21 +151,21 @@ BUILTIN_TYPE_STATICS: dict[tuple[ModuleId, ScopePath], dict[str, BuiltinStaticKi
 
 #: The scope paths of every nominal that owns built-in statics, for callers
 #: that have resolved a relative path but not yet its owning module.
-BUILTIN_TYPE_STATIC_OWNER_PATHS: frozenset[ScopePath] = frozenset(
-    owner_path for _module_id, owner_path in BUILTIN_TYPE_STATICS
-)
+BUILTIN_TYPE_STATIC_OWNER_PATHS: frozenset[ScopePath] = frozenset(BUILTIN_TYPE_STATICS)
 
 
 def builtin_type_static_kind(
     owner_module_id: ModuleId, owner_path: ScopePath, name: str
 ) -> BuiltinStaticKind | None:
     """Return the static kind registered for an owning nominal identity."""
-    return BUILTIN_TYPE_STATICS.get((owner_module_id, owner_path), {}).get(name)
+    if not owner_module_id.owns_standard_builtins:
+        return None
+    return BUILTIN_TYPE_STATICS.get(owner_path, {}).get(name)
 
 
 def is_builtin_type_static_owner(owner_module_id: ModuleId, owner_path: ScopePath) -> bool:
     """Return whether a nominal identity owns registered built-in statics."""
-    return (owner_module_id, owner_path) in BUILTIN_TYPE_STATICS
+    return owner_module_id.owns_standard_builtins and owner_path in BUILTIN_TYPE_STATICS
 
 
 BUILTIN_CALL_DISPLAY_NAMES: dict[BuiltinKind | BuiltinStaticKind, str] = {

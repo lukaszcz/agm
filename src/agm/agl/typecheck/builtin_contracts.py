@@ -1,9 +1,9 @@
 """Location-independent structural contracts for host-known builtin types.
 
-The seeded ``std/prelude`` ``TypeDef`` objects are real nominal declarations used
-by type resolution and runtime values.  They are not validation schemas: a
-source ``builtin`` declaration may live in another module or scope, and an enum
-is validated only after the builder has required its members to be inline, so
+The seeded reserved ``TypeDef`` objects are real nominal declarations used by
+type resolution and runtime values.  They are not validation schemas: a source
+``builtin`` declaration may live in any module or scope, and an enum is
+validated only after the builder has required its members to be inline, so
 source constructors can share the identities expected by host-minted values.
 
 This module projects nominal declarations into explicit contracts.  A contract
@@ -21,7 +21,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 from agm.agl.ir.reserved_nominals import reserved_nominal_id
-from agm.agl.modules.ids import STD_PRELUDE_ID
+from agm.agl.modules.ids import RESERVED_ID
 from agm.agl.semantics.type_table import (
     BUILTIN_EXCEPTION_TYPE_DEFS,
     BUILTIN_PRELUDE_TYPE_DEFS,
@@ -76,12 +76,15 @@ def contract_for_typedef(
 
     The declaration and its member records keep their real nominal identities
     in ``TypeTable``.  Only type references inside contract-bearing fields and
-    the exception base are normalized onto the host contract namespace.  This
-    lets a scoped builtin name a sibling scoped builtin while preserving a
-    reference to an unrelated module as a genuine mismatch. Enum member identity
-    is enforced separately by requiring inline source members before projection.
+    the exception base are normalized onto the host contract namespace — the
+    reserved sentinel module — so a builtin declared in one standard-library
+    module may name a builtin declared in another and still compare equal to
+    the expected contract.  This also lets a scoped builtin name a sibling
+    scoped builtin while preserving a reference to a non-builtin declaration as
+    a genuine mismatch.  Enum member identity is enforced separately by
+    requiring inline source members before projection.
     """
-    remap = (typedef.module_id, STD_PRELUDE_ID)
+    remap = (typedef.module_id, RESERVED_ID)
 
     def normalize(typ: Type) -> Type:
         rerooted = reroot_type(typ, typedef.scope_path, remap_module=remap)
@@ -95,7 +98,7 @@ def contract_for_typedef(
                 return node
             return replace(
                 node,
-                module_id=STD_PRELUDE_ID,
+                module_id=RESERVED_ID,
                 scope_path=(),
                 decl_id=reserved_id,
             )

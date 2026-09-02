@@ -21,7 +21,7 @@ from typing import Literal, cast
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
-from agm.agl.modules.ids import ENTRY_ID, STD_PRELUDE_ID, ModuleId, spell_declaration
+from agm.agl.modules.ids import ENTRY_ID, RESERVED_ID, ModuleId, spell_declaration
 from agm.agl.scope.imports import (
     ImportEnv,
     NameAtom,
@@ -81,6 +81,12 @@ from agm.agl.semantics.types import (
 from agm.agl.syntax.nodes import Expr, ParamKind, Pattern, QualifierAnchor, QualifierChain
 from agm.agl.syntax.spans import SourceSpan
 
+#: Every built-in name a module's type namespace carries a reserved fallback
+#: binding for, whether or not any source declares it.
+_BUILTIN_FALLBACK_TYPE_NAMES: frozenset[str] = frozenset(BUILTIN_EXCEPTIONS) | (
+    BUILTIN_PRELUDE_TYPE_NAMES
+)
+
 
 def _split_scoped_type_name(name: str) -> tuple[ScopePath, str]:
     """Split a source spelling only at the environment's UI boundary."""
@@ -94,8 +100,8 @@ def _is_own_builtin_declaration(name: str, typ: Type) -> bool:
     A canonical binding for a built-in exception or prelude type name carries
     that name's fixed reserved identity (``ir.reserved_nominals``); a
     source ``builtin`` declaration of the same name instead carries its own
-    declaration identity, wherever it is declared (including ``std/prelude``),
-    which never equals the reserved one. *name* is always one of the reserved
+    declaration identity, wherever it is declared (a standard-library module
+    included), which never equals the reserved one. *name* is always one of the reserved
     names, so it always has a reserved identity to compare against.
 
     ``NO_DECL_ID`` is excluded too: it is the identity a handle carries when
@@ -785,7 +791,7 @@ class TypeEnvironment:
                     (fname, ParamKind.STANDARD)
                     for fname in self._type_table.record_fields(prelude_type)
                 )
-                self._constructor_field_kinds[(STD_PRELUDE_ID, (), prelude_name)] = fields
+                self._constructor_field_kinds[(RESERVED_ID, (), prelude_name)] = fields
                 self._constructor_field_kinds_by_decl_id[prelude_type.decl_id] = fields
                 continue
             if isinstance(prelude_type, ExceptionType):
@@ -795,9 +801,7 @@ class TypeEnvironment:
                 fields = tuple(
                     (fname, ParamKind.STANDARD) for fname in self._type_table.record_fields(member)
                 )
-                self._constructor_field_kinds[(STD_PRELUDE_ID, (prelude_name,), member.name)] = (
-                    fields
-                )
+                self._constructor_field_kinds[(RESERVED_ID, (prelude_name,), member.name)] = fields
                 self._constructor_field_kinds_by_decl_id[member.decl_id] = fields
         # Exception constructor field kinds are NOT pre-registered here: each
         # exception's own fields honor their declared @pos/@std/@named marker
@@ -1013,7 +1017,7 @@ class TypeEnvironment:
         but the guard makes the helper safe to call defensively.
         """
         self._assert_mutable()
-        if name in BUILTIN_EXCEPTIONS or name in BUILTIN_PRELUDE_TYPE_NAMES:
+        if name in _BUILTIN_FALLBACK_TYPE_NAMES:
             return
         self._types.pop(name, None)
         self._alias_targets.pop(name, None)
@@ -2068,12 +2072,7 @@ class TypeEnvironment:
         # Direct named type (record, enum, exception, prelude).
         typ = self._types.get(name)
         if typ is not None:
-            builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
-            if name in builtin and not _is_own_builtin_declaration(name, typ):
-                selected = self._resolve_bare_type(name, span)
-                if selected is not None:
-                    return selected
-            return typ
+            return self._selected_builtin_type(name, typ, span)
         bare = self._resolve_bare_type(name, span)
         if bare is not None:
             return bare
@@ -2152,11 +2151,10 @@ class TypeEnvironment:
         declaration of the same reserved name is included like any other
         source declaration.
         """
-        builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
         return [
             (name, typ)
             for name, typ in self._types.items()
-            if name not in builtin or _is_own_builtin_declaration(name, typ)
+            if name not in _BUILTIN_FALLBACK_TYPE_NAMES or _is_own_builtin_declaration(name, typ)
         ]
 
     def all_declared_type_names(self) -> frozenset[str]:
@@ -2209,6 +2207,22 @@ class TypeEnvironment:
         template = self.source_type_template_qname(module_id, name, scope_path=scope_path)
         return None if template is None else match_nominal_owner_template(template, concrete)
 
+    def _selected_builtin_type(self, name: str, typ: Type, span: SourceSpan | None) -> Type:
+        """Return the declaration the built-in *name* denotes in this module.
+
+        Every module's type namespace carries the host's reserved fallback for
+        each built-in name, whether or not anything declares it. Once a
+        standard-library module declares that name, the loaded declaration is
+        what the name means, and a reference here reaches it through the
+        ordinary bare-name routes. Type references and owner-form enumeration
+        both go through this, so they can never disagree about which
+        declaration a built-in name denotes.
+        """
+        if name not in _BUILTIN_FALLBACK_TYPE_NAMES or _is_own_builtin_declaration(name, typ):
+            return typ
+        selected = self._resolve_bare_type(name, span)
+        return typ if selected is None else selected
+
     def source_type_template_qname(
         self, module_id: ModuleId, name: str, *, scope_path: ScopePath = ()
     ) -> TypeTemplate | None:
@@ -2245,7 +2259,9 @@ class TypeEnvironment:
                 )
             return TypeTemplate(template, type_params)
         resolved = self._types.get(local_name)
-        return None if resolved is None else TypeTemplate(resolved)
+        if resolved is None:
+            return None
+        return TypeTemplate(self._selected_builtin_type(local_name, resolved, None))
 
     def _own_source_type_names(self) -> frozenset[str]:
         cached = self._sealed_own_source_type_names
@@ -2699,9 +2715,8 @@ class TypeEnvironment:
         self._assert_mutable()
         if not other.is_sealed:
             raise AssertionError("cannot seed from an unsealed type environment")
-        builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
         incoming_type_names = (
-            {name for name in other._types if name not in builtin}
+            {name for name in other._types if name not in _BUILTIN_FALLBACK_TYPE_NAMES}
             | set(other._alias_targets)
             | set(other._generic_types)
             | set(other._alias_type_params)
@@ -2721,7 +2736,7 @@ class TypeEnvironment:
         if merge_type_table:
             self._type_table.merge_from(other._type_table)
         for name, typ in other._types.items():
-            if name not in builtin or _is_own_builtin_declaration(name, typ):
+            if name not in _BUILTIN_FALLBACK_TYPE_NAMES or _is_own_builtin_declaration(name, typ):
                 self._types[name] = typ
         self._alias_targets.update(other._alias_targets)
         self._resolved_aliases.update(other._resolved_aliases)

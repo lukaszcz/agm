@@ -212,3 +212,28 @@ def test_execution_packages_do_not_import_the_inference_engine(package: str) -> 
     ]
 
     assert violations == []
+
+
+#: Only prelude injection may key on the prelude module's identity: the host
+#: recognizes a standard built-in declaration by the ``builtin`` keyword in any
+#: standard-library module, never by that module being ``std/prelude``.
+#: ``modules/ids.py`` defines the id and ``modules/loader.py`` injects the
+#: synthetic import (and decides which module supersedes or forgoes it).
+_PRELUDE_ID_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "modules/ids.py",
+        "modules/loader.py",
+    }
+)
+
+
+def test_prelude_module_identity_is_used_only_for_prelude_injection() -> None:
+    """Nothing outside prelude injection may ask which module is the prelude."""
+    violations = sorted(
+        str(path.relative_to(AGL_ROOT))
+        for path in AGL_ROOT.rglob("*.py")
+        if "STD_PRELUDE_ID" in path.read_text(encoding="utf-8")
+        and str(path.relative_to(AGL_ROOT)) not in _PRELUDE_ID_ALLOWLIST
+    )
+
+    assert violations == []

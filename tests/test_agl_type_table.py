@@ -20,7 +20,7 @@ from agm.agl.ir.reserved_nominals import (
     RESERVED_NOMINAL_NAMES,
     reserved_nominal_id,
 )
-from agm.agl.modules.ids import ENTRY_ID, STD_OPTION_ID, STD_PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, RESERVED_ID, STD_PRELUDE_ID, ModuleId
 from agm.agl.repl import ReplSession
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.analyses import (
@@ -2010,35 +2010,33 @@ class TestBuiltinSeeding:
     def test_all_prelude_types_resolvable(self) -> None:
         table = create_seeded_type_table()
         for name, typ in BUILTIN_PRELUDE_TYPES.items():
-            typedef = table.get(STD_PRELUDE_ID, name)
+            typedef = table.get(RESERVED_ID, name)
             assert typedef is not None
             expected = BUILTIN_PRELUDE_TYPE_DEFS[name]
             if isinstance(typ, RecordType):
-                handle = RecordType(
-                    name=name, module_id=STD_PRELUDE_ID, decl_id=typedef.decl_node_id
-                )
+                handle = RecordType(name=name, module_id=RESERVED_ID, decl_id=typedef.decl_node_id)
                 assert dict(table.record_fields(handle)) == dict(expected.fields)
             elif isinstance(typ, ExceptionType):
                 handle = ExceptionType(
-                    name=name, module_id=STD_PRELUDE_ID, decl_id=typedef.decl_node_id
+                    name=name, module_id=RESERVED_ID, decl_id=typedef.decl_node_id
                 )
                 assert table.exception_def(handle) == expected
             else:
-                handle = EnumType(name=name, module_id=STD_PRELUDE_ID, decl_id=typedef.decl_node_id)
+                handle = EnumType(name=name, module_id=RESERVED_ID, decl_id=typedef.decl_node_id)
                 result = _enum_fields(table, handle)
                 assert {v: dict(f) for v, f in result.items()} == {
                     member.name: dict(table.record_fields(member)) for member in expected.members
                 }
 
-    def test_generic_option_seeded_under_std_option(self) -> None:
+    def test_generic_option_seeded_under_the_reserved_sentinel(self) -> None:
         table = create_seeded_type_table()
-        typedef = table.get(STD_OPTION_ID, "Option")
+        typedef = table.get(RESERVED_ID, "Option")
         assert typedef is not None
         assert typedef.type_params == ("T",)
         handle = EnumType(
             name="Option",
             type_args=(TextType(),),
-            module_id=STD_OPTION_ID,
+            module_id=RESERVED_ID,
             decl_id=typedef.decl_node_id,
         )
         result = _enum_fields(table, handle)
@@ -2590,7 +2588,7 @@ class TestCastClassification:
 
     def test_exception_to_json_total(self) -> None:
         table = create_seeded_type_table()
-        source = ExceptionType(name="Abort", module_id=STD_PRELUDE_ID)
+        source = ExceptionType(name="Abort", module_id=RESERVED_ID)
         assert cast_classification(source, JsonType(), table) == CastKind.TOTAL_JSON
 
     def test_array_of_record_to_json_total(self) -> None:
@@ -4187,7 +4185,7 @@ class TestDeclarationIdentity:
         decl_ids = [
             handle.decl_id
             for mid, module in checked.modules.items()
-            if not mid.is_entry and mid != STD_PRELUDE_ID
+            if not mid.is_entry and not mid.is_standard_library
             for handle in [module.type_env.get_type("Point")]
             if isinstance(handle, RecordType)
         ]
@@ -4198,13 +4196,24 @@ class TestDeclarationIdentity:
     def test_stdlib_declarations_of_reserved_names_adopt_their_source_identity(
         self, tmp_path: Path
     ) -> None:
-        """Loading ``std/prelude`` selects its declarations over the reserved
-        fallbacks without making their identity depend on the module path."""
+        """Loading the standard library selects its declarations over the
+        reserved fallbacks without making their identity depend on which
+        standard-library module happens to declare the name."""
         checked = _check_program(tmp_path, {"entry": "()"})
         declared_reserved = set(RESERVED_NOMINAL_NAMES) - COMPATIBILITY_PRELUDE_TYPE_NAMES
         assert "Option" in declared_reserved
         for name in sorted(declared_reserved):
-            module = checked.modules[STD_OPTION_ID if name == "Option" else STD_PRELUDE_ID]
+            declaring = [
+                module
+                for mid, module in checked.modules.items()
+                if mid.is_standard_library
+                and any(
+                    isinstance(item, (RecordDef, EnumDef, ExceptionDef)) and item.name == name
+                    for item in module.resolved.program.body.items
+                )
+            ]
+            assert len(declaring) == 1, name
+            module = declaring[0]
             declarations = {
                 item.name: item
                 for item in module.resolved.program.body.items

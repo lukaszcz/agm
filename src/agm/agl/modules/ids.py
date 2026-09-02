@@ -10,10 +10,12 @@ from dataclasses import dataclass
 # followed by letters, digits, or underscores.
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-# Reserved segment used exclusively in the ENTRY_ID sentinel.  The NUL byte
-# (\x00) can never appear in a filesystem path segment, so no real .agl file
-# can produce a ModuleId with this segment via from_path.
+# Reserved segments used exclusively in the ENTRY_ID and RESERVED_ID
+# sentinels.  The NUL byte (\x00) can never appear in a filesystem path
+# segment, so no real .agl file can produce a ModuleId with either via
+# from_path.
 _ENTRY_SEGMENT = "\x00entry"
+_RESERVED_SEGMENT = "\x00reserved"
 
 # The ambient standard-library registry predates ordinary module-name
 # validation. It is a fixed loader-owned path, not a user-definable spelling.
@@ -26,6 +28,9 @@ Every layer that renders an entry-qualified name for a user recognizes this
 label, so it is defined once here rather than spelled at each of them.
 """
 
+RESERVED_DISPLAY = "<builtin>"
+"""The label for the host's own reserved identities, which have no module."""
+
 
 @dataclass(frozen=True, slots=True)
 class ModuleId:
@@ -35,9 +40,10 @@ class ModuleId:
     corresponds to ``foo/bar/baz`` and to the file ``foo/bar/baz.agl`` under a
     root.
 
-    The module-system sentinel :data:`ENTRY_ID` is the only ``ModuleId`` whose
-    ``is_entry`` property returns ``True``.  Its reserved segment contains a
-    NUL byte and cannot be produced by :meth:`from_path`.
+    The module-system sentinels :data:`ENTRY_ID` and :data:`RESERVED_ID` are
+    the only ``ModuleId``s whose ``is_entry`` / ``is_reserved`` properties
+    return ``True``.  Their reserved segments contain a NUL byte and cannot be
+    produced by :meth:`from_path`.
     """
 
     segments: tuple[str, ...]
@@ -51,6 +57,30 @@ class ModuleId:
         """Return ``True`` if this is the distinguished entry-module sentinel."""
         return _ENTRY_SEGMENT in self.segments
 
+    @property
+    def is_reserved(self) -> bool:
+        """Return ``True`` if this is the host's own reserved-identity sentinel."""
+        return _RESERVED_SEGMENT in self.segments
+
+    @property
+    def is_standard_library(self) -> bool:
+        """Return ``True`` for a module under the ``std`` tree.
+
+        A ``builtin`` declaration in any such module is the *standard*
+        declaration of its name; a ``builtin`` declaration anywhere else
+        overrides it.
+        """
+        return self.segments[:1] == ("std",)
+
+    @property
+    def owns_standard_builtins(self) -> bool:
+        """Return whether a ``builtin`` owned here is the standard one for its name.
+
+        True for every standard-library module and for the reserved sentinel,
+        whose identities stand in for a standard declaration nothing loaded.
+        """
+        return self.is_standard_library or self.is_reserved
+
     # ------------------------------------------------------------------
     # String representations
     # ------------------------------------------------------------------
@@ -63,6 +93,8 @@ class ModuleId:
         """Return a user-facing module label that never exposes sentinel bytes."""
         if self.is_entry:
             return ENTRY_DISPLAY
+        if self.is_reserved:
+            return RESERVED_DISPLAY
         return self.path_str()
 
     def synthetic_name_component(self) -> str:
@@ -124,12 +156,13 @@ def spell_declaration(
     """Render a declaration path the way a reader in *local_to* would write it.
 
     A declaration in the reading module needs no module qualifier, so it is
-    spelled by its path alone; anything else is prefixed with the owning
+    spelled by its path alone, as does a reserved host identity, which has no
+    module a reader could name; anything else is prefixed with the owning
     module's user-facing label.  Diagnostics that suggest a disambiguating
     spelling use this so the suggestion is one the reader can actually type.
     """
     scoped = spell_scope_path(path)
-    if local_to is not None and module_id == local_to:
+    if module_id.is_reserved or (local_to is not None and module_id == local_to):
         return scoped
     return f"{module_id.display()}::{scoped}"
 
@@ -144,17 +177,19 @@ def spell_declaration(
 #: via :meth:`ModuleId.from_path`.  Use ``module_id.is_entry`` to test.
 ENTRY_ID: ModuleId = ModuleId(segments=(_ENTRY_SEGMENT,))
 
-#: Logical module id for the shipped standard-library prelude. Built-in
-#: types and functions (``ExecResult``, every built-in exception, ``exec``,
-#: ``ask``, ...) are declared here (``stdlib/std/prelude.agl``); ``Option`` is
-#: instead declared by :data:`STD_OPTION_ID`. A program that declares nothing
-#: of its own for a built-in name is answered with the owning module's identity
-#: (see :class:`~agm.agl.ir.builtin_nominals.BuiltinNominals`).
-STD_PRELUDE_ID: ModuleId = ModuleId(segments=("std", "prelude"))
+#: Distinguished sentinel owning the host's *reserved* nominal identities --
+#: the fallback handles, shapes, and descriptors a host-known built-in name
+#: carries when no source declares it (notably under ``--no-stdlib``).  They
+#: belong to no file, so they carry this sentinel rather than any real
+#: module's identity, and they spell bare wherever a name is rendered.
+RESERVED_ID: ModuleId = ModuleId(segments=(_RESERVED_SEGMENT,))
 
-#: Logical module id for the shipped Option standard library
-#: (``stdlib/std/option.agl``).
-STD_OPTION_ID: ModuleId = ModuleId(segments=("std", "option"))
+#: Logical module id for the shipped standard-library prelude
+#: (``stdlib/std/prelude.agl``), the module every other module implicitly
+#: imports.  It is the prelude *injection* point only: which module declares a
+#: given ``builtin`` is not part of its meaning -- see
+#: :attr:`ModuleId.is_standard_library`.
+STD_PRELUDE_ID: ModuleId = ModuleId(segments=("std", "prelude"))
 
 #: Logical module id for the shipped engine-settings standard library
 #: (``std/config``), which declares the engine keys as ``builtin var`` bindings.

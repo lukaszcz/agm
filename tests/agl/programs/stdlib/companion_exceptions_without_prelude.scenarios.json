@@ -1,0 +1,46 @@
+{
+  "scenarios": [
+    {
+      "name": "array_first_on_empty_is_catchable",
+      "no_stdlib": true,
+      "params": {"surface": "array", "guarded": true},
+      "expect": {"stdout_contains": ["caught", "array index out of range"]}
+    },
+    {
+      "name": "array_first_on_empty_raises_index_error",
+      "no_stdlib": true,
+      "params": {"surface": "array", "guarded": false},
+      "expect": {"raises": {"type": "IndexError", "fields": {"index": 0, "length": 0}}}
+    },
+    {
+      "name": "dict_get_missing_key_raises_key_error",
+      "no_stdlib": true,
+      "params": {"surface": "dict", "guarded": false},
+      "expect": {"raises": {"type": "KeyError", "fields": {"key": "missing"}}}
+    },
+    {
+      "name": "dict_get_missing_key_is_catchable",
+      "no_stdlib": true,
+      "params": {"surface": "dict", "guarded": true},
+      "expect": {"stdout_contains": ["caught", "dictionary key not found"]}
+    },
+    {
+      "name": "text_index_of_missing_is_catchable",
+      "no_stdlib": true,
+      "params": {"surface": "text", "guarded": true},
+      "expect": {"stdout_contains": ["caught", "text substring not found"]}
+    },
+    {
+      "name": "random_choice_on_empty_raises_index_error",
+      "no_stdlib": true,
+      "params": {"surface": "random", "guarded": false},
+      "expect": {"raises": {"type": "IndexError", "fields": {"index": 0, "length": 0}}}
+    },
+    {
+      "name": "json_parse_failure_raises_json_parse_error",
+      "no_stdlib": true,
+      "params": {"surface": "json", "guarded": false},
+      "expect": {"raises": {"type": "JsonParseError"}}
+    }
+  ]
+}

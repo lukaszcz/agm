@@ -55,7 +55,7 @@ from typing import Literal, Protocol, TypeGuard, assert_never, cast
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic, static_root_message
 from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import ENTRY_ID, STD_OPTION_ID, STD_PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.imports import (
     qualification_repair_guidance,
 )
@@ -943,7 +943,7 @@ class _Checker:
                 is_method=is_method,
                 method_receiver=method_receiver,
                 method_receiver_name=method_receiver_name,
-                allow_stdlib_session_declaration=self._module_id == STD_PRELUDE_ID,
+                allow_stdlib_session_declaration=self._module_id.is_standard_library,
                 static_kind=static_kind,
             )
             if not any(
@@ -4451,6 +4451,21 @@ class _Checker:
 
     # --- member access ---
 
+    def _is_standard_option_enum(self, owner: EnumType) -> bool:
+        """Return whether *owner* is the standard ``Option`` enum.
+
+        ``Option``'s member records carry no methods of their own, so a
+        projection off one is retried against the owning enum. The owner
+        qualifies when it is a standard-library ``builtin`` declaration of that
+        name, or the host's reserved fallback identity for it; a user's own
+        enum that happens to be named ``Option`` does not.
+        """
+        typedef = self._env.type_table.get_by_id(owner.decl_id)
+        return owner.name == "Option" and (
+            owner.module_id.is_reserved
+            or (owner.module_id.is_standard_library and typedef is not None and typedef.is_builtin)
+        )
+
     def _bound_method_type(
         self,
         method: MethodDef,
@@ -4619,11 +4634,7 @@ class _Checker:
                 method = self._env.type_table.lookup_method(obj_type, node.field)
                 if isinstance(obj_type, RecordType) and method is None:
                     enum_owners = self._env.type_table.enum_owners_for_member(obj_type)
-                    if (
-                        len(enum_owners) == 1
-                        and enum_owners[0].module_id == STD_OPTION_ID
-                        and enum_owners[0].name == "Option"
-                    ):
+                    if len(enum_owners) == 1 and self._is_standard_option_enum(enum_owners[0]):
                         method_receiver = enum_owners[0]
                         method = self._env.type_table.lookup_method(method_receiver, node.field)
             else:

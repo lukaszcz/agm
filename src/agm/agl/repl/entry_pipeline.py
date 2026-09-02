@@ -862,17 +862,18 @@ class EntryPipeline:
             self._ctx._link_image.mark_linked(module_ids)
 
         def completed_library_module_ids() -> frozenset[ModuleId]:
-            """Return newly initialized modules whose dependencies also completed."""
-            from agm.agl.modules.ids import STD_PRELUDE_ID
+            """Return newly initialized modules whose dependencies also completed.
 
+            Every newly loaded module answers the same question: its own params
+            were installed, every one of its initializers ran, and each of its
+            dependencies is retained too. No module is privileged -- the
+            standard library reaches this test exactly as a user library does.
+            """
             installed_symbols = (
                 self._ctx._active_imported_params.keys() | interp.entry_param_symbols_installed
             )
             candidates: set[ModuleId] = set()
             for module_id in new_modules:
-                if module_id == STD_PRELUDE_ID:
-                    candidates.add(module_id)
-                    continue
                 module = lowered.program.modules[module_id]
                 module_params = tuple(
                     param for param in lowered.program.params if param.module == module_id

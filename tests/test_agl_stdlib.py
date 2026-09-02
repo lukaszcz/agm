@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.modules.ids import STD_PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.scope import AglScopeError
@@ -208,8 +208,7 @@ def test_std_core_declares_every_public_builtin() -> None:
     assert functions == set(BUILTIN_CALL_NAMES)
     assert statics == {
         ("::".join(owner_path), static_name)
-        for (module_id, owner_path), names in BUILTIN_TYPE_STATICS.items()
-        if module_id == STD_PRELUDE_ID
+        for owner_path, names in BUILTIN_TYPE_STATICS.items()
         for static_name in names
     }
 

@@ -1,0 +1,43 @@
+# A standard-library companion raises the built-in exceptions its own module
+# names, so importing that module is all a program needs: these scenarios run
+# without the automatic prelude and still see real, catchable exceptions come
+# out of the array, dict, json, text, and random surfaces. The program
+# declares its own
+# scoped `print` so nothing here reaches for the prelude.
+import std/array
+import std/dict
+import std/json::parse
+import std/random::choice
+import std/text
+
+scope Host
+  builtin def print[T](value: T) -> unit
+end Host
+
+param surface: text
+param guarded: bool
+
+def touch() -> text =
+  case surface of
+    | "array" =>
+      let values: array[int] = []
+      "first %{values.first()}"
+    | "dict" =>
+      let entries: dict[text, int] = {}
+      "get %{entries.get("missing")}"
+    | "text" => "at %{"abc".index-of("z")}"
+    | "random" =>
+      let empty: array[int] = []
+      "choice %{choice(empty)}"
+    | _ => "kind %{parse("not json").kind()}"
+
+def report() -> text =
+  if guarded =>
+    try
+      touch()
+    catch _ as e =>
+      "caught %{e.message}"
+  else => touch()
+
+program def main() -> unit =
+  Host::print(report())

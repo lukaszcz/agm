@@ -647,9 +647,9 @@ class ConstructorChecker:
         there. Falls back to the unqualified local registry for cross-module
         types exposed by import tails but not registered in the shared table
         — including a host builtin (e.g. an exception like ``Abort``) whose
-        constructor candidate is ambiently seeded under ``std/prelude``'s module
-        id even when the standard library is not loaded, so the shared table
-        never gained an entry for it. Raises a proper diagnostic, rather than
+        constructor candidate is ambiently seeded under the reserved sentinel
+        module even when the standard library is not loaded, so the shared
+        table never gained an entry for it. Raises a proper diagnostic, rather than
         returning ``None``, when neither lookup finds a constructible owner.
         """
         owner: Type | None = self._ctx._env.resolve_constructible_type_by_module_id(

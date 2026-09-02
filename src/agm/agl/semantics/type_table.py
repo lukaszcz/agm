@@ -64,7 +64,7 @@ from agm.agl.ir.reserved_nominals import (
     require_reserved_enum_member_id,
 )
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id as _reserved_id
-from agm.agl.modules.ids import STD_OPTION_ID, STD_PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import RESERVED_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import (
     HOST_MINTED_PRELUDE_TYPE_IDS,
@@ -295,7 +295,7 @@ class TypeTable:
         # Memo for exception_field_kinds — same keying convention as
         # _exception_fields_cache above.
         self._exception_field_kinds_cache: dict[DeclId, tuple[tuple[str, str], ...]] = {}
-        # Whole-table indexes over the live ``std/prelude`` builtin declarations.
+        # Whole-table indexes over the live standard-library builtin declarations.
         # Both answer questions about what the session declares as a whole, so
         # they are invalidated wholesale like the fixpoints below.
         self._standard_builtins: dict[str, TypeDef] | None = None
@@ -947,15 +947,15 @@ class TypeTable:
 
         Builtin declarations are unique by complete scoped name, so a compile
         unit may contain several paths with this bare name. A live declaration
-        outside ``std/prelude`` overrides the standard declaration; within each
-        tier the newest registered match wins. An orphaned declaration
+        outside the standard library overrides the standard declaration; within
+        each tier the newest registered match wins. An orphaned declaration
         (:meth:`orphan`) is skipped because it never took effect.
         """
         standard: TypeDef | None = None
         override: TypeDef | None = None
         for decl_id, typedef in self._defs.items():
             if typedef.is_builtin and typedef.name == name and decl_id not in self._orphaned:
-                if typedef.module_id == STD_PRELUDE_ID:
+                if typedef.module_id.is_standard_library:
                     standard = typedef
                 else:
                     override = typedef
@@ -979,7 +979,7 @@ class TypeTable:
             for decl_id, typedef in self._defs.items():
                 if (
                     typedef.is_builtin
-                    and typedef.module_id in {STD_PRELUDE_ID, STD_OPTION_ID}
+                    and typedef.module_id.is_standard_library
                     and decl_id not in self._orphaned
                 ):
                     result[typedef.name] = typedef
@@ -1001,7 +1001,7 @@ class TypeTable:
         overrides: dict[str, TypeDef] = {}
         for decl_id, typedef in self._defs.items():
             if typedef.is_builtin and decl_id not in self._orphaned:
-                target = standard if typedef.module_id == STD_PRELUDE_ID else overrides
+                target = standard if typedef.module_id.is_standard_library else overrides
                 target[typedef.name] = typedef
         return {**standard, **overrides}
 
@@ -1746,7 +1746,7 @@ def _builtin_enum_defs(
     variants: tuple[tuple[str, tuple[tuple[str, Type], ...]], ...],
     *,
     type_params: tuple[str, ...] = (),
-    module_id: ModuleId = STD_PRELUDE_ID,
+    module_id: ModuleId = RESERVED_ID,
 ) -> tuple[TypeDef, tuple[TypeDef, ...]]:
     """Build canonical enum and scoped record-member definitions for the prelude."""
     scope_path = (name,)
@@ -1813,7 +1813,7 @@ _OUTPUT_CONTRACT_OPTION_DEF, _OUTPUT_CONTRACT_OPTION_MEMBER_DEFS = _builtin_enum
                     "value",
                     RecordType(
                         name="OutputContract",
-                        module_id=STD_PRELUDE_ID,
+                        module_id=RESERVED_ID,
                         decl_id=_reserved_id("OutputContract"),
                     ),
                 ),
@@ -1825,7 +1825,6 @@ _OPTION_DEF, _OPTION_MEMBER_DEFS = _builtin_enum_defs(
     "Option",
     (("None", ()), ("Some", (("value", TypeVarType("T")),))),
     type_params=("T",),
-    module_id=STD_OPTION_ID,
 )
 
 
@@ -1846,7 +1845,7 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
     "ExecResult": TypeDef(
         kind="record",
         name="ExecResult",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         fields=(
             ("stdout", TextType()),
             ("exit_code", IntType()),
@@ -1859,7 +1858,7 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
     "OutputContract": TypeDef(
         kind="record",
         name="OutputContract",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         fields=(
             ("target_type", TextType()),
             ("codec_name", TextType()),
@@ -1873,11 +1872,11 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
     "AgentRequest": TypeDef(
         kind="record",
         name="AgentRequest",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         fields=(
             (
                 "agent",
-                EnumType(name="Agent", module_id=STD_PRELUDE_ID, decl_id=_reserved_id("Agent")),
+                EnumType(name="Agent", module_id=RESERVED_ID, decl_id=_reserved_id("Agent")),
             ),
             ("prompt", TextType()),
             (
@@ -1885,7 +1884,7 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
                 EnumType(
                     name="Option",
                     type_args=(TextType(),),
-                    module_id=STD_OPTION_ID,
+                    module_id=RESERVED_ID,
                     decl_id=_reserved_id("Option"),
                 ),
             ),
@@ -1894,7 +1893,7 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
                 EnumType(
                     name="Option",
                     type_args=(TextType(),),
-                    module_id=STD_OPTION_ID,
+                    module_id=RESERVED_ID,
                     decl_id=_reserved_id("Option"),
                 ),
             ),
@@ -1903,7 +1902,7 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
                 EnumType(
                     name="Option",
                     type_args=(JsonType(),),
-                    module_id=STD_OPTION_ID,
+                    module_id=RESERVED_ID,
                     decl_id=_reserved_id("Option"),
                 ),
             ),
@@ -1913,7 +1912,7 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
                 EnumType(
                     name="Option",
                     type_args=(TextType(),),
-                    module_id=STD_OPTION_ID,
+                    module_id=RESERVED_ID,
                     decl_id=_reserved_id("Option"),
                 ),
             ),
@@ -1924,18 +1923,18 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
     "Session": TypeDef(
         kind="record",
         name="Session",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         fields=(
             ("id", TextType()),
             (
                 "agent",
-                EnumType(name="Agent", module_id=STD_PRELUDE_ID, decl_id=_reserved_id("Agent")),
+                EnumType(name="Agent", module_id=RESERVED_ID, decl_id=_reserved_id("Agent")),
             ),
             (
                 "transport",
                 EnumType(
                     name="SessionTransport",
-                    module_id=STD_PRELUDE_ID,
+                    module_id=RESERVED_ID,
                     decl_id=_reserved_id("SessionTransport"),
                 ),
             ),
@@ -1944,7 +1943,7 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
     "SessionStats": TypeDef(
         kind="record",
         name="SessionStats",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         fields=(
             ("input-tokens", IntType()),
             ("output-tokens", IntType()),
@@ -1955,7 +1954,7 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
     "SessionError": TypeDef(
         kind="exception",
         name="SessionError",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         fields=(("operation", TextType()),),
         base=_reserved_id("Exception"),
         field_kinds=("standard",),
@@ -1964,7 +1963,7 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
 
 BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = _with_reserved_ids(_PRELUDE_SHAPES)
 
-# Generic ``Option`` template under ``STD_OPTION_ID`` (type parameter ``T``,
+# Generic ``Option`` template under the reserved sentinel (type parameter ``T``,
 # variants ``None``/``Some(value: T)``), matching the shape of the concrete
 # ``Option[text]``/``Option[json]`` prelude constants, so a program loaded
 # without the standard library can still resolve its member set on
@@ -2030,7 +2029,7 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
     "Exception": TypeDef(
         kind="exception",
         name="Exception",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         fields=(("message", TextType()),),
         abstract=True,
         field_kinds=_named_only(1),
@@ -2038,11 +2037,11 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
     "AgentCallError": TypeDef(
         kind="exception",
         name="AgentCallError",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         fields=(
             (
                 "agent",
-                EnumType(name="Agent", module_id=STD_PRELUDE_ID, decl_id=_reserved_id("Agent")),
+                EnumType(name="Agent", module_id=RESERVED_ID, decl_id=_reserved_id("Agent")),
             ),
             ("cause", TextType()),
             ("metadata", JsonType()),
@@ -2053,11 +2052,11 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
     "AgentParseError": TypeDef(
         kind="exception",
         name="AgentParseError",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         fields=(
             (
                 "agent",
-                EnumType(name="Agent", module_id=STD_PRELUDE_ID, decl_id=_reserved_id("Agent")),
+                EnumType(name="Agent", module_id=RESERVED_ID, decl_id=_reserved_id("Agent")),
             ),
             ("target_type", TextType()),
             ("expected_schema", JsonType()),
@@ -2073,7 +2072,7 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
     "ExecError": TypeDef(
         kind="exception",
         name="ExecError",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         fields=(
             ("command", TextType()),
             ("exit_code", IntType()),
@@ -2089,7 +2088,7 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
     "ExternError": TypeDef(
         kind="exception",
         name="ExternError",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         fields=(("function", TextType()), ("python_type", TextType())),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(2),
@@ -2097,7 +2096,7 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
     "MaxIterationsExceeded": TypeDef(
         kind="exception",
         name="MaxIterationsExceeded",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         fields=(
             ("limit", IntType()),
             ("condition", TextType()),
@@ -2110,7 +2109,7 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
     "MatchError": TypeDef(
         kind="exception",
         name="MatchError",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         fields=(("scrutinee_type", TextType()), ("scrutinee", JsonType())),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(2),
@@ -2118,7 +2117,7 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
     "IndexError": TypeDef(
         kind="exception",
         name="IndexError",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         fields=(("index", IntType()), ("length", IntType())),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(2),
@@ -2126,7 +2125,7 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
     "KeyError": TypeDef(
         kind="exception",
         name="KeyError",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         fields=(("key", TextType()),),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(1),
@@ -2134,13 +2133,13 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
     "TypeError": TypeDef(
         kind="exception",
         name="TypeError",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         base=_EXCEPTION_ROOT_ID,
     ),
     "ArithmeticError": TypeDef(
         kind="exception",
         name="ArithmeticError",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         fields=(("operation", TextType()),),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(1),
@@ -2151,7 +2150,7 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
     "UndefinedVariableError": TypeDef(
         kind="exception",
         name="UndefinedVariableError",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         fields=(("name", TextType()),),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(1),
@@ -2159,7 +2158,7 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
     "ImmutableBindingError": TypeDef(
         kind="exception",
         name="ImmutableBindingError",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         fields=(("name", TextType()), ("operation", TextType())),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(2),
@@ -2167,14 +2166,14 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
     "Abort": TypeDef(
         kind="exception",
         name="Abort",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         base=_EXCEPTION_ROOT_ID,
     ),
     # AgL: RecursionError raised when the call-depth limit is exceeded.
     "RecursionError": TypeDef(
         kind="exception",
         name="RecursionError",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         fields=(("limit", IntType()),),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(1),
@@ -2182,7 +2181,7 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
     "CastError": TypeDef(
         kind="exception",
         name="CastError",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         fields=(
             ("source_type", TextType()),
             ("target_type", TextType()),
@@ -2194,7 +2193,7 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
     "JsonParseError": TypeDef(
         kind="exception",
         name="JsonParseError",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         fields=(("raw", TextType()),),
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_named_only(1),
@@ -2202,13 +2201,13 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
     "RangeError": TypeDef(
         kind="exception",
         name="RangeError",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         base=_EXCEPTION_ROOT_ID,
     ),
     "CyclicValueError": TypeDef(
         kind="exception",
         name="CyclicValueError",
-        module_id=STD_PRELUDE_ID,
+        module_id=RESERVED_ID,
         base=_EXCEPTION_ROOT_ID,
     ),
 }

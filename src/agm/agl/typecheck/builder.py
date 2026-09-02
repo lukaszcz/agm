@@ -50,8 +50,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
 from typing import cast
 
-from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
-from agm.agl.modules.ids import ENTRY_ID, STD_OPTION_ID, STD_PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.type_table import (
     TypeDef,
     source_enum_member_decl_id,
@@ -66,7 +65,6 @@ from agm.agl.semantics.types import (
     Type,
     TypeVarType,
     free_type_vars,
-    transform_type,
 )
 from agm.agl.syntax.nodes import (
     EnumDef,
@@ -799,50 +797,11 @@ class _TypeBuilder:
         bare_name = _bare_name(stmt.name)
         expected = expected_contracts[bare_name]
         actual = contract_for_typedef(typedef, self._env.type_table, base_type=base_type)
-        actual = self._normalize_option_contract(actual)
         if actual != expected:
             raise AglTypeError(
                 f"Builtin type '{stmt.name}' has an invalid definition.",
                 span=stmt.span,
             )
-
-    @staticmethod
-    def _normalize_option_contract(contract: BuiltinTypeContract) -> BuiltinTypeContract:
-        """Map legacy ``std/prelude::Option`` spellings onto Option's canonical module.
-
-        The shipped ``std/prelude`` declarations use ``Option`` through their
-        compatibility prelude binding. Host contracts own that generic enum in
-        ``std/option``, so normalize this spelling only while comparing a
-        builtin declaration's structural contract.
-        """
-
-        def normalize(typ: Type) -> Type:
-            def move_option(node: Type) -> Type:
-                if isinstance(node, EnumType) and (
-                    node.name == "Option" and node.module_id == STD_PRELUDE_ID
-                ):
-                    return replace(
-                        node,
-                        module_id=STD_OPTION_ID,
-                        decl_id=require_reserved_nominal_id("Option"),
-                    )
-                return node
-
-            return transform_type(typ, move_option)
-
-        return replace(
-            contract,
-            fields=tuple((name, normalize(typ)) for name, typ in contract.fields),
-            members=tuple(
-                replace(
-                    member,
-                    type_args=tuple(normalize(typ) for typ in member.type_args),
-                    fields=tuple((name, normalize(typ)) for name, typ in member.fields),
-                )
-                for member in contract.members
-            ),
-            base=(None if contract.base is None else cast(ExceptionType, normalize(contract.base))),
-        )
 
     def _resolve_field_type(self, fd: Param, type_vars: frozenset[str] = frozenset()) -> Type:
         """Resolve a field's TypeExpr to a semantic Type.

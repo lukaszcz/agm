@@ -1,4 +1,4 @@
-"""Constructors for ``std/prelude::Option`` member-record values."""
+"""Constructors for standard ``Option`` member-record values."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from agm.agl.semantics.values import RecordValue, TextValue, Value
 
 
 def some_value(value: Value, *, nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS) -> RecordValue:
-    """Build a ``std/prelude::Option::Some(value)`` member record."""
+    """Build an ``Option::Some(value)`` member record."""
     member = nominals.resolve_standard_member("Option", "Some")
     return RecordValue(
         nominal=member.nominal,
@@ -17,7 +17,7 @@ def some_value(value: Value, *, nominals: BuiltinNominals = NO_BUILTIN_DECLARATI
 
 
 def none_value(*, nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS) -> RecordValue:
-    """Build a ``std/prelude::Option::None`` member record."""
+    """Build an ``Option::None`` member record."""
     member = nominals.resolve_standard_member("Option", "None")
     return RecordValue(
         nominal=member.nominal,

@@ -165,9 +165,9 @@ from agm.agl.matchcompile import (
     OccurrenceId,
 )
 from agm.agl.modules.ids import (
+    RESERVED_ID,
     STD_CONFIG_ID,
     STD_ENV_ID,
-    STD_PRELUDE_ID,
     ModuleId,
     spell_scope_path,
 )
@@ -294,23 +294,37 @@ def _contract_has_schema(
     )
 
 
+def reserved_fallback_superseded(name: str, type_table: TypeTable) -> bool:
+    """Return whether a loaded standard declaration owns the built-in *name*.
+
+    A reserved shape stands in for the standard declaration of its name. Once
+    any standard-library module declares that name, the source declaration is
+    the identity the host mints and the fallback is unreachable.
+    """
+    return type_table.standard_builtin_declaration(name) is not None
+
+
 def _add_builtin_nominals(
     nominals: dict[NominalId, NominalDescriptor], type_table: TypeTable
 ) -> None:
-    """Register built-in prelude and exception nominal descriptors.
+    """Register the host's reserved prelude and exception nominal descriptors.
 
     Record/enum field and variant names, and exception field names, are all
     resolved through *type_table* (every built-in prelude and exception type
     is seeded into every table by ``create_seeded_type_table``).
+
+    A reserved identity a standard-library declaration supersedes is left out:
+    the source declaration bears that name path, and nothing can reach the
+    fallback.
     """
     for name, typ in BUILTIN_PRELUDE_TYPES.items():
-        if type_table.standard_builtin_declaration(name) is not None:
+        if reserved_fallback_superseded(name, type_table):
             continue
         nominal = NominalId(require_reserved_nominal_id(name))
         if isinstance(typ, RecordType):
             nominals[nominal] = NominalDescriptor(
                 nominal=nominal,
-                module_id=STD_PRELUDE_ID,
+                module_id=RESERVED_ID,
                 scope_path=(),
                 declared_name=name,
                 kind=NominalKind.RECORD,
@@ -324,7 +338,7 @@ def _add_builtin_nominals(
         enum_type = cast(EnumType, typ)
         nominals[nominal] = NominalDescriptor(
             nominal=nominal,
-            module_id=STD_PRELUDE_ID,
+            module_id=RESERVED_ID,
             scope_path=(),
             declared_name=name,
             kind=NominalKind.ENUM,
@@ -338,12 +352,12 @@ def _add_builtin_nominals(
         )
 
     for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
-        if type_table.standard_builtin_declaration(exc_name) is not None:
+        if reserved_fallback_superseded(exc_name, type_table):
             continue
         nominal = NominalId(require_reserved_nominal_id(exc_name))
         nominals[nominal] = NominalDescriptor(
             nominal=nominal,
-            module_id=STD_PRELUDE_ID,
+            module_id=RESERVED_ID,
             scope_path=(),
             declared_name=exc_name,
             kind=NominalKind.EXCEPTION,
@@ -364,7 +378,7 @@ def builtin_nominals_from_declarations(type_table: TypeTable) -> BuiltinNominals
     type a host call (e.g. ``exec``'s default result type) against a
     program's selected declaration, rather than an independent walk of the
     modules' ASTs. Enum members are derived from those same definitions, with
-    the loaded ``std/prelude`` members retained separately for nested standard
+    the loaded standard-library members retained separately for nested standard
     host representations. A name no declaration claims is absent and uses a
     reserved fallback (see
     :meth:`~agm.agl.ir.builtin_nominals.BuiltinNominals.resolve`).
@@ -2293,7 +2307,7 @@ class _Lowerer:
             return False
         if isinstance(session_type, RecordType) and receiver.decl_id == session_type.decl_id:
             return True
-        return method.module_id == STD_PRELUDE_ID and method.scope_path == ("Session",)
+        return method.module_id.is_standard_library and method.scope_path == ("Session",)
 
     def _lower_session_method_call(
         self, call_node: Call, method: MethodDef, span: SourceSpan

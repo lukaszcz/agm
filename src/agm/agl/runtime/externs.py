@@ -319,6 +319,12 @@ class ExternRegistry:
         stale identity reachable by a fresh companion import. Which identity
         wins is therefore decided by the type table's name index (threaded
         through ``bears_name_path``), never by insertion order.
+
+        The host's reserved fallback identities are left out as well: they
+        belong to no module, so there is no ``nominals.<path>`` a companion
+        could address them by. A companion that needs one of those built-ins
+        addresses a real declaration instead, which the module it belongs to
+        imports.
         """
         module = ModuleType("agl")
         setattr(module, "array", _array)
@@ -331,7 +337,7 @@ class ExternRegistry:
         leaves: dict[tuple[str, ...], type[object]] = {}
         for nominal, cls in self._nominal_classes.items():
             descriptor = self._nominal_by_id[nominal]
-            if descriptor.bears_name_path:
+            if descriptor.bears_name_path and not descriptor.module_id.is_reserved:
                 leaves[_nominal_identity_path(descriptor)] = cls
         _build_nominal_namespace(nominals, leaves)
         names: dict[str, list[type[object]]] = {}
@@ -535,7 +541,11 @@ class ExternRegistry:
 
 
 def _nominal_identity_path(descriptor: NominalDescriptor) -> tuple[str, ...]:
-    """Return a nominal's namespace path, rooted by module (or ``entry``) then scope."""
+    """Return a nominal's namespace path, rooted by module (or ``entry``) then scope.
+
+    Only identities that belong to a real module reach here; the reserved
+    sentinel has no path and is filtered out by :meth:`Externs._agl_module`.
+    """
     if descriptor.module_id.is_entry:
         return ("entry", *descriptor.scope_path, descriptor.declared_name)
     return (

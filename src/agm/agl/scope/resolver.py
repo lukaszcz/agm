@@ -50,7 +50,7 @@ from functools import partial
 from typing import TYPE_CHECKING, TypeVar, cast
 
 from agm.agl.diagnostics import static_root_message
-from agm.agl.modules.ids import STD_PRELUDE_ID, ModuleId, spell_declaration
+from agm.agl.modules.ids import RESERVED_ID, ModuleId, spell_declaration
 from agm.agl.scope.imports import (
     EMPTY_IMPORT_ENV,
     BareRoute,
@@ -1223,7 +1223,7 @@ class _Resolver:
                         owner_name=exc_name,
                         owner_decl_node_id=exc_type.decl_id,
                         type_params=(),
-                        owner_module_id=STD_PRELUDE_ID,
+                        owner_module_id=RESERVED_ID,
                         is_builtin=True,
                     )
                 ),
@@ -1250,7 +1250,7 @@ class _Resolver:
                                     owner_name=variant_name,
                                     owner_decl_node_id=member.decl_id,
                                     type_params=member_def.type_params,
-                                    owner_module_id=STD_PRELUDE_ID,
+                                    owner_module_id=RESERVED_ID,
                                     can_match_bare_pattern=not member_def.fields,
                                     owner_path=(type_name,),
                                     is_builtin=True,
@@ -1266,7 +1266,7 @@ class _Resolver:
                             owner_name=type_name,
                             owner_decl_node_id=type_val.decl_id,
                             type_params=(),
-                            owner_module_id=STD_PRELUDE_ID,
+                            owner_module_id=RESERVED_ID,
                             is_builtin=True,
                         )
                     ),
@@ -1277,13 +1277,13 @@ class _Resolver:
         self._constructor_candidates[name] = [
             ref
             for ref in self._constructor_candidates.get(name, [])
-            if ref.owner_module_id != STD_PRELUDE_ID
+            if not ref.owner_module_id.is_reserved
         ]
         key = (scope_path, name)
         self._scoped_constructor_candidates[key] = [
             ref
             for ref in self._scoped_constructor_candidates.get(key, [])
-            if ref.owner_module_id != STD_PRELUDE_ID
+            if not ref.owner_module_id.is_reserved
         ]
 
     def _remove_constructor_candidates_in_type_scope(self, type_scope: ScopePath) -> None:
@@ -1385,9 +1385,12 @@ class _Resolver:
         if cref.is_builtin:
             for index, candidate in enumerate(existing):
                 if candidate.is_builtin and candidate.owner_path == cref.owner_path:
-                    if cref.owner_module_id == STD_PRELUDE_ID:
+                    # A standard-library declaration never displaces an
+                    # override; an override displaces a standard-library or
+                    # reserved one.
+                    if cref.owner_module_id.owns_standard_builtins:
                         return existing
-                    if candidate.owner_module_id == STD_PRELUDE_ID:
+                    if candidate.owner_module_id.owns_standard_builtins:
                         return [*existing[:index], cref, *existing[index + 1 :]]
         for index, candidate in enumerate(existing):
             if _supersedes(candidate, cref):

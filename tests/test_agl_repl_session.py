@@ -1149,6 +1149,29 @@ class TestStdlib:
 
         assert not s.eval_entry("Some(value = 1)").ok
 
+    def test_a_standard_library_module_a_failing_entry_loaded_is_still_retained(self) -> None:
+        """The standard library reaches partial retention like any user library.
+
+        The entry below newly loads ``std/prelude`` and then fails at runtime.
+        Its earlier binding survives only if the freshly loaded module counted
+        as completed, which it does on its own merits -- installed params, all
+        initializers run, dependencies retained -- with no rule of its own.
+        """
+        s = open_session(
+            default_stdlib=False,
+            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+        )
+
+        failed = s.eval_entry(
+            "import std/prelude::*\n"
+            "let present: Option[int] = Some(value = 1)\n"
+            "let broken: decimal = 1 / 0\n"
+        )
+        kept = s.eval_entry("present")
+
+        assert not failed.ok
+        assert kept.ok, kept.diagnostics
+
     def test_core_stdlib_qualified_generic_type_resolves_in_type_definition(self) -> None:
         s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
 

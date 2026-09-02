@@ -6,6 +6,7 @@ import pytest
 
 from agm.agl.modules.ids import (
     ENTRY_ID,
+    RESERVED_ID,
     STD_BUILTIN_METHODS_ID,
     STD_CONFIG_ID,
     STD_PRELUDE_ID,
@@ -164,6 +165,15 @@ class TestSentinelIds:
 
     def test_sentinel_display_hides_its_reserved_segment(self) -> None:
         assert "\x00" not in ENTRY_ID.display()
+
+    def test_reserved_sentinel_never_shows_a_module_path(self) -> None:
+        """The host's own identities belong to no file, so they name none."""
+        assert RESERVED_ID.is_reserved
+        assert not RESERVED_ID.is_entry
+        assert not RESERVED_ID.is_standard_library
+        assert RESERVED_ID.owns_standard_builtins
+        assert "\x00" not in RESERVED_ID.display()
+        assert RESERVED_ID != ENTRY_ID
 
     def test_entry_id_not_equal_to_user_module(self) -> None:
         mid = ModuleId.from_path("main")

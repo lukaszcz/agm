@@ -1034,7 +1034,7 @@ def resolve_program(
             all_public_types=all_public_types,
             allow_root_statements=is_entry and entry_parent_scope is not None,
             is_entry_module=mid == graph.entry_id,
-            is_standard_library_module=bool(mid.segments and mid.segments[0] == "std"),
+            is_standard_library_module=mid.is_standard_library,
             repl_session_scope=entry_repl_session_scope if is_entry else None,
             repl_session_scope_nodes=entry_repl_session_scope_nodes if is_entry else None,
             repl_session_type_paths=entry_repl_session_type_paths if is_entry else None,

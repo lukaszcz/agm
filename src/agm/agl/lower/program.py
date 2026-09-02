@@ -22,7 +22,6 @@ from agm.agl.ir.program import (
     SourceFile,
     VariantDescriptor,
 )
-from agm.agl.ir.reserved_nominals import RESERVED_ENUM_MEMBER_IDS, reserved_nominal_id
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.lowerer import (
     _add_builtin_nominals,
@@ -30,17 +29,30 @@ from agm.agl.lower.lowerer import (
     _LinkState,
     _Lowerer,
     builtin_nominals_from_declarations,
+    reserved_fallback_superseded,
 )
 from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_ENV_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
-from agm.agl.semantics.type_table import TypeTable, is_json_convertible
+from agm.agl.semantics.type_table import TypeDef, TypeTable, is_json_convertible
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
 from agm.agl.syntax.nodes import BuiltinVarDecl, FuncDef, static_items
 from agm.agl.type_schema import build_encode_plan
 from agm.util.text import normalize_newlines
 
 __all__ = ["lower_program"]
+
+
+def _superseded_reserved(typedef: TypeDef, type_table: TypeTable) -> bool:
+    """Return whether *typedef* is a reserved fallback a standard declaration owns.
+
+    A reserved enum's member records go with their enum: a loaded declaration
+    brings its own members, so the fallback's are unreachable too.
+    """
+    if not typedef.module_id.is_reserved:
+        return False
+    owner_name = typedef.scope_path[0] if typedef.scope_path else typedef.name
+    return reserved_fallback_superseded(owner_name, type_table)
 
 
 def _exception_field_encodes(
@@ -51,9 +63,7 @@ def _exception_field_encodes(
     for typedef in type_table.entries():
         if typedef.kind != "exception":
             continue
-        if type_table.standard_builtin_declaration(
-            typedef.name
-        ) is not None and typedef.decl_node_id == reserved_nominal_id(typedef.name):
+        if _superseded_reserved(typedef, type_table):
             continue
         handle = typedef.handle()
         assert isinstance(handle, ExceptionType)
@@ -141,19 +151,12 @@ def lower_program(
     # name index ``TypeTable.get`` itself resolves through: an authoritative,
     # order-independent answer to "which declaration does this name mean now?"
     # that the extern boundary later uses to resolve a companion's bare/dotted
-    # nominal lookup.
+    # nominal lookup. A seeded reserved shape a standard-library declaration
+    # supersedes is skipped: the source declaration is the identity the host
+    # mints for that name.
     for typedef in type_table.entries():
-        standard = type_table.standard_builtin_declaration(typedef.name)
-        if standard is not None and typedef.decl_node_id == reserved_nominal_id(typedef.name):
+        if _superseded_reserved(typedef, type_table):
             continue
-        if typedef.scope_path:
-            enum_name = typedef.scope_path[-1]
-            fallback_member_id = RESERVED_ENUM_MEMBER_IDS.get((enum_name, typedef.name))
-            if (
-                fallback_member_id == typedef.decl_node_id
-                and type_table.standard_builtin_declaration(enum_name) is not None
-            ):
-                continue
         nominal = NominalId(typedef.decl_node_id)
         bears_name_path = (
             type_table.is_current(typedef) and typedef.decl_node_id not in inline_member_ids

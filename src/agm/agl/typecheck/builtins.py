@@ -829,9 +829,9 @@ class BuiltinCallChecker:
     ) -> None:
         """Reject *contract_type* if the host cannot produce a value of its shape.
 
-        Nominal fields filled by the host use the loaded ``std/prelude`` source
-        declaration, falling back to its reserved identity when the standard
-        library is absent. A contract field must name that same standard
+        Nominal fields filled by the host use the loaded standard-library
+        declaration of the name, falling back to its reserved identity when no
+        standard library declares it. A contract field must name that same standard
         declaration, checked recursively through type arguments.
         """
         if contract_type.decl_id in self._coherent_contracts:

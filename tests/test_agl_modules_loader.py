@@ -18,7 +18,7 @@ from agm.agl.modules.errors import (
     ModuleNotFound,
     PackageImportVisibilityError,
 )
-from agm.agl.modules.ids import ENTRY_ID, STD_OPTION_ID, STD_PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_PRELUDE_ID, ModuleId
 from agm.agl.modules.loader import LoadedModule, ModuleGraph, build_repl_graph, load_graph
 from agm.agl.modules.roots import RootSet, assemble_roots
 from agm.agl.syntax.nodes import ImportDecl
@@ -173,7 +173,7 @@ class TestGraphBuild:
 
         assert ENTRY_ID in graph.modules
         assert STD_PRELUDE_ID in graph.modules
-        assert STD_OPTION_ID in graph.modules
+        assert ModuleId.from_path("std/option") in graph.modules
         assert ModuleId.from_path("std/config") in graph.modules
         assert graph.modules[ENTRY_ID].imports[0].module_path == STD_PRELUDE_ID.segments
         assert graph.modules[ENTRY_ID].imports[0].tail == ()

@@ -80,8 +80,13 @@ from agm.agl.ir.operations import (
     ToJson,
     UnaryOp,
 )
-from agm.agl.ir.program import ExecutableProgram, FunctionDescriptor, IrFunctionBody
+from agm.agl.ir.program import (
+    ExecutableProgram,
+    FunctionDescriptor,
+    IrFunctionBody,
+)
 from agm.agl.ir.validate import validate_ir
+from agm.agl.ir.zones import ParamZone
 from agm.agl.lower import LinkImage, LoweredReplEntry, compile_coercion, lower_repl_program
 from agm.agl.lower.lowerer import InitializerOrigin, _Lowerer
 from agm.agl.lower.repl import ParamOrigin, ReplPromotionPlan
@@ -90,6 +95,7 @@ from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import build_repl_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program_seeded
+from agm.agl.runtime.params import decode_param_value
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import ScopeNode
 from agm.agl.semantics.types import (
@@ -105,6 +111,7 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
 )
+from agm.agl.semantics.values import ArrayValue, IntValue, RecordValue, TextValue
 from agm.agl.syntax.nodes import (
     AssignStmt,
     Block,
@@ -721,6 +728,94 @@ class TestLowerProgramValidateIr:
         assert any(
             isinstance(init, IrBind) and isinstance(init.value, IrMakeClosure) for init in inits
         )
+
+
+class TestProgramSignatures:
+    """``lower_program`` builds a host-facing parameter signature per program."""
+
+    def test_parameterless_program_gets_an_empty_signature(self) -> None:
+        prog = _lower("program def main() -> unit = ()\n")
+
+        symbol = next(iter(prog.program_functions))
+        assert prog.program_signatures == {symbol: ()}
+
+    def test_program_parameters_carry_kind_required_and_decoders(self) -> None:
+        source = 'program def main(a: int, /, b: text = "x", *, c: int) -> unit = ()\n'
+        prog = _lower(source)
+
+        symbol = next(iter(prog.program_functions))
+        params = prog.program_signatures[symbol]
+        assert [p.name for p in params] == ["a", "b", "c"]
+        assert [p.kind for p in params] == [
+            ParamZone.POSITIONAL_ONLY,
+            ParamZone.STANDARD,
+            ParamZone.NAMED_ONLY,
+        ]
+        assert [p.required for p in params] == [True, False, True]
+
+        a_param, b_param, c_param = params
+        assert decode_param_value(a_param.external_decoder, "5") == IntValue(5)
+        assert decode_param_value(b_param.external_decoder, "hello") == TextValue("hello")
+        assert decode_param_value(c_param.external_decoder, "7") == IntValue(7)
+
+    def test_two_module_scoped_program_signature_covers_record_alias_and_generic(
+        self, tmp_path: Path
+    ) -> None:
+        """A scoped ``program def`` in a two-module program gets a full signature.
+
+        Covers the riskiest signature-building paths together: a nominal
+        record type, a type alias over a generic builtin (``array[int]``),
+        and a generic instantiation of a standard-library enum
+        (``Option[int]``) — each resolved through an import and a decoder
+        built for a ``program def`` declared inside a named scope region.
+        """
+        import os
+
+        from agm.agl.lower.program import lower_program
+        from agm.agl.modules.loader import load_graph
+
+        lib_source = "record Coord\n  x: int\n  y: int\n\ntype Ints = array[int]\n"
+        entry_source = (
+            "import lib\n"
+            "\n"
+            "scope Group\n"
+            "\n"
+            "  program def main(coord: lib::Coord, values: lib::Ints, opt: Option[int])"
+            " -> unit = ()\n"
+            "end Group\n"
+        )
+
+        root = tmp_path / "root"
+        root.mkdir()
+        lib_mid = ModuleId.from_path("lib")
+        lib_path = root / lib_mid.relpath().replace("/", os.sep)
+        lib_path.parent.mkdir(parents=True, exist_ok=True)
+        lib_path.write_text(lib_source)
+
+        mg = load_graph(entry_source, entry_path=None, roots=agl_roots(root))
+        rg = resolve_program(mg)
+        cg = check_program(rg, _caps())
+
+        prog = lower_program(_compiled_checked(cg))
+
+        assert len(prog.program_signatures) == 1
+        symbol = next(iter(prog.program_functions))
+        params = prog.program_signatures[symbol]
+        assert [p.name for p in params] == ["coord", "values", "opt"]
+        assert all(p.required for p in params)
+
+        coord_param, values_param, opt_param = params
+        coord_value = decode_param_value(coord_param.external_decoder, {"x": 1, "y": 2})
+        assert isinstance(coord_value, RecordValue)
+        assert coord_value.fields == {"x": IntValue(1), "y": IntValue(2)}
+
+        values_value = decode_param_value(values_param.external_decoder, [1, 2, 3])
+        assert isinstance(values_value, ArrayValue)
+        assert values_value.elements == [IntValue(1), IntValue(2), IntValue(3)]
+
+        opt_value = decode_param_value(opt_param.external_decoder, {"$case": "Some", "value": 5})
+        assert isinstance(opt_value, RecordValue)
+        assert opt_value.fields == {"value": IntValue(5)}
 
 
 # ---------------------------------------------------------------------------

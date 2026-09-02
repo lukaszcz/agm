@@ -12,10 +12,10 @@ constructor patterns use; this module exists so callers outside the
 typechecker can share the same binding rule.
 
 ``kind`` is a :class:`ParamZone` value (``POSITIONAL_ONLY``, ``STANDARD``,
-``NAMED_ONLY``) rather than the AST's ``ParamKind`` enum, matching how the
-rest of ``semantics`` avoids importing ``syntax.nodes`` (see
-``semantics/type_table.py``); the typecheck wrapper maps ``ParamKind`` to
-``ParamZone`` at its boundary.
+``NAMED_ONLY``) rather than the AST's ``ParamKind`` enum: ``ParamZone`` is
+the IR-level zone enum from ``agm.agl.ir.zones``, re-exported here so
+existing call sites keep importing it from this module; the typecheck
+wrapper maps ``ParamKind`` to ``ParamZone`` at its boundary.
 
 Algorithm (positional-greedy with named-only shorthand)
 ---------------------------------------------------------
@@ -51,25 +51,21 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import TypeVar
 
+from agm.agl.ir.zones import ParamZone
+
 T = TypeVar("T")
+
+__all__ = [
+    "ArgumentBindingError",
+    "ArgumentBindingErrorKind",
+    "BindParam",
+    "ParamZone",
+    "bind_arguments",
+]
 
 # ---------------------------------------------------------------------------
 # Public data types
 # ---------------------------------------------------------------------------
-
-
-class ParamZone(enum.Enum):
-    """The zone a parameter belongs to, mirroring the AST's ``ParamKind``.
-
-    Kept as its own enum, rather than importing ``ParamKind``, so this module
-    stays free of any dependency on ``syntax.nodes`` (see
-    ``semantics/type_table.py`` for the same pattern). The typecheck wrapper
-    maps ``ParamKind`` to ``ParamZone`` at its boundary.
-    """
-
-    POSITIONAL_ONLY = "positional_only"
-    STANDARD = "standard"
-    NAMED_ONLY = "named_only"
 
 
 @dataclass(frozen=True, slots=True)

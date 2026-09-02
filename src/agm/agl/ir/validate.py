@@ -35,11 +35,13 @@ Two tiers (validate_ir runs ONLY when explicitly called):
        its projected field (on at least one enum payload shape for enums).
        Every ``IrFieldSet`` targets a declared mutable field of a registered
        record nominal.
-    10. ``program_symbols`` and ``program_functions`` form a one-to-one,
-        bidirectional index of linked ``program def`` entries with registered
-        symbols and zero-argument ``IrFunctionBody`` functions; when present,
-        ``synthetic_main_symbol`` resolves through ``program_functions`` to
-        exactly one marked synthetic ``FunctionDescriptor``.
+    10. ``program_symbols`` and ``program_functions`` form a one-to-one, bidirectional index of
+        linked ``program def`` entries with registered symbols and ``IrFunctionBody`` functions;
+        when present, ``synthetic_main_symbol`` resolves through ``program_functions`` to exactly
+        one marked synthetic ``FunctionDescriptor``.
+    11. ``program_signatures`` is keyed by exactly the ``program_functions``
+        symbols, and each entry's parameter count and required-ness agree
+        with its function descriptor's own declared parameters.
 
 The expression dispatcher uses a closed structural ``match`` with a final
 ``assert_never(node)`` arm so that adding an ``IrExpr`` variant in a
@@ -160,6 +162,7 @@ from agm.agl.ir.program import (
     ExternFunctionBody,
     IrFunctionBody,
     IrParam,
+    IrProgramParam,
     NominalKind,
     SourceFile,
 )
@@ -1457,16 +1460,40 @@ def _validate_program_tables(ctx: _Context) -> None:
                 f"program_functions entry for symbol_id={symbol!r} references"
                 f" function_id={function_id!r} without an IrFunctionBody implementation"
             )
-        if function.params:
-            raise InvalidIrError(
-                f"program_functions entry for symbol_id={symbol!r} references"
-                f" function_id={function_id!r} with parameters;"
-                " program entries require zero arguments"
-            )
         if symbol not in program_entry_symbols:
             raise InvalidIrError(
                 f"program_functions entry for symbol_id={symbol!r} has no program_symbols entry"
             )
+
+    # 11. program_signatures — keyed by exactly the program_functions symbols;
+    #     each entry's parameter count and required-ness agree with its
+    #     function descriptor's own declared IrFunctionParam list.
+    for symbol in program.program_functions:
+        if symbol not in program.program_signatures:
+            raise InvalidIrError(
+                f"program_functions entry for symbol_id={symbol!r} has no program_signatures entry"
+            )
+    for symbol, program_params in program.program_signatures.items():
+        if symbol not in program.program_functions:
+            raise InvalidIrError(
+                f"program_signatures entry for symbol_id={symbol!r} is not"
+                " a linked program_functions entry"
+            )
+        function = program.functions[program.program_functions[symbol]]
+        if len(program_params) != len(function.params):
+            raise InvalidIrError(
+                f"program_signatures entry for symbol_id={symbol!r} declares"
+                f" {len(program_params)} parameter(s), but its function descriptor"
+                f" declares {len(function.params)}"
+            )
+        for program_param, function_param in zip(program_params, function.params, strict=True):
+            if program_param.required != (function_param.default is None):
+                raise InvalidIrError(
+                    f"program_signatures entry for symbol_id={symbol!r} parameter"
+                    f" {program_param.name!r} disagrees with its function"
+                    " descriptor's default"
+                )
+            _validate_program_param(program_param, ctx)
 
     # 6. params table — each IrParam must reference a registered symbol, and
     #    the default expression (if present) must be structurally valid.
@@ -1498,6 +1525,17 @@ def _validate_ir_param(param: IrParam, ctx: _Context) -> None:
             )
     if param.default is not None:
         _validate_expr(param.default, ctx)
+
+
+def _validate_program_param(param: IrProgramParam, ctx: _Context) -> None:
+    """Validate a single ``IrProgramParam`` descriptor.
+
+    Called only from :func:`_validate_program_tables`, itself run only in the
+    deep tier, so every check here inherently needs the program tables —
+    unlike :func:`_validate_ir_param`, which also runs at the cheap tier and
+    so gates its own table-lookup checks on ``ctx.deep`` internally.
+    """
+    _check_decode_nominals(param.external_decoder.decode, param.external_decoder.defs, ctx)
 
 
 def _validate_contract_request(

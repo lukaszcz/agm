@@ -7,16 +7,17 @@ symbol/function/nominal table and per-module initializer sequences.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 
 from agm.agl.ir.builtin_vars import BuiltinVarKey, builtin_var_key
 from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode
-from agm.agl.ir.ids import NominalId, SourceId
+from agm.agl.ir.ids import NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import IrExpr
 from agm.agl.ir.program import (
     DryRunEntry,
     ExecutableModule,
     ExecutableProgram,
+    IrProgramParam,
     NominalDescriptor,
     NominalKind,
     SourceFile,
@@ -37,7 +38,9 @@ from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import TypeDef, TypeTable, is_json_convertible
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
 from agm.agl.syntax.nodes import BuiltinVarDecl, FuncDef, static_items
-from agm.agl.type_schema import build_encode_plan
+from agm.agl.type_schema import build_encode_plan, build_param_decoder
+from agm.agl.typecheck.arguments import zone_of
+from agm.agl.typecheck.env import CheckedModule, FunctionSignature
 from agm.util.text import normalize_newlines
 
 __all__ = ["lower_program"]
@@ -72,6 +75,49 @@ def _exception_field_encodes(
             for field_name, field_type in type_table.exception_fields(handle).items()
             if is_json_convertible(field_type, type_table)
         )
+    return result
+
+
+def _program_funcdefs(
+    modules: Mapping[ModuleId, CheckedModule],
+) -> Iterator[tuple[CheckedModule, FuncDef]]:
+    """Yield every ``is_program`` ``FuncDef`` across all linked modules, with its module.
+
+    Shared by every table keyed on a program's declaration, so each is built
+    from the same walk over the ``program def`` declarations.
+    """
+    return (
+        (cm, item)
+        for cm in modules.values()
+        for item in static_items(cm.resolved.program.body.items)
+        if isinstance(item, FuncDef) and item.is_program
+    )
+
+
+def _program_signature(sig: FunctionSignature, type_table: TypeTable) -> tuple[IrProgramParam, ...]:
+    """Build one program's host-facing parameter signature from its checked type."""
+    return tuple(
+        IrProgramParam(
+            name=param.name,
+            kind=zone_of(param.kind),
+            required=not param.has_default,
+            external_decoder=build_param_decoder(param.type, type_table),
+        )
+        for param in sig.params
+    )
+
+
+def _program_signatures(
+    modules: Mapping[ModuleId, CheckedModule],
+    fn_node_to_sym: Mapping[int, SymbolId],
+    type_table: TypeTable,
+) -> dict[SymbolId, tuple[IrProgramParam, ...]]:
+    """Build every linked ``program def``'s host-facing parameter signature."""
+    result: dict[SymbolId, tuple[IrProgramParam, ...]] = {}
+    for cm, item in _program_funcdefs(modules):
+        sig = cm.type_env.get_function_signature_by_node_id(item.node_id)
+        assert sig is not None, f"compiler bug: no function signature for program {item.name!r}"
+        result[fn_node_to_sym[item.node_id]] = _program_signature(sig, type_table)
     return result
 
 
@@ -363,15 +409,11 @@ def lower_program(
         functions=dict(link.functions),
         program_symbols={
             item.node_id: link.fn_node_to_sym[item.node_id]
-            for checked_module in checked.modules.values()
-            for item in static_items(checked_module.resolved.program.body.items)
-            if isinstance(item, FuncDef) and item.is_program
+            for _cm, item in _program_funcdefs(checked.modules)
         },
         program_functions={
             link.fn_node_to_sym[item.node_id]: link.fn_node_to_id[item.node_id]
-            for checked_module in checked.modules.values()
-            for item in static_items(checked_module.resolved.program.body.items)
-            if isinstance(item, FuncDef) and item.is_program
+            for _cm, item in _program_funcdefs(checked.modules)
         },
         synthetic_main_symbol=next(
             (
@@ -383,6 +425,7 @@ def lower_program(
             ),
             None,
         ),
+        program_signatures=_program_signatures(checked.modules, link.fn_node_to_sym, type_table),
         params=tuple(param for mid in ordered_mids for param in module_lowerers[mid]._params),
         contracts=dict(link.contracts),
         dry_run_inventory=dry_run_inventory,

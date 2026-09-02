@@ -17,6 +17,7 @@ and evaluation.
 from __future__ import annotations
 
 import enum
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
@@ -24,6 +25,7 @@ from agm.agl.ir.builtin_vars import BuiltinVarKey
 from agm.agl.ir.contracts import ContractRequest, ExceptionFieldEncode, ParamDecoder
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import IrExpr, IrFunctionParam
+from agm.agl.ir.zones import ParamZone
 from agm.agl.modules.ids import ENTRY_ID, ModuleId, spell_scope_path
 
 __all__ = [
@@ -37,6 +39,7 @@ __all__ = [
     "FunctionImpl",
     "IrFunctionBody",
     "IrParam",
+    "IrProgramParam",
     "NominalDescriptor",
     "NominalKind",
     "SourceFile",
@@ -274,6 +277,34 @@ class IrParam:
 
 
 # ---------------------------------------------------------------------------
+# Program parameter signatures
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class IrProgramParam:
+    """Descriptor for one ``program def`` value parameter, as the host sees it.
+
+    ``name``               — the declared parameter name.
+    ``kind``               — the parameter's zone (positional-only, standard,
+                             named-only), governing how a host projects it.
+    ``required``           — ``True`` when the parameter has no default (the
+                             host must supply a value).
+    ``external_decoder``   — decodes one raw host-supplied value into this
+                             parameter's checked type.
+
+    Distinct from ``IrParam`` (a module ``param`` declaration): a program
+    parameter is an ordinary value parameter of its ``program def`` — bound by
+    an ordinary call, not installed into the base frame before it runs.
+    """
+
+    name: str
+    kind: ParamZone
+    required: bool
+    external_decoder: ParamDecoder
+
+
+# ---------------------------------------------------------------------------
 # Dry-run inventory
 # ---------------------------------------------------------------------------
 
@@ -325,15 +356,19 @@ class ExecutableProgram:
       ``functions``    — ordinary functions and externs, keyed by ``FunctionId``.
       ``program_symbols`` — source declaration node id -> symbol for each linked
         ``program def``. Its values are unique.
-      ``program_functions`` — public ``program def`` symbol -> zero-argument,
-        body-backed function id, used by the host invocation entry point. Its
-        keys are exactly the ``program_symbols`` values, making the two tables
-        a bidirectional index.
+      ``program_functions`` — public ``program def`` symbol -> its body-backed
+        function id, used by the host invocation entry point. Its keys are
+        exactly the ``program_symbols`` values, making the two tables a
+        bidirectional index.
       ``synthetic_main_symbol`` — the synthesized inline-source ``main`` entry,
         when this program was wrapped. Its ``program_functions`` entry resolves
         to the sole function descriptor marked ``is_synthetic_main``; file programs
         leave this ``None``. When a
         host explicitly invokes it, its final frame supplements reported bindings.
+      ``program_signatures`` — public ``program def`` symbol -> its host-facing
+        parameter signature (``IrProgramParam``, in declaration order). Every
+        ``program_functions`` key has an entry here, including an empty tuple
+        for a parameterless program.
       ``builtin_nominals`` — bare built-in type name -> the ``NominalId`` a
         host mints for it (see ``agm.agl.ir.builtin_nominals``), built during
         lowering from the program's ``builtin`` declarations. Defaults to
@@ -365,6 +400,7 @@ class ExecutableProgram:
     program_symbols: dict[int, SymbolId] = field(default_factory=dict)
     program_functions: dict[SymbolId, FunctionId] = field(default_factory=dict)
     synthetic_main_symbol: SymbolId | None = None
+    program_signatures: Mapping[SymbolId, tuple[IrProgramParam, ...]] = field(default_factory=dict)
     params: tuple[IrParam, ...] = ()
     contracts: dict["ContractId", "ContractRequest"] = field(default_factory=dict)
     dry_run_inventory: "tuple[DryRunEntry, ...]" = ()

@@ -62,6 +62,7 @@ from agm.agl.ir import (
     IrMakeJsonArray,
     IrMakeJsonObject,
     IrNominalCaseKey,
+    IrProgramParam,
     IrRenderTemplate,
     IrSequence,
     IrTemplateText,
@@ -70,6 +71,7 @@ from agm.agl.ir import (
     NominalDescriptor,
     NominalId,
     NominalKind,
+    ParamZone,
     SourceFile,
     SourceId,
     SymbolDescriptor,
@@ -157,10 +159,17 @@ def _make_program(
     functions: "dict[FunctionId, FunctionDescriptor] | None" = None,
     program_symbols: dict[int, SymbolId] | None = None,
     program_functions: dict[SymbolId, FunctionId] | None = None,
+    program_signatures: "dict[SymbolId, tuple[IrProgramParam, ...]] | None" = None,
     synthetic_main_symbol: SymbolId | None = None,
     builtin_var_declarations: frozenset[tuple[ModuleId, tuple[str, ...], str]] = frozenset(),
 ) -> ExecutableProgram:
-    """Build a valid base program; callers override individual tables."""
+    """Build a valid base program; callers override individual tables.
+
+    ``program_signatures`` defaults to an empty-tuple entry for every
+    ``program_functions`` key (a parameterless program), matching what
+    lowering always produces, so callers exercising unrelated invariants
+    need not supply one explicitly.
+    """
     nom_desc = NominalDescriptor(
         nominal=NOM0,
         module_id=MOD_A,
@@ -170,6 +179,7 @@ def _make_program(
     )
     sf = _source_file()
     em = ExecutableModule(module_id=MOD_A, initializers=initializers)
+    resolved_program_functions = {} if program_functions is None else program_functions
     return ExecutableProgram(
         entry_module=entry_module,
         modules={MOD_A: em} if modules is None else modules,
@@ -178,7 +188,12 @@ def _make_program(
         sources={SID0: sf} if sources is None else sources,
         functions=functions or {},
         program_symbols={} if program_symbols is None else program_symbols,
-        program_functions={} if program_functions is None else program_functions,
+        program_functions=resolved_program_functions,
+        program_signatures=(
+            dict.fromkeys(resolved_program_functions, ())
+            if program_signatures is None
+            else program_signatures
+        ),
         synthetic_main_symbol=synthetic_main_symbol,
         builtin_var_declarations=builtin_var_declarations,
     )
@@ -1604,6 +1619,21 @@ def _make_fn_param(sym: SymbolId = SYM1) -> IrFunctionParam:
     return IrFunctionParam(symbol=sym, default=None)
 
 
+def _make_program_param(*, name: str = "n", required: bool = True) -> IrProgramParam:
+    from agm.agl.ir.contracts import ParamDecoder, ScalarDecode, ScalarKind
+
+    return IrProgramParam(
+        name=name,
+        kind=ParamZone.NAMED_ONLY,
+        required=required,
+        external_decoder=ParamDecoder(
+            target_type_label="int",
+            json_schema="{}",
+            decode=ScalarDecode(kind=ScalarKind.INT),
+        ),
+    )
+
+
 def _make_fn_desc(
     fn_id: FunctionId = FN0,
     fn_sym: SymbolId = SYM0,
@@ -1758,17 +1788,20 @@ class TestProgramEntryMaps:
         with pytest.raises(InvalidIrError, match="IrFunctionBody"):
             validate_ir(prog)
 
-    def test_program_entry_cannot_target_parameterized_function(self) -> None:
+    def test_program_entry_can_target_a_parameterized_function_when_signature_agrees(
+        self,
+    ) -> None:
+        """A program def with declared parameters validates when its signature agrees."""
         fn_desc = _make_fn_desc(fn_sym=SYM0, params=(_make_fn_param(),))
         prog = _make_program(
             symbols={SYM0: _sym_desc_imm(), SYM1: _fn_sym_desc()},
             functions={FN0: fn_desc},
             program_symbols={10: SYM0},
             program_functions={SYM0: FN0},
+            program_signatures={SYM0: (_make_program_param(),)},
         )
 
-        with pytest.raises(InvalidIrError, match="zero arguments"):
-            validate_ir(prog)
+        validate_ir(prog)  # no exception
 
     def test_program_symbol_must_be_registered(self) -> None:
         prog = _make_program(program_symbols={10: SYM1})
@@ -1845,6 +1878,58 @@ class TestProgramEntryMaps:
             functions={FN0: fn_desc},
         )
         validate_ir(prog)  # no exception
+
+
+class TestProgramSignatureValidation:
+    """``program_signatures`` must index exactly the linked programs and agree
+    with their function descriptors."""
+
+    def test_program_function_without_a_signature_raises(self) -> None:
+        """A linked program symbol missing a program_signatures entry is rejected."""
+        fn_desc = _make_fn_desc(fn_sym=SYM0)
+        prog = _make_program(
+            functions={FN0: fn_desc},
+            program_symbols={10: SYM0},
+            program_functions={SYM0: FN0},
+            program_signatures={},
+        )
+
+        with pytest.raises(InvalidIrError, match="program_signatures"):
+            validate_ir(prog)
+
+    def test_signature_for_a_non_program_symbol_raises(self) -> None:
+        """A program_signatures entry not indexed by a linked program is rejected."""
+        prog = _make_program(program_signatures={SYM1: ()})
+
+        with pytest.raises(InvalidIrError, match="program_signatures"):
+            validate_ir(prog)
+
+    def test_signature_disagreeing_with_the_descriptor_raises(self) -> None:
+        """A signature whose parameter count disagrees with its function is rejected."""
+        fn_desc = _make_fn_desc(fn_sym=SYM0)  # zero declared IrFunctionParams
+        prog = _make_program(
+            functions={FN0: fn_desc},
+            program_symbols={10: SYM0},
+            program_functions={SYM0: FN0},
+            program_signatures={SYM0: (_make_program_param(),)},
+        )
+
+        with pytest.raises(InvalidIrError, match="program_signatures"):
+            validate_ir(prog)
+
+    def test_signature_required_flag_disagreeing_with_default_raises(self) -> None:
+        """A signature parameter's required flag must agree with its default presence."""
+        fn_desc = _make_fn_desc(fn_sym=SYM0, params=(_make_fn_param(),))  # no default: required
+        prog = _make_program(
+            symbols={SYM0: _sym_desc_imm(), SYM1: _fn_sym_desc()},
+            functions={FN0: fn_desc},
+            program_symbols={10: SYM0},
+            program_functions={SYM0: FN0},
+            program_signatures={SYM0: (_make_program_param(required=False),)},
+        )
+
+        with pytest.raises(InvalidIrError, match="disagrees"):
+            validate_ir(prog)
 
 
 class TestIrMakeClosure:

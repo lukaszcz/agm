@@ -152,6 +152,7 @@ from agm.agl.ir.program import (
     FunctionImpl,
     IrFunctionBody,
     IrParam,
+    IrProgramParam,
     NominalDescriptor,
     NominalKind,
     SourceFile,
@@ -159,6 +160,7 @@ from agm.agl.ir.program import (
     VariantDescriptor,
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
+from agm.agl.ir.zones import ParamZone
 
 __all__ = [
     "ArithKind",
@@ -257,6 +259,7 @@ __all__ = [
     "IrOr",
     "IrParam",
     "IrPrint",
+    "IrProgramParam",
     "IrRaise",
     "IrRenderValue",
     "IrRenderTemplate",
@@ -280,6 +283,7 @@ __all__ = [
     "NominalKind",
     "NO_BUILTIN_DECLARATIONS",
     "NumericKind",
+    "ParamZone",
     "RecordDecode",
     "RecordEncode",
     "RefEncode",

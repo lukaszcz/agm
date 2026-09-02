@@ -53,8 +53,13 @@ from agm.agl.typecheck.env import AglTypeError, ParamSpec
 T = TypeVar("T")
 
 
-def _zone_of(kind: ParamKind) -> pure.ParamZone:
-    """Map the AST's ``ParamKind`` to the pure binder's ``ParamZone``.
+def zone_of(kind: ParamKind) -> pure.ParamZone:
+    """Map the AST's ``ParamKind`` to the IR-level ``ParamZone``.
+
+    Public because it is the one place that converts a checked parameter's
+    ``ParamKind`` to the shared ``ParamZone`` enum; other passes below the
+    checker (e.g. the lowerer, building a program's host-facing signature)
+    reuse it rather than declaring their own converter.
 
     A ``match`` over the enum (rather than a dict lookup) so mypy's
     exhaustiveness check catches a new ``ParamKind`` member that has no
@@ -156,8 +161,7 @@ def bind_arguments(
         required param.
     """
     pure_params = [
-        pure.BindParam(name=p.name, kind=_zone_of(p.kind), has_default=p.has_default)
-        for p in params
+        pure.BindParam(name=p.name, kind=zone_of(p.kind), has_default=p.has_default) for p in params
     ]
     pure_named = [(bn.name, bn.value) for bn in named]
     try:

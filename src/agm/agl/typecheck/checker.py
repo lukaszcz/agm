@@ -499,6 +499,7 @@ def _builtin_function_signature(
             return FunctionSignature(
                 params=(
                     _std_param("prompt", TextType()),
+                    _std_param("agent", BUILTIN_PRELUDE_TYPES["Agent"], has_default=True),
                     _std_param("format", TextType(), has_default=True),
                     _std_param("strict-json", BoolType(), has_default=True),
                     _std_param(
@@ -514,6 +515,7 @@ def _builtin_function_signature(
             return FunctionSignature(
                 params=(
                     _std_param("prompt", TextType()),
+                    _std_param("agent", BUILTIN_PRELUDE_TYPES["Agent"], has_default=True),
                     _std_param("format", TextType(), has_default=True),
                     _std_param("strict-json", BoolType(), has_default=True),
                     _std_param(

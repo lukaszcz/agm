@@ -8451,14 +8451,38 @@ _AGENT_REQUEST_FIELDS_TC = (
 _PARSE_POLICY_VARIANTS_TC = "  | Abort\n  | Retry(n: int)\n"
 
 # ``ask-request`` mirrors ``ask``'s whole call surface, so its declaration
-# carries the same shaping options and target type parameter.
+# carries the same shaping options and target type parameter. The free form
+# also declares the optional ``agent`` the receiver form takes from its
+# receiver instead.
 _ASK_REQUEST_OPTIONS_TC = (
     "  prompt: text,\n"
     '  format: text = "",\n'
     "  strict-json: bool = false,\n"
     "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
 )
-_ASK_REQUEST_DECL_TC = f"builtin def ask-request[T](\n{_ASK_REQUEST_OPTIONS_TC}) -> AgentRequest\n"
+_ASK_REQUEST_FREE_OPTIONS_TC = (
+    "  prompt: text,\n"
+    '  agent: Agent = AgentCommand(command = "x"),\n'
+    '  format: text = "",\n'
+    "  strict-json: bool = false,\n"
+    "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+)
+_ASK_REQUEST_DECL_TC = (
+    f"builtin def ask-request[T](\n{_ASK_REQUEST_FREE_OPTIONS_TC}) -> AgentRequest\n"
+)
+# Without the standard library there is no ``std/config::default-agent`` to name
+# and a program may not declare a ``builtin var`` of its own, so this
+# declaration's ``agent`` default is a stand-in: a ``builtin def`` default is
+# resolved but never checked, since the host supplies the value.
+_ASK_REQUEST_NO_STDLIB_DECL_TC = (
+    "builtin def ask-request[T](\n"
+    "  prompt: text,\n"
+    '  agent: Agent = "",\n'
+    '  format: text = "",\n'
+    "  strict-json: bool = false,\n"
+    "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+    ") -> AgentRequest\n"
+)
 
 
 class TestHostContractBuiltinIdentity:
@@ -8519,7 +8543,7 @@ class TestHostContractBuiltinIdentity:
             "  | Some(value: T)\n"
             f"builtin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
             f"builtin enum ParsePolicy\n{_PARSE_POLICY_VARIANTS_TC}"
-            f"{_ASK_REQUEST_DECL_TC}"
+            f"{_ASK_REQUEST_NO_STDLIB_DECL_TC}"
             'ask-request("hi")\n',
             default_stdlib=False,
         )
@@ -8610,7 +8634,7 @@ class TestHostContractBuiltinIdentity:
             "scope A\n"
             f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
             f"builtin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
-            f"builtin def ask-request[T](\n{_ASK_REQUEST_OPTIONS_TC}) -> Agent\n"
+            f"builtin def ask-request[T](\n{_ASK_REQUEST_FREE_OPTIONS_TC}) -> Agent\n"
             "end A\n()\n"
         )
         assert "ask-request" in err.to_diagnostic().message

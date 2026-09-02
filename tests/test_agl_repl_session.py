@@ -1280,14 +1280,25 @@ _PARSE_POLICY_VARIANTS = "  | Abort\n  | Retry(n: int)\n"
 _OPTION_DECL = "enum Option[T] =\n  | None\n  | Some(value: T)\n"
 
 # ``ask-request`` mirrors ``ask``'s whole call surface, so its declaration
-# carries the same shaping options and target type parameter.
+# carries the same shaping options and target type parameter. The free form
+# also declares the optional ``agent`` the receiver form takes from its
+# receiver instead; without the standard library its canonical default,
+# ``std/config::default-agent``, is out of reach, and a ``builtin def``
+# default is resolved but never checked, so a local variant stands in.
 _ASK_REQUEST_OPTIONS = (
     "  prompt: text,\n"
     '  format: text = "",\n'
     "  strict-json: bool = false,\n"
     "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
 )
-_ASK_REQUEST_DECL = f"builtin def ask-request[T](\n{_ASK_REQUEST_OPTIONS}) -> AgentRequest\n"
+_ASK_REQUEST_FREE_OPTIONS = (
+    "  prompt: text,\n"
+    '  agent: Agent = AgentCommand(command = "noop"),\n'
+    '  format: text = "",\n'
+    "  strict-json: bool = false,\n"
+    "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+)
+_ASK_REQUEST_DECL = f"builtin def ask-request[T](\n{_ASK_REQUEST_FREE_OPTIONS}) -> AgentRequest\n"
 
 
 def _session_with_import_root(root: Path) -> ReplSession:

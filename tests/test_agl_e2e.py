@@ -1651,9 +1651,9 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
     ``scope Std`` region of a replacement ``std/prelude``, importing only
     ``Option``: the region itself holds everything else they name. Canonical
     session statics are omitted because wrapping changes their owner path,
-    and ``exec`` is reduced to its legacy host-boundary shape so its defaults
-    need no environment or config module. Infix declarations stay at module
-    root because scopes cannot contain them.
+    and ``exec``'s and the agent calls' defaults are rewritten so that no
+    default names the environment or config module. Infix declarations stay at
+    module root because scopes cannot contain them.
     """
     scoped_stdlib_root = tmp_path / "scoped_stdlib"
     std_dir = scoped_stdlib_root / "std"
@@ -1671,6 +1671,11 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
         source = "".join(line for line in module_lines(name) if not line.startswith("import "))
         if name == "session":
             source = source.replace(_SESSION_STATIC_DECLARATIONS, "")
+        if name == "agent":
+            source = source.replace(
+                "  agent: Agent = std/config::default-agent,\n",
+                '  agent: Agent = AgentCommand(command = ""),\n',
+            )
         if name == "exec":
             source = source.replace(
                 "builtin def exec(\n"

@@ -21,7 +21,7 @@ The checker selects the concrete behavior the evaluator relies on and publishes 
 - **Casts** come from a table of permitted source/target pairs, each total or fallible; `as json` becomes a static encode plan; enum-member identity casts and `is` compare declaration identity.
 - **Generics** are rank-1: rigid at the definition, freshly instantiated per use inside a solver region (`typecheck/inference.py`), erased after checking. Partial applications are typed as function values with the same machinery.
 - **Function headers** go through one seam (`function_inference.py`). Methods get a positional receiver built from their nominal owner or builtin receiver declaration; builtin receiver methods are restricted to their owning standard-library modules. Unannotated function results are inferred per import SCC (candidate inference), then every body is rechecked against the complete concrete signature table, and only that recheck publishes artifacts. A failure is blamed at the consumer's span, with related diagnostics naming the inferred callee.
-- **Argument binding and patterns** share one routine (`arguments.py`) across calls, constructors, and constructor patterns. Every constructor pattern resolves to one `ConstructorRef`; the checker publishes binder types, constructor selections, and pattern-slot selections per pattern node. Exhaustiveness belongs to match compilation.
+- **Argument binding and patterns** share one routine across calls, constructors, and constructor patterns: the zone-binding algorithm is pure (`semantics/arguments.py`, no AST or span dependency), and `typecheck/arguments.py` is its AST-facing wrapper, attaching source spans and raising `AglTypeError`. Every constructor pattern resolves to one `ConstructorRef`; the checker publishes binder types, constructor selections, and pattern-slot selections per pattern node. Exhaustiveness belongs to match compilation.
 - **Blocks** take their last item's type; earlier items are checked in unit context, so only unit or bottom may be discarded. `_` is an explicit discard binder.
 - **`extern def`** shares the body-less signature path plus extern-only checks ([execution/ffi.md](../execution/ffi.md)).
 
@@ -29,7 +29,7 @@ Checked artifacts hold concrete types and no solver state; that closure invarian
 
 ## Code Entry Points
 
-- `src/agm/agl/semantics/` — values, semantic types, `TypeTable`, whole-table analyses, exceptions, text literals, cycle guards, copying.
-- `src/agm/agl/typecheck/` — the checker, builtin typing rules and contracts, the inference solver, function-header inference, argument binding, declaration validation.
+- `src/agm/agl/semantics/` — values, semantic types, `TypeTable`, whole-table analyses, exceptions, text literals, cycle guards, copying, the pure argument zone-binder (`arguments.py`).
+- `src/agm/agl/typecheck/` — the checker, builtin typing rules and contracts, the inference solver, function-header inference, the argument-binding wrapper, declaration validation.
 - `src/agm/agl/type_schema.py` — compile-time JSON schema, decode, and encode-plan derivation.
-- Tests: `tests/test_agl_typecheck*.py`, `test_agl_types.py`, `test_agl_type_table.py`, `test_agl_inference.py`, `test_agl_arguments.py`.
+- Tests: `tests/test_agl_typecheck*.py`, `test_agl_types.py`, `test_agl_type_table.py`, `test_agl_inference.py`, `test_agl_arguments.py`, `test_agl_semantics_arguments.py`.

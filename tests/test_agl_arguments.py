@@ -11,7 +11,7 @@ import itertools
 
 import pytest
 
-from agm.agl.syntax.nodes import ParamKind, VarPattern, WildcardPattern
+from agm.agl.syntax.nodes import ParamKind, PatternField, VarPattern, WildcardPattern
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.arguments import BindParam, BoundName, bind_arguments, bind_pattern_args
 from agm.agl.typecheck.env import AglTypeError
@@ -205,6 +205,30 @@ def test_pattern_binding_leaves_partial_record_fields_wild_and_uses_named_only_s
 
     assert partial == (left, None, None)
     assert bound == (left, middle, label)
+
+
+def test_duplicate_named_field_in_pattern_reports_second_occurrence() -> None:
+    """A constructor pattern with a field named twice (``R(x = a, x = b)``) is not
+    pre-screened for duplicates the way call sites are, so the wrapper's own
+    duplicate check fires. It must locate the SECOND occurrence: that is what
+    the user is looking at when the field appears to be reassigned."""
+    first_span = SourceSpan(2, 1, 2, 10, 10, 20)
+    second_span = SourceSpan(3, 1, 3, 10, 20, 30)
+    first = VarPattern("a", first_span, 1)
+    second = VarPattern("b", second_span, 2)
+    first_field = PatternField(name="x", pattern=first, span=first.span, node_id=3)
+    second_field = PatternField(name="x", pattern=second, span=second.span, node_id=4)
+
+    with pytest.raises(AglTypeError, match="Duplicate") as exc_info:
+        bind_pattern_args(
+            (("x", STANDARD),),
+            (),
+            (first_field, second_field),
+            call_span=_CALL_SPAN,
+            context_desc="pattern for constructor 'R'",
+        )
+    assert exc_info.value.span == second.span
+    assert exc_info.value.span != first.span
 
 
 def test_positional_skips_leading_named_only() -> None:

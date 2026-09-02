@@ -14,7 +14,7 @@ program def main() -> unit =
     print e
     # Interpolate into a template: same AgL form (top-level text is verbatim,
     # but the exception is a nominal value so it renders record-style).
-    print "caught: %{e.source_type} -> %{e.target_type}"
+    print "caught: %{e.source-type} -> %{e.target-type}"
     # as json: pretty-prints the exception as a JSON object with all fields.
     print(e as json)
 

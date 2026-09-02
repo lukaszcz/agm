@@ -2,6 +2,6 @@
 program def main() -> unit =
   let answer: int = AgentCommand("writer").ask(
     "calculate the total",
-    on_parse_error = Retry(n = 1),
+    on-parse-error = Retry(n = 1),
   )
   print answer

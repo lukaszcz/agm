@@ -1467,9 +1467,9 @@ class TestBuiltinNominalsTable:
                 "scope A\n"
                 "  builtin record ExecResult\n"
                 "    stdout: text\n"
-                "    exit_code: int\n"
+                "    exit-code: int\n"
                 "    stderr: text\n"
-                "    timed_out: bool\n"
+                "    timed-out: bool\n"
                 "end A\n"
                 "\n"
                 "()\n",
@@ -2576,7 +2576,7 @@ class TestHostOpLowering:
         Regression test: the checker records a print/render call's own type as
         unit/text regardless of an explicit ``::[T]``, so the lowerer must
         re-resolve ``T`` from ``call_node.type_args`` rather than reading it off
-        the call node (which is how ``copy``/``shallow_copy`` do it).
+        the call node (which is how ``copy``/``shallow-copy`` do it).
         """
         from agm.agl.ir.nodes import IrCoerce, IrPrint
         from agm.agl.ir.operations import ToJson
@@ -2646,11 +2646,11 @@ class TestHostOpLowering:
         assert ir_bind.value.kind is CopyKind.DEEP
 
     def test_shallow_copy_lowers_to_shallow_ir_copy_value(self) -> None:
-        """shallow_copy(x) lowers to an IrCopyValue with the shallow kind."""
+        """shallow-copy(x) lowers to an IrCopyValue with the shallow kind."""
         from agm.agl.ir import CopyKind
         from agm.agl.ir.nodes import IrCopyValue
 
-        source = "let x = [1, 2]\nlet y = shallow_copy(x)\n()"
+        source = "let x = [1, 2]\nlet y = shallow-copy(x)\n()"
         prog = _lower(source)
         entry = prog.modules[list(prog.modules.keys())[-1]]
         ir_bind = _let_root_capture(entry.initializers[1])
@@ -3469,7 +3469,7 @@ class TestLoopDesugar:
             "message",
             "limit",
             "condition",
-            "last_condition_value",
+            "last-condition-value",
             "metadata",
         ]
         assert isinstance(fields[0][1], IrRenderTemplate)

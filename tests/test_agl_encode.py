@@ -414,9 +414,9 @@ def test_encode_bytes_are_preserved_across_agent_request_and_parameter_boundarie
     assert isinstance(request_encoded, JsonValue)
     assert dumps_exact(request_encoded.raw, indent=None) == (
         '{"agent": {"$case": "AgentCommand", "command": "fake"}, "prompt": "hi", '
-        '"target_type": {"$case": "Some", "value": "text"}, '
-        '"format_instructions": {"$case": "None"}, "json_schema": {"$case": "None"}, '
-        '"attempt": 0, "previous_error": {"$case": "None"}, '
+        '"target-type": {"$case": "Some", "value": "text"}, '
+        '"format-instructions": {"$case": "None"}, "json-schema": {"$case": "None"}, '
+        '"attempt": 0, "previous-error": {"$case": "None"}, '
         '"metadata": {"codec_name": "text", "strict_json": null, "structured_exec": false}}'
     )
 

@@ -1856,7 +1856,7 @@ class _Lowerer:
                                         IrConstText(location=loc, value=until_source),
                                     ),
                                     (
-                                        "last_condition_value",
+                                        "last-condition-value",
                                         IrConstBool(location=loc, value=False),
                                     ),
                                     ("metadata", IrConstJsonNull(location=loc)),
@@ -3446,9 +3446,9 @@ class _Lowerer:
     def _extract_max_attempts(self, call_node: "Call") -> int:
         """Extract max_attempts from the on_parse_error named arg at lowering time."""
         named_map: dict[str, "NamedArg"] = {na.name: na for na in call_node.named_args}
-        if "on_parse_error" not in named_map:
+        if "on-parse-error" not in named_map:
             return 1
-        policy_expr = named_map["on_parse_error"].value
+        policy_expr = named_map["on-parse-error"].value
         if isinstance(policy_expr, Call):
             callee = policy_expr.callee
             if isinstance(callee, VarRef):

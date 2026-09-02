@@ -130,7 +130,7 @@ BUILTIN_CALL_NAMES: dict[str, BuiltinKind] = {
     "ask": BuiltinKind.ASK,
     "ask-request": BuiltinKind.ASK_REQUEST,
     "copy": BuiltinKind.COPY,
-    "shallow_copy": BuiltinKind.SHALLOW_COPY,
+    "shallow-copy": BuiltinKind.SHALLOW_COPY,
     "resource": BuiltinKind.RESOURCE,
     "resource-dir": BuiltinKind.RESOURCE_DIR,
 }

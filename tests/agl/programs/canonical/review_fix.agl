@@ -33,7 +33,7 @@ program def main() -> unit =
 
       Artifact:
       %{artifact}
-      """, agent = reviewer, on_parse_error = Retry(n = 2))
+      """, agent = reviewer, on-parse-error = Retry(n = 2))
 
       case review of
         | Pass() =>
@@ -48,7 +48,7 @@ program def main() -> unit =
 
             Current artifact:
             %{artifact}
-            """, agent = impl, on_parse_error = Retry(n = 2))
+            """, agent = impl, on-parse-error = Retry(n = 2))
 
             case result of
               | Complete(output) =>
@@ -69,13 +69,13 @@ program def main() -> unit =
     %{e.agent}
 
     Expected schema:
-    %{e.expected_schema}
+    %{e.expected-schema}
 
     Raw output:
     %{e.raw}
 
     Validation errors:
-    %{e.validation_errors}
+    %{e.validation-errors}
     """, agent = critic)
     raise e
 

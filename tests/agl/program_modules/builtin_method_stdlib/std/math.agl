@@ -1,6 +1,6 @@
 def int::abs(self) -> int = if self < 0 => -self else => self
 def decimal::abs(self) -> decimal = if self < 0 => -self else => self
-builtin def decimal::shallow_copy(self) -> decimal
+builtin def decimal::shallow-copy(self) -> decimal
 def bool::negated(self) -> bool = not self
 builtin def bool::print(self) -> unit
 builtin def int::copy(self) -> int

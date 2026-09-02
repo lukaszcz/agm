@@ -297,7 +297,7 @@ mutable-record view. This is trusted, not checked: a representable value of the 
 is accepted at the boundary, and the program is then free to fail later, at
 an unrelated point, with an error the program cannot catch. An unsupported
 Python value (such as a bare `list`) raises `ExternError`. Ordinary Python
-exceptions also become `ExternError`, whose `python_type` holds the original
+exceptions also become `ExternError`, whose `python-type` holds the original
 exception class name. A `BaseException` still propagates.
 
 ## Trust boundary

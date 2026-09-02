@@ -24,7 +24,7 @@ A conforming host processes a program in this order:
 
 A failure in steps 1–5 means **nothing executes**: no statement runs, no
 agent is called, no shell command is spawned. Warnings (for example a useless
-`on_parse_error` on a `text` target) are reported on every path and never
+`on-parse-error` on a `text` target) are reported on every path and never
 prevent execution.
 
 ## Agents
@@ -188,12 +188,12 @@ trace configured elsewhere — a `[exec] log-file` path or an auto path from
 
 | Setting | Portable default | Used when |
 | ------- | ---------------- | --------- |
-| Default parse policy | `abort` | call without `on_parse_error` |
-| Default JSON parsing mode | lenient recovery | JSON-codec call without `strict_json` |
+| Default parse policy | `abort` | call without `on-parse-error` |
+| Default JSON parsing mode | lenient recovery | JSON-codec call without `strict-json` |
 | Agent idle timeout | host-defined | every agent dispatch |
 
 Source-level call options always override host defaults — in both
-directions: `strict_json = false` forces lenient parsing even under a strict
+directions: `strict-json = false` forces lenient parsing even under a strict
 host default.
 
 ## Tracing

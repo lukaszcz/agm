@@ -27,7 +27,7 @@ Programs may declare concrete exception types:
 ```agl
 exception DeployError extends Exception
   service: text
-  exit_code: int
+  exit-code: int
 ```
 
 An exception extends exactly one base exception type. Constructor fields include
@@ -100,7 +100,7 @@ including all fields (`message` and any type-specific fields) in declaration
 order — for example:
 
 ```
-CastError(message = "cannot parse \"x\" as int", source_type = "text", target_type = "int", raw = "x")
+CastError(message = "cannot parse \"x\" as int", source-type = "text", target-type = "int", raw = "x")
 ```
 
 See [Strings and interpolation](strings-and-interpolation.md) for the uniform
@@ -139,7 +139,7 @@ initializer exits, in which case it has bottom type. See
 try
   let review: Review = reviewer.ask(
     "Review %{artifact}",
-    on_parse_error = Retry(n = 2)
+    on-parse-error = Retry(n = 2)
   )
   print "reviewed: %{review}"
 catch AgentParseError as e =>
@@ -204,7 +204,7 @@ fields:
 ```agl
 exception DeployError extends Exception
   service: text
-  exit_code: int
+  exit-code: int
 
 program def main() -> unit =
   let _ = raise DeployError("api", 1, message = "deployment failed")
@@ -247,7 +247,7 @@ Field lists below are in addition to the base `message`.
 ### `AgentCallError`
 
 An agent **transport** failure: the agent could not run. Not eligible for
-`on_parse_error` retries ([Agent calls](agent-calls.md)).
+`on-parse-error` retries ([Agent calls](agent-calls.md)).
 
 ```text
 agent: Agent      # the selected backend
@@ -262,11 +262,11 @@ allowed by the parse policy.
 
 ```text
 agent: Agent            # selected backend
-target_type: text       # the contract's target type, e.g. "Review"
-expected_schema: json   # the derived JSON Schema
+target-type: text       # the contract's target type, e.g. "Review"
+expected-schema: json   # the derived JSON Schema
 raw: text               # the last attempt's raw output
-normalized_raw: text    # the recovered/normalized JSON text (or the raw output)
-validation_errors: json # structured error records (category, message, path, field)
+normalized-raw: text    # the recovered/normalized JSON text (or the raw output)
+validation-errors: json # structured error records (category, message, path, field)
 attempts: int           # total attempts made
 metadata: json
 ```
@@ -280,10 +280,10 @@ nonzero exit as `ExecResult` data.
 
 ```text
 command: text     # the rendered command
-exit_code: int    # -1 for spawn failure or timeout without an exit status
+exit-code: int    # -1 for spawn failure or timeout without an exit status
 stdout: text
 stderr: text
-timed_out: bool
+timed-out: bool
 ```
 
 ### `SessionError`
@@ -313,7 +313,7 @@ a Python value that has no AgL boundary representation
 
 ```text
 function: text       # the extern's declared name
-python_type: text    # the raising Python exception's class name; empty for
+python-type: text    # the raising Python exception's class name; empty for
                       # a return-value contract violation
 ```
 
@@ -328,7 +328,7 @@ unbounded loop never raises it.
 ```text
 limit: int                  # the bound in effect
 condition: text             # source text of the until-condition
-last_condition_value: bool  # the condition's final value
+last-condition-value: bool  # the condition's final value
 metadata: json
 ```
 
@@ -353,7 +353,7 @@ required to be exhaustive and never raise `MatchError` implicitly
 `MatchError` may be constructed, raised, and caught by user code.
 
 ```text
-scrutinee_type: text   # type name of the rejected value
+scrutinee-type: text   # type name of the rejected value
 scrutinee: json        # structural JSON encoding of the rejected value
 ```
 
@@ -421,8 +421,8 @@ the target type. This includes an enum-to-member identity downcast when the
 value has a different member identity.
 
 ```text
-source_type: text   # name of the source type, e.g. "json"
-target_type: text   # name of the target type, e.g. "int"
+source-type: text   # name of the source type, e.g. "json"
+target-type: text   # name of the target type, e.g. "int"
 raw: text           # text representation of the value that failed to convert
 ```
 

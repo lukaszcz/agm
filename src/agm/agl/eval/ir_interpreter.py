@@ -750,8 +750,10 @@ class IrInterpreter:
                         "IndexError",
                         str(err),
                         nominals=self._program.builtin_nominals,
-                        index=IntValue(err.index),
-                        length=IntValue(err.length),
+                        fields={
+                            "index": IntValue(err.index),
+                            "length": IntValue(err.length),
+                        },
                     ),
                 )
             case AglMissingKey():
@@ -760,7 +762,9 @@ class IrInterpreter:
                         "KeyError",
                         f"Dict key {err.key!r} is missing",
                         nominals=self._program.builtin_nominals,
-                        key=TextValue(err.key),
+                        fields={
+                            "key": TextValue(err.key),
+                        },
                     ),
                 )
             case _ as unreachable:  # pragma: no cover
@@ -795,9 +799,11 @@ class IrInterpreter:
                         "CastError",
                         exc.message,
                         nominals=self._program.builtin_nominals,
-                        source_type=TextValue(exc.source_label),
-                        target_type=TextValue(exc.target_label),
-                        raw=TextValue(exc.raw),
+                        fields={
+                            "source-type": TextValue(exc.source_label),
+                            "target-type": TextValue(exc.target_label),
+                            "raw": TextValue(exc.raw),
+                        },
                     ),
                 )
             case ConversionFailureMode.RETURN_BOOL:
@@ -908,7 +914,9 @@ class IrInterpreter:
                 "RecursionError",
                 f"Maximum call depth ({self._max_call_depth}) exceeded",
                 nominals=self._program.builtin_nominals,
-                limit=IntValue(self._max_call_depth),
+                fields={
+                    "limit": IntValue(self._max_call_depth),
+                },
             )
         )
 
@@ -1438,7 +1446,9 @@ class IrInterpreter:
                             "ArithmeticError",
                             "Division by zero",
                             nominals=self._program.builtin_nominals,
-                            operation=TextValue("/"),
+                            fields={
+                                "operation": TextValue("/"),
+                            },
                         )
                     )
 
@@ -1602,9 +1612,11 @@ class IrInterpreter:
                         "CastError",
                         f"cannot cast '{source_label}' to '{target_label}'",
                         nominals=self._program.builtin_nominals,
-                        source_type=TextValue(source_label),
-                        target_type=TextValue(target_label),
-                        raw=TextValue(self._cast_raw(value)),
+                        fields={
+                            "source-type": TextValue(source_label),
+                            "target-type": TextValue(target_label),
+                            "raw": TextValue(self._cast_raw(value)),
+                        },
                     )
                 )
 
@@ -1737,10 +1749,12 @@ class IrInterpreter:
                                 "MaxIterationsExceeded",
                                 f"Loop exhausted after {self._loop_limit} iterations",
                                 nominals=self._program.builtin_nominals,
-                                limit=IntValue(self._loop_limit),
-                                condition=TextValue("loop limit"),
-                                last_condition_value=BoolValue(False),
-                                metadata=JsonValue(None),
+                                fields={
+                                    "limit": IntValue(self._loop_limit),
+                                    "condition": TextValue("loop limit"),
+                                    "last-condition-value": BoolValue(False),
+                                    "metadata": JsonValue(None),
+                                },
                             )
                         )
                     try:

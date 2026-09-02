@@ -1,4 +1,4 @@
-# shallow_copy detaches exactly the top-level container: mutating the copy's
+# shallow-copy detaches exactly the top-level container: mutating the copy's
 # own slot does not touch the original, but mutating a nested container
 # reached THROUGH the copy is visible through the original, because the
 # nested container is the same shared object.
@@ -9,7 +9,7 @@ param third: int
 program def main() -> unit =
   var inner = [first, second]
   var outer = [inner]
-  let copied = shallow_copy(outer)
+  let copied = shallow-copy(outer)
 
   copied[0][0] := 99
   print(outer)

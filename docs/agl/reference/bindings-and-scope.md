@@ -43,7 +43,7 @@ continuation that consumes the block. A block ending in a bare `let` has type
 ```agl
 let review: Review = reviewer.ask(
   "Review %{artifact}",
-  on_parse_error = Retry(n = 2)
+  on-parse-error = Retry(n = 2)
 )
 let count = 3
 ```
@@ -165,8 +165,8 @@ assignment mutates the shared value in place, even through a `let` binding.
 Either indexed or `var`-field assignment can close a reference cycle — see
 [Cycles](types.md#cycles) for the operations that detect one. Because binding
 and assignment never copy, a program that wants an independent value asks for
-one with the `copy`/`shallow_copy` built-ins — see [`copy` and
-`shallow_copy`](types.md#copying-values).
+one with the `copy`/`shallow-copy` built-ins — see [`copy` and
+`shallow-copy`](types.md#copying-values).
 
 Evaluation order for `target[index] := value` is left to right: the
 container, then the index, then `value`, then the checked in-place store. A

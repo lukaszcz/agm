@@ -104,7 +104,7 @@ class TestSeededTypeDefsCarryReservedIds:
     def test_agent_request_embedded_option_fields_carry_option_reserved_id(self) -> None:
         agent_request = BUILTIN_PRELUDE_TYPE_DEFS["AgentRequest"]
         fields = dict(agent_request.fields)
-        for field_name in ("target_type", "format_instructions", "json_schema", "previous_error"):
+        for field_name in ("target-type", "format-instructions", "json-schema", "previous-error"):
             assert _decl_id(fields[field_name]) == reserved_nominal_id("Option")
 
     def test_output_contract_option_embedded_record_carries_reserved_id(self) -> None:

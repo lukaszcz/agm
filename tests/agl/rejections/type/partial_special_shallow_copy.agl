@@ -1,2 +1,2 @@
 program def main() -> unit =
-  shallow_copy(?)
+  shallow-copy(?)

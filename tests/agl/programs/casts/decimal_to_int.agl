@@ -1,6 +1,6 @@
 # `decimal as int`: succeeds only when the decimal has no fractional part;
-# raises CastError otherwise.  The CastError carries source_type="decimal",
-# target_type="int", and raw=the original decimal value.
+# raises CastError otherwise.  The CastError carries source-type="decimal",
+# target-type="int", and raw=the original decimal value.
 param d: decimal
 
 program def main() -> unit =
@@ -10,5 +10,5 @@ program def main() -> unit =
     print "next: %{i + 1}"
   catch CastError as e =>
     print "not integral: %{e.raw}"
-    print e.source_type
-    print e.target_type
+    print e.source-type
+    print e.target-type

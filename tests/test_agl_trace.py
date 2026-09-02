@@ -332,7 +332,7 @@ class TestRetryRecords:
         _run_inline(
             rt,
             'let impl = AgentCommand("impl")\n'
-            'let x: int = impl.ask("get int", on_parse_error = Retry(n = 2))\nx',
+            'let x: int = impl.ask("get int", on-parse-error = Retry(n = 2))\nx',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -370,7 +370,7 @@ class TestRetryRecords:
         _run_inline(
             rt,
             'let impl = AgentCommand("impl")\n'
-            'let x: int = impl.ask("get int", on_parse_error = Retry(n = 2))\nx',
+            'let x: int = impl.ask("get int", on-parse-error = Retry(n = 2))\nx',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -388,7 +388,7 @@ class TestRetryRecords:
         rt = _agent_runtime(agent, strict_json=True)
         src = (
             'let impl = AgentCommand("impl")\n'
-            'let x: int = impl.ask("get int", on_parse_error = Retry(n = 1))\nx'
+            'let x: int = impl.ask("get int", on-parse-error = Retry(n = 1))\nx'
         )
         try:
             _run_inline(rt, src, log_file=log_path)
@@ -545,7 +545,7 @@ class TestBuiltinExceptionFields:
             "  | 0 => ()\n"
             "  | _ =>\n"
             '    raise MatchError(message = "no match", '
-            'scrutinee_type = "int", scrutinee = 5)\n',
+            'scrutinee-type = "int", scrutinee = 5)\n',
             log_file=None,
         )
         assert not result.ok
@@ -1026,7 +1026,7 @@ class TestUnparseableFeedback:
         result = _run_inline(
             rt,
             'let impl = AgentCommand("impl")\n'
-            'let x: int = impl.ask("get int", on_parse_error = Retry(n = 1))\nx',
+            'let x: int = impl.ask("get int", on-parse-error = Retry(n = 1))\nx',
             log_file=log_path,
         )
         assert result.ok
@@ -1052,7 +1052,7 @@ class TestUnparseableFeedback:
         _run_inline(
             rt,
             'let impl = AgentCommand("impl")\n'
-            'let x: int = impl.ask("get int", on_parse_error = Retry(n = 1))\nx',
+            'let x: int = impl.ask("get int", on-parse-error = Retry(n = 1))\nx',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -1085,7 +1085,7 @@ class TestUnparseableFeedback:
             result = _run_inline(
                 rt,
                 'let impl = AgentCommand("impl")\n'
-                'let x: int = impl.ask("q", on_parse_error = Abort())\n'
+                'let x: int = impl.ask("q", on-parse-error = Abort())\n'
                 "x",
             )
         # The program raises AgentParseError; run returns ok=False.
@@ -1093,7 +1093,7 @@ class TestUnparseableFeedback:
         assert result.error is not None
         assert result.error.type_name == "AgentParseError"
         # With empty errors the validation_errors list is empty.
-        val_errs = result.error.fields.get("validation_errors")
+        val_errs = result.error.fields.get("validation-errors")
         assert val_errs == []
 
 

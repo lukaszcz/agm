@@ -1,5 +1,5 @@
 # Mutable record fields can close a cycle directly. Equality remains
-# co-inductive, copy rebuilds the cycle independently, and shallow_copy keeps
+# co-inductive, copy rebuilds the cycle independently, and shallow-copy keeps
 # the original nested alias.
 param seed: int
 
@@ -19,6 +19,6 @@ program def main() -> unit =
   print(copied.value)
   print(left.value)
 
-  let shallow = shallow_copy(left)
+  let shallow = shallow-copy(left)
   (shallow.next as Link::Cell).value := seed + 2
   print(left.value)

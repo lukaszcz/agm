@@ -1,8 +1,8 @@
 builtin record ExecResult
   stdout: text
-  exit_code: int
+  exit-code: int
   stderr: text
-  timed_out: bool
+  timed-out: bool
 
 program def main() -> unit =
   ()

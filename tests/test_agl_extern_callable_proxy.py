@@ -231,4 +231,4 @@ def test_returning_a_python_callable_into_agl_raises_extern_error(tmp_path: Path
     )
 
     assert exc.display_name == "ExternError"
-    assert exc.fields["python_type"] == TextValue("")
+    assert exc.fields["python-type"] == TextValue("")

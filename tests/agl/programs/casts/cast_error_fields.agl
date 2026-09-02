@@ -1,5 +1,5 @@
 # CastError field access: verifies that a caught CastError carries its declared
-# source_type, target_type, raw, and message fields for downstream logic.
+# source-type, target-type, raw, and message fields for downstream logic.
 param value
 param target
 
@@ -14,8 +14,8 @@ program def main() -> unit =
       let d = value as decimal
       print "decimal: %{d as text}"
   catch CastError as e =>
-    print "source: %{e.source_type}"
-    print "target: %{e.target_type}"
+    print "source: %{e.source-type}"
+    print "target: %{e.target-type}"
     print "raw: %{e.raw}"
     # message is non-empty
     let has_msg = e.message != ""

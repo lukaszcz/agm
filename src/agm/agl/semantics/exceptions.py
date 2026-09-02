@@ -18,13 +18,19 @@ values.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from agm.agl.ir.builtin_nominals import BuiltinNominals
 from agm.agl.ir.ids import Location
 from agm.agl.semantics.values import ExceptionValue, TextValue, Value
 
 
 def make_builtin_exception(
-    type_name: str, message: str, *, nominals: BuiltinNominals, **extra: Value
+    type_name: str,
+    message: str,
+    *,
+    nominals: BuiltinNominals,
+    fields: Mapping[str, Value] | None = None,
 ) -> ExceptionValue:
     """Create an ``ExceptionValue`` for a built-in exception type.
 
@@ -33,15 +39,15 @@ def make_builtin_exception(
     so the value carries the identity and the declared spelling that table
     resolves for *type_name* rather than hardcoded ones, and a scoped
     declaration reports its own spelling instead of the bare name.
-    Extra keyword arguments become additional fields beyond ``message``.
+    *fields* maps the declared AgL field names beyond ``message`` to their values.
     """
-    fields: dict[str, Value] = {"message": TextValue(message)}
-    fields.update(extra)
+    all_fields: dict[str, Value] = {"message": TextValue(message)}
+    all_fields.update(fields or {})
     declared = nominals.resolve(type_name)
     return ExceptionValue(
         nominal=declared.nominal,
         display_name=declared.display_name,
-        fields=fields,
+        fields=all_fields,
     )
 
 

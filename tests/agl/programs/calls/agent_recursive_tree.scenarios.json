@@ -87,7 +87,7 @@
               "command": "builder"
             },
             "attempts": 2,
-            "target_type": "Tree"
+            "target-type": "Tree"
           },
           "message_contains": [
             "Tree",

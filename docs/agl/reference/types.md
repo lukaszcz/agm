@@ -161,11 +161,11 @@ See [Bindings and Scope](bindings-and-scope.md) for `:=` rules, and [Foreign
 Function Interface](ffi.md) for boundary behavior. Arrays, dictionaries, and
 records with a `var` field cross the FFI as live views; records without one,
 exceptions, and other immutable values cross as independent values. Use `copy`
-or `shallow_copy` before the call, or an explicit `as json` cast, when a
+or `shallow-copy` before the call, or an explicit `as json` cast, when a
 boundary snapshot is needed. (`as json` builds an independent container
 snapshot — see [Casts and convertibility](#casts-and-convertibility) below —
 and `with` ([Expressions](expressions.md)) builds a shallow copy of a record.
-See [Copying values](#copying-values) below for `copy`/`shallow_copy`.)
+See [Copying values](#copying-values) below for `copy`/`shallow-copy`.)
 
 #### Builtin-type methods
 
@@ -236,7 +236,7 @@ with this signature, and the prelude exports them:
 <!-- agl-check: fragment -->
 ```agl
 builtin def copy[T](value: T) -> T
-builtin def shallow_copy[T](value: T) -> T
+builtin def shallow-copy[T](value: T) -> T
 ```
 
 Both are generic and identity-typed — `T -> T` — so they compose with any
@@ -244,10 +244,10 @@ value and never change its type. An explicit type argument
 (`copy::[decimal](5)`) is accepted and behaves like passing that value to any
 other declaration expecting the explicit type: the argument must be
 assignable to it. Like `print` and `render`, neither `copy`
-nor `shallow_copy` can be bound as a function value — both are only valid in
+nor `shallow-copy` can be bound as a function value — both are only valid in
 call position.
 
-`shallow_copy` rebuilds exactly **one** level: a new array, dict, record,
+`shallow-copy` rebuilds exactly **one** level: a new array, dict, record,
 enum, or exception holding the *same* element or field references as the
 original. Replacing the copy's own top-level contents — including assigning a
 `var` field — does not affect the original, but mutating a container reached
@@ -255,7 +255,7 @@ original. Replacing the copy's own top-level contents — including assigning a
 original too, because that nested container is the same shared object. Every
 other value kind (`int`, `decimal`, `bool`, `text`, `json`, `unit`, a function
 value) is returned as-is:
-primitives are immutable, so there is nothing to detach. `shallow_copy`
+primitives are immutable, so there is nothing to detach. `shallow-copy`
 never recurses, so it can never loop and never raises, even on a cyclic
 value.
 
@@ -263,7 +263,7 @@ value.
 program def main() -> unit =
   var inner = [1, 2]
   var outer = [inner]
-  let copied = shallow_copy(outer)
+  let copied = shallow-copy(outer)
   copied[0][0] := 9
   let _ = print(outer)
 ```
@@ -271,7 +271,7 @@ program def main() -> unit =
 `copy` is deep: every array, dict, record, enum, and exception reachable from
 the value is rebuilt with independently copied contents, all the way down.
 Function values reached along the way are returned as-is, exactly as for
-`shallow_copy`: a container reachable only through a function value's captured
+`shallow-copy`: a container reachable only through a function value's captured
 environment stays shared after the copy.
 A `json` leaf copies as an independent value. **Sharing is preserved**: if
 two fields or array slots pointed at the same array before the copy, they
@@ -350,16 +350,16 @@ A structured record returned by `exec` when no target annotation is given
 
 ```text
 stdout:    text
-exit_code: int
+exit-code: int
 stderr:    text
-timed_out: bool
+timed-out: bool
 ```
 
-Field access works normally: `res.stdout`, `res.exit_code`, etc.
+Field access works normally: `res.stdout`, `res.exit-code`, etc.
 
 ### `ParsePolicy`
 
-An enum used as the `on_parse_error` argument to `ask` and typed `exec`:
+An enum used as the `on-parse-error` argument to `ask` and typed `exec`:
 
 ```text
 enum ParsePolicy
@@ -389,17 +389,17 @@ without dispatching an agent (see [Agent calls](agent-calls.md)):
 record AgentRequest
   agent:               Agent
   prompt:              text
-  target_type:         Option[text]
-  format_instructions: Option[text]
-  json_schema:         Option[json]
+  target-type:         Option[text]
+  format-instructions: Option[text]
+  json-schema:         Option[json]
   attempt:             int
-  previous_error:      Option[text]
+  previous-error:      Option[text]
   metadata:            json
 ```
 
-`target_type` is always `Some("text")`; `format_instructions` and
-`json_schema` are `None` because `ask-request` has a fixed text contract.
-`previous_error` is `None` because it constructs only the first-attempt
+`target-type` is always `Some("text")`; `format-instructions` and
+`json-schema` are `None` because `ask-request` has a fixed text contract.
+`previous-error` is `None` because it constructs only the first-attempt
 request.
 
 ### `SessionTransport`
@@ -651,7 +651,7 @@ host raises the program's own declaration under that name instead.
 The host fills the fields of such a value itself, always with standard
 values, so any field of one whose type is itself a nominal type must keep the
 standard identity for that name — including a nominal nested inside a type
-argument, such as the `Option` in `AgentRequest`'s `target_type:
+argument, such as the `Option` in `AgentRequest`'s `target-type:
 Option[text]`. The fields subject to this are `AgentRequest`'s `agent: Agent`
 and its `Option`-typed fields, and the `agent: Agent` field of the built-in
 exceptions `AgentCallError` and `AgentParseError`; `ExecResult` has no

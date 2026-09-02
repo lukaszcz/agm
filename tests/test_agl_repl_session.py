@@ -1194,7 +1194,7 @@ class TestStdlib:
         s = open_session()
 
         result = s.eval_entry(
-            'ExecResult(stdout = "ok", exit_code = 0, stderr = "", timed_out = false)'
+            'ExecResult(stdout = "ok", exit-code = 0, stderr = "", timed-out = false)'
         )
 
         assert result.ok, result.diagnostics
@@ -1249,7 +1249,7 @@ class TestStdlib:
 # Builtin identity across REPL entries
 # ---------------------------------------------------------------------------
 
-_EXEC_RESULT_FIELDS = "  stdout: text\n  exit_code: int\n  stderr: text\n  timed_out: bool\n"
+_EXEC_RESULT_FIELDS = "  stdout: text\n  exit-code: int\n  stderr: text\n  timed-out: bool\n"
 
 _AGENT_VARIANTS = (
     "  | AgentCommand(command: text)\n"
@@ -1261,11 +1261,11 @@ _AGENT_VARIANTS = (
 _AGENT_REQUEST_FIELDS = (
     "  agent: Agent\n"
     "  prompt: text\n"
-    "  target_type: Option[text]\n"
-    "  format_instructions: Option[text]\n"
-    "  json_schema: Option[json]\n"
+    "  target-type: Option[text]\n"
+    "  format-instructions: Option[text]\n"
+    "  json-schema: Option[json]\n"
     "  attempt: int\n"
-    "  previous_error: Option[text]\n"
+    "  previous-error: Option[text]\n"
     "  metadata: json\n"
 )
 
@@ -1331,7 +1331,7 @@ class TestBuiltinIdentityAcrossEntries:
 
         assert call.ok, call.diagnostics
         assert capsys.readouterr().out.strip() == (
-            'Stdlib::ExecResult(stdout = "hey", exit_code = 0, stderr = "", timed_out = false)'
+            'Stdlib::ExecResult(stdout = "hey", exit-code = 0, stderr = "", timed-out = false)'
         )
 
     def test_unannotated_exec_types_as_the_most_recently_declared_builtin(self) -> None:
@@ -1428,7 +1428,7 @@ class TestBuiltinIdentityAcrossEntries:
         )
         assert declare.ok, declare.diagnostics
         original = s.eval_entry(
-            'let a = ExecResult(stdout = "hi", exit_code = 0, stderr = "", timed_out = false)'
+            'let a = ExecResult(stdout = "hi", exit-code = 0, stderr = "", timed-out = false)'
         )
         assert original.ok, original.diagnostics
         assert isinstance(original.value_type, RecordType)
@@ -1517,14 +1517,14 @@ class TestBuiltinIdentityWithStandardLibrary:
         assert result.value_type.scope_path == ("A",)
 
         ctor = s.eval_entry(
-            'let b = A::ExecResult(stdout = "hi", exit_code = 0, stderr = "", timed_out = false)'
+            'let b = A::ExecResult(stdout = "hi", exit-code = 0, stderr = "", timed-out = false)'
         )
         assert ctor.ok, ctor.diagnostics
         equal = s.eval_entry("let c = a == b")
         assert equal.ok, equal.diagnostics
         assert equal.value == BoolValue(True)
 
-        field = s.eval_entry("a.exit_code")
+        field = s.eval_entry("a.exit-code")
         assert field.ok, field.diagnostics
         assert field.value == IntValue(0)
 
@@ -1546,7 +1546,7 @@ class TestBuiltinIdentityWithStandardLibrary:
         assert result.value_type.scope_path == ()
 
         ctor = s.eval_entry(
-            'let b = ExecResult(stdout = "hi", exit_code = 0, stderr = "", timed_out = false)'
+            'let b = ExecResult(stdout = "hi", exit-code = 0, stderr = "", timed-out = false)'
         )
         assert ctor.ok, ctor.diagnostics
         equal = s.eval_entry("a == b")
@@ -1609,7 +1609,7 @@ class TestBuiltinIdentityWithStandardLibrary:
         assert after.value_type.decl_id != before_decl_id
         assert after.value_type.scope_path == ("A",)
 
-        still_reads_old_field = s.eval_entry("a.exit_code")
+        still_reads_old_field = s.eval_entry("a.exit-code")
         cross = s.eval_entry("a == b")
         assert still_reads_old_field.ok, still_reads_old_field.diagnostics
         assert still_reads_old_field.value == IntValue(0)
@@ -1658,8 +1658,8 @@ class TestBuiltinIdentityAcrossModules:
         assert result.value.nominal.value == result.value_type.decl_id
 
         ctor = s.eval_entry(
-            'let b = lib::Lib::ExecResult(stdout = "hi", exit_code = 0, stderr = "", '
-            "timed_out = false)"
+            'let b = lib::Lib::ExecResult(stdout = "hi", exit-code = 0, stderr = "", '
+            "timed-out = false)"
         )
         assert ctor.ok, ctor.diagnostics
         equal = s.eval_entry("a == b")
@@ -2064,7 +2064,7 @@ class TestParsePolicyBuiltinIdentity:
         shell = FakeShell(stdout="2")
         with patch("agm.core.process.run_capture_result", side_effect=shell):
             result = s.eval_entry(
-                'let r = exec::[int]("echo hi", on_parse_error = A::ParsePolicy::Retry(n = 2))'
+                'let r = exec::[int]("echo hi", on-parse-error = A::ParsePolicy::Retry(n = 2))'
             )
         assert result.ok, result.diagnostics
         assert result.value == IntValue(2)
@@ -2079,7 +2079,7 @@ class TestParsePolicyBuiltinIdentity:
         shell = FakeShell(stdout="2")
         with patch("agm.core.process.run_capture_result", side_effect=shell):
             result = s.eval_entry(
-                'let r = exec::[int]("echo hi", on_parse_error = A::ParsePolicy::Abort)'
+                'let r = exec::[int]("echo hi", on-parse-error = A::ParsePolicy::Abort)'
             )
         assert result.ok, result.diagnostics
         assert result.value == IntValue(2)
@@ -2095,7 +2095,7 @@ class TestParsePolicyBuiltinIdentity:
 
         shell = FakeShell(stdout="2")
         with patch("agm.core.process.run_capture_result", side_effect=shell):
-            result = s.eval_entry('let r = exec::[int]("echo hi", on_parse_error = Retry(n = 2))')
+            result = s.eval_entry('let r = exec::[int]("echo hi", on-parse-error = Retry(n = 2))')
         assert result.ok, result.diagnostics
         assert result.value == IntValue(2)
 
@@ -2108,11 +2108,11 @@ class TestParsePolicyBuiltinIdentity:
         s = open_session()
         shell = FakeShell(stdout="2")
         with patch("agm.core.process.run_capture_result", side_effect=shell):
-            bare = s.eval_entry('let a = exec::[int]("echo hi", on_parse_error = Retry(n = 2))')
+            bare = s.eval_entry('let a = exec::[int]("echo hi", on-parse-error = Retry(n = 2))')
         assert bare.ok, bare.diagnostics
         with patch("agm.core.process.run_capture_result", side_effect=shell):
             qualified = s.eval_entry(
-                'let b = exec::[int]("echo hi", on_parse_error = ParsePolicy::Abort)'
+                'let b = exec::[int]("echo hi", on-parse-error = ParsePolicy::Abort)'
             )
         assert qualified.ok, qualified.diagnostics
 
@@ -2126,11 +2126,11 @@ class TestParsePolicyBuiltinIdentity:
         s = open_session()
         result = s.eval_entry(
             "let Abort = ParsePolicy::Retry(n = 3)\n"
-            'let n: int = exec::[int]("echo 7", on_parse_error = Abort)\nn',
+            'let n: int = exec::[int]("echo 7", on-parse-error = Abort)\nn',
             check_only=True,
         )
         assert not result.ok
-        assert any("on_parse_error" in d.message for d in result.diagnostics)
+        assert any("on-parse-error" in d.message for d in result.diagnostics)
 
     def test_on_parse_error_rejects_a_local_binding_shadowing_abort_call_form(self) -> None:
         """The call-form (``Abort()``) counterpart of the shadowing bug:
@@ -2139,11 +2139,11 @@ class TestParsePolicyBuiltinIdentity:
         s = open_session()
         result = s.eval_entry(
             "let Abort = ParsePolicy::Retry(n = 3)\n"
-            'let n: int = exec::[int]("echo 7", on_parse_error = Abort())\nn',
+            'let n: int = exec::[int]("echo 7", on-parse-error = Abort())\nn',
             check_only=True,
         )
         assert not result.ok
-        assert any("on_parse_error" in d.message for d in result.diagnostics)
+        assert any("on-parse-error" in d.message for d in result.diagnostics)
 
     def test_on_parse_error_rejects_a_local_binding_shadowing_retry(self) -> None:
         """The ``Retry`` counterpart: a local binding shadowing ``Retry``'s
@@ -2151,11 +2151,11 @@ class TestParsePolicyBuiltinIdentity:
         ``ParsePolicy::Retry`` call spelled the same way."""
         s = open_session()
         result = s.eval_entry(
-            'let Retry = 5\nlet n: int = exec::[int]("echo 7", on_parse_error = Retry(n = 3))\nn',
+            'let Retry = 5\nlet n: int = exec::[int]("echo 7", on-parse-error = Retry(n = 3))\nn',
             check_only=True,
         )
         assert not result.ok
-        assert any("on_parse_error" in d.message for d in result.diagnostics)
+        assert any("on-parse-error" in d.message for d in result.diagnostics)
 
     def test_on_parse_error_rejects_a_qualifier_naming_an_unrelated_enum(self) -> None:
         """Regression: an unrelated enum's constructor is still rejected as
@@ -2170,7 +2170,7 @@ class TestParsePolicyBuiltinIdentity:
         assert not_policy.ok, not_policy.diagnostics
 
         result = s.eval_entry(
-            'let n: int = exec::[int]("ls", on_parse_error = NotPolicy::Abort())', check_only=True
+            'let n: int = exec::[int]("ls", on-parse-error = NotPolicy::Abort())', check_only=True
         )
         assert not result.ok
         assert any("ParsePolicy" in d.message for d in result.diagnostics)
@@ -2194,7 +2194,7 @@ class TestParsePolicyBuiltinIdentity:
         shell = FakeShell(stdout="2")
         with patch("agm.core.process.run_capture_result", side_effect=shell):
             result = s.eval_entry(
-                'let r = exec::[int]("echo hi", on_parse_error = Lib::ParsePolicy::Retry(n = 2))'
+                'let r = exec::[int]("echo hi", on-parse-error = Lib::ParsePolicy::Retry(n = 2))'
             )
         assert result.ok, result.diagnostics
         assert result.value == IntValue(2)

@@ -4,7 +4,7 @@ The evaluator interprets the linked program and never imports the frontend. `run
 
 ## Values and Aliasing
 
-Binding is by reference: arrays, dicts, and records are shared, so an in-place update — an index set or a `var` field set — is observed through every alias. Text and exceptions are immutable. An enum-typed slot holds the selected member `RecordValue` directly, never a wrapper. Reference cycles are therefore possible: rendering and JSON encoding carry a cycle guard and raise catchable `CyclicValueError`; equality is co-inductive and terminates; `copy` uses a memo and terminates, while `shallow_copy` rebuilds one level (`semantics/copying.py`).
+Binding is by reference: arrays, dicts, and records are shared, so an in-place update — an index set or a `var` field set — is observed through every alias. Text and exceptions are immutable. An enum-typed slot holds the selected member `RecordValue` directly, never a wrapper. Reference cycles are therefore possible: rendering and JSON encoding carry a cycle guard and raise catchable `CyclicValueError`; equality is co-inductive and terminates; `copy` uses a memo and terminates, while `shallow-copy` rebuilds one level (`semantics/copying.py`).
 
 ## Control Flow
 

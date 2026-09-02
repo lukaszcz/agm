@@ -291,7 +291,9 @@ the first six rows below, and the rest are imported explicitly:
 | `std/env` | the ambient environment snapshot and its helpers |
 | `std/process` | process metadata and termination |
 
-A few conventions run through all of them. Each module declares the exception
+A few conventions run through all of them. Every name the library exposes —
+functions, fields, and named arguments alike — is spelled in kebab-case, with
+types and constructors in `CamelCase`. Each module declares the exception
 types its own operations raise, so an error type lives beside the operations
 that produce it; the exceptions the language itself raises live in
 `std/errors`. An operation that raises may have a `?` twin returning `Option`,

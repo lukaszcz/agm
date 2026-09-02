@@ -94,10 +94,10 @@ def test_stdlib_ask_signature_is_context_inferred_with_optional_arguments() -> N
     assert params[0].name == "prompt" and params[0].type == TextType() and not params[0].has_default
     assert params[1].name == "format" and params[1].type == TextType() and params[1].has_default
     assert (
-        params[2].name == "strict_json" and params[2].type == BoolType() and params[2].has_default
+        params[2].name == "strict-json" and params[2].type == BoolType() and params[2].has_default
     )
     p4 = params[3]
-    assert p4.name == "on_parse_error"
+    assert p4.name == "on-parse-error"
     assert isinstance(p4.type, EnumType)
     assert p4.type.name == "ParsePolicy"
     assert p4.has_default is True
@@ -110,7 +110,7 @@ def test_canonical_builtin_signatures_name_the_shared_prelude_handles() -> None:
     ask = _builtin_function_signature("ask")
     assert ask is not None
     ask_params = {param.name: param.type for param in ask.params}
-    assert ask_params["on_parse_error"] == BUILTIN_PRELUDE_TYPES["ParsePolicy"]
+    assert ask_params["on-parse-error"] == BUILTIN_PRELUDE_TYPES["ParsePolicy"]
     ask_request = _builtin_function_signature("ask-request")
     assert ask_request is not None
     assert ask_request.result == BUILTIN_PRELUDE_TYPES["AgentRequest"]
@@ -126,7 +126,7 @@ def test_builtin_function_signature_mismatches_are_rejected() -> None:
         "builtin def ask-request(prompt: text) -> ExecResult\n()\n",
         "builtin def exec(command: int) -> ExecResult\n()\n",
         "builtin def copy(value: int) -> int\n()\n",
-        "builtin def shallow_copy[T](value: T) -> unit\n()\n",
+        "builtin def shallow-copy[T](value: T) -> unit\n()\n",
     ]
     for source in cases:
         with pytest.raises(AglTypeError, match="Builtin function '.*' has an invalid signature"):
@@ -343,15 +343,15 @@ def test_lowerer_skips_builtin_function_definitions() -> None:
 
 
 def test_copy_and_shallow_copy_source_declared_calls_are_classified() -> None:
-    """Runs without the standard library: ``copy``/``shallow_copy`` are
+    """Runs without the standard library: ``copy``/``shallow-copy`` are
     ``std/prelude``'s own built-in names too, so declaring them again while it
     is loaded would be a duplicate rather than exercising this call-site
     classification."""
     _check(
         "builtin def copy[T](value: T) -> T\n"
-        "builtin def shallow_copy[T](value: T) -> T\n"
+        "builtin def shallow-copy[T](value: T) -> T\n"
         "let _ = copy(1)\n"
-        "shallow_copy(1)\n",
+        "shallow-copy(1)\n",
         default_stdlib=False,
     )
 

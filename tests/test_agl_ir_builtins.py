@@ -1,4 +1,4 @@
-"""IR evaluation tests for print, copy/shallow_copy, and entry params.
+"""IR evaluation tests for print, copy/shallow-copy, and entry params.
 
 Each test evaluates a program through the IR pipeline and asserts
 the produced bindings and stdout.
@@ -167,16 +167,16 @@ def test_print_inside_loop() -> None:
 
 
 # ===========================================================================
-# copy / shallow_copy
+# copy / shallow-copy
 # ===========================================================================
 
 
 def test_shallow_copy_detaches_top_level_shares_nested() -> None:
-    """shallow_copy detaches the top-level array; a nested array stays shared."""
+    """shallow-copy detaches the top-level array; a nested array stays shared."""
     source = textwrap.dedent("""\
         var inner = [1, 2]
         var outer = [inner]
-        let copied = shallow_copy(outer)
+        let copied = shallow-copy(outer)
         copied[0][0] := 99
         print(outer)
         print(copied)
@@ -263,12 +263,12 @@ def test_copy_of_cyclic_value_produces_independent_isomorphic_cycle() -> None:
 
 
 def test_copy_and_shallow_copy_are_identity_on_primitives() -> None:
-    """copy/shallow_copy of int, decimal, bool, text, unit return an equal value."""
+    """copy/shallow-copy of int, decimal, bool, text, unit return an equal value."""
     source = textwrap.dedent("""\
         let a = copy(5)
-        let b = shallow_copy(true)
+        let b = shallow-copy(true)
         let c = copy("hi")
-        let d: decimal = shallow_copy(3.5)
+        let d: decimal = shallow-copy(3.5)
         let e = copy(())
         ()
     """)
@@ -281,12 +281,12 @@ def test_copy_and_shallow_copy_are_identity_on_primitives() -> None:
 
 
 def test_copy_through_record_detaches_field_shallow_copy_shares_it() -> None:
-    """copy detaches a record's array field; shallow_copy shares it."""
+    """copy detaches a record's array field; shallow-copy shares it."""
     source = textwrap.dedent("""\
         record Box(items: array[int])
         var b = Box(items = [1, 2])
         let deep = copy(b)
-        let shallow = shallow_copy(b)
+        let shallow = shallow-copy(b)
         deep.items[0] := -1
         shallow.items[0] := -2
         print(b.items)
@@ -355,8 +355,8 @@ def test_copy_explicit_type_arg_coerces_scalar() -> None:
 
 
 def test_shallow_copy_returns_new_array_object() -> None:
-    """shallow_copy(array) returns a distinct ArrayValue, not the same object."""
-    source = "var xs = [1, 2]\nlet ys = shallow_copy(xs)\n()"
+    """shallow-copy(array) returns a distinct ArrayValue, not the same object."""
+    source = "var xs = [1, 2]\nlet ys = shallow-copy(xs)\n()"
     ir = evaluate_ir(source)
     assert isinstance(ir["xs"], ArrayValue)
     assert isinstance(ir["ys"], ArrayValue)

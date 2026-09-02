@@ -420,7 +420,7 @@ to enums (match and reconstruct instead), dictionaries, arrays, or `json`
 values. The target is evaluated once, then the update values left to right.
 
 See [Types](types.md#copying-values) for the general-purpose `copy` and
-`shallow_copy` built-ins, which work over any type rather than only records
+`shallow-copy` built-ins, which work over any type rather than only records
 and exceptions.
 
 Update values are ordinary expressions in the enclosing scope — there is no
@@ -487,7 +487,7 @@ with `key` and `message` fields.
 
 All calls use the same uniform parenthesized syntax. This applies equally to
 user `def`s, built-in functions (`ask`, `exec`, `print`, `render`, `copy`,
-`shallow_copy`, `resource`, `resource-dir`), and
+`shallow-copy`, `resource`, `resource-dir`), and
 function values stored in bindings:
 
 ```ebnf
@@ -614,9 +614,9 @@ let prompt_path = resource("prompts/review.md")
 let package_root = resource-dir()
 ```
 
-## `copy` and `shallow_copy`
+## `copy` and `shallow-copy`
 
-`copy` and `shallow_copy` are the built-ins that ask for an independent value
+`copy` and `shallow-copy` are the built-ins that ask for an independent value
 when binding is by reference — see [Copying values](types.md#copying-values)
 for the full deep-vs-shallow model and how each treats a cyclic value.
 

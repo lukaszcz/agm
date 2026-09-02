@@ -541,7 +541,7 @@ let result = try
     | _ =>
       raise MatchError(
         message = "explicit",
-        scrutinee_type = "int",
+        scrutinee-type = "int",
         scrutinee = null,
       )
 catch MatchError =>

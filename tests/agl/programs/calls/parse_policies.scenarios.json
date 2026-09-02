@@ -36,7 +36,7 @@
               "command": "reviewer"
             },
             "attempts": 1,
-            "target_type": "Review"
+            "target-type": "Review"
           }
         }
       }
@@ -108,7 +108,7 @@
               "command": "reviewer"
             },
             "attempts": 3,
-            "target_type": "Review"
+            "target-type": "Review"
           }
         }
       }

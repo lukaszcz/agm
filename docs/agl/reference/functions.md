@@ -235,8 +235,8 @@ an import. Ordinary and `extern` builtin-receiver methods use the same
 direct-call, bound-method, and generic-specialization rules as nominal methods.
 
 A `builtin def` receiver method is instead a call-only host route. Its name and
-signature must be one of `print`, `render`, `copy`, or `shallow_copy`; each
-takes only `self`. `copy` and `shallow_copy` return the receiver's exact type,
+signature must be one of `print`, `render`, `copy`, or `shallow-copy`; each
+takes only `self`. `copy` and `shallow-copy` return the receiver's exact type,
 `print` returns `unit`, and `render` returns `text`. Such a call reuses the
 corresponding bare builtin operation with `self` as its value; it cannot be
 bound or partially applied.
@@ -808,7 +808,7 @@ Error conditions are reported statically:
   `f ?` do not parse.
 - Partial application is not supported by the special built-in calls `print`,
   `render`, `exec`, `ask`, `ask-request`, `copy`, and
-  `shallow_copy`; for example, `print(?)` is rejected.
+  `shallow-copy`; for example, `print(?)` is rejected.
 - Numbered placeholders must be a permutation from `?1` through `?n`; examples
   such as `f(?0)`, `f(?2)`, `f(?1, ?1)`, and `f(?, ?1)` are rejected.
 - Existing argument-binding errors still apply: arity mismatches such as too
@@ -889,7 +889,7 @@ def make_policy(retries: int) -> ParsePolicy =
   if retries == 0 => ParsePolicy::Abort else => Retry(n = retries)
 ```
 
-The `on_parse_error` argument of `ask`/`exec` is the one exception: it requires
+The `on-parse-error` argument of `ask`/`exec` is the one exception: it requires
 a **syntactic** static constructor written at the call site (`Abort`, or
 `Retry(n = <int literal>)`), so a `ParsePolicy` held in a binding or returned
 from a function like `make_policy` cannot be passed to it.
@@ -909,7 +909,7 @@ def summarize_issues(issues: array[text]) -> text =
 def review_artifact(artifact: text) -> Review =
   let r: Review = reviewer.ask(
     "Review this artifact:\n%{artifact}",
-    on_parse_error = Retry(n = 2)
+    on-parse-error = Retry(n = 2)
   )
   r
 

@@ -11,8 +11,8 @@ value that should receive the request:
 ```agl
 ask "Summarize %{topic}"
 reviewer.ask("Review this artifact:\n%{artifact}")
-reviewer.ask("Review %{artifact}", on_parse_error = Retry(n = 2))
-reviewer.ask::[Review]("Review %{artifact}", on_parse_error = Retry(n = 2))
+reviewer.ask("Review %{artifact}", on-parse-error = Retry(n = 2))
+reviewer.ask::[Review]("Review %{artifact}", on-parse-error = Retry(n = 2))
 ```
 
 ## `ask` — the agent call function
@@ -21,8 +21,8 @@ reviewer.ask::[Review]("Review %{artifact}", on_parse_error = Retry(n = 2))
 
 ```text
 ask(prompt: text, agent: Agent = std/config::default-agent,
-    format: text = "", strict_json: bool = false,
-    on_parse_error: ParsePolicy = ParsePolicy::Abort) -> T
+    format: text = "", strict-json: bool = false,
+    on-parse-error: ParsePolicy = ParsePolicy::Abort) -> T
 ```
 
 where `T` is the **target type** — determined from the calling context (see
@@ -32,8 +32,8 @@ An `Agent` value also provides the call-only method form:
 
 ```text
 Agent::ask(self, prompt: text, format: text = "",
-           strict_json: bool = false,
-           on_parse_error: ParsePolicy = ParsePolicy::Abort) -> T
+           strict-json: bool = false,
+           on-parse-error: ParsePolicy = ParsePolicy::Abort) -> T
 ```
 
 Free `ask` uses the snapshot default `Session` when `agent` is omitted; its
@@ -56,8 +56,8 @@ record/enum **field name**.
 
 ```text
 Session::ask[T](self, prompt: text, format: text = "",
-                strict_json: bool = false,
-                on_parse_error: ParsePolicy = ParsePolicy::Abort) -> T
+                strict-json: bool = false,
+                on-parse-error: ParsePolicy = ParsePolicy::Abort) -> T
 ```
 
 It sends the prompt through that live session, so the session's stored agent
@@ -110,7 +110,7 @@ trailing spaces and tabs in an inline prompt; `\%{` writes a literal `%{`.
 A raw call needs a nonempty inline prompt or a block with at least one nonblank
 line. A bare `ask$` uses the default session and `reviewer.ask$` opens the
 short-lived session for its receiver. Use `ask(...)` or `reviewer.ask(...)`
-when setting `format`, `strict_json`, or `on_parse_error`; the parenthesized
+when setting `format`, `strict-json`, or `on-parse-error`; the parenthesized
 forms are also available outside a raw-tail line-final position.
 
 ## Agents as values
@@ -260,7 +260,7 @@ program def main() -> unit =
   let _ = ask "Notify the reviewer."
 ```
 
-Because nothing is parsed, `format`, `strict_json`, and `on_parse_error` are
+Because nothing is parsed, `format`, `strict-json`, and `on-parse-error` are
 invalid for a `unit` target.
 
 You normally never write "Return JSON matching …" yourself — the type
@@ -351,7 +351,7 @@ that supports the call's target type; both are checked statically.
 let r: Review = reviewer.ask("Review %{a}", format = "json")
 ```
 
-### `strict_json`
+### `strict-json`
 
 Opts a JSON-codec call into **strict** parsing (a `bool`). With `true`,
 the response must be exactly one bare JSON value with nothing but surrounding
@@ -360,7 +360,7 @@ explicitly selects lenient parsing, overriding a host default. It is a
 static error unless the selected codec is `json`. When omitted, the host
 default applies; the portable default is **lenient recovery** (see below).
 
-### `on_parse_error`
+### `on-parse-error`
 
 The parse policy for invalid structured output. The value is a `ParsePolicy`
 — one of two members from the standard-library enum:
@@ -380,7 +380,7 @@ enum ParsePolicy
 ```agl
 let r: Review = reviewer.ask(
   "Review %{artifact}",
-  on_parse_error = Retry(n = 2)
+  on-parse-error = Retry(n = 2)
 )
 ```
 
@@ -512,12 +512,12 @@ as ambiguous. Schema validation is always strict regardless of lenient mode.
 
 ### Strict parsing
 
-With `strict_json = true` (or a host default of strict), the response must be
+With `strict-json = true` (or a host default of strict), the response must be
 exactly one bare JSON value with nothing but surrounding whitespace.
 
 ## Parse policies and retries
 
-For a call with `on_parse_error = Retry(n = N)`, attempt 1 sends the rendered
+For a call with `on-parse-error = Retry(n = N)`, attempt 1 sends the rendered
 prompt plus its output-format instructions. The output is then parsed and
 validated. Each failed parse or validation sends at most `N` corrective
 follow-ups in the **same session** (`N + 1` attempts total). A follow-up contains
@@ -534,7 +534,7 @@ explicit-agent, and explicit-session forms.
 
 A failed `ask` transport — for example a process spawn failure, nonzero exit,
 idle timeout, or a failed Pi RPC prompt — raises **`AgentCallError`**. It is
-catchable and is never retried by `on_parse_error`. **`SessionError`** instead
+catchable and is never retried by `on-parse-error`. **`SessionError`** instead
 reports a session lifecycle, capability, or non-ask backend failure: opening or
 using a closed session, an unsupported operation or transport, and failed
 compaction/fork/reset/name/stats operations. `SessionError.operation` names the
@@ -544,7 +544,7 @@ the requested structured contract.
 ## Text targets
 
 For a `text` target the raw output is bound verbatim — no parsing, no
-validation. `on_parse_error` on such a call draws a static warning.
+validation. `on-parse-error` on such a call draws a static warning.
 
 ## What the agent receives
 
@@ -580,5 +580,5 @@ let r = ask-request("Summarize %{topic}")
 ```
 
 The result is an `AgentRequest` record (see [Types](types.md)) with `attempt`
-set to `0`, `previous_error` set to `None`, and its fixed text-output contract
+set to `0`, `previous-error` set to `None`, and its fixed text-output contract
 recorded for inspection.

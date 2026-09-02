@@ -41,7 +41,7 @@ rules:
     - statement: "\\b(as|and|or|not|is|in|to|downto|by|with)\\b"
 
     # Contextual built-ins and primitive type names.
-    - identifier: "\\b(print|render|exec|ask|shallow_copy|copy|resource)\\b"
+    - identifier: "\\b(print|render|exec|ask|shallow-copy|copy|resource)\\b"
     - type: "\\b(unit|text|json|bool|int|decimal|array|dict)\\b"
 
     # Boundary repair: a name containing an operator character is one

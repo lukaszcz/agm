@@ -28,8 +28,8 @@ builtin def Session::ask[T](
   self,
   prompt: text,
   format: text = "",
-  strict_json: bool = false,
-  on_parse_error: ParsePolicy = ParsePolicy::Abort,
+  strict-json: bool = false,
+  on-parse-error: ParsePolicy = ParsePolicy::Abort,
 ) -> T
 builtin def Session::compact(self, instructions: text = "") -> unit
 builtin def Session::reset(self) -> unit

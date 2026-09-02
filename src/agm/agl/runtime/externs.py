@@ -592,8 +592,10 @@ def _extern_error(
             "ExternError",
             message,
             nominals=nominals,
-            function=TextValue(function_name),
-            python_type=TextValue(python_type),
+            fields={
+                "function": TextValue(function_name),
+                "python-type": TextValue(python_type),
+            },
         )
     )
 

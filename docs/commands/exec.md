@@ -100,7 +100,7 @@ either is a static error.
   expansion includes `std/prelude` supplies that module's contribution instead; plain
   `import std/prelude` leaves prelude names qualified-only.
 - `--strict-json`: Require agents to return exactly one bare JSON value (no fences,
-  prose, or repair). Overridable per call site with the `strict_json:` named argument
+  prose, or repair). Overridable per call site with the `strict-json:` named argument
   to `ask`.
 - `--no-strict-json`: Use lenient JSON recovery (the default): the runtime recovers
   exactly one JSON value from chatty output (stripping fences/prose, repairing

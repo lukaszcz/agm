@@ -94,7 +94,7 @@ func assertFace(t *testing.T, source, substring, group string) {
 // src/agm/agl/scope/symbols.py. Keep this list in step with that one.
 var builtins = []string{
 	"print", "render", "exec", "ask", "ask-request",
-	"copy", "shallow_copy", "resource", "resource-dir",
+	"copy", "shallow-copy", "resource", "resource-dir",
 }
 
 func TestBuiltinsAreFacedBySpelling(t *testing.T) {

@@ -20,9 +20,9 @@ program def main() -> unit =
     case flip of
       | Heads() => print "heads"
       | Tails() =>
-          raise MatchError(message = "no match", scrutinee_type = "Coin", scrutinee = null)
+          raise MatchError(message = "no match", scrutinee-type = "Coin", scrutinee = null)
   catch MatchError as e =>
-    print "no match for %{e.scrutinee_type}"
+    print "no match for %{e.scrutinee-type}"
 
   try
     var i: int = 0

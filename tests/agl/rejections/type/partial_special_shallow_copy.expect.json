@@ -3,7 +3,7 @@
     "line": 2,
     "message_contains": [
       "placeholder",
-      "shallow_copy"
+      "shallow-copy"
     ]
   }
 }

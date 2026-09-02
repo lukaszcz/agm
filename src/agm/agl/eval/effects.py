@@ -238,16 +238,18 @@ class EffectHandlers:
                 "AgentParseError",
                 message,
                 nominals=self._ctx._program.builtin_nominals,
-                raw=TextValue(last_raw or ""),
-                normalized_raw=TextValue(normalized_text),
-                agent=agent,
-                attempts=IntValue(max_attempts),
-                target_type=TextValue(target_type_label),
-                expected_schema=JsonValue(
-                    None if json_schema is None else cast(object, json.loads(json_schema))
-                ),
-                validation_errors=JsonValue(errors_json),
-                metadata=JsonValue(None),
+                fields={
+                    "raw": TextValue(last_raw or ""),
+                    "normalized-raw": TextValue(normalized_text),
+                    "agent": agent,
+                    "attempts": IntValue(max_attempts),
+                    "target-type": TextValue(target_type_label),
+                    "expected-schema": JsonValue(
+                        None if json_schema is None else cast(object, json.loads(json_schema))
+                    ),
+                    "validation-errors": JsonValue(errors_json),
+                    "metadata": JsonValue(None),
+                },
             )
         )
 
@@ -286,7 +288,9 @@ class EffectHandlers:
                 "SessionError",
                 error.message,
                 nominals=self._ctx._program.builtin_nominals,
-                operation=TextValue(error.operation),
+                fields={
+                    "operation": TextValue(error.operation),
+                },
             )
         ) from error
 
@@ -668,11 +672,11 @@ class EffectHandlers:
             fields={
                 "agent": agent_value,
                 "prompt": TextValue(prompt_text),
-                "target_type": some_value(TextValue("text"), nominals=nominals),
-                "format_instructions": none_value(nominals=nominals),
-                "json_schema": none_value(nominals=nominals),
+                "target-type": some_value(TextValue("text"), nominals=nominals),
+                "format-instructions": none_value(nominals=nominals),
+                "json-schema": none_value(nominals=nominals),
                 "attempt": IntValue(0),
-                "previous_error": none_value(nominals=nominals),
+                "previous-error": none_value(nominals=nominals),
                 "metadata": JsonValue(
                     {
                         "codec_name": "text",
@@ -707,11 +711,13 @@ class EffectHandlers:
                 "ExecError",
                 message,
                 nominals=self._ctx._program.builtin_nominals,
-                command=TextValue(command),
-                exit_code=IntValue(exit_code),
-                stdout=TextValue(stdout),
-                stderr=TextValue(stderr),
-                timed_out=BoolValue(timed_out),
+                fields={
+                    "command": TextValue(command),
+                    "exit-code": IntValue(exit_code),
+                    "stdout": TextValue(stdout),
+                    "stderr": TextValue(stderr),
+                    "timed-out": BoolValue(timed_out),
+                },
             )
         )
 
@@ -865,9 +871,9 @@ class EffectHandlers:
                 display_name=exec_result.display_name,
                 fields={
                     "stdout": TextValue(stdout.rstrip("\n")),
-                    "exit_code": IntValue(actual_exit_code),
+                    "exit-code": IntValue(actual_exit_code),
                     "stderr": TextValue(stderr.rstrip("\n")),
-                    "timed_out": BoolValue(False),
+                    "timed-out": BoolValue(False),
                 },
             )
 
@@ -908,11 +914,13 @@ class EffectHandlers:
                             "ExecError",
                             f"Shell command exited with code {rc2}: {cmd!r}",
                             nominals=self._ctx._program.builtin_nominals,
-                            command=TextValue(cmd),
-                            exit_code=IntValue(rc2),
-                            stdout=TextValue(stdout2.rstrip("\n")),
-                            stderr=TextValue(stderr2.rstrip("\n")),
-                            timed_out=BoolValue(False),
+                            fields={
+                                "command": TextValue(cmd),
+                                "exit-code": IntValue(rc2),
+                                "stdout": TextValue(stdout2.rstrip("\n")),
+                                "stderr": TextValue(stderr2.rstrip("\n")),
+                                "timed-out": BoolValue(False),
+                            },
                         )
                     )
                 last_raw = stdout2.rstrip("\n")

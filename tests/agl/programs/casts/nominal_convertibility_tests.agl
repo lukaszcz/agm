@@ -31,4 +31,4 @@ program def main() -> unit =
     let _ = shape as Shape::Circle
     print "unexpected cast"
   catch CastError as e =>
-    print "%{e.source_type} -> %{e.target_type}: %{e.raw}"
+    print "%{e.source-type} -> %{e.target-type}: %{e.raw}"

@@ -10,17 +10,17 @@ scope A
   exception ExecError extends Exception
     *
     command: text
-    exit_code: int
+    exit-code: int
     stdout: text
     stderr: text
-    timed_out: bool
+    timed-out: bool
 
   def run() -> text =
     try
       let out: text = exec("false")
       "no-error"
     catch ExecError as e =>
-      "caught: %{e.exit_code}"
+      "caught: %{e.exit-code}"
 end A
 
 program def main() -> unit =

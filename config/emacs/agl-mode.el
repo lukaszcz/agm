@@ -77,7 +77,7 @@ whose promoted token types are `src/agm/agl/lexer/tokens.py''s
 
 (defconst agl-contextual-builtins
   '("print" "render" "exec" "ask" "ask-request"
-    "copy" "shallow_copy" "resource" "resource-dir")
+    "copy" "shallow-copy" "resource" "resource-dir")
   "The AgL builtin call names, highlighted by spelling.
 
 These lex as ordinary NAME tokens; the stdlib declares them as

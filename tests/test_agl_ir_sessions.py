@@ -118,8 +118,8 @@ def test_free_ask_lowers_through_the_default_session() -> None:
 def test_session_ask_lowers_a_formatted_strict_json_contract_with_retries() -> None:
     program = lower_inline_ir(
         "let session = Session::default()\n"
-        'let answer: int = session.ask("How many?", format = "json", strict_json = true, '
-        "on_parse_error = Retry(n = 2))\n"
+        'let answer: int = session.ask("How many?", format = "json", strict-json = true, '
+        "on-parse-error = Retry(n = 2))\n"
         "()"
     )
     answer = next(
@@ -154,8 +154,8 @@ def test_session_ask_lowers_a_formatted_strict_json_contract_with_retries() -> N
 def test_session_methods_lower_to_session_nodes() -> None:
     values = _main_let_values(
         "let session = Session::default()\n"
-        'let retried: text = session.ask("retry", on_parse_error = Retry(n = 2))\n'
-        'let aborted: text = session.ask("abort", on_parse_error = Abort)\n'
+        'let retried: text = session.ask("retry", on-parse-error = Retry(n = 2))\n'
+        'let aborted: text = session.ask("abort", on-parse-error = Abort)\n'
         'let defaulted: text = session.ask("default")\n'
         "session.compact()\n"
         'session.compact("retain decisions")\n'

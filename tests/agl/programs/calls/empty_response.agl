@@ -1,9 +1,9 @@
 program def main() -> unit =
   # An empty response is valid for a text target; a typed target then fails parsing
-  # and follows the parse policy. on_parse_error on a text target is a
+  # and follows the parse policy. on-parse-error on a text target is a
   # warning only — the program must still run.
   let prompter: Agent = AgentCommand("prompter")
-  let blank = ask("Say nothing.", on_parse_error = Retry(n = 1))
+  let blank = ask("Say nothing.", on-parse-error = Retry(n = 1))
   print blank
   print "after"
   let typed: int = prompter.ask("Number, please.")

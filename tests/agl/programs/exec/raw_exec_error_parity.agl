@@ -4,10 +4,10 @@ program def main() -> unit =
     let raw: text = exec$ raw-failure
     ()
   catch ExecError as error =>
-    print "raw %{error.command} %{error.exit_code} %{error.stdout} %{error.stderr} %{error.timed_out}"
+    print "raw %{error.command} %{error.exit-code} %{error.stdout} %{error.stderr} %{error.timed-out}"
 
   try
     let call: text = exec "call-failure"
     ()
   catch ExecError as error =>
-    print "call %{error.command} %{error.exit_code} %{error.stdout} %{error.stderr} %{error.timed_out}"
+    print "call %{error.command} %{error.exit-code} %{error.stdout} %{error.stderr} %{error.timed-out}"

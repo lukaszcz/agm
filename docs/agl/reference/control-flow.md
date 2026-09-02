@@ -60,7 +60,7 @@ All branch bodies must also have type `unit`:
 
 <!-- agl-check: fragment -->
 ```agl
-if res.exit_code != 0 =>
+if res.exit-code != 0 =>
   print "command failed: %{res.stderr}"
 ```
 

@@ -9,9 +9,9 @@
 scope Stdlib
   builtin record ExecResult
     stdout: text
-    exit_code: int
+    exit-code: int
     stderr: text
-    timed_out: bool
+    timed-out: bool
 
   builtin
   enum ParsePolicy =
@@ -46,8 +46,8 @@ end Stdlib
 param code: int
 
 program def main() -> unit =
-  let r = Stdlib::ExecResult(stdout = "hi", exit_code = code, stderr = "", timed_out = false)
+  let r = Stdlib::ExecResult(stdout = "hi", exit-code = code, stderr = "", timed-out = false)
   Stdlib::print(r.stdout)
-  Stdlib::print(Stdlib::report(r.exit_code))
+  Stdlib::print(Stdlib::report(r.exit-code))
   Stdlib::print(Stdlib::classify(Stdlib::ParsePolicy::Retry(n = 2)))
   Stdlib::print(Stdlib::exec("echo host").stdout)

@@ -17,11 +17,11 @@ builtin
 record AgentRequest
   agent: Agent
   prompt: text
-  target_type: Option[text]
-  format_instructions: Option[text]
-  json_schema: Option[json]
+  target-type: Option[text]
+  format-instructions: Option[text]
+  json-schema: Option[json]
   attempt: int
-  previous_error: Option[text]
+  previous-error: Option[text]
   metadata: json
 
 builtin
@@ -35,26 +35,26 @@ builtin
 exception AgentParseError extends Exception
   *
   agent: Agent
-  target_type: text
-  expected_schema: json
+  target-type: text
+  expected-schema: json
   raw: text
-  normalized_raw: text
-  validation_errors: json
+  normalized-raw: text
+  validation-errors: json
   attempts: int
   metadata: json
 
 builtin def ask[T](
   prompt: text,
   format: text = "",
-  strict_json: bool = false,
-  on_parse_error: ParsePolicy = ParsePolicy::Abort,
+  strict-json: bool = false,
+  on-parse-error: ParsePolicy = ParsePolicy::Abort,
 ) -> T
 builtin def Agent::ask[T](
   self,
   prompt: text,
   format: text = "",
-  strict_json: bool = false,
-  on_parse_error: ParsePolicy = ParsePolicy::Abort,
+  strict-json: bool = false,
+  on-parse-error: ParsePolicy = ParsePolicy::Abort,
 ) -> T
 builtin def Agent::ask-request(
   self,

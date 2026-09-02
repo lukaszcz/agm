@@ -95,9 +95,9 @@ def test_session_values_cannot_be_forged_through_record_update() -> None:
 def test_session_ask_records_parse_options_and_output_contract_metadata() -> None:
     checked = _check(
         "let session = Session::default()\n"
-        'let count: int = session.ask("count", format = "json", strict_json = true, '
-        "on_parse_error = Retry(n = 2))\n"
-        'let summary: text = session.ask("summarize", format = "text", on_parse_error = Abort)\n'
+        'let count: int = session.ask("count", format = "json", strict-json = true, '
+        "on-parse-error = Retry(n = 2))\n"
+        'let summary: text = session.ask("summarize", format = "text", on-parse-error = Abort)\n'
         "summary"
     )
 

@@ -2,7 +2,7 @@
 # uses `$defs`/`$ref` (its instantiation graph closes on itself via a
 # self-loop), and the typeless decode mirror resolves the matching `RefDecode`
 # through its own defs table the same way. Parse-policy machinery (lenient
-# recovery, strict_json, retry, abort) works identically for a recursive
+# recovery, strict-json, retry, abort) works identically for a recursive
 # target as for any other output type.
 enum Tree
   | Leaf
@@ -16,8 +16,8 @@ def sum_tree(t: Tree) -> int =
 program def main() -> unit =
   let builder: Agent = AgentCommand("builder")
   try
-    let t: Tree = builder.ask("Build a tree.", on_parse_error = Retry(n = 1))
+    let t: Tree = builder.ask("Build a tree.", on-parse-error = Retry(n = 1))
     print sum_tree(t)
   catch AgentParseError as e =>
-    print "schema: %{e.expected_schema}"
+    print "schema: %{e.expected-schema}"
     raise e

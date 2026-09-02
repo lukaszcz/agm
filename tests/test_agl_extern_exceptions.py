@@ -161,7 +161,7 @@ def test_ordinary_python_exceptions_become_extern_error_and_base_exceptions_prop
     with pytest.raises(AglRaise) as ordinary:
         registry.invoke("ordinary", raise_ordinary, ())
     assert ordinary.value.exc.display_name == "ExternError"
-    assert ordinary.value.exc.fields["python_type"] == TextValue("RuntimeError")
+    assert ordinary.value.exc.fields["python-type"] == TextValue("RuntimeError")
 
     with pytest.raises(KeyboardInterrupt):
         registry.invoke("interrupt", raise_interrupt, ())

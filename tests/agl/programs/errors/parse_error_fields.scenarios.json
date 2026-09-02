@@ -57,7 +57,7 @@
               "command": "builder"
             },
             "attempts": 2,
-            "target_type": "Spec"
+            "target-type": "Spec"
           }
         }
       }

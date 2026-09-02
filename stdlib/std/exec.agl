@@ -6,18 +6,18 @@ import std/option::Option
 builtin
 record ExecResult
   stdout: text
-  exit_code: int
+  exit-code: int
   stderr: text
-  timed_out: bool
+  timed-out: bool
 
 builtin
 exception ExecError extends Exception
   *
   command: text
-  exit_code: int
+  exit-code: int
   stdout: text
   stderr: text
-  timed_out: bool
+  timed-out: bool
 
 builtin def exec(
   command: text,

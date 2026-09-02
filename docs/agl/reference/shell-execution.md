@@ -107,8 +107,8 @@ See [Grammar](grammar.md#raw-tail-calls) for the complete position rule.
 `exec$` has the same typing behavior as `exec`: without an expected type it
 returns `ExecResult`; a non-`ExecResult`/non-`unit` target parses stdout; and a
 `unit` target discards successful output. Use `exec(...)` instead when the
-command needs named parsing options (`format`, `strict_json`, or
-`on_parse_error`) or must occur outside a raw-tail position.
+command needs named parsing options (`format`, `strict-json`, or
+`on-parse-error`) or must occur outside a raw-tail position.
 
 ## Interpolation in shell templates
 
@@ -137,29 +137,29 @@ returns the `ExecResult` standard-library record:
 
 ```text
 stdout:    text
-exit_code: int
+exit-code: int
 stderr:    text
-timed_out: bool
+timed-out: bool
 ```
 
 A **nonzero exit does not raise** in this form — the caller branches on
-`exit_code`:
+`exit-code`:
 
 ```agl
 program def main() -> unit =
   let res = exec "ls -la"
   let _ = print(res.stdout)
-  let _ = if res.exit_code != 0 =>
+  let _ = if res.exit-code != 0 =>
     print("command failed: %{res.stderr}")
 ```
 
 A spawn failure or timeout raises `ExecError` in this form. A timeout does
-not produce an `ExecResult` with `timed_out = true`.
+not produce an `ExecResult` with `timed-out = true`.
 
 ### Parsed form — target is any non-`ExecResult` or `unit` type
 
 When the target type is neither `ExecResult` nor `unit`, `exec` parses stdout
-into that type (honouring `format`, `strict_json`, and `on_parse_error`) and
+into that type (honouring `format`, `strict-json`, and `on-parse-error`) and
 **raises `ExecError` on a nonzero exit**:
 
 <!-- agl-check: fragment -->
@@ -167,7 +167,7 @@ into that type (honouring `format`, `strict_json`, and `on_parse_error`) and
 let out: text = exec "cat %{path}"          # stdout verbatim; raises on nonzero
 let data: dict[text, int] = exec(           # JSON parsed; raises on nonzero
   "compute-stats --json",
-  on_parse_error = Retry(n = 1)
+  on-parse-error = Retry(n = 1)
 )
 ```
 
@@ -186,7 +186,7 @@ program def main() -> unit =
   let completed: unit = exec "make lint"
 ```
 
-Because no output is parsed, `format`, `strict_json`, and `on_parse_error` are
+Because no output is parsed, `format`, `strict-json`, and `on-parse-error` are
 invalid for a `unit` target.
 
 ## Execution semantics
@@ -207,8 +207,8 @@ In addition to the spawn parameters above, `exec` accepts the same codec-related
 named parameters as `ask`:
 
 - `format` — codec name (a `text` value); normally auto-selected.
-- `strict_json` — `bool`; opts the JSON codec into strict parsing.
-- `on_parse_error` — `ParsePolicy`; controls retry behavior on parse
+- `strict-json` — `bool`; opts the JSON codec into strict parsing.
+- `on-parse-error` — `ParsePolicy`; controls retry behavior on parse
   failures in the parsed form. In the structured and unit forms, where no
   stdout parsing happens, passing this parameter is a static error.
 
@@ -229,11 +229,11 @@ program def main() -> unit =
   let _ = try
     let data: dict[text, int] = exec "compute-stats --json"
   catch ExecError as e =>
-    print "command failed (%{e.exit_code}): %{e.stderr}"
+    print "command failed (%{e.exit-code}): %{e.stderr}"
 ```
 
 In the structured form, `ExecError` is raised for a spawn failure (the shell
 itself cannot be launched) or timeout. A nonzero exit instead surfaces in
-`exit_code`.
+`exit-code`.
 
 See [Exceptions](exceptions.md) for the full field lists.

@@ -11,8 +11,8 @@ program def main() -> unit =
         let count: int = agents[0].ask::[int](
           "How many?",
           format = "json",
-          strict_json = true,
-          on_parse_error = Abort,
+          strict-json = true,
+          on-parse-error = Abort,
         )
         print(count)
     | mode == "defaulted" =>

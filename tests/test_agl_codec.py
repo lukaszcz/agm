@@ -145,8 +145,8 @@ def _ask_builtin_items() -> tuple[Item, ...]:
         "builtin def ask[T](\n"
         "  prompt: text,\n"
         '  format: text = "",\n'
-        "  strict_json: bool = false,\n"
-        "  on_parse_error: ParsePolicy = ParsePolicy::Abort,\n"
+        "  strict-json: bool = false,\n"
+        "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
         ") -> T\n",
         start_id=500_000,
     )
@@ -363,7 +363,7 @@ def _ask_call(
 ) -> ast.Call:
     """Build an ``ask(text)`` call expression using the default agent.
 
-    ``strict_json=True`` adds ``strict_json = true`` as a named argument.
+    ``strict_json=True`` adds ``strict-json = true`` as a named argument.
     The omitted agent argument reads the ``default-agent`` engine setting, which
     ``_run_with_json_codec`` seeds with :data:`_TEST_DEFAULT_AGENT`.
     """
@@ -371,7 +371,7 @@ def _ask_call(
     if strict_json is not None:
         named_args.append(
             ast.NamedArg(
-                name="strict_json",
+                name="strict-json",
                 value=ast.BoolLit(value=strict_json, span=_sp(), node_id=_nid()),
                 span=_sp(),
                 node_id=_nid(),
@@ -1821,7 +1821,7 @@ class TestValidationErrorsThroughRuntime:
             )
         exc = exc_info.value.exc
         assert exc.display_name == "AgentParseError"
-        ve = exc.fields["validation_errors"]
+        ve = exc.fields["validation-errors"]
         assert isinstance(ve, JsonValue)
         assert isinstance(ve.raw, list)
         assert len(ve.raw) >= 1
@@ -1843,7 +1843,7 @@ class TestValidationErrorsThroughRuntime:
                 agent_dispatcher=lambda req: '{"$case": "Nope"}',
             )
         exc = exc_info.value.exc
-        ve = exc.fields["validation_errors"]
+        ve = exc.fields["validation-errors"]
         assert isinstance(ve, JsonValue)
         assert isinstance(ve.raw, list)
         first = ve.raw[0]
@@ -1886,7 +1886,7 @@ class TestValidationErrorsThroughRuntime:
             args=(_template(_text_seg("Get issue.")),),
             named_args=(
                 ast.NamedArg(
-                    name="on_parse_error",
+                    name="on-parse-error",
                     value=retry_ctor,
                     span=_sp(),
                     node_id=_nid(),
@@ -2245,7 +2245,7 @@ class TestPipelineDriverWireUp:
             _run_with_json_codec((let_n,), agent_dispatcher=lambda req: "bad")
         exc = exc_info.value.exc
         assert exc.display_name == "AgentParseError"
-        assert "target_type" in exc.fields
+        assert "target-type" in exc.fields
 
     def test_decimal_exactness_end_to_end(self) -> None:
         """Decimal stays exact through the full runtime pipeline."""

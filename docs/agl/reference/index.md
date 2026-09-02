@@ -52,7 +52,7 @@ let impl = AgentCommand("impl")
 def review_and_fix(artifact: text) -> text =
   let r: Review = reviewer.ask(
     "Review the artifact for correctness:\n%{artifact}",
-    on_parse_error = Retry(n = 2)
+    on-parse-error = Retry(n = 2)
   )
   case r of
     | Pass => artifact
@@ -77,7 +77,7 @@ program def main() -> unit =
 | [Program structure](program-structure.md) | Programs, blocks, items, binders, inline forms |
 | [Modules](modules.md) | File-based module system: module identity, import forms, qualified access, visibility, cyclic imports, REPL imports, the standard-library module inventory |
 | [Named scopes](scopes.md) | Nestable declaration namespaces, qualifier paths, visibility, and `use` |
-| [Types](types.md) | Built-in types (`unit`, `text`, `int`, `decimal`, `bool`, `json`, function types), `record`/`enum`/`type` declarations, the library types the language itself names (`ExecResult`, `ParsePolicy`, `Agent`, `AgentRequest`, `SessionTransport`, `Session`, `SessionStats`), assignability, casts and convertibility (`as`/`as?`), mutable record fields and reference semantics, cycles, and copying (`copy`/`shallow_copy`) |
+| [Types](types.md) | Built-in types (`unit`, `text`, `int`, `decimal`, `bool`, `json`, function types), `record`/`enum`/`type` declarations, the library types the language itself names (`ExecResult`, `ParsePolicy`, `Agent`, `AgentRequest`, `SessionTransport`, `Session`, `SessionStats`), assignability, casts and convertibility (`as`/`as?`), mutable record fields and reference semantics, cycles, and copying (`copy`/`shallow-copy`) |
 | [Bindings and scope](bindings-and-scope.md) | `let`, `var`, `:=`, `param`, `builtin var`, `def`, lexical scoping, shadowing |
 | [Expressions](expressions.md) | Literals, constructors, calls, operators, `as`/`as?` cast operators, `render`, JSON parsing, `case`/`if` expressions, `unit`-typed forms, expected-type propagation |
 | [Functions](functions.md) | `def` declarations, `fn` lambdas, optional/named arguments, function types, first-class values, recursion and depth limit |
@@ -117,7 +117,7 @@ AgL distinguishes three failure layers:
 1. **Static errors** — syntax, scope, type, case-exhaustiveness, and
    case-redundancy errors. A program with a static error never executes any
    expression and never calls any agent.
-2. **Static warnings** — advisory diagnostics such as `on_parse_error` on a
+2. **Static warnings** — advisory diagnostics such as `on-parse-error` on a
    `text` target. Warnings never prevent execution.
 3. **Runtime exceptions** — typed, catchable in-language values such as
    `AgentParseError`, `MaxIterationsExceeded`, or `RecursionError`. Uncaught

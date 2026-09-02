@@ -489,7 +489,7 @@ def _builtin_function_signature(
             )
         case "copy":
             return FunctionSignature(params=(_std_param("value", t),), result=t, type_params=("T",))
-        case "shallow_copy":
+        case "shallow-copy":
             return FunctionSignature(params=(_std_param("value", t),), result=t, type_params=("T",))
         case "resource":
             return FunctionSignature(params=(_std_param("path", TextType()),), result=TextType())
@@ -500,9 +500,9 @@ def _builtin_function_signature(
                 params=(
                     _std_param("prompt", TextType()),
                     _std_param("format", TextType(), has_default=True),
-                    _std_param("strict_json", BoolType(), has_default=True),
+                    _std_param("strict-json", BoolType(), has_default=True),
                     _std_param(
-                        "on_parse_error",
+                        "on-parse-error",
                         BUILTIN_PRELUDE_TYPES["ParsePolicy"],
                         has_default=True,
                     ),

@@ -1412,15 +1412,15 @@ class TestRenderValue:
             display_name="CastError",
             fields={
                 "message": TextValue('cannot parse "x" as int'),
-                "source_type": TextValue("text"),
-                "target_type": TextValue("int"),
+                "source-type": TextValue("text"),
+                "target-type": TextValue("int"),
                 "raw": TextValue("x"),
             },
         )
         out = render_value(v)
         expected = (
             'CastError(message = "cannot parse \\"x\\" as int", '
-            'source_type = "text", target_type = "int", raw = "x")'
+            'source-type = "text", target-type = "int", raw = "x")'
         )
         assert out == expected
 
@@ -2260,7 +2260,7 @@ class TestMaxIterationsExceededSchema:
         "catch MaxIterationsExceeded as e =>\n"
         "  print e.limit\n"
         "  print e.condition\n"
-        "  print e.last_condition_value\n"
+        "  print e.last-condition-value\n"
     )
 
     def test_fields_surface_through_real_source(self, capsys: pytest.CaptureFixture[str]) -> None:
@@ -2301,7 +2301,7 @@ class TestMaxIterationsExceededSchema:
             "  until finished\n"
             "catch MaxIterationsExceeded as e =>\n"
             "  print e.condition\n"
-            "  print e.last_condition_value\n"
+            "  print e.last-condition-value\n"
         )
         result = run_inline_command(rt, program)
         assert result.ok is True

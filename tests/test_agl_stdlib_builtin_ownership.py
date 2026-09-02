@@ -68,18 +68,18 @@ _MODULES: dict[str, str] = {
         "builtin\n"
         "record ExecResult\n"
         "  stdout: text\n"
-        "  exit_code: int\n"
+        "  exit-code: int\n"
         "  stderr: text\n"
-        "  timed_out: bool\n"
+        "  timed-out: bool\n"
         "\n"
         "builtin\n"
         "exception ExecError extends Exception\n"
         "  *\n"
         "  command: text\n"
-        "  exit_code: int\n"
+        "  exit-code: int\n"
         "  stdout: text\n"
         "  stderr: text\n"
-        "  timed_out: bool\n"
+        "  timed-out: bool\n"
         "\n"
         "builtin def exec(command: text) -> ExecResult\n"
     ),
@@ -98,11 +98,11 @@ _MODULES: dict[str, str] = {
         "record AgentRequest\n"
         "  agent: Agent\n"
         "  prompt: text\n"
-        "  target_type: Option[text]\n"
-        "  format_instructions: Option[text]\n"
-        "  json_schema: Option[json]\n"
+        "  target-type: Option[text]\n"
+        "  format-instructions: Option[text]\n"
+        "  json-schema: Option[json]\n"
         "  attempt: int\n"
-        "  previous_error: Option[text]\n"
+        "  previous-error: Option[text]\n"
         "  metadata: json\n"
         "\n"
         "builtin\n"
@@ -116,11 +116,11 @@ _MODULES: dict[str, str] = {
         "exception AgentParseError extends Exception\n"
         "  *\n"
         "  agent: Agent\n"
-        "  target_type: text\n"
-        "  expected_schema: json\n"
+        "  target-type: text\n"
+        "  expected-schema: json\n"
         "  raw: text\n"
-        "  normalized_raw: text\n"
-        "  validation_errors: json\n"
+        "  normalized-raw: text\n"
+        "  validation-errors: json\n"
         "  attempts: int\n"
         "  metadata: json\n"
         "\n"
@@ -217,7 +217,7 @@ def test_exec_dispatches_to_the_declaration_in_its_own_standard_module(
     shell = FakeShell([{"command": "echo hi", "stdout": "hi\n"}])
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
         result = _run(
-            'let r = exec("echo hi")\nprint(r.stdout)\nprint(r.exit_code)\n', split_stdlib
+            'let r = exec("echo hi")\nprint(r.stdout)\nprint(r.exit-code)\n', split_stdlib
         )
     assert list(result.diagnostics) == []
     assert result.error is None
@@ -231,7 +231,7 @@ def test_a_failing_exec_raises_the_catchable_standard_exec_error(
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
         result = _run(
             'let code = try\n  let out: text = exec("false")\n  "no"\n'
-            "catch ExecError as e =>\n  render(e.exit_code)\nprint(code)\n",
+            "catch ExecError as e =>\n  render(e.exit-code)\nprint(code)\n",
             split_stdlib,
         )
     assert list(result.diagnostics) == []

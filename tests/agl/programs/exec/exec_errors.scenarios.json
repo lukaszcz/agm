@@ -53,8 +53,8 @@
           "type": "ExecError",
           "fields": {
             "command": "false",
-            "exit_code": 1,
-            "timed_out": false
+            "exit-code": 1,
+            "timed-out": false
           }
         }
       }

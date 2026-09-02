@@ -97,7 +97,7 @@ class TestValueDirectedBoundary:
             "def f(): return [1]\n",
             tmp_path,
         )
-        assert exc.fields["python_type"].value == ""
+        assert exc.fields["python-type"].value == ""
 
     def test_agl_dict_rejects_non_text_keys(self, tmp_path: Path) -> None:
         exc = evaluate_ir_raises_with_externs(
@@ -106,7 +106,7 @@ class TestValueDirectedBoundary:
             tmp_path,
         )
 
-        assert exc.fields["python_type"].value == "TypeError"
+        assert exc.fields["python-type"].value == "TypeError"
 
     def test_generic_aliases_need_no_schema_reconciliation(self, tmp_path: Path) -> None:
         source = (
@@ -1248,4 +1248,4 @@ def test_registry_wraps_unexpected_decode_errors_as_extern_errors() -> None:
     with pytest.raises(AglRaise) as excinfo:
         registry.invoke("broken", lambda: broken, ())
 
-    assert excinfo.value.exc.fields["python_type"] == TextValue("KeyError")
+    assert excinfo.value.exc.fields["python-type"] == TextValue("KeyError")

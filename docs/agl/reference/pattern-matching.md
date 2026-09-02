@@ -332,7 +332,7 @@ program def main() -> unit =
     | _ =>
       raise MatchError(
         message = "response rejected by this workflow",
-        scrutinee_type = "Response",
+        scrutinee-type = "Response",
         scrutinee = response as json,
       )
 ```

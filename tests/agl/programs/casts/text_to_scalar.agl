@@ -16,8 +16,8 @@ program def main() -> unit =
     print "doubled: %{n * 2}"
   catch CastError as e =>
     print "int cast failed"
-    print e.source_type
-    print e.target_type
+    print e.source-type
+    print e.target-type
     print e.raw
 
   # text → bool: only "true" or "false" (strict JSON)

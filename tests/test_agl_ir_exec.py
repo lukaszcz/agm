@@ -127,7 +127,7 @@ def test_t3_structured_exec() -> None:
 
     assert isinstance(ir["r"], RecordValue)
     assert ir["r"].display_name == "ExecResult"
-    assert ir["r"].fields["exit_code"] == IntValue(1)
+    assert ir["r"].fields["exit-code"] == IntValue(1)
     program = lower_inline_ir(source, caps=shell_caps())
     assert ir["r"].nominal == program.builtin_nominals.nominal("ExecResult")
 
@@ -177,7 +177,7 @@ def test_t5_timeout() -> None:
     from agm.agl.semantics.values import BoolValue
 
     assert ir_exc.display_name == "ExecError"
-    assert ir_exc.fields["timed_out"] == BoolValue(True)
+    assert ir_exc.fields["timed-out"] == BoolValue(True)
 
 
 def test_t5a_structured_exec_timeout_raises_exec_error() -> None:
@@ -187,7 +187,7 @@ def test_t5a_structured_exec_timeout_raises_exec_error() -> None:
     from agm.agl.semantics.values import BoolValue
 
     assert ir_exc.display_name == "ExecError"
-    assert ir_exc.fields["timed_out"] == BoolValue(True)
+    assert ir_exc.fields["timed-out"] == BoolValue(True)
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +203,7 @@ def test_t6_spawn_error() -> None:
     from agm.agl.semantics.values import BoolValue
 
     assert ir_exc.display_name == "ExecError"
-    assert ir_exc.fields["timed_out"] == BoolValue(False)
+    assert ir_exc.fields["timed-out"] == BoolValue(False)
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +229,7 @@ def test_t7_retry_success() -> None:
             return _ok("not_a_number\n")
         return _ok("99\n")
 
-    source = 'let n: int = exec("cmd", on_parse_error = Retry(n = 1))\nn'
+    source = 'let n: int = exec("cmd", on-parse-error = Retry(n = 1))\nn'
     from tests.agl.ir_harness import _run_ir_exec
 
     caps = shell_caps()
@@ -264,7 +264,7 @@ def test_t7_retry_forwards_spawn_settings_on_every_attempt() -> None:
         'let n: int = exec("cmd", env = child, '
         'cwd = Option[text]::Some(value = "/work"), '
         'timeout = Option[text]::Some(value = "2s"), '
-        "on_parse_error = Retry(n = 1))\n"
+        "on-parse-error = Retry(n = 1))\n"
         "n"
     )
     from tests.agl.ir_harness import _run_ir_exec
@@ -291,7 +291,7 @@ def test_t8_retry_exhaustion() -> None:
     Routes through evaluate_ir_raises_with_shell and keeps shell failures in
     the ExecError family.
     """
-    source = 'let n: int = exec("cmd", on_parse_error = Retry(n = 2))\nn'
+    source = 'let n: int = exec("cmd", on-parse-error = Retry(n = 2))\nn'
     commands = {"cmd": _ok("not_a_number\n")}
     ir_exc = evaluate_ir_raises_with_shell(source, commands)
     assert ir_exc.display_name == "ExecError"
@@ -314,7 +314,7 @@ def test_retry_reruns_the_shell_exactly_once_per_attempt(retries: int, expected_
         runs.append(" ".join(args))
         return _ok("not_a_number\n")
 
-    source = f'let n: int = exec("cmd", on_parse_error = Retry(n = {retries}))\nn'
+    source = f'let n: int = exec("cmd", on-parse-error = Retry(n = {retries}))\nn'
     from tests.agl.ir_harness import _run_ir_exec
 
     with pytest.raises(AglRaise) as exc:
@@ -607,7 +607,7 @@ def test_t12_retry_then_nonzero_exit() -> None:
             return _ok("not_a_number\n")
         return _fail(1, stdout="", stderr="retry failed")
 
-    source = 'let n: int = exec("cmd", on_parse_error = Retry(n = 1))\nn'
+    source = 'let n: int = exec("cmd", on-parse-error = Retry(n = 1))\nn'
     from agm.agl.semantics.exceptions import AglRaise
     from agm.agl.semantics.values import ExceptionValue
     from tests.agl.ir_harness import _run_ir_exec

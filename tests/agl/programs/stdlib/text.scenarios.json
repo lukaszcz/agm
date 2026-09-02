@@ -49,7 +49,7 @@
         "stdout": "",
         "raises": {
           "type": "ExternError",
-          "fields": {"function": "split", "python_type": "ValueError"}
+          "fields": {"function": "split", "python-type": "ValueError"}
         },
         "calls": {}
       }

@@ -42,7 +42,7 @@ def test_agent_ask_method_accepts_type_args_and_named_defaults() -> None:
     """Agent::ask is a normal selected builtin method with the receiver as agent."""
     source = """\
 let worker: Agent = AgentCommand("worker")
-let answer: int = worker.ask::[int]("How many?", strict_json = true)
+let answer: int = worker.ask::[int]("How many?", strict-json = true)
 answer
 """
     ir = evaluate_ir_with_agents(source, scripts={"worker": ["42"]})
@@ -247,7 +247,7 @@ n
 
 
 # ---------------------------------------------------------------------------
-# retry success (on_parse_error: Retry(n: 1))
+# retry success (on-parse-error: Retry(n: 1))
 # ---------------------------------------------------------------------------
 
 
@@ -255,7 +255,7 @@ def test_retry_success_second_attempt() -> None:
     """Retry policy: first response is invalid JSON, second is valid."""
     source = """\
 let parser = AgentCommand("parser")
-let n: int = ask("Parse this.", agent = parser, on_parse_error = Retry(n = 1))
+let n: int = ask("Parse this.", agent = parser, on-parse-error = Retry(n = 1))
 n
 """
     ir = evaluate_ir_with_agents(
@@ -274,7 +274,7 @@ def test_retry_exhausted_raises() -> None:
     """Retry policy: all attempts fail → AgentParseError raised."""
     source = """\
 let parser = AgentCommand("parser")
-let n: int = ask("Parse this.", agent = parser, on_parse_error = Retry(n = 1))
+let n: int = ask("Parse this.", agent = parser, on-parse-error = Retry(n = 1))
 n
 """
     ir_exc = evaluate_ir_raises_with_agents(
@@ -294,7 +294,7 @@ def test_strict_json_mode() -> None:
     """strict_json: true — bare JSON without fences, no repair."""
     source = """\
 let strict_agent = AgentCommand("strict_agent")
-let b: bool = ask("True or false?", agent = strict_agent, strict_json = true)
+let b: bool = ask("True or false?", agent = strict_agent, strict-json = true)
 b
 """
     ir = evaluate_ir_with_agents(
@@ -400,7 +400,7 @@ def test_strict_json_invalid_raises() -> None:
     """strict_json=true with fenced JSON: strict mode does not strip fences."""
     source = """\
 let strict_agent = AgentCommand("strict_agent")
-let n: int = ask("Give int.", agent = strict_agent, strict_json = true)
+let n: int = ask("Give int.", agent = strict_agent, strict-json = true)
 n
 """
     # Fenced JSON fails in strict mode (strict does not strip fences).
@@ -457,13 +457,13 @@ prompt_text
     assert req.nominal == program.builtin_nominals.nominal("AgentRequest")
     assert isinstance(req.fields["agent"], RecordValue)
     assert req.fields["agent"].display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
-    assert isinstance(req.fields["target_type"], RecordValue)
-    assert req.fields["target_type"].display_name.rsplit("::", maxsplit=1)[-1] == "Some"
-    assert req.fields["target_type"].fields["value"] == TextValue("text")
-    assert isinstance(req.fields["format_instructions"], RecordValue)
-    assert req.fields["format_instructions"].display_name.rsplit("::", maxsplit=1)[-1] == "None"
-    assert isinstance(req.fields["json_schema"], RecordValue)
-    assert req.fields["json_schema"].display_name.rsplit("::", maxsplit=1)[-1] == "None"
+    assert isinstance(req.fields["target-type"], RecordValue)
+    assert req.fields["target-type"].display_name.rsplit("::", maxsplit=1)[-1] == "Some"
+    assert req.fields["target-type"].fields["value"] == TextValue("text")
+    assert isinstance(req.fields["format-instructions"], RecordValue)
+    assert req.fields["format-instructions"].display_name.rsplit("::", maxsplit=1)[-1] == "None"
+    assert isinstance(req.fields["json-schema"], RecordValue)
+    assert req.fields["json-schema"].display_name.rsplit("::", maxsplit=1)[-1] == "None"
 
 
 # ---------------------------------------------------------------------------
@@ -475,7 +475,7 @@ def test_retry_with_schema_validation_error_then_success() -> None:
     """Retry: first response fails schema, second is valid."""
     source = """\
 let fixer = AgentCommand("fixer")
-let n: int = ask("Give int.", agent = fixer, on_parse_error = Retry(n = 1))
+let n: int = ask("Give int.", agent = fixer, on-parse-error = Retry(n = 1))
 n
 """
     # First response: string (wrong type) → schema error; second: valid int.
@@ -577,7 +577,7 @@ enum Status
   | Err(msg: text)
 
 let checker = AgentCommand("checker")
-let s: Status = ask("Status?", agent = checker, on_parse_error = Retry(n = 1))
+let s: Status = ask("Status?", agent = checker, on-parse-error = Retry(n = 1))
 s
 """
     ir = evaluate_ir_with_agents(
@@ -1622,7 +1622,7 @@ def test_lower_on_parse_error_abort_gives_one_attempt() -> None:
     """_extract_max_attempts: Abort policy → 1 attempt."""
     source = """\
 let a = AgentCommand("a")
-let n: int = ask("?", agent = a, on_parse_error = Abort)
+let n: int = ask("?", agent = a, on-parse-error = Abort)
 n
 """
     from tests.agl.ir_harness import evaluate_ir_with_agents
@@ -1753,7 +1753,7 @@ def test_ir_ask_request_has_a_text_target() -> None:
     source = """\
 let a = AgentCommand("a")
 let req = ask-request("Do it.", agent = a)
-let target = req.target_type
+let target = req.target-type
 target
 """
     from tests.agl.ir_harness import evaluate_ir_with_agents
@@ -1771,7 +1771,7 @@ def test_lower_on_parse_error_self_qualified_retry() -> None:
     """Self-qualified Retry parse policy produces the correct attempt count."""
     source = """\
 let a = AgentCommand("a")
-let n: int = ask("?", agent = a, on_parse_error = ::Retry(n = 2))
+let n: int = ask("?", agent = a, on-parse-error = ::Retry(n = 2))
 n
 """
     from tests.agl.ir_harness import evaluate_ir_with_agents
@@ -1893,7 +1893,7 @@ def test_lower_extract_max_attempts_field_access_retry() -> None:
         span=span,
         node_id=3,
     )
-    named_arg = NamedArg(name="on_parse_error", value=inner_call, span=span, node_id=7)
+    named_arg = NamedArg(name="on-parse-error", value=inner_call, span=span, node_id=7)
     outer_call = Call(
         callee=VarRef(name="ask", span=span, node_id=8),
         args=(),
@@ -1921,7 +1921,7 @@ def test_lower_extract_max_attempts_unknown_callee() -> None:
         span=span,
         node_id=11,
     )
-    named_arg = NamedArg(name="on_parse_error", value=inner_call, span=span, node_id=14)
+    named_arg = NamedArg(name="on-parse-error", value=inner_call, span=span, node_id=14)
     outer_call = Call(
         callee=VarRef(name="ask", span=span, node_id=12),
         args=(),
@@ -1953,7 +1953,7 @@ def test_lower_extract_max_attempts_field_access_non_retry() -> None:
         span=span,
         node_id=22,
     )
-    named_arg = NamedArg(name="on_parse_error", value=inner_call, span=span, node_id=25)
+    named_arg = NamedArg(name="on-parse-error", value=inner_call, span=span, node_id=25)
     outer_call = Call(
         callee=VarRef(name="ask", span=span, node_id=23),
         args=(),
@@ -2249,7 +2249,7 @@ status
     # validation_errors is stored as a JsonValue(raw=[{...}]).
     from agm.agl.semantics.values import JsonValue
 
-    errors_val = ir_exc.fields.get("validation_errors")
+    errors_val = ir_exc.fields.get("validation-errors")
     assert isinstance(errors_val, JsonValue)
     assert isinstance(errors_val.raw, list)
     assert len(errors_val.raw) >= 1
@@ -2286,7 +2286,7 @@ status
 
     from agm.agl.semantics.values import JsonValue
 
-    errors_val = ir_exc.fields.get("validation_errors")
+    errors_val = ir_exc.fields.get("validation-errors")
     assert isinstance(errors_val, JsonValue)
     assert isinstance(errors_val.raw, list)
     assert len(errors_val.raw) >= 1
@@ -2301,7 +2301,7 @@ status
     assert first_err.get("field") == "msg"
 
     # Verify the same validation_errors fields are consistent.
-    ir_errors_val = ir_exc.fields.get("validation_errors")
+    ir_errors_val = ir_exc.fields.get("validation-errors")
     assert isinstance(ir_errors_val, JsonValue)
     ir_first = ir_errors_val.raw[0]
     assert isinstance(ir_first, dict)
@@ -2334,7 +2334,7 @@ status
 
     from agm.agl.semantics.values import JsonValue
 
-    errors_val = ir_exc.fields.get("validation_errors")
+    errors_val = ir_exc.fields.get("validation-errors")
     assert isinstance(errors_val, JsonValue)
     assert isinstance(errors_val.raw, list)
     assert len(errors_val.raw) >= 1
@@ -2349,7 +2349,7 @@ status
     assert first_err.get("field") == "extra_field"
 
     # Verify the same validation_errors fields are consistent.
-    ir_errors_val = ir_exc.fields.get("validation_errors")
+    ir_errors_val = ir_exc.fields.get("validation-errors")
     assert isinstance(ir_errors_val, JsonValue)
     ir_first = ir_errors_val.raw[0]
     assert isinstance(ir_first, dict)

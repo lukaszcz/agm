@@ -9203,7 +9203,7 @@ class TestExecCommand:
             "  | Pass\n"
             'let reviewer = AgentCommand("review-runner \\%{SESSION_ID}")\n'
             'let review: Review = reviewer.ask("Review now", '
-            "on_parse_error = Retry(n = 1))\n"
+            "on-parse-error = Retry(n = 1))\n"
             "case review of\n"
             '  | Pass => print "accepted"\n',
             encoding="utf-8",

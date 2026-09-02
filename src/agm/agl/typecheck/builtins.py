@@ -95,21 +95,21 @@ class PendingBuiltinObligation:
 
     @property
     def has_parse_shaping_option(self) -> bool:
-        """Whether any of ``format`` / ``strict_json`` / ``on_parse_error`` is set."""
+        """Whether any of ``format`` / ``strict-json`` / ``on-parse-error`` is set."""
         return bool(self.parse_option_spans)
 
     @property
     def has_parse_error_option(self) -> bool:
-        """Whether the ``on_parse_error`` option is set."""
-        return any(name == "on_parse_error" for name, _ in self.parse_option_spans)
+        """Whether the ``on-parse-error`` option is set."""
+        return any(name == "on-parse-error" for name, _ in self.parse_option_spans)
 
     def strict_json_span(self) -> SourceSpan:
-        """Return the span of the ``strict_json`` option.
+        """Return the span of the ``strict-json`` option.
 
         Precondition: :attr:`strict_json` is not ``None`` (the option was
         supplied), which guarantees a matching entry is present.
         """
-        return next(span for name, span in self.parse_option_spans if name == "strict_json")
+        return next(span for name, span in self.parse_option_spans if name == "strict-json")
 
     def first_parse_option(self) -> tuple[str, SourceSpan]:
         """Return the first parse-shaping option's ``(name, span)``.
@@ -166,11 +166,11 @@ class BuiltinCallChecker:
     """
 
     _ASK_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset(
-        {"agent", "format", "strict_json", "on_parse_error"}
+        {"agent", "format", "strict-json", "on-parse-error"}
     )
 
     _EXEC_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset(
-        {"env", "cwd", "timeout", "format", "strict_json", "on_parse_error"}
+        {"env", "cwd", "timeout", "format", "strict-json", "on-parse-error"}
     )
 
     def __init__(self, ctx: BuiltinCheckCtx) -> None:
@@ -226,9 +226,9 @@ class BuiltinCallChecker:
     def check_shallow_copy(self, node: Call) -> Type:
         if len(node.args) != 1 or node.named_args:
             raise AglTypeError(
-                "shallow_copy() requires exactly one positional argument.", span=node.span
+                "shallow-copy() requires exactly one positional argument.", span=node.span
             )
-        return self._check_arg_with_optional_explicit_target(node, node.args[0], "shallow_copy")
+        return self._check_arg_with_optional_explicit_target(node, node.args[0], "shallow-copy")
 
     def _check_arg_with_optional_explicit_target(
         self, node: Call, arg_expr: Expr, name: str
@@ -240,7 +240,7 @@ class BuiltinCallChecker:
         (``name::[T](...)``), *arg_expr* must be assignable to ``T``, and the
         return is ``T``. Shared by every built-in whose sole type parameter
         needs no other contextual ``expected`` type: ``print``, ``render``,
-        ``copy``, and ``shallow_copy``.
+        ``copy``, and ``shallow-copy``.
         """
         explicit = self._resolve_explicit_target(node, name)
         if explicit is None:
@@ -614,13 +614,13 @@ class BuiltinCallChecker:
         self._append_call_site(obligation, codec_name, parse_policy)
 
     def _warn_noop_parse_error_on_text(self, obligation: PendingBuiltinObligation) -> None:
-        """Warn when ``on_parse_error`` is set on a text target, where it can never fire."""
+        """Warn when ``on-parse-error`` is set on a text target, where it can never fire."""
         if not (obligation.has_parse_error_option and isinstance(obligation.target_type, TextType)):
             return
         self._ctx._append_warning(
             Diagnostic(
                 message=(
-                    "'on_parse_error' has no effect on a text target: a text result "
+                    "'on-parse-error' has no effect on a text target: a text result "
                     "never fails parsing, so the policy can never fire."
                 ),
                 line=obligation.span.start_line,
@@ -876,7 +876,7 @@ class BuiltinCallChecker:
         type-variable guard (see :meth:`_reject_type_var_target`) to the
         *final* target type, covering both the explicit and the
         contextual/inferred target paths; ``print``, ``render``, ``copy``,
-        and ``shallow_copy`` do not apply that guard, because none of them
+        and ``shallow-copy`` do not apply that guard, because none of them
         schema-compile their target — a bare type variable in
         ``copy::[T](v)`` is exactly what makes it work inside a generic
         ``def``.
@@ -953,16 +953,16 @@ class BuiltinCallChecker:
                 )
             format_name = format_na.value.value
         strict_json: bool | None = None
-        if "strict_json" in named:
-            strict_na = named["strict_json"]
+        if "strict-json" in named:
+            strict_na = named["strict-json"]
             if not isinstance(strict_na.value, BoolLit):
                 raise AglTypeError(
-                    "'strict_json' must be a static bool literal.", span=strict_na.span
+                    "'strict-json' must be a static bool literal.", span=strict_na.span
                 )
             strict_json = strict_na.value.value
         parse_policy = "default"
-        if "on_parse_error" in named:
-            parse_na = named["on_parse_error"]
+        if "on-parse-error" in named:
+            parse_na = named["on-parse-error"]
             parse_policy = self._extract_parse_policy_str(parse_na.value, parse_na.span)
         return format_name, strict_json, parse_policy
 
@@ -973,7 +973,7 @@ class BuiltinCallChecker:
         """Capture the spans of the parse-shaping named args for later diagnostics."""
         return tuple(
             (name, named[name].span)
-            for name in ("format", "strict_json", "on_parse_error")
+            for name in ("format", "strict-json", "on-parse-error")
             if name in named
         )
 
@@ -987,7 +987,7 @@ class BuiltinCallChecker:
             )
         if obligation.strict_json is not None and codec_name != "json":
             raise AglTypeError(
-                f"'strict_json' is only valid when the codec is 'json'; the selected codec "
+                f"'strict-json' is only valid when the codec is 'json'; the selected codec "
                 f"for this call is '{codec_name}'.",
                 span=obligation.strict_json_span(),
             )
@@ -1064,7 +1064,7 @@ class BuiltinCallChecker:
             callee = arg.callee
             if not self._accepts_as_parse_policy_constructor(callee):
                 raise AglTypeError(
-                    "'on_parse_error' must be a static ParsePolicy constructor "
+                    "'on-parse-error' must be a static ParsePolicy constructor "
                     "(Abort or Retry(n: <int>)).",
                     span=span,
                 )
@@ -1077,7 +1077,7 @@ class BuiltinCallChecker:
         ):
             return "abort"
         raise AglTypeError(
-            "'on_parse_error' must be a static ParsePolicy constructor (Abort or Retry(n: <int>)).",
+            "'on-parse-error' must be a static ParsePolicy constructor (Abort or Retry(n: <int>)).",
             span=span,
         )
 
@@ -1095,7 +1095,7 @@ class BuiltinCallChecker:
         share that one bare root spelling, and ordinary name resolution picks
         one of them (the exception, today); accepting either is unambiguous
         in this position, since only a ``ParsePolicy`` constructor is ever a
-        legal ``on_parse_error`` value, and it preserves the unqualified
+        legal ``on-parse-error`` value, and it preserves the unqualified
         spelling's existing leniency while still closing the actual
         shadowing hole (a binding that resolves to no constructor at all).
 
@@ -1129,7 +1129,7 @@ class BuiltinCallChecker:
         if name == "Abort":
             if named_args:
                 raise AglTypeError(
-                    "'on_parse_error' must be a static ParsePolicy constructor "
+                    "'on-parse-error' must be a static ParsePolicy constructor "
                     "(Abort or Retry(n: <int>)).",
                     span=span,
                 )
@@ -1138,13 +1138,13 @@ class BuiltinCallChecker:
             n_arg = next((a for a in named_args if a.name == "n"), None)
             if n_arg is None or not isinstance(n_arg.value, IntLit):
                 raise AglTypeError(
-                    "'on_parse_error' must be a static ParsePolicy constructor "
+                    "'on-parse-error' must be a static ParsePolicy constructor "
                     "(Abort or Retry(n: <int>)).",
                     span=span,
                 )
             return f"retry[{n_arg.value.value}]"
         raise AglTypeError(
-            "'on_parse_error' must be a static ParsePolicy constructor (Abort or Retry(n: <int>)).",
+            "'on-parse-error' must be a static ParsePolicy constructor (Abort or Retry(n: <int>)).",
             span=span,
         )
 

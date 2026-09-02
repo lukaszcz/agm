@@ -23,7 +23,7 @@ program def main() =
     print((-3).abs())
     print((-3).copy())
     print((-1.5).abs())
-    print((-1.5).shallow_copy())
+    print((-1.5).shallow-copy())
     print(false.negated())
     print(4.extern_double())
   else =>

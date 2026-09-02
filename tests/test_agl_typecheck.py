@@ -1791,7 +1791,7 @@ class TestScopedParamTypes:
             parse_resolve_check("scope Deploy\n  def f() -> int = 0\n  param f\nend Deploy\n\n()")
 
 
-_EXEC_RESULT_FIELDS = "  stdout: text\n  exit_code: int\n  stderr: text\n  timed_out: bool\n"
+_EXEC_RESULT_FIELDS = "  stdout: text\n  exit-code: int\n  stderr: text\n  timed-out: bool\n"
 
 
 class TestScopedBuiltinTypes:
@@ -1806,8 +1806,8 @@ class TestScopedBuiltinTypes:
         other scoped type already has."""
         r = accept_type(
             f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
-            "def use(value: A::ExecResult) -> int = value.exit_code\n"
-            'use(A::ExecResult(stdout = "a", exit_code = 1, stderr = "", timed_out = false))\n',
+            "def use(value: A::ExecResult) -> int = value.exit-code\n"
+            'use(A::ExecResult(stdout = "a", exit-code = 1, stderr = "", timed-out = false))\n',
             default_stdlib=False,
         )
         assert r.resolved.program is not None
@@ -1883,7 +1883,7 @@ class TestScopedBuiltinTypes:
         checked = accept_type(
             f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
             "def A::ExecResult::describe(self) -> text = self.stdout\n"
-            'A::ExecResult(stdout = "a", exit_code = 1, stderr = "", timed_out = false)'
+            'A::ExecResult(stdout = "a", exit-code = 1, stderr = "", timed-out = false)'
             ".describe()",
             default_stdlib=False,
         )
@@ -1900,7 +1900,7 @@ class TestScopedBuiltinTypes:
             f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
             "def ExecResult::describe(self) -> text = self.stdout\n"
             "end A\n"
-            'A::ExecResult(stdout = "a", exit_code = 1, stderr = "", timed_out = false)'
+            'A::ExecResult(stdout = "a", exit-code = 1, stderr = "", timed-out = false)'
             ".describe()",
             default_stdlib=False,
         )
@@ -2034,11 +2034,11 @@ class TestScopedBuiltinTypes:
             "scope A\n"
             "  builtin\n"
             "  record OutputContract\n"
-            "    target_type: text\n"
+            "    target-type: text\n"
             "    codec_name: text\n"
-            "    strict_json: json\n"
-            "    format_instructions: text\n"
-            "    json_schema: json\n"
+            "    strict-json: json\n"
+            "    format-instructions: text\n"
+            "    json-schema: json\n"
             "    structured_exec: bool\n"
             "  builtin\n"
             "  enum OutputContractOption =\n"
@@ -2093,8 +2093,8 @@ class TestScopedBuiltinTypes:
             "    self,\n"
             "    prompt: text,\n"
             '    format: text = "",\n'
-            "    strict_json: bool = false,\n"
-            "    on_parse_error: ParsePolicy = ParsePolicy::Abort,\n"
+            "    strict-json: bool = false,\n"
+            "    on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
             "  ) -> T\n"
             "end A\n"
             "\n"
@@ -2267,10 +2267,10 @@ class TestCaughtExceptionShadowedByBuiltinRedeclaration:
             "  exception ExecError extends Exception\n"
             "    *\n"
             "    command: text\n"
-            "    exit_code: int\n"
+            "    exit-code: int\n"
             "    stdout: text\n"
             "    stderr: text\n"
-            "    timed_out: bool\n"
+            "    timed-out: bool\n"
             "end A\n"
             "\n"
             "def f() -> int =\n"
@@ -2293,10 +2293,10 @@ class TestCaughtExceptionShadowedByBuiltinRedeclaration:
             "  exception ExecError extends Exception\n"
             "    *\n"
             "    command: text\n"
-            "    exit_code: int\n"
+            "    exit-code: int\n"
             "    stdout: text\n"
             "    stderr: text\n"
-            "    timed_out: bool\n"
+            "    timed-out: bool\n"
             "  def f() -> int =\n"
             "    try\n"
             "      1\n"
@@ -2363,10 +2363,10 @@ class TestCaughtExceptionShadowedByBuiltinRedeclaration:
             "exception ExecError extends Exception\n"
             "  *\n"
             "  command: text\n"
-            "  exit_code: int\n"
+            "  exit-code: int\n"
             "  stdout: text\n"
             "  stderr: text\n"
-            "  timed_out: bool\n"
+            "  timed-out: bool\n"
             "def f() -> int =\n"
             "  try\n"
             "    1\n"
@@ -2843,32 +2843,32 @@ class TestAsk:
         assert spec.codec_name == "json"
 
     def test_ask_strict_json_true(self) -> None:
-        r = accept_type('let n: int = ask("Q", format = "json", strict_json = true)\nn')
+        r = accept_type('let n: int = ask("Q", format = "json", strict-json = true)\nn')
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
         spec = r.contract_specs[decl.value.node_id]
         assert spec.strict_json is True
 
     def test_ask_strict_json_without_json_codec_raises(self) -> None:
-        err = reject_type('let x = ask("Q", strict_json = true)\nx')
-        assert "strict_json" in str(err).lower() or "json" in str(err).lower()
+        err = reject_type('let x = ask("Q", strict-json = true)\nx')
+        assert "strict-json" in str(err).lower() or "json" in str(err).lower()
 
     def test_ask_strict_json_mismatch_diagnostic_targets_the_argument(self) -> None:
         # The diagnostic underlines the offending strict_json argument, not the
         # whole call span (even when another option precedes it).
-        src = 'let x = ask("Q", format = "text", strict_json = true)\nx'
+        src = 'let x = ask("Q", format = "text", strict-json = true)\nx'
         err = reject_type(src)
         assert err.span is not None
         fragment = src[err.span.start_offset : err.span.end_offset]
-        assert "strict_json" in fragment
+        assert "strict-json" in fragment
         assert "ask" not in fragment
 
     def test_ask_unit_parse_option_diagnostic_targets_the_argument(self) -> None:
-        src = 'let r: unit = ask("Q", strict_json = true)\nr'
+        src = 'let r: unit = ask("Q", strict-json = true)\nr'
         err = reject_type(src)
         assert err.span is not None
         fragment = src[err.span.start_offset : err.span.end_offset]
-        assert "strict_json" in fragment
+        assert "strict-json" in fragment
         assert "ask" not in fragment
 
     def test_ask_format_non_string_raises(self) -> None:
@@ -2876,27 +2876,27 @@ class TestAsk:
         assert "format" in str(err).lower() or "static" in str(err).lower()
 
     def test_ask_strict_json_non_bool_raises(self) -> None:
-        err = reject_type('let n: int = ask("Q", format = "json", strict_json = "yes")\nn')
-        assert "strict_json" in str(err).lower() or "bool" in str(err).lower()
+        err = reject_type('let n: int = ask("Q", format = "json", strict-json = "yes")\nn')
+        assert "strict-json" in str(err).lower() or "bool" in str(err).lower()
 
     def test_ask_on_parse_error_retry(self) -> None:
-        r = accept_type('let n: int = ask("Q", on_parse_error = Retry(n = 3))\nn')
+        r = accept_type('let n: int = ask("Q", on-parse-error = Retry(n = 3))\nn')
         assert r.call_sites[0].parse_policy == "retry[3]"
 
     def test_ask_on_parse_error_bare_abort_varref(self) -> None:
         # Bare ``Abort`` (no parens) is accepted as abort policy.
-        r = accept_type('let n: int = ask("Q", on_parse_error = Abort)\nn')
+        r = accept_type('let n: int = ask("Q", on-parse-error = Abort)\nn')
         assert r.call_sites[0].parse_policy == "abort"
 
     def test_ask_on_parse_error_bare_qualified_abort(self) -> None:
         # Bare ``ParsePolicy::Abort`` (no parens) is accepted as abort policy.
-        r = accept_type('let n: int = ask("Q", on_parse_error = ParsePolicy::Abort)\nn')
+        r = accept_type('let n: int = ask("Q", on-parse-error = ParsePolicy::Abort)\nn')
         assert r.call_sites[0].parse_policy == "abort"
 
     def test_ask_on_parse_error_bad_qualified_policy_raises(self) -> None:
         # A qualified constructor with the wrong owner is rejected.
         err = reject_type(
-            'enum FooBar\n  | Abort\nlet n: int = ask("Q", on_parse_error = FooBar::Abort())\nn'
+            'enum FooBar\n  | Abort\nlet n: int = ask("Q", on-parse-error = FooBar::Abort())\nn'
         )
         assert "parse_error" in str(err).lower() or "ParsePolicy" in str(err)
 
@@ -2905,7 +2905,7 @@ class TestAsk:
         # rejected even though the field name is "Abort".
         err = reject_type(
             "enum SomethingElse\n  | Abort\n"
-            'let n: int = ask("Q", on_parse_error = SomethingElse::Abort)\nn'
+            'let n: int = ask("Q", on-parse-error = SomethingElse::Abort)\nn'
         )
         assert "parse_error" in str(err).lower() or "ParsePolicy" in str(err)
 
@@ -2962,7 +2962,7 @@ class TestAskCodecOptions:
         assert "text" in str(err) or "support" in str(err).lower()
 
     def test_ask_strict_json_false(self) -> None:
-        r = accept_type('let n: int = ask("Q", format = "json", strict_json = false)\nn')
+        r = accept_type('let n: int = ask("Q", format = "json", strict-json = false)\nn')
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
         spec = r.contract_specs[decl.value.node_id]
@@ -3017,10 +3017,10 @@ class TestAskRequest:
         (
             'ask-request::[int]("Q")',
             'ask-request("Q", format = "json")',
-            'ask-request("Q", strict_json = true)',
-            'ask-request("Q", on_parse_error = Retry(n = 1))',
+            'ask-request("Q", strict-json = true)',
+            'ask-request("Q", on-parse-error = Retry(n = 1))',
             'let agent = AgentCommand("worker")\nagent.ask-request::[int]("Q")',
-            'let agent = AgentCommand("worker")\nagent.ask-request("Q", strict_json = true)',
+            'let agent = AgentCommand("worker")\nagent.ask-request("Q", strict-json = true)',
         ),
     )
     def test_rejects_type_arguments_and_parse_options(self, call: str) -> None:
@@ -3179,7 +3179,7 @@ class TestExec:
         )
 
     def test_non_final_exec_rejects_parse_options(self) -> None:
-        reject_type('exec("ls", on_parse_error = Abort())\n()')
+        reject_type('exec("ls", on-parse-error = Abort())\n()')
 
     def test_exec_function_target_rejected(self) -> None:
         err = reject_type('let f: (int) -> int = exec("ls")\nf(1)')
@@ -3197,16 +3197,16 @@ class TestExec:
         assert spec.codec_name == "json"
 
     def test_exec_strict_json(self) -> None:
-        r = accept_type('let n: int = exec("ls", format = "json", strict_json = true)\nn')
+        r = accept_type('let n: int = exec("ls", format = "json", strict-json = true)\nn')
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
         spec = r.contract_specs[decl.value.node_id]
         assert spec.strict_json is True
 
     def test_exec_on_parse_error_text_warns(self) -> None:
-        r = accept_type('let x: text = exec("ls", on_parse_error = Abort())\nx')
+        r = accept_type('let x: text = exec("ls", on-parse-error = Abort())\nx')
         assert len(r.warnings) == 1
-        assert "on_parse_error" in r.warnings[0].message
+        assert "on-parse-error" in r.warnings[0].message
 
     def test_exec_call_site_record(self) -> None:
         r = accept_type('exec("ls")')
@@ -3215,16 +3215,16 @@ class TestExec:
         assert cs.callee == "exec"
 
     def test_exec_call_site_abort_policy(self) -> None:
-        r = accept_type('let n: int = exec("ls", on_parse_error = Abort())\nn')
+        r = accept_type('let n: int = exec("ls", on-parse-error = Abort())\nn')
         assert r.call_sites[0].parse_policy == "abort"
 
     def test_exec_call_site_retry_policy(self) -> None:
-        r = accept_type('let n: int = exec("ls", on_parse_error = Retry(n = 2))\nn')
+        r = accept_type('let n: int = exec("ls", on-parse-error = Retry(n = 2))\nn')
         assert r.call_sites[0].parse_policy == "retry[2]"
 
     def test_exec_strict_json_without_json_raises(self) -> None:
-        err = reject_type('let x: text = exec("ls", strict_json = true)\nx')
-        assert "strict_json" in str(err).lower() or "json" in str(err).lower()
+        err = reject_type('let x: text = exec("ls", strict-json = true)\nx')
+        assert "strict-json" in str(err).lower() or "json" in str(err).lower()
 
     def test_exec_structured_parse_option_diagnostic_targets_the_argument(self) -> None:
         # A default (structured ExecResult) exec rejects parse-shaping options,
@@ -3242,8 +3242,8 @@ class TestExec:
 
     def test_exec_strict_json_non_bool_raises(self) -> None:
         # Exercises line 815: strict_json non-BoolLit in exec
-        err = reject_type('let n: int = exec("ls", format = "json", strict_json = "yes")\nn')
-        assert "strict_json" in str(err).lower() or "bool" in str(err).lower()
+        err = reject_type('let n: int = exec("ls", format = "json", strict-json = "yes")\nn')
+        assert "strict-json" in str(err).lower() or "bool" in str(err).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -4763,7 +4763,7 @@ class TestPartialDeclaredCalls:
 
     @pytest.mark.parametrize(
         "name",
-        ["print", "render", "exec", "ask", "ask-request", "copy", "shallow_copy"],
+        ["print", "render", "exec", "ask", "ask-request", "copy", "shallow-copy"],
     )
     def test_special_builtin_partial_call_rejected(self, name: str) -> None:
         err = reject_type(f"let g = {name}(?)\ng")
@@ -8337,66 +8337,66 @@ class TestVarAssign:
 
 class TestParsePolicy:
     def test_on_parse_error_abort(self) -> None:
-        r = accept_type('let n: int = ask("Q", on_parse_error = Abort())\nn')
+        r = accept_type('let n: int = ask("Q", on-parse-error = Abort())\nn')
         assert r.call_sites[0].parse_policy == "abort"
 
     def test_on_parse_error_retry(self) -> None:
-        r = accept_type('let n: int = ask("Q", on_parse_error = Retry(n = 5))\nn')
+        r = accept_type('let n: int = ask("Q", on-parse-error = Retry(n = 5))\nn')
         assert r.call_sites[0].parse_policy == "retry[5]"
 
     def test_on_parse_error_invalid_constructor_raises(self) -> None:
-        err = reject_type('let n: int = ask("Q", on_parse_error = 42)\nn')
-        assert "on_parse_error" in str(err).lower() or "ParsePolicy" in str(err)
+        err = reject_type('let n: int = ask("Q", on-parse-error = 42)\nn')
+        assert "on-parse-error" in str(err).lower() or "ParsePolicy" in str(err)
 
     def test_on_parse_error_abort_with_extra_args_raises(self) -> None:
         # Abort is nullary, so every supplied argument is surplus.
-        err = reject_type('let n: int = ask("Q", on_parse_error = Abort(message = "x"))\nn')
-        assert "on_parse_error" in str(err).lower() or "Abort" in str(err)
+        err = reject_type('let n: int = ask("Q", on-parse-error = Abort(message = "x"))\nn')
+        assert "on-parse-error" in str(err).lower() or "Abort" in str(err)
 
     def test_on_parse_error_retry_no_n_raises(self) -> None:
-        err = reject_type('let n: int = ask("Q", on_parse_error = Retry())\nn')
-        assert "on_parse_error" in str(err).lower() or "Retry" in str(err)
+        err = reject_type('let n: int = ask("Q", on-parse-error = Retry())\nn')
+        assert "on-parse-error" in str(err).lower() or "Retry" in str(err)
 
     def test_on_parse_error_unrelated_unqualified_constructor_raises(self) -> None:
         """An unqualified call to a real, resolvable constructor that is
         simply not ``ParsePolicy::Abort``/``Retry`` is still rejected --
         genuine constructor identity is required, not merely that SOME
         constructor resolves."""
-        err = reject_type('record Foo()\nlet n: int = ask("Q", on_parse_error = Foo())\nn')
-        assert "on_parse_error" in str(err).lower() or "ParsePolicy" in str(err)
+        err = reject_type('record Foo()\nlet n: int = ask("Q", on-parse-error = Foo())\nn')
+        assert "on-parse-error" in str(err).lower() or "ParsePolicy" in str(err)
 
     def test_on_parse_error_wrong_qualifier_raises(self) -> None:
         # 'Other' is not a declared type name, so this fails at scope time.
-        err = reject_any('let n: int = ask("Q", on_parse_error = Other::Abort())\nn')
+        err = reject_any('let n: int = ask("Q", on-parse-error = Other::Abort())\nn')
         err_str = str(err).lower()
-        assert "on_parse_error" in err_str or "ParsePolicy" in str(err) or "Other" in str(err)
+        assert "on-parse-error" in err_str or "ParsePolicy" in str(err) or "Other" in str(err)
 
     def test_on_parse_error_text_target_warns(self) -> None:
-        r = accept_type('ask("Q", on_parse_error = Abort())')
+        r = accept_type('ask("Q", on-parse-error = Abort())')
         assert len(r.warnings) == 1
-        assert "on_parse_error" in r.warnings[0].message
+        assert "on-parse-error" in r.warnings[0].message
 
     def test_on_parse_error_qualifier_with_type_args_rejected(self) -> None:
         """A qualifier segment carrying an explicit type argument
         (``ParsePolicy[int]::``) is never an accepted ``on_parse_error``
         spelling, regardless of what it would otherwise resolve to."""
-        err = reject_type('let n: int = ask("Q", on_parse_error = ParsePolicy[int]::Abort())\nn')
-        assert "on_parse_error" in str(err).lower() or "ParsePolicy" in str(err)
+        err = reject_type('let n: int = ask("Q", on-parse-error = ParsePolicy[int]::Abort())\nn')
+        assert "on-parse-error" in str(err).lower() or "ParsePolicy" in str(err)
 
     def test_retry_with_non_int_n_raises(self) -> None:
         # Exercises line 880->879: Retry n_arg not an IntLit
-        err = reject_type('let n: int = ask("Q", on_parse_error = Retry(n = "bad"))\nn')
-        assert "on_parse_error" in str(err).lower() or "Retry" in str(err)
+        err = reject_type('let n: int = ask("Q", on-parse-error = Retry(n = "bad"))\nn')
+        assert "on-parse-error" in str(err).lower() or "Retry" in str(err)
 
     def test_retry_with_wrong_key_raises(self) -> None:
         # Exercises line 880 -> falls through to raise
-        err = reject_type('let n: int = ask("Q", on_parse_error = Retry(m = 3))\nn')
-        assert "on_parse_error" in str(err).lower() or "Retry" in str(err)
+        err = reject_type('let n: int = ask("Q", on-parse-error = Retry(m = 3))\nn')
+        assert "on-parse-error" in str(err).lower() or "Retry" in str(err)
 
     def test_parse_policy_unknown_variant_raises(self) -> None:
         # Exercises line 877->890: arg.name is neither "Abort" nor "Retry"
-        err = reject_type('let n: int = ask("Q", on_parse_error = ParsePolicy::Bad())\nn')
-        assert "on_parse_error" in str(err).lower() or "ParsePolicy" in str(err)
+        err = reject_type('let n: int = ask("Q", on-parse-error = ParsePolicy::Bad())\nn')
+        assert "on-parse-error" in str(err).lower() or "ParsePolicy" in str(err)
 
 
 # ---------------------------------------------------------------------------
@@ -8420,11 +8420,11 @@ _AGENT_VARIANTS_TC = (
 _AGENT_REQUEST_FIELDS_TC = (
     "  agent: Agent\n"
     "  prompt: text\n"
-    "  target_type: Option[text]\n"
-    "  format_instructions: Option[text]\n"
-    "  json_schema: Option[json]\n"
+    "  target-type: Option[text]\n"
+    "  format-instructions: Option[text]\n"
+    "  json-schema: Option[json]\n"
     "  attempt: int\n"
-    "  previous_error: Option[text]\n"
+    "  previous-error: Option[text]\n"
     "  metadata: json\n"
 )
 
@@ -8492,7 +8492,7 @@ class TestHostContractBuiltinIdentity:
             'ask-request("hi")\n',
             default_stdlib=False,
         )
-        assert "target_type" in err.to_diagnostic().message
+        assert "target-type" in err.to_diagnostic().message
         assert "Option" in err.to_diagnostic().message
 
     def test_scoped_agent_request_naming_a_scoped_option_rejected(self) -> None:
@@ -8513,13 +8513,13 @@ class TestHostContractBuiltinIdentity:
             'let q = ask-request("hi")\n'
             "end A\n()\n"
         )
-        assert "target_type" in err.to_diagnostic().message
+        assert "target-type" in err.to_diagnostic().message
         assert "Option" in err.to_diagnostic().message
 
     def test_scoped_parse_policy_constructor_accepted_by_on_parse_error(self) -> None:
         r = accept_type(
             f"scope A\nbuiltin enum ParsePolicy =\n{_PARSE_POLICY_VARIANTS_TC}"
-            'let n: int = exec::[int]("ls", on_parse_error = A::ParsePolicy::Retry(n = 5))\n'
+            'let n: int = exec::[int]("ls", on-parse-error = A::ParsePolicy::Retry(n = 5))\n'
             "end A\n()\n"
         )
         region = r.resolved.program.body.items[0]
@@ -8530,7 +8530,7 @@ class TestHostContractBuiltinIdentity:
     def test_scoped_parse_policy_abort_accepted_by_on_parse_error(self) -> None:
         r = accept_type(
             f"scope A\nbuiltin enum ParsePolicy =\n{_PARSE_POLICY_VARIANTS_TC}"
-            'let n: int = exec::[int]("ls", on_parse_error = A::ParsePolicy::Abort)\n'
+            'let n: int = exec::[int]("ls", on-parse-error = A::ParsePolicy::Abort)\n'
             "end A\n()\n"
         )
         region = r.resolved.program.body.items[0]
@@ -8544,9 +8544,9 @@ class TestHostContractBuiltinIdentity:
         err = reject_type(
             f"scope A\nbuiltin enum ParsePolicy =\n{_PARSE_POLICY_VARIANTS_TC}end A\n"
             "enum NotPolicy\n  | Abort\n"
-            'let n: int = exec::[int]("ls", on_parse_error = NotPolicy::Abort())\n'
+            'let n: int = exec::[int]("ls", on-parse-error = NotPolicy::Abort())\n'
         )
-        assert "on_parse_error" in str(err).lower() or "ParsePolicy" in str(err)
+        assert "on-parse-error" in str(err).lower() or "ParsePolicy" in str(err)
 
     def test_scoped_builtin_ask_request_signature_mentioning_sibling_types_typechecks(
         self,
@@ -8613,8 +8613,8 @@ class TestHostContractBuiltinIdentity:
             "  self,\n"
             "  prompt: text,\n"
             '  format: text = "",\n'
-            "  strict_json: bool = false,\n"
-            "  on_parse_error: ParsePolicy = ParsePolicy::Abort,\n"
+            "  strict-json: bool = false,\n"
+            "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
             ") -> T\n"
             'let g: Agent = Agent::AgentCommand("x")\n'
             'let r: text = g.ask("hi")\n'
@@ -9917,7 +9917,7 @@ class TestAskUnknownArgs:
         # All supported parse options work on an explicit Agent receiver.
         r = accept_type(
             'let a = AgentCommand("a")\nlet n: int = a.ask("Q", format = "json",'
-            " strict_json = true, on_parse_error = Abort())\nn"
+            " strict-json = true, on-parse-error = Abort())\nn"
         )
         assert r.resolved.program is not None
 
@@ -9935,8 +9935,8 @@ class TestExecUnknownArgs:
     def test_exec_valid_named_arg_combinations_still_accepted(self) -> None:
         # format, strict_json, on_parse_error are valid for exec.
         r = accept_type(
-            'let n: int = exec("ls", format = "json", strict_json = true,'
-            " on_parse_error = Abort())\nn"
+            'let n: int = exec("ls", format = "json", strict-json = true,'
+            " on-parse-error = Abort())\nn"
         )
         assert r.resolved.program is not None
 
@@ -9974,12 +9974,12 @@ class TestExecStructured:
         assert "ExecResult" in str(err) or "format" in str(err).lower()
 
     def test_exec_structured_strict_json_rejected(self) -> None:
-        err = reject_type('exec("ls", strict_json = true)')
-        assert "ExecResult" in str(err) or "strict_json" in str(err).lower()
+        err = reject_type('exec("ls", strict-json = true)')
+        assert "ExecResult" in str(err) or "strict-json" in str(err).lower()
 
     def test_exec_structured_on_parse_error_rejected(self) -> None:
-        err = reject_type('exec("ls", on_parse_error = Abort())')
-        assert "ExecResult" in str(err) or "on_parse_error" in str(err).lower()
+        err = reject_type('exec("ls", on-parse-error = Abort())')
+        assert "ExecResult" in str(err) or "on-parse-error" in str(err).lower()
 
     def test_exec_parsed_form_has_no_structured_exec(self) -> None:
         r = accept_type('let n: int = exec("ls", format = "json")\nn')
@@ -12578,7 +12578,7 @@ class TestExceptionRecursiveTypes:
         r = accept_type(
             "record R\n  e: CastError\n"
             'R(e = CastError(message = "m", '
-            'source_type = "text", target_type = "int", raw = "x"))'
+            'source-type = "text", target-type = "int", raw = "x"))'
         )
         assert r.resolved.program is not None
 
@@ -13060,17 +13060,17 @@ class TestNoFiniteSchemaUseSites:
 
 
 class TestCopyAndShallowCopyCall:
-    """Tests for the copy/shallow_copy built-ins: identity typing in a single T."""
+    """Tests for the copy/shallow-copy built-ins: identity typing in a single T."""
 
-    @pytest.mark.parametrize("name", ["copy", "shallow_copy"])
+    @pytest.mark.parametrize("name", ["copy", "shallow-copy"])
     def test_infers_argument_type(self, name: str) -> None:
-        """copy(x)/shallow_copy(x) yield exactly x's own checked type."""
+        """copy(x)/shallow-copy(x) yield exactly x's own checked type."""
         r = accept_type(f"let xs: array[int] = [1, 2]\n{name}(xs)")
         call = r.resolved.program.body.items[1]
         assert isinstance(call, Call)
         assert r.node_types[call.node_id] == ArrayType(elem=IntType())
 
-    @pytest.mark.parametrize("name", ["copy", "shallow_copy"])
+    @pytest.mark.parametrize("name", ["copy", "shallow-copy"])
     def test_explicit_type_arg_widens_result(self, name: str) -> None:
         """copy::[decimal](5) yields decimal — the argument's int is assignable to it."""
         r = accept_type(f"{name}::[decimal](5)")
@@ -13078,27 +13078,27 @@ class TestCopyAndShallowCopyCall:
         assert isinstance(call, Call)
         assert r.node_types[call.node_id] == DecimalType()
 
-    @pytest.mark.parametrize("name", ["copy", "shallow_copy"])
+    @pytest.mark.parametrize("name", ["copy", "shallow-copy"])
     def test_explicit_type_arg_not_assignable_rejected(self, name: str) -> None:
         """copy::[text](5) is rejected — int is not assignable to text."""
         err = reject_type(f"{name}::[text](5)")
         assert "text" in str(err).lower() or "int" in str(err).lower()
 
-    @pytest.mark.parametrize("name", ["copy", "shallow_copy"])
+    @pytest.mark.parametrize("name", ["copy", "shallow-copy"])
     def test_named_arg_rejected(self, name: str) -> None:
-        """Named args to copy/shallow_copy are rejected."""
+        """Named args to copy/shallow-copy are rejected."""
         err = reject_type(f"{name}(value = 1)")
         assert name in str(err).lower() or "positional" in str(err).lower()
 
-    @pytest.mark.parametrize("name", ["copy", "shallow_copy"])
+    @pytest.mark.parametrize("name", ["copy", "shallow-copy"])
     def test_wrong_arity_rejected(self, name: str) -> None:
-        """copy()/shallow_copy() with wrong arity is rejected."""
+        """copy()/shallow-copy() with wrong arity is rejected."""
         err = reject_type(f'{name}("a", "b")')
         assert name in str(err).lower()
 
-    @pytest.mark.parametrize("name", ["copy", "shallow_copy"])
+    @pytest.mark.parametrize("name", ["copy", "shallow-copy"])
     def test_no_args_rejected(self, name: str) -> None:
-        """copy()/shallow_copy() with no args is rejected."""
+        """copy()/shallow-copy() with no args is rejected."""
         err = reject_type(f"{name}()")
         assert name in str(err).lower()
 

@@ -8,10 +8,10 @@
       "expect": {
         "stdout_contains": [
           "CastError(message = \"Failed to parse text as JSON:",
-          "source_type = \"text\", target_type = \"int\", raw = \"abc\")",
+          "source-type = \"text\", target-type = \"int\", raw = \"abc\")",
           "caught: text -> int\n",
-          "\"source_type\": \"text\"",
-          "\"target_type\": \"int\"",
+          "\"source-type\": \"text\"",
+          "\"target-type\": \"int\"",
           "\"raw\": \"abc\"",
           "no int\n",
           "ArithmeticError(message = \"Division by zero\", operation = \"/\")",

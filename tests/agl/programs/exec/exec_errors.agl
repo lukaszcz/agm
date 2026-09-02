@@ -1,5 +1,5 @@
 # ExecError: nonzero exit raises a catchable exception carrying command,
-# exit_code, stdout, stderr, timed_out.
+# exit-code, stdout, stderr, timed-out.
 param mode
 
 program def main() -> unit =
@@ -7,10 +7,10 @@ program def main() -> unit =
     let out: text = exec "sh -c 'echo partial; echo oops >&2; exit 3'"
     print out
   catch ExecError as e =>
-    print "failed code %{e.exit_code}"
+    print "failed code %{e.exit-code}"
     print "captured %{e.stdout}"
     print "err %{e.stderr}"
-    print "timed %{e.timed_out}"
+    print "timed %{e.timed-out}"
 
   if mode == "uncaught" =>
     let ignored: text = exec "false"

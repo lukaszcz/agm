@@ -29,4 +29,4 @@ program def main() -> unit =
     print task.title
     print task.effort
   catch CastError as e =>
-    print "task cast failed: %{e.source_type} -> %{e.target_type}"
+    print "task cast failed: %{e.source-type} -> %{e.target-type}"

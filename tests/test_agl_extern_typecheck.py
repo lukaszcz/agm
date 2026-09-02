@@ -89,8 +89,8 @@ _ASK_BUILTIN_SOURCE = (
     "builtin def ask[T](\n"
     "  prompt: text,\n"
     '  format: text = "",\n'
-    "  strict_json: bool = false,\n"
-    "  on_parse_error: ParsePolicy = ParsePolicy::Abort,\n"
+    "  strict-json: bool = false,\n"
+    "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
     ") -> T\n"
 )
 

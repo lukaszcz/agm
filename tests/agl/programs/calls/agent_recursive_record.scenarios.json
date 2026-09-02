@@ -47,7 +47,7 @@
               "command": "tree_source"
             },
             "attempts": 1,
-            "target_type": "Category"
+            "target-type": "Category"
           }
         }
       }

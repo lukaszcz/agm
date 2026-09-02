@@ -173,7 +173,7 @@ def test_exec_retries_with_the_output_contract_feedback(
     write_file_program(
         program,
         'let answer: int = AgentCommand("mock \\%{SESSION_ID}").ask("count", '
-        "on_parse_error = Retry(n = 1))\n"
+        "on-parse-error = Retry(n = 1))\n"
         "print answer\n",
     )
     fake_agent_transport.queue(

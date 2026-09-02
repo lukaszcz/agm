@@ -1,4 +1,4 @@
-# copy detaches fully at EVERY depth (unlike shallow_copy, which shares one
+# copy detaches fully at EVERY depth (unlike shallow-copy, which shares one
 # level down), and it preserves diamond sharing: two fields that pointed at
 # the same array before the copy still point at the same (new) array after.
 param first: int

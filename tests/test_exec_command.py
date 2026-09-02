@@ -1691,7 +1691,7 @@ class TestExecConfigWiring:
         from agm.cli_support.args import ExecArgs
         from agm.config.context import ConfigContext
 
-        home = self._config_home(tmp_path)  # config sets strict_json = true
+        home = self._config_home(tmp_path)  # config sets strict-json = true
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, "let x = 1\nx\n")
 
@@ -1888,7 +1888,7 @@ class TestDryRunInventory:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, 'ask("Hello", on_parse_error = Abort)\n')
+        write_file_program(agl_file, 'ask("Hello", on-parse-error = Abort)\n')
 
         args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
         assert exec_command.run(args) is None

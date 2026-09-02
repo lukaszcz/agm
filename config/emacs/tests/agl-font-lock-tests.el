@@ -248,8 +248,8 @@
     (should (eq (agl-flt--face-of "copy") 'font-lock-builtin-face))))
 
 (ert-deftest agl-flt-shallow-copy-is-builtin-face ()
-  (agl-flt--with-buffer "let c = shallow_copy(x)\n"
-    (should (eq (agl-flt--face-of "shallow_copy") 'font-lock-builtin-face))))
+  (agl-flt--with-buffer "let c = shallow-copy(x)\n"
+    (should (eq (agl-flt--face-of "shallow-copy") 'font-lock-builtin-face))))
 
 (ert-deftest agl-flt-resource-is-builtin-face ()
   (agl-flt--with-buffer "let p = resource(\"data.txt\")\n"

@@ -1,5 +1,5 @@
 # Agent::ask retains corrective retries in one ephemeral conversation.
 program def main() -> unit =
   let worker = AgentPi("writer", "model", "high")
-  let answer: int = worker.ask("calculate the total", on_parse_error = Retry(n = 1))
+  let answer: int = worker.ask("calculate the total", on-parse-error = Retry(n = 1))
   print answer

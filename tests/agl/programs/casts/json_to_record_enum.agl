@@ -23,7 +23,7 @@ program def main() -> unit =
     print cfg.timeout
     print cfg.retries
   catch CastError as e =>
-    print "config invalid: %{e.source_type} -> %{e.target_type}"
+    print "config invalid: %{e.source-type} -> %{e.target-type}"
   catch JsonParseError as e =>
     print "config json error: %{e.raw}"
 
@@ -38,6 +38,6 @@ program def main() -> unit =
         | High(reason) => print "priority: high (%{reason})"
         | Low          => ()
   catch CastError as e =>
-    print "priority invalid: %{e.source_type} -> %{e.target_type}"
+    print "priority invalid: %{e.source-type} -> %{e.target-type}"
   catch JsonParseError as e =>
     print "priority json error: %{e.raw}"

@@ -1,5 +1,5 @@
 # `try`/`catch ExternError` around a companion that raises on bad input; the
-# handler inspects the exception's `function`/`python_type` fields.
+# handler inspects the exception's `function`/`python-type` fields.
 extern def divide(a: int, b: int) -> int
 
 param a: int
@@ -10,6 +10,6 @@ program def main() -> unit =
     divide(a, b)
   catch ExternError as e =>
     print e.function
-    print e.python_type
+    print e.python-type
     -1
   print result

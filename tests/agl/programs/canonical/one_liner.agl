@@ -10,7 +10,7 @@ program def main() -> unit =
   var artifact: text = ask("Implement %{spec}", agent = impl)
   var review: Review = Pass
   do[5]
-    review := ask("Review %{artifact}", agent = reviewer, on_parse_error = Retry(n = 2))
+    review := ask("Review %{artifact}", agent = reviewer, on-parse-error = Retry(n = 2))
     case review of
       | Fail(issues) =>
           artifact := ask("Fix %{issues} in %{artifact}", agent = impl)

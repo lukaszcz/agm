@@ -1,6 +1,6 @@
-# copy/shallow_copy through records, enums, exceptions, and a generic
+# copy/shallow-copy through records, enums, exceptions, and a generic
 # container (dict[text, array[int]]); copy detaches every array field,
-# shallow_copy shares it. Both are identity on primitives.
+# shallow-copy shares it. Both are identity on primitives.
 param x: int
 
 record Box(items: array[int])
@@ -14,7 +14,7 @@ exception Batch extends Exception
 program def main() -> unit =
   var b = Box(items = [x, x + 1])
   let deep_box = copy(b)
-  let shallow_box = shallow_copy(b)
+  let shallow_box = shallow-copy(b)
   deep_box.items[0] := -1
   shallow_box.items[0] := -2
   print(b.items)
@@ -43,5 +43,5 @@ program def main() -> unit =
   print(copied_groups["a"])
 
   print(copy(x))
-  print(shallow_copy(true))
+  print(shallow-copy(true))
   print(copy("hi"))

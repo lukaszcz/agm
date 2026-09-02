@@ -3922,10 +3922,10 @@ class TestCastScope:
         assert "undefinedVar" in err.to_diagnostic().message
 
     def test_copy_and_shallow_copy_resolve_as_builtins(self) -> None:
-        """copy(x)/shallow_copy(x) resolve as builtins, not undefined names."""
+        """copy(x)/shallow-copy(x) resolve as builtins, not undefined names."""
         from agm.agl.scope.symbols import BuiltinKind
 
-        r = parse_and_resolve("let x = [1]\nlet _ = copy(x)\nshallow_copy(x)")
+        r = parse_and_resolve("let x = [1]\nlet _ = copy(x)\nshallow-copy(x)")
         assert BuiltinKind.COPY in r.builtin_calls.values()
         assert BuiltinKind.SHALLOW_COPY in r.builtin_calls.values()
 

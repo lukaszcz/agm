@@ -520,9 +520,9 @@ class TestTypeEnvironmentPrelude:
         assert isinstance(t, RecordType)
         fields = env.type_table.record_fields(t)
         assert fields["stdout"] == TextType()
-        assert fields["exit_code"] == IntType()
+        assert fields["exit-code"] == IntType()
         assert fields["stderr"] == TextType()
-        assert fields["timed_out"] == BoolType()
+        assert fields["timed-out"] == BoolType()
 
     def test_parse_policy_resolves(self) -> None:
         env = TypeEnvironment()
@@ -1167,10 +1167,10 @@ class TestNewExceptions:
 
         e = BUILTIN_EXCEPTIONS["CastError"]
         fields = create_seeded_type_table().exception_fields(e)
-        assert "source_type" in fields
-        assert "target_type" in fields
+        assert "source-type" in fields
+        assert "target-type" in fields
         assert "raw" in fields
-        assert fields["source_type"] == TextType()
+        assert fields["source-type"] == TextType()
 
     def test_json_parse_error_fields(self) -> None:
         from agm.agl.semantics.type_table import create_seeded_type_table

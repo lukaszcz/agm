@@ -177,15 +177,15 @@ by the automatically injected `std/prelude` prelude:
 scope Host
   builtin record ExecResult
     stdout: text
-    exit_code: int
+    exit-code: int
     stderr: text
-    timed_out: bool
+    timed-out: bool
 
   builtin def print[T](value: T) -> unit
 end Host
 
 program def main() -> unit =
-  let result = Host::ExecResult(stdout = "x", exit_code = 0, stderr = "", timed_out = false)
+  let result = Host::ExecResult(stdout = "x", exit-code = 0, stderr = "", timed-out = false)
   let _ = Host::print(result.stdout)
 ```
 

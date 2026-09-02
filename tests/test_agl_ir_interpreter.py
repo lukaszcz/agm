@@ -2846,7 +2846,7 @@ class TestIrExec:
         from agm.agl.semantics.values import BoolValue
 
         assert exc_info.value.exc.display_name == "ExecError"
-        assert exc_info.value.exc.fields["timed_out"] == BoolValue(True)
+        assert exc_info.value.exc.fields["timed-out"] == BoolValue(True)
 
     def test_ir_exec_retry_nonzero_exit_raises_exec_error(self) -> None:
         """On retry, non-zero exit in subsequent shell call raises ExecError."""

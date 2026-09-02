@@ -7,20 +7,20 @@ builtin
 exception ExternError extends Exception
   *
   function: text
-  python_type: text
+  python-type: text
 
 builtin
 exception MaxIterationsExceeded extends Exception
   *
   limit: int
   condition: text
-  last_condition_value: bool
+  last-condition-value: bool
   metadata: json
 
 builtin
 exception MatchError extends Exception
   *
-  scrutinee_type: text
+  scrutinee-type: text
   scrutinee: json
 
 builtin
@@ -64,8 +64,8 @@ exception RecursionError extends Exception
 builtin
 exception CastError extends Exception
   *
-  source_type: text
-  target_type: text
+  source-type: text
+  target-type: text
   raw: text
 
 builtin

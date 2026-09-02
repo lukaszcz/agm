@@ -218,7 +218,7 @@ def test_dispatcher_retry_replays_the_complete_request_context() -> None:
 
     result = PipelineDriver(agent_dispatcher=dispatch).run(
         "program def main() -> unit =\n"
-        '  let number: int = ask("count", on_parse_error = Retry(n = 1))\n'
+        '  let number: int = ask("count", on-parse-error = Retry(n = 1))\n'
     )
 
     assert result.ok
@@ -365,7 +365,7 @@ def test_free_ask_retries_in_the_default_session() -> None:
     host = RetryingHost()
     result = _run(
         "program def main() -> unit =\n"
-        '  let number: int = ask("count", on_parse_error = Retry(n = 1))\n',
+        '  let number: int = ask("count", on-parse-error = Retry(n = 1))\n',
         host,
     )
 
@@ -445,7 +445,7 @@ def test_session_ask_retries_with_corrective_follow_ups() -> None:
     result = _run(
         "program def main() -> unit =\n"
         '  let session = Session::open(AgentCommand("worker"))\n'
-        '  let number: int = session.ask("one chance", on_parse_error = Retry(n = 3))\n'
+        '  let number: int = session.ask("one chance", on-parse-error = Retry(n = 3))\n'
         '  let later: text = session.ask("what did I ask?")\n'
         "  session.close()\n",
         host,
@@ -518,7 +518,7 @@ def test_session_retry_redacts_schema_invalid_output_from_corrective_feedback() 
     result = _run(
         "program def main() -> unit =\n"
         '  let session = Session::open(AgentCommand("worker"))\n'
-        '  let number: int = session.ask("parse me", on_parse_error = Retry(n = 1))\n',
+        '  let number: int = session.ask("parse me", on-parse-error = Retry(n = 1))\n',
         host,
     )
 
@@ -534,8 +534,8 @@ def test_session_retry_redacts_schema_invalid_output_from_corrective_feedback() 
     ("options", "expected_attempts"),
     [
         pytest.param("", 1, id="default"),
-        pytest.param(", on_parse_error = Abort", 1, id="abort"),
-        pytest.param(", on_parse_error = Retry(n = 2)", 3, id="retry"),
+        pytest.param(", on-parse-error = Abort", 1, id="abort"),
+        pytest.param(", on-parse-error = Retry(n = 2)", 3, id="retry"),
     ],
 )
 def test_session_parse_policies_stop_retrying_when_exhausted(
@@ -577,7 +577,7 @@ def test_session_retry_stops_at_a_transport_failure() -> None:
         "program def main() -> unit =\n"
         '  let session = Session::open(AgentCommand("worker"))\n'
         "  try\n"
-        '    let number: int = session.ask("parse me", on_parse_error = Retry(n = 3))\n'
+        '    let number: int = session.ask("parse me", on-parse-error = Retry(n = 3))\n'
         "    ()\n"
         "  catch AgentCallError =>\n"
         "    session.close()\n",

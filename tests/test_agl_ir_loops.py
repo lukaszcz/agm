@@ -194,7 +194,7 @@ def test_loop_exhaustion_raises() -> None:
     assert cond_field.value == "false", f"condition source text mismatch: {cond_field.value!r}"
 
     assert ir_exc.fields.get("limit") == IntValue(3)
-    assert ir_exc.fields.get("last_condition_value") == BoolValue(False)
+    assert ir_exc.fields.get("last-condition-value") == BoolValue(False)
     assert ir_exc.fields.get("metadata") == JsonValue(None)
 
 

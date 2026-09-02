@@ -21,7 +21,7 @@ program def main() -> unit =
     let pt = p::parse_point(point_json)
     print "point %{pt.x},%{pt.y}"
   catch CastError as e =>
-    print "bad point: %{e.source_type} -> %{e.target_type}"
+    print "bad point: %{e.source-type} -> %{e.target-type}"
   catch JsonParseError as e =>
     print "bad json: %{e.raw}"
 
@@ -31,4 +31,4 @@ program def main() -> unit =
     let pt = p::parse_point(raw)
     print "agent point %{pt.x},%{pt.y}"
   catch CastError as e =>
-    print "agent bad point: %{e.target_type}"
+    print "agent bad point: %{e.target-type}"

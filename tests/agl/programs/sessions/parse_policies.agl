@@ -5,11 +5,11 @@ program def main() -> unit =
   catch AgentParseError =>
     print "default"
   try
-    let aborted: int = session.ask("abort policy", on_parse_error = Abort)
+    let aborted: int = session.ask("abort policy", on-parse-error = Abort)
   catch AgentParseError =>
     print "abort"
   try
-    let exhausted: int = session.ask("retry policy", on_parse_error = Retry(n = 2))
+    let exhausted: int = session.ask("retry policy", on-parse-error = Retry(n = 2))
   catch AgentParseError =>
     print "exhausted"
   let context: text = session.ask("conversation continues")

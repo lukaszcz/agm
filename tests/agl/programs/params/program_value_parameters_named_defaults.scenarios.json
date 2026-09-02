@@ -1,0 +1,58 @@
+{
+  "scenarios": [
+    {
+      "name": "all_defaults",
+      "params": {
+        "label": "Ann"
+      },
+      "expect": {
+        "stdout": "hi, Ann.\n6\n{}\n"
+      }
+    },
+    {
+      "name": "named_overrides",
+      "params": {
+        "label": "Bo",
+        "on": true,
+        "tag": {"$case": "Some", "value": 9},
+        "meta": {"a": 1}
+      },
+      "expect": {
+        "stdout": "hello, Bo!\n54\n{\"a\": 1}\n"
+      }
+    },
+    {
+      "name": "missing_required_label",
+      "params": {},
+      "expect": {
+        "host_error": {
+          "message_contains": ["label"]
+        }
+      }
+    },
+    {
+      "name": "type_invalid_bool",
+      "params": {
+        "label": "Ann",
+        "on": "not-a-bool"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": ["on"]
+        }
+      }
+    },
+    {
+      "name": "type_invalid_option",
+      "params": {
+        "label": "Ann",
+        "tag": {"nope": 1}
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": ["tag"]
+        }
+      }
+    }
+  ]
+}

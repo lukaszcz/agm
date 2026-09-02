@@ -127,15 +127,18 @@ class ProgramDeclInfo:
     ``module`` and ``scope_path`` retain the declaration identity in structured
     form. ``declaration_path`` is the external spelling within that module;
     ``qualified_path`` prefixes it with a non-entry module route.
-    ``parameters`` is the program's own value-parameter signature, in
-    declaration order.
+    ``span`` is the declaration's own span, the anchor for a diagnostic that
+    names no single parameter (an unknown argument name, or an excess
+    positional argument). ``parameters`` is the program's own value-parameter
+    signature, in declaration order.
     """
 
     module: "ModuleId"
     scope_path: tuple[str, ...]
     name: str
     node_id: int
-    parameters: tuple[ProgramParamInfo, ...] = ()
+    span: "SourceSpan"
+    parameters: tuple[ProgramParamInfo, ...]
 
     @property
     def declaration_path(self) -> str:

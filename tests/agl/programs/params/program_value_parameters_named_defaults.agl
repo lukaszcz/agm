@@ -1,0 +1,32 @@
+# A ``program def``'s own value parameters, all in the named-only default
+# zone: a marker-less ``program def`` parameter list defaults every
+# parameter to named-only, unlike a plain ``def``. Combines a required
+# named-only parameter with no default and three defaulted ones (bool,
+# Option[T], json), flowing into a helper def, an enum, a record, a for
+# loop, and a match.
+
+enum Mode
+  | Quiet
+  | Loud(volume: int)
+
+record Summary(mode: Mode, greeting: text)
+
+def greet(label: text, on: bool) -> text =
+  if on => "hello, %{label}!" else => "hi, %{label}."
+
+program def main(label: text, on: bool = false, tag: Option[int] = Option::None, meta: json = {}) -> unit =
+  let mode: Mode = case tag of
+    | Option::Some(value) => Loud(volume = value)
+    | Option::None => Quiet
+
+  let summary = Summary(mode = mode, greeting = greet(label, on))
+  print summary.greeting
+
+  var total: int = 0
+  for step in [1, 2, 3] do
+    case summary.mode of
+      | Loud(volume) => total := total + step * volume
+      | Quiet => total := total + step
+  done
+  print total
+  print meta

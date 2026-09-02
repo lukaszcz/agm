@@ -1,0 +1,31 @@
+# A ``program def``'s own value parameters: @pos opens the positional-only
+# zone (count), / closes it into the standard zone (label), which accepts
+# either a positional or a named argument, and * opens the named-only zone
+# (loud), which accepts only a named argument. Parameters flow through a
+# helper def, an enum, a record, a for loop, and a match.
+
+enum Volume
+  | Soft
+  | Loud(times: int)
+
+record Announcement(message: text, volume: Volume)
+
+def shout(label: text, times: int) -> text =
+  var line = label
+  for tick in 1 to times do
+    line := "%{line}!"
+  done
+  line
+
+program def main(@pos, count: int, /, label: text, *, loud: bool = false) -> unit =
+  let volume: Volume = if loud => Loud(times = count) else => Soft
+  let announcement = case volume of
+    | Loud(times) => Announcement(message = shout(label, times), volume = volume)
+    | Soft => Announcement(message = label, volume = volume)
+  print announcement.message
+
+  var total: int = 0
+  for i in 1 to count do
+    total := total + i
+  done
+  print total

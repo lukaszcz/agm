@@ -2461,6 +2461,7 @@ class TestExecTimeoutAndLogFileFlags:
         from collections.abc import Mapping
 
         from agm.agl.ir.ids import SymbolId
+        from agm.agl.ir.nodes import UseDefault
         from agm.agl.ir.program import ExecutableProgram
         from agm.agl.matchcompile import MatchCompiledProgram
         from agm.agl.pipeline import PipelineDriver as RealRuntime
@@ -2484,6 +2485,7 @@ class TestExecTimeoutAndLogFileFlags:
                 builtin_host_settings: Mapping[str, Value] | None = None,
                 process_environment: Mapping[str, str] | None = None,
                 program_symbol: SymbolId | None = None,
+                arguments: "tuple[Value | UseDefault, ...]" = (),
             ) -> RunResult:
                 captured["shell_exec_timeout"] = self._shell_exec_timeout
                 captured["process_environment"] = process_environment
@@ -2498,6 +2500,7 @@ class TestExecTimeoutAndLogFileFlags:
                     builtin_host_settings=builtin_host_settings,
                     process_environment=process_environment,
                     program_symbol=program_symbol,
+                    arguments=arguments,
                 )
 
         monkeypatch.setattr(exec_engine, "PipelineDriver", CapturingRuntime)

@@ -728,14 +728,60 @@ def _run_prepared_entry(
     prepared: Any,
     *,
     param_values: dict[str, Any],
+    positional: list[Any] | None = None,
     process_environment: dict[str, str] | None = None,
 ) -> Any:
-    """Run the sole selected file-style entry through the public pipeline seams."""
+    """Run the sole selected file-style entry through the public pipeline seams.
+
+    Routes through :meth:`PipelineDriver.preflight_arguments` (binding
+    *positional*/*param_values* as the entry program's own value arguments)
+    when the selected entry ``program def`` declares parameters, and through
+    the ``param``-mechanism :meth:`PipelineDriver.preflight_params` path
+    otherwise.
+    """
     discovery = runtime.discover_params(prepared)
-    if discovery.checked is None:
+    if discovery.compiled is None:
         return runtime.run_prepared(
             prepared, param_values=param_values, process_environment=process_environment
         )
+    entry_programs = [item for item in discovery.programs if item.module.is_entry]
+    assert len(entry_programs) == 1
+    entry_program = entry_programs[0]
+
+    if entry_program.parameters:
+        from agm.agl.runtime.arguments import ProgramArguments
+
+        assert not discovery.params_for(entry_program), (
+            "scenario binds 'params' as the entry program's own arguments when it "
+            "declares value parameters; a module 'param' reachable from it would "
+            "silently keep its default instead of taking 'params' - no fixture may "
+            "combine a parameterized program def with a reachable module param"
+        )
+        argument_preflight = runtime.preflight_arguments(
+            prepared,
+            entry_program,
+            ProgramArguments(
+                positional=tuple(positional) if positional else (),
+                named=dict(param_values) if param_values else {},
+            ),
+            compiled=discovery.compiled,
+        )
+        if not argument_preflight.result.ok:
+            return argument_preflight.result
+        assert argument_preflight.executable is not None
+        return runtime.run_prepared(
+            prepared,
+            compiled=discovery.compiled,
+            executable=argument_preflight.executable,
+            program_symbol=argument_preflight.executable.program_symbols[entry_program.node_id],
+            arguments=argument_preflight.arguments,
+            process_environment=process_environment,
+        )
+
+    assert not positional, (
+        "scenario supplied 'positional' but the entry program declares no "
+        "parameters to receive them - check the fixture's program signature"
+    )
     preflight = runtime.preflight_params(
         prepared,
         param_values=param_values,
@@ -743,15 +789,13 @@ def _run_prepared_entry(
     )
     if not preflight.result.ok:
         return preflight.result
-    entry_programs = [item for item in discovery.programs if item.module.is_entry]
-    assert len(entry_programs) == 1
     assert preflight.executable is not None
     return runtime.run_prepared(
         prepared,
         param_values=param_values,
         compiled=discovery.compiled,
         executable=preflight.executable,
-        program_symbol=preflight.executable.program_symbols[entry_programs[0].node_id],
+        program_symbol=preflight.executable.program_symbols[entry_program.node_id],
         process_environment=process_environment,
     )
 
@@ -839,6 +883,7 @@ def _run_program(
                 runtime,
                 prepared,
                 param_values=scenario.get("params", {}),
+                positional=scenario.get("positional"),
                 process_environment=scenario.get("process_environment"),
             )
         except SystemExit as exc:

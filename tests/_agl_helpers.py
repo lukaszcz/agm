@@ -52,6 +52,7 @@ from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program_seeded, wrap_inline_program
 from agm.agl.pipeline import PreparedProgram, RunResult
+from agm.agl.runtime.arguments import ProgramArguments
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_MEMBER_TYPE_DEFS,
     TypeDef,
@@ -196,7 +197,14 @@ def run_inline_command(
     setting_overrides: dict[str, SettingOverride] | None = None,
     **run_kwargs: object,
 ) -> RunResult:
-    """Run test-only inline source through the same entry transform as ``agm exec -c``."""
+    """Run test-only inline source through the same entry transform as ``agm exec -c``.
+
+    Routes through :meth:`PipelineDriver.preflight_arguments` (binding
+    ``positional``/``param_values`` as the entry program's own value
+    arguments) when the selected entry ``program def`` declares parameters,
+    and through the ``param``-mechanism :meth:`PipelineDriver.preflight_params`
+    path otherwise.
+    """
     prepared = prepare_inline_command(
         source,
         roots=roots,
@@ -204,23 +212,58 @@ def run_inline_command(
         setting_overrides=setting_overrides,
     )
     param_values = run_kwargs.pop("param_values", None)
+    positional = run_kwargs.pop("positional", None)
     discovery = runtime.discover_params(prepared)
-    if discovery.checked is None:
+    if discovery.compiled is None:
         return runtime.run_prepared(prepared, param_values=param_values, **run_kwargs)
+    entry_programs = [program for program in discovery.programs if program.module.is_entry]
+    assert len(entry_programs) == 1
+    entry_program = entry_programs[0]
+
+    if entry_program.parameters:
+        assert not discovery.params_for(entry_program), (
+            "scenario binds 'params' as the entry program's own arguments when it "
+            "declares value parameters; a module 'param' reachable from it would "
+            "silently keep its default instead of taking 'params' - no fixture may "
+            "combine a parameterized program def with a reachable module param"
+        )
+        argument_preflight = runtime.preflight_arguments(
+            prepared,
+            entry_program,
+            ProgramArguments(
+                positional=tuple(positional) if positional else (),
+                named=dict(param_values) if param_values else {},
+            ),
+            compiled=discovery.compiled,
+        )
+        if not argument_preflight.result.ok:
+            return argument_preflight.result
+        assert argument_preflight.executable is not None
+        return runtime.run_prepared(
+            prepared,
+            compiled=discovery.compiled,
+            executable=argument_preflight.executable,
+            program_symbol=argument_preflight.executable.program_symbols[entry_program.node_id],
+            arguments=argument_preflight.arguments,
+            **run_kwargs,
+        )
+
+    assert not positional, (
+        "scenario supplied 'positional' but the entry program declares no "
+        "parameters to receive them - check the fixture's program signature"
+    )
     preflight = runtime.preflight_params(
         prepared, param_values=param_values, compiled=discovery.compiled
     )
     if not preflight.result.ok:
         return preflight.result
-    entry_programs = [program for program in discovery.programs if program.module.is_entry]
-    assert len(entry_programs) == 1
     assert preflight.executable is not None
     return runtime.run_prepared(
         prepared,
         param_values=param_values,
         compiled=discovery.compiled,
         executable=preflight.executable,
-        program_symbol=preflight.executable.program_symbols[entry_programs[0].node_id],
+        program_symbol=preflight.executable.program_symbols[entry_program.node_id],
         **run_kwargs,
     )
 

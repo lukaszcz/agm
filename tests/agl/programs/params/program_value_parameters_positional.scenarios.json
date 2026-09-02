@@ -1,0 +1,78 @@
+{
+  "scenarios": [
+    {
+      "name": "positional_arguments",
+      "positional": [3, "hi"],
+      "params": {},
+      "expect": {
+        "stdout": "hi\n6\n"
+      }
+    },
+    {
+      "name": "standard_zone_by_name",
+      "positional": [3],
+      "params": {
+        "label": "hi"
+      },
+      "expect": {
+        "stdout": "hi\n6\n"
+      }
+    },
+    {
+      "name": "named_only_loud_zone",
+      "positional": [2],
+      "params": {
+        "label": "go",
+        "loud": true
+      },
+      "expect": {
+        "stdout": "go!!\n3\n"
+      }
+    },
+    {
+      "name": "missing_required_positional_only",
+      "positional": [],
+      "params": {
+        "label": "hi"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": ["count"]
+        }
+      }
+    },
+    {
+      "name": "type_invalid_positional_only",
+      "positional": ["not-an-int", "hi"],
+      "params": {},
+      "expect": {
+        "host_error": {
+          "message_contains": ["count"]
+        }
+      }
+    },
+    {
+      "name": "positional_only_supplied_by_name",
+      "positional": [],
+      "params": {
+        "count": 3,
+        "label": "hi"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": ["count"]
+        }
+      }
+    },
+    {
+      "name": "named_only_supplied_positionally",
+      "positional": [2, "go", true],
+      "params": {},
+      "expect": {
+        "host_error": {
+          "message_contains": ["supplied by name"]
+        }
+      }
+    }
+  ]
+}

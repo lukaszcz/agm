@@ -47,6 +47,7 @@ Layout:
       "name": "snake_case_scenario_id",
       "module_roots": ["program_modules/example"],
       "params": {"spec": "verbatim text", "rounds": 3},
+      "positional": ["verbatim text", 3],
       "agents": {
         "reviewer": ["first response", "second response"],
         "impl": {
@@ -105,8 +106,13 @@ Layout:
 
 Field notes:
 
-- `params` — passed to `runtime.run(source, params=...)` verbatim. JSON numbers with
-  a fractional part are loaded as `decimal.Decimal` (AgL has no binary floats).
+- `params` — the selected entry's arguments, verbatim: named module `param`
+  values when it declares none of its own, or (when it declares its own value
+  parameters) its named/standard-zone arguments. JSON numbers with a fractional
+  part are loaded as `decimal.Decimal` (AgL has no binary floats).
+- `positional` — an entry program's own positional-only/standard-zone
+  arguments, in order; ignored for a `param`-declaring entry, which has no
+  positional argument source.
 - `agents` — response queues selected by the `Agent` value at each call site,
   consumed in call order. A list is a strict queue (a call past its end fails the
   test); the object form allows `repeat_last` for loop-exhaustion scenarios. The key
@@ -169,8 +175,9 @@ Field notes:
   exact-match subset of its fields, and substrings of its `message` field.
 - `expect.exit_code` — the program must terminate through `SystemExit` with this
   status; it is used for host-termination workflows such as `std/process::exit`.
-- `expect.host_error` — the run must fail pre-execution (param validation): no agent
-  is called, no AgL exception is raised, and the diagnostics mention the fragments.
+- `expect.host_error` — the run must fail pre-execution (param validation, program
+  argument binding, or decode failure): no agent is called, no AgL exception is
+  raised, and the diagnostics mention the fragments.
 - Exact `stdout` is asserted only where rendering is pinned by the design (`text`
   verbatim, scalars as scalar text). Pretty-JSON console rendering and
   boundary-marked prompt rendering are asserted with `contains` fragments to avoid

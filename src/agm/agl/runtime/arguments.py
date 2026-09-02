@@ -48,7 +48,17 @@ __all__ = [
     "ProgramSignature",
     "bind_program_arguments",
     "decode_param_value",
+    "default_program_arguments",
 ]
+
+
+def _missing_required_message(name: str) -> str:
+    """The diagnostic message for a missing required program argument.
+
+    The sole place this wording is generated: every diagnostic that reports
+    a missing required program argument, however it is reached, calls this.
+    """
+    return f"Missing required program argument: {name!r}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,9 +232,7 @@ def bind_program_arguments(
                 values.append(UseDefault(param_index=index))
             else:
                 diagnostics.append(
-                    diagnostic_from_span(
-                        f"Missing required program argument: {param.name!r}", param.span
-                    )
+                    diagnostic_from_span(_missing_required_message(param.name), param.span)
                 )
             continue
         try:
@@ -242,6 +250,33 @@ def bind_program_arguments(
     return tuple(values), ()
 
 
+def default_program_arguments(
+    signature: "tuple[IrProgramParam, ...]",
+) -> "tuple[tuple[Value | UseDefault, ...], tuple[Diagnostic, ...]]":
+    """Derive an argument list for a program invoked with no host-supplied values.
+
+    Used when a caller runs a selected program without going through
+    :func:`bind_program_arguments` — no ``ProgramArguments`` was ever
+    collected, only the lowered signature is on hand. Every parameter defers
+    to its own default (``UseDefault``); a parameter with none is reported
+    with the same message :func:`bind_program_arguments` uses for an
+    explicitly missing argument, anchored at line 1 since no declaration span
+    is reachable from an ``IrProgramParam`` alone.
+
+    Returns ``(values, ())`` on success — one entry per parameter, in
+    declaration order — or ``((), diagnostics)``, one diagnostic per missing
+    required parameter.
+    """
+    diagnostics = tuple(
+        Diagnostic(message=_missing_required_message(param.name), line=1)
+        for param in signature
+        if param.required
+    )
+    if diagnostics:
+        return (), diagnostics
+    return tuple(UseDefault(param_index=i) for i in range(len(signature))), ()
+
+
 def _diagnose_binding_error(exc: ArgumentBindingError, signature: ProgramSignature) -> Diagnostic:
     """Translate one structural zone-binding violation into a pre-execution diagnostic."""
     match exc.kind:
@@ -251,7 +286,7 @@ def _diagnose_binding_error(exc: ArgumentBindingError, signature: ProgramSignatu
             # instead of short-circuiting the binder.
             assert exc.name is not None, "binder always names a missing-required parameter"
             return diagnostic_from_span(
-                f"Missing required program argument: {exc.name!r}",
+                _missing_required_message(exc.name),
                 _span_for(signature, exc.name),
             )
         case ArgumentBindingErrorKind.UNKNOWN_NAME:

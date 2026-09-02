@@ -600,7 +600,7 @@ forward-slash path with no `..` segment; it cannot be computed or passed through
 binding. `resource-dir() -> text` returns the same absolute resource anchor.
 
 Resources in a loose module are anchored at that module's directory. Resources in a
-package-owned module are anchored at the package root, so they remain stable when the
+[package-owned](packages.md) module are anchored at the package root, so they remain stable when the
 module is imported from another project. A module with no backing file has no resource
 anchor, so either call in such a module is a static error. Both calls are constant
 expressions and may initialize root bindings and `builtin var` defaults. They resolve

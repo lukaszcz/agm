@@ -23,6 +23,10 @@ No matching file is an error; more than one matching file is also an error.
 There is no root-priority shadowing. Wildcard imports select matching modules
 from the same global module set.
 
+A module inside a [package](packages.md) has the package name as the first
+segment of its path and may import only its own package, the package's
+declared dependencies, and the standard library.
+
 ## Imports
 
 ```ebnf

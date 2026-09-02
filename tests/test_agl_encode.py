@@ -417,7 +417,8 @@ def test_encode_bytes_are_preserved_across_agent_request_and_parameter_boundarie
         '"target-type": {"$case": "Some", "value": "text"}, '
         '"format-instructions": {"$case": "None"}, "json-schema": {"$case": "None"}, '
         '"attempt": 0, "previous-error": {"$case": "None"}, '
-        '"metadata": {"codec_name": "text", "strict_json": null, "structured_exec": false}}'
+        '"metadata": {"codec_name": "text", "strict_json": null, "structured_exec": false, '
+        '"max_attempts": 1}}'
     )
 
     choice, choice_def = enum_type("Choice", {"None": {}, "One": {"value": IntType()}})

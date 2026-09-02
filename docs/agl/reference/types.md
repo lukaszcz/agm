@@ -382,7 +382,7 @@ for the operation; see [Agent calls](agent-calls.md) for dispatch behavior.
 
 ### `AgentRequest`
 
-`AgentRequest` is the first-attempt text request that `ask-request` builds
+`AgentRequest` is the first-attempt request that `ask-request` builds
 without dispatching an agent (see [Agent calls](agent-calls.md)):
 
 ```text
@@ -397,10 +397,11 @@ record AgentRequest
   metadata:            json
 ```
 
-`target-type` is always `Some("text")`; `format-instructions` and
-`json-schema` are `None` because `ask-request` has a fixed text contract.
-`previous-error` is `None` because it constructs only the first-attempt
-request.
+`target-type`, `format-instructions`, and `json-schema` record the output
+contract selected by the call's type argument and parse-shaping options; the
+latter two are `None` whenever the contract has nothing to state, as for a
+`text` output. `previous-error` is `None` because it constructs only the
+first-attempt request.
 
 ### `SessionTransport`
 

@@ -1901,8 +1901,15 @@ class IrInterpreter:
             case IrSessionOpen() | IrSessionDefault() | IrSessionAsk() | IrSessionOp():
                 return self._eval_session_effect(node)
 
-            case IrAskRequest(agent=agent_expr, prompt=prompt_expr):
-                return self._effects.eval_ir_ask_request(node, agent_expr, prompt_expr)
+            case IrAskRequest(
+                agent=agent_expr,
+                prompt=prompt_expr,
+                contract_id=contract_id,
+                max_attempts=max_attempts,
+            ):
+                return self._effects.eval_ir_ask_request(
+                    node, agent_expr, prompt_expr, contract_id, max_attempts
+                )
 
             case IrExec(
                 command=command_expr,

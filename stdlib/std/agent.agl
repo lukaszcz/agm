@@ -56,10 +56,16 @@ builtin def Agent::ask[T](
   strict-json: bool = false,
   on-parse-error: ParsePolicy = ParsePolicy::Abort,
 ) -> T
-builtin def Agent::ask-request(
+builtin def Agent::ask-request[T](
   self,
   prompt: text,
+  format: text = "",
+  strict-json: bool = false,
+  on-parse-error: ParsePolicy = ParsePolicy::Abort,
 ) -> AgentRequest
-builtin def ask-request(
+builtin def ask-request[T](
   prompt: text,
+  format: text = "",
+  strict-json: bool = false,
+  on-parse-error: ParsePolicy = ParsePolicy::Abort,
 ) -> AgentRequest

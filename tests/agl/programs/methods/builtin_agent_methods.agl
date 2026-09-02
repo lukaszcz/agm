@@ -1,6 +1,6 @@
 # Builtin Agent methods are call-only methods that select their receiver as the
 # agent. The branches cover typed and defaulted ask calls and the free-function
-# ask-request form.
+# ask-request form, typed and untyped.
 param mode: text
 
 program def main() -> unit =
@@ -21,6 +21,10 @@ program def main() -> unit =
     | mode == "request" =>
         let request = ask-request("Prepare a count.")
         print(request.prompt)
+    | mode == "typed-request" =>
+        let request = ask-request::[int] "Prepare a count."
+        print(request.prompt)
+        print(request.target-type)
     | else =>
         let request = ask-request("Prepare a count.")
         print(request.prompt)

@@ -512,8 +512,18 @@ def _builtin_function_signature(
             )
         case "ask-request":
             return FunctionSignature(
-                params=(_std_param("prompt", TextType()),),
+                params=(
+                    _std_param("prompt", TextType()),
+                    _std_param("format", TextType(), has_default=True),
+                    _std_param("strict-json", BoolType(), has_default=True),
+                    _std_param(
+                        "on-parse-error",
+                        BUILTIN_PRELUDE_TYPES["ParsePolicy"],
+                        has_default=True,
+                    ),
+                ),
                 result=BUILTIN_PRELUDE_TYPES["AgentRequest"],
+                type_params=("T",),
             )
         case "exec":
             return FunctionSignature(

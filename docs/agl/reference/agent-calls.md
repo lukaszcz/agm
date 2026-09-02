@@ -562,23 +562,34 @@ See [Host environment](host-environment.md).
 
 ## `ask-request` — the request builder
 
-`ask-request` is the side-effect-free twin of `ask`: it builds a first-attempt
-text `AgentRequest` **without invoking an agent**. Its direct form is:
+`ask-request` is the side-effect-free twin of `ask`: it builds the
+first-attempt `AgentRequest` that the matching `ask` would have dispatched,
+**without invoking an agent**. Its direct form mirrors `ask`'s whole call
+surface:
 
 ```text
-ask-request(prompt: text, agent: Agent = std/config::default-agent) -> AgentRequest
+ask-request[T](
+  prompt: text,
+  agent: Agent = std/config::default-agent,
+  format: text = "",
+  strict-json: bool = false,
+  on-parse-error: ParsePolicy = ParsePolicy::Abort,
+) -> AgentRequest
 ```
 
 The optional named `agent` is captured in the request; `reviewer.ask-request(...)`
-captures its receiver instead. The builder accepts no output-parsing options or
-type arguments. It only assembles the text-output request contract; it never
+captures its receiver instead. The type argument and the parse-shaping options
+select the output contract exactly as they do for `ask`, and the target type
+comes from the type argument alone — never from context, whose expected type
+here is the request record rather than the output the request asks for. Without
+one, the request describes a `text` output, as `ask` does. The builder never
 dispatches, retries, parses, or emits trace events.
 
 <!-- agl-check: fragment -->
 ```agl
-let r = ask-request("Summarize %{topic}")
+let r = ask-request::[Summary]("Summarize %{topic}")
 ```
 
 The result is an `AgentRequest` record (see [Types](types.md)) with `attempt`
-set to `0`, `previous-error` set to `None`, and its fixed text-output contract
+set to `0`, `previous-error` set to `None`, and the requested output contract
 recorded for inspection.

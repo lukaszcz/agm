@@ -29,6 +29,14 @@
       }
     },
     {
+      "name": "typed_ask_request_records_its_output_contract_without_dispatch",
+      "params": {"mode": "typed-request"},
+      "expect": {
+        "stdout_contains": ["Prepare a count.", "int"],
+        "calls": {}
+      }
+    },
+    {
       "name": "ask_request_free_function_is_agent_independent_without_dispatch",
       "params": {"mode": "free"},
       "expect": {

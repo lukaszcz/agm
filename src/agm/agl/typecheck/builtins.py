@@ -437,39 +437,28 @@ class BuiltinCallChecker:
         return self.check_ask_request(node, receiver_type=receiver_type)
 
     def check_ask_request(self, node: Call, *, receiver_type: Type | None = None) -> Type:
-        """Type-check the fixed-text, side-effect-free ``ask-request`` builder."""
-        agent_request_type = self._resolve_host_record_contract("AgentRequest", span=node.span)
+        """Type-check the side-effect-free ``ask-request`` builder.
 
-        if node.type_args:
-            raise AglTypeError(
-                "ask-request does not accept type arguments; it always builds a text request.",
-                span=node.span,
-            )
-        # This reuses prompt and Agent argument type validation, without exposing
-        # ask's parse-shaping options. The obligation still records the fixed text
-        # target so the call site is reported like any other agent call site;
-        # lowering builds the request record itself and allocates no contract.
+        The builder mirrors ``ask``'s whole call surface — target type argument
+        and parse-shaping options alike — and differs only in producing the
+        ``AgentRequest`` that ``ask`` would have dispatched instead of
+        dispatching it. The target type therefore comes from the explicit type
+        argument alone, never from context: the expected type here is the
+        request record, not the output the request asks for.
+        """
+        agent_request_type = self._resolve_host_record_contract("AgentRequest", span=node.span)
+        explicit = self._resolve_explicit_target(node, "ask-request")
+        target_type: Type = explicit if explicit is not None else TextType()
+        self._reject_type_var_target(target_type, node.span)
         # The contract resolved above is threaded through so the coherence walk
         # does not run a second time for this call site.
-        self._validate_ask_like_arguments(
+        self._register_ask_like_obligation(
             node,
-            "ask-request",
-            allowed_named=frozenset() if receiver_type is not None else frozenset({"agent"}),
+            target_type=target_type,
+            result_type=agent_request_type,
+            kind=BuiltinObligationKind.ASK_REQUEST,
             receiver_type=receiver_type,
             agent_request_type=agent_request_type,
-        )
-        self._ctx._register_builtin_obligation(
-            PendingBuiltinObligation(
-                node_id=node.node_id,
-                target_type=TextType(),
-                result_type=agent_request_type,
-                span=node.span,
-                kind=BuiltinObligationKind.ASK_REQUEST,
-                format_name=None,
-                strict_json=None,
-                parse_policy="default",
-                parse_option_spans=(),
-            )
         )
         return agent_request_type
 
@@ -481,6 +470,7 @@ class BuiltinCallChecker:
         result_type: Type,
         kind: BuiltinObligationKind,
         receiver_type: Type | None,
+        agent_request_type: RecordType | None = None,
     ) -> None:
         """Check target-independent syntax, then queue contract materialization."""
         callee = kind.value
@@ -490,6 +480,7 @@ class BuiltinCallChecker:
             allowed_named=self._ASK_ALLOWED_NAMED_ARGS
             - ({"agent"} if receiver_type is not None else set()),
             receiver_type=receiver_type,
+            agent_request_type=agent_request_type,
         )
         format_name, strict_json, parse_policy = self._parse_options(named)
         self._ctx._register_builtin_obligation(
@@ -518,7 +509,7 @@ class BuiltinCallChecker:
         """Check syntax and value arguments that do not need the target type.
 
         *allowed_named* is the caller's permitted named-argument set: ``ask``
-        offers its parse-shaping options, ``ask-request`` only ``agent``, and a
+        and ``ask-request`` share one set of parse-shaping options, and a
         receiver call drops ``agent`` because the receiver already supplies it.
 
         Every ``ask``/``ask-request`` call resolves the ``AgentRequest``
@@ -885,8 +876,9 @@ class BuiltinCallChecker:
         ``explicit_builtin_targets`` side table, keyed by ``node.node_id`` —
         the lowerer's authoritative source for a call's explicit target type,
         needed by ``print``/``render`` whose own checked result type discards
-        it (see ``CheckedModule.explicit_builtin_targets``). ``ask-request``
-        has no output target and therefore does not use this helper.
+        it, and by ``ask-request``, whose result type is the request record
+        rather than the output the request asks for (see
+        ``CheckedModule.explicit_builtin_targets``).
         """
         if not node.type_args:
             return None

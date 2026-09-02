@@ -654,6 +654,8 @@ class EffectHandlers:
         _node: IrAskRequest,
         agent_expr: IrExpr,
         prompt_expr: IrExpr,
+        contract_id: ContractId,
+        max_attempts: int,
     ) -> Value:
         """Handle IrAskRequest: build AgentRequest record without dispatching."""
         agent_value = self._ctx._eval(agent_expr)
@@ -664,6 +666,7 @@ class EffectHandlers:
             )
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
 
+        contract = self._ctx._program.contracts[contract_id]
         agent_request = self._ctx._program.builtin_nominals.resolve("AgentRequest")
         nominals = self._ctx._program.builtin_nominals
         return RecordValue(
@@ -672,20 +675,35 @@ class EffectHandlers:
             fields={
                 "agent": agent_value,
                 "prompt": TextValue(prompt_text),
-                "target-type": some_value(TextValue("text"), nominals=nominals),
-                "format-instructions": none_value(nominals=nominals),
-                "json-schema": none_value(nominals=nominals),
+                "target-type": some_value(TextValue(contract.target_type_label), nominals=nominals),
+                "format-instructions": self._optional_text(contract.format_instructions),
+                "json-schema": (
+                    none_value(nominals=nominals)
+                    if contract.json_schema is None
+                    else some_value(
+                        JsonValue(cast(object, json.loads(contract.json_schema))),
+                        nominals=nominals,
+                    )
+                ),
                 "attempt": IntValue(0),
                 "previous-error": none_value(nominals=nominals),
                 "metadata": JsonValue(
                     {
-                        "codec_name": "text",
-                        "strict_json": None,
-                        "structured_exec": False,
+                        "codec_name": contract.codec_name,
+                        "strict_json": contract.strict_json,
+                        "structured_exec": contract.structured_exec,
+                        "max_attempts": max_attempts,
                     }
                 ),
             },
         )
+
+    def _optional_text(self, text: str) -> Value:
+        """Wrap a contract's optional text field, treating empty as absent."""
+        nominals = self._ctx._program.builtin_nominals
+        if not text:
+            return none_value(nominals=nominals)
+        return some_value(TextValue(text), nominals=nominals)
 
     # ------------------------------------------------------------------
     # Exec call helper

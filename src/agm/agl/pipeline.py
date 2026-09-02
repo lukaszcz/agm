@@ -29,6 +29,7 @@ from agm.agl.eval.ir_interpreter import (
     IrInterpreter,
     ParameterDefaultCycleError,
 )
+from agm.agl.ir.nodes import UseDefault
 from agm.agl.recursion import NestingTooDeepError, frontend_recursion_boundary
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.params import _materialize_ir_contracts, _prepare_ir_params
@@ -497,6 +498,30 @@ class PipelineDriver:
             )
 
         # ----------------------------------------------------------------
+        # Program entry arguments. No host value source feeds a program's own
+        # parameters yet, so every one of them defers to its own default;
+        # a parameter without a default is a pre-execution failure rather
+        # than an interpreter call short of arguments.
+        # ----------------------------------------------------------------
+        program_arguments: "tuple[Value | UseDefault, ...]" = ()
+        if program_symbol is not None:
+            signature = executable.program_signatures[program_symbol]
+            missing_required = [param.name for param in signature if param.required]
+            if missing_required:
+                return RunResult(
+                    ok=False,
+                    diagnostics=[
+                        Diagnostic(message=f"Missing required program argument: {name!r}", line=1)
+                        for name in missing_required
+                    ],
+                    error=None,
+                    warnings=list(warnings),
+                    bindings={},
+                    trace_path=None,
+                )
+            program_arguments = tuple(UseDefault(param_index=i) for i in range(len(signature)))
+
+        # ----------------------------------------------------------------
         # Build and run the interpreter
         # ----------------------------------------------------------------
         from agm.agl.runtime.trace import TraceStore
@@ -552,7 +577,7 @@ class PipelineDriver:
                 builtin_host_settings=interpreter_builtin_settings,
                 process_environment=process_environment,
             )
-            entry_bindings = interp.run(program_symbol=program_symbol)
+            entry_bindings = interp.run(program_symbol=program_symbol, arguments=program_arguments)
         except AglRaise as exc:
             # Uncaught AgL exception (exit code 2 per the CLI contract).
             # ONLY the AgL exception carrier is caught here: an unexpected Python

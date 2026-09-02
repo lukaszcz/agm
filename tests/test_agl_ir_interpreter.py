@@ -2106,7 +2106,9 @@ class TestSelectedProgramExecution:
             program_functions={fn_symbol: fn_id},
         )
 
-        def raise_python_recursion(self: IrInterpreter, symbol: SymbolId) -> Value:
+        def raise_python_recursion(
+            self: IrInterpreter, symbol: SymbolId, arguments: tuple[object, ...]
+        ) -> Value:
             raise RecursionError
 
         monkeypatch.setattr(IrInterpreter, "_invoke_program", raise_python_recursion)

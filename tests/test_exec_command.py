@@ -1325,6 +1325,28 @@ class TestExecCommandExitCodes:
             exec_command.run(args)
         assert exc_info.value.code == 1
 
+    def test_program_with_required_argument_exits_1_without_a_traceback(
+        self, tmp_path: Path
+    ) -> None:
+        """A required program parameter with no supplied value is a clean diagnostic.
+
+        No host value source feeds ``value``, so running exits 1 with a
+        pre-execution diagnostic rather than an unhandled Python exception.
+        """
+        agl_file = tmp_path / "test.agl"
+        write_file_program(agl_file, "program def main(value: int) -> unit = print value\n")
+        args = ExecArgs(
+            file=str(agl_file),
+            param_tokens=[],
+            strict_json=None,
+            max_iters=None,
+            no_log=False,
+            log_file=None,
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(args)
+        assert exc_info.value.code == 1
+
     def test_scoped_param_cli_flag_uses_its_full_path_spelling(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

@@ -21,8 +21,8 @@ from __future__ import annotations
 import decimal
 import inspect
 import sys
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, ContextManager, Protocol, assert_never, cast
+from collections.abc import Callable, Mapping
+from typing import TYPE_CHECKING, ContextManager, Protocol, TypeVar, assert_never, cast
 
 from agm.agl.eval._decimal import AGL_DECIMAL_CONTEXT
 from agm.agl.eval.arith import (
@@ -202,6 +202,8 @@ __all__ = [
 
 
 _SCALAR_ENCODE_PLAN = EncodePlan(ScalarEncode())
+
+_ArgT = TypeVar("_ArgT")
 
 
 def _rebind_host_enum_member(
@@ -972,6 +974,43 @@ class IrInterpreter:
             case other:  # pragma: no cover
                 assert_never(other)
 
+    def _resolve_defaults_and_invoke(
+        self,
+        desc: "FunctionDescriptor",
+        body: IrExpr,
+        closure_val: IrClosureValue,
+        arguments: "tuple[object, ...]",
+        eval_arg: "Callable[[_ArgT], Value]",
+        *,
+        retain_frame: bool = False,
+    ) -> Value:
+        """Resolve each argument against the callee, in one positional pass, then invoke.
+
+        The tail shared by the IR direct-call path (:meth:`_execute_direct_call`)
+        and the program entry point (:meth:`_invoke_program`). A single loop
+        walks *arguments* in parameter order: a plain argument is turned into a
+        value by *eval_arg* (``self._eval`` in the caller frame for a direct
+        call, or the identity function for the program entry point's
+        already-evaluated arguments), and a ``UseDefault`` argument evaluates
+        that parameter's default expression in the callee's captures frame —
+        interleaved in argument order, as an omitted argument does. Every
+        non-``UseDefault`` element of *arguments* is an ``_ArgT``, matching
+        *eval_arg*'s own parameter type; the caller's own signature enforces
+        that, so the per-element cast below only restates it for the type
+        checker.
+        """
+        bound_values: list[Value] = []
+        for param, arg in zip(desc.params, arguments, strict=True):
+            val = (
+                self._eval_default_in_frame(param, dict(closure_val.captures))
+                if isinstance(arg, UseDefault)
+                else eval_arg(cast(_ArgT, arg))
+            )
+            bound_values.append(val)
+        return self._bind_and_invoke(
+            desc, body, closure_val, bound_values, retain_frame=retain_frame
+        )
+
     def _execute_direct_call(
         self,
         fn_id: FunctionId,
@@ -985,8 +1024,10 @@ class IrInterpreter:
         An extern ``function_id`` skips the AgL body entirely and crosses
         into the companion Python module via the effects layer, mirroring
         the host-op dispatch pattern (no call-depth accounting — there is no
-        AgL frame to recurse into).  Otherwise: depth check → evaluate
-        arguments (``UseDefault`` uses a captures frame) → ``_bind_and_invoke``.
+        AgL frame to recurse into).  Otherwise: depth check → single
+        positional pass over *arguments*, evaluating each plain one in the
+        caller frame and each ``UseDefault`` one against the callee's
+        captures frame (:meth:`_resolve_defaults_and_invoke`).
         """
         desc = self._program.functions[fn_id]
         match desc.impl:
@@ -1003,18 +1044,8 @@ class IrInterpreter:
             case IrFunctionBody(body=body):
                 self._check_call_depth()
                 closure_val = self._get_closure_for(fn_id)
-
-                bound_values: list[Value] = []
-                for param, arg in zip(desc.params, arguments, strict=True):
-                    val = (
-                        self._eval_default_in_frame(param, dict(closure_val.captures))
-                        if isinstance(arg, UseDefault)
-                        else self._eval(arg)
-                    )
-                    bound_values.append(val)
-
-                return self._bind_and_invoke(
-                    desc, body, closure_val, bound_values, retain_frame=retain_frame
+                return self._resolve_defaults_and_invoke(
+                    desc, body, closure_val, arguments, self._eval, retain_frame=retain_frame
                 )
             case other:  # pragma: no cover
                 assert_never(other)
@@ -1095,20 +1126,38 @@ class IrInterpreter:
     # Public entry point
     # ------------------------------------------------------------------
 
-    def _program_entry_location(self, symbol: SymbolId) -> Location:
-        """Return the selected ``program def`` body's source location."""
+    def _program_entry(
+        self, symbol: SymbolId
+    ) -> "tuple[FunctionDescriptor, IrFunctionBody, Location]":
+        """Look up a selected ``program def``'s descriptor, body, and entry-point span."""
         descriptor = self._program.functions[self._program.program_functions[symbol]]
         assert isinstance(descriptor.impl, IrFunctionBody)
-        return descriptor.impl.body.location
+        return descriptor, descriptor.impl, descriptor.impl.body.location
 
-    def _invoke_program(self, symbol: SymbolId) -> Value:
-        """Invoke a selected linked ``program def`` with an entry-point error span."""
-        location = self._program_entry_location(symbol)
+    def _program_entry_location(self, symbol: SymbolId) -> Location:
+        """Return the selected ``program def`` body's source location."""
+        return self._program_entry(symbol)[2]
+
+    def _invoke_program(
+        self, symbol: SymbolId, arguments: "tuple[Value | UseDefault, ...]"
+    ) -> Value:
+        """Invoke a selected linked ``program def`` with pre-evaluated arguments.
+
+        Reuses :meth:`_resolve_defaults_and_invoke`, the same tail an ordinary
+        direct call uses, so the entry point binds exactly like a call to the
+        same function descriptor, with an entry-point error span attached to
+        any depth-limit or body error.
+        """
+        desc, impl, location = self._program_entry(symbol)
         try:
-            return self._execute_direct_call(
-                self._program.program_functions[symbol],
-                (),
-                location,
+            self._check_call_depth()
+            closure_val = self._get_closure_for(desc.function_id)
+            return self._resolve_defaults_and_invoke(
+                desc,
+                impl.body,
+                closure_val,
+                arguments,
+                lambda value: value,
                 retain_frame=symbol == self._program.synthetic_main_symbol,
             )
         except AglRaise as exc:
@@ -1116,15 +1165,24 @@ class IrInterpreter:
                 exc.span = location
             raise
 
-    def run(self, *, program_symbol: SymbolId | None = None) -> dict[str, Value]:
+    def run(
+        self,
+        *,
+        program_symbol: SymbolId | None = None,
+        arguments: "tuple[Value | UseDefault, ...]" = (),
+    ) -> dict[str, Value]:
         """Execute all modules in order and return the entry module's public bindings.
 
         Installs every linked module param into the base frame BEFORE any module
         initializer runs, then iterates over all modules in insertion order
         (library modules first, entry last) executing each module's initializers.
         When *program_symbol* is provided, invokes that selected ``program def``
-        before leaving the same managed execution boundary. All evaluation runs
-        under the pinned AgL decimal context.
+        with *arguments* — its own pre-evaluated parameter values, positionally
+        matching its signature, with ``UseDefault`` in place of an omitted
+        defaulted parameter — before leaving the same managed execution
+        boundary. Arguments are bound after every module initializer has run,
+        so a defaulted parameter's default may read module bindings. All
+        evaluation runs under the pinned AgL decimal context.
 
         Python's recursion limit is raised for the duration so the AgL
         ``max_call_depth`` guard is reached before Python's own limit; a Python
@@ -1162,7 +1220,7 @@ class IrInterpreter:
                                 self._eval_and_record_initializer(mod.module_id, node)
                     if program_symbol is not None:
                         try:
-                            self._invoke_program(program_symbol)
+                            self._invoke_program(program_symbol, arguments)
                         except RecursionError:
                             error = self._recursion_error()
                             error.span = self._program_entry_location(program_symbol)

@@ -1,6 +1,6 @@
 # AgL Evaluator
 
-The evaluator interprets the linked program and never imports the frontend. `run()` installs the parameter inventory (host-provided values first, defaults resolved on demand, dependency cycles reported), initializes modules in link order, then invokes the host-selected entry symbol — it never picks one itself — under a pinned decimal context and a recursion boundary. Frames hold `let` and param bindings directly and `var` bindings in shared cells; the base frame is module scope.
+The evaluator interprets the linked program and never imports the frontend. `run()` installs the parameter inventory (host-provided values first, defaults resolved on demand, dependency cycles reported), initializes modules in link order, then invokes the host-selected entry symbol with its pre-evaluated arguments — it never picks a symbol or decodes host values itself — under a pinned decimal context and a recursion boundary. An entry argument is either an already-evaluated value or a `UseDefault` marker, resolved against the entry function's own default expression exactly as an omitted call argument is; direct calls and the program entry share this same value-taking tail, so a defaulted parameter's default may read module bindings established before the entry runs. Frames hold `let` and param bindings directly and `var` bindings in shared cells; the base frame is module scope.
 
 ## Values and Aliasing
 

@@ -15,13 +15,24 @@ Covers:
 from __future__ import annotations
 
 import decimal
+from pathlib import Path
 
 import pytest
 
 from agm.agl.eval.ir_interpreter import IrInterpreter
+from agm.agl.ir.nodes import UseDefault
+from agm.agl.lower.program import lower_program
+from agm.agl.matchcompile import MatchCompiledProgram, compile_program_matches
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import BoolValue, DecimalValue, IntValue, TextValue
-from tests.agl.ir_harness import evaluate_ir, lower_inline_ir
+from agm.agl.typecheck.program import check_program
+from tests.agl.ir_harness import (
+    base_caps,
+    evaluate_ir,
+    lower_inline_ir,
+    make_repl_graph_from_files,
+    resolve_repl_graph,
+)
 
 # ---------------------------------------------------------------------------
 # Basic function call tests
@@ -53,6 +64,29 @@ def test_default_arg_used() -> None:
     ir = evaluate_ir(source)
     assert ir["a"] == IntValue(11)
     assert ir["b"] == IntValue(15)
+
+
+def test_default_and_named_supplied_args_evaluate_in_positional_order() -> None:
+    """A single interleaved pass evaluates arguments in PARAMETER order.
+
+    ``f``'s first parameter is defaulted and its second is supplied by name,
+    so reaching ``f`` requires a named argument that leaves an earlier
+    parameter defaulted. Both the default and the supplied expression have a
+    visible side effect (appending to ``log``): the default for ``a`` must
+    run before the caller-supplied expression for ``b``, matching parameter
+    order rather than "every supplied argument, then every default."
+    """
+    source = (
+        'var log = ""\n'
+        "def note(s: text) -> int =\n"
+        "  log := log + s\n"
+        "  0\n"
+        'def f(a: int = note("a"), b: int = 0) -> unit = ()\n'
+        'f(b = note("b"))\n'
+        "()"
+    )
+    ir = evaluate_ir(source)
+    assert ir["log"] == TextValue("ab")
 
 
 def test_return_coercion() -> None:
@@ -558,6 +592,96 @@ def test_name_target_only_static_root_assignment() -> None:
     (main_symbol,) = executable.program_functions
     ir = IrInterpreter(executable).run(program_symbol=main_symbol)
     assert ir["counter"] == IntValue(5)
+
+
+# ---------------------------------------------------------------------------
+# Program entry: pre-evaluated arguments
+# ---------------------------------------------------------------------------
+
+
+def test_program_entry_runs_with_supplied_argument() -> None:
+    """A ``program def`` parameter binds directly from a pre-evaluated argument."""
+    source = "var result = 0\nprogram def main(x: int) -> unit =\n  result := x\n"
+    executable = lower_inline_ir(source)
+    (main_symbol,) = executable.program_functions
+    ir = IrInterpreter(executable).run(program_symbol=main_symbol, arguments=(IntValue(7),))
+    assert ir["result"] == IntValue(7)
+
+
+def test_program_entry_use_default_reads_module_let(tmp_path: Path) -> None:
+    """A ``UseDefault`` argument's default reads a binding a module INITIALIZER sets.
+
+    ``base`` starts at a sentinel and is overwritten by a later top-level
+    assignment — a genuine module initializer executed in sequence, unlike a
+    static ``let`` value that could equally resolve at declaration time — so
+    seeing the overwritten value pins that program arguments bind after
+    every module initializer has run. A root assignment statement needs the
+    REPL-rooted graph (``lower_inline_ir``'s inline-command entry does not
+    permit one).
+    """
+    source = (
+        "var base = 0\n"
+        "base := 10\n"
+        "var result = 0\n"
+        "program def main(x: int = base) -> unit =\n"
+        "  result := x\n"
+    )
+    graph = make_repl_graph_from_files(tmp_path, {"entry": source})
+    checked = check_program(resolve_repl_graph(graph), base_caps())
+    compiled = compile_program_matches(checked)
+    assert isinstance(compiled.compiled, MatchCompiledProgram)
+    executable = lower_program(compiled.compiled, _entry_source_text=source)
+    (main_symbol,) = executable.program_functions
+    ir = IrInterpreter(executable).run(
+        program_symbol=main_symbol, arguments=(UseDefault(param_index=0),)
+    )
+    assert ir["result"] == IntValue(10)
+
+
+def test_program_entry_raising_default_propagates_like_a_body_raise() -> None:
+    """A raising program-parameter default surfaces with a span, exactly like a body raise."""
+    default_source = (
+        'def bad() -> int = raise Abort(message = "bad default")\n'
+        "program def main(x: int = bad()) -> unit = ()\n"
+    )
+    body_source = 'program def main() -> unit =\n  raise Abort(message = "bad body")\n'
+
+    default_executable = lower_inline_ir(default_source)
+    (default_symbol,) = default_executable.program_functions
+    with pytest.raises(AglRaise) as default_exc_info:
+        IrInterpreter(default_executable).run(
+            program_symbol=default_symbol, arguments=(UseDefault(param_index=0),)
+        )
+
+    body_executable = lower_inline_ir(body_source)
+    (body_symbol,) = body_executable.program_functions
+    with pytest.raises(AglRaise) as body_exc_info:
+        IrInterpreter(body_executable).run(program_symbol=body_symbol, arguments=())
+
+    assert default_exc_info.value.exc.display_name == "Abort"
+    assert default_exc_info.value.span is not None
+    assert body_exc_info.value.span is not None
+    assert type(default_exc_info.value.span) is type(body_exc_info.value.span)
+
+
+def test_program_entry_with_no_parameters_takes_empty_arguments() -> None:
+    """A parameterless program's entry call is unaffected by the ``arguments`` default."""
+    source = "var result = 0\nprogram def main() -> unit =\n  result := 1\n"
+    executable = lower_inline_ir(source)
+    (main_symbol,) = executable.program_functions
+    ir = IrInterpreter(executable).run(program_symbol=main_symbol, arguments=())
+    assert ir["result"] == IntValue(1)
+
+
+def test_program_entry_depth_limit_error_carries_entry_span() -> None:
+    """The depth-limit error raised directly at the program entry carries an entry-point span."""
+    source = "program def main() -> unit =\n  ()\n"
+    executable = lower_inline_ir(source)
+    (main_symbol,) = executable.program_functions
+    with pytest.raises(AglRaise) as exc_info:
+        IrInterpreter(executable, max_call_depth=0).run(program_symbol=main_symbol, arguments=())
+    assert exc_info.value.exc.display_name == "RecursionError"
+    assert exc_info.value.span is not None
 
 
 def test_root_parameter_through_nested_positions_and_pattern_locals() -> None:

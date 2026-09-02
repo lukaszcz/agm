@@ -516,7 +516,11 @@ ask "Hello?"          # equivalent to ask("Hello?")
 print res.stdout      # field-access path is valid sugar argument
 print classify(x)     # equivalent to print(classify(x))
 f Option::Some(value = 1)  # equivalent to f(Option::Some(value = 1))
+ask::[int] "How many?"     # equivalent to ask::[int]("How many?")
 ```
+
+A callee's explicit type arguments carry over to the sugar, so `f::[int] x`
+is the typed call `f::[int](x)`.
 
 Application binds **tighter than all operators**:
 

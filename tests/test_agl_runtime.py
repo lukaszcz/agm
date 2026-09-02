@@ -2188,17 +2188,6 @@ class TestRuntimeErrorPaths:
         assert result.diagnostics == []
         assert capsys.readouterr().out == '"hello"\n[\n  1,\n  2\n]\n{\n  "a": 1\n}\n'
 
-    def test_is_json_shaped_dict_with_non_str_key_is_false(self) -> None:
-        """_is_json_shaped: a dict with non-str keys is not JSON-shaped (covers
-        the dict branch of _is_json_shaped).
-        """
-        from agm.agl.runtime.params import _is_json_shaped
-
-        # Dict with non-str key.
-        assert _is_json_shaped({1: "a"}) is False
-        # Dict with str keys and JSON-shaped values.
-        assert _is_json_shaped({"k": 1}) is True
-
 
 class TestUniformRenderingInPrompts:
     """Uniform rendering: no boundary tags in agent prompts."""

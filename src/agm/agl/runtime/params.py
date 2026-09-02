@@ -5,12 +5,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import Diagnostic
+from agm.agl.runtime.arguments import decode_param_value
 from agm.config.engine_keys import ENGINE_KEYS
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from agm.agl.ir.contracts import ParamDecoder
     from agm.agl.ir.ids import ContractId, SymbolId
     from agm.agl.ir.program import ExecutableProgram, IrParam
     from agm.agl.runtime.codec import OutputCodec
@@ -96,47 +96,6 @@ def engine_default_settings() -> "dict[str, Value]":
     return build_engine_config_seeds(
         {spec.name: spec.default for spec in ENGINE_KEYS if spec.has_default}
     )
-
-
-def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
-    """Decode a raw host param value against *decoder* into a typed ``Value``.
-
-    The single decode path shared by IR param binding (:func:`_prepare_ir_params`)
-    and the REPL/config param path (:func:`convert_param_value`).  ``text`` params
-    are taken verbatim; every other value crosses the canonical JSON boundary
-    (strict parse, integral-decimal normalization, JSON-Schema validation, then
-    the typeless :func:`decode_value` walk).
-
-    :raises StrictJsonParseError: if a textual/native value is not strict JSON.
-    :raises ValueError: on a type/shape mismatch or schema-validation failure.
-    """
-    from agm.agl.runtime.convert import (
-        _clean_validation_message,
-        decode_value,
-        normalize_integral_decimals,
-        parse_json_strict,
-        validator_for_schema,
-    )
-    from agm.agl.runtime.serialize import dumps_exact
-
-    if decoder.text_verbatim:
-        if not isinstance(raw, str):
-            raise ValueError(f"expected a text value (str), got {type(raw).__name__}")
-        obj: object = raw
-    elif isinstance(raw, str):
-        obj = parse_json_strict(raw)
-    elif _is_json_shaped(raw):
-        # Native host values cross the same canonical JSON boundary as textual
-        # values. In particular, Python floats become Decimal through
-        # parse_float=Decimal before typed decoding.
-        obj = parse_json_strict(dumps_exact(raw, indent=None))
-    else:
-        raise ValueError(f"expected a JSON-compatible value, got {type(raw).__name__}")
-    normalized = normalize_integral_decimals(obj)
-    validation_errors = list(validator_for_schema(decoder.json_schema).iter_errors(normalized))
-    if validation_errors:
-        raise ValueError(_clean_validation_message(validation_errors[0]))
-    return decode_value(decoder.decode, normalized, dict(decoder.defs))
 
 
 def decode_or_diagnose_param(
@@ -304,25 +263,3 @@ def convert_config_value(
         inner: AglType = key_type.type_args[0] if key_type.type_args else TextType()
         return some_value(convert_param_value(name, raw, inner, table))
     return convert_param_value(name, raw, key_type, table)
-
-
-def _is_json_shaped(obj: object) -> bool:
-    """Return ``True`` iff *obj* is a JSON-compatible Python value.
-
-    The closed set: ``None``, ``bool``, ``int``, ``float``,
-    ``decimal.Decimal``, ``str``, ``list`` (elements recursively JSON-shaped),
-    and ``dict`` (str keys, values recursively JSON-shaped).
-
-    Used by :func:`convert_param_value` to detect non-JSON-shaped host objects
-    (e.g. sets or custom classes) before attempting serialisation, so the
-    caller can emit a clean diagnostic instead of a cryptic traceback.
-    """
-    import decimal as _decimal_mod
-
-    if obj is None or isinstance(obj, (bool, int, float, str, _decimal_mod.Decimal)):
-        return True
-    if isinstance(obj, list):
-        return all(_is_json_shaped(e) for e in obj)
-    if isinstance(obj, dict):
-        return all(isinstance(k, str) and _is_json_shaped(v) for k, v in obj.items())
-    return False

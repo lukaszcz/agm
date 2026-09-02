@@ -7,8 +7,8 @@ import json
 import pytest
 
 from agm.agl.ir.ids import NominalId
+from agm.agl.runtime.arguments import decode_param_value
 from agm.agl.runtime.convert import decode_value
-from agm.agl.runtime.params import decode_param_value
 from agm.agl.runtime.serialize import dumps_exact, encode_value
 from agm.agl.semantics.type_table import TypeDef
 from agm.agl.semantics.types import (

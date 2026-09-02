@@ -95,7 +95,7 @@ from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import build_repl_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program_seeded
-from agm.agl.runtime.params import decode_param_value
+from agm.agl.runtime.arguments import decode_param_value
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import ScopeNode
 from agm.agl.semantics.types import (

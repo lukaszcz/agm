@@ -10,6 +10,8 @@
 
 Preparation records every `program def` with its module and scope path, and the `param` inventory of the selected program module's transitive imports, so a host can select an entry and wire parameters before execution. `agm exec` exposes params as CLI flags ([cli.md](../cli.md)) and resolves each as external value > source default > required error; the REPL takes imported-module params from configuration. The selected entry runs after module initialization inside the interpreter's normal boundary. `agm check` uses `check_prepared`, which stops after lowering and binds no parameters, so a required param without a default is accepted.
 
+`agl/runtime/arguments.py` holds the host-side counterpart for a `program def`'s own value parameters (as opposed to module `param` declarations): `ProgramArguments` carries a host's raw positional/named values, and `bind_program_arguments` runs them through the shared zone binder (`agl/semantics/arguments.py`) and decodes each supplied value through its `ParamDecoder`. A structural violation (unknown name, duplicate, positional overflow, a positional-only parameter supplied by name) is reported as a single pre-execution diagnostic; a missing required parameter or a decode failure is reported for every offending parameter, not just the first. `ProgramSignature.fuse` pairs an executable's per-parameter decoders with a declaration's spans and types by name, so the two independent descriptions can never be mismatched by position.
+
 ## Engine Settings and Host Seeds
 
 Engine settings (`default-agent`, `log`, `log-file`, `strict-json`, `max-iters`, `timeout`) are root `builtin var` bindings of `std/config`, catalogued in `config/engine_keys.py` ([config.md](../config.md)). Hosts seed them, and any other host-backed binding, through typed `builtin_var_seeds` keyed by module, scope path, and name; a source write overrides a seed from its program point onward, and the evaluator routes each write by the catalog's consuming side — a live interpreter field or a host-consumed register.
@@ -28,5 +30,6 @@ The compiler carries self-checks that re-verify artifacts it just produced (chec
 
 - `src/agm/agl/pipeline.py` — `PipelineDriver`: preparation, checking, execution, host-environment assembly.
 - `src/agm/agl/capabilities.py`, `diagnostics.py`, `recursion.py`, `setting_overrides.py`, `self_validation.py` — the host-facing leaves.
+- `src/agm/agl/runtime/arguments.py` — `program def` argument binding and decoding; `src/agm/agl/runtime/params.py` — module `param` and engine-setting decoding/config helpers.
 - `src/agm/commands/exec_program.py`, `check.py`, `repl.py` — the CLI hosts; `src/agm/cli_support/` — parameter discovery and engine-setting seeds.
-- Tests: `tests/test_agl_pipeline_*.py`, `test_exec_*.py`, `test_check_command.py`, `test_default_agent_setting.py`, `test_agl_self_validation.py`.
+- Tests: `tests/test_agl_pipeline_*.py`, `test_exec_*.py`, `test_check_command.py`, `test_default_agent_setting.py`, `test_agl_self_validation.py`, `test_agl_runtime_arguments.py`.

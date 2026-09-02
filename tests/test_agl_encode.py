@@ -28,7 +28,7 @@ from agm.agl.ir.contracts import (
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.operations import ToJson
 from agm.agl.modules.ids import ENTRY_ID
-from agm.agl.runtime.params import decode_param_value
+from agm.agl.runtime.arguments import decode_param_value
 from agm.agl.runtime.serialize import (
     dumps_exact,
     encode_value,

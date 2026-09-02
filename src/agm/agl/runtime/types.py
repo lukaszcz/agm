@@ -9,12 +9,14 @@ from agm.agl.modules.ids import ENTRY_DISPLAY
 
 if TYPE_CHECKING:
     from agm.agl.capabilities import HostCapabilities
+    from agm.agl.ir.zones import ParamZone
     from agm.agl.modules.ids import ModuleId
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.externs import ExternRegistry
     from agm.agl.runtime.sessions import SessionHost
     from agm.agl.semantics.types import Type as AglType
+    from agm.agl.syntax.spans import SourceSpan
 
 __all__ = [
     "ENTRY_PARAM_QUALIFIER",
@@ -22,6 +24,7 @@ __all__ = [
     "HostEnvironment",
     "ParamDeclInfo",
     "ProgramDeclInfo",
+    "ProgramParamInfo",
     "public_param_spelling",
 ]
 
@@ -98,18 +101,41 @@ class CallSiteInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class ProgramParamInfo:
+    """Static summary of one ``program def`` value parameter, as the host sees it.
+
+    ``name``         — the declared parameter name.
+    ``kind``         — the parameter's zone (positional-only, standard,
+                        named-only), governing how a host projects it.
+    ``type``         — the parameter's checked type.
+    ``has_default``  — ``True`` when the parameter has a default expression.
+    ``span``         — the parameter's declaration span, the anchor for a
+                        binding or decode diagnostic naming this parameter.
+    """
+
+    name: str
+    kind: "ParamZone"
+    type: "AglType"
+    has_default: bool
+    span: "SourceSpan"
+
+
+@dataclass(frozen=True, slots=True)
 class ProgramDeclInfo:
     """Static summary of one ``program def`` declaration.
 
     ``module`` and ``scope_path`` retain the declaration identity in structured
     form. ``declaration_path`` is the external spelling within that module;
     ``qualified_path`` prefixes it with a non-entry module route.
+    ``parameters`` is the program's own value-parameter signature, in
+    declaration order.
     """
 
     module: "ModuleId"
     scope_path: tuple[str, ...]
     name: str
     node_id: int
+    parameters: tuple[ProgramParamInfo, ...] = ()
 
     @property
     def declaration_path(self) -> str:

@@ -31,7 +31,7 @@ against a hand-written literal that has no way to know the real declaration
 identity — most equality assertions against a literal, since identity
 participates in ``RecordType``/``EnumType``/``ExceptionType`` equality.
 
-``agent_value`` builds a runtime ``std/core::Agent`` enum value directly, for
+``agent_value`` builds a runtime ``std/prelude::Agent`` enum value directly, for
 tests that need one as an expected value, a seeded host setting, or a request
 payload without going through source parsing.
 """
@@ -441,7 +441,7 @@ def option_nominal_descriptors(
 
 
 def agent_value(variant: str, **fields: str) -> RecordValue:
-    """Build the runtime ``std/core::Agent`` enum value for *variant*.
+    """Build the runtime ``std/prelude::Agent`` enum value for *variant*.
 
     Each keyword becomes a text-valued field, matching every ``Agent``
     variant's payload shape (``command``, ``model``/``thinking``, etc.); pass

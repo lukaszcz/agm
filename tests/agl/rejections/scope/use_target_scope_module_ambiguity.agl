@@ -1,8 +1,8 @@
-import std/core
-use core::*
+import std/prelude
+use prelude::*
 
-scope core
+scope prelude
   def local() -> int = 1
-end core
+end prelude
 
 program def main() -> unit = ()

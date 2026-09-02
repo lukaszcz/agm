@@ -42,7 +42,7 @@ def _array_companion() -> _ArrayCompanion:
         {
             _INDEX_ERROR: NominalDescriptor(
                 nominal=_INDEX_ERROR,
-                module_id=ModuleId(("std", "core")),
+                module_id=ModuleId(("std", "prelude")),
                 scope_path=(),
                 declared_name="IndexError",
                 kind=NominalKind.EXCEPTION,

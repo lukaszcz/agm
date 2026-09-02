@@ -64,7 +64,7 @@ class BuiltinNominals:
         declares nothing for answers with the shipped standard library's own
         reserved identity for it (see ``ir.reserved_nominals``) and its bare
         name. Reserved ids are fallback identities, not identities assigned
-        to a parsed ``std/core`` declaration.
+        to a parsed ``std/prelude`` declaration.
 
         Identity and spelling are resolved together so a value can never be
         stamped with one declaration's identity and another's spelling.

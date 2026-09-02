@@ -380,7 +380,7 @@ def test_use_after_a_non_header_region_item_is_rejected() -> None:
     "source",
     (
         # `std/config` (a real module distinct from the auto-imported
-        # `std/core`) stands in for a placeholder library name so the real
+        # `std/prelude`) stands in for a placeholder library name so the real
         # module graph these are now built through can actually load the
         # import; content doesn't matter here since placement is checked
         # before any import content is consulted.

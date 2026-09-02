@@ -55,7 +55,7 @@ from typing import Literal, Protocol, TypeGuard, assert_never, cast
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic, static_root_message
 from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, STD_OPTION_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_OPTION_ID, STD_PRELUDE_ID, ModuleId
 from agm.agl.scope.imports import (
     qualification_repair_guidance,
 )
@@ -943,7 +943,7 @@ class _Checker:
                 is_method=is_method,
                 method_receiver=method_receiver,
                 method_receiver_name=method_receiver_name,
-                allow_stdlib_session_declaration=self._module_id == STD_CORE_ID,
+                allow_stdlib_session_declaration=self._module_id == STD_PRELUDE_ID,
                 static_kind=static_kind,
             )
             if not any(

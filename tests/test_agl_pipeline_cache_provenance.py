@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.matchcompile import MatchCompiledProgram, compile_program_matches
-from agm.agl.modules.ids import STD_CORE_ID
+from agm.agl.modules.ids import STD_PRELUDE_ID
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import (
     ArtifactProvenanceError,
@@ -92,7 +92,7 @@ def test_program_discovery_rejects_cached_artifact_with_different_entry_identity
     assert discovery.compiled is not None
     wrong_entry_checked = replace(
         discovery.compiled.checked,
-        entry_id=STD_CORE_ID,
+        entry_id=STD_PRELUDE_ID,
     )
     wrong_entry_compiled = MatchCompiledProgram(
         checked=wrong_entry_checked,

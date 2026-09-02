@@ -385,7 +385,7 @@
     (should-not (eq (agl-flt--face-of "+") agl--operator-face))))
 
 (ert-deftest agl-flt-symbolic-operator-name-is-one-operator-token ()
-  ;; `std/core' declares `|>', `<|', `>>' and `<<'; a program may declare any
+  ;; `std/prelude' declares `|>', `<|', `>>' and `<<'; a program may declare any
   ;; other spelling.  However many characters an operator name has, all of them
   ;; carry the operator face -- none is split off as a delimiter.
   (dolist (op '("|>" "<|" ">>" "<<" "<$>"))

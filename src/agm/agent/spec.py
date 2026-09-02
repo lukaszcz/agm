@@ -31,7 +31,7 @@ __all__ = [
 class SessionTransport(StrEnum):
     """The ways a session backend can drive an agent.
 
-    The member values are also the ``std/core::SessionTransport`` member names,
+    The member values are also the ``std/prelude::SessionTransport`` member names,
     so a specification's default crosses into AgL without translation.
     """
 
@@ -172,7 +172,7 @@ class AgentPi:
 
 AgentSpec: TypeAlias = AgentCommand | AgentClaude | AgentCodex | AgentPi
 
-#: Runtime projection of the checked ``std/core::Agent`` variants.
+#: Runtime projection of the checked ``std/prelude::Agent`` variants.
 AGENT_SPECS: Mapping[str, type[AgentSpec]] = MappingProxyType(
     {
         "AgentCommand": AgentCommand,

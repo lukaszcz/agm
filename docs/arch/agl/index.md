@@ -39,7 +39,7 @@ AgL has no statement category. Bindings, assignment, loops, and `if` without `el
 
 ## Programs and Modules
 
-A **program** is the entry module plus its transitive import and re-export dependencies; scope, typecheck, match compilation, and lowering are whole-program passes with no standalone per-module entry point. A `program def` is an ordinary function that is also a host-discoverable entry. Every module except `std/core` receives the `std/core` prelude unless the host disables it. Module loading, visibility, and the compilation caches are in [modules.md](modules.md).
+A **program** is the entry module plus its transitive import and re-export dependencies; scope, typecheck, match compilation, and lowering are whole-program passes with no standalone per-module entry point. A `program def` is an ordinary function that is also a host-discoverable entry. Every module except `std/prelude` receives the `std/prelude` prelude unless the host disables it. Module loading, visibility, and the compilation caches are in [modules.md](modules.md).
 
 ## Package Map
 

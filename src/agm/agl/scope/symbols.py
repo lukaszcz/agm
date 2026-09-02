@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import TypeAlias as TypingTypeAlias
 
 from agm.agl.diagnostics import AglError
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_PRELUDE_ID, ModuleId
 from agm.agl.semantics.types import EnumType, RecordType, TypeVarType
 from agm.agl.syntax.nodes import (
     EnumDef,
@@ -139,7 +139,7 @@ BUILTIN_CALL_NAMES: dict[str, BuiltinKind] = {
 # identity, so similarly named user types and enum variants remain ordinary
 # declarations. Their final segments therefore remain ordinary names.
 BUILTIN_TYPE_STATICS: dict[tuple[ModuleId, ScopePath], dict[str, BuiltinStaticKind]] = {
-    (STD_CORE_ID, ("Session",)): {
+    (STD_PRELUDE_ID, ("Session",)): {
         "open": BuiltinStaticKind.SESSION_OPEN,
         "default": BuiltinStaticKind.SESSION_DEFAULT,
     },

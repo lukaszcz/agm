@@ -68,7 +68,7 @@ _CAPS = HostCapabilities(
 _TYPE_REJECTIONS_DIR = Path(__file__).resolve().parent / "agl" / "rejections" / "type"
 
 # ``check_extern``/``resolve_program_ast`` build a hand-crafted single-module
-# graph that never imports ``std/core`` (see
+# graph that never imports ``std/prelude`` (see
 # ``tests.agl.module_graph.resolve_and_check_program_ast``), so a bare
 # ``ask(...)`` call in one of these sources needs its own reachable
 # declaration: a bare built-in call is classified only once it resolves to a

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.modules.ids import STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import STD_PRELUDE_ID, ModuleId
 from agm.agl.modules.loader import load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.scope import AglScopeError
@@ -35,7 +35,7 @@ from tests.agl.module_graph import resolve_and_check_inline_entry, resolve_inlin
 
 _ROOTS = RootSet(frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
 _CAPS = HostCapabilities()
-_STD_CORE = Path(__file__).resolve().parents[1] / "stdlib" / "std" / "core.agl"
+_STD_PRELUDE = Path(__file__).resolve().parents[1] / "stdlib" / "std" / "prelude.agl"
 _STD_OPTION = Path(__file__).resolve().parents[1] / "stdlib" / "std" / "option.agl"
 
 
@@ -62,7 +62,7 @@ def test_no_stdlib_reports_bare_print_as_undefined() -> None:
 
 def test_no_stdlib_still_allows_explicit_std_core_import() -> None:
     _check(
-        "import std/core::*\nlet x: Option[int] = Some(value = 1)\nx\n",
+        "import std/prelude::*\nlet x: Option[int] = Some(value = 1)\nx\n",
         default_stdlib=False,
     )
 
@@ -83,7 +83,7 @@ def test_stdlib_ask_signature_is_context_inferred_with_optional_arguments() -> N
     )
     resolved = resolve_program(graph)
     checked = check_program(resolved, _CAPS)
-    std_core = checked.modules[ModuleId.from_path("std/core")]
+    std_core = checked.modules[ModuleId.from_path("std/prelude")]
 
     ask_sig = std_core.function_signatures["ask"]
 
@@ -177,7 +177,7 @@ def test_std_core_declares_every_public_builtin() -> None:
     from agm.agl.parser import parse_program
     from agm.agl.syntax.nodes import EnumDef, ExceptionDef, FuncDef, RecordDef
 
-    program = parse_program(_STD_CORE.read_text())
+    program = parse_program(_STD_PRELUDE.read_text())
     records = {
         item.name for item in program.body.items if isinstance(item, RecordDef) and item.is_builtin
     }
@@ -209,7 +209,7 @@ def test_std_core_declares_every_public_builtin() -> None:
     assert statics == {
         ("::".join(owner_path), static_name)
         for (module_id, owner_path), names in BUILTIN_TYPE_STATICS.items()
-        if module_id == STD_CORE_ID
+        if module_id == STD_PRELUDE_ID
         for static_name in names
     }
 
@@ -248,7 +248,7 @@ def test_std_core_source_builtin_shape_is_not_masked_by_seed(
     tmp_path: Path,
 ) -> None:
     stdlib_root = tmp_path / "stdlib"
-    core_path = stdlib_root / "std" / "core.agl"
+    core_path = stdlib_root / "std" / "prelude.agl"
     core_path.parent.mkdir(parents=True)
     core_path.write_text("builtin enum Agent\n  | AgentCommand(command: int)\n")
     graph = load_graph(
@@ -347,7 +347,7 @@ def test_lowerer_skips_builtin_function_definitions() -> None:
 
 def test_copy_and_shallow_copy_source_declared_calls_are_classified() -> None:
     """Runs without the standard library: ``copy``/``shallow_copy`` are
-    ``std/core``'s own built-in names too, so declaring them again while it
+    ``std/prelude``'s own built-in names too, so declaring them again while it
     is loaded would be a duplicate rather than exercising this call-site
     classification."""
     _check(
@@ -369,8 +369,8 @@ def test_source_defined_exception_extends_base_with_message() -> None:
 
 def test_builtin_exception_constructor_resolves_without_the_standard_library() -> None:
     """``Abort`` is a host builtin identity available whether or not
-    ``std/core`` is loaded — the scope resolver seeds its constructor
-    candidate ambiently (module id ``std/core``) regardless. With the
+    ``std/prelude`` is loaded — the scope resolver seeds its constructor
+    candidate ambiently (module id ``std/prelude``) regardless. With the
     standard library switched off, that candidate's owner has no entry in
     the shared whole-program type table (built only from each module's own,
     non-builtin declarations), so resolving it must fall back to the local

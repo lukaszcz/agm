@@ -36,10 +36,10 @@ Flag notes:
       are declared, ``-p``/``--program`` selects one by declaration path. A file
       must declare at least one program; inline ``-c`` statements are wrapped in
       a synthetic ``program def main`` before scope resolution.
-    - Every loaded entry and library module receives a ``std/core`` glob import
-      by default (except ``std/core`` itself). An explicit import whose expansion
-      includes ``std/core`` supplies its core contribution instead, so plain
-      ``import std/core`` leaves core names qualified-only. ``--no-stdlib``
+    - Every loaded entry and library module receives a ``std/prelude`` glob import
+      by default (except ``std/prelude`` itself). An explicit import whose expansion
+      includes ``std/prelude`` supplies the prelude contribution instead, so plain
+      ``import std/prelude`` leaves prelude names qualified-only. ``--no-stdlib``
       disables the automatic import throughout the loaded program. Ordinary imports are
       qualified by default; tails and ``use`` declarations make names bare.
     - A program reads and writes the engine settings (``strict-json``,

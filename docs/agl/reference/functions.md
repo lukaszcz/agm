@@ -127,7 +127,7 @@ next line.
 
 `builtin def` declares a function implemented by the host, so it has no body.
 Its return type annotation is required. The declared name and signature must
-match a recognized built-in exactly. This form is used by `std/core`; ordinary
+match a recognized built-in exactly. This form is used by `std/prelude`; ordinary
 programs normally call those declarations through the default standard-library
 import instead of redeclaring them.
 
@@ -143,7 +143,7 @@ only once at that path across the program. This lets a root `ask` coexist with
 `Agent::ask`, while still preventing a second declaration at either exact path.
 A program loading the default standard library, as it does unless started with
 `--no-stdlib` (see [Modules](modules.md#prelude)), therefore cannot redeclare
-a `std/core` builtin at the same scoped name.
+a `std/prelude` builtin at the same scoped name.
 
 `builtin` is a declaration modifier: it may precede `def` on the same line or
 on the line directly above it (the newline after the modifier is
@@ -334,7 +334,7 @@ program def main() -> unit =
 The `self` spelling is special only in this receiver position. An annotated
 `self` elsewhere is an ordinary parameter. `def` and `extern def` may declare
 methods. A `builtin def` may also declare a host method when its signature is a
-recognized host contract: the standard core declares `Agent::ask` and
+recognized host contract: the standard library declares `Agent::ask` and
 `Agent::ask`. This method uses the same selection and receiver rules,
 but are call-only rather than bound function values; see [Agent calls](agent-calls.md).
 

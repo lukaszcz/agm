@@ -20,7 +20,7 @@ from agm.agl.ir.reserved_nominals import (
     RESERVED_NOMINAL_NAMES,
     reserved_nominal_id,
 )
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, STD_OPTION_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_OPTION_ID, STD_PRELUDE_ID, ModuleId
 from agm.agl.repl import ReplSession
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.analyses import (
@@ -96,7 +96,7 @@ def _check(src: str, *, default_stdlib: bool = True) -> CheckedModule:
 def test_builtin_member_identity_falls_back_for_non_enum_prelude_types() -> None:
     assert (
         source_enum_member_decl_id(
-            STD_CORE_ID,
+            STD_PRELUDE_ID,
             (),
             "ExecResult",
             "not-a-member",
@@ -2010,19 +2010,21 @@ class TestBuiltinSeeding:
     def test_all_prelude_types_resolvable(self) -> None:
         table = create_seeded_type_table()
         for name, typ in BUILTIN_PRELUDE_TYPES.items():
-            typedef = table.get(STD_CORE_ID, name)
+            typedef = table.get(STD_PRELUDE_ID, name)
             assert typedef is not None
             expected = BUILTIN_PRELUDE_TYPE_DEFS[name]
             if isinstance(typ, RecordType):
-                handle = RecordType(name=name, module_id=STD_CORE_ID, decl_id=typedef.decl_node_id)
+                handle = RecordType(
+                    name=name, module_id=STD_PRELUDE_ID, decl_id=typedef.decl_node_id
+                )
                 assert dict(table.record_fields(handle)) == dict(expected.fields)
             elif isinstance(typ, ExceptionType):
                 handle = ExceptionType(
-                    name=name, module_id=STD_CORE_ID, decl_id=typedef.decl_node_id
+                    name=name, module_id=STD_PRELUDE_ID, decl_id=typedef.decl_node_id
                 )
                 assert table.exception_def(handle) == expected
             else:
-                handle = EnumType(name=name, module_id=STD_CORE_ID, decl_id=typedef.decl_node_id)
+                handle = EnumType(name=name, module_id=STD_PRELUDE_ID, decl_id=typedef.decl_node_id)
                 result = _enum_fields(table, handle)
                 assert {v: dict(f) for v, f in result.items()} == {
                     member.name: dict(table.record_fields(member)) for member in expected.members
@@ -2588,7 +2590,7 @@ class TestCastClassification:
 
     def test_exception_to_json_total(self) -> None:
         table = create_seeded_type_table()
-        source = ExceptionType(name="Abort", module_id=STD_CORE_ID)
+        source = ExceptionType(name="Abort", module_id=STD_PRELUDE_ID)
         assert cast_classification(source, JsonType(), table) == CastKind.TOTAL_JSON
 
     def test_array_of_record_to_json_total(self) -> None:
@@ -4185,7 +4187,7 @@ class TestDeclarationIdentity:
         decl_ids = [
             handle.decl_id
             for mid, module in checked.modules.items()
-            if not mid.is_entry and mid != STD_CORE_ID
+            if not mid.is_entry and mid != STD_PRELUDE_ID
             for handle in [module.type_env.get_type("Point")]
             if isinstance(handle, RecordType)
         ]
@@ -4196,13 +4198,13 @@ class TestDeclarationIdentity:
     def test_stdlib_declarations_of_reserved_names_adopt_their_source_identity(
         self, tmp_path: Path
     ) -> None:
-        """Loading ``std/core`` selects its declarations over the reserved
+        """Loading ``std/prelude`` selects its declarations over the reserved
         fallbacks without making their identity depend on the module path."""
         checked = _check_program(tmp_path, {"entry": "()"})
         declared_reserved = set(RESERVED_NOMINAL_NAMES) - COMPATIBILITY_PRELUDE_TYPE_NAMES
         assert "Option" in declared_reserved
         for name in sorted(declared_reserved):
-            module = checked.modules[STD_OPTION_ID if name == "Option" else STD_CORE_ID]
+            module = checked.modules[STD_OPTION_ID if name == "Option" else STD_PRELUDE_ID]
             declarations = {
                 item.name: item
                 for item in module.resolved.program.body.items

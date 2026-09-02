@@ -301,7 +301,7 @@ indented; the resulting indentation column is returned."
 ;; --- A well-formatted file is a fixed point ---
 
 (ert-deftest agl-ind-formatted-source-round-trips ()
-  (let ((text (concat "import std/core\n"
+  (let ((text (concat "import std/prelude\n"
                       "\n"
                       "record Point\n"
                       "  var x: int\n"

@@ -426,7 +426,7 @@ constructor's own scope** depends on whether the constructor stays reachable:
   reachable qualified. The claiming declaration owns expression position,
   while case-pattern constructor lookup stays independent.
 - A constructor **declared in another module** may be claimed, since module
-  qualification still reaches it. This covers the **standard core** names —
+  qualification still reaches it. This covers the **prelude** names —
   exception types (`Abort`, `AgentParseError`, …), enum members (`Some`,
   `Retry`, …), and records (`ExecResult`, `AgentRequest`). They are
   conveniences, not reserved words.

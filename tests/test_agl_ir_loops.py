@@ -49,7 +49,7 @@ from agm.agl.ir.program import (
 )
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
 from agm.agl.ir.validate import validate_ir
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
+from agm.agl.modules.ids import ENTRY_ID, STD_PRELUDE_ID
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import (
     VOID_VALUE,
@@ -99,7 +99,7 @@ def _make_minimal_program(
     nominals = {
         max_iter_nominal: NominalDescriptor(
             nominal=max_iter_nominal,
-            module_id=STD_CORE_ID,
+            module_id=STD_PRELUDE_ID,
             scope_path=(),
             declared_name="MaxIterationsExceeded",
             kind=NominalKind.EXCEPTION,

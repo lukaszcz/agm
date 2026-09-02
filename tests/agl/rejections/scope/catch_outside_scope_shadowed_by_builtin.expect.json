@@ -1,1 +1,1 @@
-{"diagnostic": {"message_contains": ["ExecError", "std/core::ExecError"]}}
+{"diagnostic": {"message_contains": ["ExecError", "std/prelude::ExecError"]}}

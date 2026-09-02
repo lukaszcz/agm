@@ -168,7 +168,7 @@ class TestPersistence:
         assert agent.calls == 1
 
     def test_shell_timeout_seed_matches_loaded_option_members(self) -> None:
-        """A REPL timeout seed remains matchable after loading ``std/core``."""
+        """A REPL timeout seed remains matchable after loading ``std/prelude``."""
         session = open_session(shell_exec_timeout=2.0)
 
         result = session.eval_entry(
@@ -1132,9 +1132,9 @@ class TestStdlib:
     def test_retained_explicit_core_import_suppresses_later_preludes(self) -> None:
         s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
 
-        assert s.eval_entry("import std/core").ok
+        assert s.eval_entry("import std/prelude").ok
         assert not s.eval_entry("Some(value = 1)").ok
-        assert s.eval_entry("std/core::Option::Some(value = 1)").ok
+        assert s.eval_entry("std/prelude::Option::Some(value = 1)").ok
 
     def test_no_stdlib_requires_explicit_core_import_after_reset(self) -> None:
         s = open_session(
@@ -1143,7 +1143,7 @@ class TestStdlib:
         )
 
         assert not s.eval_entry("Some(value = 1)").ok
-        assert s.eval_entry("import std/core::*\nSome(value = 1)").ok
+        assert s.eval_entry("import std/prelude::*\nSome(value = 1)").ok
 
         s.reset()
 
@@ -1152,7 +1152,7 @@ class TestStdlib:
     def test_core_stdlib_qualified_generic_type_resolves_in_type_definition(self) -> None:
         s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
 
-        result = s.eval_entry("enum E = A(x: std/core::Option[int])")
+        result = s.eval_entry("enum E = A(x: std/prelude::Option[int])")
 
         assert result.ok, result.diagnostics
 
@@ -5947,7 +5947,7 @@ class TestImports:
                 copyfile(source, std_dir / source.name)
         config = std_dir / "config.agl"
         config.write_text(
-            "import std/core::{Option, Agent}\n"
+            "import std/prelude::{Option, Agent}\n"
             'builtin var default-agent: Agent = AgentCommand("runner")\n'
             'builtin var timeout: Option[text] = Some("not-a-timeout")\n',
             encoding="utf-8",
@@ -5962,7 +5962,7 @@ class TestImports:
         assert next_node_id > 0
 
         config.write_text(
-            "import std/core::{Option, Agent}\n"
+            "import std/prelude::{Option, Agent}\n"
             'builtin var default-agent: Agent = AgentCommand("runner")\n'
             'builtin var timeout: Option[text] = Some("2s")\n',
             encoding="utf-8",
@@ -7239,12 +7239,12 @@ class TestBareTypeEntry:
         from agm.agl.repl.render import render_entry_result
 
         s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
-        r = s.eval_entry("std/core::Option")
+        r = s.eval_entry("std/prelude::Option")
         assert r.ok
         assert r.kind == "type"
         assert (
             render_entry_result(r, echo=True)
-            == "<type:\nenum std/core::Option[T]\n  | None\n  | Some(value: T)\n>"
+            == "<type:\nenum std/prelude::Option[T]\n  | None\n  | Some(value: T)\n>"
         )
 
     def test_builtin_type_entry_works_when_graph_env_is_unavailable(self, tmp_path: Path) -> None:
@@ -7637,11 +7637,11 @@ class TestSessionOpen:
     """
 
     def test_open_with_no_overrides_preloads_the_default_stdlib(self) -> None:
-        from agm.agl.modules.ids import STD_CONFIG_ID, STD_CORE_ID
+        from agm.agl.modules.ids import STD_CONFIG_ID, STD_PRELUDE_ID
 
         s = ReplSession()
         assert s.open() == ()
-        assert STD_CORE_ID in s._loaded_lib_modules
+        assert STD_PRELUDE_ID in s._loaded_lib_modules
         assert STD_CONFIG_ID in s._loaded_lib_modules
         assert s._next_node_id > 0
 
@@ -7754,13 +7754,13 @@ class TestSessionOpen:
 
         assert ReplSession(stdlib_root=stdlib, cwd=workspace).open() == ()
 
-        duplicate = workspace / "std" / "core.agl"
+        duplicate = workspace / "std" / "prelude.agl"
         duplicate.parent.mkdir()
         duplicate.write_text("", encoding="utf-8")
 
         diagnostics = ReplSession(stdlib_root=stdlib, cwd=workspace).open()
         assert diagnostics
-        assert "std/core" in diagnostics[0].message
+        assert "std/prelude" in diagnostics[0].message
         assert "ambiguous" in diagnostics[0].message.lower()
 
     def test_open_rechecks_wildcard_root_discovery_after_a_cached_bootstrap(
@@ -7775,7 +7775,7 @@ class TestSessionOpen:
         workspace = tmp_path / "workspace"
         extra.mkdir(parents=True)
         workspace.mkdir()
-        (std / "core.agl").write_text("import std/extra/*\n", encoding="utf-8")
+        (std / "prelude.agl").write_text("import std/extra/*\n", encoding="utf-8")
         (extra / "one.agl").write_text("let one: int = 1\n", encoding="utf-8")
 
         assert ReplSession(stdlib_root=stdlib, cwd=workspace).open() == ()
@@ -8112,7 +8112,7 @@ class TestSessionOpen:
         """
         std_dir = tmp_path / "std"
         std_dir.mkdir()
-        (std_dir / "core.agl").write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
+        (std_dir / "prelude.agl").write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
         s = ReplSession(stdlib_root=tmp_path)
 
         diagnostics = s.open()

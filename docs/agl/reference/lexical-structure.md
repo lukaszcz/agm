@@ -421,7 +421,7 @@ on both sides; see
 
 ### Prelude combinators
 
-`std/core` makes four functional combinators available through the prelude:
+`std/prelude` makes four functional combinators available through the prelude:
 `|>` is left-associative at priority 5 and passes a value to a function; `<|`
 is right-associative at priority 4 and applies a function to a value; `>>` is
 left-associative at priority 60 and composes functions left-to-right; `<<` is
@@ -440,7 +440,7 @@ infixr << at prio > + 1
 Priorities are integers where lower numbers bind looser and higher numbers bind
 tighter. A priority can be a literal integer or relative to an existing builtin,
 local operator, operator made bare-visible by an import wildcard or tail, or an
-operator member made bare by `use` (with the `std/core` prelude included);
+operator member made bare by `use` (with the `std/prelude` prelude included);
 omitted priority uses the `+`/`-` level. A plain qualified import does not make
 an operator's fixity available. User infix
 use lowers to a normal two-argument function call, so the operator must also be

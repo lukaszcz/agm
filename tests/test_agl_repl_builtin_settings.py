@@ -44,7 +44,9 @@ def _copy_core_and_option(directory: Path) -> None:
     if "builtin var default-agent" not in config:
         additions += 'builtin var default-agent: Agent = AgentCommand("runner")\n'
     if additions:
-        imports = "" if "std/core::{Option" in config else "import std/core::{Option, Agent}\n"
+        imports = (
+            "" if "std/prelude::{Option" in config else "import std/prelude::{Option, Agent}\n"
+        )
         config_path.write_text(imports + config + additions, encoding="utf-8")
 
 
@@ -320,7 +322,7 @@ def declared_defaults_stdlib(tmp_path_factory: pytest.TempPathFactory) -> Path:
     config_path = stdlib_root / "std" / "config.agl"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(
-        "import std/core::*\n"
+        "import std/prelude::*\n"
         'builtin var default-agent: Agent = AgentCommand("declared")\n'
         "builtin var strict-json: bool = true\n"
         "builtin var max-iters: int = 3\n"
@@ -699,7 +701,7 @@ class TestResetRestoresMixedSeedOrigins:
         config_path = stdlib_root / "std" / "config.agl"
         config_path.parent.mkdir(parents=True)
         config_path.write_text(
-            "import std/core::{Option, Agent}\n"
+            "import std/prelude::{Option, Agent}\n"
             'builtin var default-agent: Agent = AgentCommand("declared")\n'
             "builtin var max-iters: int = 3\n"
             'builtin var log-file: Option[text] = Option[text]::Some("declared.jsonl")\n',
@@ -819,7 +821,7 @@ def test_reset_uses_declared_live_engine_defaults(tmp_path: Path) -> None:
     config_path = stdlib_root / "std" / "config.agl"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(
-        "import std/core::*\n"
+        "import std/prelude::*\n"
         'builtin var default-agent: Agent = AgentCommand("declared")\n'
         "builtin var strict-json: bool = true\n"
         "builtin var max-iters: int = 3\n"
@@ -830,7 +832,7 @@ def test_reset_uses_declared_live_engine_defaults(tmp_path: Path) -> None:
     _copy_core_and_option(config_path.parent)
     session = ReplSession(stdlib_root=stdlib_root, default_stdlib=False)
 
-    _ok(session, "import std/core::*\nimport std/config\nstd/config::strict-json")
+    _ok(session, "import std/prelude::*\nimport std/config\nstd/config::strict-json")
     _ok(session, "std/config::strict-json := false\nstd/config::max-iters := 0")
     session.reset()
 

@@ -21,10 +21,10 @@ Agent calls are gated: a single shared :class:`AgentMode` (``confirm`` by
 default, ``auto``; ``confirm`` under ``--confirm-agents``) is passed to BOTH the confirming
 wrapper and the chosen front end, so the ``:agent`` meta-command, an ``always``
 answer, and the wrapper all stay in sync.  Trace logging (``--log-file`` /
-``--no-log``) Each REPL entry and its loaded library modules receive ``std/core``
+``--no-log``) Each REPL entry and its loaded library modules receive ``std/prelude``
 glob imports by default. An explicit import whose expansion includes
-``std/core`` supplies that contribution instead, so plain ``import std/core``
-leaves core names qualified-only. ``--no-stdlib`` disables the automatic import
+``std/prelude`` supplies that contribution instead, so plain ``import std/prelude``
+leaves prelude names qualified-only. ``--no-stdlib`` disables the automatic import
 throughout every loaded REPL program. Imports are qualified by default; tails
 and ``use`` declarations opt into bare names.
 """

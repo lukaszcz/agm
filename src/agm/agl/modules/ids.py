@@ -144,13 +144,13 @@ def spell_declaration(
 #: via :meth:`ModuleId.from_path`.  Use ``module_id.is_entry`` to test.
 ENTRY_ID: ModuleId = ModuleId(segments=(_ENTRY_SEGMENT,))
 
-#: Logical module id for the shipped core standard library. Core built-in
+#: Logical module id for the shipped standard-library prelude. Built-in
 #: types and functions (``ExecResult``, every built-in exception, ``exec``,
-#: ``ask``, ...) are declared here (``stdlib/std/core.agl``); ``Option`` is
+#: ``ask``, ...) are declared here (``stdlib/std/prelude.agl``); ``Option`` is
 #: instead declared by :data:`STD_OPTION_ID`. A program that declares nothing
 #: of its own for a built-in name is answered with the owning module's identity
 #: (see :class:`~agm.agl.ir.builtin_nominals.BuiltinNominals`).
-STD_CORE_ID: ModuleId = ModuleId(segments=("std", "core"))
+STD_PRELUDE_ID: ModuleId = ModuleId(segments=("std", "prelude"))
 
 #: Logical module id for the shipped Option standard library
 #: (``stdlib/std/option.agl``).

@@ -50,7 +50,7 @@ from functools import partial
 from typing import TYPE_CHECKING, TypeVar, cast
 
 from agm.agl.diagnostics import static_root_message
-from agm.agl.modules.ids import STD_CORE_ID, ModuleId, spell_declaration
+from agm.agl.modules.ids import STD_PRELUDE_ID, ModuleId, spell_declaration
 from agm.agl.scope.imports import (
     EMPTY_IMPORT_ENV,
     BareRoute,
@@ -1223,7 +1223,7 @@ class _Resolver:
                         owner_name=exc_name,
                         owner_decl_node_id=exc_type.decl_id,
                         type_params=(),
-                        owner_module_id=STD_CORE_ID,
+                        owner_module_id=STD_PRELUDE_ID,
                         is_builtin=True,
                     )
                 ),
@@ -1250,7 +1250,7 @@ class _Resolver:
                                     owner_name=variant_name,
                                     owner_decl_node_id=member.decl_id,
                                     type_params=member_def.type_params,
-                                    owner_module_id=STD_CORE_ID,
+                                    owner_module_id=STD_PRELUDE_ID,
                                     can_match_bare_pattern=not member_def.fields,
                                     owner_path=(type_name,),
                                     is_builtin=True,
@@ -1266,7 +1266,7 @@ class _Resolver:
                             owner_name=type_name,
                             owner_decl_node_id=type_val.decl_id,
                             type_params=(),
-                            owner_module_id=STD_CORE_ID,
+                            owner_module_id=STD_PRELUDE_ID,
                             is_builtin=True,
                         )
                     ),
@@ -1277,13 +1277,13 @@ class _Resolver:
         self._constructor_candidates[name] = [
             ref
             for ref in self._constructor_candidates.get(name, [])
-            if ref.owner_module_id != STD_CORE_ID
+            if ref.owner_module_id != STD_PRELUDE_ID
         ]
         key = (scope_path, name)
         self._scoped_constructor_candidates[key] = [
             ref
             for ref in self._scoped_constructor_candidates.get(key, [])
-            if ref.owner_module_id != STD_CORE_ID
+            if ref.owner_module_id != STD_PRELUDE_ID
         ]
 
     def _remove_constructor_candidates_in_type_scope(self, type_scope: ScopePath) -> None:
@@ -1385,9 +1385,9 @@ class _Resolver:
         if cref.is_builtin:
             for index, candidate in enumerate(existing):
                 if candidate.is_builtin and candidate.owner_path == cref.owner_path:
-                    if cref.owner_module_id == STD_CORE_ID:
+                    if cref.owner_module_id == STD_PRELUDE_ID:
                         return existing
-                    if candidate.owner_module_id == STD_CORE_ID:
+                    if candidate.owner_module_id == STD_PRELUDE_ID:
                         return [*existing[:index], cref, *existing[index + 1 :]]
         for index, candidate in enumerate(existing):
             if _supersedes(candidate, cref):
@@ -3972,7 +3972,7 @@ class _Resolver:
         Inline members are records below their enum owner, but their terminal
         constructor names are injected into the module root. They therefore
         have the same lexical precedence as root record constructors over the
-        automatic ``std/core`` prelude.
+        automatic ``std/prelude`` prelude.
         """
         local = tuple(
             candidate for candidate in candidates if candidate.owner_module_id == self._module_id

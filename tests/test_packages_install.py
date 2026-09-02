@@ -192,7 +192,7 @@ def test_refresh_registers_stdlib_package_under_an_isolated_agm_home(tmp_path: P
     )
 
     assert installed.root == agm_home / "packages" / "std" / AGM_VERSION
-    assert (installed.root / "std" / "core.agl").is_file()
+    assert (installed.root / "std" / "prelude.agl").is_file()
     assert (installed.root / "std" / "option.agl").is_file()
     assert verify_record(installed.root)
     index = load_activation_index(home=tmp_path / "ignored-home", env={"AGM_HOME": str(agm_home)})
@@ -240,7 +240,7 @@ def test_managed_stdlib_refresh_stages_under_the_store_lock(
     source = _stdlib_source()
     home = prebuilt_store(_SHIPPED_STDLIB)
     installed_root = _store_root(home, "std", AGM_VERSION)
-    core = installed_root / "std" / "core.agl"
+    core = installed_root / "std" / "prelude.agl"
     stale = installed_root / "std" / "stale.agl"
     core.write_text("old complete tree\n", encoding="utf-8")
     stale.write_text("stale\n", encoding="utf-8")
@@ -268,7 +268,7 @@ def test_managed_stdlib_refresh_stages_under_the_store_lock(
     assert refreshed.root == installed_root
     assert observed_staging is not None
     assert not observed_staging.exists()
-    assert core.read_bytes() == (source / "std" / "core.agl").read_bytes()
+    assert core.read_bytes() == (source / "std" / "prelude.agl").read_bytes()
     assert not stale.exists()
     assert verify_record(refreshed.root)
     active = load_activation_index(home=home, env={}).packages["std"]
@@ -321,7 +321,7 @@ def test_managed_stdlib_refresh_restores_the_complete_tree_when_activation_fails
     source = _stdlib_source()
     home = prebuilt_store(_SHIPPED_STDLIB)
     installed_root = _store_root(home, "std", AGM_VERSION)
-    core = installed_root / "std" / "core.agl"
+    core = installed_root / "std" / "prelude.agl"
     core.write_text("old complete tree\n", encoding="utf-8")
     write_record(installed_root)
 
@@ -404,7 +404,7 @@ def test_managed_stdlib_refresh_restores_the_complete_tree_when_publication_fail
     source = _stdlib_source()
     home = prebuilt_store(_SHIPPED_STDLIB)
     installed_root = _store_root(home, "std", AGM_VERSION)
-    core = installed_root / "std" / "core.agl"
+    core = installed_root / "std" / "prelude.agl"
     core.write_text("old complete tree\n", encoding="utf-8")
     write_record(installed_root)
     original_replace = Path.replace
@@ -1246,7 +1246,7 @@ def test_install_validates_resource_aliases_from_an_installed_satisfying_depende
     home = tmp_path / "home"
     dependency = _package(tmp_path / "bravo", "bravo", "1.0.0")
     (dependency / "bravo" / "assets.agl").write_text(
-        "export std/core::{resource as asset}\n",
+        "export std/prelude::{resource as asset}\n",
         encoding="utf-8",
     )
     install_directory(dependency, home=home, env={})
@@ -2603,7 +2603,7 @@ def test_directory_install_rolls_back_new_dependency_after_discipline_failure(
     home = tmp_path / "home"
     dependency = _package(tmp_path / "bravo", "bravo", "1.0.0")
     (dependency / "bravo" / "assets.agl").write_text(
-        "export std/core::{resource as asset}\n", encoding="utf-8"
+        "export std/prelude::{resource as asset}\n", encoding="utf-8"
     )
     source = _package(
         tmp_path / "alpha",

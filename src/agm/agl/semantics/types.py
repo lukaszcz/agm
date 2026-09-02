@@ -55,7 +55,7 @@ from typing import assert_never
 
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, reserved_nominal_id
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id as _reserved_id
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, STD_OPTION_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_OPTION_ID, STD_PRELUDE_ID, ModuleId
 
 # ---------------------------------------------------------------------------
 # Primitive types (singletons-by-construction; frozen dataclasses)
@@ -253,7 +253,7 @@ class ExceptionType:
     ``exception_def``). ``module_id`` is the owning module (defaults to
     ``ENTRY_ID``, like ``RecordType``/``EnumType``); a built-in exception's
     declaring module is the shipped standard library's own module
-    (``STD_CORE_ID``) unless a program declares its own ``builtin exception``
+    (``STD_PRELUDE_ID``) unless a program declares its own ``builtin exception``
     of that name, in which case it carries that program's module instead.
 
     The abstract ``Exception`` root is the ``TypeDef`` registered under name
@@ -721,7 +721,7 @@ def reroot_type(
 
     A reference's ``decl_id`` denotes the *specific* declaration it names,
     which necessarily differs between an arbitrary declaration and the
-    canonical ``std/core`` one being compared against, even when the two
+    canonical ``std/prelude`` one being compared against, even when the two
     denote the same host type. So whenever a reference's ``module_id`` is
     remapped onto the canonical module, its ``decl_id`` is normalized too: to
     the reserved identity for its name when that name is a host-known
@@ -902,7 +902,7 @@ def contains_inference_var(t: Type) -> bool:
 # ---------------------------------------------------------------------------
 # Built-in exception types
 #
-# These are pure handles — ``module_id=STD_CORE_ID``, the shipped standard
+# These are pure handles — ``module_id=STD_PRELUDE_ID``, the shipped standard
 # library's own declaring module — carrying no field data of their own; the
 # shapes are the single source of truth defined once as ``TypeDef`` literals
 # in ``semantics.type_table.BUILTIN_EXCEPTION_TYPE_DEFS`` (registered into
@@ -918,7 +918,7 @@ def _builtin_exception(name: str) -> ExceptionType:
     Each name is spelled once, here, and stamped with its own reserved
     identity, so a handle can never be paired with another name's identity.
     """
-    return ExceptionType(name=name, module_id=STD_CORE_ID, decl_id=_reserved_id(name))
+    return ExceptionType(name=name, module_id=STD_PRELUDE_ID, decl_id=_reserved_id(name))
 
 
 # Abstract base: the hierarchy root, catchable but not constructible.
@@ -978,18 +978,18 @@ BUILTIN_EXCEPTION_NAMES: frozenset[str] = frozenset(BUILTIN_EXCEPTIONS)
 # defined once as explicit ``TypeDef`` literals in
 # ``semantics.type_table.BUILTIN_PRELUDE_TYPE_DEFS``.
 _EXEC_RESULT_TYPE = RecordType(
-    name="ExecResult", module_id=STD_CORE_ID, decl_id=_reserved_id("ExecResult")
+    name="ExecResult", module_id=STD_PRELUDE_ID, decl_id=_reserved_id("ExecResult")
 )
 
 # ``ParsePolicy`` — controls ``ask``/``exec`` error handling.
 # ``Abort`` — abort on parse error (no fields).
 # ``Retry(n: int)`` — retry up to ``n`` times.
 _PARSE_POLICY_TYPE = EnumType(
-    name="ParsePolicy", module_id=STD_CORE_ID, decl_id=_reserved_id("ParsePolicy")
+    name="ParsePolicy", module_id=STD_PRELUDE_ID, decl_id=_reserved_id("ParsePolicy")
 )
 
 # ``Agent`` — a plain enum data value that specifies an agent backend.
-_AGENT_TYPE = EnumType(name="Agent", module_id=STD_CORE_ID, decl_id=_reserved_id("Agent"))
+_AGENT_TYPE = EnumType(name="Agent", module_id=STD_PRELUDE_ID, decl_id=_reserved_id("Agent"))
 
 _OPTION_TEXT_TYPE = EnumType(
     name="Option",
@@ -1010,12 +1010,12 @@ _OPTION_JSON_TYPE = EnumType(
 )
 
 _OUTPUT_CONTRACT_TYPE = RecordType(
-    name="OutputContract", module_id=STD_CORE_ID, decl_id=_reserved_id("OutputContract")
+    name="OutputContract", module_id=STD_PRELUDE_ID, decl_id=_reserved_id("OutputContract")
 )
 
 _OUTPUT_CONTRACT_OPTION_TYPE = EnumType(
     name="OutputContractOption",
-    module_id=STD_CORE_ID,
+    module_id=STD_PRELUDE_ID,
     decl_id=_reserved_id("OutputContractOption"),
 )
 
@@ -1025,21 +1025,23 @@ _OUTPUT_CONTRACT_OPTION_TYPE = EnumType(
 # retry context (no ``previous_invalid_output`` / ``validation_errors``),
 # because ``ask-request`` never invokes the agent.
 _AGENT_REQUEST_TYPE = RecordType(
-    name="AgentRequest", module_id=STD_CORE_ID, decl_id=_reserved_id("AgentRequest")
+    name="AgentRequest", module_id=STD_PRELUDE_ID, decl_id=_reserved_id("AgentRequest")
 )
 
 _SESSION_TRANSPORT_TYPE = EnumType(
-    name="SessionTransport", module_id=STD_CORE_ID, decl_id=_reserved_id("SessionTransport")
+    name="SessionTransport", module_id=STD_PRELUDE_ID, decl_id=_reserved_id("SessionTransport")
 )
 
-_SESSION_TYPE = RecordType(name="Session", module_id=STD_CORE_ID, decl_id=_reserved_id("Session"))
+_SESSION_TYPE = RecordType(
+    name="Session", module_id=STD_PRELUDE_ID, decl_id=_reserved_id("Session")
+)
 
 _SESSION_STATS_TYPE = RecordType(
-    name="SessionStats", module_id=STD_CORE_ID, decl_id=_reserved_id("SessionStats")
+    name="SessionStats", module_id=STD_PRELUDE_ID, decl_id=_reserved_id("SessionStats")
 )
 
 _SESSION_ERROR_TYPE = ExceptionType(
-    name="SessionError", module_id=STD_CORE_ID, decl_id=_reserved_id("SessionError")
+    name="SessionError", module_id=STD_PRELUDE_ID, decl_id=_reserved_id("SessionError")
 )
 
 # These records represent host resources rather than source-constructible data.
@@ -1094,12 +1096,12 @@ def spells_bare(module_id: ModuleId, name: str) -> bool:
     Shared by ``RecordType``/``EnumType``/``ExceptionType.__repr__`` and
     ``semantics.type_table.qualified_decl_name``.
     """
-    return module_id.is_entry or (module_id == STD_CORE_ID and name in _BUILTIN_HOST_NAMES)
+    return module_id.is_entry or (module_id == STD_PRELUDE_ID and name in _BUILTIN_HOST_NAMES)
 
 
 # Legacy built-in types kept for compatibility with already-compiled tests and
 # internal APIs.  They remain available as nominal types, but their constructors
-# are not exported into source scope because std/core replaces this surface.
+# are not exported into source scope because std/prelude replaces this surface.
 COMPATIBILITY_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset(
     {"OutputContract", "OutputContractOption"}
 )

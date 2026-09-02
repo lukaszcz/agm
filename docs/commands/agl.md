@@ -52,11 +52,11 @@ Like `agm exec`, each typed
 initialization, before the prompt appears — if the session never loads `std/config`;
 `[exec] default-agent` is simply inert in that same situation.
 
-Like `agm exec`, the REPL supplies an automatic `import std/core::*` prelude to
+Like `agm exec`, the REPL supplies an automatic `import std/prelude::*` prelude to
 each loaded program, so standard-library names such as `Option`, `Some`, and
 `None` are available unqualified from a fresh prompt. An explicit import whose
-expansion includes `std/core` supplies that contribution instead, so plain
-`import std/core` leaves core names qualified-only. Pass `--no-stdlib` to disable
+expansion includes `std/prelude` supplies that contribution instead, so plain
+`import std/prelude` leaves prelude names qualified-only. Pass `--no-stdlib` to disable
 the prelude for each entry and its library modules; explicit imports still work,
 including after `:reset`.
 Entering a bare type name displays the type; an unapplied generic type name such as
@@ -155,7 +155,7 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 - `--confirm-agents`: Start in confirm mode, asking before each agent call (the default
   is auto; see [Agent-call confirmation](#agent-call-confirmation)).
 - `--quiet`: Suppress the automatic echoing of entry results.
-- `--no-stdlib`: Disable the automatic `import std/core::*` prelude for each
+- `--no-stdlib`: Disable the automatic `import std/prelude::*` prelude for each
   loaded REPL program (its entry and library modules). Explicit standard-library imports remain available;
   `:reset` retains this launch-time choice.
 - `--log` / `--log-file PATH` / `--no-log`: Control trace logging (off by default), as

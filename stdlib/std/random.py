@@ -9,7 +9,7 @@ from typing import Protocol, cast
 
 from agl import AglException, nominals, runtime
 
-IndexError = nominals.std.core.IndexError
+IndexError = nominals.std.prelude.IndexError
 
 
 def _random() -> random.Random:

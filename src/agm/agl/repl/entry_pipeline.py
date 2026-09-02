@@ -863,14 +863,14 @@ class EntryPipeline:
 
         def completed_library_module_ids() -> frozenset[ModuleId]:
             """Return newly initialized modules whose dependencies also completed."""
-            from agm.agl.modules.ids import STD_CORE_ID
+            from agm.agl.modules.ids import STD_PRELUDE_ID
 
             installed_symbols = (
                 self._ctx._active_imported_params.keys() | interp.entry_param_symbols_installed
             )
             candidates: set[ModuleId] = set()
             for module_id in new_modules:
-                if module_id == STD_CORE_ID:
+                if module_id == STD_PRELUDE_ID:
                     candidates.add(module_id)
                     continue
                 module = lowered.program.modules[module_id]

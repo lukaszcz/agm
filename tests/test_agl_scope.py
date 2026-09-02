@@ -1824,7 +1824,7 @@ class TestBuiltinCallClassification:
 
     def test_ask_request_callee_resolves_to_its_builtin_declaration(self) -> None:
         """A bare ``ask-request`` callee resolves like any other reference —
-        to std/core's own ``builtin def`` — before the call is classified."""
+        to std/prelude's own ``builtin def`` — before the call is classified."""
         r = parse_and_resolve('let x = ask-request("Q")\nx')
         let_node = r.program.body.items[0]
         assert isinstance(let_node, LetDecl)
@@ -1905,7 +1905,7 @@ class TestBuiltinCallClassification:
 
     def test_print_call_callee_resolves_to_its_builtin_declaration(self) -> None:
         """The callee VarRef of a built-in call resolves like any other
-        reference — to std/core's own ``builtin def print`` — before the call
+        reference — to std/prelude's own ``builtin def print`` — before the call
         is classified in ``builtin_calls``."""
         r = parse_and_resolve("let x = 1\nprint x")
         call_item = r.program.body.items[1]
@@ -3938,7 +3938,7 @@ class TestCastScope:
 class TestImportDeclScope:
     """Import declarations pass through the scope resolver without errors.
 
-    Each import here targets ``std/core`` — the only always-real module
+    Each import here targets ``std/prelude`` — the only always-real module
     available to this file's ``resolve_entry``-backed ``parse_and_resolve``
     (its search root is the repo's real ``stdlib/`` directory; there is no
     on-disk ``foo`` module for it to find). Under the old ``resolve_module``
@@ -3955,11 +3955,11 @@ class TestImportDeclScope:
 
     def test_import_decl_does_not_raise(self) -> None:
         """A bare import declaration resolves without a scope error."""
-        r = parse_and_resolve("import std/core::*\n1")
+        r = parse_and_resolve("import std/prelude::*\n1")
         assert r  # no exception
 
     def test_import_with_alias_does_not_raise(self) -> None:
-        r = parse_and_resolve("import std/core as core\n1")
+        r = parse_and_resolve("import std/prelude as core\n1")
         assert r
 
     def test_import_wildcard_does_not_raise(self) -> None:
@@ -3967,11 +3967,11 @@ class TestImportDeclScope:
         assert r
 
     def test_import_selected_tail_does_not_raise(self) -> None:
-        r = parse_and_resolve("import std/core::{print}\n1")
+        r = parse_and_resolve("import std/prelude::{print}\n1")
         assert r
 
     def test_import_hiding_does_not_raise(self) -> None:
-        r = parse_and_resolve("import std/core hiding print\n1")
+        r = parse_and_resolve("import std/prelude hiding print\n1")
         assert r
 
 

@@ -829,7 +829,7 @@ class BuiltinCallChecker:
     ) -> None:
         """Reject *contract_type* if the host cannot produce a value of its shape.
 
-        Nominal fields filled by the host use the loaded ``std/core`` source
+        Nominal fields filled by the host use the loaded ``std/prelude`` source
         declaration, falling back to its reserved identity when the standard
         library is absent. A contract field must name that same standard
         declaration, checked recursively through type arguments.

@@ -21,7 +21,7 @@ from typing import Literal, cast
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId, spell_declaration
+from agm.agl.modules.ids import ENTRY_ID, STD_PRELUDE_ID, ModuleId, spell_declaration
 from agm.agl.scope.imports import (
     ImportEnv,
     NameAtom,
@@ -94,7 +94,7 @@ def _is_own_builtin_declaration(name: str, typ: Type) -> bool:
     A canonical binding for a built-in exception or prelude type name carries
     that name's fixed reserved identity (``ir.reserved_nominals``); a
     source ``builtin`` declaration of the same name instead carries its own
-    declaration identity, wherever it is declared (including ``std/core``),
+    declaration identity, wherever it is declared (including ``std/prelude``),
     which never equals the reserved one. *name* is always one of the reserved
     names, so it always has a reserved identity to compare against.
 
@@ -785,7 +785,7 @@ class TypeEnvironment:
                     (fname, ParamKind.STANDARD)
                     for fname in self._type_table.record_fields(prelude_type)
                 )
-                self._constructor_field_kinds[(STD_CORE_ID, (), prelude_name)] = fields
+                self._constructor_field_kinds[(STD_PRELUDE_ID, (), prelude_name)] = fields
                 self._constructor_field_kinds_by_decl_id[prelude_type.decl_id] = fields
                 continue
             if isinstance(prelude_type, ExceptionType):
@@ -795,7 +795,9 @@ class TypeEnvironment:
                 fields = tuple(
                     (fname, ParamKind.STANDARD) for fname in self._type_table.record_fields(member)
                 )
-                self._constructor_field_kinds[(STD_CORE_ID, (prelude_name,), member.name)] = fields
+                self._constructor_field_kinds[(STD_PRELUDE_ID, (prelude_name,), member.name)] = (
+                    fields
+                )
                 self._constructor_field_kinds_by_decl_id[member.decl_id] = fields
         # Exception constructor field kinds are NOT pre-registered here: each
         # exception's own fields honor their declared @pos/@std/@named marker

@@ -363,7 +363,7 @@ default applies; the portable default is **lenient recovery** (see below).
 ### `on_parse_error`
 
 The parse policy for invalid structured output. The value is a `ParsePolicy`
-— one of two members from the standard core enum:
+— one of two members from the standard-library enum:
 
 <!-- agl-check: fragment -->
 ```agl

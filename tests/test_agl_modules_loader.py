@@ -18,7 +18,7 @@ from agm.agl.modules.errors import (
     ModuleNotFound,
     PackageImportVisibilityError,
 )
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, STD_OPTION_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_OPTION_ID, STD_PRELUDE_ID, ModuleId
 from agm.agl.modules.loader import LoadedModule, ModuleGraph, build_repl_graph, load_graph
 from agm.agl.modules.roots import RootSet, assemble_roots
 from agm.agl.syntax.nodes import ImportDecl
@@ -172,14 +172,17 @@ class TestGraphBuild:
         text_id = ModuleId.from_path("std/text")
 
         assert ENTRY_ID in graph.modules
-        assert STD_CORE_ID in graph.modules
+        assert STD_PRELUDE_ID in graph.modules
         assert STD_OPTION_ID in graph.modules
         assert ModuleId.from_path("std/config") in graph.modules
-        assert graph.modules[ENTRY_ID].imports[0].module_path == STD_CORE_ID.segments
+        assert graph.modules[ENTRY_ID].imports[0].module_path == STD_PRELUDE_ID.segments
         assert graph.modules[ENTRY_ID].imports[0].tail == ()
-        assert graph.modules[STD_CORE_ID].path == (_REPO_STDLIB_ROOT / "std" / "core.agl").resolve()
+        assert (
+            graph.modules[STD_PRELUDE_ID].path
+            == (_REPO_STDLIB_ROOT / "std" / "prelude.agl").resolve()
+        )
         assert {registry_id, array_id, text_id}.issubset(graph.ambient_modules)
-        assert graph.adjacency[ENTRY_ID] == (STD_CORE_ID,)
+        assert graph.adjacency[ENTRY_ID] == (STD_PRELUDE_ID,)
         assert {array_id, text_id}.issubset(graph.adjacency[registry_id])
 
     def test_explicit_builtin_method_registry_import_is_not_ambient(self, tmp_path: Path) -> None:
@@ -237,7 +240,7 @@ class TestGraphBuild:
         )
         assert ModuleId.from_path("util") in graph.modules
         util = graph.modules[ModuleId.from_path("util")]
-        assert not any(decl.module_path == STD_CORE_ID.segments for decl in util.imports)
+        assert not any(decl.module_path == STD_PRELUDE_ID.segments for decl in util.imports)
 
     def test_transitive_import_resolved(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -629,8 +632,8 @@ class TestCycles:
         b_id = ModuleId.from_path("b")
         assert a_id in graph.modules
         assert b_id in graph.modules
-        assert set(graph.adjacency[a_id]) == {b_id, STD_CORE_ID}
-        assert set(graph.adjacency[b_id]) == {a_id, STD_CORE_ID}
+        assert set(graph.adjacency[a_id]) == {b_id, STD_PRELUDE_ID}
+        assert set(graph.adjacency[b_id]) == {a_id, STD_PRELUDE_ID}
         assert any({a_id, b_id}.issubset(component) for component in graph.sccs)
 
     def test_longer_cycle_terminates(self, tmp_path: Path) -> None:
@@ -1238,13 +1241,13 @@ class TestBuildReplGraph:
     """Tests for :func:`~agm.agl.modules.loader.build_repl_graph`."""
 
     def test_simple_program_no_imports(self, tmp_path: Path) -> None:
-        """Graph for a program with no explicit imports still loads std/core."""
+        """Graph for a program with no explicit imports still loads std/prelude."""
         program = _parse_for_repl("let x = 1")
         graph, _next_id, new_modules = build_repl_graph(
             program, 1000, path=None, cached={}, roots=_roots(tmp_path)
         )
         assert ENTRY_ID in graph.modules
-        assert STD_CORE_ID in graph.modules
+        assert STD_PRELUDE_ID in graph.modules
         assert {
             ModuleId.from_path("std/builtin-methods"),
             ModuleId.from_path("std/array"),
@@ -1318,24 +1321,24 @@ class TestBuildReplGraph:
         assert dependency_id in graph2.adjacency[library_id]
 
     def test_cached_std_core_not_reloaded(self, tmp_path: Path) -> None:
-        """The REPL graph builder reuses cached std/core when present."""
+        """The REPL graph builder reuses cached std/prelude when present."""
         program1 = _parse_for_repl("()")
         graph1, next_id, _new1 = build_repl_graph(
             program1, 0, path=None, cached={}, roots=_roots(tmp_path)
         )
-        std_core = graph1.modules[STD_CORE_ID]
+        std_core = graph1.modules[STD_PRELUDE_ID]
 
         program2 = _parse_for_repl("let x: Option[int] = None\nx")
         graph2, _next2, new2 = build_repl_graph(
             program2,
             next_id,
             path=None,
-            cached={STD_CORE_ID: std_core},
+            cached={STD_PRELUDE_ID: std_core},
             roots=_roots(tmp_path),
         )
 
-        assert graph2.modules[STD_CORE_ID] is std_core
-        assert STD_CORE_ID not in new2
+        assert graph2.modules[STD_PRELUDE_ID] is std_core
+        assert STD_PRELUDE_ID not in new2
 
     def test_path_sets_entry_source_id(self, tmp_path: Path) -> None:
         """When *path* is given, the entry source ID uses the canonical path label."""
@@ -1451,13 +1454,15 @@ class TestPreludeSupersession:
         from agm.agl.scope import resolve_program
 
         graph = load_graph(
-            "import std/core::* hiding ask",
+            "import std/prelude::* hiding ask",
             entry_path=None,
             roots=_roots(tmp_path),
         )
 
         entry = graph.modules[ENTRY_ID]
-        core_imports = [decl for decl in entry.imports if decl.module_path == STD_CORE_ID.segments]
+        core_imports = [
+            decl for decl in entry.imports if decl.module_path == STD_PRELUDE_ID.segments
+        ]
         assert len(core_imports) == 1
         resolution = resolve_program(graph).modules[ENTRY_ID]
         assert "ask" not in resolution.import_env.unqualified
@@ -1467,7 +1472,7 @@ class TestPreludeSupersession:
         self, tmp_path: Path
     ) -> None:
         graph = load_graph(
-            "scope Local\n  import std/core\nend Local",
+            "scope Local\n  import std/prelude\nend Local",
             entry_path=None,
             roots=_roots(tmp_path),
         )
@@ -1475,7 +1480,7 @@ class TestPreludeSupersession:
         core_imports = [
             decl
             for decl in graph.modules[ENTRY_ID].imports
-            if decl.module_path == STD_CORE_ID.segments
+            if decl.module_path == STD_PRELUDE_ID.segments
         ]
         assert len(core_imports) == 1
         assert core_imports[0].scope_path[0].name == "Local"
@@ -1484,14 +1489,14 @@ class TestPreludeSupersession:
         from agm.agl.scope import resolve_program
 
         graph = load_graph(
-            "import std/core",
+            "import std/prelude",
             entry_path=None,
             roots=_roots(tmp_path),
         )
 
         resolution = resolve_program(graph).modules[ENTRY_ID]
         assert "Option" not in resolution.import_env.unqualified
-        assert resolution.import_env.contributions[STD_CORE_ID].path_enabled
+        assert resolution.import_env.contributions[STD_PRELUDE_ID].path_enabled
 
     def test_wildcard_import_including_core_suppresses_the_default_prelude(
         self, tmp_path: Path
@@ -1512,14 +1517,14 @@ class TestPreludeSupersession:
     ) -> None:
         no_prelude = load_graph("()", entry_path=None, roots=_roots(tmp_path), default_stdlib=False)
         explicit_core = load_graph(
-            "import std/core::*\n()",
+            "import std/prelude::*\n()",
             entry_path=None,
             roots=_roots(tmp_path),
             default_stdlib=False,
         )
 
-        assert STD_CORE_ID not in no_prelude.modules
-        assert STD_CORE_ID in explicit_core.modules
+        assert STD_PRELUDE_ID not in no_prelude.modules
+        assert STD_PRELUDE_ID in explicit_core.modules
         assert len(explicit_core.modules[ENTRY_ID].imports) == 1
 
 

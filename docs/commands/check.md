@@ -39,8 +39,8 @@ rule.
 - `-I DIR`, `--module-path DIR`: Add `DIR` as an additional module search root
   (repeatable), resolved relative to the invocation working directory, exactly as for
   `agm exec`.
-- `--no-stdlib`: Disable automatic `std/core` opening throughout each checked file (the
-  file itself and its library modules). Explicit `import std/core` is unaffected.
+- `--no-stdlib`: Disable automatic `std/prelude` opening throughout each checked file (the
+  file itself and its library modules). Explicit `import std/prelude` is unaffected.
 - `--dry-run`: Accepted for consistency with every other command, but meaningless here —
   `check` never has a side effect to skip.
 

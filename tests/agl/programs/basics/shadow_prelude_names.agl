@@ -5,14 +5,14 @@
 # shadows it for a function, both without an "already declared" collision.
 param n: int
 
-# `let` shadows the built-in `ExecResult` standard core record constructor.
+# `let` shadows the built-in `ExecResult` standard-library record constructor.
 def Retry(x: int) -> int = x + 1
 
 program def main() -> unit =
   let ExecResult = n * 2
   print "%{ExecResult}"
 
-  # `let` shadows the built-in `AgentRequest` standard core record constructor.
+  # `let` shadows the built-in `AgentRequest` standard-library record constructor.
   let AgentRequest = "req-%{n}"
   print AgentRequest
 

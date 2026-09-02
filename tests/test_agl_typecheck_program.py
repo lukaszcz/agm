@@ -263,7 +263,7 @@ def test_builtin_header_has_standalone_program_signature_parity(tmp_path: Path) 
 
     Both sides check the same entry-only declaration of ``print``, so the
     program-mode graph is built without the default standard library — its
-    own ``std/core`` declares ``print`` too, which would otherwise make the
+    own ``std/prelude`` declares ``print`` too, which would otherwise make the
     entry module's declaration a duplicate rather than exercising the parity
     this test is about.
     """
@@ -349,21 +349,21 @@ def test_same_module_same_type_identity() -> None:
 
 
 def test_std_core_execresult_reports_std_core_as_its_owning_module(tmp_path: Path) -> None:
-    """In a normal program, the standard library's own ``ExecResult`` is owned by ``std/core``.
+    """In a normal program, the standard library's own ``ExecResult`` is owned by ``std/prelude``.
 
     A ``builtin`` declaration belongs to the module that declares it, like
     any other declaration — no re-homing onto a shared sentinel. Loading the
     real standard library (the default) and reading its own checked module
     directly shows ``ExecResult`` resolves to a handle owned by
-    ``std/core`` itself, not the entry module or any placeholder.
+    ``std/prelude`` itself, not the entry module or any placeholder.
     """
-    from agm.agl.modules.ids import STD_CORE_ID
+    from agm.agl.modules.ids import STD_PRELUDE_ID
 
     cg = _check_program(tmp_path, {"entry": "()"})
-    std_core = cg.modules[STD_CORE_ID]
+    std_core = cg.modules[STD_PRELUDE_ID]
     handle = std_core.type_env.get_type("ExecResult")
     assert isinstance(handle, RecordType)
-    assert handle.module_id == STD_CORE_ID
+    assert handle.module_id == STD_PRELUDE_ID
 
 
 def test_program_warnings_follow_module_presentation_order(tmp_path: Path) -> None:

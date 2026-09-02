@@ -1,6 +1,6 @@
 """Location-independent structural contracts for host-known builtin types.
 
-The seeded ``std/core`` ``TypeDef`` objects are real nominal declarations used
+The seeded ``std/prelude`` ``TypeDef`` objects are real nominal declarations used
 by type resolution and runtime values.  They are not validation schemas: a
 source ``builtin`` declaration may live in another module or scope, and an enum
 is validated only after the builder has required its members to be inline, so
@@ -21,7 +21,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 from agm.agl.ir.reserved_nominals import reserved_nominal_id
-from agm.agl.modules.ids import STD_CORE_ID
+from agm.agl.modules.ids import STD_PRELUDE_ID
 from agm.agl.semantics.type_table import (
     BUILTIN_EXCEPTION_TYPE_DEFS,
     BUILTIN_PRELUDE_TYPE_DEFS,
@@ -81,7 +81,7 @@ def contract_for_typedef(
     reference to an unrelated module as a genuine mismatch. Enum member identity
     is enforced separately by requiring inline source members before projection.
     """
-    remap = (typedef.module_id, STD_CORE_ID)
+    remap = (typedef.module_id, STD_PRELUDE_ID)
 
     def normalize(typ: Type) -> Type:
         rerooted = reroot_type(typ, typedef.scope_path, remap_module=remap)
@@ -95,7 +95,7 @@ def contract_for_typedef(
                 return node
             return replace(
                 node,
-                module_id=STD_CORE_ID,
+                module_id=STD_PRELUDE_ID,
                 scope_path=(),
                 decl_id=reserved_id,
             )

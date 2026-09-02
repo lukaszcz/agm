@@ -5,7 +5,7 @@ from __future__ import annotations
 from agl import AglException, array, nominals
 from agl import dict as agl_dict
 
-KeyError = nominals.std.core.KeyError
+KeyError = nominals.std.prelude.KeyError
 Option = nominals.std.option.Option
 Pair = nominals.std.pair.Pair
 

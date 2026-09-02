@@ -1586,7 +1586,7 @@ def test_direct_std_option_import_runs_without_the_automatic_prelude(
     roots = RootSet(roots=frozenset({REPO_STDLIB_ROOT}))
     result = _run_source_entry(
         PipelineDriver(),
-        "import std/core::print\n"
+        "import std/prelude::print\n"
         "import std/option::Option\n"
         "program def main() -> unit =\n"
         "  let option: Option[int] = Option::Some(value = 2)\n"
@@ -1610,7 +1610,7 @@ def test_std_core_option_reexport_preserves_nominal_identity(
     roots = RootSet(roots=frozenset({REPO_STDLIB_ROOT}))
     result = _run_source_entry(
         PipelineDriver(),
-        "import std/core::{Option as CoreOption, print}\n"
+        "import std/prelude::{Option as CoreOption, print}\n"
         "import std/option::Option\n"
         "program def main() -> unit =\n"
         "  let value: CoreOption[int] = Option::Some(value = 3)\n"
@@ -1625,14 +1625,14 @@ def test_std_core_option_reexport_preserves_nominal_identity(
 
 
 def test_qualified_std_core_print_still_works(capsys: pytest.CaptureFixture[str]) -> None:
-    """A fully qualified ``std/core::print(...)`` call still runs, exactly as
+    """A fully qualified ``std/prelude::print(...)`` call still runs, exactly as
     the bare form does — a built-in call is classified once its callee
-    resolves to a ``builtin def``, and ``std/core::print`` reaches the same
+    resolves to a ``builtin def``, and ``std/prelude::print`` reaches the same
     declaration a bare ``print`` does, just by a qualified route."""
     from agm.agl import PipelineDriver
 
     runtime = PipelineDriver()
-    result = _run_source_entry(runtime, 'program def main() -> unit = std/core::print("hi")\n')
+    result = _run_source_entry(runtime, 'program def main() -> unit = std/prelude::print("hi")\n')
 
     assert list(result.diagnostics) == [], (
         f"unexpected static diagnostics: {' | '.join(d.message for d in result.diagnostics)}"
@@ -1642,9 +1642,9 @@ def test_qualified_std_core_print_still_works(capsys: pytest.CaptureFixture[str]
 
 
 def _scoped_stdlib_root(tmp_path: Path) -> Path:
-    """Build a throwaway module root with the real ``std/core`` scoped.
+    """Build a throwaway module root with the real ``std/prelude`` scoped.
 
-    The expanded core and its functional dependencies are copied. Imports
+    The expanded prelude and its functional dependencies are copied. Imports
     needed only by the extended ``exec`` signature are removed when that
     declaration is reduced to its legacy host-boundary shape, and canonical
     session statics are omitted because wrapping changes their owner path.
@@ -1654,7 +1654,7 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
     std_dir = scoped_stdlib_root / "std"
     std_dir.mkdir(parents=True)
     core_source = (
-        (REPO_STDLIB_ROOT / "std" / "core.agl")
+        (REPO_STDLIB_ROOT / "std" / "prelude.agl")
         .read_text(encoding="utf-8")
         .replace("import std/config\n", "")
         .replace("import std/env::*\n", "")
@@ -1676,7 +1676,7 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
     scoped_core_source = "".join(
         line for line in core_source.splitlines(keepends=True) if not line.startswith("infix")
     )
-    (std_dir / "core.agl").write_text(
+    (std_dir / "prelude.agl").write_text(
         f"{infix_declarations}\nscope Std\n{scoped_core_source}end Std\n", encoding="utf-8"
     )
     for name in ("option.agl", "pair.agl", "either.agl", "result.agl"):
@@ -1710,7 +1710,7 @@ def test_legacy_exec_signature_rejects_extended_options_with_a_diagnostic(tmp_pa
 def test_scoped_stdlib_arrangement_runs_end_to_end(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A whole scoped ``std/core`` module works end to end.
+    """A whole scoped ``std/prelude`` module works end to end.
 
     This runs the runtime-lowerable expanded prelude through parsing, scope
     resolution, typechecking, lowering, and evaluation. It exercises scoped
@@ -1817,7 +1817,7 @@ def test_scoped_stdlib_arrangement_uncaught_host_raised_exec_error_reports_scope
 def test_scoped_stdlib_arrangement_bare_print_is_undefined_but_qualified_works(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """With the real core wrapped in ``scope Std``, only ``Std::print`` works.
+    """With the real prelude wrapped in ``scope Std``, only ``Std::print`` works.
 
     A built-in call is classified only once its callee resolves to a
     ``builtin def`` declaration, the same as any other reference. The named
@@ -1860,7 +1860,7 @@ def test_scoped_builtin_hierarchy_declared_in_the_entry_module_catches_a_host_ra
     catch already uses. This program declares the whole exec/exception
     surface itself and loads without the standard library (``default_stdlib
     =False``), so its own ``scope Host`` module lowers normally (unlike the
-    real ``std/core`` module, whose pure declarations are linked with the
+    real ``std/prelude`` module, whose pure declarations are linked with the
     prelude). A failed (``text``-typed, non-structured) ``exec`` call
     raises ``ExecError`` at the host boundary; before per-path identity was
     restored the host would have minted a path-free nominal while the type

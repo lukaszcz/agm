@@ -171,7 +171,7 @@ functions](functions.md#built-in-functions). This allows a receiver method
 such as `Agent::ask` to coexist with root `ask`. The example below therefore
 presumes a program started with `--no-stdlib` ([Modules](modules.md#prelude)),
 since `ExecResult` and `print` are otherwise already declared at those paths
-by the automatically injected `std/core` prelude:
+by the automatically injected `std/prelude` prelude:
 
 ```agl
 scope Host

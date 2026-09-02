@@ -167,7 +167,7 @@ class TestAssembleRoots:
         )
         assert stdlib.resolve() in rs.roots
         assert rs.stdlib_roots == frozenset({stdlib.resolve()})
-        assert rs.is_standard_library_path(stdlib / "std" / "core.agl")
+        assert rs.is_standard_library_path(stdlib / "std" / "prelude.agl")
 
     def test_includes_package_root_and_preserves_its_ownership_metadata(
         self, tmp_path: Path

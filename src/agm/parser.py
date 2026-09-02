@@ -594,7 +594,7 @@ _HELP_TEXTS: dict[str, str] = {
           --no-log              Disable trace logging (overrides config).
           --log, --log-file, and --no-log are mutually exclusive.
           --log-file and --no-log-file are mutually exclusive.
-          --no-stdlib           Disable the automatic import std/core::* prelude
+          --no-stdlib           Disable the automatic import std/prelude::* prelude
                                 throughout the loaded program (entry and library modules).
           -I DIR, --module-path DIR
                                 Add DIR as an additional module search root
@@ -624,10 +624,10 @@ _HELP_TEXTS: dict[str, str] = {
         earlier results stay available and agent calls fire exactly once.  The
         session reuses the [exec] configuration (default agent, call-depth
         limit, JSON strictness, timeout). Like agm exec, it supplies an automatic
-        import std/core::* prelude to each loaded program, so standard-library
+        import std/prelude::* prelude to each loaded program, so standard-library
         names are available unqualified. An explicit import whose expansion
-        includes std/core supplies its core contribution instead, so plain
-        import std/core leaves core names qualified-only. Other imports are
+        includes std/prelude supplies the prelude contribution instead, so plain
+        import std/prelude leaves prelude names qualified-only. Other imports are
         qualified by default; --no-stdlib disables the automatic prelude.
 
         The REPL has two front ends: an interactive prompt_toolkit console
@@ -659,7 +659,7 @@ _HELP_TEXTS: dict[str, str] = {
           --confirm-agents     Confirm each agent prompt before dispatching it
                                 (default: fire agent calls without confirming).
           --quiet               Suppress automatic echoing of entry results.
-          --no-stdlib           Disable the automatic import std/core::* prelude for
+          --no-stdlib           Disable the automatic import std/prelude::* prelude for
                                 each loaded REPL program (entries and library modules).
                                 Explicit imports remain available, and :reset
                                 keeps this choice.
@@ -708,7 +708,7 @@ _HELP_TEXTS: dict[str, str] = {
                                 (repeatable). Resolved relative to the invocation
                                 working directory. Joins the unordered root set;
                                 a module id found in two roots is an ambiguity error.
-          --no-stdlib           Disable automatic std/core opening throughout
+          --no-stdlib           Disable automatic std/prelude opening throughout
                                 each checked file (entry and library modules).
 
         Exit codes:

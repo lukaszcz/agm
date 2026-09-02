@@ -76,7 +76,7 @@ def _write_command_stdlib(root: Path, config: str) -> Path:
     config_path = stdlib_root / "std" / "config.agl"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(
-        'import std/core::*\nbuiltin var default-agent: Agent = AgentCommand("echo")\n' + config,
+        'import std/prelude::*\nbuiltin var default-agent: Agent = AgentCommand("echo")\n' + config,
         encoding="utf-8",
     )
     for source in (_STDLIB / "std").iterdir():

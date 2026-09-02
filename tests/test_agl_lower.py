@@ -1346,7 +1346,7 @@ class TestBuiltinNominalsTable:
     """``ExecutableProgram.builtin_nominals`` — the host's per-program nominal table."""
 
     def test_answers_with_loaded_standard_library_source_identities(self) -> None:
-        """Loaded ``std/core`` declarations drive the host's nominal table.
+        """Loaded ``std/prelude`` declarations drive the host's nominal table.
 
         Reserved identities remain the fallback only for a program that does
         not load a source declaration.
@@ -1362,7 +1362,7 @@ class TestBuiltinNominalsTable:
 
         The declaration is at the root (empty scope path) of the entry
         module — a bare builtin name may be declared only once per program
-        and ``std/core`` already declares a root ``RangeError``, so this
+        and ``std/prelude`` already declares a root ``RangeError``, so this
         compiles with ``default_stdlib=False`` — so it carries the entry
         module's own identity, a distinct nominal from the shipped standard
         library's own ``RangeError``: the declaration is what drives the
@@ -1389,7 +1389,7 @@ class TestBuiltinNominalsTable:
         nominal from a same-named one at another path (or at the root), so
         the table answers with the declaration's own module and scope path
         here, not the shipped standard library's own root identity. A bare
-        builtin name may be declared only once per program and ``std/core``
+        builtin name may be declared only once per program and ``std/prelude``
         already declares a root ``RangeError``, so this compiles with
         ``default_stdlib=False``.
         """
@@ -1424,7 +1424,7 @@ class TestBuiltinNominalsTable:
         inside ``scope A`` and nothing declared at the root — carries the
         exact scoped identity a same-region ``catch RangeError`` resolves
         to, not the path-free one, and reports its declared spelling. A bare
-        builtin name may be declared only once per program and ``std/core``
+        builtin name may be declared only once per program and ``std/prelude``
         already declares a root ``RangeError``, so this compiles with
         ``default_stdlib=False``: that is what makes "nothing declared at
         the root" true here.
@@ -1694,7 +1694,7 @@ class TestIrFieldLowering:
     def test_abstract_exception_field_access_uses_upper_bound_mode(self) -> None:
         """Field access on abstract Exception records a static upper bound."""
         from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
-        from agm.agl.modules.ids import STD_CORE_ID
+        from agm.agl.modules.ids import STD_PRELUDE_ID
         from agm.agl.syntax.nodes import FieldAccess, UnitLit
         from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 
@@ -1714,7 +1714,7 @@ class TestIrFieldLowering:
         field_access = FieldAccess(obj=unit_lit, field="message", span=span, node_id=fake_node_id)
 
         checked.node_types[unit_lit.node_id] = ExceptionType(
-            "Exception", STD_CORE_ID, decl_id=require_reserved_nominal_id("Exception")
+            "Exception", STD_PRELUDE_ID, decl_id=require_reserved_nominal_id("Exception")
         )
         lowerer = _make_lowerer(checked, source)
         result = lowerer.lower_expr(field_access)

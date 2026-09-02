@@ -868,7 +868,7 @@ class ReplSession:
         spaced_qualifiers = tuple(spaced_sink)
 
         # [1d] REPL entries use the program pipeline by default because that
-        # is where the synthetic ``import std/core`` prelude is injected.  This
+        # is where the synthetic ``import std/prelude`` prelude is injected.  This
         # keeps the REPL aligned with ``agm exec``: stdlib names are bare unless
         # a host explicitly opts out.
         return self._entry_pipeline.eval_entry(

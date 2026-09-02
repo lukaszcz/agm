@@ -158,7 +158,7 @@ def test_dry_run_keeps_registry_method_modules_reached_through_source_imports(
     stdlib = tmp_path / "stdlib"
     std = stdlib / "std"
     std.mkdir(parents=True)
-    (std / "core.agl").write_text("builtin def print[T](value: T) -> unit\n")
+    (std / "prelude.agl").write_text("builtin def print[T](value: T) -> unit\n")
     (std / "builtin-methods.agl").write_text("import std/math\n")
     (std / "math.agl").write_text(
         "param limit: int = 3\nextern def helper() -> int\n"

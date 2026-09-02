@@ -65,8 +65,8 @@ def test_renamed_resource_builtin_runs_through_its_original_declaration(tmp_path
     entry = tmp_path / "main.agl"
     resource = tmp_path / "prompt.md"
     resource.write_text("prompt", encoding="utf-8")
-    source = """import std/core::*
-import std/core::{resource as asset}
+    source = """import std/prelude::*
+import std/prelude::{resource as asset}
 let prompt = asset("prompt.md")
 program def main() -> unit =
   print prompt
@@ -249,7 +249,7 @@ def test_package_validation_rejects_missing_resource_reached_through_a_reexport(
     module_root = root / "package"
     module_root.mkdir(parents=True)
     (module_root / "resources.agl").write_text(
-        "export std/core::{resource as asset}\n", encoding="utf-8"
+        "export std/prelude::{resource as asset}\n", encoding="utf-8"
     )
     (module_root / "main.agl").write_text(
         """import package/resources::{asset}
@@ -271,7 +271,7 @@ def test_package_validation_rejects_missing_resource_exposed_by_import_tail_scop
     module_root = root / "package"
     module_root.mkdir(parents=True)
     (module_root / "resources.agl").write_text(
-        "scope Assets\n  export std/core::{resource as asset}\nend Assets\n",
+        "scope Assets\n  export std/prelude::{resource as asset}\nend Assets\n",
         encoding="utf-8",
     )
     (module_root / "main.agl").write_text(
@@ -294,7 +294,7 @@ def test_package_validation_rejects_missing_resource_through_an_ancestor_scoped_
     module_root.mkdir(parents=True)
     (module_root / "main.agl").write_text(
         "scope Assets\n"
-        "  import std/core::{resource as asset}\n"
+        "  import std/prelude::{resource as asset}\n"
         "\n"
         "  scope Templates\n"
         '    let prompt = asset("prompts/missing.md")\n'
@@ -317,10 +317,10 @@ def test_scoped_function_blocks_scoped_resource_alias_during_nested_lookup(
     module_root = root / "package"
     module_root.mkdir(parents=True)
     (module_root / "main.agl").write_text(
-        "import std/core::{resource as asset}\n"
+        "import std/prelude::{resource as asset}\n"
         "\n"
         "scope Assets\n"
-        "  import std/core::{resource as asset}\n"
+        "  import std/prelude::{resource as asset}\n"
         "  def asset(path: text) -> text = path\n"
         "\n"
         "  scope Templates\n"
@@ -344,7 +344,7 @@ def test_package_validation_rejects_missing_resource_through_a_scoped_import_rou
     module_root.mkdir(parents=True)
     (module_root / "main.agl").write_text(
         "scope Assets\n"
-        "  import std/core::{resource as asset}\n"
+        "  import std/prelude::{resource as asset}\n"
         "end Assets\n"
         "\n"
         'let prompt = core::asset("prompts/missing.md")\n'
@@ -363,7 +363,7 @@ def test_package_validation_uses_the_resolved_resource_declaration(tmp_path: Pat
     module_root = root / "package"
     module_root.mkdir(parents=True)
     (module_root / "main.agl").write_text(
-        """import std/core::{resource as asset}
+        """import std/prelude::{resource as asset}
 def asset(path: text) -> text = path
 let local = asset("prompts/missing.md")
 program def main() -> unit = ()
@@ -375,7 +375,7 @@ program def main() -> unit = ()
     validate_package(package)
 
     (module_root / "main.agl").write_text(
-        """import std/core as core
+        """import std/prelude as core
 let path = core::resource("prompts/missing.md")
 program def main() -> unit = ()
 """,
@@ -392,7 +392,7 @@ def test_package_validation_follows_an_unaliased_qualified_resource_import(
     module_root = root / "package"
     module_root.mkdir(parents=True)
     (module_root / "main.agl").write_text(
-        """import std/core
+        """import std/prelude
 let path = core::resource("prompts/missing.md")
 program def main() -> unit = ()
 """,
@@ -404,7 +404,7 @@ program def main() -> unit = ()
         validate_package(package)
 
 
-@pytest.mark.parametrize("qualifier", ("core", "std/core", "/std/core"))
+@pytest.mark.parametrize("qualifier", ("core", "std/prelude", "/std/prelude"))
 def test_package_validation_follows_qualified_resource_wildcard_imports(
     tmp_path: Path, qualifier: str
 ) -> None:
@@ -447,7 +447,7 @@ def test_package_validation_accepts_a_reexport_that_hides_resource_builtins(tmp_
     module_root = root / "package"
     module_root.mkdir(parents=True)
     (module_root / "resources.agl").write_text(
-        "export std/core hiding resource\n", encoding="utf-8"
+        "export std/prelude hiding resource\n", encoding="utf-8"
     )
     (module_root / "main.agl").write_text("program def main() -> unit = ()\n", encoding="utf-8")
     package = PackageInfo(root, PackageManifest("package", semver.Version.parse("1.0.0")))

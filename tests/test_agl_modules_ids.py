@@ -8,7 +8,7 @@ from agm.agl.modules.ids import (
     ENTRY_ID,
     STD_BUILTIN_METHODS_ID,
     STD_CONFIG_ID,
-    STD_CORE_ID,
+    STD_PRELUDE_ID,
     ModuleId,
 )
 
@@ -147,7 +147,7 @@ class TestModuleIdRoundTrip:
 
 class TestStandardLibraryIds:
     def test_standard_library_ids_use_slash_paths(self) -> None:
-        assert STD_CORE_ID.path_str() == "std/core"
+        assert STD_PRELUDE_ID.path_str() == "std/prelude"
         assert STD_CONFIG_ID.path_str() == "std/config"
 
 

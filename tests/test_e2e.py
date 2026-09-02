@@ -7499,7 +7499,7 @@ class TestPackageInstall:
         env["AGM_HOME"] = str(tmp_path / "agm-home")
         dependency = _write_store_test_package(tmp_path / "helpers", "helpers", "1.0.0")
         (dependency / "helpers" / "assets.agl").write_text(
-            "export std/core::{resource as asset}\n", encoding="utf-8"
+            "export std/prelude::{resource as asset}\n", encoding="utf-8"
         )
         package = _write_store_test_package(tmp_path / "source", "alpha", "1.0.0")
         (package / "package.toml").write_text(
@@ -9438,7 +9438,7 @@ class TestReplCommand:
             ["repl", "--no-stdlib"],
             env=env,
             cwd=str(work),
-            input="Some(value = 1)\nimport std/core::*\nSome(value = 1)\n:quit\n",
+            input="Some(value = 1)\nimport std/prelude::*\nSome(value = 1)\n:quit\n",
         )
 
         assert result.returncode == 0

@@ -230,7 +230,7 @@ recorded as a placeholder marker rather than raising — see
 ### Copying values
 
 Because binding is by reference, a program that wants an independent value
-must ask for one explicitly. `std/core` declares both host functions with
+must ask for one explicitly. `std/prelude` declares both host functions with
 this signature:
 
 <!-- agl-check: fragment -->
@@ -326,14 +326,14 @@ See [Functions](functions.md) for the declaration and call syntax.
 
 ## Library types named by the language
 
-The types below are declared by `std/core` and named by the language's own
+The types below are declared by `std/prelude` and named by the language's own
 constructs — `exec`, `ask`, and sessions — so the reference describes them
-here. Every loaded entry and library module except `std/core` itself receives
-an automatic `import std/core::*`, unless `--no-stdlib` disables it or an
-explicit import whose expansion includes `std/core` supplies the core
+here. Every loaded entry and library module except `std/prelude` itself receives
+an automatic `import std/prelude::*`, unless `--no-stdlib` disables it or an
+explicit import whose expansion includes `std/prelude` supplies the prelude
 contribution instead.
 
-`std/core` also re-exports `std/option`, `std/pair`, `std/either`, and
+`std/prelude` also re-exports `std/option`, `std/pair`, `std/either`, and
 `std/result`, which supply the generic optional `Option[T]`, product
 `Pair[A, B]`, neutral sum `Either[A, B]`, and outcome `Result[T, E]`. Of those,
 `Option[T]` reaches the language surface: `null` is a value of type `json` only
@@ -374,7 +374,7 @@ corrective retries after the initial attempt.
 record types `AgentCommand(command)`, `AgentClaude(model, thinking)`,
 `AgentCodex(model, thinking)`, and `AgentPi(provider, model, thinking)`.
 Like every enum, `Agent` values have equality, rendering, and JSON casts; a
-member record exposes its fields when used at its record type. Its standard-core `ask` and `ask-request` members are call-only builtin
+member record exposes its fields when used at its record type. Its standard-library `ask` and `ask-request` members are call-only builtin
 methods, so `agent.ask(...)` and `agent.ask-request(...)` select that agent
 for the operation; see [Agent calls](agent-calls.md) for dispatch behavior.
 
@@ -539,10 +539,10 @@ A record may be generic — `record Box[T]` then a field `value: T`
 (see [Generics](generics.md)).
 
 `builtin record` is the body-equivalent form for host-recognized nominal record
-types in `std/core`. The name and full field shape must match a recognized
+types in `std/prelude`. The name and full field shape must match a recognized
 built-in type exactly, and that complete scoped name may be declared only once
 across the whole program. A program loading the default standard library, as
-it does unless started with `--no-stdlib`, cannot redeclare a `std/core` type
+it does unless started with `--no-stdlib`, cannot redeclare a `std/prelude` type
 at the same path (see [Built-in functions](functions.md#built-in-functions)).
 
 ## Enum types
@@ -640,8 +640,8 @@ under that name: an unannotated `exec` returns that program's
 `builtin record AgentRequest`, and a built-in exception the host raises is its
 `builtin exception` of that name. Such a value carries that declaration's own
 path, so it renders under that path and a `catch` clause naming the declaration
-matches it. A name the program declares no `builtin` for keeps the standard
-core type described in [Standard library types](#standard-library-types). A `catch`
+matches it. A name the program declares no `builtin` for keeps the standard-library
+type described in [Standard library types](#standard-library-types). A `catch`
 clause naming the standard declaration of a name the program declares its own
 `builtin` for is rejected, wherever in the program it is written, because the
 host raises the program's own declaration under that name instead.

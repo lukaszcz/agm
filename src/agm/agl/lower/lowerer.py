@@ -166,8 +166,8 @@ from agm.agl.matchcompile import (
 )
 from agm.agl.modules.ids import (
     STD_CONFIG_ID,
-    STD_CORE_ID,
     STD_ENV_ID,
+    STD_PRELUDE_ID,
     ModuleId,
     spell_scope_path,
 )
@@ -310,7 +310,7 @@ def _add_builtin_nominals(
         if isinstance(typ, RecordType):
             nominals[nominal] = NominalDescriptor(
                 nominal=nominal,
-                module_id=STD_CORE_ID,
+                module_id=STD_PRELUDE_ID,
                 scope_path=(),
                 declared_name=name,
                 kind=NominalKind.RECORD,
@@ -324,7 +324,7 @@ def _add_builtin_nominals(
         enum_type = cast(EnumType, typ)
         nominals[nominal] = NominalDescriptor(
             nominal=nominal,
-            module_id=STD_CORE_ID,
+            module_id=STD_PRELUDE_ID,
             scope_path=(),
             declared_name=name,
             kind=NominalKind.ENUM,
@@ -343,7 +343,7 @@ def _add_builtin_nominals(
         nominal = NominalId(require_reserved_nominal_id(exc_name))
         nominals[nominal] = NominalDescriptor(
             nominal=nominal,
-            module_id=STD_CORE_ID,
+            module_id=STD_PRELUDE_ID,
             scope_path=(),
             declared_name=exc_name,
             kind=NominalKind.EXCEPTION,
@@ -364,7 +364,7 @@ def builtin_nominals_from_declarations(type_table: TypeTable) -> BuiltinNominals
     type a host call (e.g. ``exec``'s default result type) against a
     program's selected declaration, rather than an independent walk of the
     modules' ASTs. Enum members are derived from those same definitions, with
-    the loaded ``std/core`` members retained separately for nested standard
+    the loaded ``std/prelude`` members retained separately for nested standard
     host representations. A name no declaration claims is absent and uses a
     reserved fallback (see
     :meth:`~agm.agl.ir.builtin_nominals.BuiltinNominals.resolve`).
@@ -2293,7 +2293,7 @@ class _Lowerer:
             return False
         if isinstance(session_type, RecordType) and receiver.decl_id == session_type.decl_id:
             return True
-        return method.module_id == STD_CORE_ID and method.scope_path == ("Session",)
+        return method.module_id == STD_PRELUDE_ID and method.scope_path == ("Session",)
 
     def _lower_session_method_call(
         self, call_node: Call, method: MethodDef, span: SourceSpan

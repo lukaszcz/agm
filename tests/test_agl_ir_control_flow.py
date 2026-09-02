@@ -47,7 +47,7 @@ from agm.agl.ir.program import (
     SymbolDescriptor,
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
+from agm.agl.modules.ids import ENTRY_ID, STD_PRELUDE_ID
 from agm.agl.semantics.values import (
     ExceptionValue,
     IntValue,
@@ -752,7 +752,7 @@ def test_ir_try_handler_binding_stored_in_frame() -> None:
     nominals = {
         exc_nominal: NominalDescriptor(
             nominal=exc_nominal,
-            module_id=STD_CORE_ID,
+            module_id=STD_PRELUDE_ID,
             scope_path=(),
             declared_name="Abort",
             kind=NominalKind.EXCEPTION,
@@ -815,7 +815,7 @@ def test_validate_ir_try_handler_symbol_missing() -> None:
     nominals = {
         exc_nominal: NominalDescriptor(
             nominal=exc_nominal,
-            module_id=STD_CORE_ID,
+            module_id=STD_PRELUDE_ID,
             scope_path=(),
             declared_name="Abort",
             kind=NominalKind.EXCEPTION,

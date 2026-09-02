@@ -309,7 +309,7 @@ class TestCheckCommand:
         agl_file = tmp_path / "opt.agl"
         agl_file.write_text("let x = Some(value = 1)\n")
 
-        # std/core is opened automatically by default, so this checks clean.
+        # std/prelude is opened automatically by default, so this checks clean.
         check_command.run(CheckArgs(files=[str(agl_file)]))
         captured = capsys.readouterr()
         assert captured.out == ""

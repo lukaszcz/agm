@@ -138,9 +138,9 @@ def test_non_prelude_session_static_header_is_not_a_builtin() -> None:
 
 
 def test_replacement_std_core_scope_is_not_the_session_static_owner(tmp_path: Path) -> None:
-    """A same-path scope in replacement ``std/core`` cannot impersonate Session."""
+    """A same-path scope in replacement ``std/prelude`` cannot impersonate Session."""
     (tmp_path / "std").mkdir()
-    (tmp_path / "std" / "core.agl").write_text(
+    (tmp_path / "std" / "prelude.agl").write_text(
         "scope Session\n  builtin def default() -> Session\nend Session\n",
         encoding="utf-8",
     )
@@ -163,7 +163,7 @@ def test_prelude_session_constructor_spelling_is_rejected_as_an_unknown_static(
 ) -> None:
     """A prelude static owner rejects constructor-like value references."""
     (tmp_path / "std").mkdir()
-    (tmp_path / "std" / "core.agl").write_text(
+    (tmp_path / "std" / "prelude.agl").write_text(
         "builtin record Session()\n"
         "builtin def Session::default() -> Session\n"
         "let value = Session::Session\n",

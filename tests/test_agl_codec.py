@@ -119,12 +119,12 @@ def _ask_builtin_items() -> tuple[Item, ...]:
     """Real ``ParsePolicy``/``ask`` declarations, parsed once, for a bare ``ask(...)``.
 
     ``_check_program_with_json`` builds a hand-crafted single-module program
-    that never imports ``std/core`` (see ``resolve_and_check_program_ast``),
+    that never imports ``std/prelude`` (see ``resolve_and_check_program_ast``),
     so a bare ``ask(...)`` call needs its own reachable declaration in the
     same program: a bare built-in call is classified only once it resolves to
     a ``builtin def``, exactly like any other reference. Parsing the real
     signatures (rather than hand-building the AST) keeps them trivially in
-    sync with ``std/core.agl`` and their canonical shape, which a ``builtin``
+    sync with ``std/prelude.agl`` and their canonical shape, which a ``builtin``
     declaration is checked against. Node ids are seeded well above this
     module's own ``_nid()`` counter to stay disjoint from every hand-built
     node id in this file.
@@ -262,7 +262,7 @@ def _check_program_with_json(body: tuple[Item, ...]) -> CheckedModule:
     by this module's ``_let``/``_template``/... builders below, not parsed
     from source text, so there is no source string to hand to
     ``tests.agl.module_graph.resolve_and_check_entry`` (which only accepts
-    one). That graph never imports ``std/core``, so ``_ask_builtin_items()``
+    one). That graph never imports ``std/prelude``, so ``_ask_builtin_items()``
     is prepended to give this suite's bare ``ask(...)`` calls (built by
     ``_ask_call``) a reachable declaration.
     """
@@ -290,7 +290,7 @@ class _Bindings(dict[str, object]):
 
 
 # The hand-built program in ``_check_program_with_json`` declares its own
-# ``Agent`` enum (scoped to the entry module, not ``std/core``) and never loads
+# ``Agent`` enum (scoped to the entry module, not ``std/prelude``) and never loads
 # ``std/config``, so the bare ``ask(...)`` calls built by ``_ask_call`` have no
 # declared ``default-agent`` to read. ``_run_with_json_codec`` seeds one — its
 # concrete variant is irrelevant, since every ``agent_dispatcher`` in this file

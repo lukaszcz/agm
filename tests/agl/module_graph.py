@@ -17,16 +17,16 @@ uses) and run the real program-level passes, returning the entry module's
 already has a parsed (possibly hand-built, or virtually-pathed) ``Program``
 AST rather than a source string.
 
-The standard library (``std/core.agl``) is parsed once per process and
+The standard library (``std/prelude.agl``) is parsed once per process and
 reused across calls via ``build_repl_graph``'s ``cached`` parameter, since
 re-parsing it on every call would materially slow the suite (~17ms of the
-~18ms a full load costs is spent parsing ``std/core.agl``). *default_stdlib*
+~18ms a full load costs is spent parsing ``std/prelude.agl``). *default_stdlib*
 therefore defaults to ``True``: that is the configuration production runs
 (a bare ``print``/``exec``/``ask`` call resolves through its real
-``std/core`` declaration, not through an undeclared-name fallback), and a
+``std/prelude`` declaration, not through an undeclared-name fallback), and a
 test should only opt out of it when being stdlib-free is itself the point
 being tested — it declares its own ``builtin`` name (a bare builtin name may
-be declared only once per program, and ``std/core`` already declares every
+be declared only once per program, and ``std/prelude`` already declares every
 built-in name), or it asserts that some name is genuinely undefined with
 nothing else in scope. It is never a substitute for fixing a test that reads
 ``program.body.items`` positionally — see below.
@@ -34,7 +34,7 @@ nothing else in scope. It is never a substitute for fixing a test that reads
 Contract for the returned ``program.body.items``: the helper's job is to
 resolve *source* as a real program and hand back the entry module's
 resolution, whose items are the ones the test wrote. Resolution and
-type-checking always run with the injected ``std/core`` import present (that
+type-checking always run with the injected ``std/prelude`` import present (that
 is the real graph production builds), but the ``ModuleResolution`` returned
 to the caller has that one synthetic ``ImportDecl`` removed from
 ``program.body.items`` — matched by the exact node id the helper itself
@@ -83,12 +83,12 @@ _DEFAULT_CAPABILITIES = HostCapabilities(
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[2] / "stdlib"
 
-# The cached std/core module's node ids are seeded from a high base so they
+# The cached std/prelude module's node ids are seeded from a high base so they
 # never collide with an entry's own ids, which every call seeds from 0 (some
 # tests reason about entry node ids starting at 0). New per-call node ids
 # (the synthetic stdlib import, or any further module an entry explicitly
 # imports) are seeded from the same high base, kept above the cached range.
-_STD_CORE_SEED_START = 1_000_000
+_STD_PRELUDE_SEED_START = 1_000_000
 
 _std_core_cache: dict[ModuleId, LoadedModule] | None = None
 _std_core_next_start_id: int = 0
@@ -99,15 +99,15 @@ def _roots() -> RootSet:
 
 
 def _cached_std_core() -> tuple[dict[ModuleId, LoadedModule], int]:
-    """Return the process-cached ``std/core`` module plus the next free node id.
+    """Return the process-cached ``std/prelude`` module plus the next free node id.
 
     Loaded once per process (per ``pytest -n auto`` worker) and reused for
     every call with ``default_stdlib=True``, avoiding a ~17ms reparse of
-    ``std/core.agl`` on every single test.
+    ``std/prelude.agl`` on every single test.
     """
     global _std_core_cache, _std_core_next_start_id
     if _std_core_cache is None:
-        priming_program, next_id = parse_program_seeded("()", start_id=_STD_CORE_SEED_START)
+        priming_program, next_id = parse_program_seeded("()", start_id=_STD_PRELUDE_SEED_START)
         _graph, next_id, new_modules = build_repl_graph(
             priming_program,
             next_id,
@@ -166,7 +166,7 @@ def build_module_graph_from_program(
 def _without_synthetic_import(
     resolved: ModuleResolution, import_node_id: int | None
 ) -> ModuleResolution:
-    """Return *resolved* with the injected ``std/core`` import dropped from view.
+    """Return *resolved* with the injected ``std/prelude`` import dropped from view.
 
     Matches strictly by *import_node_id* (the id the helper itself assigned
     the synthetic import), never by position or node type, so a test's own
@@ -193,10 +193,10 @@ def resolve_entry(
     """Resolve *source* as the entry of a real module graph.
 
     Builds a real :class:`~agm.agl.modules.loader.ModuleGraph` (entry plus
-    ``std/core`` unless *default_stdlib* is ``False``) and runs
+    ``std/prelude`` unless *default_stdlib* is ``False``) and runs
     :func:`~agm.agl.scope.program.resolve_program` over it, returning the
     entry module's :class:`~agm.agl.scope.symbols.ModuleResolution` with the
-    injected ``std/core`` import removed from ``program.body.items`` (see
+    injected ``std/prelude`` import removed from ``program.body.items`` (see
     the module docstring) — so it always mirrors the source the test wrote.
 
     Parameters mirror the entry-scoped parameters of ``resolve_program``:
@@ -206,12 +206,12 @@ def resolve_entry(
     respectively; *origin_path* forwards to
     ``build_repl_graph``'s ``path``.
 
-    *default_stdlib* controls whether ``std/core`` is imported into the
+    *default_stdlib* controls whether ``std/prelude`` is imported into the
     entry, matching real program execution — this is ``True`` by default
     because that is what production always does. Pass ``False`` only when
     being stdlib-free is itself the point: a test that declares its own
     ``builtin`` (a bare builtin name may be declared only once per program,
-    and ``std/core`` already declares every built-in name), or one that
+    and ``std/prelude`` already declares every built-in name), or one that
     asserts a name is genuinely undefined with nothing else in scope. Never
     for positional convenience over ``program.body.items`` — the synthetic
     import is already invisible there regardless of this flag.
@@ -365,7 +365,7 @@ def resolve_and_check_entry(
     :func:`~agm.agl.typecheck.program.check_program` over the resolved graph
     and returns the entry module's
     :class:`~agm.agl.typecheck.env.CheckedModule`. Resolution and checking
-    both run with the injected ``std/core`` import present — that is the
+    both run with the injected ``std/prelude`` import present — that is the
     real graph production builds — and only the returned
     ``checked.resolved.program.body.items`` has that one synthetic item
     removed, exactly as :func:`resolve_entry` does. *capabilities* and

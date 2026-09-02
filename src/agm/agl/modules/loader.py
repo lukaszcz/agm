@@ -39,7 +39,7 @@ from agm.agl.modules.errors import (
     ModuleNotFound,
     PackageImportVisibilityError,
 )
-from agm.agl.modules.ids import ENTRY_ID, STD_BUILTIN_METHODS_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_BUILTIN_METHODS_ID, STD_PRELUDE_ID, ModuleId
 from agm.agl.modules.parsed_module_cache import (
     InfixSignature,
     cached_chain_scope_paths,
@@ -311,7 +311,7 @@ def _synthetic_stdlib_import(node_id: int) -> ImportDecl:
         source=SourceId(label="<stdlib-import>"),
     )
     return ImportDecl(
-        module_path=STD_CORE_ID.segments,
+        module_path=STD_PRELUDE_ID.segments,
         wildcard=False,
         alias=None,
         tail=(),
@@ -350,8 +350,8 @@ def _with_default_stdlib_import(
 ) -> syntax.Program:
     imports = _extract_imports(program)
     if any(
-        decl.module_path == STD_CORE_ID.segments
-        or (decl.wildcard and STD_CORE_ID.segments[: len(decl.module_path)] == decl.module_path)
+        decl.module_path == STD_PRELUDE_ID.segments
+        or (decl.wildcard and STD_PRELUDE_ID.segments[: len(decl.module_path)] == decl.module_path)
         for decl in imports
     ):
         return program
@@ -1032,7 +1032,7 @@ def _parse_imported_module(
             source=file_source_id,
             resolve_infix=False,
         )
-    if default_stdlib and module_id != STD_CORE_ID:
+    if default_stdlib and module_id != STD_PRELUDE_ID:
         program = _with_default_stdlib_import(program, import_node_id=next_id)
         next_id += 1
     loaded = LoadedModule(
@@ -1254,7 +1254,7 @@ def _build_entry_loaded_module(
 
     Shared by :func:`load_graph` (parses the entry itself first) and
     :func:`build_repl_graph` (given an already-parsed entry from the REPL's
-    own per-entry parse). Injects the ``std/core`` prelude import when
+    own per-entry parse). Injects the ``std/prelude`` prelude import when
     *default_stdlib* is set, consuming one more node id, and derives the
     companion path for a declared extern. Returns the built module together
     with the next free node id.

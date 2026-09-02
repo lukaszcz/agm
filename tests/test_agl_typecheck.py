@@ -2005,7 +2005,7 @@ class TestScopedBuiltinTypes:
         assert r.resolved.program is not None
 
     def test_builtin_exception_extending_an_out_of_region_same_named_base_is_rejected(self) -> None:
-        """Only a base that re-roots onto the canonical (``std/core``, path
+        """Only a base that re-roots onto the canonical (``std/prelude``, path
         ``()``) frame names the canonical hierarchy root. An unrelated
         exception that merely shares the name ``Exception``, declared outside
         the ``builtin`` declaration's own region, is a different type, so the
@@ -2171,19 +2171,19 @@ class TestBuiltinTypeModuleIdentity:
     module that writes it.
 
     These root declarations use names already provided at the root by
-    ``std/core``, so they run with ``default_stdlib=False``. The shipped
+    ``std/prelude``, so they run with ``default_stdlib=False``. The shipped
     standard library's declaration remains a distinct nominal rather than a
     re-homed shared sentinel.
     """
 
     def test_root_builtin_record_carries_the_entry_modules_own_identity(self) -> None:
-        """An entry-module ``builtin record ExecResult`` is not std/core's.
+        """An entry-module ``builtin record ExecResult`` is not std/prelude's.
 
-        Written with no standard library loaded because ``std/core`` already
+        Written with no standard library loaded because ``std/prelude`` already
         declares this root name. The entry module's declaration is therefore
         the only root ``ExecResult`` in scope here.
         """
-        from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
+        from agm.agl.modules.ids import ENTRY_ID, STD_PRELUDE_ID
 
         checked = accept_type(
             f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}()", default_stdlib=False
@@ -2191,7 +2191,7 @@ class TestBuiltinTypeModuleIdentity:
         handle = checked.type_env.get_type("ExecResult")
         assert isinstance(handle, RecordType)
         assert handle.module_id == ENTRY_ID
-        assert handle.module_id != STD_CORE_ID
+        assert handle.module_id != STD_PRELUDE_ID
 
     def test_root_builtin_exception_hierarchy_declared_without_the_stdlib_typechecks(self) -> None:
         """A program without the standard library may declare its own root
@@ -2200,9 +2200,9 @@ class TestBuiltinTypeModuleIdentity:
         The subclass's ``extends Exception`` resolves to the entry module's
         own root declaration, not the shipped standard library's; the
         canonical-shape comparison must re-root that reference onto its own
-        declaring module before it matches the canonical (``std/core``)
+        declaring module before it matches the canonical (``std/prelude``)
         shape, so this passes builtin shape validation. It uses
-        ``default_stdlib=False`` because ``std/core`` already declares root
+        ``default_stdlib=False`` because ``std/prelude`` already declares root
         ``Exception``.
         """
         r = accept_type(
@@ -2220,14 +2220,14 @@ class TestBuiltinTypeModuleIdentity:
         """A type-mismatch diagnostic spells a built-in record type bare.
 
         ``ExecResult``'s canonical (seeded) identity carries the shipped
-        standard library's own module (``std/core``); the message must still
+        standard library's own module (``std/prelude``); the message must still
         read the bare name a program never declared anything of its own for,
-        not ``std/core::ExecResult``.
+        not ``std/prelude::ExecResult``.
         """
         err = reject_type('let r: ExecResult = exec("ls")\nlet n: int = r\nn')
         message = err.to_diagnostic().message
         assert "ExecResult" in message
-        assert "std/core" not in message
+        assert "std/prelude" not in message
 
     def test_shipped_stdlib_builtin_exception_type_spells_bare_in_diagnostics(self) -> None:
         """A type-mismatch diagnostic spells a built-in exception type bare."""
@@ -2236,7 +2236,7 @@ class TestBuiltinTypeModuleIdentity:
         )
         message = err.to_diagnostic().message
         assert "RangeError" in message
-        assert "std/core" not in message
+        assert "std/prelude" not in message
 
 
 class TestCaughtExceptionShadowedByBuiltinRedeclaration:
@@ -2257,7 +2257,7 @@ class TestCaughtExceptionShadowedByBuiltinRedeclaration:
         ``scope A`` declares its own ``builtin exception ExecError``, so the
         host mints ``A::ExecError`` under the bare name ``ExecError``
         everywhere. The ``catch`` clause below sits OUTSIDE ``scope A``, so
-        the bare name resolves to the standard ``std/core::ExecError``
+        the bare name resolves to the standard ``std/prelude::ExecError``
         instead -- a declaration the host will never raise here -- and must
         be rejected rather than silently accepted as a dead handler.
         """
@@ -8211,8 +8211,8 @@ class TestTypeDeclarations:
 
     def test_builtin_type_name_shadow_raises(self) -> None:
         # ExecResult is a BUILTIN_PRELUDE_TYPE_NAMES — a non-builtin record
-        # shadowing it is always rejected. With std/core in scope (the real
-        # configuration), std/core's own `builtin record ExecResult` makes the
+        # shadowing it is always rejected. With std/prelude in scope (the real
+        # configuration), std/prelude's own `builtin record ExecResult` makes the
         # bare name ambiguous at scope-resolution time, before the type-level
         # shadow check in _TypeBuilder ever runs — so this now raises
         # AglScopeError, not AglTypeError; reject_any accepts either since
@@ -13119,7 +13119,7 @@ class TestCopyAndShallowCopyCall:
 class TestImportDeclTypecheck:
     """Import declarations pass through the type-checker without errors.
 
-    Each import here targets ``std/core``/``std/config`` — real modules under
+    Each import here targets ``std/prelude``/``std/config`` — real modules under
     the configured roots — since a real module graph (unlike the old
     per-module ``resolve_module``/``check_module`` bypass) resolves every
     import against the module loader, which rejects a target that does not
@@ -13128,11 +13128,11 @@ class TestImportDeclTypecheck:
 
     def test_import_decl_does_not_raise(self) -> None:
         """A bare import declaration type-checks as unit."""
-        r = accept_type("import std/core::*\n1")
+        r = accept_type("import std/prelude::*\n1")
         assert r  # no exception
 
     def test_import_with_alias_does_not_raise(self) -> None:
-        r = accept_type("import std/core as f\n1")
+        r = accept_type("import std/prelude as f\n1")
         assert r
 
     def test_import_wildcard_does_not_raise(self) -> None:
@@ -13140,11 +13140,11 @@ class TestImportDeclTypecheck:
         assert r
 
     def test_import_using_does_not_raise(self) -> None:
-        r = accept_type("import std/core::{ExecResult}\n1")
+        r = accept_type("import std/prelude::{ExecResult}\n1")
         assert r
 
     def test_import_hiding_does_not_raise(self) -> None:
-        r = accept_type("import std/core hiding ExecResult\n1")
+        r = accept_type("import std/prelude hiding ExecResult\n1")
         assert r
 
 

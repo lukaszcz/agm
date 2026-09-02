@@ -8,7 +8,7 @@ from typing import Protocol
 
 from agl import AglException, array, nominals
 
-IndexError = nominals.std.core.IndexError
+IndexError = nominals.std.prelude.IndexError
 Option = nominals.std.option.Option
 Pair = nominals.std.pair.Pair
 

@@ -51,7 +51,7 @@ from dataclasses import replace
 from typing import cast
 
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, STD_OPTION_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_OPTION_ID, STD_PRELUDE_ID, ModuleId
 from agm.agl.semantics.type_table import (
     TypeDef,
     source_enum_member_decl_id,
@@ -808,9 +808,9 @@ class _TypeBuilder:
 
     @staticmethod
     def _normalize_option_contract(contract: BuiltinTypeContract) -> BuiltinTypeContract:
-        """Map legacy ``std/core::Option`` spellings onto Option's canonical module.
+        """Map legacy ``std/prelude::Option`` spellings onto Option's canonical module.
 
-        The shipped ``std/core`` declarations use ``Option`` through their
+        The shipped ``std/prelude`` declarations use ``Option`` through their
         compatibility prelude binding. Host contracts own that generic enum in
         ``std/option``, so normalize this spelling only while comparing a
         builtin declaration's structural contract.
@@ -819,7 +819,7 @@ class _TypeBuilder:
         def normalize(typ: Type) -> Type:
             def move_option(node: Type) -> Type:
                 if isinstance(node, EnumType) and (
-                    node.name == "Option" and node.module_id == STD_CORE_ID
+                    node.name == "Option" and node.module_id == STD_PRELUDE_ID
                 ):
                     return replace(
                         node,

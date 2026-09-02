@@ -3,7 +3,7 @@
 A record/enum/exception is ordinarily identified by the declaration that
 introduced it (its AST node). Some nominal types the host recognizes have no
 such declaration in hand at the point a value needs one — a session run with
-``--no-stdlib`` never parses ``std/core`` at all, and the host mints certain
+``--no-stdlib`` never parses ``std/prelude`` at all, and the host mints certain
 values (a raised built-in exception, a structured ``exec`` ``ExecResult``, an
 ``Option`` value, ...) directly. This module fixes a stable identity for
 every such name so a handle naming one is never left without an identity to

@@ -234,15 +234,15 @@ their legal same-named, type-owned namespaces.
 
 ## Prelude
 
-Every loaded entry and library module, except `std/core` itself, receives an
-implicit `import std/core::*`. Any explicit import declaration whose expansion
-includes `std/core`, including one inside a named scope region, supplies the
-core contribution instead. Thus `import std/core` and `import std/*` leave core
-names qualified-only, while `import std/core::* hiding ask` makes every core
+Every loaded entry and library module, except `std/prelude` itself, receives an
+implicit `import std/prelude::*`. Any explicit import declaration whose expansion
+includes `std/prelude`, including one inside a named scope region, supplies the prelude
+contribution instead. Thus `import std/prelude` and `import std/*` leave prelude
+names qualified-only, while `import std/prelude::* hiding ask` makes every prelude
 member except `ask` bare.
 
 ```agl
-import std/core::* hiding ask
+import std/prelude::* hiding ask
 
 program def main() -> unit =
   let _ = print("ready")
@@ -252,7 +252,7 @@ When the prelude is enabled, the optional `std/builtin-methods` registry is
 also loaded when the standard library provides it, making its receiver methods
 ambient. The `--no-stdlib` option disables both automatic additions; a custom
 standard library may also omit the registry. Either way, importing a method's
-owning module loads its methods. An explicit core import remains available with
+owning module loads its methods. An explicit prelude import remains available with
 `--no-stdlib`.
 
 ## Standard library modules
@@ -261,7 +261,7 @@ The standard library is an ordinary module tree under the `std/` root: its
 modules are imported, aliased, re-exported, and hidden from exactly like any
 other module. Three have a language-level role:
 
-- `std/core` is the prelude described above, declaring the types, exceptions,
+- `std/prelude` is the prelude described above, declaring the types, exceptions,
   and built-ins the language itself refers to.
 - `std/config` exposes the host engine settings as `builtin var` bindings; see
   [Host environment](host-environment.md).
@@ -273,7 +273,7 @@ status:
 
 | Module | Provides |
 | ------ | -------- |
-| `std/option`, `std/pair`, `std/either`, `std/result` | `Option[T]`, `Pair[A, B]`, `Either[A, B]`, and `Result[T, E]`, all re-exported by `std/core` |
+| `std/option`, `std/pair`, `std/either`, `std/result` | `Option[T]`, `Pair[A, B]`, `Either[A, B]`, and `Result[T, E]`, all re-exported by `std/prelude` |
 | `std/array`, `std/dict`, `std/text`, `std/json` | the methods on the matching builtin type, plus that module's free functions |
 | `std/math` | numeric methods on `int` and `decimal`, aggregates, and constants |
 | `std/toml` | conversion between TOML documents and `json` |
@@ -321,7 +321,7 @@ declaration for every module it names at the same scope path and the earlier
 `use` declaration for the same resolved target at that path. A failed entry
 changes neither imports nor uses, and `:reset` clears both with the session
 bindings. An
-explicit `import std/core` retained from a successful entry
+explicit `import std/prelude` retained from a successful entry
 suppresses the synthetic prelude in later entries; `--no-stdlib` disables it
 for the whole session.
 

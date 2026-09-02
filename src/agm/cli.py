@@ -1140,7 +1140,7 @@ def exec_cmd(
         False,
         "--no-stdlib",
         help=(
-            "Disable the automatic import std/core::* prelude throughout the loaded program "
+            "Disable the automatic import std/prelude::* prelude throughout the loaded program "
             "(entry and library modules)."
         ),
     ),
@@ -1307,7 +1307,7 @@ def repl_cmd(
         False,
         "--no-stdlib",
         help=(
-            "Disable the automatic import std/core::* prelude for each loaded REPL program "
+            "Disable the automatic import std/prelude::* prelude for each loaded REPL program "
             "(entries and library modules)."
         ),
     ),
@@ -1369,7 +1369,7 @@ def check_cmd(
         False,
         "--no-stdlib",
         help=(
-            "Disable automatic std/core opening throughout each checked file "
+            "Disable automatic std/prelude opening throughout each checked file "
             "(entry and library modules)."
         ),
     ),

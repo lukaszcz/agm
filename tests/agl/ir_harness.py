@@ -48,7 +48,7 @@ def _checked_program(
     """Resolve and check *source* through a real module graph.
 
     Reuses :func:`tests.agl.module_graph._build_graph` (entry plus a
-    process-cached ``std/core`` unless *default_stdlib* is ``False``) so this
+    process-cached ``std/prelude`` unless *default_stdlib* is ``False``) so this
     pays the same one-parse-per-process cost as the scope/typecheck unit
     helpers, then runs the real whole-program passes -- the configuration
     production always runs, and the only one under which the module
@@ -236,7 +236,7 @@ def lower_ir(
     origin_path: Path | None = None,
 ) -> ExecutableProgram:
     """Resolve, check, compile, and lower *source* through the real
-    program-level pipeline (entry plus ``std/core`` unless *default_stdlib*
+    program-level pipeline (entry plus ``std/prelude`` unless *default_stdlib*
     is ``False``), returning the linked ``ExecutableProgram`` without running
     it.
 

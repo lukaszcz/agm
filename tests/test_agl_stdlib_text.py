@@ -47,7 +47,7 @@ def _text_companion() -> _TextCompanion:
         {
             _INDEX_ERROR: NominalDescriptor(
                 nominal=_INDEX_ERROR,
-                module_id=ModuleId(("std", "prelude")),
+                module_id=ModuleId(("std", "errors")),
                 scope_path=(),
                 declared_name="IndexError",
                 kind=NominalKind.EXCEPTION,

@@ -1,0 +1,39 @@
+import std/agent::{Agent, ParsePolicy}
+import std/errors::Exception
+import std/option::Option
+
+builtin
+enum SessionTransport
+  | Cli
+  | Rpc
+
+builtin record Session(id: text, agent: Agent, transport: SessionTransport)
+
+builtin record SessionStats(
+  input-tokens: int,
+  output-tokens: int,
+  cost: decimal,
+  context-percent: decimal,
+)
+
+builtin exception SessionError extends Exception(operation: text)
+
+builtin def Session::open(
+  agent: Agent,
+  transport: Option[SessionTransport] = Option[SessionTransport]::None,
+  name: text = "",
+) -> Session
+builtin def Session::default() -> Session
+builtin def Session::ask[T](
+  self,
+  prompt: text,
+  format: text = "",
+  strict_json: bool = false,
+  on_parse_error: ParsePolicy = ParsePolicy::Abort,
+) -> T
+builtin def Session::compact(self, instructions: text = "") -> unit
+builtin def Session::reset(self) -> unit
+builtin def Session::fork(self) -> Session
+builtin def Session::stats(self) -> SessionStats
+builtin def Session::set-name(self, name: text) -> unit
+builtin def Session::close(self) -> unit

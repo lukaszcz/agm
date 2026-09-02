@@ -60,6 +60,7 @@ from agm.agl.scope.imports import (
     QualResolution,
     QualResolutionAmbiguous,
     QualResolutionFound,
+    declares_bare_constructor,
     qualification_repair_guidance,
     qualifier_candidates,
     qualifier_contributes,
@@ -69,7 +70,6 @@ from agm.agl.scope.imports import (
     resolve_alias_target,
     resolve_qualified,
     resolve_qualified_member,
-    sibling_qname,
     try_resolve_qualified_member,
 )
 from agm.agl.scope.symbols import (
@@ -1809,6 +1809,7 @@ class _Resolver:
           header there is reported as the header-ordering violation it is.
         """
         seen_non_import_item = False
+        regional_exposures = self._regional_import_exposures(items)
 
         for item in items:
             if isinstance(item, UseDecl):
@@ -1834,7 +1835,7 @@ class _Resolver:
                         span=item.span,
                     )
                 if isinstance(item, ImportDecl) and item.scope_path:
-                    self._contribute_regional_import_bare(item)
+                    self._contribute_regional_import_bare(item, exposures=regional_exposures)
                 # The program module-system pass processes imports/exports; this pass skips them.
                 continue
             if isinstance(item, InfixDecl):
@@ -1937,7 +1938,26 @@ class _Resolver:
             )
         return ref, constructor
 
-    def _contribute_regional_import_bare(self, decl: ImportDecl) -> None:
+    def _regional_import_exposures(
+        self, items: tuple[Item, ...]
+    ) -> dict[NameAtom, frozenset[QName]]:
+        """Union the bare atoms every region-scoped import in *items* exposes.
+
+        A region's imports form one surface, however many declarations spell
+        it: whether an enum member's bare spelling yields to a same-named
+        record or exception must not depend on which import came first.
+        """
+        exposures: dict[NameAtom, frozenset[QName]] = {}
+        for item in items:
+            if not isinstance(item, ImportDecl) or not item.scope_path:
+                continue
+            for atom, qnames in self._import_env.decl_bare.get(item.node_id, {}).items():
+                exposures[atom] = exposures.get(atom, frozenset()) | frozenset(qnames)
+        return exposures
+
+    def _contribute_regional_import_bare(
+        self, decl: ImportDecl, *, exposures: Mapping[NameAtom, Collection[QName]]
+    ) -> None:
         """Contribute a region-scoped import tail to its own region only.
 
         ``build_import_env`` keeps a tail's bare atoms per declaration in
@@ -1953,7 +1973,6 @@ class _Resolver:
         rather than raising here.
         """
         bare = self._import_env.decl_bare.get(decl.node_id, {})
-        selected_qnames = frozenset(qname for qnames in bare.values() for qname in qnames)
         for atom, qnames in bare.items():
             for qname in qnames:
                 ref, constructor = self._cross_module_member_ref(atom, qname, decl.span)
@@ -1961,12 +1980,10 @@ class _Resolver:
                 if constructor is not None:
                     self._current_scope().contribute_bare_constructor(atom, constructor)
                 if isinstance(atom, str):
-                    self._contribute_regional_enum_variants(
-                        qname, decl.span, selected_qnames=selected_qnames
-                    )
+                    self._contribute_regional_enum_variants(qname, decl.span, exposures=exposures)
 
     def _contribute_regional_enum_variants(
-        self, qname: QName, span: SourceSpan, *, selected_qnames: Collection[QName]
+        self, qname: QName, span: SourceSpan, *, exposures: Mapping[NameAtom, Collection[QName]]
     ) -> None:
         """Expand a bare-exposed enum type into its own bare variants, region-scoped.
 
@@ -1982,6 +1999,7 @@ class _Resolver:
         module, source = qname
         owner_path = _bare_path(source)
         scope = self._current_scope()
+        selected_qnames = frozenset(qname for qnames in exposures.values() for qname in qnames)
         for member in declaration.members:
             if isinstance(member, VariantRef):
                 constructors = self._referenced_member_constructor_refs.get(
@@ -2002,13 +2020,9 @@ class _Resolver:
                         referenced_constructor.owner_name, referenced_constructor
                     )
                 continue
-            # A same-named top-level exception already owns the bare name
-            # (checked by its own plain atom, not the variant's owner-path
-            # key); the exception's own bare contribution stands alone.
-            exception_qname = sibling_qname(qname, member.name)
-            if exception_qname in selected_qnames and isinstance(
-                self._all_public_types.get(exception_qname), ExceptionDef
-            ):
+            # A same-named record or exception exposed bare already owns the
+            # spelling; its own bare contribution stands alone.
+            if declares_bare_constructor(exposures.get(member.name, ()), self._all_public_types):
                 continue
             variant_qname = (module, _bare_atom((*owner_path, member.name)))
             if variant_qname not in selected_qnames:
@@ -2630,13 +2644,11 @@ class _Resolver:
                 scope.contribute_bare_constructor(exposed, constructor)
                 contributed_constructors.setdefault(exposed, set()).add(constructor)
 
-        selected_qnames = frozenset(selected.values())
+        exposures = {exposed: (qname,) for exposed, qname in selected.items()}
         for exposed, qname in selected.items():
             contribute(exposed, qname)
             if isinstance(exposed, str):
-                self._contribute_regional_enum_variants(
-                    qname, decl.span, selected_qnames=selected_qnames
-                )
+                self._contribute_regional_enum_variants(qname, decl.span, exposures=exposures)
         for exposed, source in self._use_renamed_members(decl, members):
             contribute(exposed, source)
         scope.imported_use_contributions.append(

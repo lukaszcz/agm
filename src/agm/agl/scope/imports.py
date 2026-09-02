@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TypeAlias
@@ -53,7 +53,7 @@ __all__ = [
     "resolve_alias_target",
     "resolve_qualified",
     "resolve_qualified_member",
-    "sibling_qname",
+    "declares_bare_constructor",
     "try_resolve_qualified_member",
 ]
 
@@ -66,10 +66,19 @@ ScopeOrigins: TypeAlias = frozenset[QName]
 BareRoute: TypeAlias = tuple[ModuleId, PathAtom]
 
 
-def sibling_qname(owner: QName, sibling_name: str) -> QName:
-    """Return the qualified name beside *owner* in its declaring scope."""
-    module, atom = owner
-    return module, _atom((*_path(atom)[:-1], sibling_name))
+def declares_bare_constructor(
+    qnames: Iterable[QName],
+    all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAliasDecl],
+) -> bool:
+    """Whether one of *qnames* is a record or exception declaring its bare name.
+
+    An enum member's bare spelling is an injected convenience that stays
+    reachable qualified, so on an import surface it yields to a same-named
+    record or exception constructor, whichever module declares it.
+    """
+    return any(
+        isinstance(all_public_types.get(qname), (RecordDef, ExceptionDef)) for qname in qnames
+    )
 
 
 def _path_sort_key(atom: NameAtom) -> str:

@@ -1,5 +1,5 @@
 import std/option::Option
-import std/prelude::IndexError
+import std/errors::IndexError
 
 extern def interp(template: text, vars: dict[text, text]) -> text
 

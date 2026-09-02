@@ -4,7 +4,7 @@ from agl import AglException, array, nominals
 
 from agm.util.interp import interp
 
-IndexError = nominals.std.prelude.IndexError
+IndexError = nominals.std.errors.IndexError
 Option = nominals.std.option.Option
 
 

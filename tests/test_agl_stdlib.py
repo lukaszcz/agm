@@ -15,6 +15,7 @@ from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
     COMPATIBILITY_PRELUDE_TYPE_NAMES,
+    OPTION_TEXT_TYPE,
     BoolType,
     EnumType,
     IntType,
@@ -35,7 +36,7 @@ from tests.agl.module_graph import resolve_and_check_inline_entry, resolve_inlin
 
 _ROOTS = RootSet(frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
 _CAPS = HostCapabilities()
-_STD_PRELUDE = Path(__file__).resolve().parents[1] / "stdlib" / "std" / "prelude.agl"
+_STD_DIR = Path(__file__).resolve().parents[1] / "stdlib" / "std"
 _STD_OPTION = Path(__file__).resolve().parents[1] / "stdlib" / "std" / "option.agl"
 
 
@@ -60,7 +61,7 @@ def test_no_stdlib_reports_bare_print_as_undefined() -> None:
         resolve_inline_entry('print("hi")\n', default_stdlib=False)
 
 
-def test_no_stdlib_still_allows_explicit_std_core_import() -> None:
+def test_no_stdlib_still_allows_explicit_std_prelude_import() -> None:
     _check(
         "import std/prelude::*\nlet x: Option[int] = Some(value = 1)\nx\n",
         default_stdlib=False,
@@ -83,9 +84,9 @@ def test_stdlib_ask_signature_is_context_inferred_with_optional_arguments() -> N
     )
     resolved = resolve_program(graph)
     checked = check_program(resolved, _CAPS)
-    std_core = checked.modules[ModuleId.from_path("std/prelude")]
+    std_agent = checked.modules[ModuleId.from_path("std/agent")]
 
-    ask_sig = std_core.function_signatures["ask"]
+    ask_sig = std_agent.function_signatures["ask"]
 
     assert ask_sig.type_params == ("T",)
     assert ask_sig.result == TypeVarType("T")
@@ -173,25 +174,19 @@ def test_builtin_signature_helpers_cover_negative_paths() -> None:
     )
 
 
-def test_std_core_declares_every_public_builtin() -> None:
+def test_standard_library_declares_every_public_builtin() -> None:
     from agm.agl.parser import parse_program
     from agm.agl.syntax.nodes import EnumDef, ExceptionDef, FuncDef, RecordDef
 
-    program = parse_program(_STD_PRELUDE.read_text())
-    records = {
-        item.name for item in program.body.items if isinstance(item, RecordDef) and item.is_builtin
-    }
-    enums = {
-        item.name for item in program.body.items if isinstance(item, EnumDef) and item.is_builtin
-    }
-    exceptions = {
-        item.name
-        for item in program.body.items
-        if isinstance(item, ExceptionDef) and item.is_builtin
-    }
-    builtin_functions = [
-        item for item in program.body.items if isinstance(item, FuncDef) and item.is_builtin
+    items = [
+        item
+        for path in sorted(_STD_DIR.glob("*.agl"))
+        for item in parse_program(path.read_text()).body.items
     ]
+    records = {item.name for item in items if isinstance(item, RecordDef) and item.is_builtin}
+    enums = {item.name for item in items if isinstance(item, EnumDef) and item.is_builtin}
+    exceptions = {item.name for item in items if isinstance(item, ExceptionDef) and item.is_builtin}
+    builtin_functions = [item for item in items if isinstance(item, FuncDef) and item.is_builtin]
     functions = {item.name for item in builtin_functions if not item.scope_path}
     statics = {
         ("::".join(segment.name for segment in item.scope_path), item.name)
@@ -199,11 +194,14 @@ def test_std_core_declares_every_public_builtin() -> None:
         if item.scope_path and (not item.params or item.params[0].name != "self")
     }
 
-    public_prelude = set(BUILTIN_PRELUDE_TYPES) - set(COMPATIBILITY_PRELUDE_TYPE_NAMES)
     session_nominals = {"SessionTransport", "Session", "SessionStats", "SessionError"}
     assert session_nominals <= records | enums | exceptions
     assert session_nominals <= set(BUILTIN_PRELUDE_TYPES)
-    assert records | enums | exceptions == public_prelude | set(BUILTIN_EXCEPTIONS)
+    assert records | enums | exceptions == (
+        set(BUILTIN_PRELUDE_TYPES) - set(COMPATIBILITY_PRELUDE_TYPE_NAMES)
+        | set(BUILTIN_EXCEPTIONS)
+        | {OPTION_TEXT_TYPE.name}
+    )
     assert exceptions == set(BUILTIN_EXCEPTIONS) | {"SessionError"}
     assert functions == set(BUILTIN_CALL_NAMES)
     assert statics == {

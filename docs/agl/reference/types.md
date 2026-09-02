@@ -230,8 +230,8 @@ recorded as a placeholder marker rather than raising — see
 ### Copying values
 
 Because binding is by reference, a program that wants an independent value
-must ask for one explicitly. `std/prelude` declares both host functions with
-this signature:
+must ask for one explicitly. The standard library declares both host functions
+with this signature, and the prelude exports them:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -326,14 +326,15 @@ See [Functions](functions.md) for the declaration and call syntax.
 
 ## Library types named by the language
 
-The types below are declared by `std/prelude` and named by the language's own
-constructs — `exec`, `ask`, and sessions — so the reference describes them
-here. Every loaded entry and library module except `std/prelude` itself receives
-an automatic `import std/prelude::*`, unless `--no-stdlib` disables it or an
+The types below are declared by the standard library and named by the
+language's own constructs — `exec`, `ask`, and sessions — so the reference
+describes them here. `std/prelude` re-exports their declaring modules, and
+every loaded entry and library module except `std/prelude` itself receives an
+automatic `import std/prelude::*`, unless `--no-stdlib` disables it or an
 explicit import whose expansion includes `std/prelude` supplies the prelude
 contribution instead.
 
-`std/prelude` also re-exports `std/option`, `std/pair`, `std/either`, and
+The prelude also re-exports `std/option`, `std/pair`, `std/either`, and
 `std/result`, which supply the generic optional `Option[T]`, product
 `Pair[A, B]`, neutral sum `Either[A, B]`, and outcome `Result[T, E]`. Of those,
 `Option[T]` reaches the language surface: `null` is a value of type `json` only
@@ -539,11 +540,11 @@ A record may be generic — `record Box[T]` then a field `value: T`
 (see [Generics](generics.md)).
 
 `builtin record` is the body-equivalent form for host-recognized nominal record
-types in `std/prelude`. The name and full field shape must match a recognized
-built-in type exactly, and that complete scoped name may be declared only once
-across the whole program. A program loading the default standard library, as
-it does unless started with `--no-stdlib`, cannot redeclare a `std/prelude` type
-at the same path (see [Built-in functions](functions.md#built-in-functions)).
+types in the standard library. The name and full field shape must match a
+recognized built-in type exactly, and that complete scoped name may be declared
+only once across the whole program. A program loading the default standard
+library, as it does unless started with `--no-stdlib`, cannot redeclare a
+standard-library type at the same path (see [Built-in functions](functions.md#built-in-functions)).
 
 ## Enum types
 

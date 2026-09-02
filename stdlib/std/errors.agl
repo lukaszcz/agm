@@ -1,0 +1,80 @@
+builtin
+exception Exception
+  *
+  message: text
+
+builtin
+exception ExternError extends Exception
+  *
+  function: text
+  python_type: text
+
+builtin
+exception MaxIterationsExceeded extends Exception
+  *
+  limit: int
+  condition: text
+  last_condition_value: bool
+  metadata: json
+
+builtin
+exception MatchError extends Exception
+  *
+  scrutinee_type: text
+  scrutinee: json
+
+builtin
+exception IndexError extends Exception
+  *
+  index: int
+  length: int
+
+builtin
+exception KeyError extends Exception
+  *
+  key: text
+
+builtin
+exception TypeError extends Exception()
+
+builtin
+exception ArithmeticError extends Exception
+  *
+  operation: text
+
+builtin
+exception UndefinedVariableError extends Exception
+  *
+  name: text
+
+builtin
+exception ImmutableBindingError extends Exception
+  *
+  name: text
+  operation: text
+
+builtin
+exception Abort extends Exception()
+
+builtin
+exception RecursionError extends Exception
+  *
+  limit: int
+
+builtin
+exception CastError extends Exception
+  *
+  source_type: text
+  target_type: text
+  raw: text
+
+builtin
+exception JsonParseError extends Exception
+  *
+  raw: text
+
+builtin
+exception RangeError extends Exception()
+
+builtin
+exception CyclicValueError extends Exception()

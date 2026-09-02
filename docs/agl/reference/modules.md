@@ -261,19 +261,25 @@ The standard library is an ordinary module tree under the `std/` root: its
 modules are imported, aliased, re-exported, and hidden from exactly like any
 other module. Three have a language-level role:
 
-- `std/prelude` is the prelude described above, declaring the types, exceptions,
-  and built-ins the language itself refers to.
+- `std/prelude` is the prelude described above. It declares nothing itself: it
+  re-exports the modules declaring the types, exceptions, and built-ins the
+  language itself refers to, together with the generic sum and product types.
 - `std/config` exposes the host engine settings as `builtin var` bindings; see
   [Host environment](host-environment.md).
 - `std/builtin-methods` is the optional registry that makes the other modules'
   receiver methods ambient.
 
-Every other `std/*` module is imported explicitly and carries no special
-status:
+Every other `std/*` module carries no special status; the prelude re-exports
+the first six rows below, and the rest are imported explicitly:
 
 | Module | Provides |
 | ------ | -------- |
-| `std/option`, `std/pair`, `std/either`, `std/result` | `Option[T]`, `Pair[A, B]`, `Either[A, B]`, and `Result[T, E]`, all re-exported by `std/prelude` |
+| `std/errors` | the built-in exception hierarchy |
+| `std/fun` | the function application and composition combinators |
+| `std/io`, `std/value` | printing; rendering and copying values |
+| `std/exec`, `std/agent`, `std/session` | shell execution, agent calls, and agent sessions |
+| `std/package` | package resource lookup |
+| `std/option`, `std/pair`, `std/either`, `std/result` | `Option[T]`, `Pair[A, B]`, `Either[A, B]`, and `Result[T, E]` |
 | `std/array`, `std/dict`, `std/text`, `std/json` | the methods on the matching builtin type, plus that module's free functions |
 | `std/math` | numeric methods on `int` and `decimal`, aggregates, and constants |
 | `std/toml` | conversion between TOML documents and `json` |

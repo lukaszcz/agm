@@ -348,22 +348,21 @@ def test_same_module_same_type_identity() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_std_core_execresult_reports_std_core_as_its_owning_module(tmp_path: Path) -> None:
-    """In a normal program, the standard library's own ``ExecResult`` is owned by ``std/prelude``.
+def test_std_exec_execresult_reports_std_exec_as_its_owning_module(tmp_path: Path) -> None:
+    """In a normal program, the standard library's own ``ExecResult`` is owned by ``std/exec``.
 
     A ``builtin`` declaration belongs to the module that declares it, like
     any other declaration — no re-homing onto a shared sentinel. Loading the
     real standard library (the default) and reading its own checked module
     directly shows ``ExecResult`` resolves to a handle owned by
-    ``std/prelude`` itself, not the entry module or any placeholder.
+    ``std/exec`` itself, not the entry module or any placeholder.
     """
-    from agm.agl.modules.ids import STD_PRELUDE_ID
-
+    std_exec_id = ModuleId.from_path("std/exec")
     cg = _check_program(tmp_path, {"entry": "()"})
-    std_core = cg.modules[STD_PRELUDE_ID]
-    handle = std_core.type_env.get_type("ExecResult")
+    std_exec = cg.modules[std_exec_id]
+    handle = std_exec.type_env.get_type("ExecResult")
     assert isinstance(handle, RecordType)
-    assert handle.module_id == STD_PRELUDE_ID
+    assert handle.module_id == std_exec_id
 
 
 def test_program_warnings_follow_module_presentation_order(tmp_path: Path) -> None:

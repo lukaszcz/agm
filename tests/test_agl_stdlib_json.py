@@ -38,7 +38,7 @@ def _json_companion() -> _JsonCompanion:
         {
             _JSON_PARSE_ERROR: NominalDescriptor(
                 nominal=_JSON_PARSE_ERROR,
-                module_id=ModuleId(("std", "prelude")),
+                module_id=ModuleId(("std", "errors")),
                 scope_path=(),
                 declared_name="JsonParseError",
                 kind=NominalKind.EXCEPTION,
@@ -46,7 +46,7 @@ def _json_companion() -> _JsonCompanion:
             ),
             _KEY_ERROR: NominalDescriptor(
                 nominal=_KEY_ERROR,
-                module_id=ModuleId(("std", "prelude")),
+                module_id=ModuleId(("std", "errors")),
                 scope_path=(),
                 declared_name="KeyError",
                 kind=NominalKind.EXCEPTION,

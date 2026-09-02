@@ -1,0 +1,27 @@
+import std/config
+import std/env::Environ
+import std/errors::Exception
+import std/option::Option
+
+builtin
+record ExecResult
+  stdout: text
+  exit_code: int
+  stderr: text
+  timed_out: bool
+
+builtin
+exception ExecError extends Exception
+  *
+  command: text
+  exit_code: int
+  stdout: text
+  stderr: text
+  timed_out: bool
+
+builtin def exec(
+  command: text,
+  env: Environ = std/env::environ,
+  cwd: Option[text] = Option[text]::None,
+  timeout: Option[text] = std/config::timeout,
+) -> ExecResult

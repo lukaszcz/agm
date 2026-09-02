@@ -410,6 +410,11 @@ enum Other
 let h: Holder[int] = Holder::Tagged(by = 7)   # qualified — unambiguous
 ```
 
+An enum member's bare spelling is an injected convenience, so among the names
+one import surface exposes it yields to a record or exception constructor
+declaring that very name, whichever module declares each: bare `Abort` is the
+prelude's exception, while the member stays reachable as `ParsePolicy::Abort`.
+
 A **nearer ordinary binding shadows** a constructor (or an overload set): an
 inner `let`, `var`, or function parameter named `Tagged` hides the outer
 constructor for the rest of its scope, exactly like any other shadowing.

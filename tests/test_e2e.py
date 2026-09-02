@@ -7646,7 +7646,8 @@ class TestPackageInstall:
             "param subject: text\n"
             "program def main() -> unit =\n"
             "  print subject\n"
-            "  print std/config::max-iters\n",
+            "  print std/config::max-iters\n"
+            '  let _ = exec("true")\n',
             encoding="utf-8",
         )
         (package / "tools" / "inspect.agl").write_text(

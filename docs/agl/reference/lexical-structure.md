@@ -421,7 +421,7 @@ on both sides; see
 
 ### Prelude combinators
 
-`std/prelude` makes four functional combinators available through the prelude:
+The standard library provides four functional combinators through the prelude:
 `|>` is left-associative at priority 5 and passes a value to a function; `<|`
 is right-associative at priority 4 and applies a function to a value; `>>` is
 left-associative at priority 60 and composes functions left-to-right; `<<` is

@@ -1,0 +1,40 @@
+# The prelude declares nothing of its own, so every module it re-exports is
+# usable on its own: these scenarios run with no automatic prelude and import
+# exactly the modules they exercise — combinators, the exception hierarchy,
+# printing, value copying, shell execution, agent calls, and the session and
+# package surfaces.
+import std/fun::*
+import std/errors::*
+import std/io::print
+import std/value::{render, copy}
+import std/exec::*
+import std/agent::*
+import std/session
+import std/package
+
+param mode: text
+
+record Box(value: int)
+
+def increment(x: int) -> int = x + 1
+def double(x: int) -> int = x * 2
+
+program def main() -> unit =
+  print(render(increment <| 2 |> double))
+  print(render((increment >> double)(3)))
+  let copied: Box = copy(Box(value = 7))
+  print(render(copied.value))
+  if
+    | mode == "exec" =>
+        let result: ExecResult = exec("echo hi")
+        print(result.stdout)
+    | mode == "ask" =>
+        let reviewer: Agent = AgentCommand("reviewer")
+        let answer: text = ask("Review this.", agent = reviewer)
+        print(answer)
+    | mode == "raise" =>
+        try
+          raise RangeError(message = "out of range")
+        catch Exception as e =>
+          print("caught %{e.message}")
+    | else => ()

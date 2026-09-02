@@ -50,9 +50,9 @@ from agm.agl.scope.imports import (
     SingleTarget,
     WildcardTarget,
     build_import_env,
+    declares_bare_constructor,
     matching_atoms,
     resolve_alias_target,
-    sibling_qname,
     try_resolve_qualified_member,
 )
 from agm.agl.scope.resolver import _Resolver
@@ -379,9 +379,8 @@ def _build_cross_module_constructor_candidates(
                         ):
                             add_candidate(referenced_cref.owner_name, referenced_cref)
                         continue
-                    exception_qname = sibling_qname(key, member.name)
-                    if exception_qname in exposed_qnames and isinstance(
-                        all_public_types.get(exception_qname), ExceptionDef
+                    if declares_bare_constructor(
+                        import_env.unqualified.get(member.name, ()), all_public_types
                     ):
                         continue
                     member_atom = _atom((*owner_path, decl.name, member.name))

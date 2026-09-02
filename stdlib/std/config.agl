@@ -1,4 +1,5 @@
-import std/prelude::{Option, Agent}
+import std/agent::Agent
+import std/option::Option
 
 builtin var default-agent: Agent = AgentClaude("sonnet", "medium")
 builtin var log: bool = false

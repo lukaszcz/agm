@@ -1,0 +1,58 @@
+{
+  "scenarios": [
+    {
+      "name": "combinators_and_copies_alone",
+      "no_stdlib": true,
+      "params": {
+        "mode": "none"
+      },
+      "expect": {
+        "stdout": "5\n8\n7\n"
+      }
+    },
+    {
+      "name": "exec_alone",
+      "no_stdlib": true,
+      "params": {
+        "mode": "exec"
+      },
+      "shell": [
+        {
+          "command": "echo hi",
+          "stdout": "hi\n"
+        }
+      ],
+      "expect": {
+        "stdout": "5\n8\n7\nhi\n"
+      }
+    },
+    {
+      "name": "ask_alone",
+      "no_stdlib": true,
+      "params": {
+        "mode": "ask"
+      },
+      "agents": {
+        "reviewer": [
+          "Looks good"
+        ]
+      },
+      "expect": {
+        "stdout": "5\n8\n7\nLooks good\n",
+        "calls": {
+          "reviewer": 1
+        }
+      }
+    },
+    {
+      "name": "errors_alone",
+      "no_stdlib": true,
+      "params": {
+        "mode": "raise"
+      },
+      "expect": {
+        "stdout": "5\n8\n7\ncaught out of range\n"
+      }
+    }
+  ]
+}

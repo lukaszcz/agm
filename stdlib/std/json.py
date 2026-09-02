@@ -7,8 +7,8 @@ from agl import AglException, array, json, nominals
 from agm.agl.runtime.codec import extract_json_text
 from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
 
-JsonParseError = nominals.std.prelude.JsonParseError
-KeyError = nominals.std.prelude.KeyError
+JsonParseError = nominals.std.errors.JsonParseError
+KeyError = nominals.std.errors.KeyError
 Option = nominals.std.option.Option
 
 

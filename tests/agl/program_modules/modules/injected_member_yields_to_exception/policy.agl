@@ -1,0 +1,3 @@
+enum Policy
+  | Stop
+  | Go

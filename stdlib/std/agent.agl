@@ -1,0 +1,65 @@
+import std/errors::Exception
+import std/option::Option
+
+builtin
+enum ParsePolicy =
+  | Abort
+  | Retry(n: int)
+
+builtin
+enum Agent
+  | AgentCommand(command: text)
+  | AgentClaude(model: text, thinking: text)
+  | AgentCodex(model: text, thinking: text)
+  | AgentPi(provider: text, model: text, thinking: text)
+
+builtin
+record AgentRequest
+  agent: Agent
+  prompt: text
+  target_type: Option[text]
+  format_instructions: Option[text]
+  json_schema: Option[json]
+  attempt: int
+  previous_error: Option[text]
+  metadata: json
+
+builtin
+exception AgentCallError extends Exception
+  *
+  agent: Agent
+  cause: text
+  metadata: json
+
+builtin
+exception AgentParseError extends Exception
+  *
+  agent: Agent
+  target_type: text
+  expected_schema: json
+  raw: text
+  normalized_raw: text
+  validation_errors: json
+  attempts: int
+  metadata: json
+
+builtin def ask[T](
+  prompt: text,
+  format: text = "",
+  strict_json: bool = false,
+  on_parse_error: ParsePolicy = ParsePolicy::Abort,
+) -> T
+builtin def Agent::ask[T](
+  self,
+  prompt: text,
+  format: text = "",
+  strict_json: bool = false,
+  on_parse_error: ParsePolicy = ParsePolicy::Abort,
+) -> T
+builtin def Agent::ask-request(
+  self,
+  prompt: text,
+) -> AgentRequest
+builtin def ask-request(
+  prompt: text,
+) -> AgentRequest

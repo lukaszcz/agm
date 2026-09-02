@@ -1624,7 +1624,7 @@ def test_std_core_option_reexport_preserves_nominal_identity(
     assert capsys.readouterr().out == "3\n"
 
 
-def test_qualified_std_core_print_still_works(capsys: pytest.CaptureFixture[str]) -> None:
+def test_qualified_std_prelude_print_still_works(capsys: pytest.CaptureFixture[str]) -> None:
     """A fully qualified ``std/prelude::print(...)`` call still runs, exactly as
     the bare form does — a built-in call is classified once its callee
     resolves to a ``builtin def``, and ``std/prelude::print`` reaches the same
@@ -1641,43 +1641,49 @@ def test_qualified_std_core_print_still_works(capsys: pytest.CaptureFixture[str]
     assert capsys.readouterr().out == "hi\n"
 
 
-def _scoped_stdlib_root(tmp_path: Path) -> Path:
-    """Build a throwaway module root with the real ``std/prelude`` scoped.
+_SCOPED_STDLIB_MODULES = ("errors", "agent", "session", "exec", "io", "value", "package")
 
-    The expanded prelude and its functional dependencies are copied. Imports
-    needed only by the extended ``exec`` signature are removed when that
-    declaration is reduced to its legacy host-boundary shape, and canonical
-    session statics are omitted because wrapping changes their owner path.
-    Infix declarations stay at module root because scopes cannot contain them.
+
+def _scoped_stdlib_root(tmp_path: Path) -> Path:
+    """Build a throwaway module root whose builtin surface is one scoped module.
+
+    The standard library's builtin declarations are concatenated inside a
+    ``scope Std`` region of a replacement ``std/prelude``, importing only
+    ``Option``: the region itself holds everything else they name. Canonical
+    session statics are omitted because wrapping changes their owner path,
+    and ``exec`` is reduced to its legacy host-boundary shape so its defaults
+    need no environment or config module. Infix declarations stay at module
+    root because scopes cannot contain them.
     """
     scoped_stdlib_root = tmp_path / "scoped_stdlib"
     std_dir = scoped_stdlib_root / "std"
     std_dir.mkdir(parents=True)
-    core_source = (
-        (REPO_STDLIB_ROOT / "std" / "prelude.agl")
-        .read_text(encoding="utf-8")
-        .replace("import std/config\n", "")
-        .replace("import std/env::*\n", "")
-        .replace(_SESSION_STATIC_DECLARATIONS, "")
-        .replace("std/config::default-agent", 'AgentClaude("sonnet", "medium")')
-        .replace(
-            "builtin def exec(\n"
-            "  command: text,\n"
-            "  env: Environ = std/env::environ,\n"
-            "  cwd: Option[text] = Option[text]::None,\n"
-            "  timeout: Option[text] = std/config::timeout,\n"
-            ") -> ExecResult\n",
-            "builtin def exec(command: text) -> ExecResult\n",
-        )
-    )
-    infix_declarations = "".join(
-        line for line in core_source.splitlines(keepends=True) if line.startswith("infix")
-    )
-    scoped_core_source = "".join(
-        line for line in core_source.splitlines(keepends=True) if not line.startswith("infix")
-    )
+
+    def module_lines(name: str) -> list[str]:
+        source = (REPO_STDLIB_ROOT / "std" / f"{name}.agl").read_text(encoding="utf-8")
+        return source.splitlines(keepends=True)
+
+    fun_lines = module_lines("fun")
+    infix_declarations = "".join(line for line in fun_lines if line.startswith("infix"))
+    scoped_sources = ["import std/option::Option\n"]
+    scoped_sources.append("".join(line for line in fun_lines if not line.startswith("infix")))
+    for name in _SCOPED_STDLIB_MODULES:
+        source = "".join(line for line in module_lines(name) if not line.startswith("import "))
+        if name == "session":
+            source = source.replace(_SESSION_STATIC_DECLARATIONS, "")
+        if name == "exec":
+            source = source.replace(
+                "builtin def exec(\n"
+                "  command: text,\n"
+                "  env: Environ = std/env::environ,\n"
+                "  cwd: Option[text] = Option[text]::None,\n"
+                "  timeout: Option[text] = std/config::timeout,\n"
+                ") -> ExecResult\n",
+                "builtin def exec(command: text) -> ExecResult\n",
+            )
+        scoped_sources.append(source)
     (std_dir / "prelude.agl").write_text(
-        f"{infix_declarations}\nscope Std\n{scoped_core_source}end Std\n", encoding="utf-8"
+        f"{infix_declarations}\nscope Std\n{''.join(scoped_sources)}end Std\n", encoding="utf-8"
     )
     for name in ("option.agl", "pair.agl", "either.agl", "result.agl"):
         source = (REPO_STDLIB_ROOT / "std" / name).read_text(encoding="utf-8")

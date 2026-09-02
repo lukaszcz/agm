@@ -204,7 +204,7 @@ func TestColonOperatorsFaceAsOneToken(t *testing.T) {
 }
 
 // A symbolic operator name is one token, however many characters it spells.
-// `std/prelude' declares `|>', `<|', `>>' and `<<', and a program may declare any
+// `std/fun' declares `|>', `<|', `>>' and `<<', and a program may declare any
 // other spelling with `infixl'/`infixr'.
 func TestOperatorNamesFaceAsOneToken(t *testing.T) {
 	for _, op := range []string{"|>", "<|", ">>", "<<", "++", "<$>"} {

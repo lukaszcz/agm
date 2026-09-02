@@ -1,0 +1,43 @@
+{
+  "scenarios": [
+    {
+      "name": "no_raise",
+      "module_roots": [
+        "program_modules/modules/injected_member_yields_to_exception"
+      ],
+      "params": {
+        "mode": "none"
+      },
+      "expect": {
+        "stdout": "stop\ngo\nok\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "bare_exception_at_module_root",
+      "module_roots": [
+        "program_modules/modules/injected_member_yields_to_exception"
+      ],
+      "params": {
+        "mode": "raise"
+      },
+      "expect": {
+        "stdout": "stop\ngo\nstopped module\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "bare_exception_in_scope_region",
+      "module_roots": [
+        "program_modules/modules/injected_member_yields_to_exception"
+      ],
+      "params": {
+        "mode": "regional"
+      },
+      "expect": {
+        "stdout": "stop\ngo\nstopped regional\n",
+        "calls": {}
+      }
+    }
+  ]
+}

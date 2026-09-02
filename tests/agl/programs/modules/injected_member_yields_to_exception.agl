@@ -1,0 +1,29 @@
+# An imported enum member's bare spelling yields to a same-named exception
+# constructor exposed by another module: bare `Stop` is the exception, while
+# the member stays reachable as `Policy::Stop`. Both the module-root import
+# and a scope-region import apply the rule.
+import facade::*
+param mode: text
+
+def describe(policy: Policy) -> text =
+  case policy of
+    | Policy::Stop => "stop"
+    | Go => "go"
+
+scope Region
+  import errs::*
+  import policy::*
+
+  def raise-stop() -> unit = raise Stop(message = "regional")
+end Region
+
+program def main() -> unit =
+  print(describe(Policy::Stop))
+  print(describe(Go))
+  try
+    if
+      | mode == "raise" => raise Stop(message = "module")
+      | mode == "regional" => Region::raise-stop()
+      | else => print("ok")
+  catch Stop as e =>
+    print("stopped %{e.message}")

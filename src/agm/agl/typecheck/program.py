@@ -496,7 +496,7 @@ def _build_program_type_table(
             local_scope_paths=frozenset(rmod.resolved.scope_nodes),
             scope_nodes=rmod.resolved.scope_nodes,
         )
-        if mid.is_entry and entry_seed_env is not None:
+        if mid == resolved.entry_id and entry_seed_env is not None:
             env.seed_from(entry_seed_env)
         # The builder is transient: it only collects headers into ``env``
         # (which bootstraps ``program_type_table`` below).  Body resolution
@@ -595,7 +595,7 @@ def _build_program_type_table(
             module_id=mid,
             type_table=shared_type_table,
         )
-        if mid.is_entry and entry_seed_env is not None:
+        if mid == resolved.entry_id and entry_seed_env is not None:
             cross_env.seed_from(entry_seed_env)
         # Seed with own type shells so bare-name local refs resolve.
         for name, t in per_module_envs[mid].non_builtin_type_items():
@@ -721,7 +721,7 @@ def _build_program_func_sig_table(
             scope_nodes=rmod.resolved.scope_nodes,
             module_id=mid,
         )
-        if mid.is_entry and entry_seed_env is not None:
+        if mid == resolved.entry_id and entry_seed_env is not None:
             env.seed_from(entry_seed_env)
         for (t_mid, scope_path, t_name), t in program_type_table.items():
             if t_mid == mid:
@@ -886,8 +886,8 @@ def _prepare_module_environment(
     - ``type_table``: the single ``TypeTable`` instance shared by every module
       in this program (the same one built and dual-written in the type pre-pass),
       so this module's own re-check dual-writes into the same table.
-    - ``entry_seed_env``: when given and ``mid`` is the entry module, the session
-      type env is seeded first so that prior REPL bindings are available.
+    - ``entry_seed_env``: the session type env, seeded first so that prior REPL
+      bindings are available. The caller supplies it for the entry module only.
     """
     import_env = import_env_map[mid]
     assert isinstance(import_env, ImportEnv)
@@ -913,7 +913,7 @@ def _prepare_module_environment(
     # ``entry_seed_env`` and then advanced with this entry's own declarations,
     # so re-merging its name index now would regress it onto a name this
     # entry just redeclared (see ``TypeEnvironment.seed_from``).
-    if mid.is_entry and entry_seed_env is not None:
+    if entry_seed_env is not None:
         env.seed_from(entry_seed_env, merge_type_table=False)
 
     # Seed env with the module's own fully-resolved types so they're
@@ -1066,7 +1066,7 @@ def check_program(
             program_ctor_sig_table,
             program_ctor_field_kinds_table,
             shared_type_table,
-            entry_seed_env=entry_seed_env if mid.is_entry else None,
+            entry_seed_env=entry_seed_env if mid == resolved.entry_id else None,
         )
 
     # Annotated static lets and builtin vars need each module's complete type
@@ -1094,7 +1094,7 @@ def check_program(
             module_id=mid,
         )
 
-    validate_builtin_declaration_uniqueness(program_modules)
+    validate_builtin_declaration_uniqueness(program_modules, resolved.entry_id)
     validate_method_declaration_collisions(program_modules, shared_type_table)
 
     # Candidate discovery follows the derived reverse-topological inference
@@ -1155,7 +1155,7 @@ def check_program(
     # Preserve the established checked-module presentation order independently
     # from dependency-ordered inference and validation above. Warnings follow the
     # same presentation order so multi-module diagnostics stay stable.
-    presentation_order = tuple(mid for mid in resolved.modules if not mid.is_entry) + (
+    presentation_order = tuple(mid for mid in resolved.modules if mid != resolved.entry_id) + (
         resolved.entry_id,
     )
     runtime_modules = frozenset(resolved.graph.source_reachable_modules(resolved.entry_id))

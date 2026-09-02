@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 # Regex for a valid identifier segment: must start with letter or underscore,
@@ -165,6 +165,28 @@ def spell_declaration(
     if module_id.is_reserved or (local_to is not None and module_id == local_to):
         return scoped
     return f"{module_id.display()}::{scoped}"
+
+
+def expand_module_wildcard(
+    prefix: tuple[str, ...], module_ids: Iterable[ModuleId], entry_id: ModuleId
+) -> tuple[ModuleId, ...]:
+    """Return the loaded modules a wildcard import or export names.
+
+    A wildcard reaches every loaded module whose path starts with *prefix*,
+    except the graph's own entry module, which no module can import.  The
+    result is ordered by logical path so two expansions of the same graph
+    agree.
+    """
+    return tuple(
+        sorted(
+            (
+                mid
+                for mid in module_ids
+                if mid != entry_id and mid.segments[: len(prefix)] == prefix
+            ),
+            key=ModuleId.path_str,
+        )
+    )
 
 
 # ------------------------------------------------------------------

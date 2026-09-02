@@ -7,7 +7,7 @@ import weakref
 from dataclasses import replace
 from typing import Never, NoReturn, assert_never
 
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.symbols import ConstructorRef
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
@@ -73,7 +73,7 @@ from .model import (
     WildcardCell,
 )
 
-CheckedPatternOwner = CheckedModule | CheckedModule
+CheckedPatternOwner = CheckedModule
 
 
 class MatchCompileInvariantError(RuntimeError):
@@ -524,7 +524,7 @@ def normalize_pattern(
 def match_case_context(checked: CheckedPatternOwner) -> MatchCaseContext:
     """Resolve the checked qualification metadata shared by one owner's match sites."""
     return MatchCaseContext(
-        module_id=checked.module_id if isinstance(checked, CheckedModule) else ENTRY_ID,
+        module_id=checked.module_id,
         enum_owner_forms=checked.type_env.enum_owner_forms(),
         blocked_enum_variants=checked.type_env.blocked_enum_variants(),
         bare_enum_constructors=resolve_bare_enum_constructors(checked),

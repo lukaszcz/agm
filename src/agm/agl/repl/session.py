@@ -341,8 +341,9 @@ class ReplSession:
         # Source log of successfully-promoted entries (for dump_source / :save).
         self._source_log: list[str] = []
         # Constructor candidates from prior promoted entries, keyed by constructor
-        # name → ordered tuple of ConstructorRef.  Passed to resolve() as ambient
-        # so that subsequent entries can reference constructors from prior entries.
+        # name → ordered tuple of ConstructorRef.  Passed to resolve_program()
+        # as ambient so that subsequent entries can reference constructors from
+        # prior entries.
         self._ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] = {}
         # The subset of the above that were bare-visible (not only
         # qualifier-visible) at the end of the entry that declared them.
@@ -497,7 +498,6 @@ class ReplSession:
         ordinary entry.
         """
         from agm.agl.diagnostics import AglError
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.parser import parse_program_seeded
         from agm.agl.repl.entry_pipeline import OverrideRejected
 
@@ -543,7 +543,8 @@ class ReplSession:
 
             self._loaded_lib_modules.update(loaded.new_modules)
             self._next_node_id = loaded.new_next_id
-            self._type_env = loaded.checked_program.modules[ENTRY_ID].type_env
+            checked_program = loaded.checked_program
+            self._type_env = checked_program.modules[checked_program.entry_id].type_env
             if cache_key is not None:
                 _bootstrap_cache[cache_key] = _BootstrapSnapshot(
                     modules=dict(loaded.new_modules),
@@ -818,7 +819,6 @@ class ReplSession:
             ModuleNotFound,
             ModulePrefixNotFound,
         )
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.parser import AglSyntaxError, parse_program_seeded
         from agm.agl.scope import AglScopeError
         from agm.agl.typecheck import AglTypeError
@@ -841,7 +841,7 @@ class ReplSession:
             ImportEntryError,
         ):
             return None
-        return checked_program.modules[ENTRY_ID].type_env
+        return checked_program.modules[checked_program.entry_id].type_env
 
     def _eval_entry_pipeline(self, text: str, *, check_only: bool = False) -> EntryResult:
         """Run the resolve → typecheck → matchcompile → lower/eval entry core.
@@ -1071,7 +1071,7 @@ class ReplSession:
         self._builtin_var_values = interp.builtin_vars
 
     def _pre_eval_param_values(
-        self, params: tuple["IrParam", ...], warnings: list[Diagnostic]
+        self, params: tuple["IrParam", ...], warnings: list[Diagnostic], entry_id: ModuleId
     ) -> tuple[dict["SymbolId", "Value"], EntryResult | None]:
         """Validate active imported config routes and decode only new params."""
         from agm.agl.runtime.params import decode_or_diagnose_param
@@ -1081,7 +1081,7 @@ class ReplSession:
         new_imported = tuple(
             param
             for param in params
-            if not param.module.is_entry and param.symbol not in active_symbols
+            if param.module != entry_id and param.symbol not in active_symbols
         )
         try:
             configured = self._params_config_loader((*active_imported, *new_imported))
@@ -1106,7 +1106,7 @@ class ReplSession:
         # Prompt-local params are intentionally default-only; config values
         # apply exclusively to newly linked imported params.
         for param in params:
-            if param.module.is_entry and param.required:
+            if param.module == entry_id and param.required:
                 # A prompt entry has no module route, so report the param under
                 # the shared user-facing entry namespace rather than the
                 # module system's internal identity.
@@ -1126,10 +1126,12 @@ class ReplSession:
                 )
         return values, None
 
-    def _record_active_imported_params(self, params: tuple["IrParam", ...]) -> None:
+    def _record_active_imported_params(
+        self, params: tuple["IrParam", ...], entry_id: ModuleId
+    ) -> None:
         """Retain successfully installed imported params for later config validation."""
         self._active_imported_params.update(
-            (param.symbol, param) for param in params if not param.module.is_entry
+            (param.symbol, param) for param in params if param.module != entry_id
         )
 
     def _build_check_only_result(
@@ -1826,7 +1828,6 @@ class ReplSession:
         failure, or ``AglError`` for match errors or a non-expression entry.
         """
         from agm.agl.lexer import spaced_qualifier_collector
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.parser import parse_program_seeded
         from agm.agl.syntax.nodes import Binder, Declaration
 
@@ -1847,7 +1848,7 @@ class ReplSession:
         checked_program = self._entry_pipeline.resolve_and_check_program(
             program, next_node_id, host_env, spaced_qualifiers=tuple(spaced_sink)
         )
-        checked = checked_program.modules[ENTRY_ID]
+        checked = checked_program.modules[checked_program.entry_id]
         from agm.agl.matchcompile import (
             cached_module_sites,
             compile_program_matches,

@@ -39,7 +39,13 @@ from agm.agl.modules.errors import (
     ModuleNotFound,
     PackageImportVisibilityError,
 )
-from agm.agl.modules.ids import ENTRY_ID, STD_BUILTIN_METHODS_ID, STD_PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import (
+    ENTRY_ID,
+    STD_BUILTIN_METHODS_ID,
+    STD_PRELUDE_ID,
+    ModuleId,
+    expand_module_wildcard,
+)
 from agm.agl.modules.parsed_module_cache import (
     InfixSignature,
     cached_chain_scope_paths,
@@ -390,19 +396,15 @@ def _operator_export_paths(program: syntax.Program, name: str) -> set[_OperatorP
     return paths or {(name,)}
 
 
-def _dependency_targets(
-    decl: ImportDecl | ExportDecl, modules: Mapping[ModuleId, LoadedModule]
-) -> tuple[ModuleId, ...]:
-    """Return loaded targets for one import or export declaration."""
+def _dependency_targets(decl: ImportDecl | ExportDecl, graph: ModuleGraph) -> tuple[ModuleId, ...]:
+    """Return loaded targets for one import or export declaration.
+
+    A wildcard expands over the loaded library modules; the graph's own entry
+    module is never among them.
+    """
     if not decl.wildcard:
         return (ModuleId(segments=tuple(decl.module_path)),)
-    prefix = tuple(decl.module_path)
-    return tuple(
-        sorted(
-            (mid for mid in modules if not mid.is_entry and mid.segments[: len(prefix)] == prefix),
-            key=ModuleId.path_str,
-        )
-    )
+    return expand_module_wildcard(tuple(decl.module_path), graph.modules, graph.entry_id)
 
 
 _OperatorPath = tuple[str, ...]
@@ -510,7 +512,7 @@ def _operator_export_maps(
         changed_decls: list[ExportDecl] = []
         for mid, loaded in graph.modules.items():
             for decl in loaded.export_decls:
-                for target in _dependency_targets(decl, graph.modules):
+                for target in _dependency_targets(decl, graph):
                     for path, origins in _forwarded_operator_exports(
                         decl, exports.get(target, {})
                     ).items():
@@ -619,7 +621,7 @@ def _used_operator_surface(
         decl_scope = _operator_decl_scope_path(import_decl)
         tail = import_decl.tail
         bare_here = tail is not None and scope_path[: len(decl_scope)] == decl_scope
-        for target in _dependency_targets(import_decl, graph.modules):
+        for target in _dependency_targets(import_decl, graph):
             surface = _imported_operator_surface(import_decl, exports.get(target, {}))
             if route in _operator_import_routes(import_decl, target):
                 absorb(surface, routed_path)
@@ -669,7 +671,7 @@ def _operator_bare_layers(
         if tail is None:
             continue
         members: dict[_OperatorPath, set[_OperatorOrigin]] = {}
-        for target in _dependency_targets(decl, graph.modules):
+        for target in _dependency_targets(decl, graph):
             surface = _imported_operator_surface(decl, exports.get(target, {}))
             for path, origins in _bare_operator_members(tail, surface).items():
                 members.setdefault(path, set()).update(origins)
@@ -759,7 +761,7 @@ def _reject_obvious_scoped_reexport_cycles(graph: ModuleGraph) -> None:
         for declaration in loaded.export_decls:
             if declaration.items or declaration.hidden:
                 continue
-            for target in _dependency_targets(declaration, graph.modules):
+            for target in _dependency_targets(declaration, graph):
                 adjacency[mid].append(target)
                 declarations.setdefault((mid, target), []).append(declaration)
 
@@ -832,14 +834,14 @@ def _resolve_graph_infix(
     session_origins: dict[str, _OperatorOrigin] = {}
     if session_infix is not None:
         for name, fixity in session_infix.items():
-            origin = (ENTRY_ID, f"<session:{name}>")
+            origin = (graph.entry_id, f"<session:{name}>")
             session_origins[name] = origin
             origin_fixities[origin] = fixity
     unresolved: AglSyntaxError | None = None
 
     def visible_at(mid: ModuleId, scope_path: _OperatorPath) -> dict[str, set[_OperatorOrigin]]:
         visible = _visible_operator_origins(scope_path, bare_layers[mid])
-        if mid == ENTRY_ID:
+        if mid == graph.entry_id:
             for name, origin in session_origins.items():
                 visible.setdefault(name, set()).add(origin)
         return visible
@@ -903,7 +905,7 @@ def _resolve_graph_infix(
             else:
                 root_conflicts.add(name)
         root_conflicts.difference_update(own_names)
-        if mid == ENTRY_ID:
+        if mid == graph.entry_id:
             entry_infix_ambient = root_ambient
         root_table = build_infix_operator_table(declarations[mid], root_ambient)
 

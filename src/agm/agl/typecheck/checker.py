@@ -788,6 +788,16 @@ class _Checker:
         self._return_collected_provenance_stack: list[list[tuple[Type, set[int]]]] = []
         self._return_extern_targets_stack: list[list[_ExternTarget]] = []
 
+    def _is_entry_local(self, ref: BindingRef) -> bool:
+        """Return whether *ref* binds a declaration of this program's own entry.
+
+        True when this is the program's entry module and *ref* is declared in
+        it rather than imported from a library.  Such a binding has no owning
+        library module for a bare constructor reference to resolve against, so
+        the reference is a type name used as a value.
+        """
+        return self._resolved.is_entry_module and ref.module_id == self._module_id
+
     # ------------------------------------------------------------------
     # Pre-registration of function signatures
     # ------------------------------------------------------------------
@@ -1931,7 +1941,7 @@ class _Checker:
             )
         ref = self._binding_for(node.node_id)
         if ref.kind is BinderKind.constructor_binding:
-            if not ref.module_id.is_entry:
+            if not self._is_entry_local(ref):
                 return self._constructors.check_cross_module_constructor_as_value(
                     ref, span=node.span, expected=expected
                 )
@@ -2969,9 +2979,8 @@ class _Checker:
                     callee_ref=callee_ref,
                     hole_indices=hole_indices,
                 )
-            if (
-                callee_ref.kind is BinderKind.constructor_binding
-                and not callee_ref.module_id.is_entry
+            if callee_ref.kind is BinderKind.constructor_binding and not self._is_entry_local(
+                callee_ref
             ):
                 return self._constructors.check_cross_module_constructor_call(
                     node, callee_ref, expected=expected, hole_indices=hole_indices

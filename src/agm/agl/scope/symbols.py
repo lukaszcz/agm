@@ -450,10 +450,8 @@ class BindingRef:
         ``let``.
     ``module_id``
         The :class:`~agm.agl.modules.ids.ModuleId` of the module that owns
-        this binding.  For module resolution (``resolve()``) and all
-        local bindings, this is always :data:`~agm.agl.modules.ids.ENTRY_ID`.
-        For cross-module resolution via ``resolve_program()``, cross-module
-        references carry the owning library module's id.
+        this binding: the resolved module's own id for a local binding, and
+        the library module's id for a cross-module reference.
     ``scope_path``
         The named scope path that owns this binding. The empty path is the
         module root.

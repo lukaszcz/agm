@@ -118,7 +118,7 @@ def lower_program(
         display_name = mid.display()
         module_source_text = (
             _entry_source_text
-            if mid.is_entry and _entry_source_text is not None
+            if mid == checked.entry_id and _entry_source_text is not None
             else cm.source_text
         )
         normalized = normalize_newlines(module_source_text)
@@ -271,7 +271,7 @@ def lower_program(
             mid,
             source_id,
             _entry_source_text
-            if mid.is_entry and _entry_source_text is not None
+            if mid == checked.entry_id and _entry_source_text is not None
             else cm.source_text,
             compiled.sites_by_module[mid],
             checked.resource_roots.get(mid),
@@ -291,7 +291,7 @@ def lower_program(
         mid
         for component in import_sccs
         for mid in component
-        if not mid.is_entry and mid not in _already_linked
+        if mid != checked.entry_id and mid not in _already_linked
     ]
     if checked.entry_id not in _already_linked:
         ordered_mids.append(checked.entry_id)

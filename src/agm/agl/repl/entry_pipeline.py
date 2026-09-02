@@ -97,14 +97,16 @@ class EntryPipelineCtx(Protocol):
     ) -> EntryResult: ...
 
     def _pre_eval_param_values(
-        self, params: tuple[IrParam, ...], warnings: list[Diagnostic]
+        self, params: tuple[IrParam, ...], warnings: list[Diagnostic], entry_id: ModuleId
     ) -> tuple[dict[SymbolId, Value], EntryResult | None]: ...
 
     def _record_declared_engine_defaults(
         self, declared_keys: frozenset[str], interp: IrInterpreter
     ) -> None: ...
 
-    def _record_active_imported_params(self, params: tuple[IrParam, ...]) -> None: ...
+    def _record_active_imported_params(
+        self, params: tuple[IrParam, ...], entry_id: ModuleId
+    ) -> None: ...
 
     def _update_engine_settings(self, interp: IrInterpreter) -> None: ...
 
@@ -289,7 +291,6 @@ class EntryPipeline:
             ModuleNotFound,
             ModulePrefixNotFound,
         )
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.parser import AglSyntaxError
         from agm.agl.scope import AglScopeError
         from agm.agl.typecheck import AglTypeError
@@ -329,7 +330,7 @@ class EntryPipeline:
         entry_imports = loaded.entry_imports
         entry_uses = loaded.entry_uses
         entry_infix_ambient = loaded.entry_infix_ambient
-        entry_cm = checked_program.modules[ENTRY_ID]
+        entry_cm = checked_program.modules[checked_program.entry_id]
 
         # Collect warnings from all passes.
         warnings: list[Diagnostic] = [*tab_warnings, *checked_program.warnings]
@@ -440,7 +441,7 @@ class EntryPipeline:
         identity, so a reparsed, spliced or superseded module simply misses.
         """
         for module_id, checked in checked_program.modules.items():
-            if module_id.is_entry:
+            if module_id == checked_program.entry_id:
                 continue
             self._ctx._retained_resolved_modules[module_id] = resolved_program.modules[module_id]
             self._ctx._retained_checked_modules[module_id] = checked
@@ -714,10 +715,13 @@ class EntryPipeline:
         params_to_install = tuple(
             param
             for param in lowered.program.params
-            if param.module.is_entry or param.symbol not in self._ctx._active_imported_params
+            if param.module == lowered.program.entry_module
+            or param.symbol not in self._ctx._active_imported_params
         )
         program_to_run = replace(lowered.program, params=params_to_install)
-        ir_params, pre_eval_result = self._ctx._pre_eval_param_values(params_to_install, warnings)
+        ir_params, pre_eval_result = self._ctx._pre_eval_param_values(
+            params_to_install, warnings, lowered.program.entry_module
+        )
         if pre_eval_result is not None:
             self._ctx._link_image.restore_state(link_snapshot)
             return pre_eval_result
@@ -857,7 +861,8 @@ class EntryPipeline:
                     param
                     for param in params_to_install
                     if param.module in module_ids and param.symbol in installed_symbols
-                )
+                ),
+                lowered.program.entry_module,
             )
             self._ctx._link_image.mark_linked(module_ids)
 
@@ -891,7 +896,7 @@ class EntryPipeline:
                 module_id
                 for module_id in candidates
                 if any(
-                    not dependency.is_entry and dependency not in available
+                    dependency != lowered.program.entry_module and dependency not in available
                     for dependency in module_adjacency.get(module_id, ())
                 )
             }:
@@ -1003,7 +1008,11 @@ class EntryPipeline:
             ),
         )
         retain_library_state(
-            frozenset(module_id for module_id in checked_program.modules if not module_id.is_entry)
+            frozenset(
+                module_id
+                for module_id in checked_program.modules
+                if module_id != checked_program.entry_id
+            )
         )
         self._retain_import_context(entry_imports, entry_uses)
         marker = lowered.trailing_expression

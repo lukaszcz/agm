@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import TypeAlias
 
 from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.ids import ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.syntax.nodes import Case, LetDecl, Program, simple_let_pattern_name
 from agm.agl.syntax.visitor import walk
@@ -293,7 +293,9 @@ def _validate_sites(
 
 def validate_match_compiled_module(compiled: MatchCompiledModule) -> None:
     """Validate totality, ownership, provenance, and replay for a module artifact."""
-    _validate_sites(owner=compiled.checked, module_id=ENTRY_ID, sites=compiled.sites)
+    _validate_sites(
+        owner=compiled.checked, module_id=compiled.checked.module_id, sites=compiled.sites
+    )
 
 
 def validate_match_compiled_program(compiled: MatchCompiledProgram) -> None:

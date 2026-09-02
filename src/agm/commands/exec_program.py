@@ -66,6 +66,7 @@ from typing import NoReturn, TypeVar
 from agm.agent.session import create_agl_session_host
 from agm.agl import PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
+from agm.agl.modules.ids import ENTRY_DISPLAY
 from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.types import ParamDeclInfo
@@ -129,7 +130,7 @@ def _entry_module_segments(
     entry_module_segments: tuple[str, ...], module_segments: tuple[str, ...]
 ) -> tuple[str, ...]:
     """Replace the entry sentinel with its config module component."""
-    if module_segments == ("<entry>",):
+    if module_segments == (ENTRY_DISPLAY,):
         return entry_module_segments
     return module_segments
 
@@ -463,7 +464,9 @@ def run(
             print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
         raise SystemExit(1)
 
-    entry_programs = tuple(program for program in discovery.programs if program.module.is_entry)
+    entry_programs = tuple(
+        program for program in discovery.programs if program.module == checked.entry_id
+    )
     if args.file is not None and not entry_programs:
         print("Error: file must declare at least one program.", file=sys.stderr)
         raise SystemExit(1)

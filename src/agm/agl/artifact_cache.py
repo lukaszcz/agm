@@ -147,7 +147,7 @@ def retained_module_sources(graph: ModuleGraph) -> dict[ModuleId, Sources]:
     """
     sources: dict[ModuleId, Sources] = {}
     for module_id, loaded in graph.modules.items():
-        if loaded.path is None or module_id.is_entry:
+        if loaded.path is None or module_id == graph.entry_id:
             continue
         reachable = _reachable(graph, module_id) | set(graph.ambient_modules)
         sources[module_id] = tuple(

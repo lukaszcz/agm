@@ -969,7 +969,7 @@ class PipelineDriver:
         successful artifact is returned for later lowering by
         :meth:`run_prepared`.
         """
-        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.modules.ids import ENTRY_DISPLAY
         from agm.agl.syntax.nodes import FuncDef, ParamDecl, scoped_public_name, static_items
 
         if prepared.resolved is None:
@@ -1017,7 +1017,7 @@ class PipelineDriver:
                     warnings=all_warnings,
                 )
 
-        entry_cm = checked.modules.get(ENTRY_ID)
+        entry_cm = checked.modules.get(checked.entry_id)
         if entry_cm is None:
             return ParamDiscovery(
                 params=(),
@@ -1032,7 +1032,7 @@ class PipelineDriver:
         program_infos: list[ProgramDeclInfo] = []
         for module_id, checked_module in checked.modules.items():
             module_infos: list[ParamDeclInfo] = []
-            module_segments = module_id.segments if not module_id.is_entry else ("<entry>",)
+            module_segments = module_id.segments if not module_id.is_entry else (ENTRY_DISPLAY,)
             for item in static_items(checked_module.resolved.program.body.items):
                 if isinstance(item, ParamDecl):
                     param_type = checked_module.type_env.get_binding_type(item.node_id)
@@ -1065,7 +1065,7 @@ class PipelineDriver:
 
         program_infos.sort(
             key=lambda info: (
-                not info.module.is_entry,
+                info.module != checked.entry_id,
                 info.module.path_str(),
                 info.declaration_path,
             )
@@ -1089,7 +1089,7 @@ class PipelineDriver:
             program.node_id: cached_param_inventory(program.module) for program in program_infos
         }
         return ParamDiscovery(
-            params=cached_param_inventory(ENTRY_ID),
+            params=cached_param_inventory(checked.entry_id),
             checked=checked,
             diagnostics=(),
             warnings=all_warnings,

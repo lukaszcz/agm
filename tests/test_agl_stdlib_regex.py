@@ -36,7 +36,7 @@ _OPTION_SOME = NominalId(9_700_005)
 class _RegexCompanion(Protocol):
     def test(self, pattern: str, s: str) -> bool: ...
 
-    def find_option(self, pattern: str, s: str) -> object: ...
+    def find(self, pattern: str, s: str) -> object: ...
 
     def find_all(self, pattern: str, s: str) -> object: ...
 
@@ -79,7 +79,7 @@ def test_regex_match_populates_offsets_numbered_groups_named_groups_and_nonparti
     companion, _ = _regex_companion()
 
     found = decode_boundary_value(
-        companion.find_option(r"(?P<word>[A-Za-z]+)-(\d+)(?:-([A-Z]+))?", "ref-42")
+        companion.find(r"(?P<word>[A-Za-z]+)-(\d+)(?:-([A-Z]+))?", "ref-42")
     )
 
     assert found == RecordValue(
@@ -105,7 +105,7 @@ def test_regex_match_populates_offsets_numbered_groups_named_groups_and_nonparti
             )
         },
     )
-    assert decode_boundary_value(companion.find_option("x", "no match")) == RecordValue(
+    assert decode_boundary_value(companion.find("x", "no match")) == RecordValue(
         _OPTION_NONE, "Option::None", {}
     )
 
@@ -145,7 +145,7 @@ def test_regex_invalid_pattern_raises_typed_error_and_compiles_each_pattern_once
     monkeypatch.setattr(module.re, "compile", compile_mock)
 
     assert companion.test("[0-9]+", "42")
-    assert decode_boundary_value(companion.find_option("[0-9]+", "x7")) == RecordValue(
+    assert decode_boundary_value(companion.find("[0-9]+", "x7")) == RecordValue(
         _OPTION_SOME,
         "Option::Some",
         {

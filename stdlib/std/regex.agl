@@ -12,12 +12,11 @@ exception RegexError extends Exception
   pattern: text
 
 scope RegexInternals
-  extern def find_option(pattern: text, s: text) -> Option[Match]
   extern def find_all(pattern: text, s: text) -> array[Match]
 end RegexInternals
 
 extern def test(pattern: text, s: text) -> bool
-def find?(pattern: text, s: text) -> Option[Match] = RegexInternals::find_option(pattern, s)
+extern def find(pattern: text, s: text) -> Option[Match]
 def find-all(pattern: text, s: text) -> array[Match] = RegexInternals::find_all(pattern, s)
 extern def replace(pattern: text, s: text, replacement: text) -> text
 extern def split(pattern: text, s: text) -> array[text]

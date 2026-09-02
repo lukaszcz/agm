@@ -41,12 +41,12 @@ def Result::is-ok[T, E](self) -> bool =
 
 def Result::is-err[T, E](self) -> bool = not self.is-ok()
 
-def Result::ok?[T, E](self) -> Option[T] =
+def Result::ok[T, E](self) -> Option[T] =
   case self of
     | Result::Ok(value) => Option::Some(value = value)
     | Result::Err(_) => Option::None
 
-def Result::err?[T, E](self) -> Option[E] =
+def Result::err[T, E](self) -> Option[E] =
   case self of
     | Result::Ok(_) => Option::None
     | Result::Err(error) => Option::Some(value = error)

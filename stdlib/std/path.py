@@ -25,7 +25,7 @@ def basename(path: str) -> str:
     return os.path.basename(path)
 
 
-def extension_option(path: str) -> object:
+def extension(path: str) -> object:
     """Return *path*'s extension, including its leading dot, when it has one."""
     _, extension = os.path.splitext(path)
     return Option.Some(value=extension) if extension else getattr(Option, "None")()
@@ -70,7 +70,7 @@ __all__ = [
     "absolute",
     "basename",
     "dirname",
-    "extension_option",
+    "extension",
     "home",
     "is_absolute",
     "join",

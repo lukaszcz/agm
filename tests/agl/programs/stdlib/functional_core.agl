@@ -39,21 +39,21 @@ program def main() -> unit =
         print(
           left
           |> (fn(value: Either[int, text]) =>
-            value.map-left(double).map-right(append_mark).left?()
+            value.map-left(double).map-right(append_mark).left()
           )
         )
         print(
           right
           |> (fn(value: Either[int, text]) =>
-            value.map-left(double).map-right(append_mark).right?()
+            value.map-left(double).map-right(append_mark).right()
           )
         )
         print(left.is-left())
         print(right.is-left())
         print(left.is-right())
         print(right.is-right())
-        print(left.right?())
-        print(right.left?())
+        print(left.right())
+        print(right.left())
         print(left.swap())
         print(right.swap())
 
@@ -68,7 +68,7 @@ program def main() -> unit =
           )
           |> project_result
         )
-        print(none.to-result(error = "missing").err?())
+        print(none.to-result(error = "missing").err())
 
         let result: Result[int, text] = Result::Ok(value = 2)
         let lost: Result[int, text] = Result::Err(error = "lost")
@@ -85,8 +85,8 @@ program def main() -> unit =
         print(result.with-default(0))
         print(result.is-ok())
         print(result.is-err())
-        print(result.ok?())
-        print(result.err?())
+        print(result.ok())
+        print(result.err())
         print(
           lost
           |> (fn(value: Result[int, text]) => value.map(double))
@@ -102,10 +102,10 @@ program def main() -> unit =
         print(lost.with-default(0))
         print(lost.is-ok())
         print(lost.is-err())
-        print(lost.ok?())
-        print(lost.err?())
+        print(lost.ok())
+        print(lost.err())
         print(project_result <| Result::Ok(value = 8))
 
-        print(attempt(succeed).map(increment).ok?())
-        print(attempt(fail).err?().map(fn(error: Exception) => error.message))
+        print(attempt(succeed).map(increment).ok())
+        print(attempt(fail).err().map(fn(error: Exception) => error.message))
         print(attempt(fail).or-else(fn(_: Exception) => Result::Ok(value = 8)).unwrap())

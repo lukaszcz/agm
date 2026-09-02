@@ -291,12 +291,17 @@ the first six rows below, and the rest are imported explicitly:
 | `std/env` | the ambient environment snapshot and its helpers |
 | `std/process` | process metadata and termination |
 
-Two naming conventions run through all of them. An operation that raises has a
-`?` counterpart returning `Option` where one is provided, and a `!` suffix
-marks an in-place operation — usually the counterpart of a copy-producing one,
-sometimes an inherently mutating operation with no copy-producing form. An
-operation with neither suffix may still mutate when that is its purpose, as
-`append` and `set` do.
+A few conventions run through all of them. Each module declares the exception
+types its own operations raise, so an error type lives beside the operations
+that produce it; the exceptions the language itself raises live in
+`std/errors`. An operation that raises may have a `?` twin returning `Option`,
+which drops the failure, and a `try-` twin returning `Result[T, E]` with `E` the
+specific exception, which keeps it. Both suffixes name twins only: an operation
+whose natural result is an `Option` and which has no raising form carries no
+`?`. A `!` suffix marks an in-place operation — usually the counterpart of a
+copy-producing one, sometimes an inherently mutating operation with no
+copy-producing form. An operation with neither suffix may still mutate when that
+is its purpose, as `append` and `set` do.
 
 Each module's own source is its reference.
 

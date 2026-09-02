@@ -38,7 +38,7 @@ timestamp = 1979-05-27T07:32:00Z
         try
           let _ = toml::parse("broken = [")
         catch TomlParseError as error => print(error.raw)
-        print(toml::parse?("broken = ["))
+        print(toml::try-parse("broken = ["))
     | 5 => print(toml::render({"title": "AGM", "enabled": true}))
     | 6 =>
         let _ = toml::render({"value": null})
@@ -59,9 +59,9 @@ negative_infinity = -inf
 ''')
         print(toml::render(document))
     | 10 =>
-        case toml::parse?("enabled = true") of
-          | Option::Some(value = _ as document) => print(document.get("enabled") == (true as json))
-          | Option::None => print(false)
+        case toml::try-parse("enabled = true") of
+          | Result::Ok(value = _ as document) => print(document.get("enabled") == (true as json))
+          | Result::Err(error) => print(error.raw)
     | _ =>
         let original = toml::parse('''
 ratio = 1.25

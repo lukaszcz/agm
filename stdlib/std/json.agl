@@ -1,17 +1,18 @@
 import std/option::Option
+import std/result::Result
 import std/errors::{JsonParseError, KeyError}
 
 scope JsonInternals
-  extern def parse_option(value: text) -> Option[json]
   extern def parse_lenient(value: text) -> json
-  extern def parse_lenient_option(value: text) -> Option[json]
   extern def get_option(self: json, key: text) -> Option[json]
 end JsonInternals
 
 extern def parse(value: text) -> json
-def parse?(value: text) -> Option[json] = JsonInternals::parse_option(value)
+def try-parse(value: text) -> Result[json, JsonParseError] =
+  try Result::Ok(value = parse(value)) catch JsonParseError as e => Result::Err(error = e)
 def parse-lenient(value: text) -> json = JsonInternals::parse_lenient(value)
-def parse-lenient?(value: text) -> Option[json] = JsonInternals::parse_lenient_option(value)
+def try-parse-lenient(value: text) -> Result[json, JsonParseError] =
+  try Result::Ok(value = parse-lenient(value)) catch JsonParseError as e => Result::Err(error = e)
 
 extern def json::kind(self) -> text
 extern def json::size(self) -> int

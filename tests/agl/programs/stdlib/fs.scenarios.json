@@ -29,10 +29,10 @@
       }
     },
     {
-      "name": "returns_none_for_an_optional_missing_read",
+      "name": "try_read_of_a_missing_file_returns_the_fs_error",
       "params": {"root": "$TEMP_ROOT", "scenario": "optional_read"},
       "filesystem": {},
-      "expect": {"stdout": "Option::None\n"}
+      "expect": {"stdout": "read\n"}
     },
     {
       "name": "reports_invalid_utf8_as_fs_error",
@@ -46,10 +46,10 @@
       }
     },
     {
-      "name": "returns_none_for_an_optional_invalid_utf8_read",
+      "name": "try_read_of_invalid_utf8_returns_the_fs_error",
       "params": {"root": "$TEMP_ROOT", "scenario": "invalid_encoding_optional"},
       "filesystem": {"hex_files": {"invalid.txt": "ff"}},
-      "expect": {"stdout": "Option::None\n"}
+      "expect": {"stdout": "Option::Some(value = \"read\")\n"}
     },
     {
       "name": "removes_a_directory_symlink_without_removing_its_target",

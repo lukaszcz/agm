@@ -12,7 +12,6 @@ scope ArrayInternals
   extern def map_in_place[E](self: array[E], function: (E) -> E) -> unit
   extern def filter_in_place[E](self: array[E], predicate: (E) -> bool) -> unit
   extern def fold_right[E, B](self: array[E], initial: B, function: (B, E) -> B) -> B
-  extern def find[E](self: array[E], predicate: (E) -> bool) -> Option[E]
   extern def find_index[E](self: array[E], predicate: (E) -> bool) -> Option[int]
   extern def reverse_in_place[E](self: array[E]) -> unit
   extern def sort_in_place[E](self: array[E], comparator: (E, E) -> int) -> unit
@@ -43,8 +42,8 @@ extern def array[E]::fold[B](self, initial: B, function: (B, E) -> B) -> B
 def array[E]::fold-right[B](self, initial: B, function: (B, E) -> B) -> B = ArrayInternals::fold_right(self, initial, function)
 extern def array[E]::any(self, predicate: (E) -> bool) -> bool
 extern def array[E]::all(self, predicate: (E) -> bool) -> bool
-def array[E]::find?(self, predicate: (E) -> bool) -> Option[E] = ArrayInternals::find(self, predicate)
-def array[E]::find-index?(self, predicate: (E) -> bool) -> Option[int] = ArrayInternals::find_index(self, predicate)
+extern def array[E]::find(self, predicate: (E) -> bool) -> Option[E]
+def array[E]::find-index(self, predicate: (E) -> bool) -> Option[int] = ArrayInternals::find_index(self, predicate)
 extern def array[E]::reverse(self) -> array[E]
 def array[E]::reverse!(self) -> unit = ArrayInternals::reverse_in_place(self)
 extern def array[E]::sort(self, comparator: (E, E) -> int) -> array[E]

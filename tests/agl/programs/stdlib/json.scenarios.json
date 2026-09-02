@@ -17,10 +17,10 @@
       }
     },
     {
-      "name": "strict_failures_raise_or_return_none_while_lenient_parse_recovers",
+      "name": "strict_failures_raise_or_return_err_while_lenient_parse_recovers",
       "params": {"mode": 3},
       "expect": {
-        "stdout": "answer: 42\nnull\nOption::None\n42\nOption::None\n",
+        "stdout": "answer: 42\nnull\nResult::Err(error = JsonParseError(message = \"JSON parse error: Expecting value: line 1 column 1 (char 0)\", raw = \"answer: 42\"))\n42\nResult::Err(error = JsonParseError(message = \"Could not recover a single JSON value from the input.\", raw = \"not JSON at all\"))\n",
         "calls": {}
       }
     },
@@ -48,18 +48,18 @@
       }
     },
     {
-      "name": "strict_optional_parse_returns_some_for_valid_json",
+      "name": "strict_try_parse_returns_ok_for_valid_json",
       "params": {"mode": 7},
       "expect": {
-        "stdout": "Option::Some(value = {\"answer\": 42})\n",
+        "stdout": "Result::Ok(value = {\"answer\": 42})\n",
         "calls": {}
       }
     },
     {
-      "name": "lenient_optional_parse_returns_some_for_recovered_json",
+      "name": "lenient_try_parse_returns_ok_for_recovered_json",
       "params": {"mode": 8},
       "expect": {
-        "stdout": "Option::Some(value = [1, 2])\n",
+        "stdout": "Result::Ok(value = [1, 2])\n",
         "calls": {}
       }
     },

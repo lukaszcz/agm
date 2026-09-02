@@ -1,3 +1,5 @@
+import std/result::Result
+
 exception TimeParseError extends Exception
   raw: text
 
@@ -12,6 +14,10 @@ def now-iso() -> text = TimeInternals::now_iso()
 extern def monotonic() -> decimal
 extern def sleep(seconds: decimal) -> unit
 def parse-iso(value: text) -> decimal = TimeInternals::parse_iso(value)
+def try-parse-iso(value: text) -> Result[decimal, TimeParseError] =
+  try Result::Ok(value = parse-iso(value)) catch TimeParseError as e => Result::Err(error = e)
 def format-iso(epoch: decimal) -> text = TimeInternals::format_iso(epoch)
 extern def format(epoch: decimal, fmt: text) -> text
 extern def parse(value: text, fmt: text) -> decimal
+def try-parse(value: text, fmt: text) -> Result[decimal, TimeParseError] =
+  try Result::Ok(value = parse(value, fmt)) catch TimeParseError as e => Result::Err(error = e)

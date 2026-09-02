@@ -14,22 +14,16 @@ from agm.agl.ir.program import NominalDescriptor, NominalKind
 from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.boundary import AglException, AglJson, decode_boundary_value
 from agm.agl.runtime.externs import ExternRegistry
-from agm.agl.semantics.values import JsonValue, RecordValue, TextValue
-from tests._agl_helpers import option_nominal_descriptors
+from agm.agl.semantics.values import JsonValue, TextValue
 
 _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 _TOML_MODULE = ModuleId(("std", "toml"))
 _TOML_PARSE_ERROR = NominalId(9_500_001)
 _TOML_RENDER_ERROR = NominalId(9_500_002)
-_OPTION = NominalId(9_500_003)
-_OPTION_NONE = NominalId(9_500_004)
-_OPTION_SOME = NominalId(9_500_005)
 
 
 class _TomlCompanion(Protocol):
     def parse(self, raw: str) -> object: ...
-
-    def parse_option(self, raw: str) -> object: ...
 
     def render(self, value: object) -> str: ...
 
@@ -55,7 +49,6 @@ def _toml_companion() -> _TomlCompanion:
                 kind=NominalKind.EXCEPTION,
                 fields=("message",),
             ),
-            **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
         }
     )
     module: ModuleType = registry.load_companion(_TOML_MODULE, _STDLIB_ROOT / "std" / "toml.py")
@@ -88,27 +81,12 @@ ports = [8000, 8001]
     )
 
 
-def test_toml_parse_failures_are_typed_and_optional_parse_returns_none() -> None:
+def test_toml_parse_failures_are_typed() -> None:
     companion = _toml_companion()
 
     with pytest.raises(AglException) as exc_info:
         companion.parse("broken = [")
     assert exc_info.value.value.fields["raw"] == TextValue("broken = [")
-    assert decode_boundary_value(companion.parse_option("broken = [")) == RecordValue(
-        _OPTION_NONE, "Option::None", {}
-    )
-
-
-def test_toml_optional_parse_wraps_a_valid_document() -> None:
-    companion = _toml_companion()
-
-    result = decode_boundary_value(companion.parse_option("enabled = true"))
-
-    assert result == RecordValue(
-        _OPTION_SOME,
-        "Option::Some",
-        {"value": JsonValue({"enabled": True})},
-    )
 
 
 def test_toml_render_round_trips_tables_and_rejects_unrepresentable_json() -> None:

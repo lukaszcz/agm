@@ -30,7 +30,7 @@ class _PathCompanion(Protocol):
 
     def basename(self, path: str) -> str: ...
 
-    def extension_option(self, path: str) -> object: ...
+    def extension(self, path: str) -> object: ...
 
     def with_extension(self, path: str, extension: str) -> str: ...
 
@@ -73,10 +73,10 @@ def test_path_operations_preserve_platform_path_semantics(
     assert companion.join(["one", "two", "three.txt"]) == os.path.join("one", "two", "three.txt")
     assert companion.dirname(file_path) == parent
     assert companion.basename(trailing_parent) == ""
-    assert decode_boundary_value(companion.extension_option(file_path)) == RecordValue(
+    assert decode_boundary_value(companion.extension(file_path)) == RecordValue(
         _OPTION_SOME, "Option::Some", {"value": TextValue(".txt")}
     )
-    assert decode_boundary_value(companion.extension_option(no_extension)) == RecordValue(
+    assert decode_boundary_value(companion.extension(no_extension)) == RecordValue(
         _OPTION_NONE, "Option::None", {}
     )
     assert companion.with_extension(no_extension, ".bak") == os.path.join(parent, "file.bak")

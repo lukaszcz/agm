@@ -18,6 +18,11 @@ program def main() -> unit =
         try
           let _ = time::parse("not a date", "%Y-%m-%d")
         catch TimeParseError as error => print(error.raw)
+    | 4 =>
+        print(time::try-parse-iso("not an instant").err().map(fn(error: TimeParseError) => error.raw))
+        print(time::try-parse("not a date", "%Y-%m-%d").is-err())
+        print(time::try-parse-iso("2024-01-02T03:04:05+00:00").ok().map(time::format-iso))
+        print(time::try-parse("2024/01/02", "%Y/%m/%d").ok().map(time::format-iso))
     | _ =>
         let epoch = time::now()
         print(time::format-iso(epoch).contains("T"))

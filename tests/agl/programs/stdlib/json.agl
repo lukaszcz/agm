@@ -33,9 +33,9 @@ program def main() -> unit =
           print(error.raw)
           null
         print(strict)
-        print(json::parse?("answer: 42"))
+        print(json::try-parse("answer: 42"))
         print(json::parse-lenient("answer: 42"))
-        print(json::parse-lenient?("not JSON at all"))
+        print(json::try-parse-lenient("not JSON at all"))
     | 4 =>
         let object = json::parse("{}")
         try
@@ -50,8 +50,8 @@ program def main() -> unit =
         let scalar = json::parse("true")
         let _ = scalar.get("missing")
         ()
-    | 7 => print(json::parse?("{\"answer\": 42}"))
-    | 8 => print(json::parse-lenient?("result: [1, 2]"))
+    | 7 => print(json::try-parse("{\"answer\": 42}"))
+    | 8 => print(json::try-parse-lenient("result: [1, 2]"))
     | 9 => print(json::parse("{\"name\": \"agm\"}").get?("name"))
     | _ =>
         let null_value = json::parse("null")

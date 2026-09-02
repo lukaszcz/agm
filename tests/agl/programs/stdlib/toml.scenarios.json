@@ -16,9 +16,9 @@
       "expect": {"stdout": "true\ntrue\ntrue\n", "calls": {}}
     },
     {
-      "name": "invalid_toml_raises_or_returns_none",
+      "name": "invalid_toml_raises_or_returns_err",
       "params": {"mode": 4},
-      "expect": {"stdout": "broken = [\nOption::None\n", "calls": {}}
+      "expect": {"stdout": "broken = [\nResult::Err(error = TomlParseError(message = \"Could not parse TOML.\", raw = \"broken = [\"))\n", "calls": {}}
     },
     {
       "name": "render_valid_table",

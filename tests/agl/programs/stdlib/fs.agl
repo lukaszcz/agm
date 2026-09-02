@@ -28,11 +28,13 @@ program def main() -> unit =
   if scenario == "missing_directory" =>
     let _ = fs::list(at("missing"))
   if scenario == "optional_read" =>
-    print(fs::read?(at("missing.txt")))
+    case fs::try-read(at("missing.txt")) of
+      | Result::Ok(value) => print(value)
+      | Result::Err(error) => print(error.operation)
   if scenario == "invalid_encoding" =>
     let _ = fs::read(at("invalid.txt"))
   if scenario == "invalid_encoding_optional" =>
-    print(fs::read?(at("invalid.txt")))
+    print(fs::try-read(at("invalid.txt")).err().map(fn(error: fs::FsError) => error.operation))
   if scenario == "directory_symlink" =>
     fs::remove(at("directory-link"))
     print(fs::is-dir(at("directory-target")))

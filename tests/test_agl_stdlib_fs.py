@@ -141,28 +141,28 @@ program def main() -> unit =
     assert result.error.fields["operation"] == operation
 
 
-def test_fs_optional_read_of_an_invalid_path_returns_none(
+def test_fs_try_read_of_an_invalid_path_returns_an_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.chdir(tmp_path)
     result = _run_file(
         """import std/fs
-program def main() -> unit = print(fs::read?("invalid\\u0000path"))
+program def main() -> unit = print(fs::try-read("invalid\\u0000path").is-err())
 """,
         tmp_path / "main.agl",
         roots=agl_roots(),
     )
 
     assert result.ok
-    assert capsys.readouterr().out == "Option::None\n"
+    assert capsys.readouterr().out == "true\n"
 
 
-def test_fs_read_option_is_not_public(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fs_internals_are_not_public(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     result = _run_file(
         """import std/fs
 program def main() -> unit =
-  let _ = fs::read_option("file.txt")
+  let _ = fs::is_file("file.txt")
 """,
         tmp_path / "main.agl",
         roots=agl_roots(),
@@ -187,7 +187,7 @@ program def main() -> unit =
   fs::move("nested/copy.txt", "nested/deep/moved.txt")
   print(fs::is-file("nested/source.txt"))
   print(fs::is-dir("nested/deep"))
-  print(fs::read?("missing.txt"))
+  print(fs::try-read("missing.txt").is-err())
   print(fs::glob("nested/*.txt"))
   print(fs::glob("missing/*.txt"))
   fs::remove("nested/deep/moved.txt")
@@ -200,7 +200,7 @@ program def main() -> unit =
     assert not (tmp_path / "nested" / "deep" / "moved.txt").exists()
     assert (tmp_path / "nested" / "source.txt").read_text(encoding="utf-8") == "contents"
     assert capsys.readouterr().out == (
-        f'true\ntrue\nOption::None\n["{os.path.join("nested", "source.txt")}"]\n[]\n'
+        f'true\ntrue\ntrue\n["{os.path.join("nested", "source.txt")}"]\n[]\n'
     )
 
 

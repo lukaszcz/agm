@@ -11,7 +11,6 @@ from agl import AglException, array, nominals
 
 from agm.core import fs
 
-Option = nominals.std.option.Option
 FsError = nominals.std.fs.FsError
 
 T = TypeVar("T")
@@ -39,14 +38,6 @@ def _run(path: str, operation: str, action: Callable[[], T]) -> T:
 def read(path: str) -> str:
     """Read UTF-8 text from *path*."""
     return _run(path, "read", lambda: fs.read_text(Path(path)))
-
-
-def read_option(path: str) -> object:
-    """Read UTF-8 text from *path*, returning ``Option::None`` on failure."""
-    try:
-        return Option.Some(value=read(path))
-    except AglException:
-        return getattr(Option, "None")()
 
 
 def write(path: str, content: str) -> None:

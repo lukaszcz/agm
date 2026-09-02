@@ -51,7 +51,7 @@ def test(pattern: str, s: str) -> bool:
     return _compile(pattern).search(s) is not None
 
 
-def find_option(pattern: str, s: str) -> object:
+def find(pattern: str, s: str) -> object:
     """Return the first match as ``Option``, if one occurs."""
     match = _compile(pattern).search(s)
     return Option.Some(value=_match(match)) if match is not None else _none()
@@ -77,4 +77,4 @@ def escape(s: str) -> str:
     return re.escape(s)
 
 
-__all__ = ["escape", "find_all", "find_option", "replace", "split", "test"]
+__all__ = ["escape", "find", "find_all", "replace", "split", "test"]

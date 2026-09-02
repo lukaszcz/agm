@@ -10,13 +10,8 @@ from typing import cast
 import tomlkit
 from agl import AglException, json, nominals
 
-Option = nominals.std.option.Option
 TomlParseError = nominals.std.toml.TomlParseError
 TomlRenderError = nominals.std.toml.TomlRenderError
-
-
-def _none() -> object:
-    return getattr(Option, "None")()
 
 
 def _parse_error(raw: str) -> None:
@@ -43,13 +38,6 @@ def parse(raw: str) -> object:
     except tomllib.TOMLDecodeError:
         _parse_error(raw)
     return json(_json_value(parsed))
-
-
-def parse_option(raw: str) -> object:
-    try:
-        return Option.Some(value=parse(raw))
-    except AglException:
-        return _none()
 
 
 _TOML_INT_MIN = -(2**63)
@@ -105,4 +93,4 @@ def render(value: object) -> str:
     return tomlkit.dumps(_toml_value(raw))
 
 
-__all__ = ["parse", "parse_option", "render"]
+__all__ = ["parse", "render"]

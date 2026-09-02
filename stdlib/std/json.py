@@ -38,22 +38,8 @@ def parse(raw: str) -> object:
     return _parse(raw, lenient=False)
 
 
-def parse_option(raw: str) -> object:
-    try:
-        return _some(parse(raw))
-    except AglException:
-        return _none()
-
-
 def parse_lenient(raw: str) -> object:
     return _parse(raw, lenient=True)
-
-
-def parse_lenient_option(raw: str) -> object:
-    try:
-        return _some(parse_lenient(raw))
-    except AglException:
-        return _none()
 
 
 def kind(value: object) -> str:
@@ -108,7 +94,5 @@ __all__ = [
     "kind",
     "parse",
     "parse_lenient",
-    "parse_lenient_option",
-    "parse_option",
     "size",
 ]

@@ -1,7 +1,6 @@
 import std/option::Option
 
 scope PathInternals
-  extern def extension_option(path: text) -> Option[text]
   extern def with_extension(path: text, extension: text) -> text
   extern def is_absolute(path: text) -> bool
 end PathInternals
@@ -9,7 +8,7 @@ end PathInternals
 extern def join(parts: array[text]) -> text
 extern def dirname(path: text) -> text
 extern def basename(path: text) -> text
-def extension?(path: text) -> Option[text] = PathInternals::extension_option(path)
+extern def extension(path: text) -> Option[text]
 def with-extension(path: text, extension: text) -> text =
   PathInternals::with_extension(path, extension)
 extern def absolute(path: text) -> text

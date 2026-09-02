@@ -21,7 +21,7 @@ def parse-schedule(path: text) -> decimal =
 def report-schedule-failure(schedule: text) -> unit =
   let parsed = attempt(fn() => parse-schedule(schedule))
   print(parsed.is-err())
-  print(parsed.err?().is-some())
+  print(parsed.err().is-some())
 
 program def main() -> unit =
   case workflow of
@@ -36,7 +36,7 @@ program def main() -> unit =
     | 3 =>
         let parsed = attempt(fn() => parse-schedule(path::join([root, "schedule.toml"])))
         print(parsed.is-ok())
-        print(parsed.ok?().map(time::format-iso))
+        print(parsed.ok().map(time::format-iso))
     | 4 => report-schedule-failure(path::join([root, "missing.toml"]))
     | 6 => report-schedule-failure(path::join([root, "schedule.toml"]))
     | 7 => report-schedule-failure(path::join([root, "schedule.toml"]))

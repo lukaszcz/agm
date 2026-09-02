@@ -9,9 +9,9 @@ program def main() -> unit =
     | 1 =>
         print(regex::test("[0-9]+", "letters"))
         print(regex::test("[0-9]+", "item-42"))
-        print(regex::find?("[0-9]+", "letters"))
+        print(regex::find("[0-9]+", "letters"))
     | 2 =>
-        case regex::find?("(?P<word>[A-Za-z]+)-([0-9]+)(?:-([A-Z]+))?", "ref-42") of
+        case regex::find("(?P<word>[A-Za-z]+)-([0-9]+)(?:-([A-Z]+))?", "ref-42") of
           | Option::Some(value = _ as found) =>
               print(found.matched)
               print(found.start)
@@ -39,7 +39,7 @@ program def main() -> unit =
         catch RegexError as error => print(error.pattern)
     | 8 =>
         print(regex::test(pattern = "[0-9]+", s = "item-42"))
-        print(regex::find?(pattern = "[0-9]+", s = "item-42"))
+        print(regex::find(pattern = "[0-9]+", s = "item-42"))
         print(regex::find-all(pattern = "[A-Za-z]+", s = "one 22 two").size())
         print(regex::replace(pattern = "[0-9]+", s = "item-42", replacement = "#"))
         print(regex::split(pattern = ",", s = "a,b").size())

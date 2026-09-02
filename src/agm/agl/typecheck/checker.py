@@ -110,6 +110,7 @@ from agm.agl.semantics.types import (
     UnitType,
     contains_inference_var,
     free_type_vars,
+    is_standard_option_enum,
     reroot_type,
     substitute,
 )
@@ -4490,21 +4491,6 @@ class _Checker:
 
     # --- member access ---
 
-    def _is_standard_option_enum(self, owner: EnumType) -> bool:
-        """Return whether *owner* is the standard ``Option`` enum.
-
-        ``Option``'s member records carry no methods of their own, so a
-        projection off one is retried against the owning enum. The owner
-        qualifies when it is a standard-library ``builtin`` declaration of that
-        name, or the host's reserved fallback identity for it; a user's own
-        enum that happens to be named ``Option`` does not.
-        """
-        typedef = self._env.type_table.get_by_id(owner.decl_id)
-        return owner.name == "Option" and (
-            owner.module_id.is_reserved
-            or (owner.module_id.is_standard_library and typedef is not None and typedef.is_builtin)
-        )
-
     def _bound_method_type(
         self,
         method: MethodDef,
@@ -4673,7 +4659,7 @@ class _Checker:
                 method = self._env.type_table.lookup_method(obj_type, node.field)
                 if isinstance(obj_type, RecordType) and method is None:
                     enum_owners = self._env.type_table.enum_owners_for_member(obj_type)
-                    if len(enum_owners) == 1 and self._is_standard_option_enum(enum_owners[0]):
+                    if len(enum_owners) == 1 and is_standard_option_enum(enum_owners[0]):
                         method_receiver = enum_owners[0]
                         method = self._env.type_table.lookup_method(method_receiver, node.field)
             else:

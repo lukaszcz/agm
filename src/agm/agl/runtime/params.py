@@ -254,10 +254,10 @@ def convert_config_value(
     """
     from agm.agl.runtime.option import none_value, some_value
     from agm.agl.semantics.type_table import create_seeded_type_table
-    from agm.agl.semantics.types import EnumType, TextType
+    from agm.agl.semantics.types import TextType, is_standard_option_enum
 
     table = type_table if type_table is not None else create_seeded_type_table()
-    if isinstance(key_type, EnumType) and key_type.name == "Option":
+    if is_standard_option_enum(key_type):
         if raw is None:
             return none_value()
         inner: AglType = key_type.type_args[0] if key_type.type_args else TextType()

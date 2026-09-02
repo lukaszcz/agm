@@ -7,6 +7,9 @@ declared as ``builtin var`` bindings in ``std/config``.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import MappingProxyType
+
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     OPTION_TEXT_TYPE,
@@ -29,10 +32,15 @@ _TYPE_BY_KIND: dict[EngineKeyKind, Type] = {
     EngineKeyKind.AGENT: BUILTIN_PRELUDE_TYPES["Agent"],
 }
 
-# Lookup: kebab key name → resolved AgL type.
-_ENGINE_KEY_TYPES: dict[str, Type] = {name: _TYPE_BY_KIND[kind] for name, kind in ENGINE_KEY_KINDS}
+# Lookup: kebab key name → resolved AgL type. Built from the same
+# ``ENGINE_KEY_KINDS`` tuple ``cli_support.program_options.engine_key_flags``
+# iterates, so that lookup is total by construction: every name it visits is
+# a key of this mapping.
+ENGINE_KEY_TYPES: Mapping[str, Type] = MappingProxyType(
+    {name: _TYPE_BY_KIND[kind] for name, kind in ENGINE_KEY_KINDS}
+)
 
 
 def get_engine_key_type(name: str) -> Type | None:
     """Return the AgL type for engine key *name*, or ``None`` if unknown."""
-    return _ENGINE_KEY_TYPES.get(name)
+    return ENGINE_KEY_TYPES.get(name)

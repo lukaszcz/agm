@@ -51,7 +51,7 @@ import enum as _enum
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from itertools import count
-from typing import assert_never
+from typing import TypeGuard, assert_never
 
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, reserved_nominal_id
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id as _reserved_id
@@ -1002,6 +1002,27 @@ _OPTION_TEXT_TYPE = EnumType(
 # Public alias for the ``Option[text]`` type — the single source of truth
 # shared with engine_keys and any other module that needs this type.
 OPTION_TEXT_TYPE: EnumType = _OPTION_TEXT_TYPE
+
+
+def is_standard_option_enum(type_: Type) -> TypeGuard[EnumType]:
+    """Return whether *type_* is the standard library's ``Option`` enum.
+
+    Checked by nominal provenance, not by name alone: a user-declared
+    ``enum Option[T]`` in the entry module shares the name but not the
+    identity, and does not qualify. The standard ``Option`` either carries
+    the host's reserved fallback identity (``RESERVED_ID``, as
+    :data:`OPTION_TEXT_TYPE` does) or is declared under the standard
+    library's module tree (e.g. ``std/option``). This is the single
+    predicate shared by every layer that special-cases ``Option`` —
+    typechecking's method-projection fallback, engine-setting decode, and
+    the CLI's type-directed option projection.
+    """
+    return (
+        isinstance(type_, EnumType)
+        and type_.name == "Option"
+        and (type_.module_id.is_reserved or type_.module_id.is_standard_library)
+    )
+
 
 _OPTION_JSON_TYPE = EnumType(
     name="Option",

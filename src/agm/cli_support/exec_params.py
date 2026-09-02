@@ -11,7 +11,8 @@ also falls back to ``@entry``. Bool params use ``--name/--no-name`` flag form.
 One selected option map drives parsing, help, and completion.
 
 Collision detection is **verbatim**: a param whose name is ``foo`` produces the
-flag ``--foo``; that exact string is checked against ``RESERVED_FLAGS``.
+flag ``--foo``; that exact string is checked against ``RESERVED_FLAGS``
+(re-exported here from ``program_options``, the host's own flag inventory).
 There is no underscore↔hyphen normalisation — the engine keys all use
 kebab-case, so a param named ``timeout`` (the exact engine key name) collides,
 but one named ``timeout_val`` does not.
@@ -32,64 +33,10 @@ from agm.agl.runtime.types import (
     public_param_spelling,
 )
 from agm.agl.semantics.types import BoolType
+from agm.cli_support.program_options import RESERVED_FLAGS
 
 if TYPE_CHECKING:
     from agm.cli_support.exec_target import PackageProgramReference
-
-
-def _build_engine_key_flags() -> frozenset[str]:
-    """Derive the set of reserved CLI flag strings from the engine-key registry.
-
-    For each engine key:
-    - Always adds ``--<name>`` (positive flag).
-    - Adds ``--no-<name>`` for bool-typed keys and Option-typed keys (which have
-      an explicit ``--no-<name>`` negation to set the binding to ``none``).
-
-    Derived from the engine-key catalog so that adding a new engine key
-    automatically appears here.  An engine key whose CLI flag is spelled
-    differently from its key name (``default-agent`` is reached by ``--agent``)
-    is reserved by ``_BUILTIN_EXEC_FLAGS`` instead.
-    """
-    from agm.config.engine_keys import ENGINE_KEYS, EngineKeyKind
-
-    flags: set[str] = set()
-    for spec in ENGINE_KEYS:
-        flags.add(f"--{spec.name}")
-        # Only bool and Option[text] engine keys have a negative CLI flag.
-        if spec.kind in {EngineKeyKind.BOOL, EngineKeyKind.OPTION_TEXT}:
-            flags.add(f"--no-{spec.name}")
-    return frozenset(flags)
-
-
-# Flags ``agm exec`` declares that the engine-key catalog does not spell.
-# Every flag the command declares must appear either here or there: an
-# unreserved flag is worse than a rejected param name, because Click binds the
-# token to the built-in option and the param advertised under that flag
-# silently keeps its default.  The declarations live in ``agm.cli``, a layer
-# above this one, so they are mirrored here and cross-checked by the tests.
-_BUILTIN_EXEC_FLAGS: frozenset[str] = frozenset(
-    {
-        "--command",
-        "-c",
-        "--program",
-        "-p",
-        "--module-path",
-        "-I",
-        "--max-call-depth",
-        # ``agm exec`` turns off Click's built-in help option so that program
-        # ``--param`` tokens pass through to it, and recognises these itself.
-        "--help",
-        "-h",
-        "--dry-run",
-        "--no-stdlib",
-        # The CLI spelling of the ``default-agent`` engine key.
-        "--agent",
-    }
-)
-
-# Reserved flag strings: declared built-ins UNION engine-key flags (both polarities).
-# Collision check is verbatim — no underscore↔hyphen normalisation.
-RESERVED_FLAGS: frozenset[str] = _BUILTIN_EXEC_FLAGS | _build_engine_key_flags()
 
 
 def param_flag(name: str) -> str:

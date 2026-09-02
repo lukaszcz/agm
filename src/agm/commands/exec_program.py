@@ -67,6 +67,7 @@ from agm.agent.session import create_agl_session_host
 from agm.agl import PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
 from agm.agl.modules.ids import ENTRY_DISPLAY
+from agm.agl.modules.roots import RootSet
 from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.types import ParamDeclInfo
@@ -108,7 +109,7 @@ from agm.core.log import (
 from agm.core.parse import parse_timeout
 from agm.core.toml import toml_dict
 from agm.packages.activation import load_activation_index
-from agm.packages.model import PackageInfo, owning_package
+from agm.packages.model import owning_package
 
 
 class RegisteredParamUsageError(Exception):
@@ -135,25 +136,21 @@ def _entry_module_segments(
     return module_segments
 
 
-def _package_entry_segments(
-    entry_path: Path | None, packages: tuple[PackageInfo, ...]
-) -> tuple[str, ...] | None:
+def _package_entry_segments(entry_path: Path | None, roots: RootSet) -> tuple[str, ...] | None:
     """Return a package entry's package-qualified module path.
 
-    *packages* is the mounted package selection the root set was assembled
-    from, so a development checkout and an installed store tree route their
-    configuration identically — and identically to the same program reached by
-    its ``PACKAGE/MODULE::PROGRAM`` reference. The standard library is included:
-    a directly executed ``std`` module routes under ``std/MODULE`` from whichever
-    tree was selected as the standard library.
+    *roots* carries the mounted package selection it was assembled from, so a
+    development checkout and an installed store tree route their configuration
+    identically — and identically to the same program reached by its
+    ``PACKAGE/MODULE::PROGRAM`` reference. The standard library is included: a
+    directly executed ``std`` module routes under ``std/MODULE`` from whichever
+    tree was selected as the standard library. This is the module identity the
+    loader keys such an entry by, asked of the same root set.
     """
     if entry_path is None:
         return None
-    package = owning_package(entry_path, packages)
-    if package is None:
-        return None
-    relative = entry_path.resolve().relative_to(package.root).with_suffix("")
-    return relative.parts
+    module_id = roots.package_module_id_for(entry_path)
+    return None if module_id is None else module_id.segments
 
 
 _T = TypeVar("_T")
@@ -275,7 +272,7 @@ def run(
         raise SystemExit(1)
 
     entry_stem: str | None = Path(args.file).stem if args.file is not None else None
-    package_entry_segments = _package_entry_segments(entry_path, exec_roots.roots.packages)
+    package_entry_segments = _package_entry_segments(entry_path, exec_roots.roots)
     config_entry_segments: tuple[str, ...]
     if entry_module_segments is not None:
         config_entry_segments = entry_module_segments

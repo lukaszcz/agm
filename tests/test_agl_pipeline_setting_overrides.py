@@ -22,7 +22,12 @@ from agm.agl.parser import AglSyntaxError
 from agm.agl.pipeline import ParsedEntry, PipelineDriver, PreparedProgram
 from agm.agl.semantics.values import RecordValue, TextValue
 from agm.agl.setting_overrides import SettingOverride
-from tests._agl_helpers import agl_roots, prepare_inline_command, run_inline_command
+from tests._agl_helpers import (
+    agl_roots,
+    agl_std_package_roots,
+    prepare_inline_command,
+    run_inline_command,
+)
 
 _STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
 
@@ -379,3 +384,50 @@ class TestMalformedAgentCommandAtConstruction:
         assert not result.ok
         assert result.diagnostics
         assert result.error is None
+
+
+# ---------------------------------------------------------------------------
+# The entry file's own identity never changes how an override is applied
+# ---------------------------------------------------------------------------
+
+
+class TestStandardLibraryEntry:
+    """An override is spliced and validated whichever module is the entry.
+
+    A standard-library file executed or checked directly keeps the module
+    identity its package declares, ``std/config`` included. The splice-and-
+    validate step is driven by the graph, so it must not depend on which of
+    those modules the host happened to name.
+    """
+
+    def _prepare_file(
+        self, path: Path, overrides: dict[str, SettingOverride]
+    ) -> tuple[PipelineDriver, PreparedProgram]:
+        parsed = PipelineDriver.parse_entry(path.read_text(), entry_path=path)
+        prepared = PipelineDriver.prepare_parsed_entry(
+            parsed, roots=agl_std_package_roots(), setting_overrides=overrides
+        )
+        return PipelineDriver(), prepared
+
+    @pytest.mark.parametrize("module", ["config", "math"])
+    def test_unknown_engine_key_is_rejected_for_every_library_entry(self, module: str) -> None:
+        origin = "--probe"
+        _driver, prepared = self._prepare_file(
+            _STDLIB / "std" / f"{module}.agl",
+            {"no-such-engine-setting": SettingOverride(source="1", origin=origin)},
+        )
+        assert prepared.diagnostics
+        assert origin in _diagnostic_text(prepared)
+
+    @pytest.mark.parametrize("module", ["config", "math"])
+    def test_spliced_override_is_type_checked_for_every_library_entry(self, module: str) -> None:
+        """The value really is spliced in as the declaration's default."""
+        origin = "--agent"
+        driver, prepared = self._prepare_file(
+            _STDLIB / "std" / f"{module}.agl",
+            {"default-agent": SettingOverride(source='"not-an-agent"', origin=origin)},
+        )
+        assert prepared.diagnostics == ()
+        result = driver.check_prepared(prepared)
+        assert not result.ok
+        assert origin in format_diagnostic(result.diagnostics[0])

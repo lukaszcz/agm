@@ -141,7 +141,11 @@ class ResolvedProgram:
         Maps each :class:`~agm.agl.modules.ids.ModuleId` to its
         :class:`ResolvedModule`.
     ``entry_id``
-        Always :data:`~agm.agl.modules.ids.ENTRY_ID`.
+        The graph's entry module identity — read from :attr:`graph` so the two
+        can never name different modules. It is the module id the entry file's
+        owning package declares, or
+        :data:`~agm.agl.modules.ids.ENTRY_ID` for a source with no module
+        identity.
     ``all_public_funcs``
         Whole-program pre-pass table mapping ``(ModuleId, name)`` to the
         :class:`~agm.agl.syntax.nodes.FuncDef` node. Contains every source-level
@@ -158,10 +162,15 @@ class ResolvedProgram:
     """
 
     modules: dict[ModuleId, ResolvedModule]
-    entry_id: ModuleId
     all_public_funcs: dict[QName, FuncDef]
     all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias]
     graph: ModuleGraph
+
+    @property
+    def entry_id(self) -> ModuleId:
+        """Return the entry module's identity, as the loaded graph keys it."""
+
+        return self.graph.entry_id
 
     @property
     def import_sccs(self) -> tuple[tuple[ModuleId, ...], ...]:
@@ -755,9 +764,7 @@ def _decl_to_import_target(decl: ImportDecl | ExportDecl, graph: ModuleGraph) ->
         mid = ModuleId(segments=tuple(decl.module_path))
         return SingleTarget(module=mid)
     return WildcardTarget(
-        modules=frozenset(
-            expand_module_wildcard(tuple(decl.module_path), graph.modules, graph.entry_id)
-        )
+        modules=frozenset(expand_module_wildcard(tuple(decl.module_path), graph.modules))
     )
 
 
@@ -1028,7 +1035,6 @@ def resolve_program(
             program_import_envs=import_envs,
             all_public_types=all_public_types,
             allow_root_statements=is_entry and entry_parent_scope is not None,
-            is_entry_module=is_entry,
             is_standard_library_module=mid.is_standard_library,
             repl_session_scope=entry_repl_session_scope if is_entry else None,
             repl_session_scope_nodes=entry_repl_session_scope_nodes if is_entry else None,
@@ -1057,7 +1063,6 @@ def resolve_program(
     retain_resolved_modules(retainable, resolved_modules)
     return ResolvedProgram(
         modules=resolved_modules,
-        entry_id=graph.entry_id,
         all_public_funcs=all_public_funcs,
         all_public_types=all_public_types,
         graph=graph,

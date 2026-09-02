@@ -394,8 +394,9 @@ unary operators over those. It
 becomes the binding default only when the host supplies no initial value. The
 `builtin` modifier may sit on the same line or the line directly above (like
 `builtin def`). It may be declared only at the root, or in a named scope region,
-of a standard-library module; entry modules and ordinary library modules cannot
-declare one. `std/config` reserves builtin vars for engine settings.
+of a module whose path identity lies under `std`, the entry program included
+when its path lies there; no other module may declare one. `std/config`
+reserves builtin vars for engine settings.
 
 `var`'s `decl_head` accepts the same optional scope-path prefix as the type
 declarations above (`var A::count = 0`). `let` needs no separate grammar for

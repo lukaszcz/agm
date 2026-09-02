@@ -1498,6 +1498,13 @@ class TestReservedNames:
         _, msg = diag(err)
         assert "print" in msg
 
+    def test_reserve_copy_def_in_inline_entry(self) -> None:
+        """An inline ``-c`` entry has no module identity of its own, so a
+        built-in spelling stays reserved in its bare namespace."""
+        err = reject_scope("def copy() -> int = 1\ncopy()")
+        _, msg = diag(err)
+        assert "copy" in msg
+
     def test_reserve_print_def_still_rejected_beside_an_unrelated_type(self) -> None:
         err = reject_scope("record Point\n  x: int\ndef print() -> int = 1\n()")
         _, msg = diag(err)

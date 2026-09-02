@@ -10,7 +10,9 @@ or a `use` declaration adds selected declarations to a bare namespace.
 
 A module identity is its slash path: the relative path to its `.agl` file,
 without the suffix. For example, `utils/strings.agl` has identity
-`utils/strings`. The entry program has no path identity.
+`utils/strings`. An entry program that no [package](packages.md) owns has no
+path identity; a file inside a package keeps its package-qualified identity even
+when it is the entry.
 
 A slash path is written byte-adjacent wherever it appears — in a header, a
 qualifier, or a wildcard tail. `a/b` is a path; `a / b`, spaced on both sides,

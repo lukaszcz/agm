@@ -35,6 +35,22 @@ from agm.agl.typecheck.env import (
 )
 from agm.agl.typecheck.inference import ConstraintRole, InferenceEngine
 
+
+def type_name_not_a_value(name: str, span: SourceSpan) -> AglTypeError:
+    """Return the diagnostic for a type name that denotes no constructor value.
+
+    Written once and raised from every path that discovers a nominal has no
+    bare constructor -- a module's own declaration, an imported one, and a
+    generic alias of either -- so the reader is told the same thing wherever
+    the name was written.
+    """
+    return AglTypeError(
+        f"'{name}' is a type name, not a value; "
+        "use it with a constructor call (e.g. 'EnumName::Variant' or 'RecordName(...)').",
+        span=span,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Narrow context Protocol
 # ---------------------------------------------------------------------------
@@ -733,7 +749,10 @@ class ConstructorChecker:
         signature = self._ctx._env.get_ctor_sig_from_module(
             owner.module_id, owner.name, scope_path=owner.scope_path
         )
-        assert signature is not None
+        if signature is None:
+            # A generic enum has members but no constructor of its own, so an
+            # alias of one names a type and nothing else.
+            raise type_name_not_a_value(callee_ref.name, span)
         source = self._ctx._env.source_type_template_qname(
             callee_ref.module_id, callee_ref.name, scope_path=callee_ref.scope_path
         )
@@ -771,11 +790,7 @@ class ConstructorChecker:
             )
         if isinstance(owner, RecordType):
             return self.check_constructor_as_value(owner=owner, span=span, expected=expected)
-        raise AglTypeError(
-            f"'{callee_ref.name}' is a type name, not a value; "
-            "use it with a constructor call (e.g. 'EnumName::Variant' or 'RecordName(...)').",
-            span=span,
-        )
+        raise type_name_not_a_value(callee_ref.name, span)
 
     def check_cross_module_constructor_call(
         self,

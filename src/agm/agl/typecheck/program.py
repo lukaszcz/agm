@@ -161,7 +161,10 @@ class CheckedProgram:
         Maps each :class:`~agm.agl.modules.ids.ModuleId` to its
         :class:`CheckedModule`.
     ``entry_id``
-        Always :data:`~agm.agl.modules.ids.ENTRY_ID`.
+        The entry module's identity, as the loaded graph keys it: its owning
+        package's declared module id, or
+        :data:`~agm.agl.modules.ids.ENTRY_ID` for a source with no module
+        identity.
     ``program_type_table``
         Whole-program type table mapping ``(ModuleId, scope_path, name)`` to the fully-built
         :class:`~agm.agl.semantics.types.Type` object stamped with the owning

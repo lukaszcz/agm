@@ -481,3 +481,224 @@ def test_check_searches_the_development_std_checkout_holding_the_entry(
     searched = capsys.readouterr().err.replace(str(entry.resolve()), "").replace(str(entry), "")
     assert str(checkout.resolve()) in searched
     assert str(store_root.resolve()) not in searched
+
+
+_CONSTRUCTOR_FORMS = """\
+record Point(x: int, y: int)
+
+record Box[T]
+  value: T
+
+enum Shape
+  | Circle(r: int)
+  | Square(s: int)
+
+enum Opt[T]
+  | Nothing
+  | Just(v: T)
+
+type PointAlias = Point
+
+type BoxAlias[T] = Box[T]
+
+def point-ctor() -> (int, int) -> Point = Point
+
+def box-ctor() -> (int) -> Box[int] = Box
+
+def circle-ctor() -> (int) -> Shape = Circle
+
+def just-ctor() -> (int) -> Opt[int] = Just
+
+def alias-point() -> PointAlias = PointAlias(x = 1, y = 2)
+
+def alias-box() -> BoxAlias[int] = BoxAlias(value = 2)
+
+def made() -> Shape = Square(s = 3)
+"""
+
+_ENUM_ALIAS_AS_VALUE = """\
+enum Opt[T]
+  | Nothing
+  | Just(v: T)
+
+type OptAlias[T] = Opt[T]
+
+def enum-alias() -> int =
+  let f = OptAlias
+  1
+"""
+
+
+class TestPackageOwnedEntry:
+    """A checked file that a package owns is compiled under its module identity."""
+
+    _REPO_STDLIB = Path(__file__).resolve().parents[1] / "stdlib"
+
+    def _isolated_home(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Point the AGM home and cwd at *tmp_path*, away from the developer's own."""
+        home = tmp_path / "agm-home"
+        home.mkdir()
+        monkeypatch.setenv("AGM_HOME", str(home))
+        monkeypatch.chdir(tmp_path)
+
+    def _development_package(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+    ) -> Path:
+        """Lay out an empty development package *name* and isolate the AGM home."""
+        self._isolated_home(tmp_path, monkeypatch)
+        root = tmp_path / name
+        (root / name).mkdir(parents=True)
+        (root / "package.toml").write_text(
+            f'[package]\nname = "{name}"\nversion = "1.0.0"\n', encoding="utf-8"
+        )
+        return root
+
+    def test_mutually_importing_package_modules_check_from_either_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Neither file is anonymous, so each may import the other back."""
+        root = self._development_package(tmp_path, monkeypatch, "duo")
+        first = root / "duo" / "a.agl"
+        second = root / "duo" / "b.agl"
+        first.write_text(
+            "import duo/b\ndef fa() -> int = duo/b::fb()\n",
+            encoding="utf-8",
+        )
+        second.write_text(
+            "import duo/a\ndef fb() -> int = 2\ndef gb() -> int = duo/a::fa()\n",
+            encoding="utf-8",
+        )
+
+        check_command.run(CheckArgs(files=[str(first), str(second)], no_stdlib=True))
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == ""
+
+    def test_wildcard_import_reaches_the_package_owned_entry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A named entry is an ordinary member of its package's module tree."""
+        root = self._development_package(tmp_path, monkeypatch, "duo")
+        first = root / "duo" / "a.agl"
+        second = root / "duo" / "b.agl"
+        first.write_text("import duo/b\ndef fa() -> int = 1\n", encoding="utf-8")
+        second.write_text("import duo/*\ndef gb() -> int = duo/a::fa()\n", encoding="utf-8")
+
+        check_command.run(CheckArgs(files=[str(first)], no_stdlib=True))
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == ""
+
+    def test_standard_library_module_checked_directly_accepts_its_builtins(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``builtin var`` is a standard-library privilege the entry must keep."""
+        self._isolated_home(tmp_path, monkeypatch)
+
+        check_command.run(CheckArgs(files=[str(self._REPO_STDLIB / "std" / "config.agl")]))
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == ""
+
+    def test_standard_library_prelude_checks_without_importing_itself(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._isolated_home(tmp_path, monkeypatch)
+
+        check_command.run(CheckArgs(files=[str(self._REPO_STDLIB / "std" / "prelude.agl")]))
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == ""
+
+    def test_builtin_var_outside_the_standard_library_is_still_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        root = self._development_package(tmp_path, monkeypatch, "mine")
+        module = root / "mine" / "settings.agl"
+        module.write_text("builtin var log: bool = false\n", encoding="utf-8")
+
+        with pytest.raises(SystemExit) as exc_info:
+            check_command.run(CheckArgs(files=[str(module)], no_stdlib=True))
+
+        assert exc_info.value.code == 1
+        assert capsys.readouterr().err
+
+    def test_package_owned_module_may_declare_a_builtin_named_function(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A named module's members live in its own qualified namespace, so a
+        built-in spelling is free there whether the file is the checked entry
+        or one of its library imports."""
+        root = self._development_package(tmp_path, monkeypatch, "kit")
+        owner = root / "kit" / "files.agl"
+        user = root / "kit" / "user.agl"
+        owner.write_text("def copy(n: int) -> int = n\n", encoding="utf-8")
+        user.write_text(
+            "import kit/files\ndef twice(n: int) -> int = kit/files::copy(n)\n",
+            encoding="utf-8",
+        )
+
+        check_command.run(CheckArgs(files=[str(owner)], no_stdlib=True))
+
+        assert capsys.readouterr().err == ""
+
+        check_command.run(CheckArgs(files=[str(user)], no_stdlib=True))
+
+        assert capsys.readouterr().err == ""
+
+    def test_loose_entry_file_may_not_declare_a_builtin_named_function(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A file no package owns has only a bare namespace to declare into."""
+        home = tmp_path / "agm-home"
+        home.mkdir()
+        monkeypatch.setenv("AGM_HOME", str(home))
+        monkeypatch.chdir(tmp_path)
+        loose = tmp_path / "loose.agl"
+        loose.write_text("def copy(n: int) -> int = n\n", encoding="utf-8")
+
+        with pytest.raises(SystemExit) as exc_info:
+            check_command.run(CheckArgs(files=[str(loose)], no_stdlib=True))
+
+        assert exc_info.value.code == 1
+        assert capsys.readouterr().err
+
+    def _check_ok(self, path: Path, capsys: pytest.CaptureFixture[str]) -> bool:
+        """Return whether checking *path* alone reported no error."""
+        try:
+            check_command.run(CheckArgs(files=[str(path)], no_stdlib=True))
+        except SystemExit:
+            return False
+        finally:
+            capsys.readouterr()
+        return True
+
+    @pytest.mark.parametrize(
+        "source, accepted", [(_CONSTRUCTOR_FORMS, True), (_ENUM_ALIAS_AS_VALUE, False)]
+    )
+    def test_own_constructors_read_alike_as_entry_and_as_import(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        source: str,
+        accepted: bool,
+    ) -> None:
+        """A package module's own constructors resolve against its own name.
+
+        Record and enum constructors, bare and generic, as values and as call
+        callees, are accepted or rejected identically whether the host named
+        the file or an import reached it.
+        """
+        root = self._development_package(tmp_path, monkeypatch, "kit")
+        owner = root / "kit" / "forms.agl"
+        owner.write_text(source, encoding="utf-8")
+        consumer = root / "kit" / "user.agl"
+        consumer.write_text("import kit/forms\n", encoding="utf-8")
+
+        assert self._check_ok(owner, capsys) is accepted
+        assert self._check_ok(consumer, capsys) is accepted

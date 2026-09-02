@@ -168,22 +168,19 @@ def spell_declaration(
 
 
 def expand_module_wildcard(
-    prefix: tuple[str, ...], module_ids: Iterable[ModuleId], entry_id: ModuleId
+    prefix: tuple[str, ...], module_ids: Iterable[ModuleId]
 ) -> tuple[ModuleId, ...]:
     """Return the loaded modules a wildcard import or export names.
 
-    A wildcard reaches every loaded module whose path starts with *prefix*,
-    except the graph's own entry module, which no module can import.  The
-    result is ordered by logical path so two expansions of the same graph
-    agree.
+    A wildcard reaches every loaded module whose path starts with *prefix*.
+    An entry with no module identity is unreachable — its sentinel segment is
+    unspellable — while an entry a package names is an ordinary member of that
+    package's module tree and is reached like any other.  The result is ordered
+    by logical path so two expansions of the same graph agree.
     """
     return tuple(
         sorted(
-            (
-                mid
-                for mid in module_ids
-                if mid != entry_id and mid.segments[: len(prefix)] == prefix
-            ),
+            (mid for mid in module_ids if mid.segments[: len(prefix)] == prefix),
             key=ModuleId.path_str,
         )
     )
@@ -193,10 +190,12 @@ def expand_module_wildcard(
 # Sentinels
 # ------------------------------------------------------------------
 
-#: Distinguished sentinel representing the entry module (the script passed to
-#: ``agm exec`` or supplied via ``-c``).  Its reserved segment contains a NUL
-#: byte, so no real ``.agl`` file on disk can produce a colliding ``ModuleId``
-#: via :meth:`ModuleId.from_path`.  Use ``module_id.is_entry`` to test.
+#: Distinguished sentinel representing an entry module with no module identity
+#: of its own -- source supplied via ``-c``, a REPL entry, or a file no mounted
+#: package owns.  (An entry inside a package keeps that package's declared
+#: module id instead.)  Its reserved segment contains a NUL byte, so no real
+#: ``.agl`` file on disk can produce a colliding ``ModuleId`` via
+#: :meth:`ModuleId.from_path`.  Use ``module_id.is_entry`` to test.
 ENTRY_ID: ModuleId = ModuleId(segments=(_ENTRY_SEGMENT,))
 
 #: Distinguished sentinel owning the host's *reserved* nominal identities --

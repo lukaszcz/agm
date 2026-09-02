@@ -353,7 +353,6 @@ class _Resolver:
         cross_module_type_scopes: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
         program_import_envs: Mapping[ModuleId, ImportEnv] | None = None,
         allow_root_statements: bool = False,
-        is_entry_module: bool = False,
         is_standard_library_module: bool = False,
         repl_session_scope: ScopeNode | None = None,
         repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
@@ -425,7 +424,6 @@ class _Resolver:
         # The REPL is an incremental host and intentionally retains root
         # statements. File and inline exec entries use static roots.
         self._allow_root_statements = allow_root_statements
-        self._is_entry_module = is_entry_module
         self._is_standard_library_module = is_standard_library_module
         # Optional REPL session scope for ``::name`` self-ref fallback.
         # When set, ``_lookup_own_root`` falls back to this scope for names not
@@ -692,7 +690,6 @@ class _Resolver:
             scope_nodes=dict(self._scope_nodes),
             declared_functions=dict(self._declared_functions),
             allows_root_statements=self._allow_root_statements,
-            is_entry_module=self._is_entry_module,
             origin_path=self._origin_path,
             declared_type_names=frozenset(self._declared_type_names),
             declared_type_paths=frozenset(self._type_paths),
@@ -1096,7 +1093,8 @@ class _Resolver:
             decl.name in _RESERVED_NAMES
             and not decl.is_builtin
             and not is_qualified_function_member(
-                self._is_entry_module, tuple(segment.name for segment in decl.scope_path)
+                not self._module_id.is_entry,
+                tuple(segment.name for segment in decl.scope_path),
             )
         ):
             raise AglScopeError(

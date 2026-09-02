@@ -54,11 +54,13 @@ What they may import is restricted:
 
 An import outside this set is a static error naming the missing dependency,
 even when a module with that path exists on some search root. Loose modules —
-the entry file of `agm exec`, `-c` source, REPL entries, and modules on
-non-package roots — remain unrestricted: they may import any mounted package
-module alongside their loose neighbours. A loose module never borrows package
-visibility by sharing a declared dependency's leading path segment; ownership
-follows the file's location, not the path spelling.
+`-c` source, REPL entries, and files no package owns — remain unrestricted:
+they may import any mounted package module alongside their loose neighbours.
+Ownership follows the file's location, not the path spelling and not how the
+file was reached: a file inside a package imports under its package's
+entitlements whether an import reached it or it is the entry program, and a
+loose module never borrows package visibility by sharing a declared
+dependency's leading path segment.
 
 <!-- agl-check: fragment -->
 ```agl

@@ -132,8 +132,8 @@ class ParamDeclInfo:
     external identity. ``name`` is its scope-path spelling: a root param's
     bare name, or a scoped param's full ``::``-joined path spelling. The
     module-qualified spelling disambiguates same-named params in one program
-    inventory. ``is_entry`` keeps the synthetic entry-module identity separate
-    from its user-facing option spelling. ``entry_qualifier`` supplies that
+    inventory. ``is_entry`` marks the params of the invoked entry, whose
+    user-facing option spelling is its own. ``entry_qualifier`` supplies that
     spelling for file-backed entries without changing their internal identity.
     """
 

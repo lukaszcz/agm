@@ -1032,7 +1032,13 @@ class PipelineDriver:
         program_infos: list[ProgramDeclInfo] = []
         for module_id, checked_module in checked.modules.items():
             module_infos: list[ParamDeclInfo] = []
-            module_segments = module_id.segments if not module_id.is_entry else (ENTRY_DISPLAY,)
+            # ``module_segments`` is the param's external route, so it stands
+            # in for a module that has no name to route by; an entry a package
+            # names routes under that name like any other module. Whether the
+            # params belong to the invoked entry is a separate question, and is
+            # asked of the graph's entry identity.
+            is_entry_module = module_id == checked.entry_id
+            module_segments = (ENTRY_DISPLAY,) if module_id.is_entry else module_id.segments
             for item in static_items(checked_module.resolved.program.body.items):
                 if isinstance(item, ParamDecl):
                     param_type = checked_module.type_env.get_binding_type(item.node_id)
@@ -1048,8 +1054,8 @@ class PipelineDriver:
                             line=item.span.start_line,
                             col=item.span.start_col,
                             module_segments=module_segments,
-                            is_entry=module_id.is_entry,
-                            entry_qualifier=entry_qualifier if module_id.is_entry else None,
+                            is_entry=is_entry_module,
+                            entry_qualifier=entry_qualifier if is_entry_module else None,
                         )
                     )
                 elif isinstance(item, FuncDef) and item.is_program:
@@ -1716,16 +1722,19 @@ def _apply_setting_overrides(
 
 
 def _entry_param_module_qualifier(prepared: PreparedProgram) -> str | None:
-    """Return the user-facing module route for a file-backed entry module."""
+    """Return the user-facing module route for a file-backed entry module.
+
+    A package's own file is addressed by the package-qualified module route its
+    manifest declares — the same route its configuration table uses — and any
+    other file by its stem.
+    """
 
     if prepared.entry_path is None:
         return None
-    entry_path = prepared.entry_path.resolve()
-    for package in prepared.roots.packages:
-        if entry_path.is_relative_to(package.module_root):
-            relative = entry_path.relative_to(package.module_root).with_suffix("")
-            return "/".join((package.manifest.name, *relative.parts))
-    return entry_path.stem
+    package_module_id = prepared.roots.package_module_id_for(prepared.entry_path)
+    if package_module_id is not None:
+        return package_module_id.path_str()
+    return prepared.entry_path.resolve().stem
 
 
 def _check_artifact_provenance(

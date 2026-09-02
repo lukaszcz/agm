@@ -541,7 +541,9 @@ class ExternRegistry:
 
 
 def _nominal_identity_path(descriptor: NominalDescriptor) -> tuple[str, ...]:
-    """Return a nominal's namespace path, rooted by module (or ``entry``) then scope.
+    """Return a nominal's namespace path, rooted by module then scope.
+
+    A module with no path identity of its own roots at ``entry`` instead.
 
     Only identities that belong to a real module reach here; the reserved
     sentinel has no path and is filtered out by :meth:`Externs._agl_module`.

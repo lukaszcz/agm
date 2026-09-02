@@ -127,8 +127,9 @@ enum class is a namespace over its member classes. An inline member record is
 available below its enum scope, so `Shape.circle` remains its Python spelling. A
 nominal whose final name is unique and does not collide with a built-in `agl` API
 can be imported directly. Use the identity-preserving `nominals` namespace,
-rooted by module path (or `entry`) and then by AgL scope, for name collisions and
-reserved names such as an exception named `AglException`:
+rooted by module path — or by `entry` for a module with no path identity — and
+then by AgL scope, for name collisions and reserved names such as an exception
+named `AglException`:
 
 ```python
 from agl import Box, Shape, nominals

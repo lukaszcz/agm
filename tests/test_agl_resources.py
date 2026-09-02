@@ -29,12 +29,13 @@ def _run_file(source: str, path: Path, *, roots: RootSet) -> object:
     runtime = PipelineDriver()
     prepared = PipelineDriver.prepare_program(source, entry_path=path, roots=roots)
     discovery = runtime.discover_params(prepared)
-    if discovery.checked is None:
+    checked = discovery.checked
+    if checked is None:
         return runtime.run_prepared(prepared)
     preflight = runtime.preflight_params(prepared, compiled=discovery.compiled)
     if not preflight.result.ok:
         return preflight.result
-    (program,) = [item for item in discovery.programs if item.module.is_entry]
+    (program,) = [item for item in discovery.programs if item.module == checked.entry_id]
     assert preflight.executable is not None
     return runtime.run_prepared(
         prepared,

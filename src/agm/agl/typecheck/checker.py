@@ -801,6 +801,8 @@ class _Checker:
             inferred_sig = self._env.get_function_signature_by_node_id(node.node_id)
             if inferred_sig is not None:
                 self._validate_program_signature(node, inferred_sig)
+                if node.is_program:
+                    self._validate_program_parameters(node, inferred_sig)
             return
 
         sig, func_type, receiver = resolve_function_header(
@@ -813,6 +815,8 @@ class _Checker:
             self._validate_extern_signature(node, sig)
             self._env.register_extern_node_id(node.node_id)
         self._validate_program_signature(node, sig)
+        if node.is_program:
+            self._validate_program_parameters(node, sig)
         self._register_funcdef_signature(
             node, sig, func_type, is_method=is_method, receiver=receiver
         )
@@ -824,9 +828,10 @@ class _Checker:
         Scope-classified methods have their own member namespace. Global
         builtin-name and signature rules therefore apply only to ordinary
         declarations; builtin methods are rejected because they have no host
-        dispatch contract. A receiver disqualifies a ``program def`` before its
-        parameter list does, so ``program def Owner::main(self)`` is reported as
-        a method rather than as a function carrying a value parameter.
+        dispatch contract. The receiver check precedes
+        ``_validate_program_parameters``, so ``program def Owner::main(self)``
+        is reported as a method rather than as an undecodable program
+        parameter.
         """
         if node.is_program:
             if is_method:
@@ -836,11 +841,6 @@ class _Checker:
             if node.type_param_slots:
                 raise AglTypeError(
                     f"Program function '{node.name}' cannot declare type parameters.",
-                    span=node.span,
-                )
-            if node.params:
-                raise AglTypeError(
-                    f"Program function '{node.name}' cannot declare value parameters.",
                     span=node.span,
                 )
         static_kind = _builtin_static_kind(
@@ -887,6 +887,30 @@ class _Checker:
         """Ensure a ``program def`` resolves to the required unit result."""
         if node.is_program and not isinstance(sig.result, UnitType):
             raise AglTypeError(f"Program function '{node.name}' must return unit.", span=node.span)
+
+    def _validate_program_parameters(self, node: FuncDef, sig: FunctionSignature) -> None:
+        """Ensure a ``program def``'s parameters can cross the host boundary.
+
+        Every parameter's type must be finite-schema and JSON-wire-serializable
+        (text crosses verbatim; every other type round-trips through JSON),
+        since a host argument arrives that way. Every name-addressable
+        parameter (standard or named-only) additionally cannot spell an
+        ``ENGINE_KEY_NAMES`` name, since program arguments and engine settings
+        share one flag and config namespace; a positional-only parameter is
+        exempt, as it never becomes a flag or config key.
+        """
+        for param, spec in zip(node.params, sig.params, strict=True):
+            self._reject_undecodable_boundary_type(
+                spec.type,
+                param.span,
+                use="a program parameter type",
+                subject="Program parameter type",
+            )
+            if param.kind != ParamKind.POSITIONAL_ONLY and param.name in ENGINE_KEY_NAMES:
+                raise AglTypeError(
+                    f"Program parameter '{param.name}' conflicts with an engine setting name.",
+                    span=param.span,
+                )
 
     def _validate_extern_signature(self, node: FuncDef, sig: FunctionSignature) -> None:
         """Require finite extern data shapes while allowing callback parameters.
@@ -1285,19 +1309,34 @@ class _Checker:
         # lowering: infinite instantiation closures have no finite schema, and
         # non-data values (unit, functions, exceptions, …) have no
         # JSON wire representation at all. Text params are taken verbatim.
-        if not isinstance(declared_type, TextType):
-            message = self._env.type_table.no_finite_schema_message(
-                declared_type, use="a parameter type"
-            )
-            if message is not None:
-                raise AglTypeError(message, span=stmt.span)
-            if not self._type_is_wire_serializable(declared_type):
-                raise AglTypeError(
-                    f"Param type '{declared_type!r}' cannot be decoded from JSON; "
-                    "use text or a JSON-serializable data type.",
-                    span=stmt.span,
-                )
+        self._reject_undecodable_boundary_type(
+            declared_type, stmt.span, use="a parameter type", subject="Param type"
+        )
         self._env.set_binding_type(stmt.node_id, declared_type)
+
+    def _reject_undecodable_boundary_type(
+        self, typ: Type, span: SourceSpan, *, use: str, subject: str
+    ) -> None:
+        """Raise unless *typ* can cross the host/JSON boundary.
+
+        Shared by ``_check_param`` and ``_validate_program_parameters``: both
+        kinds of host-facing bindings round-trip through JSON decoding, so
+        both reject a non-finite schema and a non-wire-serializable type the
+        same way. Text is taken verbatim and is always exempt. *use* feeds
+        ``no_finite_schema_message``; *subject* names the binding kind in the
+        wire-serializability message.
+        """
+        if isinstance(typ, TextType):
+            return
+        message = self._env.type_table.no_finite_schema_message(typ, use=use)
+        if message is not None:
+            raise AglTypeError(message, span=span)
+        if not self._type_is_wire_serializable(typ):
+            raise AglTypeError(
+                f"{subject} '{typ!r}' cannot be decoded from JSON; "
+                "use text or a JSON-serializable data type.",
+                span=span,
+            )
 
     def _type_is_wire_serializable(self, typ: Type) -> bool:
         """Return whether *typ* can be decoded from a JSON/schema boundary."""

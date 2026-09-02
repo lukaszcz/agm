@@ -80,8 +80,8 @@ region.
   stays module-wide. A scoped export re-roots its forwarded atoms under the
   region's path. See [Named scopes](scopes.md#import-and-export) and
   [Modules](modules.md#imports-and-use-inside-a-scope-region).
-- **`program def` declaration** — marks a non-generic, zero-argument,
-  `unit`-returning ordinary function as an executable entry point. It cannot be a
+- **`program def` declaration** — marks a non-generic, `unit`-returning
+  ordinary function as an executable entry point. It cannot be a
   builtin, extern, or method. It may appear at the module root or as a non-method
   member of a named scope region (never in an ordinary nested block or as a type
   method), remains callable like any other function, and is addressed by its

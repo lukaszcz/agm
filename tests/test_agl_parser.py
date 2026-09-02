@@ -1525,6 +1525,50 @@ class TestMarkerParams:
 
 
 # ---------------------------------------------------------------------------
+# ParamKind — program def's named-only default zone
+# ---------------------------------------------------------------------------
+
+
+class TestProgramParamKind:
+    """A marker-less ``program def`` parameter list defaults to named-only."""
+
+    def test_program_def_markerless_params_are_named_only(self) -> None:
+        fd = first(parse('program def main(a: int, b: text = "x") -> unit = ()'))
+        assert isinstance(fd, FuncDef)
+        assert fd.params[0].kind == ParamKind.NAMED_ONLY
+        assert fd.params[1].kind == ParamKind.NAMED_ONLY
+
+    def test_def_markerless_params_stay_standard(self) -> None:
+        fd = first(parse("def f(a: int, b: text) -> int = 1"))
+        assert isinstance(fd, FuncDef)
+        assert fd.params[0].kind == ParamKind.STANDARD
+        assert fd.params[1].kind == ParamKind.STANDARD
+
+    def test_program_def_leading_at_pos_all_positional_only(self) -> None:
+        """program def main(@pos, a: int, b: int) → both positional-only."""
+        fd = first(parse("program def main(@pos, a: int, b: int) -> unit = ()"))
+        assert isinstance(fd, FuncDef)
+        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamKind.POSITIONAL_ONLY
+
+    def test_program_def_trailing_slash_all_positional_only(self) -> None:
+        """program def main(a: int, b: int, /) → both positional-only."""
+        fd = first(parse("program def main(a: int, b: int, /) -> unit = ()"))
+        assert isinstance(fd, FuncDef)
+        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamKind.POSITIONAL_ONLY
+
+    def test_program_def_slash_star_matches_def_marker_semantics(self) -> None:
+        """Explicit markers override the named-only default exactly as they
+        would override the standard default in an ordinary def."""
+        fd = first(parse("program def main(a: int, /, b: int, *, c: int) -> unit = ()"))
+        assert isinstance(fd, FuncDef)
+        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamKind.STANDARD
+        assert fd.params[2].kind == ParamKind.NAMED_ONLY
+
+
+# ---------------------------------------------------------------------------
 # Function declarations (def)
 # ---------------------------------------------------------------------------
 

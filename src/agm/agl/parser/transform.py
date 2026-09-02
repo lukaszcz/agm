@@ -1045,7 +1045,8 @@ class AstBuilder(Transformer):
             if _is_str_tuple(a):
                 type_params_val = cast(tuple[str, ...], a)
         type_params_val = self._receiver_type_params(receiver_type) + type_params_val
-        params, return_type, body = self._split_params_type_body(args)
+        default_kind = syntax.ParamKind.NAMED_ONLY if is_program else syntax.ParamKind.STANDARD
+        params, return_type, body = self._split_params_type_body(args, default_kind=default_kind)
         assert body is not None, "func_def: no body"
         return syntax.FuncDef(
             name=name,
@@ -1133,14 +1134,16 @@ class AstBuilder(Transformer):
         """extern_func_def: "extern" "def" name type_params? (...) -> type_expr"""
         return self._bodyless_func_def(meta, args, is_extern=True)
 
-    def param_list(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
+    def param_list(self, meta: Meta, args: _Args) -> _RawEntries:
         """param_list: param_entry (COMMA param_entry)* COMMA?
 
-        Collects the full marker/param interleaving and resolves zones.
-        def/lambda parameters default to STANDARD when no markers are present.
+        Collects the full marker/param interleaving. Returns the raw
+        interleaving, like ``field_list``; the owning builder
+        (``_split_params_type_body``) resolves zones with the default kind
+        for its form (``STANDARD`` for ``def``/lambda/builtin/extern,
+        ``NAMED_ONLY`` for ``program def``).
         """
-        entries: _RawEntries = tuple(a for a in args if isinstance(a, (syntax.Param, _ParamMarker)))
-        return _resolve_params(entries, default_kind=syntax.ParamKind.STANDARD)
+        return tuple(a for a in args if isinstance(a, (syntax.Param, _ParamMarker)))
 
     def param_def(self, meta: Meta, args: _Args) -> syntax.Param:
         """param_def: field_name (COLON type_expr)? (EQ or_expr)?"""
@@ -1465,12 +1468,18 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def _split_params_type_body(
-        self, args: _Args
+        self, args: _Args, *, default_kind: syntax.ParamKind = syntax.ParamKind.STANDARD
     ) -> tuple[tuple[syntax.Param, ...], TypeExpr | None, syntax.Expr | None]:
         """Classify a func/lambda arg list into ``(params, return_type, body)``.
 
-        Shared by ``func_def`` (return type required) and ``lambda_expr`` (return
-        type optional); callers assert on the parts they require.
+        Shared by ``func_def``/``program_func_def`` (return type required) and
+        ``lambda_expr`` (return type optional); callers assert on the parts
+        they require. ``param_list`` returns the raw marker/param interleaving
+        (like ``field_list``); ``default_kind`` is the zone assigned to a
+        markerless parameter (``program_func_def`` passes ``NAMED_ONLY``,
+        every other form keeps ``STANDARD``) — explicit zone markers are
+        unaffected, since ``_resolve_params`` ignores ``default_kind`` once a
+        marker is present.
         """
         params: tuple[syntax.Param, ...] = ()
         return_type: TypeExpr | None = None
@@ -1478,8 +1487,8 @@ class AstBuilder(Transformer):
         for a in args:
             if _is_str_tuple(a):
                 pass  # type_params: non-empty tuple of str — skip
-            elif isinstance(a, tuple) and all(isinstance(x, syntax.Param) for x in a):
-                params = cast(tuple[syntax.Param, ...], a)
+            elif _is_field_tuple(a):
+                params = _resolve_params(cast(_RawEntries, a), default_kind=default_kind)
             elif isinstance(a, _ALL_TYPE_EXPRS):
                 return_type = a
             elif a is not None and not isinstance(
@@ -3450,7 +3459,9 @@ def _is_name_token(value: object) -> TypeGuard[Token]:
 
 
 def _is_field_tuple(a: object) -> bool:
-    """True iff *a* is a field-list result (``tuple`` of ``Param | _ParamMarker``).
+    """True iff *a* is a field- or parameter-list result (``field_list``/``param_list``).
+
+    Both return a ``tuple`` of ``Param | _ParamMarker``.
 
     An empty tuple is treated as a field tuple (the ``field_list?`` absent case).
     Markers may appear at position 0 in the raw entries returned by ``field_list``

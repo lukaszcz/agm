@@ -9386,21 +9386,26 @@ class TestProgramFunctionDefinitions:
         "source",
         (
             "program def main[T]() -> unit = ()",
-            "program def main(value: int) -> unit = ()",
             "program def main() -> int = 1",
             "record Receiver()\nprogram def Receiver::main(self) -> unit = ()",
         ),
-        ids=("type-parameters", "value-parameters", "non-unit-result", "method"),
+        ids=("type-parameters", "non-unit-result", "method"),
     )
     def test_program_func_def_rejects_invalid_headers(self, source: str) -> None:
         reject_type(source)
 
-    def test_program_def_method_is_reported_as_a_method_not_as_a_parameter(self) -> None:
-        """A receiver disqualifies a program def before its parameter list does.
+    def test_program_func_def_accepts_value_parameters(self) -> None:
+        checked = accept_type('program def main(value: int, label: text = "x") -> unit = ()')
 
-        ``self`` occupies the parameter list, so a header validated in the wrong
-        order reports the receiver as an ordinary value parameter and sends the
-        reader looking for a parameter they did not write.
+        sig = checked.function_signatures["main"]
+        assert [p.name for p in sig.params] == ["value", "label"]
+
+    def test_program_def_method_is_reported_as_a_method_not_as_a_parameter(self) -> None:
+        """The receiver check precedes program-parameter validation.
+
+        ``self`` occupies the parameter list, so a header validated in the
+        wrong order would report the receiver as an undecodable program
+        parameter instead of as a method.
         """
         err = reject_type("record Receiver()\nprogram def Receiver::main(self) -> unit = ()")
 
@@ -9454,6 +9459,41 @@ class TestProgramFunctionDefinitions:
 
         with pytest.raises(AglTypeError, match="Program def"):
             _Checker._validate_funcdef_header(cast(_Checker, None), fd, is_method=False)
+
+
+class TestProgramParameterValidation:
+    """Program-parameter host-decodability and name-reservation rules."""
+
+    def test_decodable_parameters_typecheck(self) -> None:
+        checked = accept_type(
+            "record Options(count: int)\n"
+            'program def main(value: int, opts: Options, label: text = "x") -> unit = ()'
+        )
+        sig = checked.function_signatures["main"]
+        assert [(p.name, p.kind) for p in sig.params] == [
+            ("value", ParamKind.NAMED_ONLY),
+            ("opts", ParamKind.NAMED_ONLY),
+            ("label", ParamKind.NAMED_ONLY),
+        ]
+
+    @pytest.mark.parametrize("zone", ("named-only", "standard"))
+    def test_engine_key_name_is_rejected_for_a_name_addressable_parameter(self, zone: str) -> None:
+        header = (
+            "program def main(*, timeout: text) -> unit = ()"
+            if zone == "named-only"
+            else "program def main(a: int, /, timeout: text) -> unit = ()"
+        )
+        err = reject_type(header)
+        assert "engine setting name" in str(err).lower()
+
+    def test_engine_key_name_is_accepted_for_a_positional_only_parameter(self) -> None:
+        checked = accept_type("program def main(timeout: text, /) -> unit = ()")
+        sig = checked.function_signatures["main"]
+        assert [(p.name, p.kind) for p in sig.params] == [("timeout", ParamKind.POSITIONAL_ONLY)]
+
+    def test_required_after_defaulted_ordering_fires_for_program_parameters(self) -> None:
+        err = reject_type("program def main(a: int = 1, b: int, /) -> unit = ()")
+        assert "'b' has no default but follows a defaulted positional parameter" in str(err)
 
 
 class TestDefensiveGuards:
@@ -12940,6 +12980,16 @@ class TestNoFiniteSchemaUseSites:
         msg = str(err).lower()
         assert "perfect[int]" in msg
         assert "parameter type" in msg
+
+    def test_program_parameter_growing_type_rejected(self) -> None:
+        err = reject_type(_GROWING_TYPE_SRC + "program def main(p: Perfect[int]) -> unit = ()")
+        msg = str(err).lower()
+        assert "perfect[int]" in msg
+        assert "program parameter type" in msg
+
+    def test_program_parameter_not_wire_serializable_rejected(self) -> None:
+        err = reject_type("program def main(p: unit) -> unit = ()")
+        assert "json-serializable" in str(err).lower()
 
     def test_ask_growing_type_reachable_through_field_rejected(self) -> None:
         # The root type (`Holder`) is not itself infinite; the culprit

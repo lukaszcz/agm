@@ -142,7 +142,9 @@ def _package_entry_segments(
     *packages* is the mounted package selection the root set was assembled
     from, so a development checkout and an installed store tree route their
     configuration identically — and identically to the same program reached by
-    its ``PACKAGE/MODULE::PROGRAM`` reference.
+    its ``PACKAGE/MODULE::PROGRAM`` reference. The standard library is included:
+    a directly executed ``std`` module routes under ``std/MODULE`` from whichever
+    tree was selected as the standard library.
     """
     if entry_path is None:
         return None

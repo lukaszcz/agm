@@ -437,7 +437,9 @@ class ReplSession:
 
         cwd = self._cwd if self._cwd is not None else Path.cwd()
         if self._stdlib_root is None:
-            self._stdlib_root = resolve_stdlib_root(home=current_config_context(cwd=cwd).home)
+            self._stdlib_root = resolve_stdlib_root(
+                home=current_config_context(cwd=cwd).home, anchor=cwd
+            )
         self._roots = assemble_roots(
             invocation_root=cwd,
             stdlib_root=self._stdlib_root,

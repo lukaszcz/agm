@@ -3151,7 +3151,7 @@ class TestExecModuleRoots:
         entry = tmp_path / "prog.agl"
         write_file_program(entry, "let x = 1\nx\n")
 
-        def fake_resolve_stdlib_root(*, home: Path) -> Path:
+        def fake_resolve_stdlib_root(*, home: Path, anchor: Path | None = None) -> Path:
             raise StdlibVersionMismatchError("0.0.1", "0.1.0")
 
         monkeypatch.setattr(
@@ -4308,3 +4308,99 @@ class TestExecDevelopmentPackages:
         )
 
         assert exec_command.run(_exec_args_no_log(entry, no_stdlib=True)) is None
+
+
+class TestExecStandardLibraryEntries:
+    """A directly executed standard-library file is owned by its own package."""
+
+    @staticmethod
+    def _config_context(monkeypatch: pytest.MonkeyPatch, home: Path, cwd: Path) -> None:
+        from agm.config.context import ConfigContext
+
+        monkeypatch.delenv("AGM_STDLIB", raising=False)
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=cwd),
+        )
+
+    def test_store_stdlib_entry_uses_the_package_qualified_config_identity(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        import semver
+
+        from agm.packages.activation import ActivationIndex, ActivePackage, write_activation_index
+        from agm.version import AGM_VERSION
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('["std/probe"]\nmessage = "package-qualified"\n')
+        store_root = home / ".agm" / "packages" / "std" / AGM_VERSION
+        (store_root / "std").mkdir(parents=True)
+        (store_root / "package.toml").write_text(
+            f'[package]\nname = "std"\nversion = "{AGM_VERSION}"\n'
+        )
+        entry = store_root / "std" / "probe.agl"
+        write_file_program(
+            entry,
+            "builtin def print[T](value: T) -> unit\n"
+            'param message: text = "default"\n\n'
+            "program def main() -> unit = print message\n",
+        )
+        write_activation_index(
+            ActivationIndex({"std": ActivePackage(semver.Version.parse(AGM_VERSION))}),
+            home=home,
+            env={},
+        )
+        self._config_context(monkeypatch, home, tmp_path)
+
+        assert exec_command.run(_exec_args_no_log(entry, no_stdlib=True)) is None
+        assert capsys.readouterr().out == "package-qualified\n"
+
+    def test_stdlib_entry_cannot_import_a_loose_cli_module_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Package visibility applies to the standard library it mounts."""
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        self._config_context(monkeypatch, home, tmp_path)
+        checkout = tmp_path / "checkout"
+        (checkout / "std").mkdir(parents=True)
+        (checkout / "package.toml").write_text('[package]\nname = "std"\nversion = "9.9.9"\n')
+        loose = tmp_path / "loose"
+        loose.mkdir()
+        (loose / "helper.agl").write_text("def answer() -> int = 42\n")
+        entry = checkout / "std" / "probe.agl"
+        write_file_program(
+            entry, "import helper\n\nprogram def main() -> unit =\n  let _ = helper::answer()\n"
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(entry, no_stdlib=True, module_paths=[str(loose)]))
+
+        assert exc_info.value.code == 1
+
+    def test_loose_entry_beside_a_std_tree_still_imports_a_loose_cli_module_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The same layout without a manifest is unowned, so the import is allowed."""
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        self._config_context(monkeypatch, home, tmp_path)
+        checkout = tmp_path / "checkout"
+        (checkout / "std").mkdir(parents=True)
+        loose = tmp_path / "loose"
+        loose.mkdir()
+        (loose / "helper.agl").write_text("def answer() -> int = 42\n")
+        entry = checkout / "std" / "probe.agl"
+        write_file_program(
+            entry, "import helper\n\nprogram def main() -> unit =\n  let _ = helper::answer()\n"
+        )
+
+        assert (
+            exec_command.run(_exec_args_no_log(entry, no_stdlib=True, module_paths=[str(loose)]))
+            is None
+        )

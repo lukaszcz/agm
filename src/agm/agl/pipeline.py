@@ -746,8 +746,9 @@ class PipelineDriver:
             )
 
             cwd = Path.cwd()
+            entry_directory = entry_path.resolve().parent if entry_path is not None else cwd
             try:
-                default_stdlib_root = resolve_stdlib_root(home=Path.home())
+                default_stdlib_root = resolve_stdlib_root(home=Path.home(), anchor=entry_directory)
             except StdlibResolutionError as exc:
                 return PreparedProgram(
                     entry_source,
@@ -758,7 +759,7 @@ class PipelineDriver:
                     parsed.warnings,
                 )
             roots = assemble_roots(
-                invocation_root=entry_path.resolve().parent if entry_path is not None else cwd,
+                invocation_root=entry_directory,
                 stdlib_root=default_stdlib_root,
                 lib_root=resolve_lib_root(
                     ModuleRootsConfig(lib_root=None, extra=()), home=Path.home()

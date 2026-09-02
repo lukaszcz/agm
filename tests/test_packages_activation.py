@@ -1360,3 +1360,187 @@ def test_rebuild_rejects_store_directory_that_disagrees_with_manifest(tmp_path: 
 
     with pytest.raises(PackageActivationError):
         rebuild_activation_index(home=home, env={"AGM_HOME": str(home)})
+
+
+def _write_std_checkout(root: Path, version: str) -> Path:
+    """Create a development ``std`` package checkout holding one module."""
+    (root / "std").mkdir(parents=True)
+    (root / "package.toml").write_text(
+        f'[package]\nname = "std"\nversion = "{version}"\n', encoding="utf-8"
+    )
+    (root / "std" / "agent.agl").write_text("def value() -> int = 1\n", encoding="utf-8")
+    return root
+
+
+def test_effective_exec_roots_mounts_the_development_std_checkout_holding_the_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Editing the standard library resolves it from the checkout being edited."""
+    home = tmp_path / "agm-home"
+    home.mkdir()
+    monkeypatch.setenv("AGM_HOME", str(home))
+    monkeypatch.delenv("AGM_STDLIB", raising=False)
+    checkout = _write_std_checkout(tmp_path / "checkout", "9.9.9")
+
+    roots = effective_exec_roots(
+        entry_path=checkout / "std" / "agent.agl",
+        module_paths=[],
+        cwd=tmp_path,
+        home=tmp_path / "user-home",
+        proj_dir=None,
+    ).roots
+
+    assert roots.stdlib_roots == {checkout.resolve()}
+    assert (checkout / "std").resolve() not in roots.roots
+    assert tuple(package.root for package in roots.packages) == (checkout.resolve(),)
+
+
+def test_effective_exec_roots_keeps_a_std_checkout_entry_loose_under_a_stdlib_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An override still selects the standard library, so the checkout is not mounted."""
+    home = tmp_path / "agm-home"
+    home.mkdir()
+    override = tmp_path / "override"
+    (override / "std").mkdir(parents=True)
+    monkeypatch.setenv("AGM_HOME", str(home))
+    monkeypatch.setenv("AGM_STDLIB", str(override))
+    checkout = _write_std_checkout(tmp_path / "checkout", "9.9.9")
+
+    roots = effective_exec_roots(
+        entry_path=checkout / "std" / "agent.agl",
+        module_paths=[],
+        cwd=tmp_path,
+        home=tmp_path / "user-home",
+        proj_dir=None,
+    ).roots
+
+    assert roots.stdlib_roots == {override.resolve()}
+    assert (checkout / "std").resolve() in roots.roots
+    assert roots.packages == ()
+
+
+def test_effective_exec_roots_mounts_the_store_stdlib_holding_the_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A standard-library file in the immutable store is owned by its package too."""
+    home = tmp_path / "agm-home"
+    store_root = _write_package(home, "std", AGM_VERSION)
+    (store_root / "std" / "agent.agl").write_text("def value() -> int = 1\n", encoding="utf-8")
+    write_activation_index(
+        ActivationIndex({"std": ActivePackage(semver.Version.parse(AGM_VERSION))}),
+        home=home,
+        env={"AGM_HOME": str(home)},
+    )
+    monkeypatch.setenv("AGM_HOME", str(home))
+    monkeypatch.delenv("AGM_STDLIB", raising=False)
+
+    roots = effective_exec_roots(
+        entry_path=store_root / "std" / "agent.agl",
+        module_paths=[],
+        cwd=tmp_path,
+        home=tmp_path / "user-home",
+        proj_dir=None,
+    ).roots
+
+    assert roots.stdlib_roots == {store_root.resolve()}
+    assert (store_root / "std").resolve() not in roots.roots
+    assert tuple(package.root for package in roots.packages) == (store_root.resolve(),)
+
+
+def test_effective_exec_roots_mounts_a_stdlib_override_that_is_a_std_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ownership follows the selected root, even when an override selected it."""
+    home = tmp_path / "agm-home"
+    home.mkdir()
+    override = _write_std_checkout(tmp_path / "override", "9.9.9")
+    monkeypatch.setenv("AGM_HOME", str(home))
+    monkeypatch.setenv("AGM_STDLIB", str(override))
+
+    roots = effective_exec_roots(
+        entry_path=override / "std" / "agent.agl",
+        module_paths=[],
+        cwd=tmp_path,
+        home=tmp_path / "user-home",
+        proj_dir=None,
+    ).roots
+
+    assert roots.stdlib_roots == {override.resolve()}
+    assert (override / "std").resolve() not in roots.roots
+    assert tuple(package.root for package in roots.packages) == (override.resolve(),)
+
+
+def test_effective_exec_roots_mounts_nothing_for_a_stdlib_override_without_a_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A synthetic override tree is not a package, so its files stay loose."""
+    home = tmp_path / "agm-home"
+    home.mkdir()
+    override = tmp_path / "override"
+    (override / "std").mkdir(parents=True)
+    entry = override / "std" / "agent.agl"
+    entry.write_text("def value() -> int = 1\n", encoding="utf-8")
+    monkeypatch.setenv("AGM_HOME", str(home))
+    monkeypatch.setenv("AGM_STDLIB", str(override))
+
+    roots = effective_exec_roots(
+        entry_path=entry,
+        module_paths=[],
+        cwd=tmp_path,
+        home=tmp_path / "user-home",
+        proj_dir=None,
+    ).roots
+
+    assert roots.stdlib_roots == {override.resolve()}
+    assert (override / "std").resolve() in roots.roots
+    assert roots.packages == ()
+
+
+def test_effective_exec_roots_leaves_the_stdlib_unmounted_for_an_entry_outside_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mounting is scoped to the entry, so ordinary invocations keep their packages."""
+    home = tmp_path / "agm-home"
+    home.mkdir()
+    override = _write_std_checkout(tmp_path / "override", "9.9.9")
+    loose = tmp_path / "loose"
+    loose.mkdir()
+    entry = loose / "prog.agl"
+    entry.write_text("def value() -> int = 1\n", encoding="utf-8")
+    monkeypatch.setenv("AGM_HOME", str(home))
+    monkeypatch.setenv("AGM_STDLIB", str(override))
+
+    roots = effective_exec_roots(
+        entry_path=entry,
+        module_paths=[],
+        cwd=tmp_path,
+        home=tmp_path / "user-home",
+        proj_dir=None,
+    ).roots
+
+    assert roots.stdlib_roots == {override.resolve()}
+    assert roots.packages == ()
+
+
+def test_effective_exec_roots_mounts_nothing_when_the_stdlib_root_is_not_a_std_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a ``std`` manifest makes the selected stdlib root an owning package."""
+    home = tmp_path / "agm-home"
+    home.mkdir()
+    alpha = _write_development_package(tmp_path / "alpha", "alpha", "1.0.0")
+    monkeypatch.setenv("AGM_HOME", str(home))
+    monkeypatch.setenv("AGM_STDLIB", str(alpha.root))
+
+    roots = effective_exec_roots(
+        entry_path=alpha.root / "alpha" / "main.agl",
+        module_paths=[],
+        cwd=tmp_path,
+        home=tmp_path / "user-home",
+        proj_dir=None,
+    ).roots
+
+    # Mounted once, by development discovery — the standard-library seam added
+    # nothing, because the selected root does not declare the ``std`` package.
+    assert tuple(package.root for package in roots.packages) == (alpha.root,)

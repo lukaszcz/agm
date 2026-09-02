@@ -8153,7 +8153,7 @@ class TestDeferredStdlibResolution:
         import agm.config.module_roots as module_roots
         from agm.config.module_roots import StdlibVersionMismatchError
 
-        def _raise_version_mismatch(*, home: Path) -> Path:
+        def _raise_version_mismatch(*, home: Path, anchor: Path | None = None) -> Path:
             raise StdlibVersionMismatchError("0.0.1", "0.1.0")
 
         monkeypatch.delenv("AGM_STDLIB", raising=False)

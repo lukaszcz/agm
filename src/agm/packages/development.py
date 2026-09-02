@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 import semver
@@ -9,6 +10,28 @@ import semver
 from agm.packages.manifest import load_manifest
 from agm.packages.model import PackageInfo
 from agm.packages.store import is_package_store_root
+
+
+def containing_development_package(
+    anchor: Path, *, home: Path | None = None, env: Mapping[str, str] | None = None
+) -> PackageInfo | None:
+    """Return the nearest development package at or above *anchor*.
+
+    ``None`` when no ancestor carries a manifest, or when the nearest one is
+    an immutable store tree — a store entry is owned by active package
+    selection rather than by development discovery.
+    """
+
+    package_root = _containing_package_root(anchor)
+    if package_root is None:
+        return None
+    canonical_root = package_root.resolve()
+    manifest = load_manifest(canonical_root / "package.toml")
+    if home is not None and is_package_store_root(
+        canonical_root, manifest.name, manifest.version, home=home, env=env
+    ):
+        return None
+    return PackageInfo(canonical_root, manifest)
 
 
 def discover_development_packages(
@@ -26,33 +49,21 @@ def discover_development_packages(
     selection rather than being reclassified as development source.
     """
 
-    package_root = _containing_package_root(anchor)
-    if package_root is None:
+    seed = containing_development_package(anchor, home=home)
+    if seed is None:
         return ()
     packages: dict[Path, PackageInfo] = {}
     roots_by_name: dict[str, Path] = {}
 
-    def add(
-        root: Path, *, expected_name: str | None = None, minimum: semver.Version | None = None
-    ) -> None:
-        canonical_root = root.resolve()
-        manifest = load_manifest(canonical_root / "package.toml")
-        if expected_name is not None and manifest.name != expected_name:
-            raise ValueError(
-                f"development dependency {expected_name!r} resolves package {manifest.name!r}"
-            )
-        if minimum is not None and manifest.version < minimum:
-            raise ValueError(
-                f"development dependency {expected_name!r} requires at least {minimum}, "
-                f"but path declares {manifest.version}"
-            )
+    def add(package: PackageInfo) -> None:
+        canonical_root = package.root
+        manifest = package.manifest
         if home is not None and is_package_store_root(
             canonical_root, manifest.name, manifest.version, home=home
         ):
             return
         if canonical_root in packages:
             return
-        package = PackageInfo(canonical_root, manifest)
         previous_root = roots_by_name.setdefault(manifest.name, canonical_root)
         if previous_root != canonical_root:
             raise ValueError(
@@ -68,14 +79,24 @@ def discover_development_packages(
                 raise ValueError(f"cannot use symbolic-link package dependency {dependency_root}")
             dependency_root = dependency_root.resolve()
             if (dependency_root / "package.toml").is_file():
-                add(
-                    dependency_root,
-                    expected_name=dependency_name,
-                    minimum=dependency.version,
-                )
+                add(_declared_dependency(dependency_root, dependency_name, dependency.version))
 
-    add(package_root)
+    add(seed)
     return tuple(packages.values())
+
+
+def _declared_dependency(root: Path, name: str, minimum: semver.Version) -> PackageInfo:
+    """Load the package at a declared path source, checking identity and floor."""
+
+    manifest = load_manifest(root / "package.toml")
+    if manifest.name != name:
+        raise ValueError(f"development dependency {name!r} resolves package {manifest.name!r}")
+    if manifest.version < minimum:
+        raise ValueError(
+            f"development dependency {name!r} requires at least {minimum}, "
+            f"but path declares {manifest.version}"
+        )
+    return PackageInfo(root, manifest)
 
 
 def _containing_package_root(anchor: Path) -> Path | None:

@@ -8,7 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from agm.packages.development import discover_development_packages
+from agm.packages.development import (
+    containing_development_package,
+    discover_development_packages,
+)
 
 
 def _write_package(
@@ -186,3 +189,30 @@ def test_discovery_rejects_different_roots_with_the_same_package_identity(tmp_pa
 
     with pytest.raises(ValueError, match="shared"):
         discover_development_packages(alpha / "alpha" / "main.agl")
+
+
+def test_containing_development_package_reports_the_nearest_manifest(tmp_path: Path) -> None:
+    alpha = tmp_path / "alpha"
+    _write_package(alpha, "alpha")
+
+    package = containing_development_package(alpha / "alpha" / "main.agl")
+
+    assert package is not None
+    assert package.root == alpha.resolve()
+    assert package.manifest.name == "alpha"
+
+
+def test_containing_development_package_ignores_a_directory_without_a_manifest(
+    tmp_path: Path,
+) -> None:
+    assert containing_development_package(tmp_path) is None
+
+
+def test_containing_development_package_leaves_a_store_tree_to_activation(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    stored = home / ".agm" / "packages" / "bravo" / "1.0.0"
+    stored.parent.mkdir(parents=True)
+    _write_package(stored, "bravo")
+
+    assert containing_development_package(stored / "bravo", home=home) is None
+    assert containing_development_package(stored / "bravo") is not None

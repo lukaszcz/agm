@@ -17,7 +17,7 @@ from agm.agl.pipeline import PipelineDriver
 from agm.config.module_roots import StdlibResolutionError, StdlibVersionMismatchError
 
 
-def _raise_version_mismatch(*, home: Path) -> Path:
+def _raise_version_mismatch(*, home: Path, anchor: Path | None = None) -> Path:
     raise StdlibVersionMismatchError("0.0.1", "0.1.0")
 
 
@@ -37,7 +37,7 @@ class TestPrepareProgramDefaultRootsVersionMismatch:
     def test_activation_resolution_error_is_captured_as_a_diagnostic_not_raised(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        def raise_resolution_error(*, home: Path) -> Path:
+        def raise_resolution_error(*, home: Path, anchor: Path | None = None) -> Path:
             raise StdlibResolutionError("corrupt active std package")
 
         monkeypatch.setattr(module_roots, "resolve_stdlib_root", raise_resolution_error)

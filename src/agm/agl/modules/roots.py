@@ -143,11 +143,13 @@ def assemble_roots(
     cwd:
         Current working directory; used to resolve relative CLI paths.
     package_roots:
-        Mounted non-``std`` packages, regardless of whether their roots come
-        from a development directory or a future package store. A supplied
-        ``std`` package is ignored because ``stdlib_root`` is its exclusive
-        mounting seam. Package mounts expose only the package's declared
-        module tree unless the same path is also supplied as an ordinary root.
+        Mounted packages, regardless of whether their roots come from a
+        development directory or a future package store. A ``std`` package
+        belongs here only when *stdlib_root* already selected that very tree,
+        so the standard library keeps exactly one mounted root while still
+        owning the files under it. Package mounts expose only the package's
+        declared module tree unless the same path is also supplied as an
+        ordinary root.
 
     All roots are user-expanded, made absolute, and canonicalized before
     de-duplication.  Non-existent roots are dropped silently (resolution

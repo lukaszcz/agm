@@ -141,7 +141,7 @@ def run(args: ReplArgs) -> None:
 
     mod_roots_cfg = load_module_roots(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
     try:
-        stdlib_root = resolve_stdlib_root(home=ctx.home)
+        stdlib_root = resolve_stdlib_root(home=ctx.home, anchor=ctx.cwd)
     except StdlibResolutionError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc

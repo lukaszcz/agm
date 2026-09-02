@@ -990,7 +990,7 @@ class TestReplRun:
 
         _isolated_home(monkeypatch, tmp_path)
 
-        def fake_resolve_stdlib_root(*, home: Path) -> Path:
+        def fake_resolve_stdlib_root(*, home: Path, anchor: Path | None = None) -> Path:
             raise StdlibVersionMismatchError("0.0.1", "0.1.0")
 
         monkeypatch.setattr(repl_command, "resolve_stdlib_root", fake_resolve_stdlib_root)

@@ -16,13 +16,13 @@ Archives (`.agmpkg`) are deterministic ZIP files. Readers bound metadata, entry 
 
 ## The Managed `std` Package
 
-The standard library ships as a managed store package whose version must exactly match the running AGM. `just install` refreshes it (holding the store lock, staging a full replacement, publishing by rename); the ordinary install paths never touch it and it cannot be uninstalled. A refresh after a release-line upgrade deactivates incompatible packages and their dependents while retaining their trees. A wheel falls back to its bundled copy when the store has not been populated.
+The standard library ships as a managed store package whose version must exactly match the running AGM. `just install` refreshes it (holding the store lock, staging a full replacement, publishing by rename); the ordinary install paths never touch it and it cannot be uninstalled. A refresh after a release-line upgrade deactivates incompatible packages and their dependents while retaining their trees. A wheel falls back to its bundled copy when the store has not been populated. A development `std` checkout whose module tree holds the anchored path outranks the store selection — so editing the library never resolves against an installed copy, and a version difference is not a mismatch; an unrelated package named `std` beside the anchor is inert. Whichever tree is selected is mounted as the one standard-library root, and as the owning package of an entry file inside it.
 
 ## Code Entry Points
 
 - `src/agm/packages/store.py`, `record.py`, `archive.py` — store layout and scanning, integrity records, portable archives.
 - `src/agm/packages/distribution.py` — the one distribution view of a source tree.
 - `src/agm/packages/activation.py`, `install.py`, `fetch.py` — active selections, lifecycle operations, downloads.
-- `src/agm/packages/stdlib.py` — the active managed `std` package root; `src/agm/stdlib_locator.py` — the shipped fallback tree.
+- `src/agm/packages/stdlib.py` — anchor-aware `std` root selection; `src/agm/stdlib_locator.py` — the shipped fallback tree.
 - `src/agm/commands/pkg/` — `install`, `uninstall`, `list`, `info`, `create`, `check`.
 - `tests/test_packages_store.py`, `test_packages_install.py`, `test_packages_archive.py`, `test_packages_record.py`, `test_packages_distribution.py`.

@@ -437,3 +437,47 @@ class TestCheckCommand:
         assert captured.err
         # The second, clean file was still checked and produced no diagnostics.
         assert "clean.agl" not in captured.err
+
+
+def test_check_searches_the_development_std_checkout_holding_the_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A standard-library module is checked against its own checkout, not the store."""
+    import semver
+
+    from agm.packages.activation import ActivationIndex, ActivePackage, write_activation_index
+    from agm.version import AGM_VERSION
+
+    home = tmp_path / "agm-home"
+    monkeypatch.delenv("AGM_STDLIB", raising=False)
+    monkeypatch.setenv("AGM_HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    store_root = home / "packages" / "std" / AGM_VERSION
+    (store_root / "std").mkdir(parents=True)
+    (store_root / "package.toml").write_text(
+        f'[package]\nname = "std"\nversion = "{AGM_VERSION}"\n', encoding="utf-8"
+    )
+    (store_root / "std" / "prelude.agl").write_text("def unused() -> int = 0\n", encoding="utf-8")
+    write_activation_index(
+        ActivationIndex({"std": ActivePackage(semver.Version.parse(AGM_VERSION))}),
+        home=home,
+        env={"AGM_HOME": str(home)},
+    )
+    checkout = tmp_path / "checkout"
+    (checkout / "std").mkdir(parents=True)
+    (checkout / "package.toml").write_text(
+        '[package]\nname = "std"\nversion = "9.9.9"\n', encoding="utf-8"
+    )
+    entry = checkout / "std" / "agent.agl"
+    entry.write_text("def value() -> int = 1\n", encoding="utf-8")
+
+    # The checkout holds no ``std/prelude``, so the check fails against it; the
+    # activated store tree — which does — was never searched.
+    with pytest.raises(SystemExit):
+        check_command.run(CheckArgs(files=[str(entry)]))
+
+    # The entry's own path is stripped first, so the checkout is proven present
+    # as a searched root rather than as the name of the file being checked.
+    searched = capsys.readouterr().err.replace(str(entry.resolve()), "").replace(str(entry), "")
+    assert str(checkout.resolve()) in searched
+    assert str(store_root.resolve()) not in searched

@@ -4,7 +4,7 @@ AgL programs are file-based module graphs. A module is addressed by a slash path
 
 ## Roots and Visibility
 
-Module roots come from the invocation directory, the selected standard library, the global library in the AGM home, `[modules]` configuration, CLI module paths, and mounted packages. A path must resolve to exactly one eligible `.agl` file across all roots. Package-owned modules may import only their own tree, the standard library, and their declared dependencies ([packages.md](../packages.md)); loose modules are unrestricted.
+Module roots come from the invocation directory, the selected standard library, the global library in the AGM home, `[modules]` configuration, CLI module paths, and mounted packages. The invocation directory is dropped when the entry file is owned by a mounted package — including the standard library, when the entry lies in the tree selected as the stdlib root. A path must resolve to exactly one eligible `.agl` file across all roots. Package-owned modules may import only their own tree, the standard library, and their declared dependencies ([packages.md](../packages.md)); loose modules are unrestricted.
 
 `import` adds a graph edge and qualified access to a module's public surface; import tails and `use` add bare names to a region without narrowing that surface; `hiding` subtracts paths. `use` never loads a module. Imports, uses, and exports may appear inside `scope` regions: qualified routes stay module-wide, bare contributions are regional, and a scoped export re-roots forwarded paths beneath the region. Re-exports are part of the same graph.
 

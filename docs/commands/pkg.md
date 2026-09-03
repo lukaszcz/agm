@@ -17,7 +17,9 @@ its SHA-256 hash. Ordinary package dependencies have no upper bound. A `std` dep
 requires that minimum within one compatible AGM release line: the same minor line for `0.x`, or
 the same major line for `1.x` and later. `[commands]` maps a one- or multi-word command path to a
 package-owned `MODULE::PROGRAM` reference, where `PROGRAM` is a `program def` declaration with no
-value or type parameters and an explicit `-> unit` result. For example:
+type parameters and an explicit `-> unit` result; its value parameters, if any, project onto the
+registered command's own CLI surface exactly as for `agm exec` (see
+[Program arguments](exec.md#program-arguments)). For example:
 
 ```toml
 [package]
@@ -133,10 +135,15 @@ precedence over package registrations.
 `--editable` activates the source directory directly, so its edits are visible immediately and
 no immutable copy or `RECORD` is created. Manifest `[commands]` registrations are merged into the
 activation index. Invoke a registered single- or multi-word command directly as `agm COMMAND ...`;
-the longest matching path wins and trailing words are passed to its AgL program. Registered commands
-accept the same parameter flags and qualified configuration/engine-setting tables as `agm exec`.
+the longest matching path wins and trailing words are passed to its AgL program. The referenced
+`program def`'s own value parameters project onto the command exactly as for `agm exec`: a
+positional-capable parameter fills the next trailing word in declaration order, and a
+name-addressable parameter takes a `--name VALUE` (or `--name`/`--no-name` for `bool`) token; see
+[Program arguments](exec.md#program-arguments) for the full projection and precedence rules,
+including the qualified configuration/engine-setting tables registered commands read the same way
+`agm exec` does.
 The global `--dry-run` flag can appear before or after a registered command path; it runs the static
-pipeline and parameter validation without executing the program. They appear in `agm help` and
+pipeline and program-argument validation without executing the program. They appear in `agm help` and
 shell completion while active. An editable command re-reads its live
 manifest when dispatched, so nonconflicting command edits take effect without reinstalling. Live
 command additions are rechecked against the activation's recorded `--shadow` intent; an editable

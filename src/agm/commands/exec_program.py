@@ -207,6 +207,7 @@ def _report_undeclared_config_keys(
     *,
     scope_path: tuple[str, ...] = (),
     kind: str = "param",
+    positional_only_names: Iterable[str] = (),
 ) -> None:
     """Warn about config keys in one route's table that no declaration claims.
 
@@ -226,6 +227,14 @@ def _report_undeclared_config_keys(
     names the declaration kind in the warning — ``"param"`` for a legacy
     ``param`` table, ``"program argument"`` for a program's own value
     parameters — so the message never calls a program argument a param.
+
+    *positional_only_names* names leaves that are declared but not
+    name-addressable — a positional-only program argument, which a config
+    table (a name-keyed channel) can never supply, the same way it can never
+    be passed by name in an AgL call. Such a leaf is a distinct, milder
+    warning than a genuinely undeclared key: it exists, it is just not
+    reachable by this channel. The legacy ``param`` path never passes any
+    names here, since every legacy param is name-addressable.
     """
     entry_paths = route_table_paths(module_segments, scope_path)
     entry_path_set = set(entry_paths)
@@ -234,6 +243,7 @@ def _report_undeclared_config_keys(
         for key in param_keys
         if entry_path_set.intersection(route_table_paths(key.module_segments, key.scope_path))
     }
+    positional_only = set(positional_only_names)
     leaves = sorted(configured_leaf_names(config, module_segments, scope_path))
     if not leaves:
         # ``configured_leaf_names`` reads the same *entry_paths* candidates,
@@ -243,6 +253,14 @@ def _report_undeclared_config_keys(
     table_name = display_table_path(entry_paths[0])
     for leaf in leaves:
         if leaf in declared or leaf in ENGINE_KEY_NAMES:
+            continue
+        if leaf in positional_only:
+            print(
+                f"warning: config key '{leaf}' in the '{table_name}' configuration table "
+                "names a positional-only program argument, which can only be supplied "
+                "positionally, and will be ignored",
+                file=sys.stderr,
+            )
             continue
         print(
             f"warning: config key '{leaf}' in the '{table_name}' "
@@ -704,6 +722,7 @@ def run(
             argument_keys.values(),
             scope_path=program_path,
             kind="program argument",
+            positional_only_names=program_option_map.positional_only_names(),
         )
     arguments = ProgramArguments(positional=cli_arguments.positional, named=program_named)
 

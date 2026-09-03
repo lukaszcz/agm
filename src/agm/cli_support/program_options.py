@@ -442,6 +442,18 @@ class ProgramOptionMap:
             described.append(f"{flag_str}  {param.type!r}  {status}")
         return tuple(described)
 
+    def positional_only_names(self) -> frozenset[str]:
+        """Return the names of this program's positional-only parameters.
+
+        A positional-only parameter exposes no name in the CLI/config
+        namespace — it fills an ``ARG`` slot only, never a ``--name`` flag or
+        a config-table key — so callers that report on the name-addressable
+        surface (config-key diagnostics, completions) use this to tell those
+        parameters apart from a genuinely undeclared name.
+        """
+        option_names = {param.name for param, _projected in self.options}
+        return frozenset(param.name for param in self.positional if param.name not in option_names)
+
     def completion_items(self) -> tuple[str, ...]:
         """Return every completable CLI token: each option's flags and negative forms."""
         items: list[str] = []

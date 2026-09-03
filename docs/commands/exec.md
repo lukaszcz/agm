@@ -10,8 +10,7 @@ agm exec [--strict-json|--no-strict-json]
          [--log|--log-file PATH|--no-log] [--no-log-file]
          [--no-stdlib]
          [-I DIR]... [-p PATH]
-         (FILE | PACKAGE/MODULE::PROGRAM | -c COMMAND) [--PARAM VALUE]...
-         [ARG]... [--NAME VALUE]...
+         (FILE | PACKAGE/MODULE::PROGRAM | -c COMMAND) [ARG]... [--NAME VALUE]...
 ```
 
 Execute an AgL workflow program from a source `FILE`, an installed
@@ -72,50 +71,8 @@ either is a static error.
   path. This accepts entry-file paths such as `main` or `review::main`; with an
   installed `PACKAGE/MODULE::PROGRAM` reference, it overrides that reference's
   program path while retaining its module.
-- `--PARAM VALUE`: Provide a value for a `param` declaration. The selected
-  program exposes params from its module and transitive imports; each becomes a
-  program-specific option. Booleans use `--name` / `--no-name`. A param
-  declared inside a named scope region uses its full path spelling, e.g.
-  `--Deploy::region`. The module-qualified spelling, such as
-  `--review-tools/judge::Deploy::region`, disambiguates params with the same
-  short spelling. If an ordinary qualified positive flag would equal another
-  boolean param's negative flag, help and completion show a collision-free
-  `@module::`-marked form, such as `--@module::no-settings::region` or
-  `--no-@module::settings::region`. For an entry-file param that needs qualification,
-  use its file stem, such as `--workflow::Deploy::region` for `workflow.agl`.
-  If the resolved entry stem duplicates an imported module route, the entry uses
-  `--@entry::Deploy::region` so both qualified options remain distinct.
-  Qualified config tables supply values
-  for every parameter in the selected inventory. Values for `text` params are taken verbatim; every other
-  scalar or structured type (`int`/`decimal`/`bool`/`json`/`array`/`dict`/`record`/
-  `enum`) is parsed as exactly one strict JSON value and validated against the
-  declared type. Missing required params or invalid values are reported before any
-  agent runs. Run `agm exec FILE --help` to show the discovered param options for
-  that program.
 - `ARG` / `--NAME VALUE`: Provide a value for one of the selected `program def`'s
-  own **value parameters** (as opposed to a `param` declaration). A positional-zone
-  parameter fills a positional `ARG` slot in declaration order; a name-addressable
-  one becomes its own `--<name>` option, projected from its declared type: `bool`
-  as `--name`/`--no-name` (no value); `Option[T]` as `--name VALUE` (wrapping
-  `Some`) / `--no-name` (`None`), `VALUE` taken verbatim when `T` is `text`,
-  otherwise strict JSON; `text` verbatim; every other type as one strict JSON
-  value. A parameter whose projected flag would collide with a reserved host
-  option or with another parameter's own flag is a configuration error reported
-  before any token is parsed. An omitted argument resolves from the program's own
-  qualified config table (see [Configuration](#configuration)), then its
-  signature default; a required parameter with neither is reported before any
-  agent runs. `--PARAM`/`ARG`/`--NAME` tokens may be freely mixed in one
-  invocation — each legacy `param` flag routes to its own parsing; any token
-  that names no declared `param` is passed on to the selected program's own
-  option map. Click itself consumes a bare `--` before either parser sees it,
-  so reaching the program's own end-of-options marker (to pass a literal
-  `--`-prefixed positional argument) takes a **doubled** `--` on the command
-  line — `agm exec FILE -- -- --odd-looking-value`. A program argument typed
-  `Option[T]` has no config-table spelling for `None`; a config table can
-  only ever supply the wrapped `Some` value or leave the argument at its
-  signature default — request `None` with the CLI's `--no-name` flag
-  instead. Run `agm exec FILE --help` to show the selected program's own
-  usage and options.
+  own value parameters. See [Program arguments](#program-arguments).
 - `-I DIR`, `--module-path DIR`: Add `DIR` as an additional module search root
   (repeatable), resolved relative to the invocation working directory. See
   [Module resolution](#module-resolution). This is also how e2e/fixture tests point
@@ -158,7 +115,7 @@ either is a static error.
   `--no-log` disables it, providing the initial trace setting a program can still
   override with a `std/config::log := true` write, and overriding a `[exec] log = true`
   setting. The three are mutually exclusive (at most one may be given).
-- `--dry-run`: Run the full static pipeline, param validation, and contract
+- `--dry-run`: Run the full static pipeline, program-argument validation, and contract
   materialization, then stop before evaluating any expression (static errors exit 1; a
   clean check exits 0 with no program output). A program declaring `extern def`
   (see [Python FFI](../agl/reference/ffi.md)) does **not** import its companion
@@ -180,6 +137,90 @@ either is a static error.
   inventory is printed. Standard-library methods backed by externs (`[1].size()`,
   `"a".trim()`) are listed at the call site in your own source; the standard library's
   internal calls are not inventoried unless the program imports the module explicitly.
+
+### Program arguments
+
+The selected `program def`'s value parameters project onto `agm exec`'s own CLI
+surface, one flag or positional slot per parameter, in the same positional/standard/
+named-only zones a parameter list uses everywhere else in AgL: a marker-less
+parameter list is entirely named-only, so bare `x: T` parameters become `--x`
+options; `@pos, …, /` opens the positional-only zone, whose parameters fill `ARG`
+slots in declaration order and can never be supplied by name; a parameter between
+`/` and the next marker (or the end of the list) is standard and accepts either a
+positional token or its own `--x`.
+
+Each name-addressable parameter's declared type selects its flag form; any
+value-taking flag also accepts the inline `--x=VALUE` form as an alternative
+to `--x VALUE`:
+
+| Type | Flag |
+|---|---|
+| `bool` | `--x` / `--no-x` — a bare flag, no value |
+| `Option[T]` | `--x VALUE` (wraps `Some`) / `--no-x` (`None`); `VALUE` is taken verbatim when `T` is `text`, otherwise parsed as one strict JSON value of `T` |
+| `text` | `--x VALUE`, `VALUE` taken verbatim |
+| every other type | `--x VALUE`, `VALUE` parsed as one strict JSON value and validated against the declared type |
+
+A positional slot has no `--no-x` counterpart, so it never gets the `Option[T]`
+flag's special treatment: a positional token for a `text` parameter is taken
+verbatim, and for every other type — `Option[T]` included — it is parsed as one
+strict JSON value of the parameter's own declared type (e.g. `'{"$case": "Some",
+"value": "hi"}'` for an `Option[text]` positional).
+
+Supplying the same parameter twice — twice by flag, or once positionally and once
+by `--x` for a standard parameter — is an error reported before any agent runs, as
+is an unrecognized `--flag` or a positional argument beyond the program's own
+positional-capable parameters.
+
+A parameter name cannot project onto a reserved spelling. An engine-setting name
+(`default-agent`, `strict-json`, `max-iters`, `timeout`, `log`, `log-file`) on any
+name-addressable parameter is a static error — `agm check` reports it too — whether
+or not the CLI ever supplies it, since program arguments and engine settings share
+one flag and config namespace. A parameter whose projected flag would otherwise
+collide with a reserved flag is instead a host-level check with no static
+counterpart: it fails the program when actually selected for execution, but
+`--help` and shell completion degrade silently, showing no `Program arguments:`
+section or completions for that program rather than erroring. The reserved set is
+the host's own declared options (`--help`/`-h`, `--program`/`-p`, `--command`/`-c`,
+`--module-path`/`-I`, `--max-call-depth`, `--no-stdlib`, `--dry-run`, `--agent`)
+**union every engine-setting flag in both polarities** — `--default-agent`,
+`--strict-json`/`--no-strict-json`, `--max-iters`, `--timeout`/`--no-timeout`,
+`--log`/`--no-log`, `--log-file`/`--no-log-file` — so a parameter such as
+`no-log: text` collides even though `no-log` itself names no engine setting. It
+also includes another parameter's own projected flag, such as a `cache: bool`
+parameter's negative flag colliding with a `no-cache: bool` parameter's positive
+one.
+
+Click itself consumes a bare `--` before this parser sees any tokens, so reaching
+the program's own end-of-options marker (to pass a literal `--`-prefixed
+positional argument) takes a **doubled** `--` on the command line — `agm exec
+FILE -- -- --odd-looking-value`.
+
+Running `agm exec FILE --help` (or `-c ... --help`) appends a `Program arguments:`
+section after the standard help text. With exactly one entry program — or with
+several and one selected via `-p` — the section shows that program's usage line
+and its full option list; with several entry programs and none selected, it lists
+only each entry program's own usage line, so the reader can pick one with `-p`.
+Inline `-c` source with no `program def` of its own is wrapped in a synthetic,
+parameterless `program def main`, so it accepts no `ARG`/`--NAME` tokens at all;
+declare an explicit `program def` in the inline text to give it parameters. Even
+then, an inline `-c` program cannot receive positional arguments at all: a bare
+token after `-c COMMAND` is parsed as the mutually exclusive `FILE` selector, not
+as `ARG` (`agm exec -c '…' hello` fails with `error: argument FILE not allowed
+with -c/--command`), even though `-c … --help` still advertises a positional
+usage line for a program with positional-capable parameters. Named `--x`/`--x
+VALUE` options work normally; declare only standard or named-only parameters in
+inline `-c` source to make every value reachable.
+
+An omitted name-addressable argument resolves from the program's own qualified
+config table (see [Configuration](#configuration)), then its signature default;
+a required parameter with neither is reported before any agent runs. A
+positional-only parameter has no config-table spelling at all — a config table
+is a name-keyed channel, and a positional-only parameter exposes no name to key
+it by — so it always falls straight through to its signature default (or is
+reported as missing, if required). An `Option[T]` parameter's config table has
+no spelling for `None`: a present key can only ever supply the wrapped `Some`
+value, or the key can be left out entirely to fall through to the signature
+default — request `None` explicitly with the CLI's `--no-x` flag instead.
 
 ### Agents
 
@@ -242,18 +283,21 @@ with nothing run.
 Qualified tables address declarations by module suffix and scope path. A loose entry
 file's `.agl` stem is its module component. A file executed directly from a package — a
 development checkout or an installed store tree — instead retains its package-qualified
-module route, just like an installed package reference. For example, a `review::main` program in `review-tools/review` reads engine
-overrides from `[review-tools.review.review.main]`, and a `review::max-tries` param in
-`review-tools/judge` reads `[judge.review]` when that suffix is unambiguous. Use a longer
-suffix or an exact quoted module route such as `["review-tools/judge".review]` to
-disambiguate. `runner` remains an `[exec]`-only setting. Inline `-c` params are CLI-only.
-A selected program's own value parameters read from this same table, keyed by the
-program's own qualified module route.
+module route, just like an installed package reference. For example, a `review::main`
+program in `review-tools/review` reads both its engine overrides and its own value
+parameters from `[review-tools.review.review.main]`; a shorter unambiguous suffix, or an
+exact quoted module route such as `["review-tools/review".review.main]`, also resolves it.
+`runner` remains an `[exec]`-only setting. Inline `-c` source has no file-derived route, so
+its program's own value parameters are CLI-only (CLI value, then signature default).
 
-A key in the entry module's own table that names neither one of its params, an engine
-setting, nor (for the selected program's own table) one of its own value parameters
-(typically a misspelling) is reported on stderr and ignored; the program still runs on
-its declared defaults.
+A key in the selected program's own table that names neither one of its own
+name-addressable value parameters nor an engine setting (typically a
+misspelling) is reported on stderr and ignored; the program still runs on its
+declared defaults. A key that instead names one of the program's
+positional-only parameters is also reported — with a distinct message noting
+that the parameter can only be supplied positionally — since a config table
+cannot address it either way; the program still runs on that parameter's
+signature default.
 
 #### Source-level engine settings (`std/config`)
 
@@ -264,9 +308,7 @@ by the live engine. Each setting is also readable through a qualified reference:
 ```agl
 import std/config
 
-param spec
-
-program def main() -> unit =
+program def main(spec: text) -> unit =
   std/config::log := true             # enable trace logging for this program
   std/config::log-file := Some("trace.jsonl")  # explicit trace path
   std/config::strict-json := true     # require bare JSON from agents
@@ -288,19 +330,10 @@ Precedence differs by kind:
 - **Engine settings** (`default-agent`, `log`, `strict-json`, `max-iters`, `log-file`, `timeout`):
   `source std/config::X write > CLI > qualified program table > [exec].X > engine default`.
   `default-agent` has one extra fallback below `[exec] default-agent`: `[exec] runner`.
-- **Param values** (`param NAME`):
-  `CLI > qualified config table > source default > required error`.
 - **Program arguments** (a selected `program def`'s own value parameters):
-  `CLI > qualified config table > signature default > required error`.
-
-`NAME` is a scoped param's full path spelling (`Deploy::region`) when it is
-  declared as a member of a named scope region. That key must be quoted in TOML, since
-  `::` is not a legal bare key:
-
-  ```toml
-  [demo.Deploy]
-  region = "prod"
-  ```
+  `CLI > qualified program table > signature default > required error`, except a
+  positional-only parameter, which has no qualified-table spelling: `CLI >
+  signature default > required error`.
 
 The CLI flags and the config-file layers supply the setting's **initial** value; a
 source `std/config::X := …` write overrides them from its program point onward. For
@@ -335,7 +368,7 @@ disable tracing entirely.
 | Code | Meaning |
 |------|---------|
 | `0` | The workflow completed successfully, or `std/process::exit(0)` requested success |
-| `1` | Pre-execution failure: unreadable file, static language diagnostics (including invalid `case` coverage), host configuration error, or param validation failure; it can also be requested with `std/process::exit(1)` |
+| `1` | Pre-execution failure: unreadable file, static language diagnostics (including invalid `case` coverage), host configuration error, or program-argument validation failure; it can also be requested with `std/process::exit(1)` |
 | `2` | The workflow executed but ended with an uncaught AgL exception; it can also be requested with `std/process::exit(2)` |
 | `3`–`255` | Requested by `std/process::exit(code)` |
 
@@ -346,7 +379,7 @@ value is a runtime error, not a process termination.
 ### Diagnostics and warnings
 
 - Error-severity diagnostics (static language errors, including non-exhaustive or
-  redundant `case` arms, host configuration errors, param validation failures) and uncaught AgL exceptions are
+  redundant `case` arms, host configuration errors, program-argument validation failures) and uncaught AgL exceptions are
   printed to stderr and determine the exit code per the table above.
 - Advisory **warnings** are a separate
   channel. They are printed to stderr with a `warning:`

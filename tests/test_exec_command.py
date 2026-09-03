@@ -4293,14 +4293,17 @@ class TestProgramValueArguments:
         """A ``POSITIONAL_ONLY`` parameter has no ``--flag``, so a program-table
 
         entry naming it can never reach the argument binder: it falls back to
-        the signature default and is reported as an undeclared program
-        argument, the same as any other key the option map doesn't recognize.
+        the signature default and is reported with a distinct positional-only
+        warning, never the generic "not a declared program argument" one —
+        the parameter *is* declared, it is just not name-addressable. A
+        genuinely misspelled key in the same table still gets the generic
+        undeclared warning.
         """
         from agm.config.context import ConfigContext
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[prog.main]\nname = "configured"\n')
+        (home / ".agm" / "config.toml").write_text('[prog.main]\nname = "configured"\nbogus = 1\n')
         monkeypatch.setattr(
             exec_engine,
             "current_config_context",
@@ -4314,7 +4317,13 @@ class TestProgramValueArguments:
         assert exec_command.run(_exec_args_no_log(agl_file)) is None
         captured = capsys.readouterr()
         assert captured.out == "default\n"
-        assert "name" in captured.err
+        reported = [line for line in captured.err.splitlines() if line.strip()]
+        assert len(reported) == 2
+        positional_warning = next(line for line in reported if "'name'" in line)
+        undeclared_warning = next(line for line in reported if "'bogus'" in line)
+        assert "positional-only" in positional_warning
+        assert "is not a declared" not in positional_warning
+        assert "is not a declared program argument" in undeclared_warning
 
     def test_legacy_flag_supplied_twice_is_a_usage_error(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

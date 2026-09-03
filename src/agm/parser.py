@@ -552,8 +552,7 @@ _HELP_TEXTS: dict[str, str] = {
                  [--timeout DURATION|--no-timeout] [--dry-run]
                  [--log|--log-file PATH|--no-log] [--no-log-file]
                  [--no-stdlib] [-I DIR]... [-p PATH]
-                 (FILE | PACKAGE/MODULE::PROGRAM | -c COMMAND) [--PARAM VALUE]...
-                 [ARG]... [--NAME VALUE]...
+                 (FILE | PACKAGE/MODULE::PROGRAM | -c COMMAND) [ARG]... [--NAME VALUE]...
 
         Execute an AgL (Agent Language) workflow program from FILE, an installed
         PACKAGE/MODULE::PROGRAM reference, or the inline program text given with
@@ -561,19 +560,17 @@ _HELP_TEXTS: dict[str, str] = {
 
         A file must declare at least one `program def`; select one of several
         with -p PATH. Inline source is wrapped in a synthetic `program def main`
-        when it does not declare one. Each `param` declaration in the program
-        becomes a `--<name>` option.
-        Boolean params use the `--name/--no-name` flag form. Structured types
-        take a JSON string. Run `agm exec FILE --help` to show discovered params.
+        when it does not declare one.
 
-        The selected program's own value parameters project onto the same CLI
+        The selected program's own value parameters project onto the CLI
         surface: a positional-zone parameter fills a positional slot, and a
         name-addressable one becomes its own `--<name>` option (bool as
         `--name/--no-name`; `Option[T]` as `--name VALUE`/`--no-name`; text
         verbatim; every other type as a JSON string). An omitted argument
-        resolves from the program's own qualified config table, then its
-        signature default; a required parameter with neither errors. Both
-        mechanisms may supply values in one invocation.
+        resolves from the program's own qualified config table (which
+        reaches name-addressable parameters only), then its signature
+        default; a required parameter with neither errors. Run
+        `agm exec FILE --help` to show the discovered arguments.
 
         Trace logging is OFF by default.  Enable it with --log, --log-file, or
         [exec] log = true in config.toml.  A source ``std/config::KEY := VALUE``
@@ -595,8 +592,8 @@ _HELP_TEXTS: dict[str, str] = {
           --no-timeout          Remove configured initial shell-exec and agent timeouts;
                                 seed std/config::timeout to None. Mutually exclusive
                                 with --timeout.
-          --dry-run             Run the full static pipeline and validate parameters,
-                                but do not execute the workflow.
+          --dry-run             Run the full static pipeline and validate program
+                                arguments, but do not execute the workflow.
           --log                 Enable trace logging (auto timestamped path).
           --log-file PATH       Write trace log to PATH.
           --no-log-file         Clear the CLI log-file seed only; use --no-log to
@@ -619,8 +616,8 @@ _HELP_TEXTS: dict[str, str] = {
         Exit codes:
           0  The workflow completed successfully.
           1  Pre-execution failure: unreadable file, static diagnostics
-             (lex/parse/scope/type/match), host configuration error, or param
-             validation failure.
+             (lex/parse/scope/type/match), host configuration error, or
+             program-argument validation failure.
           2  The workflow executed but ended with an uncaught AgL exception.
     """),
     "repl": textwrap.dedent("""\
@@ -699,8 +696,9 @@ _HELP_TEXTS: dict[str, str] = {
         FILE independently, in argument order, and report GNU-style
         diagnostics.  Unlike `agm exec`, no FILE needs to declare a `program
         def`, so library modules can be checked too.  A `program def` present
-        in a file is validated but never selected, param-checked, or run:
-        `check` never evaluates anything and never invokes an agent.
+        in a file is validated but never selected, resolved against
+        configuration, or run: `check` never evaluates anything and never
+        invokes an agent.
 
         Every FILE is checked even when an earlier one failed.  Diagnostics
         print to stderr as a location, then `error:` or `warning:`, then the

@@ -222,32 +222,31 @@ agm sync pull
 ### `agm exec`
 
 Execute an AgL (Agent Language) workflow program. AgL is a statically-typed, expression-oriented
-DSL for composable agent workflows: it supports typed params and outputs, user-defined functions
-(`def`/`fn`), functions implemented by a co-located Python file (`extern def`), structured JSON
-targets, do-loops with retry/abort policies, control flow (if/case/try), shell execution (`exec`),
-and typed `Agent` values. Free `ask` lazily opens a persistent default agent
-session from `std/config::default-agent`; use `agent.ask(...)` or `Session::open(...)`
-to select an explicit agent or conversation. The selected value determines the invoked command.
+DSL for composable agent workflows: it supports typed program parameters and outputs, user-defined
+functions (`def`/`fn`), functions implemented by a co-located Python file (`extern def`),
+structured JSON targets, do-loops with retry/abort policies, control flow (if/case/try), shell
+execution (`exec`), and typed `Agent` values. Free `ask` lazily opens a persistent default agent
+session from `std/config::default-agent`; use `agent.ask(...)` or `Session::open(...)` to select
+an explicit agent or conversation. The selected value determines the invoked command.
 
-A file workflow declares one or more zero-argument `program def` entries: `agm exec`
-invokes the sole one after initialization, or selects one of several with
-`-p`/`--program PATH` (for example, `review::main`). Inline `-c` source is wrapped
-in a synthetic entry when needed. Programs can span multiple `.agl` files via the
-module system (`import utils/math`). Every loaded entry and library module,
-except `std/prelude` itself, receives `import std/prelude::*` by default. An explicit import
-whose expansion includes `std/prelude` supplies the prelude contribution instead,
-so plain `import std/prelude` leaves its names qualified-only. `--no-stdlib` disables the
-automatic prelude throughout the loaded program.
-Other imports are qualified by default; an import tail or `use` declaration makes selected names
-bare. `agm exec` searches the entry file's directory, the selected standard library
-(the active `<AGM-home>/packages/std/<AGM_VERSION>/` package, then the wheel-bundled or
-source-checkout fallback),
-the selected AGM home's global `lib` directory, and any configured
-`[modules] roots` for imported modules.
+A file workflow declares one or more `program def` entries: `agm exec` invokes the sole one after
+initialization, or selects one of several with `-p`/`--program PATH` (for example,
+`review::main`). An entry's own value parameters project onto `agm exec`'s CLI as positional
+arguments and `--name` options (a marker-less parameter list is entirely named-only). Inline `-c`
+source is wrapped in a synthetic entry when needed. Programs can span multiple `.agl` files via
+the module system (`import utils/math`). Every loaded entry and library module, except
+`std/prelude` itself, receives `import std/prelude::*` by default. An explicit import whose
+expansion includes `std/prelude` supplies the prelude contribution instead, so plain `import
+std/prelude` leaves its names qualified-only. `--no-stdlib` disables the automatic prelude
+throughout the loaded program. Other imports are qualified by default; an import tail or `use`
+declaration makes selected names bare. `agm exec` searches the entry file's directory, the
+selected standard library (the active `<AGM-home>/packages/std/<AGM_VERSION>/` package, then the
+wheel-bundled or source-checkout fallback), the selected AGM home's global `lib` directory, and
+any configured `[modules] roots` for imported modules.
 
 ```bash
 agm exec workflow.agl
-agm exec workflow.agl --name Alice   # --<param> per declared param
+agm exec workflow.agl --name Alice   # --<name> per declared program parameter
 agm exec -c 'print "hello"'       # run inline program text instead of a file
 agm exec --dry-run workflow.agl   # static check only — no agent calls
 ```

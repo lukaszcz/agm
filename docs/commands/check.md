@@ -13,9 +13,13 @@ diagnostics. `agm check` never evaluates anything and never runs an agent.
 
 Unlike `agm exec`, no `FILE` needs to declare a `program def`: a plain library module
 (the case `agm exec --dry-run` rejects) can be checked on its own. A `program def`
-present in a file is validated as part of the module it lives in, but `check` never
-selects one, never resolves or checks its params against configuration, and never runs
-it — there are no `--<param>` options and no `-p`/`--program` selector.
+present in a file is validated as part of the module it lives in, including that each
+of its own value parameters has a type that can cross the host/JSON boundary (text
+verbatim, or a finite, JSON-decodable data type — for example, a function-typed
+parameter is rejected) and that no name-addressable parameter spells a reserved
+engine-setting name. `check` never selects an entry program, never resolves its
+parameters against configuration, and never runs it — there is no CLI argument
+projection and no `-p`/`--program` selector.
 
 Each `FILE` is checked independently, in argument order, and **every** `FILE` is checked
 even when an earlier one failed. A clean `FILE` produces no output at all.

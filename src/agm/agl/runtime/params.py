@@ -108,17 +108,16 @@ def decode_or_diagnose_param(
 ) -> "tuple[Value, None] | tuple[None, Diagnostic] | tuple[None, None]":
     """Decode one host-supplied param value, or build its diagnostic.
 
-    The single per-param boundary shared by IR param binding
-    (:func:`_prepare_ir_params`) and the REPL's incremental param path
-    (:meth:`~agm.agl.repl.session.ReplSession._pre_eval_param_values`).
-    Returns ``(value, None)`` on success, ``(None, diagnostic)`` when the
-    param is missing-and-required or fails to parse, and ``(None, None)``
-    when the param is missing but optional (nothing to record).
+    The per-param decode boundary used by IR param binding
+    (:func:`_prepare_ir_params`) and by the REPL's entry pre-check, which
+    calls it with ``supplied=False`` to ask what an unsupplied param means.
+    Returns ``(value, None)`` on success,
+    ``(None, diagnostic)`` when the param is missing-and-required or fails to
+    parse, and ``(None, None)`` when the param is missing but optional
+    (nothing to record).
 
-    *missing_message* is caller-supplied because the two call sites phrase
-    "missing" differently: compiled-IR binding reports a plain missing-param
-    error, while the REPL's imported-param path points at supplying a
-    default expression instead.
+    *missing_message* is caller-supplied so the diagnostic can phrase
+    "missing" in the caller's own terms.
     """
     from agm.agl.runtime.convert import StrictJsonParseError
 
@@ -206,8 +205,10 @@ def convert_param_value(
 
     Builds the same :class:`~agm.agl.ir.contracts.ParamDecoder` the lowerer
     embeds in the compiled IR (via :func:`~agm.agl.type_schema.build_param_decoder`)
-    and runs the shared :func:`decode_param_value` path, so the REPL/config param
-    boundary and the compiled-IR param boundary decode through one mechanism.
+    and runs the shared :func:`decode_param_value` path, so this and the
+    compiled-IR param boundary decode through one mechanism. Its only caller
+    is :func:`convert_config_value`, which decodes host engine-setting values
+    (CLI flags, config-file entries) through it.
 
     ``text`` params are taken verbatim; every other value crosses the canonical
     JSON boundary — either a JSON string or a JSON-compatible Python value, both

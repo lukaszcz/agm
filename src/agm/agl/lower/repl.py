@@ -111,9 +111,10 @@ class ReplPromotionPlan:
     declarations appear later in source. Non-function source declarations become
     eligible when execution reaches their source-order initializer frontier.
     This makes partial REPL promotion depend on completed IR initializers rather
-    than diagnostic source locations. Entry parameters are installed by a
-    pre-pass, so their completion comes from the symbols the interpreter
-    actually installed rather than from source position. Runtime references
+    than diagnostic source locations. A ``param`` installs during a pre-pass
+    that runs before every module initializer (see ``IrInterpreter.run``), so
+    its completion cannot be read off that frontier and is tracked separately
+    via the symbols the interpreter actually installed. Runtime references
     into imported modules are retained separately so promotion can require the
     owning modules to be available.
     """
@@ -132,10 +133,10 @@ class ReplPromotionPlan:
     ) -> frozenset[int]:
         """Return declarations whose local and imported dependencies are available.
 
-        Parameters are installed by a pre-pass rather than an initializer, so
-        their source position cannot establish completion. Imported runtime
-        references are safe only when their owning library module initialized
-        completely or was already retained by the session.
+        A param whose pre-pass install did not complete is excluded even when
+        its source position falls before the initializer frontier. Imported
+        runtime references are safe only when their owning library module
+        initialized completely or was already retained by the session.
         """
         completed_indices = set(completed_initializer_indices)
         assert all(0 <= index < len(self.initializers) for index in completed_indices)

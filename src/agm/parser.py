@@ -650,11 +650,6 @@ _HELP_TEXTS: dict[str, str] = {
         the session; :reset clears it.  Set session-wide defaults via CLI flags
         or [exec] config.
 
-        Imported params (`param NAME: T`) resolve eagerly from qualified config
-        or their source default; prompt-local params use their source default.
-        There are no CLI param options. Use :params to list declarations and
-        their resolved values.
-
         Options:
           --strict-json         Require bare JSON output from agents (no recovery).
           --no-strict-json      Use lenient JSON recovery (default).

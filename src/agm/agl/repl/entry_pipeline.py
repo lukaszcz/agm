@@ -10,7 +10,7 @@ by ``ReplSession`` via the narrow ``EntryPipelineCtx`` Protocol. Must NOT import
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, cast
 
 from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
@@ -24,7 +24,6 @@ if TYPE_CHECKING:
     from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.contracts import ContractPayload
     from agm.agl.ir.ids import SymbolId
-    from agm.agl.ir.program import IrParam
     from agm.agl.lower import LinkImage
     from agm.agl.matchcompile import MatchCompiledProgram
     from agm.agl.modules.loader import LoadedModule, ModuleGraph
@@ -56,7 +55,6 @@ class EntryPipelineCtx(Protocol):
     _retained_resolved_modules: dict[ModuleId, ResolvedModule]
     _retained_checked_modules: dict[ModuleId, CheckedModule]
     _last_match_compilation: MatchCompiledProgram | None
-    _active_imported_params: dict[SymbolId, IrParam]
     _accumulated_imports: list[tuple[ImportDecl, ...]]
     _accumulated_scoped_imports: list[tuple[ImportDecl | ScopeRegion, ...]]
     _accumulated_infix: dict[str, tuple[int, InfixAssoc]]
@@ -96,15 +94,9 @@ class EntryPipelineCtx(Protocol):
         self, program: Program, checked: CheckedModule, warnings: list[Diagnostic]
     ) -> EntryResult: ...
 
-    def _pre_eval_param_values(
-        self, params: tuple[IrParam, ...], warnings: list[Diagnostic]
-    ) -> tuple[dict[SymbolId, Value], EntryResult | None]: ...
-
     def _record_declared_engine_defaults(
         self, declared_keys: frozenset[str], interp: IrInterpreter
     ) -> None: ...
-
-    def _record_active_imported_params(self, params: tuple[IrParam, ...]) -> None: ...
 
     def _update_engine_settings(self, interp: IrInterpreter) -> None: ...
 
@@ -667,9 +659,10 @@ class EntryPipeline:
             exception_value_to_run_error,
         )
         from agm.agl.recursion import NestingTooDeepError, frontend_recursion_boundary
-        from agm.agl.runtime.params import _materialize_ir_contracts
+        from agm.agl.runtime.params import _materialize_ir_contracts, decode_or_diagnose_param
         from agm.agl.runtime.request import AgentCancelled
         from agm.agl.runtime.trace import TraceStore
+        from agm.agl.runtime.types import public_param_spelling
         from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.syntax.resources import ResourceError
 
@@ -707,20 +700,26 @@ class EntryPipeline:
                 else Diagnostic(message=str(exc), line=1)
             )
             return self._ctx._fail([diagnostic], warnings)
-        # Lowering normally omits modules already linked into the persistent
-        # image. Keep the boundary explicit nevertheless: config validation
-        # needs their metadata, but installing one again would overwrite its
-        # live base-frame slot (including mutations from prior entries).
-        params_to_install = tuple(
-            param
-            for param in lowered.program.params
-            if param.module.is_entry or param.symbol not in self._ctx._active_imported_params
-        )
-        program_to_run = replace(lowered.program, params=params_to_install)
-        ir_params, pre_eval_result = self._ctx._pre_eval_param_values(params_to_install, warnings)
-        if pre_eval_result is not None:
-            self._ctx._link_image.restore_state(link_snapshot)
-            return pre_eval_result
+        # The REPL supplies no external param values (no CLI, no config): a
+        # ``param`` with no source default can never be satisfied, so ask the
+        # shared decode boundary what an unsupplied param means and report a
+        # clean diagnostic before the interpreter runs, rather than let
+        # ``IrInterpreter._resolve_param_default`` treat it as the host
+        # contract violation it is meant to catch.
+        for param in lowered.program.params:
+            display_name = public_param_spelling(param.qualified_public_name)
+            _, missing_diagnostic = decode_or_diagnose_param(
+                param,
+                display_name,
+                supplied=False,
+                raw=None,
+                missing_message=(
+                    f"Missing required param {display_name!r}: provide a default expression."
+                ),
+            )
+            if missing_diagnostic is not None:
+                self._ctx._link_image.restore_state(link_snapshot)
+                return self._ctx._fail([missing_diagnostic], warnings)
         extern_diagnostics = _wire_extern_registry(
             checked=checked_program,
             capabilities=host_env.capabilities,
@@ -740,7 +739,7 @@ class EntryPipeline:
             self._ctx._link_image.restore_state(link_snapshot)
             self._ctx._advance_node_ids(new_next_id)
             return self._ctx._fail(extern_diagnostics, warnings)
-        host_contracts, _ = _materialize_ir_contracts(program_to_run, host_env.codecs)
+        host_contracts, _ = _materialize_ir_contracts(lowered.program, host_env.codecs)
         trace = TraceStore(path=self._ctx._trace_path)
         trace.run_start()
         if self._ctx._host_settings_policy is not None:
@@ -754,7 +753,7 @@ class EntryPipeline:
             reconfigurer = None
         try:
             interp = IrInterpreter(
-                program_to_run,
+                lowered.program,
                 agent_dispatcher=host_env.agent_dispatcher,
                 session_host=host_env.session_host,
                 close_sessions=False,
@@ -765,7 +764,6 @@ class EntryPipeline:
                     self._ctx._shell_exec_timeout if "timeout" not in self._ctx._current else None
                 ),
                 trace=trace,
-                param_values=ir_params,
                 host_contracts=host_contracts,
                 base_frame=self._ctx._ir_base_frame,
                 extern_registry=host_env.extern_registry,
@@ -782,7 +780,7 @@ class EntryPipeline:
             error = exception_value_to_run_error(
                 exc.exc,
                 span=exc.span,
-                exception_field_encodes=program_to_run.exception_field_encodes,
+                exception_field_encodes=lowered.program.exception_field_encodes,
             )
             trace.exception(
                 type_name=error.type_name,
@@ -843,21 +841,11 @@ class EntryPipeline:
         )
 
         def retain_library_state(module_ids: frozenset[ModuleId]) -> None:
-            """Cache one coherent set of initialized library modules and params."""
-            installed_symbols = (
-                self._ctx._active_imported_params.keys() | interp.entry_param_symbols_installed
-            )
+            """Cache one coherent set of initialized library modules."""
             self._ctx._loaded_lib_modules.update(
                 (module_id, new_modules[module_id])
                 for module_id in module_ids
                 if module_id in new_modules
-            )
-            self._ctx._record_active_imported_params(
-                tuple(
-                    param
-                    for param in params_to_install
-                    if param.module in module_ids and param.symbol in installed_symbols
-                )
             )
             self._ctx._link_image.mark_linked(module_ids)
 
@@ -865,20 +853,19 @@ class EntryPipeline:
             """Return newly initialized modules whose dependencies also completed.
 
             Every newly loaded module answers the same question: its own params
-            were installed, every one of its initializers ran, and each of its
-            dependencies is retained too. No module is privileged -- the
+            were installed and every one of its initializers ran, and each of
+            its dependencies is retained too. No module is privileged -- the
             standard library reaches this test exactly as a user library does.
             """
-            installed_symbols = (
-                self._ctx._active_imported_params.keys() | interp.entry_param_symbols_installed
-            )
             candidates: set[ModuleId] = set()
             for module_id in new_modules:
                 module = lowered.program.modules[module_id]
                 module_params = tuple(
                     param for param in lowered.program.params if param.module == module_id
                 )
-                if not all(param.symbol in installed_symbols for param in module_params):
+                if not all(
+                    param.symbol in interp.entry_param_symbols_installed for param in module_params
+                ):
                     continue
                 completed_indices = interp.module_completed_initializer_indices.get(
                     module_id, set()
@@ -925,8 +912,8 @@ class EntryPipeline:
             own: the link image's nominal state, including any ``builtin``
             declaration's host-mint override, is rebuilt from the shared type
             table on every lowering. Library modules whose params and
-            initializers did complete are retained with their active parameter
-            inventory, provided their dependencies completed too.
+            initializers did complete are retained, provided their
+            dependencies completed too.
             """
             trace.run_end(ok=False)
             self._persist_interpreter_settings(interp, trace)
@@ -963,7 +950,7 @@ class EntryPipeline:
             error = exception_value_to_run_error(
                 exc.exc,
                 span=exc.span,
-                exception_field_encodes=program_to_run.exception_field_encodes,
+                exception_field_encodes=lowered.program.exception_field_encodes,
             )
             trace.exception(
                 type_name=error.type_name,
@@ -973,7 +960,7 @@ class EntryPipeline:
             return partial_failure(diagnostics=[], error=error)
         except ParameterDefaultCycleError as exc:
             return partial_failure(
-                diagnostics=[_parameter_default_cycle_diagnostic(program_to_run, exc)],
+                diagnostics=[_parameter_default_cycle_diagnostic(lowered.program, exc)],
                 error=None,
             )
         except HostConfigurationError as exc:

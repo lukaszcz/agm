@@ -19,7 +19,6 @@ from unittest.mock import patch
 import pytest
 
 from agm.agl.diagnostics import AglError
-from agm.agl.ir.program import IrParam
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.runtime.sessions import AgentDispatcherSessionHost
@@ -588,6 +587,23 @@ class TestPersistence:
         assert declared.kind == "declaration"
         assert result.ok, result.diagnostics
         assert result.value == UnitValue()
+
+    def test_program_def_with_value_params_is_an_ordinary_callable_function(self) -> None:
+        # A ``program def``'s value parameters are ordinary function
+        # parameters at the prompt: the REPL has no entry-function concept,
+        # so the entry just declares a callable function like ``def`` would.
+        session = open_session()
+        assert session.eval_entry("var last = 0").ok
+
+        declared = session.eval_entry("program def f(x: int) -> unit =\n  last := x + 1")
+        result = session.eval_entry("f(x = 41)")
+        readback = session.eval_entry("last")
+
+        assert declared.ok, declared.diagnostics
+        assert declared.kind == "declaration"
+        assert result.ok, result.diagnostics
+        assert readback.ok, readback.diagnostics
+        assert readback.value == IntValue(42)
 
     def test_partial_application_closure_persists_into_next_entry(self) -> None:
         s = open_session()
@@ -3354,27 +3370,28 @@ class TestFailureEffects:
         s = open_session()
         result = s.eval_entry("param p: int = 7\nlet z: decimal = 1 / 0")
         assert not result.ok
-        assert [(name, _int(value)) for name, _type, value in s.declared_params()] == [("p", 7)]
+        followup = s.eval_entry("p")
+        assert followup.ok, followup.diagnostics
+        assert followup.value == IntValue(7)
 
     def test_runtime_raise_excludes_param_declared_after_failure(self) -> None:
-        # Regression: a runtime failure that precedes a later
-        # ``param`` declaration must not record that param. The IR interpreter
-        # installs every param into the base frame up front, so a naive
-        # ``symbol in base frame`` check would record the later param even though
-        # the scope-promotion loop excluded its binding by source position —
-        # leaving ``declared_params()`` to raise ``KeyError``.
+        # Regression: a runtime failure that precedes a later ``param``
+        # declaration must not promote that param. The IR interpreter installs
+        # every param into the base frame up front, so a naive
+        # ``symbol in base frame`` check would wrongly treat the later param as
+        # installed even though the scope-promotion loop excluded its binding
+        # by source position.
         s = open_session()
         result = s.eval_entry("let z: decimal = 1 / 0\nparam q: int = 5")
         assert not result.ok
-        assert s.declared_params() == []
-        # The later param was excluded from the session scope too.
+        # The later param was excluded from the session scope.
         assert not s.eval_entry("q").ok
 
     def test_runtime_raise_does_not_install_failing_param_default(self) -> None:
         s = open_session()
         result = s.eval_entry("param p: decimal = 1 / 0")
         assert not result.ok
-        assert s.declared_params() == []
+        assert not s.eval_entry("p").ok
 
     def test_failing_param_default_still_promotes_completed_type_with_no_function(self) -> None:
         # Regression: when the entry declares no zero-capture function closure,
@@ -3398,7 +3415,6 @@ class TestFailureEffects:
         )
 
         assert not result.ok
-        assert s.declared_params() == []
         assert not s.eval_entry("p").ok
 
     def test_runtime_raise_promotes_preinstalled_function_before_failing_param_default(
@@ -3704,16 +3720,6 @@ class TestAgentDeclarations:
 
 
 class TestParams:
-    def test_declared_param_listed_unset(self) -> None:
-        s = open_session()
-        s.eval_entry('param name: text = "World"')
-        ins = s.declared_params()
-        assert len(ins) == 1
-        name, typ, val = ins[0]
-        assert name == "name"
-        assert isinstance(typ, TextType)
-        assert _text(val) == "World"
-
     def test_unset_param_reference_is_clean_error(self) -> None:
         s = open_session()
         r = s.eval_entry("param name: text")
@@ -3735,15 +3741,6 @@ class TestParams:
         assert not r.ok
         assert "'@entry::name'" in r.diagnostics[0].message
         assert "<entry>" not in r.diagnostics[0].message
-
-    def test_declared_param_then_reference(self) -> None:
-        s = open_session()
-        s.eval_entry('param name: text = "World"')
-        r = s.eval_entry("name")
-        assert r.ok
-        assert _text(r.value) == "World"
-        _n, _t, val = s.declared_params()[0]
-        assert val is not None
 
     def test_imported_required_param_fails_before_interpreter_creation(
         self, tmp_path: Path
@@ -3775,112 +3772,6 @@ class TestParams:
         assert len(result.diagnostics) == 1
         assert "cycle" in result.diagnostics[0].message.lower()
 
-    def test_later_import_validates_active_params_without_reinstalling_them(
-        self, tmp_path: Path
-    ) -> None:
-        (tmp_path / "settings.agl").write_text(
-            "param items: array[int]\n"
-            "def update() -> unit =\n"
-            "  items[0] := 9\n"
-            "def read() -> int = items[0]\n"
-        )
-        (tmp_path / "other.agl").write_text("param count: int = 0\n")
-        seen_inventories: list[tuple[str, ...]] = []
-
-        def load_config(params: tuple[IrParam, ...]) -> dict[str, object]:
-            seen_inventories.append(tuple(param.qualified_public_name for param in params))
-            return {"settings::items": [1, 2]}
-
-        session = open_session(
-            lib_root=tmp_path,
-            default_stdlib=False,
-            params_config_loader=load_config,
-        )
-
-        assert session.eval_entry("import settings\nsettings::update()").ok
-        later = session.eval_entry("import other\nsettings::read()")
-
-        assert later.ok, later.diagnostics
-        assert later.value == IntValue(9)
-        assert seen_inventories == [
-            ("settings::items",),
-            ("settings::items", "other::count"),
-        ]
-
-    def test_partial_promotion_retains_completed_imported_param_inventory(
-        self, tmp_path: Path
-    ) -> None:
-        (tmp_path / "settings.agl").write_text(
-            "param token: array[text]\n"
-            "def update() -> unit =\n"
-            '  token[0] := "mutated"\n'
-            "def read() -> text = token[0]\n"
-        )
-        (tmp_path / "other.agl").write_text("param count: int = 0\n")
-        seen_inventories: list[tuple[str, ...]] = []
-
-        def load_config(params: tuple[IrParam, ...]) -> dict[str, object]:
-            seen_inventories.append(tuple(param.qualified_public_name for param in params))
-            return {"settings::token": ["configured"]}
-
-        session = open_session(
-            lib_root=tmp_path,
-            default_stdlib=False,
-            params_config_loader=load_config,
-        )
-
-        failed = session.eval_entry(
-            "import settings\n"
-            "def retained() -> text = settings::read()\n"
-            "settings::update()\n"
-            '"bad" as int'
-        )
-        assert not failed.ok
-        assert failed.installed == ("retained",), (failed.diagnostics, failed.error)
-
-        later = session.eval_entry("import other\nretained()")
-        reimported = session.eval_entry("import settings\nsettings::read()")
-
-        assert later.ok, later.diagnostics
-        assert later.value == TextValue("mutated")
-        assert reimported.ok, reimported.diagnostics
-        assert reimported.value == TextValue("mutated")
-        assert seen_inventories == [
-            ("settings::token",),
-            ("settings::token", "other::count"),
-            ("settings::token", "other::count"),
-        ]
-
-    def test_partial_failure_does_not_retain_params_or_dependents_of_incomplete_module(
-        self, tmp_path: Path
-    ) -> None:
-        (tmp_path / "broken.agl").write_text(
-            'param ready: text = "ready"\nparam failed: int = "bad" as int\n'
-        )
-        (tmp_path / "unfinished.agl").write_text("let value: int = 1\n")
-        (tmp_path / "wrapper.agl").write_text(
-            "import broken\nimport unfinished\ndef noop() -> unit = ()\n"
-        )
-        seen_inventories: list[tuple[str, ...]] = []
-
-        def load_config(params: tuple[IrParam, ...]) -> dict[str, object]:
-            seen_inventories.append(tuple(param.qualified_public_name for param in params))
-            return {}
-
-        session = open_session(
-            lib_root=tmp_path,
-            default_stdlib=False,
-            params_config_loader=load_config,
-        )
-
-        failed = session.eval_entry("import wrapper\n()")
-
-        assert not failed.ok
-        assert seen_inventories == [("broken::ready", "broken::failed")]
-        assert session._active_imported_params == {}
-        assert session._loaded_lib_modules == {}
-        assert session._link_image._linked_modules == set()
-
     def test_declared_param_typed_value(self) -> None:
         s = open_session()
         s.eval_entry("param count: int = 42")
@@ -3907,82 +3798,12 @@ class TestParams:
         assert after.ok
         assert _text(after.value) == "still alive"
 
-    def test_declared_params_lists_scoped_param_by_full_path(self) -> None:
-        s = open_session()
-        s.eval_entry("scope A\n  param p: int = 5\nend A")
-        ins = s.declared_params()
-        assert len(ins) == 1
-        name, typ, val = ins[0]
-        assert name == "A::p"
-        assert isinstance(typ, IntType)
-        assert _int(val) == 5
-
-    def test_scoped_param_metadata_is_removed_when_another_member_replaces_it(self) -> None:
-        s = open_session()
-        assert s.eval_entry("scope A\n  param x: int = 1\nend A").ok
-
-        replacement = s.eval_entry("scope A\n  let x = 2\nend A")
-
-        assert replacement.ok, replacement.diagnostics
-        assert s.declared_params() == []
-        value = s.eval_entry("A::x")
-        assert value.ok, value.diagnostics
-        assert value.value == IntValue(2)
-
-    def test_let_binding_displaces_same_named_root_param_in_later_entry(self) -> None:
-        s = open_session()
-        assert s.eval_entry("param count: int = 1").ok
-
-        result = s.eval_entry("let count = 5")
-
-        assert result.ok, result.diagnostics
-        assert s.declared_params() == []
-        value = s.eval_entry("count")
-        assert value.ok, value.diagnostics
-        assert value.value == IntValue(5)
-
-    def test_let_binding_displaces_same_keyed_scoped_param_in_later_entry(self) -> None:
-        s = open_session()
-        assert s.eval_entry('scope Deploy\n  param region: text = "eu"\nend Deploy').ok
-
-        result = s.eval_entry('scope Deploy\n  let region = "us"\nend Deploy')
-
-        assert result.ok, result.diagnostics
-        assert s.declared_params() == []
-        value = s.eval_entry("Deploy::region")
-        assert value.ok, value.diagnostics
-        assert value.value == TextValue("us")
-
-    def test_single_entry_displaces_root_and_scoped_param_together(self) -> None:
-        s = open_session()
-        setup = s.eval_entry(
-            'param count: int = 1\n\nscope Deploy\n  param region: text = "eu"\nend Deploy'
-        )
-        assert setup.ok, setup.diagnostics
-        assert {name for name, _t, _v in s.declared_params()} == {"count", "Deploy::region"}
-
-        result = s.eval_entry('let count = 5\n\nscope Deploy\n  let region = "us"\nend Deploy')
-
-        assert result.ok, result.diagnostics
-        assert s.declared_params() == []
-
-    def test_undisplaced_param_remains_listed_after_sibling_displacement(self) -> None:
-        s = open_session()
-        setup = s.eval_entry("param count: int = 1\nparam other: int = 2")
-        assert setup.ok, setup.diagnostics
-
-        result = s.eval_entry("let count = 5")
-
-        assert result.ok, result.diagnostics
-        assert {name for name, _t, _v in s.declared_params()} == {"other"}
-
     def test_scoped_param_failing_default_does_not_corrupt_next_entry(self) -> None:
         # A scoped param whose default raises must not be promoted; the next
         # entry must degrade gracefully rather than crash on an unbound symbol.
         s = open_session()
         first = s.eval_entry('scope A\n  param p: int = "x" as int\nend A')
         assert not first.ok
-        assert s.declared_params() == []
         second = s.eval_entry("let q = A::p + 1")
         assert not second.ok
         assert second.diagnostics
@@ -4007,10 +3828,8 @@ class TestReset:
     def test_reset_clears_all_state(self) -> None:
         s = open_session()
         s.eval_entry("let x = 1")
-        s.eval_entry("param n: int")
         s.reset()
         assert s.bindings() == []
-        assert s.declared_params() == []
         assert s.dump_source() == ""
         # After reset a name previously defined is gone (would error on ref).
         r = s.eval_entry("x")
@@ -4636,19 +4455,6 @@ class TestTraceLogging:
 # ---------------------------------------------------------------------------
 
 
-class TestRemovedPresetParam:
-    def test_reset_keeps_declared_params_empty(self) -> None:
-        s = open_session()
-        s.eval_entry("param count: int = 42")
-        s.reset()
-        assert s.declared_params() == []
-
-
-# ---------------------------------------------------------------------------
-# Issue #1 — re-declared param: stale value must be purged from value scope
-# ---------------------------------------------------------------------------
-
-
 class TestParamRedeclaration:
     def test_redeclare_param_purges_stale_value_from_bindings(self) -> None:
         s = open_session()
@@ -4656,7 +4462,7 @@ class TestParamRedeclaration:
         assert r1.ok
         r2 = s.eval_entry("param x: int = 10")
         assert r2.ok
-        ins2 = {name: val for name, _t, val in s.declared_params()}
+        ins2 = {name: val for name, _t, val in s.bindings()}
         assert _int(ins2["x"]) == 10
 
     def test_redeclare_param_then_reference_uses_the_new_value(self) -> None:
@@ -4672,7 +4478,6 @@ class TestParamRedeclaration:
         s.eval_entry("param x: int = 5")
         s.eval_entry("param x: int = 10")
         s.reset()
-        assert s.declared_params() == []
         # The redeclared param is gone from the value scope too, so the name
         # no longer resolves and can be redeclared from scratch.
         gone = s.eval_entry("x + 1")
@@ -6037,6 +5842,31 @@ class TestImports:
         r2 = s.eval_entry("import boom::*\nf()")
         assert r2.ok, r2.diagnostics
         assert _int(r2.value) == 42
+
+    def test_mutated_imported_module_state_survives_a_later_reimport(self, tmp_path: Path) -> None:
+        # An imported module is linked into the persistent image once. A later
+        # entry -- whether it imports something else or names the same module
+        # again -- must reuse that live base-frame slot rather than reinitialize
+        # it, so a mutation made through the module's own function is still
+        # visible afterwards.
+        (tmp_path / "settings.agl").write_text(
+            "var items = [1, 2]\n"
+            "def update() -> unit =\n"
+            "  items[0] := 9\n"
+            "def read() -> int = items[0]\n"
+        )
+        (tmp_path / "other.agl").write_text("let count = 0\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry("import settings\nsettings::update()").ok
+
+        unrelated_import = s.eval_entry("import other\nsettings::read()")
+        reimported = s.eval_entry("import settings\nsettings::read()")
+
+        assert unrelated_import.ok, unrelated_import.diagnostics
+        assert _int(unrelated_import.value) == 9
+        assert reimported.ok, reimported.diagnostics
+        assert _int(reimported.value) == 9
 
     def test_runtime_failure_prunes_entry_function_depending_on_incomplete_module(
         self, tmp_path: Path

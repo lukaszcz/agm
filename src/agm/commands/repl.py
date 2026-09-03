@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import TYPE_CHECKING
 
 from agm.agent.session import create_agl_session_host
 from agm.agl.diagnostics import format_diagnostic
@@ -60,7 +59,6 @@ from agm.config.module_roots import (
     resolve_lib_root,
     resolve_stdlib_root,
 )
-from agm.config.qualified_keys import build_qualified_config_key, resolve_qualified_values
 from agm.core import dry_run
 from agm.core.cleanup import preserve_primary_error
 from agm.core.log import (
@@ -72,16 +70,14 @@ from agm.core.toml import toml_dict
 from agm.packages.activation import select_package_roots
 from agm.packages.development import discover_development_packages
 
-if TYPE_CHECKING:
-    from agm.agl.ir.program import IrParam
-
 
 def run(args: ReplArgs) -> None:
     """Run the ``agm repl`` command."""
     ctx = current_config_context()
     try:
-        config_view = load_general_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
-        merged_config = config_view.merged
+        merged_config = load_general_config(
+            home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd
+        ).merged
         config = exec_config_from_merged(merged_config)
     except ValueError as exc:
         print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
@@ -181,18 +177,6 @@ def run(args: ReplArgs) -> None:
         agent=args.agent,
     )
 
-    def imported_param_config(params: tuple["IrParam", ...]) -> dict[str, object]:
-        keys = {
-            param: build_qualified_config_key(param.module.segments, param.public_name)
-            for param in params
-        }
-        resolved = resolve_qualified_values(config_view, keys.values())
-        return {
-            param.qualified_public_name: resolved[key]
-            for param, key in keys.items()
-            if key in resolved
-        }
-
     process_environment = dict(os.environ)
     with preserve_primary_error(session_host.close_all, label="agent session cleanup"):
         session = ReplSession(
@@ -213,7 +197,6 @@ def run(args: ReplArgs) -> None:
             configured_roots=mod_roots_cfg.extra,
             package_roots=package_roots,
             default_stdlib=not args.no_stdlib,
-            params_config_loader=imported_param_config,
         )
 
         # Load and check the session's initial library image now, so a rejected

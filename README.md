@@ -282,12 +282,11 @@ built in, and `:` meta-commands (`:help`, `:type`, `:bindings`, …) inspect the
 Each loaded program receives the `std/prelude` standard-library prelude, as in
 `agm exec`, unless an explicit import includes `std/prelude`; plain `import std/prelude`
 therefore leaves its names qualified-only. Pass `--no-stdlib` to disable the
-prelude for the entry and its library modules. Imported-module params can be supplied by their qualified
-config tables; params declared directly at the prompt use source defaults (or are required).
+prelude for the entry and its library modules.
 
 ```bash
 agm repl                        # launch; type :help for commands, :quit to exit
-agm repl --confirm-agents       # confirm calls; prompt params use source defaults
+agm repl --confirm-agents       # confirm each agent call before dispatching it
 agl> let n = 21 * 2             # bindings persist across entries → "n : int = 42"
 ```
 

@@ -333,6 +333,13 @@ class TestDispatchMeta:
         assert "Unknown command ':nope'" in outcome.text
         assert outcome.quit is False
 
+    def test_params_is_an_unknown_command(self) -> None:
+        # The REPL has no entry function, so ":params" is not a meta command.
+        outcome = meta_mod.dispatch_meta(":params", _ctx())
+        assert outcome.text is not None
+        assert "Unknown command ':params'" in outcome.text
+        assert outcome.quit is False
+
     def test_argument_is_ignored_for_known_command(self) -> None:
         # Trailing text after the command word is passed to the handler; :help
         # ignores it and still prints the list.
@@ -598,35 +605,10 @@ class TestBindings:
         assert out_b == out_e
 
 
-class TestInputs:
-    def test_inputs_empty(self) -> None:
-        outcome = meta_mod.dispatch_meta(":params", _session_ctx())
-        assert outcome.text == "No params declared."
-
-    def test_inputs_shows_unset_then_set(self) -> None:
-        s = _open_session()
-        s.eval_entry('param name: text = "World"')
-        out_set = meta_mod.dispatch_meta(":params", _session_ctx(s)).text
-        assert out_set is not None
-        assert 'name : text = "World"' in out_set
-
-
 class TestSet:
-    def test_set_declared_input(self) -> None:
-        s = _open_session()
-        outcome = meta_mod.dispatch_meta(":set count=42", _session_ctx(s))
+    def test_set_non_echo_argument_reports_usage(self) -> None:
+        outcome = meta_mod.dispatch_meta(":set count=42", _session_ctx())
         assert "usage" in (outcome.text or "").lower()
-
-    def test_set_undeclared_input_clean_error(self) -> None:
-        outcome = meta_mod.dispatch_meta(":set nope=1", _session_ctx())
-        assert outcome.text is not None
-        assert "usage" in outcome.text.lower()
-
-    def test_set_bad_value_clean_error(self) -> None:
-        s = _open_session()
-        s.eval_entry("param count: int")
-        outcome = meta_mod.dispatch_meta(":set count=oops", _session_ctx(s))
-        assert outcome.text is not None
 
     def test_set_echo_off_then_on_toggles_ctx(self) -> None:
         ctx = _session_ctx()
@@ -865,15 +847,6 @@ class TestNominalRenderingEcho:
         outcome = meta_mod.dispatch_meta(":bindings", _session_ctx(s))
         assert outcome.text is not None
         assert "Point(\n  y = 5,\n  x = 3\n)" in outcome.text
-
-    def test_params_meta_renders_record_nominal(self) -> None:
-        # :params must render a record param in AgL form (not JSON).
-        s = _open_session()
-        s.eval_entry("record Cfg\n  retries: int\n  timeout: int")
-        s.eval_entry("param cfg: Cfg = Cfg(retries = 3, timeout = 30)")
-        outcome = meta_mod.dispatch_meta(":params", _session_ctx(s))
-        assert outcome.text is not None
-        assert "Cfg(\n  retries = 3,\n  timeout = 30\n)" in outcome.text
 
     def test_load_persists_record_binding_for_bindings_rendering(self, tmp_path: Path) -> None:
         src = tmp_path / "rec.agl"

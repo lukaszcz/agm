@@ -37,20 +37,18 @@ The plain front end engages automatically when stdin or stdout is not a
 terminal, or when `TERM=dumb`; `--plain` forces it even on a terminal. There is
 no flag to force the console front end onto a non-terminal.
 
-The REPL reuses `[exec]` settings for `default-agent`, the max-iters valve,
-call-depth limit, JSON strictness, and timeout. Imported-module params resolve from
-their qualified config tables; params declared directly at the prompt use only source
-defaults (or are required). Free `ask` lazily opens one default agent conversation
-and snapshots `default-agent` at that first use; later free calls reuse it even if
-the setting changes. Explicit `Session::open` sessions also remain live until closed
-or the REPL exits. `:reset` clears AgL bindings and settings but does **not** close
-host sessions, including the default session used by free `ask`; a later free
-`ask` continues that default conversation. Close unneeded explicit sessions yourself.
-Like `agm exec`, each typed
-`Agent` value selects its own backend command; settings do not select it. Like
-`agm exec`, `--agent` combined with `--no-stdlib` still fails — during session
-initialization, before the prompt appears — if the session never loads `std/config`;
-`[exec] default-agent` is simply inert in that same situation.
+The REPL reuses `[exec]` settings for `default-agent`, the max-iters valve, call-depth
+limit, JSON strictness, and timeout. Free `ask` lazily opens one default agent
+conversation and snapshots `default-agent` at that first use; later free calls reuse
+it even if the setting changes. Explicit `Session::open` sessions also remain live
+until closed or the REPL exits. `:reset` clears AgL bindings and settings but does
+**not** close host sessions, including the default session used by free `ask`; a later
+free `ask` continues that default conversation. Close unneeded explicit sessions
+yourself. Like `agm exec`, each typed `Agent` value selects its own backend command;
+settings do not select it. Like `agm exec`, `--agent` combined with `--no-stdlib`
+still fails — during session initialization, before the prompt appears — if the
+session never loads `std/config`; `[exec] default-agent` is simply inert in that same
+situation.
 
 Like `agm exec`, the REPL supplies an automatic `import std/prelude::*` prelude to
 each loaded program, so standard-library names such as `Option`, `Some`, and
@@ -125,10 +123,9 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 |---------|--------|
 | `:help` | List the available meta-commands |
 | `:quit` / `:exit` (or Ctrl-D) | Exit the REPL |
-| `:reset` | Clear the whole session (bindings, types, declarations, params, imports, and uses) |
+| `:reset` | Clear the whole session (bindings, types, declarations, imports, and uses) |
 | `:type EXPR` | Type-check `EXPR` against the session and print its type (no eval) |
 | `:bindings` / `:env` | List current bindings as `name : Type = value` |
-| `:params` | List declared params and their resolved values |
 | `:set echo on\|off` | Toggle result echoing |
 | `:agent confirm\|auto` | Switch the agent-call mode (or report it with no argument) |
 | `:load FILE` | Load a saved transcript by its original entries, or an ordinary `.agl` file one item per entry |

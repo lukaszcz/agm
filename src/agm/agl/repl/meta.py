@@ -7,7 +7,7 @@ character.
 
 The meta-command set is implemented here: ``:help``, ``:quit`` /
 ``:exit``, ``:reset``, ``:type``, ``:bindings`` / ``:env``,
-``:params``, ``:set``, ``:agent``, ``:load``, ``:save``, plus a clean error for
+``:set``, ``:agent``, ``:load``, ``:save``, plus a clean error for
 an unknown ``:command``.  The dispatcher is a registry/table (``_COMMANDS``), so
 the command set is a single source of truth shared by the dispatcher and the
 completer.
@@ -99,7 +99,7 @@ def _handle_quit(arg: str, ctx: MetaContext) -> MetaOutcome:
 
 
 def _handle_reset(arg: str, ctx: MetaContext) -> MetaOutcome:
-    """``:reset`` — clear the entire session env (bindings, types, decls, params)."""
+    """``:reset`` — clear the entire session env (bindings, types, decls)."""
     del arg
     ctx.session.reset()
     return MetaOutcome(text="Session reset.")
@@ -135,24 +135,11 @@ def _handle_bindings(arg: str, ctx: MetaContext) -> MetaOutcome:
     return MetaOutcome(text="\n".join(lines))
 
 
-def _handle_params(arg: str, ctx: MetaContext) -> MetaOutcome:
-    """``:params`` — list declared params with their resolved values (``name : Type = value``)."""
-    del arg
-    from agm.agl.repl.render import format_typed_value
-
-    params = ctx.session.declared_params()
-    if not params:
-        return MetaOutcome(text="No params declared.")
-    lines = [format_typed_value(name, typ, value) for name, typ, value in params]
-    return MetaOutcome(text="\n".join(lines))
-
-
 def _handle_set(arg: str, ctx: MetaContext) -> MetaOutcome:
     """``:set echo on|off`` — toggle result echoing.
 
-    Only ``echo on|off`` is supported.  Input-setting via ``:set name=value``
-    is not offered: params are resolved eagerly from config or defaults when
-    declared.
+    Only ``echo on|off`` is supported.  There is no ``:set name=value`` form:
+    the REPL has no entry function, so there are no external inputs to seed.
     """
     echo_outcome = _try_set_echo(arg, ctx)
     if echo_outcome is not None:
@@ -274,7 +261,7 @@ _COMMANDS: list[MetaCommand] = [
     MetaCommand(
         names=("reset",),
         usage=":reset",
-        summary="Clear the entire session (bindings, types, decls, params).",
+        summary="Clear the entire session (bindings, types, decls).",
         handler=_handle_reset,
     ),
     MetaCommand(
@@ -288,12 +275,6 @@ _COMMANDS: list[MetaCommand] = [
         usage=":bindings / :env",
         summary="List current bindings with types and values.",
         handler=_handle_bindings,
-    ),
-    MetaCommand(
-        names=("params",),
-        usage=":params",
-        summary="List declared params with their resolved values.",
-        handler=_handle_params,
     ),
     MetaCommand(
         names=("set",),

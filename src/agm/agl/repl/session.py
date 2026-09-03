@@ -19,7 +19,7 @@ rendering, meta-commands, and the prompt_toolkit console are future work.
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from threading import Lock
 from typing import TYPE_CHECKING
@@ -28,7 +28,6 @@ from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.repl.entry import EntryKind, EntryResult
 from agm.agl.repl.entry_pipeline import EntryPipeline
 from agm.agl.runtime.sessions import AgentDispatcherSessionHost
-from agm.agl.runtime.types import public_param_spelling
 from agm.agl.scope.symbols import dedupe_constructor_candidates
 from agm.agl.self_validation import self_validation_enabled
 from agm.config.engine_keys import HOST_CONSUMED_ENGINE_KEYS
@@ -40,7 +39,6 @@ if TYPE_CHECKING:
     from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.ids import SymbolId
-    from agm.agl.ir.program import IrParam
     from agm.agl.matchcompile import MatchCompiledProgram
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule
@@ -124,11 +122,6 @@ def _module_match_sort_key(match: tuple["ModuleId", "Path"]) -> tuple[str, ...]:
     return match[0].segments
 
 
-def _no_params_config_loader(_params: tuple["IrParam", ...]) -> Mapping[str, object]:
-    """Provide no external param values when the session has no config source."""
-    return {}
-
-
 def has_runnable_statements(text: str) -> bool:
     """Return ``True`` when *text* contains at least one statement to evaluate.
 
@@ -208,7 +201,6 @@ class ReplSession:
         extra_cli_roots: "Iterable[str]" = (),
         package_roots: "Iterable[PackageInfo]" = (),
         default_stdlib: bool = True,
-        params_config_loader: "Callable[[tuple[IrParam, ...]], Mapping[str, object]] | None" = None,
     ) -> None:
         from agm.agl.lower import LinkImage
         from agm.agl.pipeline import PipelineDriver
@@ -224,9 +216,6 @@ class ReplSession:
         )
         self._builtin_var_seed: dict[BuiltinVarKey, Value] = {}
         self._builtin_var_values: dict[BuiltinVarKey, Value] = {}
-        self._params_config_loader = (
-            params_config_loader if params_config_loader is not None else _no_params_config_loader
-        )
         # ``strict-json`` is the one engine key whose host argument cannot be
         # folded into the seed map below: it is a plain ``bool`` with no way to
         # spell "the host did not specify a value", so an unseeded ``False``
@@ -335,9 +324,6 @@ class ReplSession:
         self._link_image = LinkImage()
         self._ir_base_frame: Frame = {}
         self._next_node_id: int = 0
-        # Keyed by external key (full path spelling for a scoped param, bare
-        # name for a root param); value is (declared type, declaration node id).
-        self._declared_params: dict[str, tuple[Type, int]] = {}
         # Source log of successfully-promoted entries (for dump_source / :save).
         self._source_log: list[str] = []
         # Constructor candidates from prior promoted entries, keyed by constructor
@@ -381,10 +367,6 @@ class ReplSession:
         self._retained_resolved_modules: dict[ModuleId, ResolvedModule] = {}
         self._retained_checked_modules: dict[ModuleId, CheckedModule] = {}
         self._last_match_compilation: MatchCompiledProgram | None = None
-        # Imported params installed by successfully completed entries.  These
-        # stay in the config-resolution inventory so later imports cannot make
-        # an existing suffix route ambiguous, but they are not installed again.
-        self._active_imported_params: dict[SymbolId, IrParam] = {}
         # Imports generally persist across successfully promoted program entries,
         # one retained generation per entry, kept as written so a wildcard keeps
         # tracking the module set. Declarations for a module named in a later
@@ -1068,68 +1050,6 @@ class ReplSession:
         self._shell_exec_timeout = interp.shell_exec_timeout
         self._builtin_var_values = interp.builtin_vars
 
-    def _pre_eval_param_values(
-        self, params: tuple["IrParam", ...], warnings: list[Diagnostic]
-    ) -> tuple[dict["SymbolId", "Value"], EntryResult | None]:
-        """Validate active imported config routes and decode only new params."""
-        from agm.agl.runtime.params import decode_or_diagnose_param
-
-        active_imported = (*self._active_imported_params.values(),)
-        active_symbols = self._active_imported_params
-        new_imported = tuple(
-            param
-            for param in params
-            if not param.module.is_entry and param.symbol not in active_symbols
-        )
-        try:
-            configured = self._params_config_loader((*active_imported, *new_imported))
-        except ValueError as exc:
-            return {}, self._fail([Diagnostic(message=str(exc), line=1)], warnings)
-
-        values: dict[SymbolId, Value] = {}
-        for param in new_imported:
-            name = param.qualified_public_name
-            supplied = name in configured
-            value, diagnostic = decode_or_diagnose_param(
-                param,
-                name,
-                supplied,
-                configured.get(name),
-                missing_message=f"Missing required param {name!r}: provide a default expression.",
-            )
-            if diagnostic is not None:
-                return {}, self._fail([diagnostic], warnings)
-            if value is not None:
-                values[param.symbol] = value
-        # Prompt-local params are intentionally default-only; config values
-        # apply exclusively to newly linked imported params.
-        for param in params:
-            if param.module.is_entry and param.required:
-                # A prompt entry has no module route, so report the param under
-                # the shared user-facing entry namespace rather than the
-                # module system's internal identity.
-                spelling = public_param_spelling(param.qualified_public_name)
-                return {}, self._fail(
-                    [
-                        Diagnostic(
-                            message=(
-                                f"Missing required param {spelling!r}: "
-                                "provide a default expression."
-                            ),
-                            line=param.location.start_line,
-                            column=param.location.start_col,
-                        )
-                    ],
-                    warnings,
-                )
-        return values, None
-
-    def _record_active_imported_params(self, params: tuple["IrParam", ...]) -> None:
-        """Retain successfully installed imported params for later config validation."""
-        self._active_imported_params.update(
-            (param.symbol, param) for param in params if not param.module.is_entry
-        )
-
     def _build_check_only_result(
         self,
         program: "Program",
@@ -1188,8 +1108,6 @@ class ReplSession:
             VarDecl,
             VariantDef,
             pattern_binder_candidates,
-            resolved_public_name,
-            scoped_public_name,
             static_items,
         )
         from agm.agl.syntax.types import render_type_expr
@@ -1381,18 +1299,9 @@ class ReplSession:
                 self._ambient_bare_constructor_candidates
             )
 
-        # External keys of params this entry's promotions displace (a `let` /
-        # `var` / `def` / `agent` binding that shares a param's public name
-        # takes over that name, so the param must stop being a declared
-        # param); populated by both the root-binding loop here and the
-        # scoped-member loop below, then applied to ``_declared_params`` in
-        # one pass.
-        displaced_param_keys: set[str] = set()
-
         for name, ref in promotion_bindings.items():
             if ref.decl_node_id not in promoted_binding_node_ids:
                 continue
-            displaced_param_keys.add(name)
             self._session_scope.bindings[name] = ref
         installed = (
             self._installed_report(
@@ -1445,8 +1354,6 @@ class ReplSession:
                     and not is_retired_member_scope((*path, name))
                     and _is_promoted(ref.decl_node_id)
                 ):
-                    if ref.decl_node_id in entry_declaration_node_ids:
-                        displaced_param_keys.add(resolved_public_name(path, name))
                     session_node.register_member(name, ref)
             current_targets = {
                 contribution.target for contribution in node.imported_use_contributions
@@ -1583,16 +1490,6 @@ class ReplSession:
             self._ambient_type_names |= frozenset(
                 name for path, name in promoted_type_name_paths if not path
             )
-        for key in displaced_param_keys:
-            self._declared_params.pop(key, None)
-        for item in static_items(program.body.items):
-            if isinstance(item, ParamDecl) and _is_promoted(item.node_id):
-                typ = checked.type_env.get_binding_type(item.node_id)
-                assert typ is not None
-                self._declared_params[scoped_public_name(item.scope_path, item.name)] = (
-                    typ,
-                    item.node_id,
-                )
         if not partial:
             self._source_log.append(text)
         promoted_infix = [
@@ -1874,32 +1771,19 @@ class ReplSession:
     def bindings(self) -> list[tuple[str, "Type", "Value"]]:
         """Return promoted user bindings as (name, declared type, current value).
 
-        Includes params, which resolve eagerly and live in the value scope.
+        Includes every promoted ``let``/``var`` binding.
         """
         from agm.agl.semantics.values import Cell
 
         result: list[tuple[str, Type, Value]] = []
         for name, ref in self._session_scope.bindings.items():
             typ = self._type_env.get_binding_type(ref.decl_node_id)
-            # Every promoted let/var/param binding has a recorded type.
+            # Every promoted let/var binding has a recorded type.
             assert typ is not None
             symbol = self._link_image.symbol_for_decl(ref.decl_node_id)
             slot = self._ir_base_frame.get(symbol) if symbol is not None else None
             assert slot is not None
             value = slot.value if isinstance(slot, Cell) else slot
-            result.append((name, typ, value))
-        return result
-
-    def declared_params(self) -> list[tuple[str, "Type", "Value"]]:
-        """Return declared params as (external key, type, resolved value).
-
-        A scoped param's key is its full path spelling, matching how it is
-        supplied from the CLI and config; a root param's key is its bare name.
-        """
-        result: list[tuple[str, Type, Value]] = []
-        for name, (typ, decl_node_id) in self._declared_params.items():
-            value = self._declaration_value(decl_node_id)
-            assert value is not None
             result.append((name, typ, value))
         return result
 
@@ -1921,7 +1805,7 @@ class ReplSession:
         return frozenset(self._ambient_constructor_candidates)
 
     def reset(self) -> None:
-        """Clear ALL session state (symbols, types, values, params, source, ids).
+        """Clear ALL session state (symbols, types, values, source, ids).
 
         Restores the three live engine settings (strict-json/max-iters/timeout)
         to their values at session construction, undoing any effect-at-binding
@@ -1939,7 +1823,6 @@ class ReplSession:
         self._link_image = LinkImage()
         self._ir_base_frame = {}
         self._next_node_id = 0
-        self._declared_params = {}
         self._source_log = []
         self._ambient_constructor_candidates = {}
         self._ambient_bare_constructor_candidates = {}
@@ -1966,7 +1849,6 @@ class ReplSession:
         # anything else it holds is never consulted again. A reopen that reloads
         # the same standard library therefore keeps its library image even when
         # it has to recompile the entry program.
-        self._active_imported_params = {}
         self._accumulated_imports = []
         self._accumulated_scoped_imports = []
         self._accumulated_infix = {}

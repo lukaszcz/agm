@@ -66,8 +66,8 @@ def format_typed_value(name: "str | None", value_type: "Type", value: "Value") -
     """Format a ``name : Type = value`` line, or ``: Type = value`` when unnamed.
 
     This is the single source of truth for the binding/value display shared by
-    the entry-echo path (:func:`_render_echo`) and the ``:bindings`` / ``:params``
-    meta-commands, so the two never drift in how a value is rendered. *name* is
+    the entry-echo path (:func:`_render_echo`) and the ``:bindings``
+    meta-command, so the two never drift in how a value is rendered. *name* is
     ``None`` for a destructuring ``let`` binding echo, which has no single
     public name to show.  A value that turned cyclic since its entry ran
     reports as a runtime-error line instead (see

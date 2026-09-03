@@ -7,20 +7,22 @@ symbol/function/nominal table and per-module initializer sequences.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 
 from agm.agl.ir.builtin_vars import BuiltinVarKey, builtin_var_key
 from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode
-from agm.agl.ir.ids import NominalId, SourceId, SymbolId
+from agm.agl.ir.ids import FunctionId, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import IrExpr
 from agm.agl.ir.program import (
     DryRunEntry,
     ExecutableModule,
     ExecutableProgram,
+    FunctionDescriptor,
     IrProgramParam,
     NominalDescriptor,
     NominalKind,
     SourceFile,
+    SymbolDescriptor,
     VariantDescriptor,
 )
 from agm.agl.ir.validate import validate_ir
@@ -119,6 +121,41 @@ def _program_signatures(
         assert sig is not None, f"compiler bug: no function signature for program {item.name!r}"
         result[fn_node_to_sym[item.node_id]] = _program_signature(sig, type_table)
     return result
+
+
+def _live_functions_and_symbols(
+    link: _LinkState,
+    live_modules: Iterable[ModuleId],
+) -> tuple[dict[FunctionId, FunctionDescriptor], dict[SymbolId, SymbolDescriptor]]:
+    """Drop function/symbol descriptors left behind by modules this program excludes.
+
+    A REPL entry that fails partway through initializing newly imported
+    library modules deliberately keeps the link image's allocation delta for
+    the incomplete modules (see ``LinkImage.mark_linked``), so a later reload
+    of one of them reuses the same declaration IDs. Those modules are then
+    never retained by any later program: they stay out of every future
+    entry's ``program.modules`` because nothing re-imports a module that
+    failed to load. Their allocated ``FunctionDescriptor``/``SymbolDescriptor``
+    entries would otherwise linger in ``link.functions``/``link.symbols``
+    forever, orphaned from any module in the emitted program -- exactly what
+    ``ir.validate`` treats as invalid. Filtering the emitted tables down to
+    what the program's own modules own is a no-op for a non-REPL whole-program
+    lowering, where ``live_modules`` already covers every module in ``link``.
+    """
+    live = frozenset(live_modules)
+    functions = {
+        fn_id: fn_desc for fn_id, fn_desc in link.functions.items() if fn_desc.module_id in live
+    }
+    symbols = {
+        sym_id: sym_desc
+        for sym_id, sym_desc in link.symbols.items()
+        if (
+            sym_desc.owner in live
+            if isinstance(sym_desc.owner, ModuleId)
+            else sym_desc.owner in functions
+        )
+    }
+    return functions, symbols
 
 
 def lower_program(
@@ -400,13 +437,14 @@ def lower_program(
             )
     dry_run_inventory = tuple(dry_run_entries)
     exception_field_encodes = _exception_field_encodes(type_table)
+    live_functions, live_symbols = _live_functions_and_symbols(link, executable_modules)
     program = ExecutableProgram(
         entry_module=checked.entry_id,
         modules=executable_modules,
-        symbols=dict(link.symbols),
+        symbols=live_symbols,
         nominals=dict(link.nominals),
         sources=dict(link.sources),
-        functions=dict(link.functions),
+        functions=live_functions,
         program_symbols={
             item.node_id: link.fn_node_to_sym[item.node_id]
             for _cm, item in _program_funcdefs(checked.modules)

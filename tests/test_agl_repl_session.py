@@ -5688,6 +5688,48 @@ class TestImports:
         assert not later.ok
         assert later.diagnostics
 
+    def test_ordinary_entry_after_pruned_import_cycle_still_evaluates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Regression: the symbols and functions allocated for a dropped
+        # import-cycle member must not linger in the persistent link image's
+        # emitted tables. ``a`` and ``b`` import each other; an interrupt lands
+        # partway through ``b``'s initializers, so the pruning fixpoint drops
+        # both (as in the sibling test above). Unlike that test, this one
+        # follows up with an entry that does NOT reference the dropped
+        # modules at all -- it must still reach lowering and evaluate
+        # successfully rather than crash IR validation on an orphaned
+        # ``SymbolDescriptor``/``FunctionDescriptor`` still owned by a module
+        # absent from the next program's ``modules`` table.
+        from agm.agl.eval.ir_interpreter import IrInterpreter
+        from agm.agl.ir.nodes import IrExpr
+        from agm.agl.modules.ids import ModuleId
+
+        (tmp_path / "a.agl").write_text("import b\ndef a_val() -> int = 1\n")
+        (tmp_path / "b.agl").write_text("import a\nlet x = 1\nlet y = 2\ndef b_val() -> int = 2\n")
+        s = self._make_session_with_root(tmp_path)
+
+        b_id = ModuleId(("b",))
+        original = IrInterpreter._eval_and_record_initializer
+        seen_for_b = 0
+
+        def flaky(interp: IrInterpreter, module_id: ModuleId, node: IrExpr) -> None:
+            nonlocal seen_for_b
+            if module_id == b_id:
+                seen_for_b += 1
+                if seen_for_b == 2:
+                    raise KeyboardInterrupt
+            original(interp, module_id, node)
+
+        monkeypatch.setattr(IrInterpreter, "_eval_and_record_initializer", flaky)
+        interrupted = s.eval_entry("import a::*\na_val()")
+        assert not interrupted.ok
+        monkeypatch.setattr(IrInterpreter, "_eval_and_record_initializer", original)
+
+        ordinary = s.eval_entry("1 + 1")
+        assert ordinary.ok, ordinary.diagnostics
+        assert _int(ordinary.value) == 2
+
     def test_mutated_imported_module_state_survives_a_later_reimport(self, tmp_path: Path) -> None:
         # An imported module is linked into the persistent image once. A later
         # entry -- whether it imports something else or names the same module

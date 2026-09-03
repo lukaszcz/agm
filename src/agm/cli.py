@@ -994,14 +994,17 @@ def _exec_print_help(
     *,
     file: str | None,
     command: str | None,
+    program: str | None = None,
     module_paths: list[str] | None = None,
     no_stdlib: bool = False,
 ) -> None:
-    """Print exec help, optionally with program param section, then exit 0.
+    """Print exec help, optionally with program param/argument sections, then exit 0.
 
     When FILE or -c is provided and the source can be prepared + typechecked,
-    appends the discovered ``Program parameters:`` section.  Degrades silently
-    on any error (syntax errors, unreadable files, etc.).
+    appends the discovered legacy ``Program parameters:`` section and the
+    ``Program arguments:`` section (one per declared ``program def``, its own
+    value parameters). Degrades silently on any error (syntax errors,
+    unreadable files, etc.).
     """
     from agm.cli_support.exec_params import (
         discover_params_from_installed_reference,
@@ -1009,6 +1012,12 @@ def _exec_print_help(
         render_param_help_section,
     )
     from agm.cli_support.exec_target import FileEntry, InlineSource, PackageProgramReference
+    from agm.cli_support.program_discovery import (
+        discover_program_declarations_from_installed_reference,
+        discover_program_declarations_from_source,
+        select_entry_program,
+    )
+    from agm.cli_support.program_options import render_program_arguments_help
     from agm.core.fs import read_text_arg
 
     print_help_for_command_path(["exec"])
@@ -1044,6 +1053,13 @@ def _exec_print_help(
                 roots=exec_roots.roots,
                 default_stdlib=not no_stdlib,
             )
+            programs = discover_program_declarations_from_source(
+                source,
+                inline_source=isinstance(target, InlineSource),
+                entry_path=entry_path,
+                roots=exec_roots.roots,
+                default_stdlib=not no_stdlib,
+            )
         elif isinstance(target, PackageProgramReference):
             params = discover_params_from_installed_reference(
                 target,
@@ -1052,12 +1068,27 @@ def _exec_print_help(
                 cwd=context.cwd,
                 default_stdlib=not no_stdlib,
             )
+            programs = discover_program_declarations_from_installed_reference(
+                target,
+                home=context.home,
+                proj_dir=context.proj_dir,
+                cwd=context.cwd,
+                default_stdlib=not no_stdlib,
+            )
         else:
             params = ()
+            programs = ()
     except (Exception, SystemExit):
         params = ()
+        programs = ()
     if params:
         print(render_param_help_section(params), end="")
+    if programs:
+        selection = select_entry_program(programs, requested=program)
+        print(
+            render_program_arguments_help(selection.entry_programs, selected=selection.selected),
+            end="",
+        )
 
     raise SystemExit(0)
 
@@ -1192,6 +1223,7 @@ def exec_cmd(
         _exec_print_help(
             file=effective_file,
             command=command,
+            program=program,
             module_paths=module_paths,
             no_stdlib=no_stdlib,
         )

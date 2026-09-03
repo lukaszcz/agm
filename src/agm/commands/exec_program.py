@@ -61,12 +61,13 @@ import sys
 from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
-from typing import NoReturn, TypeVar
+from typing import TYPE_CHECKING, NoReturn, TypeVar, assert_never
 
 from agm.agent.session import create_agl_session_host
 from agm.agl import PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
 from agm.agl.runtime.agents import value_driven_agent_factory
+from agm.agl.runtime.arguments import ProgramArguments, bind_program_arguments_for
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.types import ParamDeclInfo
 from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES
@@ -85,6 +86,17 @@ from agm.cli_support.exec_target import (
     PackageProgramReference,
     resolve_installed_reference,
 )
+from agm.cli_support.program_discovery import select_entry_program
+from agm.cli_support.program_options import (
+    DuplicateOptionFlagError,
+    ProgramOptionError,
+    ProgramOptionMap,
+    ProjectedOption,
+    ReservedFlagError,
+    ValueForm,
+    build_program_option_map,
+    option_some_raw,
+)
 from agm.config.context import ConfigContext, current_config_context
 from agm.config.general import GeneralConfig, exec_config_from_merged, load_general_config
 from agm.config.qualified_keys import (
@@ -93,6 +105,7 @@ from agm.config.qualified_keys import (
     QualifiedConfigLookupError,
     build_qualified_config_key,
     configured_leaf_names,
+    display_table_path,
     resolve_qualified_values,
     route_table_paths,
 )
@@ -109,10 +122,16 @@ from agm.core.toml import toml_dict
 from agm.packages.activation import load_activation_index
 from agm.packages.model import PackageInfo, owning_package
 
+if TYPE_CHECKING:
+    from agm.agl.ir.nodes import UseDefault
+    from agm.agl.semantics.values import Value
+
 
 class RegisteredParamUsageError(Exception):
-    """Raised when CLI parameter tokens fail to parse against a program's params.
+    """Raised when CLI tokens fail to parse against a program's params or arguments.
 
+    Covers both a legacy ``param`` declaration's ``--flag`` and a selected
+    program's own value-parameter option (``ProgramOptionMap.parse_tokens``).
     Carries the parse-failure message and the program's parameter inventory so
     the caller can render a usage message appropriate to how the program was
     invoked: a plain ``agm exec`` usage error, or (for a dispatched registered
@@ -174,34 +193,78 @@ def _report_undeclared_config_keys(
     config: GeneralConfig,
     module_segments: tuple[str, ...],
     param_keys: Iterable[QualifiedConfigKey],
+    *,
+    scope_path: tuple[str, ...] = (),
+    kind: str = "param",
 ) -> None:
-    """Warn about entry-module config keys that no declaration claims.
+    """Warn about config keys in one route's table that no declaration claims.
 
-    A key set in the entry module's configuration table that is neither one of
-    its params nor an engine setting is read by nothing — most often a
-    misspelled param name — so report it instead of dropping it silently. The
-    warning never affects the run: the program still executes on its defaults.
-    Engine settings legitimately share the table with params, and nested tables
-    (scope regions, per-program engine settings) address routes of their own.
+    A key set in the table that is neither one of its declared params/program
+    arguments nor an engine setting is read by nothing — most often a
+    misspelled name — so report it instead of dropping it silently. The
+    warning never affects the run: the program still executes on its
+    defaults. Engine settings legitimately share the table with params and
+    program arguments, and nested tables (scope regions, per-program engine
+    settings) address routes of their own.
 
-    A param claims a leaf whenever its own route reads the entry module's
-    table, which by suffix resolution includes params declared in imported
-    modules whose route ends in the entry module's name.
+    A key claims a leaf whenever its own route reads this table, which by
+    suffix resolution includes declarations in imported modules whose route
+    ends in *module_segments*'s name. *scope_path* checks the entry module's
+    own top-level table (the default, ``()``) or a selected program's own
+    qualified table (e.g. ``workflow.main``, for its value parameters). *kind*
+    names the declaration kind in the warning — ``"param"`` for a legacy
+    ``param`` table, ``"program argument"`` for a program's own value
+    parameters — so the message never calls a program argument a param.
     """
-    entry_paths = set(route_table_paths(module_segments))
+    entry_paths = route_table_paths(module_segments, scope_path)
+    entry_path_set = set(entry_paths)
     declared = {
         key.leaf
         for key in param_keys
-        if entry_paths.intersection(route_table_paths(key.module_segments, key.scope_path))
+        if entry_path_set.intersection(route_table_paths(key.module_segments, key.scope_path))
     }
-    for leaf in sorted(configured_leaf_names(config, module_segments)):
+    leaves = sorted(configured_leaf_names(config, module_segments, scope_path))
+    if not leaves:
+        # ``configured_leaf_names`` reads the same *entry_paths* candidates,
+        # so a non-empty result here guarantees ``entry_paths`` is non-empty
+        # below — this early return is what makes that guarantee hold.
+        return
+    table_name = display_table_path(entry_paths[0])
+    for leaf in leaves:
         if leaf in declared or leaf in ENGINE_KEY_NAMES:
             continue
         print(
-            f"warning: config key '{leaf}' in the '{'/'.join(module_segments)}' "
-            "configuration table is not a declared param and will be ignored",
+            f"warning: config key '{leaf}' in the '{table_name}' "
+            f"configuration table is not a declared {kind} and will be ignored",
             file=sys.stderr,
         )
+
+
+def _program_option_error_message(error: ProgramOptionError) -> str:
+    """Render one program-parameter CLI-flag collision as a host diagnostic message."""
+    match error:
+        case ReservedFlagError(parameter=parameter, flag=flag):
+            return f"program parameter {parameter!r} projects onto the reserved option {flag!r}"
+        case DuplicateOptionFlagError(first_parameter=first, second_parameter=second, flag=flag):
+            return f"program parameters {first!r} and {second!r} both project onto option {flag!r}"
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
+
+
+def _config_raw_value(projected: ProjectedOption, raw: object) -> object:
+    """Project one config-table value onto its parameter's raw argument shape.
+
+    Mirrors the CLI's own ``Option`` envelope-building rule
+    (``cli_support.program_options``): a present config value for an
+    ``Option[T]`` parameter is wrapped ``Some``, since a config table has no
+    ``--no-x`` equivalent — an absent key simply supplies nothing, deferring
+    to the parameter's own default. Every other value form is already a
+    native TOML/JSON value; ``decode_param_value`` decodes it directly, so it
+    passes through unchanged.
+    """
+    if projected.value_form is ValueForm.OPTION:
+        return option_some_raw(raw)
+    return raw
 
 
 def registered_program_params(
@@ -461,41 +524,75 @@ def run(
             print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
         raise SystemExit(1)
 
-    entry_programs = tuple(program for program in discovery.programs if program.module.is_entry)
+    # ``select_entry_program`` is the one place a requested ``-p``/``--program``
+    # name is matched against the entry module's own declarations, shared with
+    # ``cli._exec_print_help``'s degraded help rendering, so the two surfaces
+    # can never disagree about which program a given name selects.
+    selection = select_entry_program(discovery.programs, requested=args.program)
+    entry_programs = selection.entry_programs
     if args.file is not None and not entry_programs:
         print("Error: file must declare at least one program.", file=sys.stderr)
         raise SystemExit(1)
 
-    selected_program = None
-    if len(entry_programs) == 1:
-        selected_program = entry_programs[0]
-    elif len(entry_programs) > 1 and args.program is None:
-        candidates = ", ".join(program.declaration_path for program in entry_programs)
-        print(
-            f"Error: multiple programs declared; select one with -p: {candidates}",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
-
-    if args.program is not None:
-        selected_program = next(
-            (program for program in entry_programs if program.declaration_path == args.program),
-            None,
-        )
-        if selected_program is None:
+    selected_program = selection.selected
+    if selected_program is None:
+        if selection.requested_unmatched:
             candidates = ", ".join(program.declaration_path for program in entry_programs)
             suffix = f" Candidates: {candidates}" if candidates else ""
             print(f"Error: no program matches '{args.program}'.{suffix}", file=sys.stderr)
+            raise SystemExit(1)
+        if len(entry_programs) > 1:
+            candidates = ", ".join(program.declaration_path for program in entry_programs)
+            print(
+                f"Error: multiple programs declared; select one with -p: {candidates}",
+                file=sys.stderr,
+            )
             raise SystemExit(1)
 
     selected_params = (
         discovery.params if selected_program is None else discovery.params_for(selected_program)
     )
+
+    # A selected program's own value parameters (the new mechanism) project
+    # onto their own CLI option map, built from its declared signature. This
+    # is a static, source-derived check independent of any supplied
+    # arguments, so a colliding projection (against a reserved host flag, or
+    # against another parameter's own flag) is reported unconditionally.
+    program_option_map: ProgramOptionMap | None = None
+    if selected_program is not None:
+        option_map_result = build_program_option_map(selected_program.parameters)
+        if isinstance(option_map_result, ProgramOptionMap):
+            program_option_map = option_map_result
+        else:
+            print(f"Error: {_program_option_error_message(option_map_result)}", file=sys.stderr)
+            raise SystemExit(1)
+
+    # CLI tokens are split between the legacy ``param`` parser and the
+    # program's own option map by ``parse_param_tokens`` itself: a flag
+    # naming a declared ``param`` is parsed and validated exactly as it is
+    # for a program with no value parameters; every other token — including
+    # an unrecognized flag and a bare positional — is set aside as a
+    # leftover and handed to ``ProgramOptionMap.parse_tokens``, which owns
+    # positional collection and its own ``--name``/``--no-name`` flags. Both
+    # mechanisms may supply values for the same invocation.
     external_params: dict[str, object] = {}
-    try:
-        cli_params = parse_param_tokens(selected_params, args.param_tokens)
-    except ValueError as exc:
-        raise RegisteredParamUsageError(str(exc), selected_params) from exc
+    if program_option_map is not None:
+        try:
+            cli_params, program_tokens = parse_param_tokens(
+                selected_params, args.param_tokens, collect_leftovers=True
+            )
+        except ValueError as exc:
+            raise RegisteredParamUsageError(str(exc), selected_params) from exc
+        try:
+            cli_arguments = program_option_map.parse_tokens(program_tokens)
+        except ValueError as exc:
+            raise RegisteredParamUsageError(str(exc), selected_params) from exc
+    else:
+        try:
+            cli_params = parse_param_tokens(selected_params, args.param_tokens)
+        except ValueError as exc:
+            raise RegisteredParamUsageError(str(exc), selected_params) from exc
+        cli_arguments = ProgramArguments(positional=(), named={})
 
     if entry_stem is not None:
         param_keys = {
@@ -520,6 +617,38 @@ def run(
         _report_undeclared_config_keys(config_view, config_entry_segments, param_keys.values())
     external_params.update(cli_params)
 
+    # The selected program's own value parameters resolve config-file values
+    # from its qualified table (e.g. ``[workflow.main]``) — the same table an
+    # engine-key override reads, and the same ``QualifiedConfigKey`` shape.
+    # Precedence is CLI > config table > signature default, so config values
+    # are folded in beneath the CLI-supplied ``named`` mapping.
+    program_named: dict[str, object] = dict(cli_arguments.named)
+    if entry_stem is not None and program_option_map is not None and selected_program is not None:
+        program_path = selected_program.scope_path + (selected_program.name,)
+        argument_keys = {
+            info.name: QualifiedConfigKey(config_entry_segments, program_path, info.name)
+            for info, _projected in program_option_map.options
+        }
+        try:
+            configured_arguments = resolve_qualified_values(config_view, argument_keys.values())
+        except QualifiedConfigLookupError as exc:
+            print(f"Error: invalid qualified configuration: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+        projected_by_name = {info.name: projected for info, projected in program_option_map.options}
+        for name, key in argument_keys.items():
+            if key in configured_arguments and name not in program_named:
+                program_named[name] = _config_raw_value(
+                    projected_by_name[name], configured_arguments[key]
+                )
+        _report_undeclared_config_keys(
+            config_view,
+            config_entry_segments,
+            argument_keys.values(),
+            scope_path=program_path,
+            kind="program argument",
+        )
+    arguments = ProgramArguments(positional=cli_arguments.positional, named=program_named)
+
     # Params are validated against the lowered program, so this preflight lowers
     # the graph.  It must report a param failure (exit 1) BEFORE the trace file
     # is prepared and the runner is built — hence a check-only pass here rather
@@ -535,6 +664,19 @@ def run(
             print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
         raise SystemExit(1)
 
+    program_symbol = None
+    arguments_bound: "tuple[Value | UseDefault, ...] | None" = None
+    if selected_program is not None:
+        assert param_preflight.executable is not None
+        program_symbol = param_preflight.executable.program_symbols[selected_program.node_id]
+        arguments_bound, argument_diagnostics = bind_program_arguments_for(
+            param_preflight.executable, selected_program, arguments
+        )
+        if argument_diagnostics:
+            for diag in argument_diagnostics:
+                print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
+            raise SystemExit(1)
+
     # Resolve + validate the trace log file up front.  --dry-run is
     # side-effect-free: no trace is written regardless of --log-file.  A source
     # ``std/config::log``/``log-file`` write takes effect at runtime via the host
@@ -547,11 +689,6 @@ def run(
     policy = HostSettingsPolicy(
         resolve_trace_path=LiveTracePathResolver(command_name="exec", auto_path=log_file),
     )
-
-    program_symbol = None
-    if selected_program is not None:
-        assert param_preflight.executable is not None
-        program_symbol = param_preflight.executable.program_symbols[selected_program.node_id]
 
     # Warnings live on their own channel and never affect the exit code;
     # ``result.diagnostics`` holds only error-severity pre-execution failures.
@@ -587,6 +724,7 @@ def run(
             builtin_host_settings=engine_seeds.values,
             process_environment=process_environment,
             program_symbol=program_symbol,
+            arguments=arguments_bound,
         )
 
         for diag in result.warnings:

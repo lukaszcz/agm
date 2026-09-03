@@ -11,6 +11,7 @@ agm exec [--strict-json|--no-strict-json]
          [--no-stdlib]
          [-I DIR]... [-p PATH]
          (FILE | PACKAGE/MODULE::PROGRAM | -c COMMAND) [--PARAM VALUE]...
+         [ARG]... [--NAME VALUE]...
 ```
 
 Execute an AgL workflow program from a source `FILE`, an installed
@@ -91,6 +92,30 @@ either is a static error.
   declared type. Missing required params or invalid values are reported before any
   agent runs. Run `agm exec FILE --help` to show the discovered param options for
   that program.
+- `ARG` / `--NAME VALUE`: Provide a value for one of the selected `program def`'s
+  own **value parameters** (as opposed to a `param` declaration). A positional-zone
+  parameter fills a positional `ARG` slot in declaration order; a name-addressable
+  one becomes its own `--<name>` option, projected from its declared type: `bool`
+  as `--name`/`--no-name` (no value); `Option[T]` as `--name VALUE` (wrapping
+  `Some`) / `--no-name` (`None`), `VALUE` taken verbatim when `T` is `text`,
+  otherwise strict JSON; `text` verbatim; every other type as one strict JSON
+  value. A parameter whose projected flag would collide with a reserved host
+  option or with another parameter's own flag is a configuration error reported
+  before any token is parsed. An omitted argument resolves from the program's own
+  qualified config table (see [Configuration](#configuration)), then its
+  signature default; a required parameter with neither is reported before any
+  agent runs. `--PARAM`/`ARG`/`--NAME` tokens may be freely mixed in one
+  invocation — each legacy `param` flag routes to its own parsing; any token
+  that names no declared `param` is passed on to the selected program's own
+  option map. Click itself consumes a bare `--` before either parser sees it,
+  so reaching the program's own end-of-options marker (to pass a literal
+  `--`-prefixed positional argument) takes a **doubled** `--` on the command
+  line — `agm exec FILE -- -- --odd-looking-value`. A program argument typed
+  `Option[T]` has no config-table spelling for `None`; a config table can
+  only ever supply the wrapped `Some` value or leave the argument at its
+  signature default — request `None` with the CLI's `--no-name` flag
+  instead. Run `agm exec FILE --help` to show the selected program's own
+  usage and options.
 - `-I DIR`, `--module-path DIR`: Add `DIR` as an additional module search root
   (repeatable), resolved relative to the invocation working directory. See
   [Module resolution](#module-resolution). This is also how e2e/fixture tests point
@@ -222,10 +247,13 @@ overrides from `[review-tools.review.review.main]`, and a `review::max-tries` pa
 `review-tools/judge` reads `[judge.review]` when that suffix is unambiguous. Use a longer
 suffix or an exact quoted module route such as `["review-tools/judge".review]` to
 disambiguate. `runner` remains an `[exec]`-only setting. Inline `-c` params are CLI-only.
+A selected program's own value parameters read from this same table, keyed by the
+program's own qualified module route.
 
-A key in the entry module's own table that names neither one of its params nor an engine
-setting (typically a misspelled param name) is reported on stderr and ignored; the program
-still runs on its declared defaults.
+A key in the entry module's own table that names neither one of its params, an engine
+setting, nor (for the selected program's own table) one of its own value parameters
+(typically a misspelling) is reported on stderr and ignored; the program still runs on
+its declared defaults.
 
 #### Source-level engine settings (`std/config`)
 
@@ -262,6 +290,8 @@ Precedence differs by kind:
   `default-agent` has one extra fallback below `[exec] default-agent`: `[exec] runner`.
 - **Param values** (`param NAME`):
   `CLI > qualified config table > source default > required error`.
+- **Program arguments** (a selected `program def`'s own value parameters):
+  `CLI > qualified config table > signature default > required error`.
 
 `NAME` is a scoped param's full path spelling (`Deploy::region`) when it is
   declared as a member of a named scope region. That key must be quoted in TOML, since

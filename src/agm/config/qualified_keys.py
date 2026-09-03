@@ -115,13 +115,13 @@ def _resolve_layer(
                 for key in candidates
             )
             raise QualifiedConfigLookupError(
-                f"config key {_display_table_path(path)}.{leaf} matches multiple routes: {names}"
+                f"config key {display_table_path(path)}.{leaf} matches multiple routes: {names}"
             )
 
     resolved: dict[QualifiedConfigKey, object] = {}
     for key, values in values_by_key.items():
         if len(values) > 1:
-            spellings = ", ".join(_display_table_path(path) for path, _ in values)
+            spellings = ", ".join(display_table_path(path) for path, _ in values)
             raise QualifiedConfigLookupError(
                 f"config key {key.display_name()} is set by conflicting tables: {spellings}"
             )
@@ -198,7 +198,14 @@ def _table_path_replaced(config: TomlDict, path: tuple[str, ...]) -> bool:
     return False
 
 
-def _display_table_path(path: tuple[str, ...]) -> str:
+def display_table_path(path: tuple[str, ...]) -> str:
+    """Render *path* as the dot-joined TOML table spelling a user would write.
+
+    A path whose first segment is a slash-joined module route (the anchor
+    spelling from :func:`route_table_paths`) is rendered as a single quoted
+    key (``["a/b"].c``) since a bare ``a/b.c`` is not valid TOML; every other
+    path is plain dot-joined (``a.b``).
+    """
     first, *rest = path
     if "/" in first:
         return ".".join((f'["{first}"]', *rest))

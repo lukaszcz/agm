@@ -23,7 +23,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, overload
 
 from agm.agl.modules.roots import RootSet
 from agm.agl.runtime.request import AgentResponse
@@ -254,10 +254,11 @@ def discover_params_from_source(
     """Discover declared params from AgL *source*, degrading to ``()`` on error.
 
     Shared by the help and shell-completion paths, which both need only the
-    discovered params and must tolerate unreadable/unparsable sources. Inline
-    sources receive the same pure synthetic-main wrapper as ``agm exec -c``;
-    file sources retain their ordinary unwrapped behavior. Supplying their
-    *entry_path* lets the loader discover imports relative to that file.
+    discovered params and must tolerate unreadable/unparsable sources.
+    Inline sources receive the same pure synthetic-main wrapper as ``agm exec
+    -c``; file sources retain their ordinary unwrapped behavior. Supplying
+    their *entry_path* lets the loader discover imports relative to that
+    file.
     """
     try:
         from dataclasses import replace
@@ -295,9 +296,9 @@ def discover_params_from_installed_reference(
     """Discover params for an already-resolved active package program reference.
 
     Help and completion resolve ``PACKAGE/MODULE::PROGRAM`` through the same
-    active package selection as execution, then pass the result here.  They are
-    advisory surfaces, so an unreadable entry or a program that no longer parses
-    degrades to no params.
+    active package selection as execution, then pass the result here. They
+    are advisory surfaces, so an unreadable entry or a program that no
+    longer parses degrades to no params.
     """
     try:
         from agm.cli_support.exec_roots import effective_exec_roots
@@ -320,10 +321,28 @@ def discover_params_from_installed_reference(
         return ()
 
 
+@overload
 def parse_param_tokens(
     params: tuple[ParamDeclInfo, ...],
     tokens: list[str],
-) -> dict[str, object]:
+) -> dict[str, object]: ...
+
+
+@overload
+def parse_param_tokens(
+    params: tuple[ParamDeclInfo, ...],
+    tokens: list[str],
+    *,
+    collect_leftovers: Literal[True],
+) -> tuple[dict[str, object], list[str]]: ...
+
+
+def parse_param_tokens(
+    params: tuple[ParamDeclInfo, ...],
+    tokens: list[str],
+    *,
+    collect_leftovers: bool = False,
+) -> dict[str, object] | tuple[dict[str, object], list[str]]:
     """Parse leftover CLI tokens into a param value dict.
 
     Returns a ``dict[str, object]`` mapping param names to their values:
@@ -331,10 +350,20 @@ def parse_param_tokens(
     - all others: raw ``str`` (runtime ``convert_param_value`` handles type coercion)
 
     Raises ``ValueError`` for:
-    - Unexpected positional or short-option tokens
-    - Unknown ``--xxx`` flags
+    - Unexpected positional or short-option tokens (unless *collect_leftovers*)
+    - Unknown ``--xxx`` flags (unless *collect_leftovers*)
     - Missing value for a non-bool flag
     - Duplicate param flags
+
+    With *collect_leftovers*, a token that names no declared param — a bare
+    positional argument, or an unrecognized ``--xxx`` flag — is set aside into
+    a leftover-token list instead of raising, and the return becomes ``(values,
+    leftover_tokens)``. This lets callers reuse this function's own flag
+    pairing and ambiguity-repair logic to split raw CLI tokens between
+    declared params and a program's own value-parameter options, without a
+    second, independently written token router. A token that *does* name a
+    declared param is still fully validated: ambiguous spellings, missing
+    values, and duplicate supplies still raise.
     """
     external_keys = external_param_keys(params)
     selected = _param_flag_map(params)
@@ -358,6 +387,7 @@ def parse_param_tokens(
         return ", ".join(repairs)
 
     result: dict[str, object] = {}
+    leftovers: list[str] = []
 
     def store(param: ParamDeclInfo, value: object) -> None:
         """Record *value* for *param*, rejecting a flag repeated for the same param."""
@@ -370,6 +400,10 @@ def parse_param_tokens(
     while i < len(tokens):
         token = tokens[i]
         if not token.startswith("--"):
+            if collect_leftovers:
+                leftovers.append(token)
+                i += 1
+                continue
             raise ValueError(f"Unexpected argument: {token!r}")
 
         # ``--name=value`` and ``--name`` share one flag lookup; only the
@@ -378,6 +412,10 @@ def parse_param_tokens(
         if flag in selected.ambiguous:
             raise ValueError(f"Option {flag!r} is ambiguous; use one of: {ambiguity_repair(flag)}")
         if flag not in flag_to_param:
+            if collect_leftovers:
+                leftovers.append(token)
+                i += 1
+                continue
             raise ValueError(f"Unknown option: {flag!r}")
         param, bool_val = flag_to_param[flag]
 
@@ -397,6 +435,8 @@ def parse_param_tokens(
             store(param, tokens[i + 1])
             i += 2
 
+    if collect_leftovers:
+        return result, leftovers
     return result
 
 

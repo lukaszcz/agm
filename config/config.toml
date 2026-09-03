@@ -39,11 +39,14 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 # Config tables use a module suffix followed by a declaration scope path. The
 # entry file's stem is its module component. A longer module suffix resolves
 # ambiguity; ``["review-tools/judge".review]`` is an exact module anchor.
-# CLI param options override config values. Inline ``-c`` params are CLI-only.
+# The same table also supplies a selected ``program def``'s own value
+# parameters, keyed by name like a param. CLI options override config values
+# for both. Inline ``-c`` params are CLI-only.
 #
 # [review-workflow.main]
 # timeout = "60s"               # engine-key override for this program
 # log = true
+# region = "us-east"            # a program def's own text value parameter
 #
 # [judge.review]
 # topic = "security"            # text param — verbatim string

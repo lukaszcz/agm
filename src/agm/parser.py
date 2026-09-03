@@ -553,6 +553,7 @@ _HELP_TEXTS: dict[str, str] = {
                  [--log|--log-file PATH|--no-log] [--no-log-file]
                  [--no-stdlib] [-I DIR]... [-p PATH]
                  (FILE | PACKAGE/MODULE::PROGRAM | -c COMMAND) [--PARAM VALUE]...
+                 [ARG]... [--NAME VALUE]...
 
         Execute an AgL (Agent Language) workflow program from FILE, an installed
         PACKAGE/MODULE::PROGRAM reference, or the inline program text given with
@@ -564,6 +565,15 @@ _HELP_TEXTS: dict[str, str] = {
         becomes a `--<name>` option.
         Boolean params use the `--name/--no-name` flag form. Structured types
         take a JSON string. Run `agm exec FILE --help` to show discovered params.
+
+        The selected program's own value parameters project onto the same CLI
+        surface: a positional-zone parameter fills a positional slot, and a
+        name-addressable one becomes its own `--<name>` option (bool as
+        `--name/--no-name`; `Option[T]` as `--name VALUE`/`--no-name`; text
+        verbatim; every other type as a JSON string). An omitted argument
+        resolves from the program's own qualified config table, then its
+        signature default; a required parameter with neither errors. Both
+        mechanisms may supply values in one invocation.
 
         Trace logging is OFF by default.  Enable it with --log, --log-file, or
         [exec] log = true in config.toml.  A source ``std/config::KEY := VALUE``

@@ -78,7 +78,7 @@ from agm.agl.semantics.engine_keys import ENGINE_KEY_TYPES
 from agm.agl.semantics.types import BoolType, TextType, is_standard_option_enum
 
 if TYPE_CHECKING:
-    from agm.agl.runtime.types import ProgramParamInfo
+    from agm.agl.runtime.types import ProgramDeclInfo, ProgramParamInfo
     from agm.agl.semantics.types import Type as AglType
 
 __all__ = [
@@ -91,7 +91,10 @@ __all__ = [
     "ValueForm",
     "build_program_option_map",
     "engine_key_flags",
+    "option_none_raw",
+    "option_some_raw",
     "project_option",
+    "render_program_arguments_help",
 ]
 
 # Zones whose parameter fills a positional CLI slot.
@@ -260,6 +263,23 @@ def _value_from_token(flag: str, inner_type: "AglType", token: str) -> object:
         ) from exc
 
 
+def option_some_raw(value: object) -> object:
+    """Return the ``Some`` envelope ``decode_param_value`` expects for an ``Option[T]`` raw value.
+
+    The single place this shape (``{"$case": "Some", "value": ...}``) is
+    built — shared by :func:`_positive_raw`, for a CLI flag's already-decoded
+    ``VALUE`` token, and by the config-table path (``commands.exec_program``),
+    for an already-native TOML/JSON value read from a program's qualified
+    table.
+    """
+    return {"$case": "Some", "value": value}
+
+
+def option_none_raw() -> object:
+    """Return the ``None`` envelope ``decode_param_value`` expects for an ``Option[T]`` value."""
+    return {"$case": "None"}
+
+
 def _positive_raw(projected: ProjectedOption, flag: str, token: str) -> object:
     """Build the raw value for one value-taking flag's ``VALUE`` token.
 
@@ -268,7 +288,7 @@ def _positive_raw(projected: ProjectedOption, flag: str, token: str) -> object:
     form, whose ``takes_value`` is ``False``.
     """
     if projected.option_inner is not None:
-        return {"$case": "Some", "value": _value_from_token(flag, projected.option_inner, token)}
+        return option_some_raw(_value_from_token(flag, projected.option_inner, token))
     return token
 
 
@@ -276,7 +296,7 @@ def _negative_raw(projected: ProjectedOption) -> object:
     """Build the raw value for one negated (``--no-x``) flag."""
     if projected.value_form is ValueForm.BOOL:
         return False
-    return {"$case": "None"}
+    return option_none_raw()
 
 
 @dataclass(frozen=True, slots=True)
@@ -448,3 +468,36 @@ def build_program_option_map(
                 )
             seen[flag] = param.name
     return ProgramOptionMap(positional=positional, options=options)
+
+
+def render_program_arguments_help(
+    entry_programs: "tuple[ProgramDeclInfo, ...]", *, selected: "ProgramDeclInfo | None"
+) -> str:
+    """Render the ``Program arguments:`` section of ``agm exec --help``.
+
+    *entry_programs* and *selected* come from
+    ``cli_support.program_discovery.select_entry_program``, the one place a
+    requested program name is matched against the entry module's own
+    declarations, so this renderer only formats a selection already made —
+    it never re-derives one. When *selected* names one program, its usage
+    line and full ``Options:`` section are rendered; otherwise (several entry
+    programs and none selected, including a requested name matching none of
+    them) every entry program's usage line alone is listed, so the reader can
+    pick one with ``-p``.
+    """
+    if not entry_programs:
+        return ""
+    candidates = (selected,) if selected is not None else entry_programs
+    lines: list[str] = ["Program arguments:"]
+    for candidate in candidates:
+        option_map_result = build_program_option_map(candidate.parameters)
+        if not isinstance(option_map_result, ProgramOptionMap):
+            continue
+        lines.append(f"  Usage: {option_map_result.usage_line(candidate.declaration_path)}")
+        if selected is not None:
+            help_section = option_map_result.render_help_section()
+            if help_section:
+                lines.extend(f"  {line}" for line in help_section.splitlines())
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines) + "\n"

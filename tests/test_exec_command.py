@@ -29,6 +29,7 @@ from typer.main import get_command
 import agm.cli as cli
 import agm.commands.exec as exec_command
 from agm.cli_support.args import ExecArgs
+from agm.cli_support.program_options import render_program_arguments_help
 from agm.commands import exec_program as exec_engine
 from tests._agl_helpers import write_file_program
 
@@ -3938,6 +3939,561 @@ class TestEntryModuleConfig:
         )
         assert capsys.readouterr().out == "ab\n"
 
+    def test_ambiguous_flag_reports_the_ambiguity_not_an_unknown_option(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """An ambiguous ``--region`` still gets its own diagnostic, not a bare unknown-option error.
+
+        Regression: the CLI-token split between the legacy ``param`` parser
+        and a selected program's own option map must still reach
+        ``parse_param_tokens``'s own ambiguity check for a flag that names a
+        declared param, rather than treating it as an unrecognized flag to
+        hand off to the program's option map.
+        """
+        (tmp_path / "one.agl").write_text("param region: text\ndef read() -> text = region\n")
+        (tmp_path / "two.agl").write_text("param region: text\ndef read() -> text = region\n")
+        agl_file = tmp_path / "workflow.agl"
+        write_file_program(
+            agl_file,
+            "import one\nimport two\n"
+            "program def main() -> unit = print(one::read() + two::read())\n",
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--region", "bad"]))
+
+        assert exc_info.value.code == 1
+        assert "ambiguous" in capsys.readouterr().err
+
+
+class TestProgramValueArguments:
+    """CLI/config binding for a selected program's own value parameters.
+
+    A ``program def``'s value parameters default to the named-only zone, so
+    a plain ``name: text`` parameter is addressed only by ``--name``; an
+    explicit ``@pos, ..., /`` zone marker opens a positional slot.
+    """
+
+    def test_positional_and_named_option_arguments(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            'program def main(@pos, name: text, /, tag: text = "default") -> unit =\n'
+            '  print(name + ":" + tag)\n',
+        )
+
+        assert (
+            exec_command.run(_exec_args_no_log(agl_file, param_tokens=["alice", "--tag", "x"]))
+            is None
+        )
+        assert capsys.readouterr().out == "alice:x\n"
+
+    def test_name_equals_value_inline_form(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            'program def main(@pos, name: text, /, tag: text = "default") -> unit =\n'
+            '  print(name + ":" + tag)\n',
+        )
+
+        assert (
+            exec_command.run(_exec_args_no_log(agl_file, param_tokens=["alice", "--tag=y"])) is None
+        )
+        assert capsys.readouterr().out == "alice:y\n"
+
+    def test_bool_flag_true_and_negated_forms(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file, "program def main(verbose: bool = false) -> unit = print verbose\n"
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == "false\n"
+
+        assert exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--verbose"])) is None
+        assert capsys.readouterr().out == "true\n"
+
+        assert exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--no-verbose"])) is None
+        assert capsys.readouterr().out == "false\n"
+
+    def test_option_type_wraps_and_unwraps(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file, "program def main(tag: Option[text] = Option::None) -> unit = print tag\n"
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--tag", "eu"])) is None
+        assert capsys.readouterr().out == 'Option::Some(value = "eu")\n'
+
+        assert exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--no-tag"])) is None
+        assert capsys.readouterr().out == "Option::None\n"
+
+    def test_json_form_array_argument(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file, "program def main(nums: array[int] = []) -> unit = print nums\n"
+        )
+
+        assert (
+            exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--nums=[1, 2, 3]"])) is None
+        )
+        output = capsys.readouterr().out
+        assert "1" in output
+        assert "3" in output
+
+    def test_config_table_supplies_omitted_argument(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[prog.main]\ntag = "configured"\n')
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file, 'program def main(tag: text = "default") -> unit = print tag\n'
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == "configured\n"
+
+    def test_cli_overrides_configured_argument(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[prog.main]\ntag = "configured"\n')
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file, 'program def main(tag: text = "default") -> unit = print tag\n'
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--tag", "cli"])) is None
+        assert capsys.readouterr().out == "cli\n"
+
+    def test_signature_default_used_when_cli_and_config_omit(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file, 'program def main(tag: text = "default") -> unit = print tag\n'
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == "default\n"
+
+    def test_required_argument_without_default_errors_when_omitted(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, "program def main(name: text) -> unit = print name\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+        assert capsys.readouterr().err
+
+    def test_undeclared_config_key_in_program_table_warns_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[prog.main]\ntag = "configured"\nbogus = 1\n')
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file, 'program def main(tag: text = "default") -> unit = print tag\n'
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        captured = capsys.readouterr()
+        assert captured.out == "configured\n"
+        reported = [line for line in captured.err.splitlines() if line.strip()]
+        assert len(reported) == 1
+        assert "bogus" in reported[0]
+
+    def test_reserved_flag_projection_is_a_host_diagnostic(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, "program def main(dry-run: bool = false) -> unit = ()\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+        assert capsys.readouterr().err.startswith("Error:")
+
+    def test_duplicate_flag_projection_is_a_host_diagnostic(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file, "program def main(cache: bool = false, no-cache: bool = false) -> unit = ()\n"
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+        assert capsys.readouterr().err.startswith("Error:")
+
+    def test_legacy_param_and_program_argument_coexist(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            'param greeting: text = "hi"\n'
+            'program def main(name: text) -> unit = print(greeting + " " + name)\n',
+        )
+
+        assert (
+            exec_command.run(
+                _exec_args_no_log(agl_file, param_tokens=["--greeting", "hey", "--name", "world"])
+            )
+            is None
+        )
+        assert capsys.readouterr().out == "hey world\n"
+
+    def test_an_unknown_flag_alongside_a_legacy_param_is_the_programs_own_usage_error(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A flag naming neither the legacy ``param`` nor the program's own option leftovers
+
+        into the program's own option map, whose usage error surfaces (not a
+        generic "unexpected argument").
+        """
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            'param greeting: text = "hi"\n'
+            'program def main(name: text) -> unit = print(greeting + " " + name)\n',
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(
+                _exec_args_no_log(agl_file, param_tokens=["--name", "world", "--bogus", "x"])
+            )
+
+        assert exc_info.value.code == 1
+        assert "bogus" in capsys.readouterr().err
+
+    def test_doubled_dashdash_ends_program_option_parsing(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A doubled ``--`` ends option parsing, so a later ``--``-prefixed token
+
+        is collected positionally instead of being rejected as an unknown flag.
+        """
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, "program def main(@pos, name: text, /) -> unit = print name\n")
+
+        assert exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--", "--odd"])) is None
+        assert capsys.readouterr().out == "--odd\n"
+
+    def test_option_supplied_twice_is_a_usage_error(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file, 'program def main(tag: text = "default") -> unit = print tag\n'
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--tag", "x", "--tag", "y"]))
+
+        assert exc_info.value.code == 1
+        assert "tag" in capsys.readouterr().err
+
+    def test_standard_zone_parameter_supplied_positionally_and_by_name_is_a_duplicate(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A ``STANDARD``-zone parameter (past ``/``, before any ``@named``) accepts a
+
+        positional token or ``--name``, never both.
+        """
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            'program def main(@pos, id: text, /, tag: text = "default") -> unit =\n'
+            '  print(id + ":" + tag)\n',
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file, param_tokens=["alice", "x", "--tag", "y"]))
+
+        assert exc_info.value.code == 1
+        assert "tag" in capsys.readouterr().err
+
+    def test_positional_only_parameter_is_not_configurable_from_the_program_table(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A ``POSITIONAL_ONLY`` parameter has no ``--flag``, so a program-table
+
+        entry naming it can never reach the argument binder: it falls back to
+        the signature default and is reported as an undeclared program
+        argument, the same as any other key the option map doesn't recognize.
+        """
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[prog.main]\nname = "configured"\n')
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file, 'program def main(@pos, name: text = "default", /) -> unit = print name\n'
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        captured = capsys.readouterr()
+        assert captured.out == "default\n"
+        assert "name" in captured.err
+
+    def test_legacy_flag_supplied_twice_is_a_usage_error(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file, 'param greeting: text = "hi"\nprogram def main() -> unit = print greeting\n'
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(
+                _exec_args_no_log(agl_file, param_tokens=["--greeting", "a", "--greeting", "b"])
+            )
+
+        assert exc_info.value.code == 1
+        assert capsys.readouterr().err
+
+    def test_option_type_argument_from_config_table(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A configured ``Option[T]`` value is wrapped ``Some``, like the CLI flag."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[prog.main]\ntag = "eu"\n')
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file, "program def main(tag: Option[text] = Option::None) -> unit = print tag\n"
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == 'Option::Some(value = "eu")\n'
+
+    def test_program_argument_qualified_config_conflict_exits_cleanly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A program argument key set by two conflicting qualified spellings errors."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[main.main]\ntag = "a"\n\n["tools/main".main]\ntag = "b"\n'
+        )
+        agl_file = tmp_path / "main.agl"
+        write_file_program(agl_file, 'program def main(tag: text = "x") -> unit = print tag\n')
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_engine.run(_exec_args_no_log(agl_file), entry_module_segments=("tools", "main"))
+
+        assert exc_info.value.code == 1
+        assert "Error: invalid qualified configuration" in capsys.readouterr().err
+
+
+class TestProgramArgumentsDynamicHelp:
+    """``agm exec --help`` renders the selected program's value-parameter surface."""
+
+    def test_help_for_a_sole_program_shows_its_usage_and_options(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file, 'program def main(tag: text = "default") -> unit = print tag\n'
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            cli._exec_print_help(file=str(agl_file), command=None)
+
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "Program arguments:" in out
+        assert "--tag" in out
+
+    def test_help_for_several_programs_without_selection_lists_usage_only(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "several.agl"
+        write_file_program(
+            agl_file,
+            'program def first(tag: text = "a") -> unit = print tag\n'
+            "\n"
+            "scope review\n"
+            "\n"
+            "  program def main(count: int = 1) -> unit = print count\n"
+            "end review\n",
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            cli._exec_print_help(file=str(agl_file), command=None)
+
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "Program arguments:" in out
+        assert "Usage: first" in out
+        assert "Usage: review::main" in out
+        assert "--tag" not in out
+        assert "--count" not in out
+
+    def test_help_with_program_selection_shows_only_its_own_options(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "several.agl"
+        write_file_program(
+            agl_file,
+            'program def first(tag: text = "a") -> unit = print tag\n'
+            "\n"
+            "scope review\n"
+            "\n"
+            "  program def main(count: int = 1) -> unit = print count\n"
+            "end review\n",
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            cli._exec_print_help(file=str(agl_file), command=None, program="review::main")
+
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "--count" in out
+        assert "--tag" not in out
+
+    def test_help_for_a_program_without_value_parameters_shows_usage_without_options(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, 'program def main() -> unit = print "hi"\n')
+
+        with pytest.raises(SystemExit) as exc_info:
+            cli._exec_print_help(file=str(agl_file), command=None)
+
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        section = out[out.index("Program arguments:") :]
+        assert "Usage: main" in section
+        assert "Options:" not in section
+
+    def test_help_for_a_program_with_a_colliding_parameter_omits_the_section(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A parameter that cannot be projected degrades the help section, not a crash.
+
+        ``run()`` reports this collision as a host diagnostic when the program
+        is actually selected; the static help path renders no section instead.
+        """
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, "program def main(dry-run: bool = false) -> unit = ()\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            cli._exec_print_help(file=str(agl_file), command=None)
+
+        assert exc_info.value.code == 0
+        assert "Program arguments:" not in capsys.readouterr().out
+
+    def test_render_program_arguments_help_of_no_programs_is_empty(self) -> None:
+        assert render_program_arguments_help((), selected=None) == ""
+
+    def test_help_omits_an_imported_modules_own_program(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Only the entry module's own ``program def`` is a runnable candidate.
+
+        An imported module's own ``program def`` is discoverable but never
+        selectable by the entry file, so the help section must render just
+        the entry's sole program — usage AND its ``--tag`` option — never the
+        imported module's own usage line, and never degrade to usage-only as
+        if several entry-level programs were in play.
+        """
+        (tmp_path / "helper.agl").write_text('program def helper-main() -> unit = print "helper"\n')
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            'import helper\nprogram def main(tag: text = "default") -> unit = print tag\n',
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            cli._exec_print_help(file=str(agl_file), command=None)
+
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "Usage: main" in out
+        assert "--tag" in out
+        assert "helper-main" not in out
+
+    def test_help_with_an_unmatched_program_selection_does_not_render_the_sole_program(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``-p`` naming no program must not fall back to the sole program's own options."""
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file, 'program def main(tag: text = "default") -> unit = print tag\n'
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            cli._exec_print_help(file=str(agl_file), command=None, program="wrong")
+
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        section = out[out.index("Program arguments:") :]
+        assert "Usage: main" in section
+        assert "Options:" not in section
+
 
 class TestNegatedConstantDefaults:
     """A unary operator over a constant operand is itself a constant.
@@ -4187,6 +4743,38 @@ class TestExecProgramSelection:
 
         assert exec_command.run(args) is None
         assert capsys.readouterr().out == ""
+
+    def test_a_stray_token_with_no_selected_program_is_the_legacy_parsers_own_usage_error(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """With no discovered program, param tokens still go through the plain
+
+        (non-leftover) legacy parser, which raises its own usage error for a
+        token naming no declared param.
+        """
+        from agm.agl.pipeline import PipelineDriver as RealRuntime
+
+        class NoProgramDiscoveryRuntime(RealRuntime):
+            def discover_params(self, *args: object, **kwargs: object):
+                return replace(super().discover_params(*args, **kwargs), programs=())
+
+        monkeypatch.setattr(exec_engine, "PipelineDriver", NoProgramDiscoveryRuntime)
+        args = ExecArgs(
+            file=None,
+            command='print "only selected mains run"',
+            param_tokens=["stray"],
+            strict_json=None,
+            max_iters=None,
+            no_log=True,
+            log_file=None,
+            log=False,
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(args)
+
+        assert exc_info.value.code == 1
+        assert "stray" in capsys.readouterr().err
 
     def test_selected_program_uses_and_restores_the_pinned_decimal_context(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

@@ -35,9 +35,9 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from agm.agl.ir.contracts import ParamDecoder
-    from agm.agl.ir.program import IrProgramParam
+    from agm.agl.ir.program import ExecutableProgram, IrProgramParam
     from agm.agl.ir.zones import ParamZone
-    from agm.agl.runtime.types import ProgramParamInfo
+    from agm.agl.runtime.types import ProgramDeclInfo, ProgramParamInfo
     from agm.agl.semantics.types import Type as AglType
     from agm.agl.semantics.values import Value
     from agm.agl.syntax.spans import SourceSpan
@@ -47,6 +47,7 @@ __all__ = [
     "ProgramParameter",
     "ProgramSignature",
     "bind_program_arguments",
+    "bind_program_arguments_for",
     "decode_param_value",
     "default_program_arguments",
 ]
@@ -248,6 +249,26 @@ def bind_program_arguments(
     if diagnostics:
         return (), tuple(diagnostics)
     return tuple(values), ()
+
+
+def bind_program_arguments_for(
+    executable: "ExecutableProgram", program: "ProgramDeclInfo", arguments: ProgramArguments
+) -> "tuple[tuple[Value | UseDefault, ...], tuple[Diagnostic, ...]]":
+    """Fuse *program*'s declaration info with *executable*'s signature, then bind *arguments*.
+
+    The shared tail of ``PipelineDriver.preflight_arguments`` and
+    ``commands.exec_program.run``: both hold an already-lowered
+    ``ExecutableProgram`` and the ``ProgramDeclInfo`` for the same selected
+    program, and both need a :class:`ProgramSignature` fused from them before
+    calling :func:`bind_program_arguments` — this is the one place that
+    fusing happens, so the two hosts can never pair the two descriptions
+    differently.
+    """
+    program_symbol = executable.program_symbols[program.node_id]
+    signature = ProgramSignature.fuse(
+        executable.program_signatures[program_symbol], program.parameters, program.span
+    )
+    return bind_program_arguments(signature, arguments)
 
 
 def default_program_arguments(

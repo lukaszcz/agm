@@ -1456,22 +1456,18 @@ class PipelineDriver:
         Mirrors :meth:`preflight_params`: runs the static pipeline exactly as
         :meth:`run_prepared` does under ``check_only``, then binds and decodes
         *arguments* against the lowered program's signature for *program*
-        (:func:`~agm.agl.runtime.arguments.bind_program_arguments`). Hand the
-        lowered executable and the bound arguments back to
+        (:func:`~agm.agl.runtime.arguments.bind_program_arguments_for`). Hand
+        the lowered executable and the bound arguments back to
         :meth:`run_prepared` (``executable=``, ``arguments=``) to execute it
         without lowering it a second time.
         """
-        from agm.agl.runtime.arguments import ProgramSignature, bind_program_arguments
+        from agm.agl.runtime.arguments import bind_program_arguments_for
 
         result, executable = self._lower_and_record(prepared, compiled=compiled, program=program)
         if executable is None or not result.ok:
             return ArgumentPreflight(result=result, executable=executable)
 
-        program_symbol = executable.program_symbols[program.node_id]
-        signature = ProgramSignature.fuse(
-            executable.program_signatures[program_symbol], program.parameters, program.span
-        )
-        bound, diagnostics = bind_program_arguments(signature, arguments)
+        bound, diagnostics = bind_program_arguments_for(executable, program, arguments)
         if diagnostics:
             return ArgumentPreflight(
                 result=RunResult(

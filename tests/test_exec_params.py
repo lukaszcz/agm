@@ -493,6 +493,49 @@ class TestParseParamTokens:
         }
 
 
+class TestParseParamTokensCollectLeftovers:
+    """``collect_leftovers=True`` sets aside tokens naming no declared param."""
+
+    def test_no_declared_params_leaves_every_token_over(self) -> None:
+        from agm.cli_support.exec_params import parse_param_tokens
+
+        values, leftovers = parse_param_tokens(
+            (), ["file.agl", "--tag", "x"], collect_leftovers=True
+        )
+        assert values == {}
+        assert leftovers == ["file.agl", "--tag", "x"]
+
+    def test_a_declared_flag_is_still_parsed_and_validated(self) -> None:
+        from agm.cli_support.exec_params import parse_param_tokens
+
+        params = (_make_param("name", TextType()),)
+        values, leftovers = parse_param_tokens(
+            params, ["--name", "hello", "--tag", "x"], collect_leftovers=True
+        )
+        assert values == {"name": "hello"}
+        assert leftovers == ["--tag", "x"]
+
+    def test_an_ambiguous_declared_flag_still_raises(self) -> None:
+        from agm.cli_support.exec_params import parse_param_tokens
+
+        params = (
+            _make_param("Deploy::region", module_segments=("pkg", "one")),
+            _make_param("Deploy::region", module_segments=("pkg", "two")),
+        )
+        with pytest.raises(ValueError, match="ambiguous"):
+            parse_param_tokens(params, ["--Deploy::region", "eu"], collect_leftovers=True)
+
+    def test_a_bare_positional_is_a_leftover_not_an_error(self) -> None:
+        from agm.cli_support.exec_params import parse_param_tokens
+
+        params = (_make_param("name", TextType()),)
+        values, leftovers = parse_param_tokens(
+            params, ["some_file.agl", "--name", "hello"], collect_leftovers=True
+        )
+        assert values == {"name": "hello"}
+        assert leftovers == ["some_file.agl"]
+
+
 # ---------------------------------------------------------------------------
 # external_param_keys
 # ---------------------------------------------------------------------------

@@ -26,6 +26,7 @@ AgL programs read two kinds of configuration, both routed through *qualified* ta
 
 - **Engine settings** (`default-agent`, `log`, `log-file`, `strict-json`, `max-iters`, `timeout`) are `builtin var` bindings at the root of `std/config`. Precedence is source write > CLI flag > qualified program table > `[exec]` > engine default. Their catalog — name, value kind, config accessor, default, and which side of the host boundary consumes a write — is the pure data leaf `config/engine_keys.py`, shared with the AgL checker, IR validation, and evaluator.
 - **Param values** (`param NAME`) resolve as CLI flag > qualified config table > source default > required error, for every param in the selected program's import closure.
+- **Program arguments** — a `program def`'s own value parameters — resolve the same way (CLI > qualified config table > signature default > required error) from the selected program's own qualified table (e.g. `[workflow.main]`, the same table an engine-key override reads), using the same `QualifiedConfigKey` shape as the engine-key and param mechanisms.
 
 `config/qualified_keys.py` routes a config table to a module by path suffix, keeps layer provenance, rejects ambiguous suffixes, and keeps AGM's own sections out of module matching. How the hosts seed these values into a program is described in [agl/hosting.md](agl/hosting.md).
 

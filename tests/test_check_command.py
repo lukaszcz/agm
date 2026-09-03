@@ -245,6 +245,22 @@ class TestCheckCommand:
         assert "types.agl" in captured.err
         assert "error:" in captured.err
 
+    def test_undecodable_program_parameter_type_reports_diagnostic_and_exits_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A ``program def`` value parameter must decode from a host-supplied argument."""
+        agl_file = tmp_path / "types.agl"
+        agl_file.write_text("program def main(p: unit) -> unit = ()\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            check_command.run(CheckArgs(files=[str(agl_file)]))
+        assert exc_info.value.code == 1
+
+        captured = capsys.readouterr()
+        assert "types.agl" in captured.err
+        assert "error:" in captured.err
+        assert "unit" in captured.err
+
     def test_error_inside_imported_module_reports_that_modules_path(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

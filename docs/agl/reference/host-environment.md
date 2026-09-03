@@ -131,8 +131,8 @@ A program that never writes a setting keeps the value chosen by the CLI/config
 layers.
 
 `agm repl` resolves engine settings as source writes > CLI > `[exec]` > declared
-default. It has no per-param CLI options; imported-module params may resolve
-from qualified config, while prompt-local params require source defaults.
+default. It supplies no external param values at all, so every param it sees
+must carry a source default.
 
 ### Config-file schema
 
@@ -142,9 +142,6 @@ scope path. The selected entry program's engine settings use its qualified
 program table; every discovered param uses its declaring module path. A longer
 suffix, including an exact quoted module route, disambiguates same-leaf modules.
 Inline `-c` params are CLI-only.
-
-`agm repl` reads qualified config for imported-module params, never for engine
-settings.
 
 ### Positional effect
 

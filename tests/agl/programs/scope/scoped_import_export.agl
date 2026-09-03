@@ -13,20 +13,20 @@ import facade
 scope App
   import geom::*
   import shading::*
-  param scale: int
-  def total() -> int = sum2(Point(x = 1, y = 2)) * scale
-  def mood() -> Shade = if scale > 3 => Light else => Dark
-  def describe() -> text = label(mood())
+  let bonus: int = 1
+  def total(scale: int) -> int = sum2(Point(x = 1, y = 2)) * scale + bonus
+  def mood(scale: int) -> Shade = if scale > 3 => Light else => Dark
+  def describe(scale: int) -> text = label(mood(scale))
 end App
 
 scope Motion
   import vecmath::{double as twice}
-  def doubled() -> int = twice(App::total())
+  def doubled(scale: int) -> int = twice(App::total(scale))
 end Motion
 
-program def main() -> unit =
-  print(App::total())
-  print(App::describe())
+program def main(scale: int) -> unit =
+  print(App::total(scale))
+  print(App::describe(scale))
   print(geom::Point(x = 3, y = 4).x)
-  print(Motion::doubled())
+  print(Motion::doubled(scale))
   print(facade::Geo::greet())

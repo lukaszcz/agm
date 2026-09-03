@@ -3,9 +3,11 @@
 # bindings — including the mutable ones they assign — while root declarations
 # keep reading the computed bindings the wrapper retains at the root. A
 # retained binding initializes with the module, so its effects precede the
-# statements the entry kept.
-param start: int
-param rounds: int = 2
+# statements the entry kept. `start` and `rounds` are constants: this source
+# has no `program def` to receive host arguments, so the scenarios below vary
+# only the agent's response.
+let start = -4
+let rounds = 3
 
 def announce(value: int) -> int =
   print("init:%{value}")
@@ -21,7 +23,7 @@ enum Mood
   | Calm
   | Tense(level: int)
 
-let mood: Mood = if start < 0 => Tense(-start) else => Calm
+let mood: Mood = Tense(-start)
 
 var audits = 0
 

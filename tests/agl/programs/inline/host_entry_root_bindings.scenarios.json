@@ -1,18 +1,15 @@
 {
   "scenarios": [
     {
-      "name": "default_label_two_visits",
+      "name": "two_visits",
       "inline_entry": true,
-      "params": {
-        "rounds": 2
-      },
       "agents": {
         "reviewer": [
           "looks fine"
         ]
       },
       "expect": {
-        "stdout": "corner: 1,2\n9\nhinge\n1\n2\n7\n42\n2\n0\nlooks fine\n",
+        "stdout": "corner: 1,2\n9\nhinge\n1\n2\n3\n7\n42\n2\n0\nlooks fine\n",
         "calls": {
           "reviewer": 1
         },
@@ -23,51 +20,6 @@
             "equals": "Review corner: 1,2."
           }
         ]
-      }
-    },
-    {
-      "name": "custom_label_three_visits",
-      "inline_entry": true,
-      "params": {
-        "label": "edge",
-        "rounds": 3
-      },
-      "agents": {
-        "reviewer": [
-          "needs work"
-        ]
-      },
-      "expect": {
-        "stdout": "edge: 1,2\n9\nhinge\n1\n2\n3\n7\n42\n2\n0\nneeds work\n",
-        "calls": {
-          "reviewer": 1
-        },
-        "prompts": [
-          {
-            "agent": "reviewer",
-            "call": 0,
-            "equals": "Review edge: 1,2."
-          }
-        ]
-      }
-    },
-    {
-      "name": "single_visit_leaves_the_counter_at_one",
-      "inline_entry": true,
-      "params": {
-        "label": "solo",
-        "rounds": 1
-      },
-      "agents": {
-        "reviewer": [
-          "ok"
-        ]
-      },
-      "expect": {
-        "stdout": "solo: 1,2\n9\nhinge\n1\n7\n42\n2\n0\nok\n",
-        "calls": {
-          "reviewer": 1
-        }
       }
     }
   ]

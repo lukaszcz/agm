@@ -2,10 +2,12 @@
 # a synthetic entry, keeping at the root every binding a root declaration reads
 # (record, enum-variant, and exception constructors, plus a mutable counter a
 # root `def` assigns) and demoting every other binding into the entry.
+# `label` and `rounds` are constants: this source has no `program def` to
+# receive host arguments.
 import std/config
 
-param label: text = "corner"
-param rounds: int = 2
+let label = "corner"
+let rounds = 2
 
 record Point(x: int, y: int)
 
@@ -55,6 +57,7 @@ print(excuse())
 for round in 1 to rounds do
   print(visit())
 done
+print(visit())
 print(shadowed())
 print(tally)
 print(corner.y)

@@ -4,14 +4,12 @@
 # captures. This exercises capturing free variables that appear in the bound
 # expression (not just in the body/condition). The loop counts a module-level
 # var up to `target`, either converging below the bound or exhausting it.
-param bound: int
-param target: int
 var count: int = 0
 
-def make(b: int) -> () -> unit =
+def make(b: int, target: int) -> () -> unit =
   fn() => do[b] count := count + 1 until count >= target
 
-program def main() -> unit =
-  let stepper = make(bound)
+program def main(bound: int, target: int) -> unit =
+  let stepper = make(bound, target)
   stepper()
   print count

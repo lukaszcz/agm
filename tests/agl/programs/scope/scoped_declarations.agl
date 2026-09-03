@@ -1,0 +1,23 @@
+# Scope visibility: a scoped `def` reads its own scope's names bare, a
+# `use Deploy::*` import at the root lets a caller outside the region reach
+# those same names bare too, and a nested region resolves through its own
+# qualified path even when its enclosing scope was `use`d.
+use Deploy::*
+
+scope Deploy
+  let tag: text = "deploy"
+  var calls = 0
+
+  def describe(region: text, replicas: int) -> text =
+    calls := calls + 1
+    "%{tag}:%{region} x %{replicas} (%{calls})"
+
+  scope Retry
+    def bump(attempts: int) -> int = attempts + 1
+  end Retry
+end Deploy
+
+program def main(region: text = "eu", replicas: int, attempts: int = 1) -> unit =
+  print(describe(region, replicas))
+  print(region)
+  print(Retry::bump(attempts) + Deploy::Retry::bump(attempts))

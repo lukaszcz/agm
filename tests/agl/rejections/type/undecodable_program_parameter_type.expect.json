@@ -1,8 +1,8 @@
 {
   "diagnostic": {
-    "line": 3,
+    "line": 1,
     "message_contains": [
-      "param"
+      "program parameter type"
     ]
   }
 }

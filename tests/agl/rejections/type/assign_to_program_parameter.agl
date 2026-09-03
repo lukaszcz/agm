@@ -1,0 +1,2 @@
+program def main(p: int) -> unit =
+  p := 2

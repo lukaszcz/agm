@@ -1,0 +1,10 @@
+{
+  "diagnostic": {
+    "line": 2,
+    "message_contains": [
+      "p",
+      "parameter",
+      "immutable"
+    ]
+  }
+}

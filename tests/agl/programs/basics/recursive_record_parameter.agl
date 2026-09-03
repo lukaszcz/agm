@@ -1,7 +1,7 @@
-# Recursive-record host param: `Category` decodes through the same
+# Recursive-record host parameter: `Category` decodes through the same
 # $defs/$ref JSON Schema and RefDecode decode plan a recursive agent output
-# type uses, so a recursive-typed param round-trips nested JSON exactly like
-# any other structured param.
+# type uses, so a recursive-typed parameter round-trips nested JSON exactly
+# like any other structured parameter.
 record Category
   name: text
   subcategories: array[Category]

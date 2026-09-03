@@ -2,9 +2,6 @@
 # caught exception's static type, and a scoped exception owns methods too.
 use Scoped::*
 
-param mode: text
-param code: int
-
 exception Problem extends Exception
   code: int
 
@@ -22,7 +19,7 @@ def DetailedProblem::detail_label(self) -> text = self.label() + ": %{self.detai
 
 def Scoped::Marker::label(self) -> text = "scoped %{self.code}"
 
-program def main() -> unit =
+program def main(mode: text, code: int) -> unit =
   if
     | mode == "subtype" =>
         let problem = DetailedProblem(message = "direct", code = code, detail = "extra")

@@ -1,15 +1,12 @@
 # An exception value converts to a JSON object of its own and inherited
 # fields, and a container of exceptions converts element by element.
-param code: int
-param note: text
-
 exception Failure extends Exception
   code: int
 
 exception Nested extends Failure
   causes: array[Failure]
 
-program def main() -> unit =
+program def main(code: int, note: text) -> unit =
   let one = Failure(message = note, code = code)
   print(one as json)
 

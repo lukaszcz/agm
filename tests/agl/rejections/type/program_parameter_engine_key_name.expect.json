@@ -2,7 +2,8 @@
   "diagnostic": {
     "line": 1,
     "message_contains": [
-      "spec"
+      "timeout",
+      "engine setting"
     ]
   }
 }

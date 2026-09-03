@@ -2,10 +2,7 @@
 # handler inspects the exception's `function`/`python-type` fields.
 extern def divide(a: int, b: int) -> int
 
-param a: int
-param b: int
-
-program def main() -> unit =
+program def main(a: int, b: int) -> unit =
   let result = try
     divide(a, b)
   catch ExternError as e =>

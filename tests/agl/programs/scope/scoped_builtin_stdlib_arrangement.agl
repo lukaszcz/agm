@@ -43,9 +43,7 @@ scope Stdlib
       | ParsePolicy::Retry(n) => "retry %{n}"
 end Stdlib
 
-param code: int
-
-program def main() -> unit =
+program def main(code: int) -> unit =
   let r = Stdlib::ExecResult(stdout = "hi", exit-code = code, stderr = "", timed-out = false)
   Stdlib::print(r.stdout)
   Stdlib::print(Stdlib::report(r.exit-code))

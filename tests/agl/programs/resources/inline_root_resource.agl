@@ -1,13 +1,13 @@
 # Inline source without a `program def`: root `resource`/`resource-dir` bindings
 # that a root `def` reads stay at the root, where they are legal constants.
-param decorate: bool = false
 
 let prompt = resource("prompt.md")
 let here = resource-dir()
 
-def banner() -> text =
+def banner(decorate: bool) -> text =
   if | decorate => "prompt: %{prompt}"
     | else => prompt
 
-print(banner())
+print("decorated:%{banner(true)}")
+print("plain:%{banner(false)}")
 print(here)

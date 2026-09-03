@@ -1,10 +1,6 @@
 import std/path
 
-param parts: array[text]
-param path: text
-param base: text
-
-program def main() -> unit =
+program def main(parts: array[text], path: text, base: text) -> unit =
   print(path::join(parts))
   print(path::dirname(path))
   print(path::basename(path))

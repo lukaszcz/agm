@@ -14,10 +14,7 @@ scope Host
   builtin def print[T](value: T) -> unit
 end Host
 
-param surface: text
-param guarded: bool
-
-def touch() -> text =
+def touch(surface: text) -> text =
   case surface of
     | "array" =>
       let values: array[int] = []
@@ -31,13 +28,13 @@ def touch() -> text =
       "choice %{choice(empty)}"
     | _ => "kind %{parse("not json").kind()}"
 
-def report() -> text =
+def report(surface: text, guarded: bool) -> text =
   if guarded =>
     try
-      touch()
+      touch(surface)
     catch _ as e =>
       "caught %{e.message}"
-  else => touch()
+  else => touch(surface)
 
-program def main() -> unit =
-  Host::print(report())
+program def main(surface: text, guarded: bool) -> unit =
+  Host::print(report(surface, guarded))

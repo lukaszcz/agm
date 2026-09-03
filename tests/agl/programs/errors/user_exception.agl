@@ -8,10 +8,7 @@ exception AppError extends Exception
   code: int
   detail: text
 
-param trigger: bool
-param code: int
-
-program def main() -> unit =
+program def main(trigger: bool, code: int) -> unit =
   try
     if trigger =>
       raise Boom(message = "boom!", code = code)

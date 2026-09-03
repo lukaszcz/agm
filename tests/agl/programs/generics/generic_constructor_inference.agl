@@ -1,5 +1,3 @@
-param value: int
-
 record Box[T]
   value: T
 
@@ -11,7 +9,7 @@ def box[T](factory: (T) -> Box[T], item: T) -> Box[T] = factory(item)
 def option[T](factory: (T) -> Option[T], item: T) -> Option[T] = factory(item)
 def fallback[T](value: Option[T], item: T) -> Option[T] = value
 
-program def main() -> unit =
+program def main(value: int) -> unit =
   let direct = box(Box, value)
   let partial = box(Box(value = ?), value)
   let present = option(some, value)

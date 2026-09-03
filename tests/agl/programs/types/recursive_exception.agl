@@ -7,14 +7,11 @@ exception ValidationError extends Exception
   field_name: text
   causes: array[ValidationError]
 
-param field_name: text
-param depth: int
-
 def make_causes(d: int) -> array[ValidationError] =
   if d <= 0 => []
   else => [ValidationError(message = "nested failure", field_name = "cause_%{d}", causes = make_causes(d - 1))]
 
-program def main() -> unit =
+program def main(field_name: text, depth: int) -> unit =
   try
     raise ValidationError(message = "invalid", field_name = field_name, causes = make_causes(depth))
   catch ValidationError as e =>

@@ -2,9 +2,6 @@
 # bare variants whose resulting values can immediately use their methods.
 use Signal::*
 
-param mode: text
-param value: int
-
 enum Signal
   | idle
   | number(value: int)
@@ -22,7 +19,7 @@ def Signal::is_terminal(self) -> bool =
     | number(value) => false
     | stopped(reason) => true
 
-program def main() -> unit =
+program def main(mode: text, value: int) -> unit =
   let signal: Signal = if
       | mode == "idle" => idle
       | mode == "number" => number(value = value)

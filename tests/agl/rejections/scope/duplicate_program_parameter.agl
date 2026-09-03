@@ -1,0 +1,2 @@
+program def main(spec: text, spec: text) -> unit =
+  ()

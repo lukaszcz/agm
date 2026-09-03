@@ -1,15 +1,16 @@
 # Scoped static bindings: qualified and bare assignment, a bare reference
-# reaching a var made bare by `use` before its source scope declares it, and visibility from
-# nested and qualified paths.
+# reaching a var made bare by `use` before its source scope declares it,
+# visibility from nested and qualified paths, and a scope-region member
+# reading a module-root binding bare.
 use Config::*
 
-param increment: int
+let step: int = 2
 
 scope Config
   let retries: int = 3
   var attempts: int = 0
-  def bump() -> unit =
-    attempts := attempts + increment
+  def bump(increment: int) -> unit =
+    attempts := attempts + increment * step
     ()
   def show() -> text = "%{retries}/%{attempts}"
 
@@ -18,13 +19,13 @@ scope Config
   end Nested
 end Config
 
-program def main() -> unit =
+program def main(increment: int) -> unit =
   var extra: int = 1
 
-  Config::bump()
+  Config::bump(increment)
   Config::attempts := Config::attempts + 1
   extra := extra + increment
-  Config::bump()
+  Config::bump(increment)
 
   print(Config::show())
   print("%{Config::attempts}")

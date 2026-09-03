@@ -8,11 +8,7 @@ def Counter::add(self, amount: int) -> unit =
 def Counter::rename(self, label: text) -> unit =
   self.label := label
 
-param initial: int
-param amount: int
-param label: text
-
-program def main() -> unit =
+program def main(initial: int, amount: int, label: text) -> unit =
   let counter = Counter(value = initial, label = "before")
   let alias = counter
   counter.add(amount)

@@ -8,9 +8,6 @@ enum Color
 record Box
   shade: Color
 
-param pick: text
-param tint: int
-
 def shade_of(c: Color, root_red: int, root_blue: int) -> int
   case c of
     | Red => root_red
@@ -22,7 +19,7 @@ def shadowed(Red: int, root_red: int) -> int
 def Retry(tint: int) -> int
   tint + 100
 
-program def main() -> unit =
+program def main(pick: text, tint: int) -> unit =
   let Red = tint
   let Blue = tint * 2
 

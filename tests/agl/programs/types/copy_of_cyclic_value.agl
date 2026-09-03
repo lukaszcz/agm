@@ -3,11 +3,9 @@
 # isomorphic, independent cycle. Every OTHER operation that walks containers
 # (here, `print`) still raises CyclicValueError on a cyclic value -- including
 # on the copy itself, since the copy is cyclic too.
-param tag: int
-
 record Node(children: array[Node], tag: array[int])
 
-program def main() -> unit =
+program def main(tag: int) -> unit =
   var xs: array[Node] = [Node(children = [], tag = [tag])]
   let n = Node(children = xs, tag = [tag])
   xs[0] := n

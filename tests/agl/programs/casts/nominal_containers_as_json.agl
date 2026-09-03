@@ -2,9 +2,6 @@
 # containers of records, enums and exceptions, nested containers, and
 # recursive declarations. The encoding is the one the decode direction
 # accepts, so `(rs as json) as array[R]` recovers the values.
-param n: int
-param tag: text
-
 record R
   x: int
   label: text
@@ -17,7 +14,7 @@ record Node
   tag: int
   children: array[Node]
 
-program def main() -> unit =
+program def main(n: int, tag: text) -> unit =
   let rs: array[R] = [R(x = n, label = tag), R(x = n + 1, label = tag)]
   print(rs as json)
 

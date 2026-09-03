@@ -10,9 +10,7 @@ enum Tree
 extern def build_tree(n: int) -> Tree
 extern def sum_tree(t: Tree) -> int
 
-param n: int
-
-program def main() -> unit =
+program def main(n: int) -> unit =
   let built = build_tree(n)
   print sum_tree(built)
 

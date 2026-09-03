@@ -1,8 +1,5 @@
 # Record methods include zero-argument members, builder-style members, and
 # the equivalent qualified call form.
-param mode: text
-param x: int
-
 record Person
   name: text
   address: text
@@ -21,7 +18,7 @@ def Point::total(self) -> int = self.x + self.y
 def Point::shifted(self, delta: int) -> Point =
   Point(x = self.x + delta, y = self.y)
 
-program def main() -> unit =
+program def main(mode: text, x: int) -> unit =
   let person = Person(name = "Ada", address = "Main Street")
   let point = Point(x = x, y = 2)
 

@@ -1,13 +1,10 @@
 # A fork retains the shared prefix while parent and child accept independent prompts.
-param backend: int
-param fork_before_asks: bool
-
 def selected_agent(backend: int) -> Agent =
   if
     | backend == 0 => AgentClaude("model", "high")
     | else => AgentPi("pi", "model", "high")
 
-program def main() -> unit =
+program def main(backend: int, fork_before_asks: bool) -> unit =
   let agent = selected_agent(backend)
   let session: Session = if backend == 1 =>
     Session::open(agent, transport = Some(SessionTransport::Cli))

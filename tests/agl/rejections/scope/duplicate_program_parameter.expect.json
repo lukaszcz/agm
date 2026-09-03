@@ -1,8 +1,9 @@
 {
   "diagnostic": {
-    "line": 4,
+    "line": 1,
     "message_contains": [
-      "p"
+      "spec",
+      "already declared"
     ]
   }
 }

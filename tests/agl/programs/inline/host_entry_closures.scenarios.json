@@ -1,42 +1,8 @@
 {
   "scenarios": [
     {
-      "name": "calm_two_rounds",
+      "name": "tense_verdict",
       "inline_entry": true,
-      "params": {
-        "start": 1
-      },
-      "agents": {
-        "reviewer": [
-          "{\"$case\": \"Calm\"}"
-        ]
-      },
-      "expect": {
-        "stdout": "init:2\nentry\nbase:2 low:-1\n0\n1\n2\n3\n9\nnotes/calm\n2\n",
-        "calls": {
-          "reviewer": 1
-        },
-        "prompts": [
-          {
-            "agent": "reviewer",
-            "call": 0,
-            "contains": [
-              "Review base:2 low:-1."
-            ],
-            "schema_contains": [
-              "Tense"
-            ]
-          }
-        ]
-      }
-    },
-    {
-      "name": "tense_three_rounds",
-      "inline_entry": true,
-      "params": {
-        "start": -4,
-        "rounds": 3
-      },
       "agents": {
         "reviewer": [
           "{\"$case\": \"Tense\", \"level\": 7}"
@@ -46,23 +12,46 @@
         "stdout": "init:-3\nentry\nbase:-3 low:-1\n4\n1\n2\n3\n6\n18\nnotes/tense:7\n3\n",
         "calls": {
           "reviewer": 1
+        },
+        "prompts": [
+          {
+            "agent": "reviewer",
+            "call": 0,
+            "contains": [
+              "Review base:-3 low:-1."
+            ],
+            "schema_contains": [
+              "Tense"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "calm_verdict",
+      "inline_entry": true,
+      "agents": {
+        "reviewer": [
+          "{\"$case\": \"Calm\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "init:-3\nentry\nbase:-3 low:-1\n4\n1\n2\n3\n6\n18\nnotes/calm\n3\n",
+        "calls": {
+          "reviewer": 1
         }
       }
     },
     {
-      "name": "unreadable_verdict_single_round",
+      "name": "unreadable_verdict",
       "inline_entry": true,
-      "params": {
-        "start": 0,
-        "rounds": 1
-      },
       "agents": {
         "reviewer": [
           "BROKEN"
         ]
       },
       "expect": {
-        "stdout": "init:1\nentry\nbase:1 low:-1\n0\n1\n1\n3\nnotes/unreadable\n1\n",
+        "stdout": "init:-3\nentry\nbase:-3 low:-1\n4\n1\n2\n3\n6\n18\nnotes/unreadable\n3\n",
         "calls": {
           "reviewer": 1
         }

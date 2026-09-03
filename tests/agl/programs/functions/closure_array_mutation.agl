@@ -20,10 +20,7 @@ def make_closures(first: int, second: int) -> Closures =
     view = fn() => viewer_source,
   )
 
-param first: int
-param second: int
-
-program def main() -> unit =
+program def main(first: int, second: int) -> unit =
   let closures = make_closures(first, second)
 
   print closures.view()

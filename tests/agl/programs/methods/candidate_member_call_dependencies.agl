@@ -4,9 +4,6 @@
 # recursive through member calls, and an unannotated method calling an
 # unannotated free function declared later. Declaration order must not
 # matter for any of these.
-param mode: text
-param n: int
-
 record Box
   n: int
 
@@ -27,7 +24,7 @@ def Box::describe(self) = helper(self.n)
 
 def helper(m: int) = m + 1
 
-program def main() -> unit =
+program def main(mode: text, n: int) -> unit =
   if
     | mode == "forward_reference" =>
         print(use_box(Box(n = n)))

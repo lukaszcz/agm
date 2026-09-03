@@ -30,13 +30,9 @@ def sum_nested_arrays(t: Tree[array[int]]) -> int =
           total := total + x
         total
 
-param a: int
-param b: int
-param c: int
-
 # Tree[int]: build, fold, equality.
 
-program def main() -> unit =
+program def main(a: int, b: int, c: int) -> unit =
   let int_tree: Tree[int] = Node(
     value = a,
     left = Node(value = b, left = Leaf, right = Leaf),

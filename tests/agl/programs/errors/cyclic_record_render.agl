@@ -1,13 +1,12 @@
 # A mutable enum-member record can close a cycle without an array or dict.
 # Rendering and JSON encoding raise a catchable CyclicValueError only when
 # the cycle is actually closed.
-param close_cycle: bool
 
 enum Link
   | End
   | Cell(var next: Link)
 
-program def main() -> unit =
+program def main(close_cycle: bool) -> unit =
   let cell = Cell(next = End)
   if close_cycle =>
     cell.next := cell

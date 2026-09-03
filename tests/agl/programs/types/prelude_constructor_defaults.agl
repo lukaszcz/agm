@@ -1,8 +1,6 @@
 # Built-in record and enum payload fields follow the standard default.
-param exit-code: int
-param retries: int
 
-program def main() -> unit =
+program def main(exit-code: int, retries: int) -> unit =
   let result = ExecResult("out", exit-code, "err", false)
   let policy: ParsePolicy = ParsePolicy::Retry(retries)
 

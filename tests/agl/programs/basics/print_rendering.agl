@@ -8,9 +8,7 @@ enum Verdict
   | Good
   | Bad(reason: text)
 
-param n: int
-
-program def main() -> unit =
+program def main(n: int) -> unit =
   print "plain text line"
   print "two\nlines"
   print 42

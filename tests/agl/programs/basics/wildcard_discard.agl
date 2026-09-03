@@ -1,8 +1,7 @@
 # `_` evaluates and discards values without introducing a readable binding.
 # Its annotations are deliberately ignored because it has no binding type.
-param initial: int
 
-program def main() -> unit =
+program def main(initial: int) -> unit =
   var effects: int = initial
   effects := effects + 1
   let _: text = "discarded first"

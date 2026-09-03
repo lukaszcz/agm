@@ -5,12 +5,10 @@
 # qualified type annotations and constructors, pattern matching on imported
 # variants, and `as text` rendering. A param drives the payload and the branch.
 import collections::*
-param seed: int
-param empty: bool
 
 # Imported generic enum at int; imported generic function consumes it.
 
-program def main() -> unit =
+program def main(seed: int, empty: bool) -> unit =
   let maybe: Maybe[int] = if empty => none else => some(value = seed)
   print(or_else(maybe, 0) as text)
 

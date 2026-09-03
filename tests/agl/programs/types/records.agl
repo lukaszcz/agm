@@ -12,9 +12,7 @@ record Issue
   extra: json
   author: Author
 
-param min_severity: int
-
-program def main() -> unit =
+program def main(min_severity: int) -> unit =
   let tracker: Agent = AgentCommand("tracker")
   let issue = Issue(
     title = "Missing tests",

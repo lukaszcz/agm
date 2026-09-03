@@ -1,10 +1,8 @@
 # The do-loop bound is an arbitrary int expression (here a param plus a let),
 # evaluated in the enclosing scope. The MaxIterationsExceeded `limit` field
 # reflects the computed value.
-param cap: int
-param target: int
 
-program def main() -> unit =
+program def main(cap: int, target: int) -> unit =
   let pad: int = 1
   var rounds: int = 0
 

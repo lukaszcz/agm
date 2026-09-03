@@ -2,7 +2,6 @@
 # catch bodies; parenthesized blocks as the inline escape hatch; and open forms
 # (`case`/`if`/`try`/nested loop) in loop bodies across the `do`, `for`, and
 # `while` spellings.
-param k: int
 let reviewer: Agent = AgentCommand("reviewer")
 
 enum Verdict
@@ -17,7 +16,7 @@ def classify(n: int) -> text =
 
 def review(i: int) -> Verdict = reviewer.ask("Review %{i}.")
 
-program def main() -> unit =
+program def main(k: int) -> unit =
   # `:=` as a whole inline branch body, and a parenthesized block as the inline
   # escape hatch for a binder sequence.
   var label: text = "unset"

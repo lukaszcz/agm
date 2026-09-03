@@ -4,7 +4,5 @@
 import workshop/facade
 use workshop/facade::{format as display}
 
-param title: text
-
-program def main() -> unit =
+program def main(title: text) -> unit =
   print(display(title))

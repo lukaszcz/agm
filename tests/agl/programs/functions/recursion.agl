@@ -1,6 +1,5 @@
 # Recursive user-defined functions: factorial (direct recursion) and
 # even/odd (mutual recursion).
-param n: int
 
 def fact(x: int) =
   if x <= 1 => 1 else => x * fact(x - 1)
@@ -11,6 +10,6 @@ def is_even(x: int) =
 def is_odd(x: int) =
   if x == 0 => false else => is_even(x - 1)
 
-program def main() -> unit =
+program def main(n: int) -> unit =
   print(fact(n))
   print(is_even(n))

@@ -2,9 +2,7 @@
 import std/array
 import std/math
 
-param mode: int
-
-program def main() -> unit =
+program def main(mode: int) -> unit =
   case mode of
     | 1 =>
         print((-3).abs())

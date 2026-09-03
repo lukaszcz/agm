@@ -10,11 +10,9 @@ enum E
   | A(x: int)
   | B(x: int, r: R)
 
-param base: int
-
 # Explicit '=' construction.
 
-program def main() -> unit =
+program def main(base: int) -> unit =
   let r1 = R(x = base, y = base + 1)
   print r1.x
   print r1.y

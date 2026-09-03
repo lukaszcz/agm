@@ -2,9 +2,7 @@
 import std/regex
 import std/regex::RegexError
 
-param mode: int
-
-program def main() -> unit =
+program def main(mode: int) -> unit =
   case mode of
     | 1 =>
         print(regex::test("[0-9]+", "letters"))

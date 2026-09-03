@@ -9,10 +9,7 @@ record Box
 record Grid
   cells: array[array[int]]
 
-param a: int
-param b: int
-
-program def main() -> unit =
+program def main(a: int, b: int) -> unit =
   let box = Box(items = [a, b])
   let shared = box.items
 

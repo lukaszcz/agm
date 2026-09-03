@@ -3,9 +3,7 @@ enum Review
   | Pass
   | Fail(issues: array[text])
 
-param spec
-
-program def main() -> unit =
+program def main(spec: text) -> unit =
   let impl: Agent = AgentCommand("impl")
   let reviewer: Agent = AgentCommand("reviewer")
   let critic: Agent = AgentCommand("critic")

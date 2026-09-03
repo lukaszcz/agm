@@ -18,14 +18,11 @@ scope Local
   def scope_value() -> int = 99
 end Local
 
-param x: int
-param y: int
-
 def tag() -> int = 7
 
 def bump(tag: int) -> int = tag + ::tag()
 
-program def main() -> unit =
+program def main(x: int, y: int) -> unit =
   print(label("sum", add(x, y)))
   print(yell("go"))
   print(st::max2(x, y) as text)

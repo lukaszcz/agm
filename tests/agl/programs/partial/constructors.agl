@@ -1,6 +1,4 @@
 # Partial application of record, enum-variant, exception, and generic constructors.
-param mode: text
-param base: int
 
 record Point
   @std
@@ -21,7 +19,7 @@ enum Status
 exception Boom extends Exception
   code: int
 
-program def main() -> unit =
+program def main(mode: text, base: int) -> unit =
   if
     | mode == "record" =>
         let make_point = Point(?, base)

@@ -3,8 +3,6 @@
 # has no named-only parameters, so every bare argument is positional. A
 # param-driven branch makes each scenario take a genuinely different path (and
 # exercise a different named-arg call form).
-param msg: text
-param level: int
 
 def add3(a: int, b: int, c: int) -> int = a + b + c
 
@@ -14,7 +12,7 @@ def tag(text_val: text, prefix: text = "INFO", suffix: text = "") -> text =
 # Positional, all-named with '=', reordered named, and mixed positional+named
 # all agree.
 
-program def main() -> unit =
+program def main(msg: text, level: int) -> unit =
   print(add3(1, 2, 3))
   print(add3(a = 1, b = 2, c = 3))
   print(add3(c = 3, a = 1, b = 2))

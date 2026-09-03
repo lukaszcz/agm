@@ -4,11 +4,10 @@
 # text value as a *quoted* JSON string even when `quote_strings = false`,
 # because `quote_strings` only affects rendering the value at its OWN
 # (unwrapped) type; once coerced to json, the value is JSON, not text.
-param label: text
 
 # No explicit target: unchanged baseline (text prints/renders bare).
 
-program def main() -> unit =
+program def main(label: text) -> unit =
   print(label)
   print(render(label, quote_strings = false))
 

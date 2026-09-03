@@ -1,12 +1,11 @@
 # Outside a receiver position, self remains an ordinary identifier.
-param mode: text
 
 record Holder
   self: int
 
 def helper(self: int) -> int = self + 1
 
-program def main() -> unit =
+program def main(mode: text) -> unit =
   let self = 3
 
   if mode == "local" =>

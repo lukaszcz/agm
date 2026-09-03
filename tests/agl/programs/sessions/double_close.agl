@@ -1,7 +1,6 @@
 # Closing twice is harmless; subsequent use remains a catchable lifecycle error.
-param ask_after_close: bool
 
-program def main() -> unit =
+program def main(ask_after_close: bool) -> unit =
   let session = Session::open(AgentPi("writer", "model", "high"))
   session.close()
   session.close()

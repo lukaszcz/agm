@@ -11,11 +11,9 @@ enum Box2
   | Dot
   | Rect(*, w: int, h: int)
 
-param n: int
-
 # Positional sub-pattern: 'x' binds the standard 'value' field positionally.
 
-program def main() -> unit =
+program def main(n: int) -> unit =
   let src: Agent = AgentCommand("src")
   let opt: Opt[int] = ask("Give opt.", agent = src)
   let from_pos = case opt of

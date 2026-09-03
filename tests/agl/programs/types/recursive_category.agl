@@ -7,10 +7,6 @@ record Category
   name: text
   subcategories: array[Category]
 
-param root_name: text
-param child_name: text
-param include_grandchild: bool
-
 def count_categories(c: Category) -> int =
   var total: int = 1
   for child in c.subcategories do
@@ -23,7 +19,7 @@ def render_category(c: Category) -> text =
     result := result + " > " + render_category(child)
   result
 
-program def main() -> unit =
+program def main(root_name: text, child_name: text, include_grandchild: bool) -> unit =
   let grandchildren: array[Category] = if include_grandchild => [Category(name = "leaf", subcategories = [])] else => []
   let child = Category(name = child_name, subcategories = grandchildren)
   let root = Category(name = root_name, subcategories = [child])

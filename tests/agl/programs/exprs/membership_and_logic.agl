@@ -1,10 +1,7 @@
 # `in` membership (array element / dict key / substring) and boolean composition
 # with precedence.
-param needle
-param numbers: array[int]
-param k: int
 
-program def main() -> unit =
+program def main(needle: text, numbers: array[int], k: int) -> unit =
   let words = ["alpha", "beta", "gamma"]
   let scores = {alpha: 1, beta: 2}
 

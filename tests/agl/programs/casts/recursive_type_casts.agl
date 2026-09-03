@@ -12,10 +12,7 @@ def sum_tree(t: Tree) -> int =
     | Leaf() => 0
     | Node(value, left, right) => value + sum_tree(left) + sum_tree(right)
 
-param tree_text
-param forest_text
-
-program def main() -> unit =
+program def main(tree_text: text, forest_text: text) -> unit =
   if tree_text as? Tree =>
     let t = tree_text as Tree
     print "sum: %{sum_tree(t)}"

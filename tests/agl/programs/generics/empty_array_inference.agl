@@ -8,11 +8,9 @@ record Bag[T]
 
 def wrap[T](xs: array[T]) -> Bag[T] = Bag(items = xs)
 
-param n: int
-
 # Empty-array field resolved purely from the `Bag[int]` annotation.
 
-program def main() -> unit =
+program def main(n: int) -> unit =
   let empty: Bag[int] = Bag(items = [])
   print empty.items
 

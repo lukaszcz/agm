@@ -15,14 +15,12 @@ enum Outcome[T, E]
   | ok(value: T)
   | err(error: E)
 
-param fail: bool
-
 def describe[T, E](o: Outcome[T, E]) -> text =
   case o of
     | ok(value) => "ok"
     | err(error) => "err"
 
-program def main() -> unit =
+program def main(fail: bool) -> unit =
   let good: Outcome[Pt, Fault] = ok(value = Pt(x = 1, y = 2))
   let bad: Outcome[Pt, Fault] = err(error = Fault(code = 404, detail = "missing"))
 

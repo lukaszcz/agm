@@ -12,14 +12,12 @@ import std/agent::*
 import std/session
 import std/package
 
-param mode: text
-
 record Box(value: int)
 
 def increment(x: int) -> int = x + 1
 def double(x: int) -> int = x * 2
 
-program def main() -> unit =
+program def main(mode: text) -> unit =
   print(render(increment <| 2 |> double))
   print(render((increment >> double)(3)))
   let copied: Box = copy(Box(value = 7))

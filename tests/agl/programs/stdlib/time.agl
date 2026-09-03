@@ -1,9 +1,7 @@
 import std/time
 import std/time::TimeParseError
 
-param mode: int
-
-program def main() -> unit =
+program def main(mode: int) -> unit =
   case mode of
     | 1 =>
         let epoch = time::parse-iso("2024-01-02T03:04:05.123456+00:00")

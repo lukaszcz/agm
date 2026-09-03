@@ -1,9 +1,7 @@
 # Free asks and Session::default share one snapshot default session.
 import std/config
 
-param explicit_close: bool
-
-program def main() -> unit =
+program def main(explicit_close: bool) -> unit =
   std/config::default-agent := AgentPi("writer", "model", "high")
   let direct = Session::default()
   let first = ask("first prompt")

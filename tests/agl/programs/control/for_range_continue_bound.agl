@@ -1,9 +1,7 @@
 # Range for + do[n] bound, body always continues: continue counts as a body entry.
 # Exercises: continue in range for with safety bound, range exhaustion vs bound.
-param n: int
-param bound: int
 
-program def main() -> unit =
+program def main(n: int, bound: int) -> unit =
   for i in 1 to n do[bound]
     continue
   done

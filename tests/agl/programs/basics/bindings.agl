@@ -1,7 +1,6 @@
 # let/var/set, literal inference, agent-call targets, bare expression statements.
-param start
 
-program def main() -> unit =
+program def main(start: text) -> unit =
   let impl: Agent = AgentCommand("impl")
   let greeting = "hello"
   let count = 2

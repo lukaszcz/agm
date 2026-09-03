@@ -1,10 +1,9 @@
 # Leading full-line comment; comments must not disturb layout, and newlines are
 # suppressed inside brackets.
-param n: int   # trailing comment on a statement
 
 # comment between statements
 
-program def main() -> unit =
+program def main(n: int) -> unit =  # trailing comment on a declaration header
   let xs = [
     1,
     2,  # comment inside a bracketed continuation

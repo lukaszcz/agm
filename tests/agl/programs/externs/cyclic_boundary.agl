@@ -7,7 +7,6 @@
 # closes a genuine reference cycle through it, "acyclic" leaves it as an
 # ordinary nested array, and "diamond" makes the same inner `Node` reachable
 # twice through `xs` without `xs` ever reaching back to itself.
-param mode: text
 
 record Node(children: array[Node])
 
@@ -15,7 +14,7 @@ extern def count(xs: array[Node]) -> int
 extern def show(xs: array[Node]) -> int
 extern def identity[T](x: T) -> T
 
-program def main() -> unit =
+program def main(mode: text) -> unit =
   let leaf = Node(children = [])
   var xs: array[Node] = [leaf]
 

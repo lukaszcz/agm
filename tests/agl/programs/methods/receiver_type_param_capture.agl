@@ -4,8 +4,6 @@
 # the receiver's type argument or through a later method parameter, and
 # regardless of whether the method's own type argument is inferred or
 # supplied explicitly.
-param mode: text
-param base: int
 
 record Box[T]
   value: T
@@ -37,7 +35,7 @@ def via_receiver[U](box: Box[U], tag: int) -> Outcome[U, int] = box.stamp(tag)
 
 def via_receiver_explicit[U](box: Box[U], tag: int) -> Outcome[U, int] = box.stamp::[int](tag)
 
-program def main() -> unit =
+program def main(mode: text, base: int) -> unit =
   if
     | mode == "later_inferred" =>
         let result = via_later_parameter(Box(value = base), fn(n: int) -> text => "v=%{n}")

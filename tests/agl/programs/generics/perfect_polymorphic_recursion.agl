@@ -30,12 +30,7 @@ def shape[T](p: Perfect[T]) -> text =
     | Single(value) => "leaf"
     | Succ(next) => "deeper"
 
-param a: int
-param b: int
-param c: int
-param d: int
-
-program def main() -> unit =
+program def main(a: int, b: int, c: int, d: int) -> unit =
   let show_int: int -> text = fn(n: int) -> text => "%{n}"
 
   # Level 0: the base case, no growth yet.

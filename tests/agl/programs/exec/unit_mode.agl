@@ -1,7 +1,4 @@
-param target: int
-param fail: bool
-
-program def main() -> unit =
+program def main(target: int, fail: bool) -> unit =
   # Bare ask and exec calls adapt to unit in statement and loop-body positions.
   let notifier: Agent = AgentCommand("notifier")
   ask("starting", agent = notifier)

@@ -1,6 +1,4 @@
 # Non-hole arguments and variable values are captured when the partial application is created.
-param mode: text
-param base: int
 var counter = 0
 
 def tick() -> int =
@@ -11,7 +9,7 @@ def add(a: int, b: int) -> int = a + b
 
 def digits(a: int, b: int) -> int = a * 10 + b
 
-program def main() -> unit =
+program def main(mode: text, base: int) -> unit =
   var current = base
 
   if

@@ -1,9 +1,8 @@
 # Builtin Agent methods are call-only methods that select their receiver as the
 # agent. The branches cover typed and defaulted ask calls and the free-function
 # ask-request form.
-param mode: text
 
-program def main() -> unit =
+program def main(mode: text) -> unit =
   let agents: array[Agent] = [AgentCommand("typed"), AgentCommand("request")]
 
   if

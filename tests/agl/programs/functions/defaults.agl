@@ -1,12 +1,11 @@
 # Optional arguments via default values; named-argument calls.
-param msg: text
 
 def tag_text(text_val: text, prefix: text = "INFO", suffix: text = "") -> text =
   "[" + prefix + "] " + text_val + suffix
 
 # Called with only required arg — both defaults apply.
 
-program def main() -> unit =
+program def main(msg: text) -> unit =
   print(tag_text(msg))
 
   # Override just prefix by name.

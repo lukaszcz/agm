@@ -1,7 +1,5 @@
 # Receiver type parameters bind positionally. The remaining method parameters
 # stay generic, can be inferred from arguments, or can be pinned explicitly.
-param mode: text
-param base: int
 
 record Box[T]
   value: T
@@ -31,7 +29,7 @@ def Outcome::replace_error[A, B, E](self, replacement: E) -> Outcome[A, E] =
     | ok(value) => ok(value = value)
     | err(error) => err(error = replacement)
 
-program def main() -> unit =
+program def main(mode: text, base: int) -> unit =
   if
     | mode == "box" =>
         let box = Box(value = base)

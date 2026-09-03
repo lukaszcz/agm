@@ -5,9 +5,8 @@
 # written (`Red`/`Green`).
 import pal/colors
 import lib/aliasmod
-param red: bool
 
-program def main() -> unit =
+program def main(red: bool) -> unit =
   let p: pal/colors::Palette = if red => pal/colors::Palette::Red else => pal/colors::Palette::Green
   case p of
     | lib/aliasmod::Local::Red => print "red"

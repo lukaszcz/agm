@@ -1,5 +1,4 @@
 # Extern companions may invoke AgL callbacks with scalar and generic values.
-param mode: text
 
 extern def apply(f: (int) -> int, value: int) -> int
 extern def combine(f: (int, int) -> int, left: int, right: int) -> int
@@ -11,7 +10,7 @@ def add_one(value: int) -> int = value + 1
 def add(left: int, right: int) -> int = left + right
 def surround(value: text) -> text = "[" + value + "]"
 
-program def main() -> unit =
+program def main(mode: text) -> unit =
   if mode == "arity" =>
     print apply(add_one, 4)
     print combine(add, 2, 5)

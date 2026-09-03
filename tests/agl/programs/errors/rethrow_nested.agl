@@ -1,8 +1,7 @@
 # Nested try, rethrow with `raise e`, binderless catch, and an exception that no
 # clause matches propagating out of the program.
-param mode
 
-program def main() -> unit =
+program def main(mode: text) -> unit =
   try
     try
       if mode == "inner" =>

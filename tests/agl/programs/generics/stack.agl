@@ -25,11 +25,9 @@ def map_top[A, B](s: Stack[A], f: A -> B) -> Option[B] =
     | none() => Option[B]::none()
     | some(value) => some(value = f(value))
 
-param top: int
-
 # Int stack: peek the top — driven by the host param.
 
-program def main() -> unit =
+program def main(top: int) -> unit =
   let ints: Stack[int] = Stack(items = [top, 20, 30], size = 3)
   case peek(ints) of
     | none() => print "ints: empty"

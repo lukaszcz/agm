@@ -22,10 +22,7 @@ def eval_expr(e: Expr) -> int =
           total := total + eval_expr(s.value)
         total
 
-param x: int
-param y: int
-
-program def main() -> unit =
+program def main(x: int, y: int) -> unit =
   let block_expr = Block(stmts = [
     Stmt(name = "a", value = Lit(value = x)),
     Stmt(name = "b", value = Add(lhs = Lit(value = y), rhs = Lit(value = 1))),

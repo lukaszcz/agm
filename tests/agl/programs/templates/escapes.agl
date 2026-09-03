@@ -1,7 +1,6 @@
 # String escapes use the JSON set; dollar sequences are literal.
-param n: int
 
-program def main() -> unit =
+program def main(n: int) -> unit =
   let s1 = "quote=\" backslash=\\ slash=\/ tab=\tend"
   let s2 = "bell=\b feed=\f"
   let s3 = "newline=\nnext"

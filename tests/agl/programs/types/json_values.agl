@@ -1,8 +1,7 @@
 # json values, null, literal shorthand vs quoted keys, empty literals with
 # annotations, typed agent targets for every built-in.
-param payload: json
 
-program def main() -> unit =
+program def main(payload: json) -> unit =
   let source: Agent = AgentCommand("source")
   let empty_array: array[text] = []
   let empty_map: dict[text, json] = {}

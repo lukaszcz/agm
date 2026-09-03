@@ -1,8 +1,7 @@
 # ExecError: nonzero exit raises a catchable exception carrying command,
 # exit-code, stdout, stderr, timed-out.
-param mode
 
-program def main() -> unit =
+program def main(mode: text) -> unit =
   try
     let out: text = exec "sh -c 'echo partial; echo oops >&2; exit 3'"
     print out

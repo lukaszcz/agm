@@ -1,10 +1,7 @@
 # Arithmetic: + - * /, unary minus, int/decimal mixing, exact decimals,
 # arbitrary precision, text concatenation.
-param a: int
-param b: int
-param scale: decimal
 
-program def main() -> unit =
+program def main(a: int, b: int, scale: decimal) -> unit =
   let sum = a + b
   let diff = a - b
   let product = a * b

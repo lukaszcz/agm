@@ -1,10 +1,9 @@
 # The compact variant: vars for loop-carried state, indented case for branches.
-param spec
 enum Review
   | Pass
   | Fail(issues: array[text])
 
-program def main() -> unit =
+program def main(spec: text) -> unit =
   let impl: Agent = AgentCommand("impl")
   let reviewer: Agent = AgentCommand("reviewer")
   var artifact: text = ask("Implement %{spec}", agent = impl)

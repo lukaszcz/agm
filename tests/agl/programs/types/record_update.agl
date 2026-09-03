@@ -7,11 +7,9 @@ record Issue
   title: text
   severity: int
 
-param bump: int
-
 def shifted(p: Point, dz: int) -> Point = p with z = p.z + dz
 
-program def main() -> unit =
+program def main(bump: int) -> unit =
   let tracker: Agent = AgentCommand("tracker")
   let p = Point(1, 2, 3)
   let q = p with x = 7, z = 4

@@ -2,8 +2,6 @@
 # NodeA <-> tree_b's NodeB), used from the entry program.
 import tree_a::*
 import tree_b::*
-param v: int
-param tag: text
 
 def sum_a(n: NodeA) -> int =
   case n of
@@ -16,7 +14,7 @@ def sum_b(n: NodeB) -> int =
     total := total + sum_a(c)
   total
 
-program def main() -> unit =
+program def main(v: int, tag: text) -> unit =
   let leaf = LeafA()
   let child_group = NodeB(tag = tag, children = [leaf])
   let branch = BranchA(value = v, child = child_group)

@@ -1,9 +1,7 @@
 import std/array
 import std/random
 
-param mode: int
-
-program def main() -> unit =
+program def main(mode: int) -> unit =
   case mode of
     | 1 =>
         random::seed(713)

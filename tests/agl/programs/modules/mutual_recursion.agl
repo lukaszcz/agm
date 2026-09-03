@@ -6,11 +6,10 @@
 import even::*
 import odd::*
 import parity::*
-param n: int
 
 # Mutually recursive predicates defined across a cyclic import (even ↔ odd).
 
-program def main() -> unit =
+program def main(n: int) -> unit =
   print(is_even(n) as text)
   print(is_odd(n) as text)
 

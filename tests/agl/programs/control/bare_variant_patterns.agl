@@ -1,6 +1,5 @@
 # Bare top-level names are nullary constructor patterns. Catch-all binders use
 # an explicit as-pattern; nested names follow their matched field.
-param n: int = 0
 
 enum Color
   | Red
@@ -62,7 +61,7 @@ def inner_name(w: Wrapper) -> text =
     | Wrap(color = Red) => "wrapped-red"
     | Wrap(color) => "wrapped-%{name(color)}"
 
-program def main() -> unit =
+program def main(n: int = 0) -> unit =
   let c: Color = pick(n)
   print(name(c))
   print(code(c))

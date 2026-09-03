@@ -1,9 +1,8 @@
 # `decimal as int`: succeeds only when the decimal has no fractional part;
 # raises CastError otherwise.  The CastError carries source-type="decimal",
 # target-type="int", and raw=the original decimal value.
-param d: decimal
 
-program def main() -> unit =
+program def main(d: decimal) -> unit =
   try
     let i = d as int
     print "ok: %{i}"

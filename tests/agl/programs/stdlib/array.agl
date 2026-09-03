@@ -1,13 +1,11 @@
 # Array methods are ambient; free functions require this explicit import.
 import std/array
 
-param mode: int
-
 record Entry(key: int, tag: text)
 
 def by_order(left: int, right: int) -> int = left - right
 
-program def main() -> unit =
+program def main(mode: int) -> unit =
   case mode of
     | 1 =>
         let empty: array[int] = []

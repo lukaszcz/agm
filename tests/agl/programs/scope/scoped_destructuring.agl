@@ -1,7 +1,6 @@
 # Named-scope nominal declarations support runtime destructuring with
 # qualified paths. `mode` drives every destructured value, so each scenario's
 # output differs across every printed line, not just the trailing mode line.
-param mode: text
 
 record Bounds(low: int, high: int)
 
@@ -39,7 +38,7 @@ scope E
     low - high
 end E
 
-program def main() -> unit =
+program def main(mode: text) -> unit =
   let offset = if | mode == "verbose" => 100 | else => 0
   let reason = if | mode == "verbose" => "loud" | else => "quiet"
 

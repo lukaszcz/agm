@@ -2,9 +2,8 @@
 # element still ahead of the cursor changes what the loop sees when it gets
 # there; mutating an element the cursor has already passed does not change
 # the sum, even though the array itself still ends up mutated.
-param trigger: int
 
-program def main() -> unit =
+program def main(trigger: int) -> unit =
   var xs = [1, 2, 3, 4]
   var total = 0
   var i = 0

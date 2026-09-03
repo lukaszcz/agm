@@ -1,7 +1,6 @@
 # The core prelude re-exports the functional types and their methods. These
 # scenarios compose the combinators with the APIs, including both branches of
 # Either, Result, and the exception bridge.
-param mode: int
 
 def increment(value: int) -> int = value + 1
 def double(value: int) -> int = value * 2
@@ -12,7 +11,7 @@ def fail() -> int = raise Abort(message = "failed")
 
 def project_result(result: Result[int, text]) -> int = result.with-default(0)
 
-program def main() -> unit =
+program def main(mode: int) -> unit =
   case mode of
     | 2 =>
         let none: Option[int] = Option::None

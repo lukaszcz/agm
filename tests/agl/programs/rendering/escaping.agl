@@ -16,9 +16,7 @@ enum Snippet
 def label(t: Template) -> text =
   "tag=%{t.tag}"
 
-param use_raw: bool
-
-program def main() -> unit =
+program def main(use_raw: bool) -> unit =
   let t1 = Template(body = "use ${x} and \%{y} here", tag = "has \"quotes\"")
   print t1
 

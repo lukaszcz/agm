@@ -8,9 +8,7 @@ enum Signal
 enum Packet
   | packet(signal: Signal)
 
-param matched: bool
-
-program def main() -> unit =
+program def main(matched: bool) -> unit =
   var read: int = 4
   var assign: int = 8
   var indexed: array[int] = [12]

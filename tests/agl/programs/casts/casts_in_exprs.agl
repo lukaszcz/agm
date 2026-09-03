@@ -1,13 +1,10 @@
 # Casts as sub-expressions: inside let/var bindings, string interpolation,
 # arithmetic, and accumulation loops.  Demonstrates that cast expressions
 # compose naturally with the rest of the language.
-param a
-param b
-param label
 
 # Cast in let: parse two text params into ints, do arithmetic
 
-program def main() -> unit =
+program def main(a: text, b: text, label: text) -> unit =
   let x = a as int
   let y = b as int
   let sum = x + y

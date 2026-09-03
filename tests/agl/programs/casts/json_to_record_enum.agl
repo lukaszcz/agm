@@ -10,12 +10,9 @@ enum Priority
   | Low
   | High(reason: text)
 
-param config_json
-param priority_json
-
 # json → record parsing and cast
 
-program def main() -> unit =
+program def main(config_json: text, priority_json: text) -> unit =
   try
     let j = json::parse(config_json)
     let cfg = j as Config

@@ -1,12 +1,10 @@
 # Value-call partial application covers let-bound functions, lambdas, and chaining.
-param mode: text
-param base: int
 
 def add(a: int, b: int) -> int = a + b
 
 def digits3(a: int, b: int, c: int) -> int = a * 100 + b * 10 + c
 
-program def main() -> unit =
+program def main(mode: text, base: int) -> unit =
   let add_value: (int, int) -> int = add
   let lambda_value = fn(x: int, y: int) -> int => x * 10 + y
   let add_base = add_value(?, base)

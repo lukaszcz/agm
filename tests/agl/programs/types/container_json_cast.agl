@@ -3,10 +3,8 @@
 # `as json` cast. Scalar `int -> decimal` widening and `int -> json`
 # absorption stay implicit, and json literals (heterogeneous, and ones
 # embedding a container via an explicit cast) still compile and run.
-param a: int
-param b: int
 
-program def main() -> unit =
+program def main(a: int, b: int) -> unit =
   let xs: array[int] = [a, b]
   let xs_json: json = xs as json
   print xs_json

@@ -7,10 +7,6 @@ record Tree
   name: text
   children: dict[text, Tree]
 
-param root_name: text
-param child_name: text
-param include_grandchild: bool
-
 def count_nodes(t: Tree) -> int =
   var total: int = 1
   for key in t.children do
@@ -23,7 +19,7 @@ def render_tree(t: Tree) -> text =
     result := result + " > " + render_tree(t.children[key])
   result
 
-program def main() -> unit =
+program def main(root_name: text, child_name: text, include_grandchild: bool) -> unit =
   let grandchildren: dict[text, Tree] = if include_grandchild => {"leaf": Tree(name = "leaf", children = {})} else => {}
   let child = Tree(name = child_name, children = grandchildren)
   let root = Tree(name = root_name, children = {"child": child, "second": Tree(name = "second", children = {})})

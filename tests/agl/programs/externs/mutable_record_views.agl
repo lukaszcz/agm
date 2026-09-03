@@ -1,6 +1,5 @@
 # Mutable record fields cross to Python as live record views, while immutable
 # records retain their snapshot boundary behavior.
-param mode: text
 
 record Mutable(var value: int, fixed: text)
 record Snapshot(value: int)
@@ -21,7 +20,7 @@ extern def call_retained_callback(box: Callbacks) -> int
 def double(n: int) -> int = n * 2
 def triple(n: int) -> int = n * 3
 
-program def main() -> unit =
+program def main(mode: text) -> unit =
   if mode == "write_through" =>
     let item = Mutable(value = 1, fixed = "fixed")
     let _: unit = mutate(item)

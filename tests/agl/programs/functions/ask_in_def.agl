@@ -1,7 +1,6 @@
 # Agent::ask called from inside a user-defined function body.
 # Also exercises on-parse-error: Retry and the RecursionError depth limit
 # (caught with try/catch).
-param topic: text
 let reviewer: Agent = AgentCommand("reviewer")
 
 enum Verdict
@@ -17,7 +16,7 @@ def review_with_retry(doc: text) -> Verdict =
 # Direct call via function — result printed.
 def infinite(n: int) -> int = infinite(n + 1)
 
-program def main() -> unit =
+program def main(topic: text) -> unit =
   let first_verdict: Verdict = review_once(topic)
   print(first_verdict is Pass)
 

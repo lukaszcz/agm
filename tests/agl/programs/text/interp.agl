@@ -3,10 +3,7 @@
 # surrounding AgL template, then interpreted by the extern.
 import std/text
 
-param mode: text
-param bad_template: text
-
-program def main() -> unit =
+program def main(mode: text, bad_template: text) -> unit =
   let vars = {
     "name": "Ada",
     "place": "Earth",

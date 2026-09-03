@@ -121,19 +121,14 @@
         "bogus": "nope"
       },
       "agents": {
-        "ask": [
-          "summary"
-        ]
+        "ask": []
       },
       "expect": {
-        "stdout_contains": [
-          "x\n",
-          "1\n",
-          "1.5\n",
-          "true\n"
-        ],
-        "calls": {
-          "ask": 1
+        "host_error": {
+          "message_contains": [
+            "Unknown program argument",
+            "bogus"
+          ]
         }
       }
     },

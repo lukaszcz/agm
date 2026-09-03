@@ -3,13 +3,10 @@
 # contrast between `"42" as json` (embeds text as a JSON string) and
 # `json::parse("42")` (parses the text and yields the JSON number 42).
 import std/json
-param n: int
-param flag: bool
-param ratio: decimal
 
 # int / bool / decimal → text
 
-program def main() -> unit =
+program def main(n: int, flag: bool, ratio: decimal) -> unit =
   let n_text   = n     as text
   let b_text   = flag  as text
   let d_text   = ratio as text

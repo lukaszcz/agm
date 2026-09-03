@@ -1,8 +1,7 @@
 # Triple-quoted templates: dedent rule (drop one leading/trailing newline, strip
 # minimum common indentation), interpolation holes are never dedented.
-param body
 
-program def main() -> unit =
+program def main(body: text) -> unit =
   let critic: Agent = AgentCommand("critic")
   if true =>
     let block = critic.ask("""

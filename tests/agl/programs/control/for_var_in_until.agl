@@ -1,10 +1,8 @@
 # for x in array do body until x = sentinel — for-var referenced in until clause.
 # Accumulates a sum until the for-variable equals the sentinel value.
 # Proves the for-variable is in scope in the until condition.
-param items: array[int]
-param sentinel: int
 
-program def main() -> unit =
+program def main(items: array[int], sentinel: int) -> unit =
   var total: int = 0
   for x in items do
     total := total + x

@@ -3,9 +3,7 @@ record Review
   approved: bool
   summary: text
 
-param document: text
-
-program def main() -> unit =
+program def main(document: text) -> unit =
   let reviewer: Agent = AgentCommand("reviewer")
   let summary = ask$ Summarize %{document} in one line.
   print summary

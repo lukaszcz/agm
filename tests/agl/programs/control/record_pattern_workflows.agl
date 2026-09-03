@@ -4,13 +4,11 @@ import record_patterns
 import record_patterns as rp
 import record_patterns::*
 
-param seed: int
-
 record Pair
   left: int
   right: int
 
-program def main() -> unit =
+program def main(seed: int) -> unit =
   let pair = Pair(left = seed, right = seed + 1)
   let Pair(left = _ as swapped_right, right = _ as swapped_left) = pair
   print "%{swapped_left}:%{swapped_right}"

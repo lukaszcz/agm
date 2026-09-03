@@ -1,8 +1,7 @@
 # for x in array do body — iterate array elements, accumulate sum.
 # Exercises: for over array, for var in body, loop-carried var, done terminator.
-param items: array[int]
 
-program def main() -> unit =
+program def main(items: array[int]) -> unit =
   var total: int = 0
   for x in items do
     total := total + x

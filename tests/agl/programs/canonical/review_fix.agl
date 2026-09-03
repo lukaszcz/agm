@@ -1,5 +1,4 @@
 # The canonical example, verbatim.
-param spec: text
 
 record Issue
   title: text
@@ -17,7 +16,7 @@ enum FixResult
   | Changed(output: text)
   | Blocked(reason: text)
 
-program def main() -> unit =
+program def main(spec: text) -> unit =
   let impl: Agent = AgentCommand("impl")
   let reviewer: Agent = AgentCommand("reviewer")
   let critic: Agent = AgentCommand("critic")

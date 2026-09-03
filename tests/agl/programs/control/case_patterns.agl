@@ -9,10 +9,7 @@ enum Wrapped
   | Inner(shape: Shape)
   | Nothing
 
-param code: int
-param who
-
-program def main() -> unit =
+program def main(code: int, who: text) -> unit =
   let picker: Agent = AgentCommand("picker")
   let shape: Shape = ask("Pick a shape.", agent = picker)
 

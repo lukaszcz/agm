@@ -1,6 +1,5 @@
 # Type aliases are transparent; type declarations are collected
 # program-wide, so they may appear after their first use.
-param verdict: Status
 
 type Status = Verdict
 
@@ -8,7 +7,7 @@ enum Verdict
   | Approved
   | Rejected(notes: array[text])
 
-program def main() -> unit =
+program def main(verdict: Status) -> unit =
   let judge: Agent = AgentCommand("judge")
   let initial: Status = verdict
 

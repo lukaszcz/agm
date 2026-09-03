@@ -1,8 +1,7 @@
 # Branch-marker layout: same-column and indented `|` branches; an outer `|` at a
 # shallower column closes the nested construct first.
-param k: int
 
-program def main() -> unit =
+program def main(k: int) -> unit =
   if
     | k == 1 =>
       print "one"

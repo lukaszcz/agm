@@ -8,10 +8,7 @@ def set_value(value: Inner, next: int) -> unit =
 
 def returned(value: Inner) -> Inner = value
 
-param seed: int
-param receiver: Inner
-
-program def main() -> unit =
+program def main(seed: int, receiver: Inner) -> unit =
   receiver.b := seed + 6
 
   let r = Outer(a = Inner(b = seed), stable = seed)

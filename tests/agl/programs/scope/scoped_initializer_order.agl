@@ -1,9 +1,7 @@
 # Runtime initialization is sequenced in the selected program body. Named
 # scopes are static declaration regions and do not perform module initialization.
-param start: int
-param branch_in_region: bool = false
 
-program def main() -> unit =
+program def main(start: int, branch_in_region: bool = false) -> unit =
   var order: int = start
   order := order + 1
   let root_a = order

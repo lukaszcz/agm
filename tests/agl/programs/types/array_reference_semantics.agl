@@ -10,9 +10,7 @@ def bump(xs: array[int]) -> unit =
   var writer = xs
   writer[0] := writer[0] + 1
 
-param seed: int
-
-program def main() -> unit =
+program def main(seed: int) -> unit =
   var l = [seed, seed + 1]
   var l2 = l
   let l3 = l

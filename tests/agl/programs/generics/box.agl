@@ -11,11 +11,9 @@ def apply[A, B](x: A, f: A -> B) -> B = f(x)
 record Box[T]
   value: T
 
-param n: int
-
 # Inference from the payload, then field access.
 
-program def main() -> unit =
+program def main(n: int) -> unit =
   let bi: Box[int] = Box(value = n)
   print bi.value
 

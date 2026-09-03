@@ -9,9 +9,7 @@ def describe_option(option: library::Option[int]) -> text =
     | none() => "none"
     | some(value) => "some %{value}"
 
-param seed: int
-
-program def main() -> unit =
+program def main(seed: int) -> unit =
   let open_box: Box[int] = Box(value = seed)
   let qualified_box: library::Box[int] = library::Box(value = 7)
   let nested: library::Box[Box[int]] = library::Box(value = open_box)

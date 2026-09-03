@@ -1,8 +1,7 @@
 # do[N]...until: post-test, loop-carried state through outer vars, iteration
 # bindings visible to the condition, MaxIterationsExceeded on exhaustion.
-param target: int
 
-program def main() -> unit =
+program def main(target: int) -> unit =
   let oracle: Agent = AgentCommand("oracle")
   var hits: int = 0
   var rounds: int = 0

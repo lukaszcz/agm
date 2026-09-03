@@ -6,9 +6,7 @@ enum Verdict
 
 extern def dedup[T](xs: array[T]) -> array[T]
 
-param extra: int
-
-program def main() -> unit =
+program def main(extra: int) -> unit =
   let xs = [1, 2, 2, 3, 1, 4]
   let uniq = dedup(xs)
   var total = extra

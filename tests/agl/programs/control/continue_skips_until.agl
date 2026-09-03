@@ -3,9 +3,8 @@
 # would be true at that moment — and the until check is skipped, so the loop
 # restarts without exiting.  The loop can only exit via until when i > n,
 # i.e. on the iteration where i = n + 1.
-param n: int
 
-program def main() -> unit =
+program def main(n: int) -> unit =
   var i: int = 0
   do[n + 2]
     i := i + 1

@@ -5,9 +5,7 @@ enum Outcome
   | Partial(left: int)
   | Failed(reason: text, fatal: bool)
 
-param fallback
-
-program def main() -> unit =
+program def main(fallback: text) -> unit =
   let worker: Agent = AgentCommand("worker")
   let first: Outcome = ask("Attempt the task.", agent = worker)
 

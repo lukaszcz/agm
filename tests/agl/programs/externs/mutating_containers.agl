@@ -1,7 +1,6 @@
 # Concrete container arguments cross the Python boundary as live views: Python
 # mutations are visible through the caller's bindings, including a nested
 # record field and aliases. `copy` explicitly gives the caller a snapshot.
-param mode: text
 
 record Batch
   values: array[int]
@@ -14,7 +13,7 @@ extern def mutate_copy(xs: array[int]) -> unit
 extern def snapshot_not_list(xs: array[int]) -> array[int]
 extern def snapshot_not_dict(values: dict[text, int]) -> dict[text, int]
 
-program def main() -> unit =
+program def main(mode: text) -> unit =
   if mode == "append" =>
     var xs = [3, 1, 2]
     let _: unit = mutate_array(xs, "append")

@@ -22,14 +22,12 @@ def via_lambda[A](x: A) -> A =
 enum Wrapper[T]
   | wrap(value: T)
 
-param shout: bool
-
 # Generic function values are fresh occurrences constrained by the other
 # argument of the enclosing declared call.
 def loud(s: text) -> text = s + "!!!"
 def quiet(s: text) -> text = s
 
-program def main() -> unit =
+program def main(shout: bool) -> unit =
   print(app(id, 0))
   print(app(id, "fresh"))
 

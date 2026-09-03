@@ -6,9 +6,7 @@ enum Step
 
 extern def next_step(n: int) -> Step
 
-param start: int
-
-program def main() -> unit =
+program def main(start: int) -> unit =
   var total = 0
   var n = start
   var running = true

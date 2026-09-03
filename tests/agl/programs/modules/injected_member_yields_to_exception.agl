@@ -3,7 +3,6 @@
 # the member stays reachable as `Policy::Stop`. Both the module-root import
 # and a scope-region import apply the rule.
 import facade::*
-param mode: text
 
 def describe(policy: Policy) -> text =
   case policy of
@@ -17,7 +16,7 @@ scope Region
   def raise-stop() -> unit = raise Stop(message = "regional")
 end Region
 
-program def main() -> unit =
+program def main(mode: text) -> unit =
   print(describe(Policy::Stop))
   print(describe(Go))
   try

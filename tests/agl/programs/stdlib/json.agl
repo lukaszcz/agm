@@ -1,9 +1,7 @@
 # Strict and lenient JSON parsing plus ambient json methods.
 import std/json
 
-param mode: int
-
-program def main() -> unit =
+program def main(mode: int) -> unit =
   case mode of
     | 1 =>
         let object = json::parse('{"name": "agm", "count": 2}')

@@ -4,10 +4,7 @@
 exception Boom extends Exception
   code: int
 
-param trigger: bool
-param bump: int
-
-program def main() -> unit =
+program def main(trigger: bool, bump: int) -> unit =
   try
     try
       if trigger =>

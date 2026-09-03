@@ -30,9 +30,7 @@ scope A
     raise A::Boom(message = "m", detail = "scoped")
 end A
 
-param mode
-
-program def main() -> unit =
+program def main(mode: text) -> unit =
   if
     | mode == "sibling" =>
       print A::catch_sibling()

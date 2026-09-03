@@ -21,13 +21,9 @@ def identity_po[T](x: T, /, y: T) -> array[T] =
   let dummy = x
   [dummy, y]
 
-param a_val: int
-param b_val: int
-param z_val: int
-
 # add_po: positional fill, then positional+named.
 
-program def main() -> unit =
+program def main(a_val: int, b_val: int, z_val: int) -> unit =
   print(add_po(a_val, b_val))
   print(add_po(a_val, y = b_val))
 

@@ -8,9 +8,7 @@ enum Plan
   | Retry
   | GiveUp(why: text)
 
-param spec
-
-program def main() -> unit =
+program def main(spec: text) -> unit =
   let impl: Agent = AgentCommand("impl")
   let reviewer: Agent = AgentCommand("reviewer")
   let planner: Agent = AgentCommand("planner")

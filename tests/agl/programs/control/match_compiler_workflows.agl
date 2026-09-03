@@ -8,13 +8,11 @@ enum Bit
 enum Pair
   | pair(left: Bit, right: Bit)
 
-param integer: int
-param decimal_number: decimal
 let picker: Agent = AgentCommand("picker")
 
 def pick() -> Pair = picker.ask("Pick a pair.")
 
-program def main() -> unit =
+program def main(integer: int, decimal_number: decimal) -> unit =
   case pick() of
     | pair(right = zero) => print "right-zero first"
     | pair(left = zero) => print "left-zero second"

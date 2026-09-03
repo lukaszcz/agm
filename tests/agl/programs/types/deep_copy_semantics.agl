@@ -1,10 +1,8 @@
 # copy detaches fully at EVERY depth (unlike shallow-copy, which shares one
 # level down), and it preserves diamond sharing: two fields that pointed at
 # the same array before the copy still point at the same (new) array after.
-param first: int
-param second: int
 
-program def main() -> unit =
+program def main(first: int, second: int) -> unit =
   var inner = [first, second]
   var outer = [inner]
   let deep = copy(outer)

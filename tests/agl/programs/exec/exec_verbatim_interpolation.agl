@@ -1,10 +1,8 @@
 # Verbatim interpolation: exec inserts %{expr} text with NO shell quoting.
 # A value containing spaces causes word-splitting; metacharacters are passed
 # through literally — the shell sees them as-is (no quoting applied by AgL).
-param arg
-param k: int
 
-program def main() -> unit =
+program def main(arg: text, k: int) -> unit =
   let quoted: text = exec "printf '%s|' %{arg}"
   print quoted
 

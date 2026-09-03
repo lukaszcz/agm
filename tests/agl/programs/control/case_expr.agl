@@ -5,9 +5,7 @@ enum Grade
   | Mid(score: int)
   | Low
 
-param bonus: int
-
-program def main() -> unit =
+program def main(bonus: int) -> unit =
   let grader: Agent = AgentCommand("grader")
   let grade: Grade = ask("Grade the work.", agent = grader)
 

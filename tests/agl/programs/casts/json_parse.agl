@@ -2,11 +2,10 @@
 # It raises JsonParseError on malformed input. In contrast, `text as json`
 # embeds text as a JSON string without parsing.
 import std/json
-param raw
 
 # `text as json` embeds the text verbatim as a JSON string — always succeeds
 
-program def main() -> unit =
+program def main(raw: text) -> unit =
   let embedded: json = raw as json
   print embedded
 

@@ -7,9 +7,6 @@ def first[T](items: NonEmpty[T]) =
     | Last(value) => value
     | More(value, rest) => first(rest)
 
-param first_value: int
-param next_value: int
-
-program def main() -> unit =
+program def main(first_value: int, next_value: int) -> unit =
   let items: NonEmpty[int] = More(value = first_value, rest = Last(value = next_value))
   print first(items)

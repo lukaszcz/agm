@@ -2,9 +2,8 @@
 # Scenarios:
 #   - break inside if branch exits immediately
 #   - break in an inline body exits immediately
-param target: int
 
-program def main() -> unit =
+program def main(target: int) -> unit =
   var n: int = 0
   do
     n := n + 1

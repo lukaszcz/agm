@@ -1,8 +1,6 @@
 # Raw shell payloads preserve shell syntax while interpolating only %{...}.
-param file: text
-param label: text
 
-program def main() -> unit =
+program def main(file: text, label: text) -> unit =
   let inline: text = exec$ printf '%s' $VAR "${var}" $(echo shell) $1 "My File Name With Spaces"; # raw tail text remains shell text
   print inline
 

@@ -1,8 +1,7 @@
 # Range for + do[n] safety bound: MaxIterationsExceeded raised after n body entries.
 # Exercises: composition of range for with a do[n] safety bound.
-param bound: int
 
-program def main() -> unit =
+program def main(bound: int) -> unit =
   for i in 1 to 1000 do[bound]
     ()
   done

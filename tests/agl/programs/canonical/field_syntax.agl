@@ -9,9 +9,7 @@ enum E
   | A(x: int)
   | B(x: int, r: R)
 
-param start: int
-
-program def main() -> unit =
+program def main(start: int) -> unit =
   let r = R(x = 0, y = 1)
   let e: E = A(x = start)
 

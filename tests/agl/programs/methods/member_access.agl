@@ -1,6 +1,5 @@
 # A field that contains a function and a method are distinct members. Both
 # normal dot calls and the print juxtaposition form continue to call the field.
-param base: int
 
 record Query
   f: (int) -> int
@@ -8,7 +7,7 @@ record Query
 
 def Query::m(self, amount: int) -> int = self.value + amount
 
-program def main() -> unit =
+program def main(base: int) -> unit =
   let query = Query(
     f = fn(amount: int) -> int => amount * base,
     value = base,

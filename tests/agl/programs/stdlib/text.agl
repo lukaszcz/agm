@@ -1,9 +1,7 @@
 # Text methods are ambient; array::join remains an explicit free function.
 import std/array
 
-param mode: int
-
-program def main() -> unit =
+program def main(mode: int) -> unit =
   case mode of
     | 1 =>
         let empty = ""

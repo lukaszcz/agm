@@ -2,10 +2,7 @@
 # receive the Counter receiver as its first Python positional argument.
 import extern_counter
 
-param value: int
-param amount: int
-
-program def main() -> unit =
+program def main(value: int, amount: int) -> unit =
   let counter = extern_counter::Counter(value = value)
   print(counter.increment(amount))
   print(counter.double())

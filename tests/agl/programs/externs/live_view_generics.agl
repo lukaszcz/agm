@@ -1,7 +1,6 @@
 # Generic array elements cross as their ordinary runtime values while the array
 # itself remains a live mutable view. Parametricity is the companion's
 # obligation.
-param mode: text
 
 record Label
   value: text
@@ -9,7 +8,7 @@ record Label
 extern def mutate[T](xs: array[T], operation: text) -> unit
 extern def write_across_type_variables[T, U](xs: array[T], other: array[U]) -> unit
 
-program def main() -> unit =
+program def main(mode: text) -> unit =
   if mode == "reverse_text" =>
     var xs = ["one", "two", "three"]
     let _: unit = mutate(xs, "reverse")

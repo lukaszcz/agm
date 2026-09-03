@@ -1,8 +1,7 @@
 # Range for with different terminators: done, until, and layout-omitted.
 # Exercises: done terminator, until condition, omitted-terminator layout form.
-param n: int
 
-program def main() -> unit =
+program def main(n: int) -> unit =
   var a: int = 0
   for i in 1 to n do
     a := a + i

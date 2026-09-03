@@ -9,11 +9,7 @@ enum E
   | A
   | B(t: text)
 
-param x: int
-param y: decimal
-param word: text
-
-program def main() -> unit =
+program def main(x: int, y: decimal, word: text) -> unit =
   print(x == 3)
   print(x != 3)
   print(x == y)

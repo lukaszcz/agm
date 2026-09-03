@@ -2,9 +2,7 @@
 record Review
   summary: text
 
-param subject: text
-
-program def main() -> unit =
+program def main(subject: text) -> unit =
   let ag: Agent = AgentCommand("raw")
 
   print ag.ask$ Summarize %{subject}.

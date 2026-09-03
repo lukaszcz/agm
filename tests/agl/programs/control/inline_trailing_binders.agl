@@ -1,7 +1,6 @@
 # Marked inline loop bodies may end in a binder, including a single-item body.
-param target: int
 
-program def main() -> unit =
+program def main(target: int) -> unit =
   var rounds: int = 0
   do[3] rounds := rounds + 1; let complete = rounds >= target until complete
 

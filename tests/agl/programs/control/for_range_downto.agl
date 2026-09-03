@@ -1,10 +1,7 @@
 # Range for with 'downto': descending inclusive iteration with by step.
 # Exercises: for i in a downto b by k, step overshoot, degenerate (zero-iteration) range.
-param start: int
-param stop: int
-param step: int
 
-program def main() -> unit =
+program def main(start: int, stop: int, step: int) -> unit =
   var total: int = 0
   for i in start downto stop by step do
     total := total + i

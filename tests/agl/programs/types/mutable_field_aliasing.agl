@@ -11,9 +11,7 @@ enum Choice
 def add(item: Item, amount: int) -> unit =
   item.amount := item.amount + amount
 
-param seed: int
-
-program def main() -> unit =
+program def main(seed: int) -> unit =
   let shared = Item(amount = seed)
   let binding_alias = shared
   let items = [shared]

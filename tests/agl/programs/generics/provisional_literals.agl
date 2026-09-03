@@ -2,7 +2,6 @@
 # elsewhere in one expression. Empty literals receive evidence from sibling
 # arguments, expected results, and generic constructor fields; populated
 # containers and branches can unify provisional generic values.
-param prefer_empty: bool
 
 record Bundle[T]
   values: array[T]
@@ -16,7 +15,7 @@ enum Option[T]
 def choose[T](left: T, right: T) -> T = right
 def id[T](value: T) -> T = value
 
-program def main() -> unit =
+program def main(prefer_empty: bool) -> unit =
   let from_array_sibling = choose([], [7])
   let from_dict_sibling = choose({}, {answer: 8})
   let from_result: array[int] = id([])

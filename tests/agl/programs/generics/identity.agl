@@ -22,11 +22,9 @@ record Tag
   name: text
   weight: int
 
-param val: int
-
 # Inferred instantiations from the argument type.
 
-program def main() -> unit =
+program def main(val: int) -> unit =
   print(id(val))
   print(id("hi"))
 

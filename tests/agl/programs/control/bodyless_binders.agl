@@ -1,5 +1,4 @@
 # Terminal binders evaluate their RHS and keep effects in their enclosing continuation.
-param choose_true: bool
 var events: text = ""
 
 def log_event(event: text) -> text =
@@ -9,7 +8,7 @@ def log_event(event: text) -> text =
 def prepare() -> unit =
   let function_value = log_event("function")
 
-program def main() -> unit =
+program def main(choose_true: bool) -> unit =
   prepare()
 
   if choose_true =>

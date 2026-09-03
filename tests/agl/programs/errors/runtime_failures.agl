@@ -4,10 +4,7 @@ enum Coin
   | Heads
   | Tails
 
-param d: int
-param mode
-
-program def main() -> unit =
+program def main(d: int, mode: text) -> unit =
   let tosser: Agent = AgentCommand("tosser")
   try
     let q = 10 / d

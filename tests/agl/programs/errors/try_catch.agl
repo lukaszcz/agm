@@ -4,9 +4,7 @@ enum Review
   | Pass
   | Fail(issues: array[text])
 
-param mode
-
-program def main() -> unit =
+program def main(mode: text) -> unit =
   let reviewer: Agent = AgentCommand("reviewer")
   try
     if

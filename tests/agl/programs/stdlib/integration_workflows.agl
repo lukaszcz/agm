@@ -10,9 +10,6 @@ import std/regex::Match
 import std/time
 import std/toml
 
-param workflow: int
-param root: text
-
 def parse-schedule(path: text) -> decimal =
   let content = fs::read(path)
   let document = toml::parse(content)
@@ -23,7 +20,7 @@ def report-schedule-failure(schedule: text) -> unit =
   print(parsed.is-err())
   print(parsed.err().is-some())
 
-program def main() -> unit =
+program def main(workflow: int, root: text) -> unit =
   case workflow of
     | 1 =>
         let names = (exec "inventory").stdout |> json::parse |> (fn(value: json) => value.get("items") as array[json]) |> (fn(items: array[json]) => items.map(fn(item: json) => item.get("name") as text))

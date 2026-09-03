@@ -3,7 +3,6 @@
 # enums, and generic instantiations — including one whose type argument is an
 # array — all test `true`, whether or not a cycle exists elsewhere in the
 # program.
-param close_cycle: bool
 
 record Scalar(value: int)
 record Box[T]
@@ -14,7 +13,7 @@ enum Tree
   | leaf
   | branch(next: Tree)
 
-program def main() -> unit =
+program def main(close_cycle: bool) -> unit =
   let scalar = Scalar(value = 1)
   let tree = leaf
   let boxed_int: Box[int] = Box(value = 1)

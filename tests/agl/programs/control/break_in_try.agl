@@ -1,8 +1,7 @@
 # break inside a try body exits the loop, not caught by the catch handler.
 # The catch handler must NOT intercept the break signal.
-param n: int
 
-program def main() -> unit =
+program def main(n: int) -> unit =
   var count: int = 0
   do
     count := count + 1

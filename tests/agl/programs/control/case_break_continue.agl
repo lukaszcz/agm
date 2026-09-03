@@ -6,9 +6,7 @@ enum Cmd
   | Skip
   | Count
 
-param rounds: int
-
-program def main() -> unit =
+program def main(rounds: int) -> unit =
   let src: Agent = AgentCommand("src")
   var n: int = 0
   var total: int = 0

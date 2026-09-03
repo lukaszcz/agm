@@ -2,11 +2,8 @@
 # own slot does not touch the original, but mutating a nested container
 # reached THROUGH the copy is visible through the original, because the
 # nested container is the same shared object.
-param first: int
-param second: int
-param third: int
 
-program def main() -> unit =
+program def main(first: int, second: int, third: int) -> unit =
   var inner = [first, second]
   var outer = [inner]
   let copied = shallow-copy(outer)

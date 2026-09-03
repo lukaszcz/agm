@@ -1,7 +1,6 @@
 # Lexical scoping: branch shadowing, set across scopes, do-loop iteration scope.
-param mode
 
-program def main() -> unit =
+program def main(mode: text) -> unit =
   let x = 1
   var trail: text = ""
 

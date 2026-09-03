@@ -1,6 +1,5 @@
 # Scoped nominals retain their declaration paths through checking, lowering,
 # schema generation, decoding, and enum case dispatch.
-param expected: int
 
 record Token(value: int)
 
@@ -18,7 +17,7 @@ scope Right
   record Token(value: int)
 end Right
 
-program def main() -> unit =
+program def main(expected: int) -> unit =
   let root = Token(value = 1)
   let left = Left::Token(value = 2)
   let right = Right::Token(value = 3)

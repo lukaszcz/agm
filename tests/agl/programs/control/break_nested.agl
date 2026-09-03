@@ -1,8 +1,7 @@
 # break targets only the INNERMOST enclosing loop.
 # Inner loop breaks after one step; outer loop runs `n` times.
-param n: int
 
-program def main() -> unit =
+program def main(n: int) -> unit =
   var outer: int = 0
   var inner_sum: int = 0
   do

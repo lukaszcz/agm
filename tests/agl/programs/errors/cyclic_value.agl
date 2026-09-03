@@ -9,7 +9,6 @@
 # array, one through a dict, one through two levels of records and arrays,
 # and confirms a shared (diamond) non-cyclic structure is NOT mistaken for a
 # cycle in either mode.
-param close_cycle: bool
 
 record Node(children: array[Node])
 
@@ -18,7 +17,7 @@ record DNode(children: dict[text, DNode])
 record Level1(inner: array[Level2])
 record Level2(inner: array[Level1])
 
-program def main() -> unit =
+program def main(close_cycle: bool) -> unit =
   var xs: array[Node] = [Node(children = [])]
   let n = Node(children = xs)
   if close_cycle =>

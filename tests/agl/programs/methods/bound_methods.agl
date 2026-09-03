@@ -1,8 +1,6 @@
 # Bound methods are first-class function values. Creating one captures its
 # receiver once, while ordinary higher-order and partial-call machinery handles
 # the resulting function value.
-param mode: text
-param base: int
 var builds = 0
 
 record Meter
@@ -17,7 +15,7 @@ def Meter::add(self, amount: int) -> int = self.value + amount
 
 def apply(value: int, f: (int) -> int) -> int = f(value)
 
-program def main() -> unit =
+program def main(mode: text, base: int) -> unit =
   if
     | mode == "stored" =>
         let add = make_meter(base).add

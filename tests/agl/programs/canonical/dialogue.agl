@@ -3,9 +3,7 @@ enum Turn
   | Continue(message: text)
   | Done(answer: text)
 
-param problem
-
-program def main() -> unit =
+program def main(problem: text) -> unit =
   let researcher: Agent = AgentCommand("researcher")
   let critic: Agent = AgentCommand("critic")
   var proposal: Turn = ask("Propose a solution for %{problem}.", agent = researcher, on-parse-error = Retry(n = 2))

@@ -1,11 +1,9 @@
 # `as?` returns whether the corresponding `as` cast would succeed. A successful
 # test can select a branch before the explicit cast produces the converted value.
-param user_input
-param d: decimal
 
 # Check if the text is a valid int before using it
 
-program def main() -> unit =
+program def main(user_input: text, d: decimal) -> unit =
   if user_input as? int =>
     let n = user_input as int
     print "got int: %{n}"

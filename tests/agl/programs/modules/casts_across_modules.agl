@@ -6,13 +6,11 @@
 # imported `parse_point` raises across the module boundary.
 import parsing as p
 import parsing::{to_int_or}
-param amount
-param point_json
 
 # Imported conversion guarded by a convertibility test: succeeds or falls back,
 # never raises.
 
-program def main() -> unit =
+program def main(amount: text, point_json: text) -> unit =
   let source: Agent = AgentCommand("source")
   print(to_int_or(amount, -1) as text)
 

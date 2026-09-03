@@ -1,7 +1,6 @@
 # Explicit session transports select supported adapters and reject incompatible ones at open.
-param backend: int
 
-program def main() -> unit =
+program def main(backend: int) -> unit =
   if backend == 0 =>
     let session = Session::open(
       AgentPi("pi", "model", "high"),

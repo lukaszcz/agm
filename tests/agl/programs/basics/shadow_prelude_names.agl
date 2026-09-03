@@ -3,12 +3,11 @@
 # user declaration at the program scope may shadow — they are not reserved
 # keywords. A `let` shadows the constructor binding for a value, and a `def`
 # shadows it for a function, both without an "already declared" collision.
-param n: int
 
 # `let` shadows the built-in `ExecResult` standard-library record constructor.
 def Retry(x: int) -> int = x + 1
 
-program def main() -> unit =
+program def main(n: int) -> unit =
   let ExecResult = n * 2
   print "%{ExecResult}"
 

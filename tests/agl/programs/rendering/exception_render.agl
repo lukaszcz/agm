@@ -1,11 +1,10 @@
 # Exception rendering: exceptions render record-style with their declared fields
 # via print, template interpolation, and "as json".
 # Combined with try/catch, casts, and conditional logic.
-param bad_input: text
 
 # --- print: CastError renders in declaration-order record form ---
 
-program def main() -> unit =
+program def main(bad_input: text) -> unit =
   try
     let n = bad_input as int
     print "parsed: %{n}"

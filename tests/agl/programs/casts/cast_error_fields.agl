@@ -1,11 +1,9 @@
 # CastError field access: verifies that a caught CastError carries its declared
 # source-type, target-type, raw, and message fields for downstream logic.
-param value
-param target
 
 # Attempt cast and inspect all fields on failure
 
-program def main() -> unit =
+program def main(value: text, target: text) -> unit =
   try
     if target == "int" =>
       let n = value as int

@@ -1,10 +1,9 @@
 # Codex creates its underlying thread only on its first session ask.
-param reset_before_ask: bool
 
 def report(error: SessionError) -> unit =
   print error.operation
 
-program def main() -> unit =
+program def main(reset_before_ask: bool) -> unit =
   let agent = AgentCodex("model", "high")
   let session = Session::open(agent)
   try

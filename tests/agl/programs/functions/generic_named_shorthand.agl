@@ -13,12 +13,9 @@ def g[T, U](x: int, *, z: T, w: U) -> T = z
 # h exercises inference of a named-only shorthand combined with a container return.
 def h[A](n: int, *, label: A) -> array[A] = [label]
 
-param zval: text
-param wval: int
-
 # Bind locals whose names match the param names so that bare-name shorthand works.
 
-program def main() -> unit =
+program def main(zval: text, wval: int) -> unit =
   let z = zval
   let w = wval
 

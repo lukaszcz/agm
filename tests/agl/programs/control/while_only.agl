@@ -1,8 +1,7 @@
 # while COND do body — count up while condition holds.
 # Exercises: while-only loop, done terminator, loop-carried var.
-param limit: int
 
-program def main() -> unit =
+program def main(limit: int) -> unit =
   var n: int = 0
   while n < limit do
     n := n + 1

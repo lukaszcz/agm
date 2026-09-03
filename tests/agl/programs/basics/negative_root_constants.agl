@@ -1,6 +1,5 @@
 # Root bindings whose initializers apply a unary operator to constant operands:
 # bare literals, container elements, and constructor arguments.
-param reading: int
 
 record Range(lo: int, hi: int)
 
@@ -25,7 +24,7 @@ def offset_of(b: Bias) -> int =
     | Low => floor_value
     | High(offset) => offset
 
-program def main() -> unit =
+program def main(reading: int) -> unit =
   print(classify(reading))
   print(reading + offset_of(bias))
   print(floor_value)

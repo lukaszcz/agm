@@ -1,6 +1,4 @@
-param check_invalid_opens: bool
-
-program def main() -> unit =
+program def main(check_invalid_opens: bool) -> unit =
   let command = AgentCommand("writer \%{SESSION_ID}")
   let session = Session::open(command)
   session.reset()

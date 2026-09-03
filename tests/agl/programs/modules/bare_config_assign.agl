@@ -5,11 +5,10 @@
 # unbounded `do` loop. A param drives the numbers.
 import std/config::*
 import tuning::*
-param budget: int
 
 # Bare write through the glob import; the qualified read sees the same binding.
 
-program def main() -> unit =
+program def main(budget: int) -> unit =
   max-iters := budget
   print std/config::max-iters
 

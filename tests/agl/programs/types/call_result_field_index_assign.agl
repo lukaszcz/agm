@@ -5,12 +5,9 @@
 record Bucket
   items: array[int]
 
-param a: int
-param b: int
-
 def make_bucket(items: array[int]) -> Bucket = Bucket(items = items)
 
-program def main() -> unit =
+program def main(a: int, b: int) -> unit =
   let shared = [a, b]
 
   make_bucket(shared).items[0] := 0

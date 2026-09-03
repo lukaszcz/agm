@@ -2,11 +2,10 @@
 # Regression for the bug where ExceptionType has no module_id, causing the
 # field-kinds lookup to use module_id=None and fail for cross-module exceptions.
 import exc::*
-param mode: text
 
 # Glob import-tail form: Boom and BoomDetail are visible by unqualified name.
 
-program def main() -> unit =
+program def main(mode: text) -> unit =
   try
     if
       | mode == "boom" =>

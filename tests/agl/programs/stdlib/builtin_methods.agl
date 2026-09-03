@@ -1,13 +1,12 @@
 # Builtin receiver methods come from the local standard-library graph even
 # though this entry imports none of their owning modules.
-param mode: int
 
 def apply[A, B](value: A, f: A -> B) -> B = f(value)
 def array_first[E](values: array[E]) -> E = values.first()
 def inferred_array_first[E](values: array[E]) = values.first()
 def dict_value[V](values: dict[text, V]) -> V = values.value()
 
-program def main() =
+program def main(mode: int) =
   if mode == 1 =>
     let values = [3, 4]
     let metadata = {"answer": 7}

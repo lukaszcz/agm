@@ -1,8 +1,7 @@
 # for x in text do body — iterate characters of a text string.
 # Exercises: for over text, char binding, until terminator.
-param s: text
 
-program def main() -> unit =
+program def main(s: text) -> unit =
   var count: int = 0
   var found: bool = false
   for ch in s do

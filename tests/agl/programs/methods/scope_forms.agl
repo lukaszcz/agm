@@ -1,8 +1,6 @@
 # Declaration paths and scope regions declare the same members. The paired
 # calls below cover records, generic receivers (including `_` slots), bound
 # values, enums, exceptions, multi-segment regions, and nested regions.
-param mode: text
-param base: int
 
 record Plain(value: int)
 
@@ -64,7 +62,7 @@ scope A
   end T
 end A
 
-program def main() -> unit =
+program def main(mode: text, base: int) -> unit =
   if
     | mode == "plain" =>
         let plain = Plain(value = base)

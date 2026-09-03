@@ -1,8 +1,6 @@
 # Trailing binders make loop bodies unit-valued and remain visible to post-body `until`.
-param target: int
-param use_while: bool
 
-program def main() -> unit =
+program def main(target: int, use_while: bool) -> unit =
   var rounds: int = 0
   var route: text = ""
 

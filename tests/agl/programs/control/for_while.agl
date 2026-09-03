@@ -2,10 +2,8 @@
 # The while guard stops early even when the array is not exhausted.
 # Exercises: for+while, for var visible in while guard and body,
 # loop-carried outer var, done terminator.
-param items: array[int]
-param limit: int
 
-program def main() -> unit =
+program def main(items: array[int], limit: int) -> unit =
   var total: int = 0
   for x in items while x < limit do
     total := total + x

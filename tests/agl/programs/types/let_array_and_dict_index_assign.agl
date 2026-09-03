@@ -1,10 +1,8 @@
 # `let` means "cannot rebind", not "contents frozen": indexed assignment is
 # legal on a `let`-bound array or dict exactly like on a `var`-bound one, and
 # every alias of the same container observes the mutation.
-param a: int
-param b: int
 
-program def main() -> unit =
+program def main(a: int, b: int) -> unit =
   let xs = [a, b]
   let xs_alias = xs
   xs[0] := 0

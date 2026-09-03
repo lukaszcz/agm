@@ -3,13 +3,12 @@
 # one call. In "across_calls", stash retains the view during one call and
 # mutate_stashed mutates through it from a later call: the view still reads
 # and writes the caller's array after the first call has returned.
-param mode: text
 
 extern def stash(xs: array[int]) -> unit
 extern def mutate_stashed() -> unit
 extern def stash_and_use(xs: array[int]) -> unit
 
-program def main() -> unit =
+program def main(mode: text) -> unit =
   if mode == "within_call" =>
     var xs = [1]
     let _: unit = stash_and_use(xs)

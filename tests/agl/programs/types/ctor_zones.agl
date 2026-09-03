@@ -14,11 +14,9 @@ enum Result
   | Ok(value: int)
   | Err(reason: text, fatal: bool)
 
-param base: int
-
 # StdPair(@std): both fields are standard (positional or named)
 
-program def main() -> unit =
+program def main(base: int) -> unit =
   let p1 = StdPair(base, base + 1)
   let p2 = StdPair(0, snd = base)
   print p1.fst

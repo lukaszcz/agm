@@ -1,6 +1,5 @@
 # A member call (`p.f(...)`) and its qualified spelling (`Type::f(p, ...)`) must
 # bind named arguments and apply parameter defaults identically.
-param mode: text
 
 record Point
   x: int
@@ -12,7 +11,7 @@ def Point::describe(self, n: int = 5, label: text = "d") -> text = "%{self.x + n
 
 def Box::describe[T](self, label: text = "v") -> text = "%{label}=%{self.value}"
 
-program def main() -> unit =
+program def main(mode: text) -> unit =
   let point = Point(x = 1)
   let box = Box(value = 9)
 

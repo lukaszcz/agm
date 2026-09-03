@@ -1,7 +1,6 @@
 # copy/shallow-copy through records, enums, exceptions, and a generic
 # container (dict[text, array[int]]); copy detaches every array field,
 # shallow-copy shares it. Both are identity on primitives.
-param x: int
 
 record Box(items: array[int])
 
@@ -11,7 +10,7 @@ enum Bag
 exception Batch extends Exception
   items: array[int]
 
-program def main() -> unit =
+program def main(x: int) -> unit =
   var b = Box(items = [x, x + 1])
   let deep_box = copy(b)
   let shallow_box = shallow-copy(b)

@@ -8,9 +8,8 @@
 # separately, by the static rejection fixtures
 # tests/agl/rejections/type/{array,dict}_into_json_{let,arg}: assigning a
 # container into a `json`-typed slot is a static error, not a silent copy.
-param seed: int
 
-program def main() -> unit =
+program def main(seed: int) -> unit =
   var n: int = seed
   let widened: decimal = n
   let boxed: json = n

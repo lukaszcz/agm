@@ -16,9 +16,7 @@ record NamedPair
   left: int
   right: int
 
-param base: int
-
-program def main() -> unit =
+program def main(base: int) -> unit =
   let positional_record = Pair(base, base + 1)
   let named_record = Pair(left = base + 2, right = base + 3)
   let positional_enum = PairResult(base + 4, base + 5)

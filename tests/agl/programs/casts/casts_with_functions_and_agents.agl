@@ -13,10 +13,7 @@ def double_text_int(s: text) -> text =
   let n = parse_int_or_zero(s)
   (n * 2) as text
 
-param a
-param b
-
-program def main() -> unit =
+program def main(a: text, b: text) -> unit =
   let planner: Agent = AgentCommand("planner")
   # A helper that converts a text to int, returning 0 on failure
   print(parse_int_or_zero(a))

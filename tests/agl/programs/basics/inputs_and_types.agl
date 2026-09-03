@@ -1,11 +1,7 @@
-# Host params: untyped defaults to text; typed params are JSON-validated.
-param topic
-param rounds: int
-param ratio: decimal
-param flag: bool
-param meta: json
+# Program arguments: each parameter's declared type is validated at the host
+# boundary, `text` verbatim and every other type as JSON.
 
-program def main() -> unit =
+program def main(topic: text, rounds: int, ratio: decimal, flag: bool, meta: json) -> unit =
   print topic
   print rounds
   print ratio

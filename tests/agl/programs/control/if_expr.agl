@@ -1,9 +1,8 @@
 # if-expressions (let/print) and the multi-branch if-statement form.
-param score: int
 
 # if-expression in a let binding; int/decimal branch widening
 
-program def main() -> unit =
+program def main(score: int) -> unit =
   let label = if score >= 90 => "pass" else => "fail"
   print label
 

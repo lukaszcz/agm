@@ -19,10 +19,7 @@ def unlink[T](node: LinkedList[T]) -> unit =
         if prev is not Nil => (prev as LinkedList::Cell[T, LinkedList[T]]).next := next
         if next is not Nil => (next as LinkedList::Cell[T, LinkedList[T]]).prev := prev
 
-param seed: int
-param target: text
-
-program def main() -> unit =
+program def main(seed: int, target: text) -> unit =
   let head = LinkedList::Cell::[int, LinkedList[int]](seed, Nil, Nil)
   head.value := seed + 1
   head.next := Cell(seed + 2, head, Nil)

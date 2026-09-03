@@ -8,15 +8,13 @@ record Box[T]
   label: text
   content: T
 
-param threshold: int
-
 def relabel(b: Box[Pair[int, int]], t: int) -> Box[Pair[int, int]]
   if b.content.first >= t =>
     b with content = (b.content with first = 0)
   else =>
     b with label = "kept"
 
-program def main() -> unit =
+program def main(threshold: int) -> unit =
   let pr = Pair(first = 2, second = "two")
   let doubled = pr with first = pr.first * 10, second = "twenty"
   print doubled.first

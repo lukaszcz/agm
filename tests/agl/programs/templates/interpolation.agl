@@ -8,9 +8,7 @@ enum Pick
   | One(item: Item)
   | Nothing
 
-param who
-
-program def main() -> unit =
+program def main(who: text) -> unit =
   let item = Item(name = "bolt", qty = 7)
   let items = ["alpha", "beta"]
   let pick: Pick = One(item = item)

@@ -1,11 +1,8 @@
 # Bounds and step are evaluated exactly once at loop entry.
 # Mutating the vars they reference from inside the body does not change iteration count.
 # Exercises: single-evaluation of bounds and step at loop entry, ascending and descending.
-param down_start: int = 10
-param down_stop: int = 5
-param down_step: int = 2
 
-program def main() -> unit =
+program def main(down_start: int = 10, down_stop: int = 5, down_step: int = 2) -> unit =
   var end_val: int = 5
   var step_val: int = 1
   var count: int = 0

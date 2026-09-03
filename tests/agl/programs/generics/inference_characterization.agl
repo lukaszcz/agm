@@ -1,7 +1,6 @@
 # Characterizes expression-scoped generic inference. Every branch below is a
 # valid runtime workflow once the checker can retain constraints from all parts
 # of one expression instead of requiring a generic value to be concrete eagerly.
-param mode: text
 
 record Box[T]
   value: T
@@ -28,7 +27,7 @@ def choose[T](left: T, right: T) -> T = right
 
 def stringify(n: int) -> text = "n=%{n}"
 
-program def main() -> unit =
+program def main(mode: text) -> unit =
   if
     | mode == "argument_order" =>
         # Generic evidence appears before the concrete argument, then after it.

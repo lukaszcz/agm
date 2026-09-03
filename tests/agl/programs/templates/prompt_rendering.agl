@@ -3,9 +3,7 @@ enum Review
   | Fail(issues: array[text])
   | Pass
 
-param artifact
-
-program def main() -> unit =
+program def main(artifact: text) -> unit =
   let issues = ["missing tests", "unclear API"]
   let review: Review = Fail(issues = issues)
 

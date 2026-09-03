@@ -2,8 +2,6 @@
 # whole body — must raise a *catchable* AgL RecursionError when it exceeds the
 # call-depth limit, exactly like tail recursion. It must never escape as a
 # host-level crash.
-param depth: int
-param catch_it: bool
 
 def sum_to(n: int) =
   if n == 0 => 0 else => n + sum_to(n - 1)
@@ -15,5 +13,5 @@ def run_it(d: int, protect: bool) =
   else =>
     sum_to(d)
 
-program def main() -> unit =
+program def main(depth: int, catch_it: bool) -> unit =
   print(run_it(depth, catch_it))

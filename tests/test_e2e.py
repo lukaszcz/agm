@@ -7628,11 +7628,8 @@ class TestPackageInstall:
         assert "alpha 1.0.0 active\n  command launch" in listed_uninstalled.stdout
         assert restored_dispatch.stdout == "alpha\n"
 
-    def test_registered_commands_honor_arguments_config_engine_help_and_multiword_paths(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        home = tmp_path / "agm-home"
-        env["AGM_HOME"] = str(home)
+    def _write_tools_command_package(self, tmp_path: Path, home: Path) -> Path:
+        """Write a two-command ``tools`` package and the config its programs read."""
         package = _write_store_test_package(tmp_path / "tools-source", "tools", "1.0.0")
         (package / "package.toml").write_text(
             '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
@@ -7657,25 +7654,44 @@ class TestPackageInstall:
             '["tools/main".main]\nsubject = "configured"\nmax-iters = 9\n',
             encoding="utf-8",
         )
+        return package
+
+    def test_registered_commands_expose_help_and_multiword_command_paths(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        home = tmp_path / "agm-home"
+        env["AGM_HOME"] = str(home)
+        package = self._write_tools_command_package(tmp_path, home)
 
         installed = run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
         help_result = run_agm(["help"], env=env, cwd=tmp_path)
         command_help = run_agm(["publish", "--help"], env=env, cwd=tmp_path)
-        published = run_agm(["publish", "--subject", "flag"], env=env, cwd=tmp_path)
-        configured = run_agm(["publish"], env=env, cwd=tmp_path)
         inspected = run_agm(["tools", "inspect", "--subject", "trailing"], env=env, cwd=tmp_path)
-        dry_run = run_agm(["publish", "--dry-run"], env=env, cwd=tmp_path)
-        uninstalled = run_agm(["pkg", "uninstall", "tools"], env=env, cwd=tmp_path)
-        unknown = run_agm(["publish"], env=env, cwd=tmp_path, check=False)
 
         assert installed.returncode == 0
         assert "publish" in help_result.stdout
         assert "Publish a subject" in help_result.stdout
         assert "Program arguments:" in command_help.stdout
         assert "--subject" in command_help.stdout
+        assert inspected.stdout == "trailing\n"
+
+    def test_registered_commands_resolve_arguments_from_flags_config_and_engine_settings(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        home = tmp_path / "agm-home"
+        env["AGM_HOME"] = str(home)
+        package = self._write_tools_command_package(tmp_path, home)
+
+        installed = run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
+        published = run_agm(["publish", "--subject", "flag"], env=env, cwd=tmp_path)
+        configured = run_agm(["publish"], env=env, cwd=tmp_path)
+        dry_run = run_agm(["publish", "--dry-run"], env=env, cwd=tmp_path)
+        uninstalled = run_agm(["pkg", "uninstall", "tools"], env=env, cwd=tmp_path)
+        unknown = run_agm(["publish"], env=env, cwd=tmp_path, check=False)
+
+        assert installed.returncode == 0
         assert published.stdout == "flag\n9\n"
         assert configured.stdout == "configured\n9\n"
-        assert inspected.stdout == "trailing\n"
         assert "call-sites:" in dry_run.stdout
         assert uninstalled.returncode == 0
         assert unknown.returncode != 0

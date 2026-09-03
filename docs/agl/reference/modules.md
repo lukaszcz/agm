@@ -309,14 +309,13 @@ Each module's own source is its reference.
 
 ## Library modules and cycles
 
-Every file-backed module has a static root: imports, declarations, parameters,
-and `let`/`var` bindings are allowed there, while bare expressions and
+Every file-backed module has a static root: imports, declarations, and
+`let`/`var` bindings are allowed there, while bare expressions and
 assignments are not. Root binding initializers must be constant expressions:
-literals, literal containers, constructor applications, and unary operators
-over those. Put executable workflow code in a `program def` body. Parameters
-are also legal in named scope regions in every module. A program receives
-values for the params in its module and transitive import/export dependencies
-before it starts.
+literals, literal containers, constructor applications, unary operators over
+those, and `resource`/`resource-dir` calls
+([Expressions](expressions.md#resource-and-resource-dir)). Put executable
+workflow code in a `program def` body.
 
 Imports, uses, and exports appear before other declarations at a module root and in
 every named scope region. A region is one declaration for its enclosing root's

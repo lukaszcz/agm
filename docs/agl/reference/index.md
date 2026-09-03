@@ -87,7 +87,7 @@ program def main(spec: text) -> unit =
 | [Shell execution](shell-execution.md) | `exec`, the `ExecResult` structured form vs the parsed form, `ExecError` |
 | [Python FFI](ffi.md) | `extern def`, the companion Python file, value mapping across the boundary, `ExternError` |
 | [Exceptions](exceptions.md) | The exception model, `try`/`catch`/`raise`, the built-in exception catalog |
-| [Host environment](host-environment.md) | Agents, params, host defaults, capability checking, tracing |
+| [Host environment](host-environment.md) | Agents, program arguments, host defaults, capability checking, tracing |
 | [Grammar](grammar.md) | The collected grammar |
 
 This reference describes the language. It names a library type or function only
@@ -103,7 +103,7 @@ strings are literal tokens. Token names in `UPPER_CASE` refer to the lexical
 tokens defined in [Lexical structure](lexical-structure.md).
 
 Throughout the reference, "the host" refers to the runtime environment that
-embeds AgL: it dispatches selected `Agent` values, supplies program params,
+embeds AgL: it dispatches selected `Agent` values, supplies program arguments,
 executes shell commands, and records traces. Behavior marked *host-configurable*
 has a documented portable default that hosts may override; everything else is
 fixed by the language.
@@ -121,6 +121,7 @@ AgL distinguishes three failure layers:
    `AgentParseError`, `MaxIterationsExceeded`, or `RecursionError`. Uncaught
    exceptions terminate the program. See [Exceptions](exceptions.md).
 
-Invalid host params (missing or ill-typed required params) are **host
-invocation error**: it is reported before anything runs and is not catchable
-in-language. See [Host environment](host-environment.md).
+A missing required program argument, or a supplied value that does not
+decode to its declared type, is a **host invocation error**: reported before
+anything runs and not catchable in-language. See
+[Host environment](host-environment.md).

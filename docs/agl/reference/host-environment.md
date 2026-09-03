@@ -4,7 +4,7 @@
 
 An AgL program does not run in a vacuum: a **host** embeds the language,
 supplies the agents, provides external values for a selected program's own
-arguments, executes shell commands, and records the trace. This chapter
+parameters, executes shell commands, and records the trace. This chapter
 specifies the contract between a program and its host — what a program may
 assume, and which knobs are host-configurable.
 
@@ -61,7 +61,13 @@ A `program def`'s own value parameters ([Functions](functions.md#parameters))
 are its external inputs. The host supplies them as named external values at
 run start, resolved for the **selected** program only — a program reached
 only through an import keeps its parameters as ordinary function arguments,
-supplied by its caller, not by the host.
+supplied by its caller, not by the host. Binding is ordinary call semantics:
+the host binds only the parameters it has an external value for, and every
+other parameter uses its own default, evaluated exactly as an omitted call
+argument is — at call time, after every module's static bindings have
+initialized, so a default may read module-level state. An exception raised by
+a default therefore surfaces as an ordinary uncaught program exception, not a
+host invocation error.
 
 A positional-only or standard parameter accepts a positional CLI token; a
 standard or named-only parameter accepts `--name value`, `--name=value`, or,
@@ -73,8 +79,10 @@ a positional slot. A doubled `--` ends option parsing, so a later
 Supplying the same parameter twice (by any combination of position and name)
 is a usage error, as is a flag naming no declared parameter.
 
-Validation happens after type checking and **before any statement executes**.
-Each parameter's effective value resolves as:
+Validation happens after type checking and **before any statement executes**;
+it checks only the externally supplied values themselves, not a parameter's
+default — a default's own evaluation is distinct and happens later, at the
+entry call, as described above. Each parameter's effective value resolves as:
 
 ```
 CLI token (--name / positional)  >  qualified config table  >  declared default
@@ -95,11 +103,10 @@ and validated against the declared type.
 
 The declared type must be JSON-wire-serializable, including for a parameter
 whose default is always used. Runtime-only values such as `unit` and
-functions are not valid program-argument types because the executable always
-includes external-decoder metadata for every declared value parameter. A
-[recursive](types.md#recursive-types) record or enum parameter decodes
-normally, subject to the same finite-schema restriction as an agent output
-type or cast target — see [Generics](generics.md#the-finite-schema-boundary).
+functions are not valid program-argument types, whether or not the host ever
+supplies a value for the parameter. A [recursive](types.md#recursive-types)
+record or enum parameter decodes normally, subject to the same finite-schema
+restriction as an agent output type or cast target — see [Generics](generics.md#the-finite-schema-boundary).
 
 ## Host-configurable settings
 
@@ -140,8 +147,11 @@ A program that never writes a setting keeps the value chosen by the CLI/config
 layers.
 
 `agm repl` resolves engine settings as source writes > CLI > `[exec]` > declared
-default. It supplies no external argument values at all, so a program it runs
-must carry a source default for every value parameter it declares.
+default. It has no entry program: a `program def` declared at the prompt is an
+ordinary function, called with its own arguments like any other declaration
+there. Its named-only default zone still applies, so a plain parameter is
+supplied as `main(x = 5)`; the positional form `main(5)` is rejected as a
+positional argument in a named-only position.
 
 ### Config-file schema
 

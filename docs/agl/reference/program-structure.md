@@ -83,9 +83,13 @@ region.
   declaration path (`main`, `review::main`). Its value parameters are the
   program's own external inputs: the host supplies them from CLI options and
   qualified config, falling back to their declared defaults; see
-  [Host environment](host-environment.md#program-arguments). `agm exec` selects
-  declarations from its file entry module; declarations reached through
-  imports remain ordinary callable functions.
+  [Host environment](host-environment.md#program-arguments). A standard or
+  named-only parameter, being name-addressable, cannot spell an engine
+  setting's name ([Host environment](host-environment.md#engine-settings)),
+  since program arguments and engine settings share one flag and config
+  namespace; a positional-only parameter is exempt, as it never becomes a flag
+  or config key. `agm exec` selects declarations from its file entry module;
+  declarations reached through imports remain ordinary callable functions.
 - **`builtin var` declarations** — body-less host-backed mutable bindings.
   Any standard-library module may declare one; entry programs and ordinary
   libraries cannot. A declaration may be a member of a named scope region and

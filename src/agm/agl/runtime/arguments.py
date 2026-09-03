@@ -191,6 +191,21 @@ def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
     return decode_value(decoder.decode, normalized, dict(decoder.defs))
 
 
+@dataclass(frozen=True, slots=True)
+class _Supplied:
+    """Box a raw host argument so ``None`` keeps meaning "not supplied".
+
+    ``bind_arguments`` is generic over an opaque item type and returns
+    ``None`` for a parameter slot the caller must default; a host may
+    legitimately *supply* ``None`` itself (JSON ``null`` for a ``json``-typed
+    parameter), so every raw value is boxed before it enters the pure binder
+    and unboxed on the way out.  An absent ``Option[T]`` is not such a case:
+    it crosses as the ``{"$case": "None"}`` envelope, never a bare ``None``.
+    """
+
+    value: object
+
+
 def bind_program_arguments(
     signature: ProgramSignature, arguments: ProgramArguments
 ) -> "tuple[tuple[Value | UseDefault, ...], tuple[Diagnostic, ...]]":
@@ -220,15 +235,17 @@ def bind_program_arguments(
     bind_params = [
         BindParam(name=p.name, kind=p.kind, has_default=True) for p in signature.parameters
     ]
+    boxed_positional = [_Supplied(value) for value in arguments.positional]
+    boxed_named = [(name, _Supplied(value)) for name, value in arguments.named.items()]
     try:
-        bound = bind_arguments(bind_params, arguments.positional, arguments.named.items())
+        bound = bind_arguments(bind_params, boxed_positional, boxed_named)
     except ArgumentBindingError as exc:
         return (), (_diagnose_binding_error(exc, signature),)
 
     values: "list[Value | UseDefault]" = []
     diagnostics: list[Diagnostic] = []
-    for index, (param, raw) in enumerate(zip(signature.parameters, bound, strict=True)):
-        if raw is None:
+    for index, (param, box) in enumerate(zip(signature.parameters, bound, strict=True)):
+        if box is None:
             if param.has_default:
                 values.append(UseDefault(param_index=index))
             else:
@@ -237,7 +254,7 @@ def bind_program_arguments(
                 )
             continue
         try:
-            values.append(decode_param_value(param.decoder, raw))
+            values.append(decode_param_value(param.decoder, box.value))
         except (StrictJsonParseError, ValueError) as exc:
             diagnostics.append(
                 diagnostic_from_span(

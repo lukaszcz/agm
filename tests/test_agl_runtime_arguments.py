@@ -27,9 +27,9 @@ from agm.agl.runtime.arguments import (
 from agm.agl.runtime.types import ProgramParamInfo
 from agm.agl.semantics.arguments import ArgumentBindingError, ArgumentBindingErrorKind
 from agm.agl.semantics.type_table import create_seeded_type_table
-from agm.agl.semantics.types import BoolType, IntType, TextType
+from agm.agl.semantics.types import BoolType, IntType, JsonType, TextType
 from agm.agl.semantics.types import Type as AglType
-from agm.agl.semantics.values import BoolValue, IntValue, TextValue
+from agm.agl.semantics.values import BoolValue, IntValue, JsonValue, TextValue
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import build_param_decoder
 
@@ -189,6 +189,40 @@ class TestBindProgramArgumentsSuccess:
         )
         assert values == ()
         assert diagnostics == ()
+
+    def test_explicit_json_null_named_argument_decodes_rather_than_defaulting(self) -> None:
+        # A host-supplied `None` (JSON null) is a real argument, not an
+        # omitted one: it must decode to `JsonValue(None)`, not fall back to
+        # the parameter's default or be reported missing.
+        payload = _param_and_info(
+            "payload", ParamZone.NAMED_ONLY, JsonType(), required=False, line=1
+        )
+        signature = _signature(payload)
+        values, diagnostics = bind_program_arguments(
+            signature, ProgramArguments(positional=(), named={"payload": None})
+        )
+        assert diagnostics == ()
+        assert values == (JsonValue(None),)
+
+    def test_explicit_json_null_satisfies_a_required_parameter(self) -> None:
+        payload = _param_and_info(
+            "payload", ParamZone.NAMED_ONLY, JsonType(), required=True, line=1
+        )
+        signature = _signature(payload)
+        values, diagnostics = bind_program_arguments(
+            signature, ProgramArguments(positional=(), named={"payload": None})
+        )
+        assert diagnostics == ()
+        assert values == (JsonValue(None),)
+
+    def test_explicit_json_null_positional_argument_decodes_rather_than_defaulting(self) -> None:
+        payload = _param_and_info("payload", ParamZone.STANDARD, JsonType(), required=False, line=1)
+        signature = _signature(payload)
+        values, diagnostics = bind_program_arguments(
+            signature, ProgramArguments(positional=(None,), named={})
+        )
+        assert diagnostics == ()
+        assert values == (JsonValue(None),)
 
 
 class TestBindProgramArgumentsBindingErrors:

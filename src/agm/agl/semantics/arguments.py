@@ -159,6 +159,11 @@ def bind_arguments(
     - The bound argument item (``T``) if the argument was supplied.
     - ``None`` if the parameter's default should be used.
 
+    ``None`` is therefore reserved as the use-default marker: a caller whose
+    ``T`` admits ``None`` as a legitimate *supplied* item (a raw host value
+    decoded from JSON ``null``, say) must box its items before calling and
+    unbox the result, or the two become indistinguishable.
+
     Raises
     ------
     ArgumentBindingError

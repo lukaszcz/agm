@@ -106,9 +106,11 @@ typecheck:
 #
 # The static checks read the tree while the suite runs it, so they are
 # independent and run alongside it: on a green tree their cost disappears behind
-# the suite's runtime entirely. Their output is still reported the moment they
-# finish -- well before the suite does -- so a type or lint error surfaces as
-# early as it would have when the gates ran one after another.
+# the suite's runtime entirely. A failure is still reported the moment it is
+# known -- well before the suite finishes -- so a type or lint error surfaces as
+# early as it would have when the gates ran one after another. A clean static
+# run has nothing urgent to say, so it waits for the suite rather than splicing
+# itself into pytest's progress line.
 check:
     static_log=$(mktemp); \
     trap 'rm -f "$static_log"' EXIT; \
@@ -118,9 +120,10 @@ check:
     tests=$!; \
     static_status=0; \
     wait "$static" || static_status=$?; \
-    cat "$static_log"; \
+    if (( static_status )); then printf '\n'; cat "$static_log"; fi; \
     tests_status=0; \
     wait "$tests" || tests_status=$?; \
+    if (( ! static_status )); then cat "$static_log"; fi; \
     exit $(( static_status | tests_status ))
 
 # Install the agm CLI into an isolated environment

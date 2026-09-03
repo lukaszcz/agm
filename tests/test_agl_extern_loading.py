@@ -646,7 +646,7 @@ class TestRegistryPopulatedViaPipeline:
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,
         )
-        discovery = driver.discover_params(prepared)
+        discovery = driver.discover_programs(prepared)
         assert discovery.checked is not None
 
         diagnostics = _wire_extern_registry(

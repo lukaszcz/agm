@@ -260,11 +260,11 @@ class TestExecCommandArgParsing:
         assert "agm exec" in result.output
         assert recorded_runs == []
 
-    def test_exec_help_before_file_discovers_file_params(
+    def test_exec_help_before_file_discovers_file_arguments(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        write_file_program(agl_file, "param msg: text\n")
+        write_file_program(agl_file, "program def main(msg: text) -> unit = print msg\n")
 
         result = invoke(runner, ["exec", "--help", str(agl_file)])
 
@@ -280,11 +280,11 @@ class TestExecCommandArgParsing:
         assert "agm exec" in result.output
         assert recorded_runs == []
 
-    def test_exec_short_help_flag_after_file_discovers_file_params(
+    def test_exec_short_help_flag_after_file_discovers_file_arguments(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        write_file_program(agl_file, "param msg: text\n")
+        write_file_program(agl_file, "program def main(msg: text) -> unit = print msg\n")
 
         result = invoke(runner, ["exec", str(agl_file), "-h"])
 
@@ -292,11 +292,11 @@ class TestExecCommandArgParsing:
         assert "--msg" in result.output
         assert recorded_runs == []
 
-    def test_exec_short_help_flag_consumed_as_a_param_value_is_not_help(
+    def test_exec_short_help_flag_consumed_as_an_argument_value_is_not_help(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        write_file_program(agl_file, "param msg: text\n")
+        write_file_program(agl_file, "program def main(msg: text) -> unit = print msg\n")
 
         result = invoke(runner, ["exec", str(agl_file), "--msg", "-h"])
 
@@ -354,8 +354,12 @@ class TestExecCommandInline:
         assert exec_command.run(self._command_args('print "hello"')) is None
         assert capsys.readouterr().out == "hello\n"
 
-    def test_inline_command_with_params(self, capsys: pytest.CaptureFixture[str]) -> None:
-        args = self._command_args("param msg\nprint msg", param_tokens=["--msg", "hi"])
+    def test_inline_command_with_program_arguments(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        args = self._command_args(
+            "program def main(msg: text) -> unit = print msg", param_tokens=["--msg", "hi"]
+        )
         assert exec_command.run(args) is None
         assert capsys.readouterr().out == "hi\n"
 
@@ -466,62 +470,22 @@ class TestInlineSourceDiagnostics:
 
 
 class TestExecDynamicHelp:
-    def test_exec_help_for_file_includes_discovered_params(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file,
-            'param msg: text = "hi"\nprogram def main() -> unit = print msg\n',
-        )
+    """CLI-parsing- and degradation-level ``--help`` behavior.
 
-        with pytest.raises(SystemExit) as exc_info:
-            cli._exec_print_help(file=str(agl_file), command=None)
+    Discovery of a selected program's own value-parameter surface (the
+    ``Program arguments:`` section content) is covered by
+    ``TestProgramArgumentsDynamicHelp``; these tests exercise the surrounding
+    CLI plumbing (inline sources, the file/option heuristic, graceful
+    degradation) instead.
+    """
 
-        assert exc_info.value.code == 0
-        out = capsys.readouterr().out
-        assert "Program parameters:" in out
-        assert "--msg" in out
-
-    def test_exec_help_uses_the_file_stem_for_colliding_entry_params(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        (tmp_path / "settings.agl").write_text('param region: text = "eu"\n')
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            "import settings\nparam region: text\nprogram def main() -> unit = print region\n"
-        )
-
-        with pytest.raises(SystemExit) as exc_info:
-            cli._exec_print_help(file=str(agl_file), command=None)
-
-        assert exc_info.value.code == 0
-        output = capsys.readouterr().out
-        assert "--prog::region" in output
-        assert "--<entry>::region" not in output
-
-    def test_exec_accepts_the_file_stem_for_colliding_entry_params(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        (tmp_path / "settings.agl").write_text('param region: text = "eu"\n')
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            "import settings\nparam region: text\nprogram def main() -> unit = print region\n"
-        )
-
-        assert (
-            exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--prog::region", "local"]))
-            is None
-        )
-        assert capsys.readouterr().out == "local\n"
-
-    def test_exec_help_for_inline_command_includes_discovered_params(
+    def test_exec_help_for_inline_command_includes_discovered_arguments(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         with pytest.raises(SystemExit) as exc_info:
             cli._exec_print_help(
                 file=None,
-                command="param count: int = 1\nlet next = count + 1\nprint next",
+                command="program def main(count: int = 1) -> unit = print(count + 1)",
             )
 
         assert exc_info.value.code == 0
@@ -533,84 +497,34 @@ class TestExecDynamicHelp:
         with pytest.raises(SystemExit):
             cli._exec_print_help(
                 file="--foo/bar::x",
-                command="param count: int = 1\nprint count",
+                command="program def main(count: int = 1) -> unit = print count",
             )
 
         assert "--count" in capsys.readouterr().out
 
-    def test_exec_help_discovers_params_from_cli_module_roots(
+    def test_exec_help_discovers_program_arguments_through_cli_module_roots(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         module_root = tmp_path / "modules"
         module_root.mkdir()
-        (module_root / "settings.agl").write_text('param region: text = "eu"\n')
+        (module_root / "settings.agl").write_text('def default-region() -> text = "eu"\n')
         entry = tmp_path / "prog.agl"
-        entry.write_text("import settings\nprogram def main() -> unit = ()\n")
+        write_file_program(
+            entry,
+            "import settings\n"
+            "program def main(region: text = settings::default-region()) -> unit = ()\n",
+        )
 
         with pytest.raises(SystemExit):
             cli._exec_print_help(file=str(entry), command=None, module_paths=[str(module_root)])
 
         assert "--region" in capsys.readouterr().out
 
-    def test_exec_help_discovers_params_from_configured_module_roots(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from agm.config.context import ConfigContext
-
-        module_root = tmp_path / "modules"
-        module_root.mkdir()
-        (module_root / "settings.agl").write_text('param region: text = "eu"\n')
-        config_dir = tmp_path / ".agm"
-        config_dir.mkdir()
-        (config_dir / "config.toml").write_text(f'[modules]\nroots = ["{module_root}"]\n')
-        monkeypatch.setattr(
-            "agm.config.context.current_config_context",
-            lambda: ConfigContext(home=tmp_path, proj_dir=None, cwd=tmp_path),
-        )
-        entry = tmp_path / "prog.agl"
-        entry.write_text("import settings\nprogram def main() -> unit = ()\n")
-
-        with pytest.raises(SystemExit):
-            cli._exec_print_help(file=str(entry), command=None)
-
-        assert "--region" in capsys.readouterr().out
-
-    def test_exec_help_discovers_params_from_path_dependencies(
-        self, tmp_path: Path, runner: CliRunner
-    ) -> None:
-        bravo = tmp_path / "bravo"
-        (bravo / "bravo").mkdir(parents=True)
-        (bravo / "package.toml").write_text('[package]\nname = "bravo"\nversion = "1.0.0"\n')
-        (bravo / "bravo" / "settings.agl").write_text('param region: text = "eu"\n')
-        alpha = tmp_path / "alpha"
-        (alpha / "alpha").mkdir(parents=True)
-        (alpha / "package.toml").write_text(
-            '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
-            "[dependencies]\n"
-            'bravo = { version = "1", path = "../bravo" }\n'
-        )
-        entry = alpha / "alpha" / "main.agl"
-        entry.write_text("import bravo/settings\nprogram def main() -> unit = ()\n")
-
-        result = invoke(runner, ["exec", "--no-stdlib", str(entry), "--help"])
-
-        assert result.exit_code == 0
-        assert "--region" in result.output
-
-    def test_exec_help_for_source_without_params_has_no_param_section(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        with pytest.raises(SystemExit) as exc_info:
-            cli._exec_print_help(file=None, command='print "hi"')
-
-        assert exc_info.value.code == 0
-        assert "Program parameters:" not in capsys.readouterr().out
-
     def test_exec_help_degrades_when_effective_root_loading_fails(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param msg: text\n")
+        agl_file.write_text("program def main(msg: text) -> unit = print msg\n")
         monkeypatch.setattr(
             "agm.cli_support.exec_roots.effective_exec_roots",
             lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("unavailable roots")),
@@ -620,7 +534,7 @@ class TestExecDynamicHelp:
             cli._exec_print_help(file=str(agl_file), command=None)
 
         assert exc_info.value.code == 0
-        assert "Program parameters:" not in capsys.readouterr().out
+        assert "Program arguments:" not in capsys.readouterr().out
 
     def test_exec_help_for_unreadable_file_degrades(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -631,7 +545,7 @@ class TestExecDynamicHelp:
         assert exc_info.value.code == 0
         out = capsys.readouterr().out
         assert "agm exec" in out
-        assert "Program parameters:" not in out
+        assert "Program arguments:" not in out
 
 
 class TestExecCommandBehavior:
@@ -941,7 +855,6 @@ class TestExecExitCodeMapping:
             self: PipelineDriver,
             prepared: object,
             *,
-            param_values: object = None,
             check_only: bool = False,
             **_kwargs: object,
         ) -> RunResult:
@@ -998,7 +911,6 @@ class TestExecCommandWarnings:
             self: PipelineDriver,
             prepared: object,
             *,
-            param_values: object = None,
             check_only: bool = False,
             **_kwargs: object,
         ) -> RunResult:
@@ -1086,7 +998,6 @@ class TestExecCommandWarnings:
             self: PipelineDriver,
             prepared: object,
             *,
-            param_values: object = None,
             check_only: bool = False,
             **_kwargs: object,
         ) -> RunResult:
@@ -1306,28 +1217,16 @@ class TestExecCommandExitCodes:
         result = exec_command.run(args)
         assert result is None  # no SystemExit → exit 0
 
-    def test_program_with_params_exits_0(self, tmp_path: Path) -> None:
-        agl_file = tmp_path / "test.agl"
-        write_file_program(agl_file, "param msg\nprint msg\n")
-        from agm.cli_support.args import ExecArgs
-
-        args = ExecArgs(
-            file=str(agl_file),
-            param_tokens=["--msg", "hello"],
-            strict_json=None,
-            max_iters=None,
-            no_log=False,
-            log_file=None,
-        )
-        result = exec_command.run(args)
-        assert result is None
-
-    def test_declared_agents_with_std_config_preserve_params(self, tmp_path: Path) -> None:
+    def test_declared_agents_with_std_config_preserve_program_arguments(
+        self, tmp_path: Path
+    ) -> None:
         agl_file = tmp_path / "test.agl"
         write_file_program(
             agl_file,
-            'import std/config\nlet worker = AgentCommand("worker")\nstd/config::log := false\n'
-            "param value: int\nprint value\n",
+            'import std/config\nlet worker = AgentCommand("worker")\n'
+            "program def main(value: int) -> unit =\n"
+            "  std/config::log := false\n"
+            "  print value\n",
         )
         from agm.cli_support.args import ExecArgs
 
@@ -1380,51 +1279,6 @@ class TestExecCommandExitCodes:
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(args)
         assert exc_info.value.code == 1
-
-    def test_scoped_param_cli_flag_uses_its_full_path_spelling(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """A scoped `param Deploy::region` is supplied as `--Deploy::region`."""
-        agl_file = tmp_path / "test.agl"
-        write_file_program(
-            agl_file,
-            'scope Deploy\n  param region: text = "eu"\nend Deploy\n\nprint(Deploy::region)\n',
-        )
-
-        assert (
-            exec_command.run(_exec_args(agl_file, param_tokens=["--Deploy::region", "prod"]))
-            is None
-        )
-
-        assert capsys.readouterr().out == "prod\n"
-
-    def test_scoped_param_config_key_uses_its_full_path_spelling(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """A scoped param resolves from its qualified config table."""
-        from agm.config.context import ConfigContext
-
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[test.Deploy]\nregion = "prod"\n')
-        agl_file = tmp_path / "test.agl"
-        write_file_program(
-            agl_file,
-            'scope Deploy\n  param region: text = "eu"\nend Deploy\n'
-            "\n"
-            "program def demo() -> unit = print(Deploy::region)\n",
-        )
-        monkeypatch.setattr(
-            exec_engine,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
-        assert exec_command.run(_exec_args(agl_file)) is None
-        assert capsys.readouterr().out == "prod\n"
 
     def test_param_default_can_read_a_static_binding(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -1497,35 +1351,6 @@ class TestExecCommandExitCodes:
             exec_command.run(_exec_args(agl_file))
 
         assert exc_info.value.code == 1
-
-    def test_undeclared_param_config_warns_but_runs(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        from agm.config.context import ConfigContext
-
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text("\n".join(["[test]", 'msgs = "ignored"']))
-        agl_file = tmp_path / "test.agl"
-        write_file_program(
-            agl_file,
-            'param msg: text = "ok"\nprogram def demo() -> unit = print msg\n',
-        )
-        monkeypatch.setattr(
-            exec_engine,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
-        assert exec_command.run(_exec_args(agl_file)) is None
-        captured = capsys.readouterr()
-        # The program still runs on the declared default; the misspelled key is
-        # reported so it is not silently dropped.
-        assert captured.out == "ok\n"
-        assert "msgs" in captured.err
 
     def test_ask_program_dispatches_through_the_value_dispatcher(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2187,114 +2012,61 @@ class TestExecFFI:
         assert not marker.exists()
 
 
-class TestJsonParamsCLI:
-    """--param with structured (record/array/decimal) types via JsonCodec."""
+class TestJsonProgramArgumentsCLI:
+    """A ``program def``'s structured (record/array/decimal) arguments via JsonCodec."""
 
-    def test_record_param_parsed_from_json_string(self, tmp_path: Path) -> None:
-        """A record-typed param provided as a JSON string is parsed and usable."""
+    def test_record_argument_parsed_from_json_string(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A record-typed argument provided as a JSON string is parsed and usable."""
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            "record Point\n  x: int\n  y: int\nparam pt: Point\nprint pt.x\n",
+            "record Point\n  x: int\n  y: int\nprogram def main(pt: Point) -> unit = print pt.x\n",
         )
-        from agm.cli_support.args import ExecArgs
 
-        args = ExecArgs(
-            file=str(agl_file),
-            param_tokens=['--pt={"x": 1, "y": 2}'],
-            strict_json=None,
-            max_iters=None,
-            no_log=False,
-            log_file=None,
+        assert (
+            exec_command.run(_exec_args_no_log(agl_file, param_tokens=['--pt={"x": 1, "y": 2}']))
+            is None
         )
-        import io
-        import sys
+        assert capsys.readouterr().out.strip() == "1"
 
-        out = io.StringIO()
-        old_stdout = sys.stdout
-        sys.stdout = out
-        try:
-            result = exec_command.run(args)
-        finally:
-            sys.stdout = old_stdout
-        assert result is None
-        assert out.getvalue().strip() == "1"
-
-    def test_decimal_param_parsed_from_json_string(self, tmp_path: Path) -> None:
-        """A decimal-typed param provided as a JSON string is accepted."""
+    def test_decimal_argument_parsed_from_json_string(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A decimal-typed argument provided as a JSON string is accepted."""
         agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "param price: decimal\nprint price\n")
-        from agm.cli_support.args import ExecArgs
+        write_file_program(agl_file, "program def main(price: decimal) -> unit = print price\n")
 
-        args = ExecArgs(
-            file=str(agl_file),
-            param_tokens=["--price", "1.5"],
-            strict_json=None,
-            max_iters=None,
-            no_log=False,
-            log_file=None,
+        assert (
+            exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--price", "1.5"])) is None
         )
-        import io
-        import sys
+        assert capsys.readouterr().out.strip() == "1.5"
 
-        out = io.StringIO()
-        old_stdout = sys.stdout
-        sys.stdout = out
-        try:
-            result = exec_command.run(args)
-        finally:
-            sys.stdout = old_stdout
-        assert result is None
-        assert out.getvalue().strip() == "1.5"
-
-    def test_array_param_parsed_from_json_string(self, tmp_path: Path) -> None:
-        """An array-typed param provided as a JSON array string is accepted."""
+    def test_array_argument_parsed_from_json_string(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """An array-typed argument provided as a JSON array string is accepted."""
         agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "param tags: array[text]\nprint tags\n")
-        from agm.cli_support.args import ExecArgs
+        write_file_program(agl_file, "program def main(tags: array[text]) -> unit = print tags\n")
 
-        args = ExecArgs(
-            file=str(agl_file),
-            param_tokens=['--tags=["a", "b"]'],
-            strict_json=None,
-            max_iters=None,
-            no_log=False,
-            log_file=None,
+        assert (
+            exec_command.run(_exec_args_no_log(agl_file, param_tokens=['--tags=["a", "b"]']))
+            is None
         )
-        import io
-        import sys
-
-        out = io.StringIO()
-        old_stdout = sys.stdout
-        sys.stdout = out
-        try:
-            result = exec_command.run(args)
-        finally:
-            sys.stdout = old_stdout
-        assert result is None
         # The output should contain the rendered array.
-        output = out.getvalue().strip()
-        assert output  # non-empty
+        assert capsys.readouterr().out.strip()
 
-    def test_record_param_invalid_json_exits_1(self, tmp_path: Path) -> None:
-        """A record-typed param with invalid JSON exits 1."""
+    def test_record_argument_invalid_json_exits_1(self, tmp_path: Path) -> None:
+        """A record-typed argument with invalid JSON exits 1."""
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            "record Point\n  x: int\n  y: int\nparam pt: Point\nprint pt.x\n",
+            "record Point\n  x: int\n  y: int\nprogram def main(pt: Point) -> unit = print pt.x\n",
         )
-        from agm.cli_support.args import ExecArgs
 
-        args = ExecArgs(
-            file=str(agl_file),
-            param_tokens=["--pt", "not_json"],
-            strict_json=None,
-            max_iters=None,
-            no_log=False,
-            log_file=None,
-        )
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(args)
+            exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--pt", "not_json"]))
         assert exc_info.value.code == 1
 
 
@@ -2510,7 +2282,6 @@ class TestExecTimeoutAndLogFileFlags:
                 self,
                 prepared: PreparedProgram,
                 *,
-                param_values: Mapping[str, object] | None = None,
                 check_only: bool = False,
                 log_file: Path | None = None,
                 compiled: MatchCompiledProgram | None = None,
@@ -2525,7 +2296,6 @@ class TestExecTimeoutAndLogFileFlags:
                 captured["process_environment"] = process_environment
                 return super().run_prepared(
                     prepared,
-                    param_values=param_values,
                     check_only=check_only,
                     log_file=log_file,
                     compiled=compiled,
@@ -3259,7 +3029,7 @@ class TestExecModuleRoots:
         """``import pkg/*::*`` imports two sibling modules and makes both callable.
 
         Verifies that the wildcard import path works end-to-end through the
-        exec_command pipeline (discover_params + run_prepared).
+        exec_command pipeline (discover_programs + run_prepared).
         """
         pkg_dir = tmp_path / "pkg"
         pkg_dir.mkdir()
@@ -3484,27 +3254,13 @@ class TestExecCliModulePaths:
 
 
 class TestEntryModuleConfig:
-    """A file entry uses its stem as the qualified config module component."""
+    """A file entry uses its stem as the qualified config module component.
 
-    def test_entry_stem_selects_root_param_config(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        from agm.config.context import ConfigContext
-
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text("[foo]\nlimit = 7\n")
-        monkeypatch.setattr(
-            exec_engine,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
-        agl_file = tmp_path / "foo.agl"
-        write_file_program(agl_file, "param limit: int\nprogram def main() -> unit = print limit\n")
-
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
-        assert capsys.readouterr().out == "7\n"
+    Qualified config/CLI binding of a selected program's own value
+    parameters is covered by ``TestProgramValueArguments``; these tests
+    exercise the surrounding entry-stem/reserved-name/engine-key machinery,
+    which is orthogonal to ``param``.
+    """
 
     def test_qualified_engine_config_conflict_exits_cleanly(
         self,
@@ -3534,50 +3290,6 @@ class TestEntryModuleConfig:
 
         assert exc_info.value.code == 1
         assert "Error: invalid exec configuration" in capsys.readouterr().err
-
-    def test_entry_module_config_selects_param_despite_imported_name_collision(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """A bare file-stem key belongs to the entry module, not an import."""
-        from agm.config.context import ConfigContext
-
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[workflow]\nregion = "configured"\n')
-        monkeypatch.setattr(
-            exec_engine,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-        (tmp_path / "settings.agl").write_text('param region: text = "imported"\n')
-        agl_file = tmp_path / "workflow.agl"
-        write_file_program(
-            agl_file,
-            "import settings\nparam region: text\nprogram def main() -> unit = print region\n",
-        )
-
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
-        assert capsys.readouterr().out == "configured\n"
-
-    def test_engine_key_named_param_is_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from agm.config.context import ConfigContext
-
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        monkeypatch.setattr(
-            exec_engine,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-        agl_file = tmp_path / "workflow.agl"
-        write_file_program(agl_file, "param timeout: text\nprogram def main() -> unit = ()\n")
-
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
-
-        assert exc_info.value.code == 1
 
     def test_reserved_entry_stem_cannot_declare_params(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "exec.agl"
@@ -3609,101 +3321,6 @@ class TestEntryModuleConfig:
 
         assert exec_command.run(_exec_args_no_log(agl_file, program="second")) is None
         assert capsys.readouterr().out == "second\n"
-
-    def test_module_table_engine_settings_and_subtables_do_not_warn(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """Params, engine settings, and nested route tables are all legitimate."""
-        from agm.config.context import ConfigContext
-
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text(
-            "[workflow]\n"
-            "retries = 3\n"
-            'timeout = "30s"\n'
-            "\n[workflow.main]\n"
-            "max-iters = 5\n"
-            '\n[workflow.Deploy]\nregion = "prod"\n'
-        )
-        monkeypatch.setattr(
-            exec_engine,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-        agl_file = tmp_path / "workflow.agl"
-        agl_file.write_text(
-            "param retries: int = 1\n"
-            "\n"
-            "scope Deploy\n"
-            '  param region: text = "eu"\n'
-            "end Deploy\n"
-            "\n"
-            "program def main() -> unit = print(Deploy::region)\n"
-        )
-
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
-        captured = capsys.readouterr()
-        assert captured.out == "prod\n"
-        assert captured.err == ""
-
-    def test_key_claimed_by_an_imported_module_suffix_route_does_not_warn(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """An imported route that reads the entry table by suffix claims its key."""
-        from agm.config.context import ConfigContext
-
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text("[demo]\nretries = 5\n")
-        monkeypatch.setattr(
-            exec_engine,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-        (tmp_path / "lib").mkdir()
-        (tmp_path / "lib" / "demo.agl").write_text(
-            "param retries: int = 1\ndef read() -> int = retries\n"
-        )
-        agl_file = tmp_path / "demo.agl"
-        agl_file.write_text(
-            "import lib/demo\nprogram def main() -> unit = print(lib/demo::read())\n"
-        )
-
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
-        captured = capsys.readouterr()
-        assert captured.out == "5\n"
-        assert captured.err == ""
-
-    def test_undeclared_key_beside_valid_keys_warns_once_and_runs_on_default(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """A misspelled param key is reported instead of being silently dropped."""
-        from agm.config.context import ConfigContext
-
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text(
-            '[workflow]\nretires = 5\nregion = "prod"\n\n[workflow.main]\nmax-iters = 5\n'
-        )
-        monkeypatch.setattr(
-            exec_engine,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-        agl_file = tmp_path / "workflow.agl"
-        agl_file.write_text(
-            "param retries: int = 1\n"
-            'param region: text = "eu"\n'
-            "program def main() -> unit = print retries\n"
-        )
-
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
-        captured = capsys.readouterr()
-        assert captured.out == "1\n"
-        reported = [line for line in captured.err.splitlines() if line.strip()]
-        assert len(reported) == 1
-        assert "retires" in reported[0]
 
     def test_cli_max_iters_overrides_selected_qualified_program_table(
         self,
@@ -3765,238 +3382,6 @@ class TestEntryModuleConfig:
 
         assert exec_command.run(_exec_args_no_log(agl_file)) is None
         assert capsys.readouterr().out == "configured\n"
-
-    def test_imported_params_resolve_by_qualified_config_and_flag(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        from agm.config.context import ConfigContext
-
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[settings]\nregion = "configured"\n')
-        monkeypatch.setattr(
-            exec_engine,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-        (tmp_path / "settings.agl").write_text("param region: text\ndef read() -> text = region\n")
-        agl_file = tmp_path / "workflow.agl"
-        write_file_program(
-            agl_file,
-            "import settings\nprogram def main() -> unit = print(settings::read())\n",
-        )
-
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
-        assert capsys.readouterr().out == "configured\n"
-        assert (
-            exec_command.run(
-                _exec_args_no_log(agl_file, param_tokens=["--settings::region", "flag"])
-            )
-            is None
-        )
-        assert capsys.readouterr().out == "flag\n"
-
-    def test_config_value_for_a_reserved_flag_colliding_param_is_not_dropped(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """A param named like a built-in exec flag (e.g. ``dry-run``, reserved
-        even though it is not an engine setting) is ambiguous on the CLI, so
-        its config-table value must be addressed by the SAME qualified
-        spelling used by the CLI flag rule — not silently stored under the
-        plain name where the runtime would never find it.
-        """
-        from agm.config.context import ConfigContext
-
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[settings]\ndry-run = "configured"\n')
-        monkeypatch.setattr(
-            exec_engine,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-        (tmp_path / "settings.agl").write_text(
-            "param dry-run: text\ndef read() -> text = dry-run\n"
-        )
-        agl_file = tmp_path / "workflow.agl"
-        write_file_program(
-            agl_file,
-            "import settings\nprogram def main() -> unit = print(settings::read())\n",
-        )
-
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
-        assert capsys.readouterr().out == "configured\n"
-
-    def test_qualified_module_table_supplies_multiple_params(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        from agm.config.context import ConfigContext
-
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text(
-            '[settings]\nregion = "configured"\nzone = "secondary"\n'
-        )
-        monkeypatch.setattr(
-            exec_engine,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-        (tmp_path / "settings.agl").write_text(
-            'param region: text\nparam zone: text\ndef read() -> text = region + ":" + zone\n'
-        )
-        agl_file = tmp_path / "workflow.agl"
-        write_file_program(
-            agl_file,
-            "import settings\nprogram def main() -> unit = print(settings::read())\n",
-        )
-
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
-        assert capsys.readouterr().out == "configured:secondary\n"
-
-    def test_conflicting_qualified_param_tables_fail_before_execution(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from agm.config.context import ConfigContext
-
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text(
-            '[settings]\nregion = "short"\n\n["nested/settings"]\nregion = "exact"\n'
-        )
-        monkeypatch.setattr(
-            exec_engine,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-        nested = tmp_path / "nested"
-        nested.mkdir()
-        (nested / "settings.agl").write_text("param region: text\ndef read() -> text = region\n")
-        agl_file = tmp_path / "workflow.agl"
-        write_file_program(
-            agl_file,
-            "import nested/settings\nprogram def main() -> unit = print(settings::read())\n",
-        )
-
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
-
-        assert exc_info.value.code == 1
-
-    def test_symlinked_entry_stem_collision_keeps_both_qualified_params_settable(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        imported_root = tmp_path / "invocation"
-        imported_root.mkdir()
-        (imported_root / "settings.agl").write_text(
-            "param region: text\ndef read() -> text = region\n"
-        )
-        target_root = tmp_path / "target"
-        target_root.mkdir()
-        target = target_root / "settings.agl"
-        target.write_text(
-            "import settings\nparam region: text\n"
-            'program def main() -> unit = print(region + ":" + settings::read())\n'
-        )
-        entry = imported_root / "workflow.agl"
-        entry.symlink_to(target)
-
-        assert (
-            exec_command.run(
-                _exec_args_no_log(
-                    entry,
-                    param_tokens=[
-                        "--@entry::region",
-                        "local",
-                        "--settings::region",
-                        "remote",
-                    ],
-                )
-            )
-            is None
-        )
-        assert capsys.readouterr().out == "local:remote\n"
-
-    def test_qualified_positive_negative_collision_keeps_required_params_settable(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        (tmp_path / "no-settings.agl").write_text(
-            "param region: text\ndef read() -> text = region\n"
-        )
-        (tmp_path / "settings.agl").write_text("param region: bool\n")
-        agl_file = tmp_path / "workflow.agl"
-        write_file_program(
-            agl_file,
-            "import no-settings\nimport settings\n"
-            "program def main() -> unit = print(no-settings::read())\n",
-        )
-
-        assert (
-            exec_command.run(
-                _exec_args_no_log(
-                    agl_file,
-                    param_tokens=[
-                        "--@module::no-settings::region",
-                        "local",
-                        "--no-@module::settings::region",
-                    ],
-                )
-            )
-            is None
-        )
-        assert capsys.readouterr().out == "local\n"
-
-    def test_colliding_imported_params_require_qualified_flags(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        (tmp_path / "one.agl").write_text("param region: text\ndef read() -> text = region\n")
-        (tmp_path / "two.agl").write_text("param region: text\ndef read() -> text = region\n")
-        agl_file = tmp_path / "workflow.agl"
-        write_file_program(
-            agl_file,
-            "import one\nimport two\n"
-            "program def main() -> unit = print(one::read() + two::read())\n",
-        )
-
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--region", "bad"]))
-        assert exc_info.value.code == 1
-        assert (
-            exec_command.run(
-                _exec_args_no_log(
-                    agl_file,
-                    param_tokens=["--one::region", "a", "--two::region", "b"],
-                )
-            )
-            is None
-        )
-        assert capsys.readouterr().out == "ab\n"
-
-    def test_ambiguous_flag_reports_the_ambiguity_not_an_unknown_option(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """An ambiguous ``--region`` still gets its own diagnostic, not a bare unknown-option error.
-
-        Regression: the CLI-token split between the legacy ``param`` parser
-        and a selected program's own option map must still reach
-        ``parse_param_tokens``'s own ambiguity check for a flag that names a
-        declared param, rather than treating it as an unrecognized flag to
-        hand off to the program's option map.
-        """
-        (tmp_path / "one.agl").write_text("param region: text\ndef read() -> text = region\n")
-        (tmp_path / "two.agl").write_text("param region: text\ndef read() -> text = region\n")
-        agl_file = tmp_path / "workflow.agl"
-        write_file_program(
-            agl_file,
-            "import one\nimport two\n"
-            "program def main() -> unit = print(one::read() + two::read())\n",
-        )
-
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--region", "bad"]))
-
-        assert exc_info.value.code == 1
-        assert "ambiguous" in capsys.readouterr().err
 
 
 class TestProgramValueArguments:
@@ -4200,9 +3585,14 @@ class TestProgramValueArguments:
         assert exc_info.value.code == 1
         assert capsys.readouterr().err.startswith("Error:")
 
-    def test_legacy_param_and_program_argument_coexist(
+    def test_param_declaration_coexists_with_program_arguments_on_its_own_default(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
+        """A ``param`` alongside a ``program def`` resolves only from its own default.
+
+        No host surface can supply ``greeting``'s value anymore; only the
+        program's own ``name`` argument is CLI-addressable.
+        """
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
@@ -4211,27 +3601,16 @@ class TestProgramValueArguments:
         )
 
         assert (
-            exec_command.run(
-                _exec_args_no_log(agl_file, param_tokens=["--greeting", "hey", "--name", "world"])
-            )
-            is None
+            exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--name", "world"])) is None
         )
-        assert capsys.readouterr().out == "hey world\n"
+        assert capsys.readouterr().out == "hi world\n"
 
-    def test_an_unknown_flag_alongside_a_legacy_param_is_the_programs_own_usage_error(
+    def test_an_unknown_flag_after_a_valid_one_is_the_programs_own_usage_error(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """A flag naming neither the legacy ``param`` nor the program's own option leftovers
-
-        into the program's own option map, whose usage error surfaces (not a
-        generic "unexpected argument").
-        """
+        """A flag naming no declared program argument surfaces the program's own usage error."""
         agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file,
-            'param greeting: text = "hi"\n'
-            'program def main(name: text) -> unit = print(greeting + " " + name)\n',
-        )
+        write_file_program(agl_file, "program def main(name: text) -> unit = print name\n")
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(
@@ -4768,8 +4147,8 @@ class TestExecProgramSelection:
         from agm.agl.pipeline import PipelineDriver as RealRuntime
 
         class NoProgramDiscoveryRuntime(RealRuntime):
-            def discover_params(self, *args: object, **kwargs: object):
-                return replace(super().discover_params(*args, **kwargs), programs=())
+            def discover_programs(self, *args: object, **kwargs: object):
+                return replace(super().discover_programs(*args, **kwargs), programs=())
 
         monkeypatch.setattr(exec_engine, "PipelineDriver", NoProgramDiscoveryRuntime)
         args = ExecArgs(
@@ -4797,8 +4176,8 @@ class TestExecProgramSelection:
         from agm.agl.pipeline import PipelineDriver as RealRuntime
 
         class NoProgramDiscoveryRuntime(RealRuntime):
-            def discover_params(self, *args: object, **kwargs: object):
-                return replace(super().discover_params(*args, **kwargs), programs=())
+            def discover_programs(self, *args: object, **kwargs: object):
+                return replace(super().discover_programs(*args, **kwargs), programs=())
 
         monkeypatch.setattr(exec_engine, "PipelineDriver", NoProgramDiscoveryRuntime)
         args = ExecArgs(

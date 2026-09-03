@@ -93,40 +93,6 @@ review-tools = { program = "tools/review::main" }
     assert completion.complete_help_path(_make_ctx(help_command=["tools"]), "li") == ["lint"]
 
 
-def test_installed_exec_reference_offers_program_param_completion(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import semver
-
-    from agm.config.context import ConfigContext
-    from agm.packages.activation import ActivationIndex, ActivePackage, write_activation_index
-
-    home = tmp_path / "home"
-    package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
-    module = package_root / "tools" / "review.agl"
-    module.parent.mkdir(parents=True)
-    (package_root / "package.toml").write_text(
-        '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
-    )
-    module.write_text("param level: text\nprogram def main() -> unit = ()\n", encoding="utf-8")
-    write_record(package_root)
-    write_activation_index(
-        ActivationIndex({"tools": ActivePackage(semver.Version.parse("1.0.0"))}), home=home
-    )
-    monkeypatch.setattr(
-        completion, "current_config_context", lambda: ConfigContext(home, None, tmp_path)
-    )
-
-    from agm.cli import app
-
-    shell_complete = ShellComplete(typer.main.get_command(app), {}, "agm", "_TYPER_COMPLETE_ARGS")
-    values = [
-        item.value for item in shell_complete.get_completions(["exec", "tools/review::main"], "--")
-    ]
-
-    assert "--level" in values
-
-
 def test_installed_exec_reference_offers_program_value_argument_completion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1702,16 +1668,6 @@ class TestExecCommandShellComplete:
         sc = ShellComplete(self._get_cli(), {}, "agm", "_TYPER_COMPLETE_ARGS")
         return [c.value for c in sc.get_completions(args, incomplete)]
 
-    def test_file_param_offers_param_options(self, tmp_path: Path) -> None:
-        """``agm exec FILE --<TAB>`` offers ``--<param>`` from the file."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param msg: text\n")
-
-        result = self._complete(["exec", str(agl_file)], "--")
-        assert "--msg" in result
-        # Built-in exec options are still offered alongside param options.
-        assert "--agent" in result
-
     def test_module_root_engine_key_param_is_not_offered(self, tmp_path: Path) -> None:
         module_root = tmp_path / "modules"
         module_root.mkdir()
@@ -1722,58 +1678,6 @@ class TestExecCommandShellComplete:
         result = self._complete(["exec", "-I", str(module_root), str(entry)], "--")
 
         assert "--settings::max-iters" not in result
-
-    def test_path_dependency_param_options_are_offered(self, tmp_path: Path) -> None:
-        bravo = tmp_path / "bravo"
-        (bravo / "bravo").mkdir(parents=True)
-        (bravo / "package.toml").write_text('[package]\nname = "bravo"\nversion = "1.0.0"\n')
-        (bravo / "bravo" / "settings.agl").write_text("param region: text\n")
-        alpha = tmp_path / "alpha"
-        (alpha / "alpha").mkdir(parents=True)
-        (alpha / "package.toml").write_text(
-            '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
-            "[dependencies]\n"
-            'bravo = { version = "1", path = "../bravo" }\n'
-        )
-        entry = alpha / "alpha" / "main.agl"
-        entry.write_text("import bravo/settings\nprogram def main() -> unit = ()\n")
-
-        result = self._complete(["exec", "--no-stdlib", str(entry)], "--")
-
-        assert "--region" in result
-
-    def test_file_with_ask_offers_param_options(self, tmp_path: Path) -> None:
-        """Completion discovers params for normal exec programs using ``ask``."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            'param topic: text\nprogram def main() -> unit =\n  let answer = ask "About %{topic}"\n'
-        )
-
-        result = self._complete(["exec", str(agl_file)], "--")
-        assert "--topic" in result
-
-    def test_bool_param_offers_no_prefix_via_shell_complete(self, tmp_path: Path) -> None:
-        """Bool params offer both ``--name`` and ``--no-name`` through shell_complete."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param verbose: bool\n")
-
-        result = self._complete(["exec", str(agl_file)], "--")
-        assert "--verbose" in result
-        assert "--no-verbose" in result
-
-    def test_incomplete_prefix_filters_param_options(self, tmp_path: Path) -> None:
-        """Only ``--<param>`` options whose name starts with *incomplete* are returned."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param msg: text\nparam count: int\n")
-
-        result = self._complete(["exec", str(agl_file)], "--m")
-        assert "--msg" in result
-        assert "--count" not in result
-
-    def test_command_flag_source_offers_param_options(self) -> None:
-        """``agm exec -c 'param ...' --<TAB>`` discovers params from inline source."""
-        result = self._complete(["exec", "-c", "param count: int\nprint count"], "--")
-        assert "--count" in result
 
     def test_file_program_value_arguments_offer_their_flags(self, tmp_path: Path) -> None:
         """``agm exec FILE --<TAB>`` also offers the program's own value-parameter flags."""
@@ -1807,79 +1711,6 @@ class TestExecCommandShellComplete:
         """Without FILE or -c, only built-in exec options are offered."""
         result = self._complete(["exec"], "--")
         assert "--agent" in result
-
-
-class TestExecParamCompletionItems:
-    """Unit tests for ``_exec_param_completion_items``."""
-
-    def test_text_param_returns_completion_item(self, tmp_path: Path) -> None:
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param msg: text\n")
-        items = completion._exec_param_completion_items(agl_file.read_text(), "--")
-        assert any(item.value == "--msg" for item in items)
-
-    def test_bool_param_returns_both_flags(self, tmp_path: Path) -> None:
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param flag: bool\n")
-        items = completion._exec_param_completion_items(agl_file.read_text(), "--")
-        values = [item.value for item in items]
-        assert "--flag" in values
-        assert "--no-flag" in values
-
-    def test_bool_param_no_prefix_excluded_when_outside_filter(self) -> None:
-        """Bool --no-flag is excluded when the incomplete prefix does not match it."""
-        # prefix "--fl" matches "--flag" but not "--no-flag"
-        items = completion._exec_param_completion_items("param flag: bool\n", "--fl")
-        values = [item.value for item in items]
-        assert "--flag" in values
-        assert "--no-flag" not in values
-
-    def test_filters_by_incomplete(self) -> None:
-        source = "param apple: text\nparam banana: text\n"
-        items = completion._exec_param_completion_items(source, "--a")
-        values = [item.value for item in items]
-        assert "--apple" in values
-        assert "--banana" not in values
-
-    def test_qualified_positive_negative_collision_suggests_canonical_flags(
-        self, tmp_path: Path
-    ) -> None:
-        entry = tmp_path / "main.agl"
-        (tmp_path / "no-settings.agl").write_text("param region: text\n")
-        (tmp_path / "settings.agl").write_text("param region: bool\n")
-        entry.write_text("import no-settings\nimport settings\nprogram def main() -> unit = ()\n")
-
-        values = {
-            item.value
-            for item in completion._exec_param_completion_items(
-                entry.read_text(), "--", entry_path=entry
-            )
-        }
-
-        assert "--@module::no-settings::region" in values
-        assert "--@module::settings::region" in values
-        assert "--no-@module::settings::region" in values
-        assert "--no-settings::region" not in values
-
-    def test_engine_key_params_are_not_suggested(self) -> None:
-        items = completion._exec_param_completion_items("param max-iters: int\n", "--")
-
-        assert items == []
-
-    def test_syntax_error_returns_empty(self) -> None:
-        items = completion._exec_param_completion_items("@@@ bad syntax", "--")
-        assert items == []
-
-    def test_exception_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from agm.agl import PipelineDriver
-
-        monkeypatch.setattr(
-            PipelineDriver,
-            "prepare_program",
-            staticmethod(lambda source: (_ for _ in ()).throw(RuntimeError("boom"))),
-        )
-        items = completion._exec_param_completion_items("param x: text\n", "--")
-        assert items == []
 
 
 class TestProgramArgumentCompletionItems:
@@ -1991,23 +1822,23 @@ class TestExecCommandShellCompleteEdgeCases:
 
         assert any(item.value == "--msg" for item in result)
 
-    def test_exception_in_param_discovery_degrades_to_base(
+    def test_exception_in_program_argument_discovery_degrades_to_base(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """An exception inside the extra-items block returns base completion (no crash)."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param msg: text\n")
+        agl_file.write_text("program def main(msg: text) -> unit = ()\n")
 
-        # Patch _exec_param_completion_items to raise
+        # Patch _program_argument_completion_items to raise
         monkeypatch.setattr(
             completion,
-            "_exec_param_completion_items",
-            lambda source, incomplete: (_ for _ in ()).throw(RuntimeError("boom")),
+            "_program_argument_completion_items",
+            lambda programs, requested, incomplete: (_ for _ in ()).throw(RuntimeError("boom")),
         )
         result = self._complete(["exec", str(agl_file)], "--")
         # Built-in options still returned via base completion.
         assert "--agent" in result
-        # No param-option items.
+        # No program-argument items.
         assert "--msg" not in result
 
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 from agm.cli_support.args import ExecArgs
 from agm.cli_support.exec_target import is_installed_reference
 from agm.commands import exec_program
-from agm.commands.exec_program import RegisteredParamUsageError
+from agm.commands.exec_program import RegisteredProgramUsageError
 from agm.parser import exit_with_usage_error
 
 
@@ -21,5 +21,5 @@ def run(args: ExecArgs) -> None:
             exec_program.run_registered(args.file, args.param_tokens, args=args)
             return
         exec_program.run(args)
-    except RegisteredParamUsageError as exc:
+    except RegisteredProgramUsageError as exc:
         exit_with_usage_error(["exec"], f"error: {exc.message}")

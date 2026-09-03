@@ -892,7 +892,7 @@ def test_pipeline_nonraising_helpers_defend_against_wrong_artifact_kind(
 
 def test_single_and_program_discovery_surface_match_errors() -> None:
     runtime = PipelineDriver()
-    discovery = runtime.discover_params(
+    discovery = runtime.discover_programs(
         prepare_inline_command("let n: int = 1\ncase true of | true => n")
     )
     assert discovery.compiled is None
@@ -904,7 +904,7 @@ def test_single_and_program_discovery_surface_match_errors() -> None:
         roots=RootSet(roots=frozenset()),
         default_stdlib=False,
     )
-    program_discovery = runtime.discover_params(prepared_program)
+    program_discovery = runtime.discover_programs(prepared_program)
     assert program_discovery.compiled is None
     assert any("Non-exhaustive" in item.message for item in program_discovery.diagnostics)
 
@@ -932,7 +932,7 @@ def test_single_discovery_and_cached_run_compile_matches_once(
         "let selected: bool = true\ncase selected of | true => 1 | false => 0"
     )
 
-    discovery = runtime.discover_params(prepared)
+    discovery = runtime.discover_programs(prepared)
     assert discovery.compiled is not None
     result = runtime.run_prepared(
         prepared,
@@ -967,7 +967,7 @@ def test_program_discovery_and_cached_run_compile_matches_once(
         "let selected: bool = true\ncase selected of | true => 1 | false => 0"
     )
 
-    discovery = runtime.discover_params(prepared)
+    discovery = runtime.discover_programs(prepared)
     assert discovery.compiled is not None
     result = runtime.run_prepared(
         prepared,
@@ -999,7 +999,7 @@ def test_discovery_and_execution_reuse_one_graph_match_compilation(
     runtime = PipelineDriver()
     prepared = _prepared_program("case true of | true => 1 | false => 0")
 
-    discovery = runtime.discover_params(prepared)
+    discovery = runtime.discover_programs(prepared)
     assert discovery.compiled is not None
     result = runtime.run_prepared(
         prepared,

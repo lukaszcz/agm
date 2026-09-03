@@ -17,19 +17,19 @@ Static path and reuse: this reuses exactly the same building blocks
 read_text_arg_or_none``) and diagnostic rendering (``agm.agl.diagnostics.
 format_diagnostic``) — never duplicated. Unlike ``exec``, ``check`` never
 selects or runs a ``program def``, so it has no use for ``exec``'s
-param-discovery/selection/preflight machinery
-(``PipelineDriver.discover_params``/``preflight_params``): the smallest path
-that still reaches lowering without binding or validating any host param is
-``PipelineDriver.parse_entry`` → ``PipelineDriver.prepare_parsed_entry`` →
-``PipelineDriver.check_prepared(...)`` directly. Lowering (rather than
-stopping at match compilation, as the REPL's own ``--dry-run`` does) is
-required here because some static errors — an invalid ``resource``/
-``resource-dir`` path, an unmaterializable output contract — surface only
-during contract materialization and lowering, not during type checking.
-``check_prepared`` reaches exactly that far and no further: it never resolves
-or validates param values, so a ``param`` declaration with no default
-anywhere in a checked file's module graph is silently accepted, unlike under
-``agm exec --dry-run``.
+program-discovery/selection/preflight machinery
+(``PipelineDriver.discover_programs``/``preflight_arguments``): the smallest
+path that still reaches lowering without binding or validating any host
+argument is ``PipelineDriver.parse_entry`` → ``PipelineDriver.
+prepare_parsed_entry`` → ``PipelineDriver.check_prepared(...)`` directly.
+Lowering (rather than stopping at match compilation, as the REPL's own
+``--dry-run`` does) is required here because some static errors — an invalid
+``resource``/``resource-dir`` path, an unmaterializable output contract —
+surface only during contract materialization and lowering, not during type
+checking. ``check_prepared`` reaches exactly that far and no further: it
+never resolves or validates a program's arguments, so a ``param`` declaration
+with no default anywhere in a checked file's module graph is silently
+accepted, unlike under ``agm exec --dry-run``.
 
 Warnings (on ``RunResult.warnings``) are a separate channel from error
 diagnostics, printed to stderr but never affecting the exit code — the same

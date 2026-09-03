@@ -3,12 +3,7 @@
 :func:`discover_program_declarations_from_source` and
 :func:`discover_program_declarations_from_installed_reference` run
 ``PipelineDriver.discover_programs`` (:class:`~agm.agl.pipeline.ProgramDiscovery`)
-as their own standalone pipeline pass — deliberately not layered onto
-``exec_params.discover_params_from_source``'s own ``discover_params`` pass:
-the two views never actually share one pass in practice (the help path
-always calls both top-level functions), and the two pipeline entry points
-cost the same either way, so piggybacking one on the other only guarantees
-rework once ``exec_params.py`` is deleted.
+as their own standalone pipeline pass.
 
 :func:`select_entry_program` is the one place a requested ``-p``/``--program``
 name is matched against the entry module's own ``program def`` declarations,

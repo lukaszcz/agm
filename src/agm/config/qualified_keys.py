@@ -41,19 +41,6 @@ class QualifiedConfigKey:
         return "::".join((module_path, *self.scope_path, self.leaf))
 
 
-def build_qualified_config_key(
-    module_segments: tuple[str, ...], public_name: str
-) -> QualifiedConfigKey:
-    """Build the config address for one scope-qualified declaration name.
-
-    ``public_name`` is a declaration's ``::``-joined scope-path spelling (e.g.
-    a ``ParamDeclInfo.name`` or an ``IrParam.public_name``); its leading
-    segments become the key's scope path and its final segment the leaf.
-    """
-    *scope_path, leaf = public_name.split("::")
-    return QualifiedConfigKey(module_segments, tuple(scope_path), leaf)
-
-
 def resolve_qualified_values(
     config: GeneralConfig, keys: Iterable[QualifiedConfigKey]
 ) -> dict[QualifiedConfigKey, object]:

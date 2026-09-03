@@ -15,14 +15,14 @@ Public contract exercised here:
         default_strict_json=False,  # lenient JSON recovery is the default
         agent_dispatcher=fn,        # fn(request) -> str
     )
-    result = runtime.run(source, param_values={...})
+    result = runtime.run(source)
 
 RunResult surface asserted:
 
-    result.ok           True iff static checks and param validation passed and
-                        no uncaught AgL exception was raised
-    result.diagnostics  pre-execution failures (static errors, param
-                        validation), each with `.message: str` and
+    result.ok           True iff static checks and argument validation passed
+                        and no uncaught AgL exception was raised
+    result.diagnostics  pre-execution failures (static errors, program
+                        argument validation), each with `.message: str` and
                         `.line: int` (1-based source line)
     result.error        the uncaught AgL exception or None, exposing
                         `.type_name: str` and `.fields` — a mapping of the
@@ -735,15 +735,13 @@ def _run_prepared_entry(
 
     Routes through :meth:`PipelineDriver.preflight_arguments` (binding
     *positional*/*param_values* as the entry program's own value arguments)
-    when the selected entry ``program def`` declares parameters, and through
-    the ``param``-mechanism :meth:`PipelineDriver.preflight_params` path
-    otherwise.
+    when the selected entry ``program def`` declares parameters. No host
+    surface can supply a ``param`` declaration's value; a program with no
+    parameters just runs.
     """
-    discovery = runtime.discover_params(prepared)
+    discovery = runtime.discover_programs(prepared)
     if discovery.compiled is None:
-        return runtime.run_prepared(
-            prepared, param_values=param_values, process_environment=process_environment
-        )
+        return runtime.run_prepared(prepared, process_environment=process_environment)
     entry_programs = [item for item in discovery.programs if item.module.is_entry]
     assert len(entry_programs) == 1
     entry_program = entry_programs[0]
@@ -751,12 +749,6 @@ def _run_prepared_entry(
     if entry_program.parameters:
         from agm.agl.runtime.arguments import ProgramArguments
 
-        assert not discovery.params_for(entry_program), (
-            "scenario binds 'params' as the entry program's own arguments when it "
-            "declares value parameters; a module 'param' reachable from it would "
-            "silently keep its default instead of taking 'params' - no fixture may "
-            "combine a parameterized program def with a reachable module param"
-        )
         argument_preflight = runtime.preflight_arguments(
             prepared,
             entry_program,
@@ -778,24 +770,15 @@ def _run_prepared_entry(
             process_environment=process_environment,
         )
 
-    assert not positional, (
-        "scenario supplied 'positional' but the entry program declares no "
-        "parameters to receive them - check the fixture's program signature"
+    assert not positional and not param_values, (
+        "scenario supplied 'positional'/'params' but the entry program declares "
+        "no value parameters to receive them - check the fixture's program "
+        "signature"
     )
-    preflight = runtime.preflight_params(
-        prepared,
-        param_values=param_values,
-        compiled=discovery.compiled,
-    )
-    if not preflight.result.ok:
-        return preflight.result
-    assert preflight.executable is not None
     return runtime.run_prepared(
         prepared,
-        param_values=param_values,
         compiled=discovery.compiled,
-        executable=preflight.executable,
-        program_symbol=preflight.executable.program_symbols[entry_program.node_id],
+        select_default_program=True,
         process_environment=process_environment,
     )
 

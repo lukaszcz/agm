@@ -837,9 +837,10 @@ def build_param_decoder(typ: Type, type_table: TypeTable) -> ParamDecoder:
     decode one host-supplied entry parameter.
 
     Single source of the param-decoder shape, shared by the lowerer (which
-    embeds it in each ``IrParam.external_decoder``) and the REPL/config path
-    (:func:`agm.agl.runtime.params.convert_param_value`).  ``text`` params are
-    taken verbatim; every other type round-trips through the canonical JSON
+    embeds it in each ``IrParam.external_decoder``/``IrProgramParam.external_decoder``)
+    and the host engine-config decode path
+    (:func:`agm.agl.runtime.engine_config.convert_host_value`).  ``text`` params
+    are taken verbatim; every other type round-trips through the canonical JSON
     boundary (``derive_schema`` for validation, ``build_decode_schema`` for the
     typeless decode walk).  *type_table* resolves record/enum shapes.
 

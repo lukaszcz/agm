@@ -20,9 +20,9 @@ from agm.agl.modules.ids import STD_PRELUDE_ID
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import (
     ArtifactProvenanceError,
-    ParamDiscovery,
     PipelineDriver,
     PreparedProgram,
+    ProgramDiscovery,
 )
 from agm.agl.typecheck.program import check_program
 from tests._agl_helpers import prepare_inline_command
@@ -41,9 +41,9 @@ def _prepare_graph(
     )
 
 
-def _compiled(source: str) -> tuple[PreparedProgram, ParamDiscovery]:
+def _compiled(source: str) -> tuple[PreparedProgram, ProgramDiscovery]:
     prepared = _prepare_graph(source)
-    discovery = PipelineDriver().discover_params(prepared)
+    discovery = PipelineDriver().discover_programs(prepared)
     assert discovery.compiled is not None
     return prepared, discovery
 
@@ -65,7 +65,7 @@ def test_single_run_rejects_cached_artifact_from_different_prepared_program(
 ) -> None:
     runtime = PipelineDriver()
     prepared_a = prepare_inline_command('param a: int = 1\nprint "stale %{a}"')
-    discovery_a = runtime.discover_params(prepared_a)
+    discovery_a = runtime.discover_programs(prepared_a)
     assert discovery_a.compiled is not None
     prepared_b = prepare_inline_command('param b: int = 2\nprint "fresh %{b}"')
 
@@ -84,7 +84,7 @@ def test_program_discovery_rejects_cached_artifact_from_different_prepared_progr
     prepared_b = _prepare_graph('param b: text = "b"\nb')
 
     with pytest.raises(ArtifactProvenanceError):
-        PipelineDriver().discover_params(prepared_b, compiled=discovery_a.compiled)
+        PipelineDriver().discover_programs(prepared_b, compiled=discovery_a.compiled)
 
 
 def test_program_discovery_rejects_cached_artifact_with_different_entry_identity() -> None:
@@ -100,7 +100,7 @@ def test_program_discovery_rejects_cached_artifact_with_different_entry_identity
     )
 
     with pytest.raises(ArtifactProvenanceError):
-        PipelineDriver().discover_params(
+        PipelineDriver().discover_programs(
             prepared,
             compiled=wrong_entry_compiled,
         )
@@ -114,12 +114,12 @@ def test_program_discovery_rejects_cached_artifact_with_different_module_set(
         "import helper\nlet value = 1\nvalue",
         extra_roots=frozenset({tmp_path}),
     )
-    discovery = PipelineDriver().discover_params(prepared_with_import)
+    discovery = PipelineDriver().discover_programs(prepared_with_import)
     assert discovery.compiled is not None
     prepared_without_import = _prepare_graph("let value = 2\nvalue")
 
     with pytest.raises(ArtifactProvenanceError):
-        PipelineDriver().discover_params(
+        PipelineDriver().discover_programs(
             prepared_without_import,
             compiled=discovery.compiled,
         )
@@ -136,7 +136,7 @@ def test_single_run_rechecks_cached_artifact_when_host_capabilities_change() -> 
     source = "let value = 1\nvalue"
     runtime = PipelineDriver()
     prepared = prepare_inline_command(source)
-    discovery = runtime.discover_params(prepared)
+    discovery = runtime.discover_programs(prepared)
     assert discovery.compiled is not None
 
     runtime.register_codec(ExtraCodec())
@@ -155,7 +155,7 @@ def test_graph_cache_derives_capability_provenance_from_checked() -> None:
     ).compiled
     assert isinstance(compiled, MatchCompiledProgram)
 
-    discovery = runtime.discover_params(prepared, compiled=compiled)
+    discovery = runtime.discover_programs(prepared, compiled=compiled)
 
     assert discovery.compiled is compiled
 
@@ -170,7 +170,7 @@ def test_graph_artifact_is_rechecked_when_host_capabilities_change() -> None:
     assert isinstance(compiled, MatchCompiledProgram)
     _change_capabilities(runtime)
 
-    discovery = runtime.discover_params(prepared, compiled=compiled)
+    discovery = runtime.discover_programs(prepared, compiled=compiled)
 
     assert discovery.compiled is not None
     assert discovery.compiled is not compiled
@@ -179,7 +179,7 @@ def test_graph_artifact_is_rechecked_when_host_capabilities_change() -> None:
 def test_program_run_rechecks_prechecked_artifact_when_host_capabilities_change() -> None:
     runtime = PipelineDriver()
     prepared = _prepare_graph("let value = 1\nvalue")
-    discovery = runtime.discover_params(prepared)
+    discovery = runtime.discover_programs(prepared)
     assert discovery.checked is not None
     _change_capabilities(runtime)
 
@@ -223,7 +223,7 @@ def test_program_run_rejects_cached_artifact_from_different_prepared_program(
 def test_prechecked_artifacts_compile_without_rechecking_single_and_graph_paths() -> None:
     runtime = PipelineDriver()
     single_prepared = prepare_inline_command("let value = 1\nvalue")
-    single_discovery = runtime.discover_params(single_prepared)
+    single_discovery = runtime.discover_programs(single_prepared)
     assert single_discovery.checked is not None
     single_run = runtime.run_prepared(
         single_prepared, checked=single_discovery.checked, check_only=True
@@ -231,7 +231,7 @@ def test_prechecked_artifacts_compile_without_rechecking_single_and_graph_paths(
     assert single_run.ok, single_run.diagnostics
 
     graph_prepared = _prepare_graph("let g = 1\ng")
-    program_discovery = runtime.discover_params(graph_prepared)
+    program_discovery = runtime.discover_programs(graph_prepared)
     assert program_discovery.checked is not None
     graph_run = runtime.run_prepared(
         graph_prepared, checked=program_discovery.checked, check_only=True
@@ -245,7 +245,7 @@ def test_production_path_reuses_cached_artifacts_without_verifying_provenance(
     """With the self-checks off, every cached-artifact seam trusts its input."""
     runtime = PipelineDriver()
     single_prepared = prepare_inline_command("let value = 1\nvalue")
-    single_discovery = runtime.discover_params(single_prepared)
+    single_discovery = runtime.discover_programs(single_prepared)
     assert single_discovery.compiled is not None
     assert single_discovery.checked is not None
     assert runtime.run_prepared(
@@ -256,10 +256,10 @@ def test_production_path_reuses_cached_artifacts_without_verifying_provenance(
     ).ok
 
     graph_prepared = _prepare_graph("let g = 1\ng")
-    program_discovery = runtime.discover_params(graph_prepared)
+    program_discovery = runtime.discover_programs(graph_prepared)
     assert program_discovery.compiled is not None
     assert program_discovery.checked is not None
-    reused = runtime.discover_params(graph_prepared, compiled=program_discovery.compiled)
+    reused = runtime.discover_programs(graph_prepared, compiled=program_discovery.compiled)
     assert reused.compiled is program_discovery.compiled
     assert runtime.run_prepared(
         graph_prepared, compiled=program_discovery.compiled, check_only=True

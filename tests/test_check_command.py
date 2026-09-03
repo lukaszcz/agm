@@ -180,9 +180,9 @@ class TestCheckCommand:
     ) -> None:
         """``check`` never param-checks: a required ``param`` with no default is silent.
 
-        Regression test: ``run_prepared(check_only=True)`` used to call
-        ``_prepare_ir_params`` before the check-only stop, so this file would
-        falsely report ``Missing required param: 'name'`` on every save.
+        Regression test: ``run_prepared(check_only=True)`` used to report a
+        missing required ``param`` before the check-only stop, so this file
+        would falsely report ``Missing required param: 'name'`` on every save.
         """
         agl_file = tmp_path / "greet.agl"
         agl_file.write_text("param name: text\nprogram def main() -> unit =\n  print name\n")

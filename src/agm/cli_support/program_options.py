@@ -467,10 +467,8 @@ class ProgramOptionMap:
 
         Used to disambiguate a bare ``-h`` token from a plausible ``VALUE``
         supplied to a preceding value-taking flag (a ``text``/JSON-form
-        argument can legitimately be the literal string ``-h``) — one half of
-        the *value_flags* :func:`short_help_requested` checks against, the
-        other half being the legacy ``param`` inventory's own value-taking
-        flags (``exec_params.param_value_taking_flags``).
+        argument can legitimately be the literal string ``-h``) — the
+        *value_flags* :func:`short_help_requested` checks against.
         """
         return frozenset(
             flag
@@ -565,11 +563,9 @@ def short_help_requested(tokens: Sequence[str], *, value_flags: frozenset[str]) 
     """Return whether an unconsumed ``-h`` occurs in *tokens*.
 
     *value_flags* names every flag that consumes a following ``VALUE`` token
-    — typically the union of a legacy ``param`` inventory's own value-taking
-    flags (``exec_params.param_value_taking_flags``) and a selected program's
-    own (:meth:`ProgramOptionMap.value_taking_flags`) — so a value
-    legitimately spelled ``-h`` for one of them is recognized as consumed,
-    not as a short-help request.
+    — a selected program's own (:meth:`ProgramOptionMap.value_taking_flags`)
+    — so a value legitimately spelled ``-h`` for one of them is recognized as
+    consumed, not as a short-help request.
 
     A bare ``--`` ends option parsing, the same convention
     :meth:`ProgramOptionMap.parse_tokens` applies: every token from there on

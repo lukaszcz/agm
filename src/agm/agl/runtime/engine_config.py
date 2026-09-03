@@ -1,20 +1,14 @@
-"""Runtime param decoding/validation + contract materialization helpers."""
+"""Host engine-config decoding helpers (CLI flags, config-file entries)."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from agm.agl.diagnostics import Diagnostic
-from agm.agl.runtime.arguments import decode_param_value
 from agm.config.engine_keys import ENGINE_KEYS
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from agm.agl.ir.ids import ContractId, SymbolId
-    from agm.agl.ir.program import ExecutableProgram, IrParam
-    from agm.agl.runtime.codec import OutputCodec
-    from agm.agl.runtime.contract import OutputContract
     from agm.agl.semantics.type_table import TypeTable
     from agm.agl.semantics.types import Type as AglType
     from agm.agl.semantics.values import Value
@@ -22,8 +16,7 @@ if TYPE_CHECKING:
 __all__ = [
     "build_engine_config_seeds",
     "convert_config_value",
-    "convert_param_value",
-    "decode_or_diagnose_param",
+    "convert_host_value",
     "engine_default_settings",
     "raw_option_str",
 ]
@@ -98,135 +91,36 @@ def engine_default_settings() -> "dict[str, Value]":
     )
 
 
-def decode_or_diagnose_param(
-    param: "IrParam",
-    display_name: str,
-    supplied: bool,
-    raw: object,
-    *,
-    missing_message: str,
-) -> "tuple[Value, None] | tuple[None, Diagnostic] | tuple[None, None]":
-    """Decode one host-supplied param value, or build its diagnostic.
-
-    The per-param decode boundary used by IR param binding
-    (:func:`_prepare_ir_params`) and by the REPL's entry pre-check, which
-    calls it with ``supplied=False`` to ask what an unsupplied param means.
-    Returns ``(value, None)`` on success,
-    ``(None, diagnostic)`` when the param is missing-and-required or fails to
-    parse, and ``(None, None)`` when the param is missing but optional
-    (nothing to record).
-
-    *missing_message* is caller-supplied so the diagnostic can phrase
-    "missing" in the caller's own terms.
-    """
-    from agm.agl.runtime.convert import StrictJsonParseError
-
-    if not supplied:
-        if param.required:
-            return None, Diagnostic(
-                message=missing_message,
-                line=param.location.start_line,
-                column=param.location.start_col,
-            )
-        return None, None
-    decoder = param.external_decoder
-    assert decoder is not None, "lowerer must provide an external param decoder"
-    try:
-        return decode_param_value(decoder, raw), None
-    except (StrictJsonParseError, ValueError) as exc:
-        return None, Diagnostic(
-            message=(
-                f"Param {display_name!r}: could not parse as {decoder.target_type_label}: {exc}"
-            ),
-            line=param.location.start_line,
-            column=param.location.start_col,
-        )
-
-
-def _prepare_ir_params(
-    executable: "ExecutableProgram", param_values: "Mapping[str, object]"
-) -> "tuple[dict[SymbolId, Value], list[Diagnostic]]":
-    """Validate and typelessly decode external params from IR metadata."""
-    decoded: "dict[SymbolId, Value]" = {}
-    errors: list[Diagnostic] = []
-    name_counts: dict[str, int] = {}
-    for param in executable.params:
-        name_counts[param.public_name] = name_counts.get(param.public_name, 0) + 1
-    for param in executable.params:
-        value_name = (
-            param.qualified_public_name if name_counts[param.public_name] > 1 else param.public_name
-        )
-        # The CLI accepts a module-qualified spelling even where the short
-        # spelling is unavailable because it collides with an AGM option.
-        # Prefer that identity-preserving key whenever supplied.
-        supplied_name = (
-            param.qualified_public_name
-            if param.qualified_public_name in param_values
-            else value_name
-        )
-        supplied = supplied_name in param_values
-        value, diagnostic = decode_or_diagnose_param(
-            param,
-            value_name,
-            supplied,
-            param_values.get(supplied_name),
-            missing_message=f"Missing required param: {value_name!r}",
-        )
-        if diagnostic is not None:
-            errors.append(diagnostic)
-        elif value is not None:
-            decoded[param.symbol] = value
-    return decoded, errors
-
-
-def _materialize_ir_contracts(
-    executable: "ExecutableProgram", codecs: "Mapping[str, OutputCodec]"
-) -> "tuple[dict[ContractId, OutputContract], list[Diagnostic]]":
-    """Materialize host codec contracts exclusively from linked IR metadata."""
-    from agm.agl.runtime.contract import materialize_ir_contract
-
-    materialized: "dict[ContractId, OutputContract]" = {}
-    errors: list[Diagnostic] = []
-    for contract_id, request in executable.contracts.items():
-        try:
-            contract = materialize_ir_contract(request, codecs)
-        except ValueError as exc:
-            errors.append(Diagnostic(message=f"Contract error: {exc}", line=1))
-            continue
-        if contract is not None:
-            materialized[contract_id] = contract
-    return materialized, errors
-
-
-def convert_param_value(
+def convert_host_value(
     name: str, raw: object, type_obj: "AglType", type_table: "TypeTable"
 ) -> "Value":
-    """Convert a raw host param value to the declared AgL type.
+    """Decode a raw host value against a declared AgL type.
 
     Builds the same :class:`~agm.agl.ir.contracts.ParamDecoder` the lowerer
     embeds in the compiled IR (via :func:`~agm.agl.type_schema.build_param_decoder`)
-    and runs the shared :func:`decode_param_value` path, so this and the
-    compiled-IR param boundary decode through one mechanism. Its only caller
-    is :func:`convert_config_value`, which decodes host engine-setting values
-    (CLI flags, config-file entries) through it.
+    and runs the shared :func:`~agm.agl.runtime.arguments.decode_param_value`
+    path, so this and the compiled-IR value-decode boundary go through one
+    mechanism. Its only caller is :func:`convert_config_value`, which decodes
+    host engine-setting values (CLI flags, config-file entries) through it.
 
-    ``text`` params are taken verbatim; every other value crosses the canonical
+    ``text`` values are taken verbatim; every other value crosses the canonical
     JSON boundary — either a JSON string or a JSON-compatible Python value, both
     parsed strictly (no json-repair of user typos).  Types with no wire
     schema (unit/agent/exception/…) are rejected up front.  *type_table*
     resolves record/enum field/variant shapes for *type_obj*.
     """
+    from agm.agl.runtime.arguments import decode_param_value
     from agm.agl.runtime.convert import StrictJsonParseError
     from agm.agl.type_schema import build_param_decoder
 
     try:
         decoder = build_param_decoder(type_obj, type_table)
     except TypeError as exc:
-        raise ValueError(f"Param {name!r} has unsupported type {type_obj!r}.") from exc
+        raise ValueError(f"Setting {name!r} has unsupported type {type_obj!r}.") from exc
     try:
         return decode_param_value(decoder, raw)
     except (StrictJsonParseError, ValueError) as exc:
-        raise ValueError(f"Param {name!r}: could not parse as {type_obj!r}: {exc}") from exc
+        raise ValueError(f"Setting {name!r}: could not parse as {type_obj!r}: {exc}") from exc
 
 
 def convert_config_value(
@@ -242,8 +136,8 @@ def convert_config_value(
     "AgentCommand", "command": ...}`` shape, the same decode path any other
     engine key uses. For ``Option[T]`` engine keys (``timeout``, ``log-file``) the raw value is
     projected into the Option enum: a present *raw* becomes ``some(value)`` with
-    its inner ``T`` decoded via :func:`convert_param_value`, and ``None`` becomes
-    ``none``.  Non-Option keys fall back to :func:`convert_param_value`.
+    its inner ``T`` decoded via :func:`convert_host_value`, and ``None`` becomes
+    ``none``.  Non-Option keys fall back to :func:`convert_host_value`.
     *type_table* is threaded through to both; the Option unwrap itself reads
     ``key_type.type_args`` directly and never needs variant shapes from it.
 
@@ -262,5 +156,5 @@ def convert_config_value(
         if raw is None:
             return none_value()
         inner: AglType = key_type.type_args[0] if key_type.type_args else TextType()
-        return some_value(convert_param_value(name, raw, inner, table))
-    return convert_param_value(name, raw, key_type, table)
+        return some_value(convert_host_value(name, raw, inner, table))
+    return convert_host_value(name, raw, key_type, table)

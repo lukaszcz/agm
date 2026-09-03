@@ -8,6 +8,7 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir import ExternFunctionBody, IrBind, IrMakeClosure
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver
+from agm.agl.runtime.arguments import ProgramArguments
 
 _CAPS = HostCapabilities(
     supports_shell_exec=True,
@@ -32,7 +33,12 @@ def test_extern_descriptor_has_no_boundary_contract(tmp_path: Path) -> None:
         roots=RootSet(roots=frozenset({tmp_path})),
         default_stdlib=False,
     )
-    result = PipelineDriver().preflight_params(prepared)
+    runtime = PipelineDriver()
+    discovery = runtime.discover_programs(prepared)
+    (program,) = discovery.programs
+    result = runtime.preflight_arguments(
+        prepared, program, ProgramArguments(positional=(), named={}), compiled=discovery.compiled
+    )
 
     assert result.result.ok
     assert result.executable is not None
@@ -44,7 +50,7 @@ def test_extern_descriptor_has_no_boundary_contract(tmp_path: Path) -> None:
 
 def test_extern_still_initializes_as_a_function_closure(tmp_path: Path) -> None:
     entry = tmp_path / "entry.agl"
-    entry.write_text("extern def f() -> unit\n")
+    entry.write_text("extern def f() -> unit\nprogram def main() -> unit = ()\n")
     (tmp_path / "entry.py").write_text("def f(): return None\n")
     prepared = PipelineDriver().prepare_program(
         entry.read_text(),
@@ -52,7 +58,12 @@ def test_extern_still_initializes_as_a_function_closure(tmp_path: Path) -> None:
         roots=RootSet(roots=frozenset({tmp_path})),
         default_stdlib=False,
     )
-    result = PipelineDriver().preflight_params(prepared)
+    runtime = PipelineDriver()
+    discovery = runtime.discover_programs(prepared)
+    (program,) = discovery.programs
+    result = runtime.preflight_arguments(
+        prepared, program, ProgramArguments(positional=(), named={}), compiled=discovery.compiled
+    )
 
     assert result.executable is not None
     initializer = result.executable.modules[result.executable.entry_module].initializers[0]

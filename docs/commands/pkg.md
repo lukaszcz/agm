@@ -126,8 +126,8 @@ AGM resolves package roots or registered commands. AGM does not fall back to the
 version or fetch a dependency. For module-root selection, a discovered development package with the
 same name takes precedence over the stored selection.
 
-Pins determine the effective package module roots used by `agm exec`, `agm repl`, installed program
-references, and their parameter discovery. They also rebuild the invocation's registered-command
+Pins determine the effective package module roots used by `agm exec`, `agm repl`, and installed
+program references. They also rebuild the invocation's registered-command
 registry from the selected manifests, so command dispatch, `agm help`, registered-command `--help`,
 and shell completion all reflect the pinned versions. Built-in commands remain reserved and take
 precedence over package registrations.

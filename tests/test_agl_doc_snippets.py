@@ -114,17 +114,17 @@ def _statically_compiles(source: str) -> tuple[bool, list[str]]:
     """Return whether *source* reaches a lowered program, plus any diagnostics.
 
     Runs the full static pipeline without executing anything, as
-    ``agm exec --dry-run`` does. A lowered program (``executable is not None``)
-    means every static pass succeeded; post-lowering, run-time-only failures
-    such as an unbound ``param`` are ignored.
+    ``agm exec --dry-run`` does. ``check_prepared`` never resolves or
+    validates a program's arguments, so a required ``param`` with no default
+    is silently accepted here and only lowering failures are reported.
     """
     buffer = io.StringIO()
     with redirect_stdout(buffer):
         driver = PipelineDriver(agent_dispatcher=_unused_agent)
         prepared = driver.prepare_program(source)
-        preflight = driver.preflight_params(prepared, param_values={})
-    diagnostics = [diag.message for diag in preflight.result.diagnostics]
-    return preflight.executable is not None, diagnostics
+        result = driver.check_prepared(prepared)
+    diagnostics = [diag.message for diag in result.diagnostics]
+    return result.ok, diagnostics
 
 
 @pytest.mark.parametrize("snippet", _SNIPPETS, ids=[snippet.id for snippet in _SNIPPETS])

@@ -659,10 +659,10 @@ class EntryPipeline:
             exception_value_to_run_error,
         )
         from agm.agl.recursion import NestingTooDeepError, frontend_recursion_boundary
-        from agm.agl.runtime.params import _materialize_ir_contracts, decode_or_diagnose_param
+        from agm.agl.runtime.arguments import missing_required_param_diagnostics
+        from agm.agl.runtime.contract import materialize_ir_contracts
         from agm.agl.runtime.request import AgentCancelled
         from agm.agl.runtime.trace import TraceStore
-        from agm.agl.runtime.types import public_param_spelling
         from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.syntax.resources import ResourceError
 
@@ -701,25 +701,16 @@ class EntryPipeline:
             )
             return self._ctx._fail([diagnostic], warnings)
         # The REPL supplies no external param values (no CLI, no config): a
-        # ``param`` with no source default can never be satisfied, so ask the
-        # shared decode boundary what an unsupplied param means and report a
+        # ``param`` with no source default can never be satisfied, so report a
         # clean diagnostic before the interpreter runs, rather than let
         # ``IrInterpreter._resolve_param_default`` treat it as the host
         # contract violation it is meant to catch.
-        for param in lowered.program.params:
-            display_name = public_param_spelling(param.qualified_public_name)
-            _, missing_diagnostic = decode_or_diagnose_param(
-                param,
-                display_name,
-                supplied=False,
-                raw=None,
-                missing_message=(
-                    f"Missing required param {display_name!r}: provide a default expression."
-                ),
-            )
-            if missing_diagnostic is not None:
-                self._ctx._link_image.restore_state(link_snapshot)
-                return self._ctx._fail([missing_diagnostic], warnings)
+        missing_diagnostics = missing_required_param_diagnostics(
+            lowered.program, detail="provide a default expression"
+        )
+        if missing_diagnostics:
+            self._ctx._link_image.restore_state(link_snapshot)
+            return self._ctx._fail(list(missing_diagnostics), warnings)
         extern_diagnostics = _wire_extern_registry(
             checked=checked_program,
             capabilities=host_env.capabilities,
@@ -739,7 +730,7 @@ class EntryPipeline:
             self._ctx._link_image.restore_state(link_snapshot)
             self._ctx._advance_node_ids(new_next_id)
             return self._ctx._fail(extern_diagnostics, warnings)
-        host_contracts, _ = _materialize_ir_contracts(lowered.program, host_env.codecs)
+        host_contracts, _ = materialize_ir_contracts(lowered.program, host_env.codecs)
         trace = TraceStore(path=self._ctx._trace_path)
         trace.run_start()
         if self._ctx._host_settings_policy is not None:

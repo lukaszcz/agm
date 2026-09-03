@@ -10,7 +10,7 @@ from agm.agl.eval.arith import contains, div, order, value_eq
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.operations import CmpOp, ContainsKind
 from agm.agl.runtime.contract import materialize_contract
-from agm.agl.runtime.params import convert_param_value
+from agm.agl.runtime.engine_config import convert_host_value
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import AglNonDataValue, value_to_json_obj
 from agm.agl.semantics.types import DecimalType, TextType, UnitType
@@ -85,12 +85,12 @@ def test_constructor_render_and_serialization_edges() -> None:
 
 def test_param_conversion_direct_success_edges() -> None:
     table = type_table_for()
-    assert convert_param_value("text", "value", TextType(), table) == TextValue("value")
-    assert convert_param_value("decimal", decimal.Decimal("1.5"), DecimalType(), table) == (
+    assert convert_host_value("text", "value", TextType(), table) == TextValue("value")
+    assert convert_host_value("decimal", decimal.Decimal("1.5"), DecimalType(), table) == (
         DecimalValue(decimal.Decimal("1.5"))
     )
     with pytest.raises(ValueError, match="unsupported type"):
-        convert_param_value("unit", None, UnitType(), table)
+        convert_host_value("unit", None, UnitType(), table)
 
 
 def test_deeply_nested_singleton_decompositions_execute() -> None:

@@ -16,7 +16,7 @@ diagnostic severity is included in compiler-style output, e.g.
 
 Exit-code contract:
     0  success (or a clean ``--dry-run`` static check)
-    1  pre-execution failure (unreadable file, static errors, param validation)
+    1  pre-execution failure (unreadable file, static errors, argument validation)
     2  program executed but ended with an uncaught AgL exception
 
 Flag notes:
@@ -67,19 +67,13 @@ from agm.agent.session import create_agl_session_host
 from agm.agl import PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
 from agm.agl.runtime.agents import value_driven_agent_factory
-from agm.agl.runtime.arguments import ProgramArguments, bind_program_arguments_for
+from agm.agl.runtime.arguments import ProgramArguments
 from agm.agl.runtime.host_settings import HostSettingsPolicy
-from agm.agl.runtime.types import ParamDeclInfo, ProgramDeclInfo
+from agm.agl.runtime.types import ProgramDeclInfo
 from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES
-from agm.agl.syntax.nodes import FuncDef, ParamDecl, static_items
+from agm.agl.syntax.nodes import FuncDef, static_items
 from agm.cli_support.args import ExecArgs
 from agm.cli_support.engine_seeds import build_host_engine_seeds, check_max_iters
-from agm.cli_support.exec_params import (
-    discover_params_from_installed_reference,
-    external_param_keys,
-    param_option_flags,
-    parse_param_tokens,
-)
 from agm.cli_support.exec_roots import effective_exec_roots_or_none
 from agm.cli_support.exec_target import (
     ExecTargetError,
@@ -103,10 +97,8 @@ from agm.cli_support.program_options import (
 from agm.config.context import ConfigContext, current_config_context
 from agm.config.general import GeneralConfig, exec_config_from_merged, load_general_config
 from agm.config.qualified_keys import (
-    RESERVED_CONFIG_SECTION_NAMES,
     QualifiedConfigKey,
     QualifiedConfigLookupError,
-    build_qualified_config_key,
     configured_leaf_names,
     display_table_path,
     resolve_qualified_values,
@@ -127,41 +119,30 @@ from agm.packages.model import PackageInfo, owning_package
 
 if TYPE_CHECKING:
     from agm.agl.ir.nodes import UseDefault
+    from agm.agl.ir.program import ExecutableProgram
     from agm.agl.semantics.values import Value
 
 
-class RegisteredParamUsageError(Exception):
-    """Raised when CLI tokens fail to parse against a program's params or arguments.
+class RegisteredProgramUsageError(Exception):
+    """Raised when CLI tokens fail to parse against a program's own value parameters.
 
-    Covers both a legacy ``param`` declaration's ``--flag`` and a selected
-    program's own value-parameter option (``ProgramOptionMap.parse_tokens``).
-    Carries the parse-failure message, the program's legacy parameter
-    inventory, and the selected ``program def``'s own declaration (when one
-    was selected) so the caller can render a usage message appropriate to how
-    the program was invoked — a plain ``agm exec`` usage error, or (for a
-    dispatched registered command) the shared registered-command help
-    rendering — without a second discovery pass over the same source.
+    Wraps a ``ProgramOptionMap.parse_tokens`` failure. Carries the
+    parse-failure message and the selected ``program def``'s own declaration
+    (when one was selected) so the caller can render a usage message
+    appropriate to how the program was invoked — a plain ``agm exec`` usage
+    error, or (for a dispatched registered command) the shared
+    registered-command help rendering — without a second discovery pass over
+    the same source.
     """
 
     def __init__(
         self,
         message: str,
-        params: tuple[ParamDeclInfo, ...],
         program: ProgramDeclInfo | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
-        self.params = params
         self.program = program
-
-
-def _entry_module_segments(
-    entry_module_segments: tuple[str, ...], module_segments: tuple[str, ...]
-) -> tuple[str, ...]:
-    """Replace the entry sentinel with its config module component."""
-    if module_segments == ("<entry>",):
-        return entry_module_segments
-    return module_segments
 
 
 def _package_entry_segments(
@@ -203,46 +184,33 @@ def _registered_command_mismatch(command_path: str) -> NoReturn:
 def _report_undeclared_config_keys(
     config: GeneralConfig,
     module_segments: tuple[str, ...],
-    param_keys: Iterable[QualifiedConfigKey],
+    argument_keys: Iterable[QualifiedConfigKey],
     *,
-    scope_path: tuple[str, ...] = (),
-    kind: str = "param",
-    positional_only_names: Iterable[str] = (),
+    scope_path: tuple[str, ...],
+    positional_only_names: Iterable[str],
 ) -> None:
-    """Warn about config keys in one route's table that no declaration claims.
+    """Warn about config keys in a program's qualified table that no argument claims.
 
-    A key set in the table that is neither one of its declared params/program
-    arguments nor an engine setting is read by nothing — most often a
+    A key set in the table that is neither one of the selected program's own
+    value parameters nor an engine setting is read by nothing — most often a
     misspelled name — so report it instead of dropping it silently. The
     warning never affects the run: the program still executes on its
-    defaults. Engine settings legitimately share the table with params and
-    program arguments, and nested tables (scope regions, per-program engine
-    settings) address routes of their own.
+    defaults. Engine settings legitimately share the table with program
+    arguments, and nested tables (scope regions, per-program engine settings)
+    address routes of their own.
 
-    A key claims a leaf whenever its own route reads this table, which by
-    suffix resolution includes declarations in imported modules whose route
-    ends in *module_segments*'s name. *scope_path* checks the entry module's
-    own top-level table (the default, ``()``) or a selected program's own
-    qualified table (e.g. ``workflow.main``, for its value parameters). *kind*
-    names the declaration kind in the warning — ``"param"`` for a legacy
-    ``param`` table, ``"program argument"`` for a program's own value
-    parameters — so the message never calls a program argument a param.
+    *scope_path* is the selected program's own qualified table path (e.g.
+    ``workflow.main``).
 
     *positional_only_names* names leaves that are declared but not
     name-addressable — a positional-only program argument, which a config
     table (a name-keyed channel) can never supply, the same way it can never
     be passed by name in an AgL call. Such a leaf is a distinct, milder
     warning than a genuinely undeclared key: it exists, it is just not
-    reachable by this channel. The legacy ``param`` path never passes any
-    names here, since every legacy param is name-addressable.
+    reachable by this channel.
     """
     entry_paths = route_table_paths(module_segments, scope_path)
-    entry_path_set = set(entry_paths)
-    declared = {
-        key.leaf
-        for key in param_keys
-        if entry_path_set.intersection(route_table_paths(key.module_segments, key.scope_path))
-    }
+    declared = {key.leaf for key in argument_keys}
     positional_only = set(positional_only_names)
     leaves = sorted(configured_leaf_names(config, module_segments, scope_path))
     if not leaves:
@@ -264,7 +232,7 @@ def _report_undeclared_config_keys(
             continue
         print(
             f"warning: config key '{leaf}' in the '{table_name}' "
-            f"configuration table is not a declared {kind} and will be ignored",
+            "configuration table is not a declared program argument and will be ignored",
             file=sys.stderr,
         )
 
@@ -316,46 +284,17 @@ def _resolve_registered_program_target(
     return target
 
 
-def registered_program_params(
-    program: str, package_name: str, *, context: ConfigContext | None = None
-) -> tuple[ParamDeclInfo, ...]:
-    """Discover the parameter inventory for a registered program, degrading on failure."""
-    try:
-        if context is None:
-            context = current_config_context()
-        target = _resolve_registered_program_target(program, package_name, context=context)
-        if target is None:
-            return ()
-        return discover_params_from_installed_reference(
-            target,
-            home=context.home,
-            proj_dir=context.proj_dir,
-            cwd=context.cwd,
-        )
-    except (Exception, SystemExit):
-        return ()
-
-
-def registered_program_param_flags(
-    program: str, package_name: str, *, context: ConfigContext | None = None
-) -> tuple[str, ...]:
-    """Discover parameter flags for a registered program, degrading on failure."""
-    return param_option_flags(registered_program_params(program, package_name, context=context))
-
-
 def registered_program_declaration(
     program: str, package_name: str, *, context: ConfigContext | None = None
 ) -> ProgramDeclInfo | None:
     """Discover the referenced program's own ``program def`` declaration, degrading on failure.
 
-    Unlike :func:`registered_program_params`, which returns every ``param``
-    declaration reachable from the entry module, a registered command names
-    exactly one ``program def`` declaration — the one selected here by
-    matching the installed reference's own declaration path among the entry
-    module's own candidates, via :func:`~agm.cli_support.program_discovery.select_entry_program`,
-    the one place a requested name is matched against entry-module
-    declarations. An imported module's same-named declaration never
-    shadows it.
+    A registered command names exactly one ``program def`` declaration — the
+    one selected here by matching the installed reference's own declaration
+    path among the entry module's own candidates, via
+    :func:`~agm.cli_support.program_discovery.select_entry_program`, the one
+    place a requested name is matched against entry-module declarations. An
+    imported module's same-named declaration never shadows it.
     """
     try:
         if context is None:
@@ -432,23 +371,10 @@ def run(
         parsed = replace(parsed, program=program, next_id=next_id)
 
     # Loose file entries address declarations under the file stem; package
-    # entries retain their package-qualified route. A loose stem that would
-    # consume AGM's configuration namespace is harmless until it exposes params.
-    # Materialized: the items are scanned twice below, for params and programs.
+    # entries retain their package-qualified route.
     parsed_items = (
         tuple(static_items(parsed.program.body.items)) if parsed.program is not None else ()
     )
-    if (
-        len(config_entry_segments) == 1
-        and entry_stem in RESERVED_CONFIG_SECTION_NAMES
-        and any(isinstance(item, ParamDecl) for item in parsed_items)
-    ):
-        print(
-            f"Error: entry file stem '{entry_stem}' is reserved for configuration.",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
-
     parsed_programs = tuple(
         item for item in parsed_items if isinstance(item, FuncDef) and item.is_program
     )
@@ -591,7 +517,7 @@ def run(
         shell_exec_timeout=resolved_timeout,
         default_call_depth_limit=resolved_call_depth_limit,
     )
-    discovery = runtime.discover_params(prepared)
+    discovery = runtime.discover_programs(prepared)
     for diag in discovery.warnings:
         print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
     checked = discovery.checked
@@ -625,15 +551,11 @@ def run(
             )
             raise SystemExit(1)
 
-    selected_params = (
-        discovery.params if selected_program is None else discovery.params_for(selected_program)
-    )
-
-    # A selected program's own value parameters (the new mechanism) project
-    # onto their own CLI option map, built from its declared signature. This
-    # is a static, source-derived check independent of any supplied
-    # arguments, so a colliding projection (against a reserved host flag, or
-    # against another parameter's own flag) is reported unconditionally.
+    # A selected program's own value parameters project onto their own CLI
+    # option map, built from its declared signature. This is a static,
+    # source-derived check independent of any supplied arguments, so a
+    # colliding projection (against a reserved host flag, or against another
+    # parameter's own flag) is reported unconditionally.
     program_option_map: ProgramOptionMap | None = None
     if selected_program is not None:
         option_map_result = build_program_option_map(selected_program.parameters)
@@ -643,55 +565,17 @@ def run(
             print(f"Error: {_program_option_error_message(option_map_result)}", file=sys.stderr)
             raise SystemExit(1)
 
-    # CLI tokens are split between the legacy ``param`` parser and the
-    # program's own option map by ``parse_param_tokens`` itself: a flag
-    # naming a declared ``param`` is parsed and validated exactly as it is
-    # for a program with no value parameters; every other token — including
-    # an unrecognized flag and a bare positional — is set aside as a
-    # leftover and handed to ``ProgramOptionMap.parse_tokens``, which owns
-    # positional collection and its own ``--name``/``--no-name`` flags. Both
-    # mechanisms may supply values for the same invocation.
-    external_params: dict[str, object] = {}
     if program_option_map is not None:
         try:
-            cli_params, program_tokens = parse_param_tokens(
-                selected_params, args.param_tokens, collect_leftovers=True
-            )
+            cli_arguments = program_option_map.parse_tokens(args.param_tokens)
         except ValueError as exc:
-            raise RegisteredParamUsageError(str(exc), selected_params, selected_program) from exc
-        try:
-            cli_arguments = program_option_map.parse_tokens(program_tokens)
-        except ValueError as exc:
-            raise RegisteredParamUsageError(str(exc), selected_params, selected_program) from exc
-    else:
-        try:
-            cli_params = parse_param_tokens(selected_params, args.param_tokens)
-        except ValueError as exc:
-            raise RegisteredParamUsageError(str(exc), selected_params, selected_program) from exc
-        cli_arguments = ProgramArguments(positional=(), named={})
-
-    if entry_stem is not None:
-        param_keys = {
-            param: build_qualified_config_key(
-                _entry_module_segments(config_entry_segments, param.module_segments), param.name
-            )
-            for param in selected_params
-        }
-        try:
-            configured_params = resolve_qualified_values(config_view, param_keys.values())
-        except QualifiedConfigLookupError as exc:
-            print(f"Error: invalid qualified configuration: {exc}", file=sys.stderr)
-            raise SystemExit(1) from exc
-        external_keys = external_param_keys(selected_params)
-        external_params.update(
-            {
-                external_keys[param]: configured_params[key]
-                for param, key in param_keys.items()
-                if key in configured_params
-            }
+            raise RegisteredProgramUsageError(str(exc), selected_program) from exc
+    elif args.param_tokens:
+        raise RegisteredProgramUsageError(
+            f"unexpected argument: {args.param_tokens[0]!r}", selected_program
         )
-        _report_undeclared_config_keys(config_view, config_entry_segments, param_keys.values())
-    external_params.update(cli_params)
+    else:
+        cli_arguments = ProgramArguments(positional=(), named={})
 
     # The selected program's own value parameters resolve config-file values
     # from its qualified table (e.g. ``[workflow.main]``) — the same table an
@@ -721,38 +605,32 @@ def run(
             config_entry_segments,
             argument_keys.values(),
             scope_path=program_path,
-            kind="program argument",
             positional_only_names=program_option_map.positional_only_names(),
         )
     arguments = ProgramArguments(positional=cli_arguments.positional, named=program_named)
 
-    # Params are validated against the lowered program, so this preflight lowers
-    # the graph.  It must report a param failure (exit 1) BEFORE the trace file
-    # is prepared and the runner is built — hence a check-only pass here rather
-    # than letting the run below surface it.  The lowered program it produces is
-    # handed to that run, so the graph is lowered exactly once per invocation.
-    param_preflight = runtime.preflight_params(
-        prepared,
-        param_values=external_params,
-        compiled=discovery.compiled,
-    )
-    if not param_preflight.result.ok:
-        for diag in param_preflight.result.diagnostics:
-            print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
-        raise SystemExit(1)
-
+    # Program arguments (and any required, source-defaulted ``param``) are
+    # validated against the lowered program, so this preflight lowers the
+    # graph.  It must report a failure (exit 1) BEFORE the trace file is
+    # prepared and the runner is built — hence a check-only pass here rather
+    # than letting the run below surface it.  The lowered program it produces
+    # is handed to that run, so the graph is lowered exactly once per
+    # invocation.
+    executable: "ExecutableProgram | None" = None
     program_symbol = None
     arguments_bound: "tuple[Value | UseDefault, ...] | None" = None
     if selected_program is not None:
-        assert param_preflight.executable is not None
-        program_symbol = param_preflight.executable.program_symbols[selected_program.node_id]
-        arguments_bound, argument_diagnostics = bind_program_arguments_for(
-            param_preflight.executable, selected_program, arguments
+        argument_preflight = runtime.preflight_arguments(
+            prepared, selected_program, arguments, compiled=discovery.compiled
         )
-        if argument_diagnostics:
-            for diag in argument_diagnostics:
+        if not argument_preflight.result.ok:
+            for diag in argument_preflight.result.diagnostics:
                 print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
             raise SystemExit(1)
+        executable = argument_preflight.executable
+        assert executable is not None
+        program_symbol = executable.program_symbols[selected_program.node_id]
+        arguments_bound = argument_preflight.arguments
 
     # Resolve + validate the trace log file up front.  --dry-run is
     # side-effect-free: no trace is written regardless of --log-file.  A source
@@ -792,11 +670,10 @@ def run(
     with preserve_primary_error(session_host.close_all, label="agent session cleanup"):
         result = runtime.run_prepared(
             prepared,
-            param_values=external_params,
             check_only=dry_run.enabled(),
             log_file=log_file,
             compiled=discovery.compiled,
-            executable=param_preflight.executable,
+            executable=executable,
             host_settings_policy=policy,
             builtin_host_settings=engine_seeds.values,
             process_environment=process_environment,

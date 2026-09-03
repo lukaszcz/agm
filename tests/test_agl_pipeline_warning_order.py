@@ -8,7 +8,7 @@ import pytest
 
 from agm.agl import PipelineDriver
 from agm.agl.modules.roots import RootSet
-from agm.agl.pipeline import ParamDiscovery, PreparedProgram, RunResult
+from agm.agl.pipeline import PreparedProgram, ProgramDiscovery, RunResult
 from agm.agl.repl.session import EntryResult, ReplSession
 from tests._agl_helpers import prepare_inline_command, run_inline_command
 
@@ -39,7 +39,7 @@ def _prepare_graph(source: str) -> PreparedProgram:
 
 
 def _assert_warning_then_match_error(
-    result: RunResult | ParamDiscovery | EntryResult,
+    result: RunResult | ProgramDiscovery | EntryResult,
 ) -> None:
     assert [(item.line, item.severity) for item in result.warnings] == [(2, "warning")]
     assert [(item.line, item.severity) for item in result.diagnostics] == [(3, "error")]
@@ -59,7 +59,7 @@ def test_single_run_preserves_checker_warning_before_match_failure(check_only: b
 
 def test_single_discovery_preserves_checker_warning_before_match_failure() -> None:
     runtime = PipelineDriver(agent_dispatcher=lambda _request: "")
-    result = runtime.discover_params(prepare_inline_command(_FAILING_SOURCE))
+    result = runtime.discover_programs(prepare_inline_command(_FAILING_SOURCE))
 
     assert result.compiled is None
     _assert_warning_then_match_error(result)
@@ -77,7 +77,7 @@ def test_program_run_preserves_checker_warning_before_match_failure(check_only: 
 
 
 def test_program_discovery_preserves_checker_warning_before_match_failure() -> None:
-    result = PipelineDriver(agent_dispatcher=lambda _request: "").discover_params(
+    result = PipelineDriver(agent_dispatcher=lambda _request: "").discover_programs(
         _prepare_graph(_FAILING_SOURCE)
     )
 

@@ -167,9 +167,11 @@ class TestRunBehavior:
         # pre-execution failure: error is None (no AgL exception was raised)
         assert result.error is None
 
-    def test_run_with_params(self) -> None:
+    def test_run_with_program_arguments(self) -> None:
         rt = PipelineDriver()
-        result = run_inline_command(rt, "param k\nprint k", param_values={"k": "value"})
+        result = run_inline_command(
+            rt, "program def main(k: text) -> unit = print k", param_values={"k": "value"}
+        )
         assert isinstance(result, RunResult)
         assert result.ok is True
 
@@ -238,15 +240,13 @@ class TestInputValidationRuntime:
         msgs = " ".join(d.message for d in result.diagnostics)
         assert "spec" in msgs.lower()
 
-    def test_undeclared_extra_is_ignored(self) -> None:
+    def test_text_program_argument_verbatim(self) -> None:
         rt = PipelineDriver()
-        result = run_inline_command(rt, "param a\nprint a", param_values={"a": "ok", "b": "extra"})
-        assert result.ok is True
-        assert result.diagnostics == []
-
-    def test_text_param_verbatim(self) -> None:
-        rt = PipelineDriver()
-        result = run_inline_command(rt, "param msg\nprint msg", param_values={"msg": "hello world"})
+        result = run_inline_command(
+            rt,
+            "program def main(msg: text) -> unit = print msg",
+            param_values={"msg": "hello world"},
+        )
         assert result.ok is True
 
     def test_no_agent_called_on_param_failure(self) -> None:
@@ -260,16 +260,20 @@ class TestInputValidationRuntime:
         run_inline_command(rt, 'param x\nask("Hi")', param_values={})
         assert calls == []
 
-    def test_int_param_json_parsed(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_int_program_argument_json_parsed(self, capsys: pytest.CaptureFixture[str]) -> None:
         rt = PipelineDriver()
-        result = run_inline_command(rt, "param n: int\nprint n", param_values={"n": 5})
+        result = run_inline_command(
+            rt, "program def main(n: int) -> unit = print n", param_values={"n": 5}
+        )
         assert result.ok
         out = capsys.readouterr().out
         assert "5" in out
 
-    def test_invalid_typed_param_fails(self) -> None:
+    def test_invalid_typed_program_argument_fails(self) -> None:
         rt = PipelineDriver()
-        result = run_inline_command(rt, "param n: int\nprint n", param_values={"n": "five"})
+        result = run_inline_command(
+            rt, "program def main(n: int) -> unit = print n", param_values={"n": "five"}
+        )
         assert result.ok is False
         assert result.error is None
 
@@ -284,10 +288,10 @@ class TestInputValidationRuntime:
         assert missing, result.diagnostics
         assert missing[0].line == 3
 
-    def test_invalid_typed_param_reports_declaration_line(self) -> None:
+    def test_invalid_typed_program_argument_reports_declaration_line(self) -> None:
         """parity: the type-invalid diagnostic already reports the line."""
         rt = PipelineDriver()
-        src = "let a = 1\nlet b = 2\nparam n: int\nprint n"
+        src = "let a = 1\nlet b = 2\nprogram def main(n: int) -> unit = print n"
         result = run_inline_command(rt, src, param_values={"n": "five"})
         assert result.ok is False
         bad = [d for d in result.diagnostics if "n" in d.message.lower()]
@@ -818,12 +822,14 @@ class TestDryRunCheckOnly:
 class TestDecimalSerialization:
     """decimals print/round-trip exactly; never via binary float."""
 
-    def test_json_param_with_decimal_prints_exactly(
+    def test_json_program_argument_with_decimal_prints_exactly(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         rt = PipelineDriver()
         result = run_inline_command(
-            rt, "param data: json\nprint data", param_values={"data": '{"a": 1.5}'}
+            rt,
+            "program def main(data: json) -> unit = print data",
+            param_values={"data": '{"a": 1.5}'},
         )
         assert result.ok is True
         captured = capsys.readouterr()
@@ -892,7 +898,7 @@ class TestWarningsThreadedOnFailurePaths:
 
 
 class TestParamBindingInvariant:
-    """The runtime relies on the checker recording every param's binding type."""
+    """The runtime relies on the checker recording every declaration's binding type."""
 
     def test_missing_binding_type_is_internal_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from agm.agl.typecheck.env import TypeEnvironment
@@ -902,7 +908,7 @@ class TestParamBindingInvariant:
 
         rt = PipelineDriver()
         with pytest.raises(AssertionError, match="binding type"):
-            run_inline_command(rt, "param msg\nprint msg", param_values={"msg": "hi"})
+            run_inline_command(rt, "let msg = 1\nprint msg")
 
 
 # ---------------------------------------------------------------------------
@@ -1764,7 +1770,7 @@ class TestMaterializeContractMissingCodec:
 
 
 # ---------------------------------------------------------------------------
-# params.py — host engine seeds and engine-key defaults
+# engine_config.py — host engine seeds and engine-key defaults
 # ---------------------------------------------------------------------------
 
 
@@ -1772,14 +1778,14 @@ class TestEngineSettingDefaults:
     """The host side owns defaults only for the keys it can actually decode."""
 
     def test_unknown_engine_seed_is_rejected(self) -> None:
-        from agm.agl.runtime.params import build_engine_config_seeds
+        from agm.agl.runtime.engine_config import build_engine_config_seeds
 
         with pytest.raises(ValueError, match="engine key"):
             build_engine_config_seeds({"unknown": True})
 
     def test_engine_default_settings_has_no_default_agent_floor(self) -> None:
         """``default-agent`` is declared by ``std/config``, not fabricated by the host."""
-        from agm.agl.runtime.params import engine_default_settings
+        from agm.agl.runtime.engine_config import engine_default_settings
 
         assert "default-agent" not in engine_default_settings()
 
@@ -1855,7 +1861,7 @@ class TestRuntimeErrorPaths:
 
         monkeypatch.setattr(
             runtime_mod,
-            "_materialize_ir_contracts",
+            "materialize_ir_contracts",
             lambda executable, codecs: (
                 {},
                 [Diagnostic(message="Contract error: bad contract", line=1)],
@@ -1887,67 +1893,67 @@ class TestRuntimeErrorPaths:
         assert result.error.type_name == "Abort"
 
     def test_text_param_not_str_raises(self) -> None:
-        """convert_param_value: text type with non-str value → ValueError."""
-        from agm.agl.runtime.params import convert_param_value
+        """convert_host_value: text type with non-str value → ValueError."""
+        from agm.agl.runtime.engine_config import convert_host_value
         from agm.agl.semantics.types import TextType
 
         with pytest.raises(ValueError, match="text"):
-            convert_param_value("msg", 42, TextType(), type_table_for())
+            convert_host_value("msg", 42, TextType(), type_table_for())
 
     def test_int_param_decimal_integral_widened(self) -> None:
-        """convert_param_value: integral Decimal → IntValue for int type."""
+        """convert_host_value: integral Decimal → IntValue for int type."""
         from decimal import Decimal
 
-        from agm.agl.runtime.params import convert_param_value
+        from agm.agl.runtime.engine_config import convert_host_value
         from agm.agl.semantics.types import IntType
         from agm.agl.semantics.values import IntValue
 
-        result = convert_param_value("n", Decimal("3"), IntType(), type_table_for())
+        result = convert_host_value("n", Decimal("3"), IntType(), type_table_for())
         assert result == IntValue(3)
 
     def test_int_param_non_integral_fails(self) -> None:
-        """convert_param_value: non-integral value → ValueError for int type."""
-        from agm.agl.runtime.params import convert_param_value
+        """convert_host_value: non-integral value → ValueError for int type."""
+        from agm.agl.runtime.engine_config import convert_host_value
         from agm.agl.semantics.types import IntType
 
         with pytest.raises(ValueError, match="'integer'"):
-            convert_param_value("n", "1.5", IntType(), type_table_for())
+            convert_host_value("n", "1.5", IntType(), type_table_for())
 
     def test_decimal_param_from_int(self) -> None:
-        """convert_param_value: int value → DecimalValue for decimal type."""
+        """convert_host_value: int value → DecimalValue for decimal type."""
         from decimal import Decimal
 
-        from agm.agl.runtime.params import convert_param_value
+        from agm.agl.runtime.engine_config import convert_host_value
         from agm.agl.semantics.types import DecimalType
         from agm.agl.semantics.values import DecimalValue
 
-        result = convert_param_value("d", 3, DecimalType(), type_table_for())
+        result = convert_host_value("d", 3, DecimalType(), type_table_for())
         assert isinstance(result, DecimalValue)
         assert result.value == Decimal(3)
 
     def test_decimal_param_invalid_type_fails(self) -> None:
-        """convert_param_value: bool value → ValueError for decimal type."""
-        from agm.agl.runtime.params import convert_param_value
+        """convert_host_value: bool value → ValueError for decimal type."""
+        from agm.agl.runtime.engine_config import convert_host_value
         from agm.agl.semantics.types import DecimalType
 
         with pytest.raises(ValueError, match="'number'"):
-            convert_param_value("d", "true", DecimalType(), type_table_for())
+            convert_host_value("d", "true", DecimalType(), type_table_for())
 
     def test_bool_param_invalid_type_fails(self) -> None:
-        """convert_param_value: non-bool value → ValueError for bool type."""
-        from agm.agl.runtime.params import convert_param_value
+        """convert_host_value: non-bool value → ValueError for bool type."""
+        from agm.agl.runtime.engine_config import convert_host_value
         from agm.agl.semantics.types import BoolType
 
         with pytest.raises(ValueError, match="'boolean'"):
-            convert_param_value("b", "1", BoolType(), type_table_for())
+            convert_host_value("b", "1", BoolType(), type_table_for())
 
     def test_bool_param_true_succeeds(self) -> None:
-        """convert_param_value: bool value → BoolValue for bool type."""
-        from agm.agl.runtime.params import convert_param_value
+        """convert_host_value: bool value → BoolValue for bool type."""
+        from agm.agl.runtime.engine_config import convert_host_value
         from agm.agl.semantics.types import BoolType
         from agm.agl.semantics.values import BoolValue
 
-        result = convert_param_value("b", True, BoolType(), type_table_for())
+        result = convert_host_value("b", True, BoolType(), type_table_for())
         assert result == BoolValue(True)
 
     # --- assertions migrated from TestRuntimeExceptionHandlers (eval tests) ---
@@ -2035,31 +2041,31 @@ class TestRuntimeErrorPaths:
         assert error.fields["cyclic_record"] == "<cyclic value>"
         assert isinstance(error.fields["exc_val"], dict)
 
-    def test_convert_param_value_json_type_accepts_any(self) -> None:
-        from agm.agl.runtime.params import convert_param_value
+    def test_convert_host_value_json_type_accepts_any(self) -> None:
+        from agm.agl.runtime.engine_config import convert_host_value
         from agm.agl.semantics.types import JsonType
         from agm.agl.semantics.values import JsonValue
 
-        result = convert_param_value("meta", [1, 2, 3], JsonType(), type_table_for())
+        result = convert_host_value("meta", [1, 2, 3], JsonType(), type_table_for())
         assert result == JsonValue([1, 2, 3])
 
-    def test_convert_param_value_json_type_decodes_normalized_value(self) -> None:
-        from agm.agl.runtime.params import convert_param_value
+    def test_convert_host_value_json_type_decodes_normalized_value(self) -> None:
+        from agm.agl.runtime.engine_config import convert_host_value
         from agm.agl.semantics.types import JsonType
         from agm.agl.semantics.values import JsonValue
 
-        result = convert_param_value("meta", "1.0", JsonType(), type_table_for())
+        result = convert_host_value("meta", "1.0", JsonType(), type_table_for())
 
         assert result == JsonValue(1)
         assert isinstance(result.raw, int)
 
-    def test_convert_param_value_array_type_parsed_via_json_codec(self) -> None:
+    def test_convert_host_value_array_type_parsed_via_json_codec(self) -> None:
         # array/dict/record/enum params are now accepted via the JsonCodec.
-        from agm.agl.runtime.params import convert_param_value
+        from agm.agl.runtime.engine_config import convert_host_value
         from agm.agl.semantics.types import ArrayType, TextType
         from agm.agl.semantics.values import ArrayValue, TextValue
 
-        result = convert_param_value(
+        result = convert_host_value(
             "xs", '["a", "b"]', ArrayType(elem=TextType()), type_table_for()
         )
         assert isinstance(result, ArrayValue)
@@ -2101,11 +2107,11 @@ class TestRuntimeErrorPaths:
         """
         import decimal as _decimal
 
-        from agm.agl.runtime.params import convert_param_value
+        from agm.agl.runtime.engine_config import convert_host_value
         from agm.agl.semantics.types import ArrayType, DecimalType
         from agm.agl.semantics.values import ArrayValue, DecimalValue
 
-        result = convert_param_value(
+        result = convert_host_value(
             "xs",
             [_decimal.Decimal("1.5"), _decimal.Decimal("2.75")],
             ArrayType(elem=DecimalType()),
@@ -2122,23 +2128,23 @@ class TestRuntimeErrorPaths:
         param-validation error naming the param, not a stringified value or
         traceback.
         """
-        from agm.agl.runtime.params import convert_param_value
+        from agm.agl.runtime.engine_config import convert_host_value
         from agm.agl.semantics.types import ArrayType, TextType
 
         with pytest.raises(ValueError, match="xs") as exc_info:
-            convert_param_value("xs", {1, 2, 3}, ArrayType(elem=TextType()), type_table_for())
+            convert_host_value("xs", {1, 2, 3}, ArrayType(elem=TextType()), type_table_for())
         # The error message must name the param and mention the type, not
         # contain a raw repr of the set or a json.dumps traceback.
         msg = str(exc_info.value)
         assert "set" in msg  # type name named
 
     def test_decimal_native_in_array_end_to_end(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """E2e: param xs: array[decimal] with Decimal values binds and prints."""
+        """E2e: a program argument xs: array[decimal] with Decimal values binds and prints."""
         import decimal as _decimal
 
         result = run_inline_command(
             PipelineDriver(),
-            "param xs: array[decimal]\nprint xs\n",
+            "program def main(xs: array[decimal]) -> unit = print xs\n",
             param_values={"xs": [_decimal.Decimal("1.5"), _decimal.Decimal("2.25")]},
         )
         assert result.ok is True
@@ -2152,7 +2158,7 @@ class TestRuntimeErrorPaths:
         """Native JSON-shaped floats are canonicalized before typed decoding."""
         result = run_inline_command(
             PipelineDriver(),
-            "param xs: array[decimal]\nprint xs\n",
+            "program def main(xs: array[decimal]) -> unit = print xs\n",
             param_values={"xs": [1.5, 2.25]},
         )
 
@@ -2710,16 +2716,20 @@ class TestSerializeOpaqueValues:
 
 
 class TestIrHostMetadata:
-    def test_invalid_external_param_shapes_are_diagnostics(self) -> None:
+    def test_invalid_external_program_argument_shapes_are_diagnostics(self) -> None:
         text_result = run_inline_command(
-            PipelineDriver(), "param value: text\nprint value", param_values={"value": 3}
+            PipelineDriver(),
+            "program def main(value: text) -> unit = print value",
+            param_values={"value": 3},
         )
         assert not text_result.ok
         assert "text" in text_result.diagnostics[0].message
         assert "value" in text_result.diagnostics[0].message
 
         json_result = run_inline_command(
-            PipelineDriver(), "param value: int\nprint value", param_values={"value": {1, 2}}
+            PipelineDriver(),
+            "program def main(value: int) -> unit = print value",
+            param_values={"value": {1, 2}},
         )
         assert not json_result.ok
         assert "JSON" in json_result.diagnostics[0].message
@@ -2729,7 +2739,7 @@ class TestIrHostMetadata:
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.program import ExecutableProgram
         from agm.agl.modules.ids import ENTRY_ID
-        from agm.agl.runtime.params import _materialize_ir_contracts
+        from agm.agl.runtime.contract import materialize_ir_contracts
 
         request = ContractRequest(
             codec_name="missing",
@@ -2748,7 +2758,7 @@ class TestIrHostMetadata:
             sources={},
             contracts={ContractId(0): request},
         )
-        contracts, errors = _materialize_ir_contracts(executable, {})
+        contracts, errors = materialize_ir_contracts(executable, {})
         assert contracts == {}
         assert "missing" in errors[0].message
 
@@ -2872,7 +2882,7 @@ class TestDefaultCallDepthLimit:
 
 
 class TestConvertInputUnsupportedType:
-    """convert_param_value raises ValueError for unsupported types (e.g. ArrayType of records)."""
+    """convert_host_value raises ValueError for unsupported types (e.g. ArrayType of records)."""
 
 
 # ---------------------------------------------------------------------------
@@ -2945,7 +2955,7 @@ class TestAgentMethodAsk:
 
 
 # ---------------------------------------------------------------------------
-# PreparedProgram / prepare_program / run_prepared / discover_params
+# PreparedProgram / prepare_program / run_prepared / discover_programs
 # ---------------------------------------------------------------------------
 
 
@@ -3106,34 +3116,38 @@ class TestRunPreparedProgram:
         assert result.ok is True
 
 
-class TestDiscoverParamsGraph:
-    """PipelineDriver.discover_params: typed param discovery."""
+class TestDiscoverProgramsGraph:
+    """PipelineDriver.discover_programs: typed program-argument discovery."""
 
-    def test_discover_params_no_params(self, tmp_path: pathlib.Path) -> None:
-        """discover_params returns empty params for a program with no params."""
+    def test_discover_programs_no_programs(self, tmp_path: pathlib.Path) -> None:
+        """discover_programs returns no programs for a source with no program def.
 
-        roots = agl_roots()
-        prepared = prepare_inline_command("let x = 1\nx", entry_path=None, roots=roots)
+        Uses ``PipelineDriver.prepare_program`` directly rather than the
+        inline-command helper, which wraps bare source in a synthetic entry
+        ``program def``.
+        """
         rt = PipelineDriver()
-        discovery = rt.discover_params(prepared)
+        prepared = PipelineDriver.prepare_program("let x = 1\n")
+        discovery = rt.discover_programs(prepared)
         assert discovery.diagnostics == ()
-        assert discovery.params == ()
+        assert discovery.programs == ()
 
-    def test_discover_params_with_declared_param(self, tmp_path: pathlib.Path) -> None:
-        """discover_params discovers typed param declarations."""
+    def test_discover_programs_with_declared_program_argument(self, tmp_path: pathlib.Path) -> None:
+        """discover_programs discovers a program's own typed value-parameter signature."""
 
         roots = agl_roots()
         prepared = prepare_inline_command(
-            "param name: text\nprint name",
+            "program def main(name: text) -> unit = print name",
             entry_path=None,
             roots=roots,
         )
         rt = PipelineDriver()
-        discovery = rt.discover_params(prepared)
+        discovery = rt.discover_programs(prepared)
         assert discovery.diagnostics == ()
-        assert len(discovery.params) == 1
-        assert discovery.params[0].name == "name"
-        assert discovery.params[0].is_entry
+        assert len(discovery.programs) == 1
+        assert discovery.programs[0].name == "main"
+        assert discovery.programs[0].module.is_entry
+        assert discovery.programs[0].parameters[0].name == "name"
 
     def test_discover_programs_records_module_and_paths(self, tmp_path: pathlib.Path) -> None:
         from agm.agl.modules.roots import RootSet
@@ -3156,7 +3170,7 @@ class TestDiscoverParamsGraph:
             default_stdlib=False,
         )
 
-        discovery = PipelineDriver().discover_params(prepared)
+        discovery = PipelineDriver().discover_programs(prepared)
 
         assert discovery.diagnostics == ()
         assert [
@@ -3170,14 +3184,18 @@ class TestDiscoverParamsGraph:
         assert discovery.programs[0].qualified_path == "review::main"
         assert discovery.programs[-1].qualified_path == "helper::helper"
 
-    def test_program_inventory_follows_loader_export_edges_only(
+    def test_required_param_diagnostics_follow_loader_export_edges_only(
         self, tmp_path: pathlib.Path
     ) -> None:
+        """A required, no-default ``param`` in a module the selected program never
+        reaches by export edge must not block that program's run — only params
+        reachable from the selected program's own module are checked."""
         from agm.agl.modules.roots import RootSet
+        from agm.agl.runtime.arguments import ProgramArguments
 
         (tmp_path / "runner.agl").write_text("export settings\nprogram def main() -> unit = ()\n")
         (tmp_path / "settings.agl").write_text('param token: text = "ok"\n')
-        (tmp_path / "unrelated.agl").write_text('param ignored: text = "no"\n')
+        (tmp_path / "unrelated.agl").write_text("param ignored: text\n")
         prepared = PipelineDriver.prepare_program(
             "import runner\nimport unrelated\nprogram def entry() -> unit = ()\n",
             entry_path=tmp_path / "entry.agl",
@@ -3185,22 +3203,43 @@ class TestDiscoverParamsGraph:
             default_stdlib=False,
         )
 
-        discovery = PipelineDriver().discover_params(prepared)
-
+        rt = PipelineDriver()
+        discovery = rt.discover_programs(prepared)
+        assert discovery.diagnostics == ()
         runner = next(
             program for program in discovery.programs if program.module.path_str() == "runner"
         )
-        assert [param.name for param in discovery.params_for(runner)] == ["token"]
 
-    def test_discover_params_failure_returns_diagnostics(self, tmp_path: pathlib.Path) -> None:
-        """discover_params returns diagnostics when the prepare phase failed."""
+        preflight = rt.preflight_arguments(
+            prepared,
+            runner,
+            ProgramArguments(positional=(), named={}),
+            compiled=discovery.compiled,
+        )
+        assert preflight.result.ok
+        executable = preflight.executable
+        assert executable is not None
+
+        # ``unrelated::ignored`` is required with no default, but ``runner::main``
+        # never exports or imports ``unrelated``, so it must not block this run.
+        result = rt.run_prepared(
+            prepared,
+            compiled=discovery.compiled,
+            executable=executable,
+            program_symbol=executable.program_symbols[runner.node_id],
+            arguments=preflight.arguments,
+        )
+        assert result.ok
+
+    def test_discover_programs_failure_returns_diagnostics(self, tmp_path: pathlib.Path) -> None:
+        """discover_programs returns diagnostics when the prepare phase failed."""
 
         roots = agl_roots()
         prepared = prepare_inline_command(
             "import no_such_module\nlet x = 1", entry_path=None, roots=roots
         )
         rt = PipelineDriver()
-        discovery = rt.discover_params(prepared)
+        discovery = rt.discover_programs(prepared)
         assert len(discovery.diagnostics) >= 1
 
 
@@ -3292,11 +3331,11 @@ class TestPrepareProgramFailures:
         assert "resolve fail" in prepared.diagnostics[0].message
 
 
-class TestDiscoverParamsFailures:
-    """A failure while discovering params is reported through the discovery result."""
+class TestDiscoverProgramsFailures:
+    """A failure while discovering programs is reported through the discovery result."""
 
-    def test_discover_params_missing_entry_in_checked(self, tmp_path: pathlib.Path) -> None:
-        """discover_params returns diagnostic when checked graph has no entry module."""
+    def test_discover_programs_missing_entry_in_checked(self, tmp_path: pathlib.Path) -> None:
+        """discover_programs returns diagnostic when checked graph has no entry module."""
         from unittest.mock import MagicMock, patch
 
         roots = agl_roots()
@@ -3307,12 +3346,12 @@ class TestDiscoverParamsFailures:
         fake_checked.modules = {}
 
         with patch("agm.agl.typecheck.program.check_program", return_value=fake_checked):
-            discovery = rt.discover_params(prepared)
+            discovery = rt.discover_programs(prepared)
         assert len(discovery.diagnostics) >= 1
         assert "Entry module" in discovery.diagnostics[0].message
 
-    def test_discover_params_typecheck_failure(self, tmp_path: pathlib.Path) -> None:
-        """discover_params returns diagnostics when typecheck fails."""
+    def test_discover_programs_typecheck_failure(self, tmp_path: pathlib.Path) -> None:
+        """discover_programs returns diagnostics when typecheck fails."""
         from unittest.mock import patch
 
         from agm.agl.typecheck import AglTypeError
@@ -3322,11 +3361,11 @@ class TestDiscoverParamsFailures:
         with patch(
             "agm.agl.typecheck.program.check_program", side_effect=AglTypeError("type error")
         ):
-            discovery = rt.discover_params(prepared)
+            discovery = rt.discover_programs(prepared)
         assert discovery.checked is None
         assert len(discovery.diagnostics) >= 1
 
-    def test_discover_params_typecheck_agl_error_retains_related_notes(self) -> None:
+    def test_discover_programs_typecheck_agl_error_retains_related_notes(self) -> None:
         """The module typecheck boundary uses AglError.to_diagnostic()."""
         from unittest.mock import patch
 
@@ -3334,7 +3373,7 @@ class TestDiscoverParamsFailures:
         related = SourceSpan(2, 1, 2, 2, 2, 3)
         error = AglError("type failed", related=(("constraint", related),))
         with patch("agm.agl.typecheck.program.check_program", side_effect=error):
-            discovery = PipelineDriver().discover_params(prepared)
+            discovery = PipelineDriver().discover_programs(prepared)
 
         assert discovery.diagnostics[0].related[0].message == "constraint"
 
@@ -3358,41 +3397,9 @@ class TestDiscoverParamsFailures:
         related = SourceSpan(2, 1, 2, 2, 2, 3)
         error = AglError("type failed", related=(("constraint", related),))
         with patch("agm.agl.typecheck.program.check_program", side_effect=error):
-            discovery = PipelineDriver().discover_params(prepared)
+            discovery = PipelineDriver().discover_programs(prepared)
 
         assert discovery.diagnostics[0].related[0].message == "constraint"
-
-    def test_package_entry_param_qualifier_uses_the_module_route(
-        self, tmp_path: pathlib.Path
-    ) -> None:
-        import semver
-
-        from agm.agl.modules.roots import RootSet
-        from agm.agl.pipeline import PreparedProgram, _entry_param_module_qualifier
-        from agm.packages.manifest import PackageManifest
-        from agm.packages.model import PackageInfo
-
-        package_root = tmp_path / "package"
-        entry_path = package_root / "tools" / "review.agl"
-        entry_path.parent.mkdir(parents=True)
-        entry_path.touch()
-        package = PackageInfo(package_root, PackageManifest("tools", semver.Version.parse("1.0.0")))
-        other_package = PackageInfo(
-            tmp_path / "other", PackageManifest("other", semver.Version.parse("1.0.0"))
-        )
-        prepared = PreparedProgram(
-            source="",
-            entry_path=entry_path,
-            roots=RootSet(
-                frozenset({package.module_root, other_package.module_root}),
-                packages=(other_package, package),
-            ),
-            resolved=None,
-            diagnostics=(),
-            warnings=(),
-        )
-
-        assert _entry_param_module_qualifier(prepared) == "tools/review"
 
     def test_run_typecheck_program_generic_exception_captured(self, tmp_path: pathlib.Path) -> None:
         """_run_typecheck_program captures generic exceptions as diagnostics."""
@@ -3419,8 +3426,8 @@ class TestDiscoverParamsFailures:
             "agm.agl.typecheck.program.check_program",
             side_effect=RuntimeError("graph type crash"),
         ):
-            # discover_params will call _run_typecheck_program internally.
-            discovery = rt.discover_params(pg)
+            # discover_programs will call _run_typecheck_program internally.
+            discovery = rt.discover_programs(pg)
         assert len(discovery.diagnostics) >= 1
         assert "graph type crash" in discovery.diagnostics[0].message
 
@@ -3478,22 +3485,43 @@ class TestRunPreparedEdgeCases:
         assert result.ok is False
         assert any("Contract error" in d.message for d in result.diagnostics)
 
-    def test_run_prepared_with_precompiled_decodes_param_from_ir(
+    def test_run_prepared_with_precompiled_binds_program_arguments(
         self, tmp_path: pathlib.Path
     ) -> None:
-        """A precompiled graph executes supplied params through IR metadata."""
+        """A precompiled graph binds and executes a program's own value arguments."""
         from agm.agl.matchcompile import MatchCompiledProgram, compile_program_matches
+        from agm.agl.runtime.arguments import ProgramArguments
         from agm.agl.typecheck.program import check_program as real_check_program
 
         roots = agl_roots()
-        prepared = prepare_inline_command("param n: int\nprint n", entry_path=None, roots=roots)
+        prepared = prepare_inline_command(
+            "program def main(n: int) -> unit = print n", entry_path=None, roots=roots
+        )
         rt = PipelineDriver()
         env = rt.host_environment()
         assert prepared.resolved is not None
         checked = real_check_program(prepared.resolved, env.capabilities)
         match_result = compile_program_matches(checked)
         assert isinstance(match_result.compiled, MatchCompiledProgram)
-        result = rt.run_prepared(prepared, param_values={"n": 7}, compiled=match_result.compiled)
+
+        discovery = rt.discover_programs(prepared, compiled=match_result.compiled)
+        program = discovery.programs[0]
+        preflight = rt.preflight_arguments(
+            prepared,
+            program,
+            ProgramArguments(positional=(), named={"n": 7}),
+            compiled=match_result.compiled,
+        )
+        assert preflight.result.ok
+        executable = preflight.executable
+        assert executable is not None
+        result = rt.run_prepared(
+            prepared,
+            compiled=match_result.compiled,
+            executable=executable,
+            program_symbol=executable.program_symbols[program.node_id],
+            arguments=preflight.arguments,
+        )
         assert result.ok
 
 

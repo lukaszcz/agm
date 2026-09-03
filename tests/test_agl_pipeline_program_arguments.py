@@ -4,8 +4,8 @@ Covers ``PipelineDriver.discover_programs`` (typed parameter signatures, one
 per program), ``PipelineDriver.preflight_arguments`` (binding and decoding
 host-supplied arguments against a program's signature without executing it),
 and ``PipelineDriver.run_prepared(arguments=...)`` (executing with the bound
-arguments) — mirroring the ``param``-mechanism ``discover_params``/
-``preflight_params`` coverage.
+arguments) — the only host surface that can supply a value into a running
+program; a ``param`` declaration resolves only from its own default.
 """
 
 from __future__ import annotations

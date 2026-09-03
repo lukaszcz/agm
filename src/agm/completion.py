@@ -18,7 +18,6 @@ from agm.config.general import load_merged_config, load_run_config
 from agm.project.dependency_checkout import main_dep_repo
 
 if TYPE_CHECKING:
-    from agm.agl.modules.roots import RootSet
     from agm.agl.runtime.types import ProgramDeclInfo
 
 from agm.project.layout import (
@@ -234,17 +233,14 @@ def registered_command_param_completion(
 ) -> list[CompletionItem]:
     """Complete parameters for an already resolved registered command.
 
-    Combines the legacy ``param`` flags with the referenced program's own
-    value-parameter option flags (and their ``--no-`` forms), the same two
-    mechanisms ``registered_command_help`` renders.
+    Combines ``--dry-run`` with the referenced program's own value-parameter
+    option flags (and their ``--no-`` forms), the same mechanism
+    ``registered_command_help`` renders.
     """
     try:
         from agm.cli_dispatch import load_command_index, resolve_registered_command
         from agm.cli_support.program_options import program_option_map_or_none
-        from agm.commands.exec_program import (
-            registered_program_declaration,
-            registered_program_param_flags,
-        )
+        from agm.commands.exec_program import registered_program_declaration
 
         context = current_config_context()
         index = load_command_index(home=context.home, proj_dir=context.proj_dir, cwd=context.cwd)
@@ -259,11 +255,6 @@ def registered_command_param_completion(
         )
         flags = (
             "--dry-run",
-            *registered_program_param_flags(
-                resolution.registration.program,
-                resolution.registration.package,
-                context=context,
-            ),
             *(() if option_map is None else option_map.completion_items()),
         )
         return [CompletionItem(flag) for flag in flags if flag.startswith(incomplete)]
@@ -485,37 +476,6 @@ def complete_agl_file(ctx: click.Context, args: list[str], incomplete: str) -> l
         return []
 
 
-def _exec_param_completion_items(
-    source: str,
-    incomplete: str,
-    *,
-    inline_source: bool = False,
-    entry_path: Path | None = None,
-    roots: "RootSet | None" = None,
-    default_stdlib: bool = True,
-) -> list[CompletionItem]:
-    """Return ``CompletionItem`` objects for ``--<param>`` flags discovered in *source*.
-
-    Used by :class:`ExecCommand` to augment the standard shell_complete results.
-    Degrades silently to ``[]`` on any error.
-    """
-    from agm.cli_support.exec_params import discover_params_from_source, param_option_flags
-
-    return [
-        CompletionItem(flag)
-        for flag in param_option_flags(
-            discover_params_from_source(
-                source,
-                inline_source=inline_source,
-                entry_path=entry_path,
-                roots=roots,
-                default_stdlib=default_stdlib,
-            )
-        )
-        if flag.startswith(incomplete)
-    ]
-
-
 def _program_argument_completion_items(
     programs: "tuple[ProgramDeclInfo, ...]", requested: str | None, incomplete: str
 ) -> list[CompletionItem]:
@@ -581,39 +541,20 @@ class ExecCommand(TyperCommand):
                 cwd=context.cwd,
             )
             if isinstance(target, PackageProgramReference):
-                from agm.cli_support.exec_params import (
-                    discover_params_from_installed_reference,
-                    param_option_flags,
-                )
                 from agm.cli_support.program_discovery import (
                     discover_program_declarations_from_installed_reference,
                 )
 
-                extra = [
-                    CompletionItem(flag)
-                    for flag in param_option_flags(
-                        discover_params_from_installed_reference(
-                            target,
-                            home=context.home,
-                            proj_dir=context.proj_dir,
-                            cwd=context.cwd,
-                            default_stdlib=not bool(params.get("no_stdlib")),
-                        )
-                    )
-                    if flag.startswith(incomplete)
-                ]
-                extra.extend(
-                    _program_argument_completion_items(
-                        discover_program_declarations_from_installed_reference(
-                            target,
-                            home=context.home,
-                            proj_dir=context.proj_dir,
-                            cwd=context.cwd,
-                            default_stdlib=not bool(params.get("no_stdlib")),
-                        ),
-                        requested_program,
-                        incomplete,
-                    )
+                extra = _program_argument_completion_items(
+                    discover_program_declarations_from_installed_reference(
+                        target,
+                        home=context.home,
+                        proj_dir=context.proj_dir,
+                        cwd=context.cwd,
+                        default_stdlib=not bool(params.get("no_stdlib")),
+                    ),
+                    requested_program,
+                    incomplete,
                 )
             elif isinstance(target, (InlineSource, FileEntry)):
                 from agm.cli_support.exec_roots import effective_exec_roots
@@ -637,26 +578,16 @@ class ExecCommand(TyperCommand):
                     proj_dir=context.proj_dir,
                 )
                 assert source is not None
-                extra = _exec_param_completion_items(
-                    source,
+                extra = _program_argument_completion_items(
+                    discover_program_declarations_from_source(
+                        source,
+                        inline_source=isinstance(target, InlineSource),
+                        entry_path=entry_path,
+                        roots=exec_roots.roots,
+                        default_stdlib=not bool(params.get("no_stdlib")),
+                    ),
+                    requested_program,
                     incomplete,
-                    inline_source=isinstance(target, InlineSource),
-                    entry_path=entry_path,
-                    roots=exec_roots.roots,
-                    default_stdlib=not bool(params.get("no_stdlib")),
-                )
-                extra.extend(
-                    _program_argument_completion_items(
-                        discover_program_declarations_from_source(
-                            source,
-                            inline_source=isinstance(target, InlineSource),
-                            entry_path=entry_path,
-                            roots=exec_roots.roots,
-                            default_stdlib=not bool(params.get("no_stdlib")),
-                        ),
-                        requested_program,
-                        incomplete,
-                    )
                 )
             else:
                 return base

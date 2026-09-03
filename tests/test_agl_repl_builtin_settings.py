@@ -21,8 +21,8 @@ from shutil import copyfile
 import pytest
 
 from agm.agl.repl import EntryResult, ReplSession
+from agm.agl.runtime.engine_config import build_engine_config_seeds
 from agm.agl.runtime.host_settings import HostSettingsPolicy
-from agm.agl.runtime.params import build_engine_config_seeds
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.semantics.values import BoolValue, IntValue, RecordValue, TextValue, Value
 from agm.agl.setting_overrides import SettingOverride

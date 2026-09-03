@@ -314,7 +314,7 @@ def _run_with_json_codec(
     """Build, check, and execute *body* with JSON output decoding enabled."""
     from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.runtime.codec import JsonCodec, OutputCodec, TextCodec
-    from agm.agl.runtime.params import _materialize_ir_contracts
+    from agm.agl.runtime.contract import materialize_ir_contracts
     from tests.agl.ir_harness import compile_checked_module, lower_compiled_module
 
     checked = _check_program_with_json(body)
@@ -322,7 +322,7 @@ def _run_with_json_codec(
     json_codec = JsonCodec()
     codecs: dict[str, OutputCodec] = {text_codec.name: text_codec, json_codec.name: json_codec}
     executable = lower_compiled_module(compile_checked_module(checked), source_text="<direct-ast>")
-    contracts, errors = _materialize_ir_contracts(executable, codecs)
+    contracts, errors = materialize_ir_contracts(executable, codecs)
     assert errors == []
     return _Bindings(
         IrInterpreter(
@@ -2381,22 +2381,25 @@ class TestNormalizedRaw:
 class TestRecordEnumParams:
     """Runtime.convert_param now accepts record/enum types via JsonCodec."""
 
-    def test_record_param_parsed_from_json_string(self) -> None:
+    def test_record_program_argument_parsed_from_json_string(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         result = run_inline_command(
             PipelineDriver(),
             """
 record Issue
   title: text
   severity: int
-param issue: Issue
-issue
+program def main(issue: Issue) -> unit =
+  print issue.title
+  print issue.severity
 """,
             param_values={"issue": '{"title": "Bug", "severity": 5}'},
         )
         assert result.ok
-        v = result.bindings["issue"]
-        assert isinstance(v, RecordValue)
-        assert v.fields["title"] == TextValue("Bug")
+        out = capsys.readouterr().out
+        assert "Bug" in out
+        assert "5" in out
 
     def test_enum_param_parsed_from_json_string(self) -> None:
         """Enum can be parsed via JsonCodec from a JSON string."""
@@ -2409,53 +2412,53 @@ issue
         assert isinstance(result.value, RecordValue)
         assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "Done"
 
-    def test_array_param_parsed_from_json_string(self) -> None:
+    def test_array_program_argument_parsed_from_json_string(self) -> None:
         rt = PipelineDriver()
         result = run_inline_command(
             rt,
-            "param tags: array[text]",
+            "program def main(tags: array[text]) -> unit = print tags",
             param_values={"tags": '["a", "b"]'},
         )
         assert result.ok is True
 
     def test_structured_param_accepts_python_list(self) -> None:
         """Structured params may be provided as a Python list (JSON-compatible)."""
-        from agm.agl.runtime.params import convert_param_value
+        from agm.agl.runtime.engine_config import convert_host_value
         from agm.agl.semantics.values import ArrayValue, IntValue
 
-        result = convert_param_value("xs", [1, 2, 3], ArrayType(elem=IntType()), type_table_for())
+        result = convert_host_value("xs", [1, 2, 3], ArrayType(elem=IntType()), type_table_for())
         assert isinstance(result, ArrayValue)
         assert result.elements == [IntValue(1), IntValue(2), IntValue(3)]
 
     def test_structured_param_must_be_string_or_compatible(self) -> None:
         """Structured params that are not a string or JSON-compatible Python value raise."""
-        from agm.agl.runtime.params import convert_param_value
+        from agm.agl.runtime.engine_config import convert_host_value
 
         with pytest.raises(ValueError, match="JSON"):
-            convert_param_value("xs", object(), ArrayType(elem=IntType()), type_table_for())
+            convert_host_value("xs", object(), ArrayType(elem=IntType()), type_table_for())
 
     def test_invalid_structured_param_raises(self) -> None:
         """A JSON string that fails schema validation for the declared type raises."""
-        from agm.agl.runtime.params import convert_param_value
+        from agm.agl.runtime.engine_config import convert_host_value
 
         with pytest.raises(ValueError, match="severity"):
             issue_type, issue_def = record_type(
                 "Issue", {"title": TextType(), "severity": IntType()}
             )
-            convert_param_value(
+            convert_host_value(
                 "issue",
                 '{"title": "Bug"}',  # missing severity
                 issue_type,
                 type_table_for(issue_def),
             )
 
-    def test_unsupported_type_in_convert_param_value_raises(self) -> None:
+    def test_unsupported_type_in_convert_host_value_raises(self) -> None:
         """ExceptionType is not a supported param type."""
-        from agm.agl.runtime.params import convert_param_value
+        from agm.agl.runtime.engine_config import convert_host_value
         from agm.agl.semantics.types import ExceptionType
 
         with pytest.raises(ValueError, match="unsupported type"):
-            convert_param_value("e", "val", ExceptionType(name="Boom"), type_table_for())
+            convert_host_value("e", "val", ExceptionType(name="Boom"), type_table_for())
 
     def test_structured_param_is_strict_no_repair(self) -> None:
         """host --param values are parsed strictly; typos are NOT repaired.
@@ -2464,13 +2467,13 @@ issue
         output) must be rejected for a user-supplied structured param, with an
         error that makes the JSON requirement clear.
         """
-        from agm.agl.runtime.params import convert_param_value
+        from agm.agl.runtime.engine_config import convert_host_value
 
         with pytest.raises(ValueError, match="JSON parse"):
             issue_type, issue_def = record_type(
                 "Issue", {"title": TextType(), "severity": IntType()}
             )
-            convert_param_value(
+            convert_host_value(
                 "issue",
                 '{"title": "Bug", "severity": 5,}',  # trailing comma typo
                 issue_type,
@@ -2479,10 +2482,10 @@ issue
 
     def test_structured_param_rejects_fenced_json(self) -> None:
         """a Markdown-fenced --param value is not stripped (strict parsing)."""
-        from agm.agl.runtime.params import convert_param_value
+        from agm.agl.runtime.engine_config import convert_host_value
 
         with pytest.raises(ValueError, match="JSON parse"):
-            convert_param_value(
+            convert_host_value(
                 "tags",
                 "```json\n[1, 2]\n```",
                 ArrayType(elem=IntType()),

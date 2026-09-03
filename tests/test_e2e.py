@@ -7628,7 +7628,7 @@ class TestPackageInstall:
         assert "alpha 1.0.0 active\n  command launch" in listed_uninstalled.stdout
         assert restored_dispatch.stdout == "alpha\n"
 
-    def test_registered_commands_honor_params_config_engine_help_and_multiword_paths(
+    def test_registered_commands_honor_arguments_config_engine_help_and_multiword_paths(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         home = tmp_path / "agm-home"
@@ -7643,19 +7643,18 @@ class TestPackageInstall:
         )
         (package / "tools" / "main.agl").write_text(
             "import std/config\n"
-            "param subject: text\n"
-            "program def main() -> unit =\n"
+            "program def main(subject: text) -> unit =\n"
             "  print subject\n"
             "  print std/config::max-iters\n"
             '  let _ = exec("true")\n',
             encoding="utf-8",
         )
         (package / "tools" / "inspect.agl").write_text(
-            "param subject: text\nprogram def main() -> unit = print subject\n", encoding="utf-8"
+            "program def main(subject: text) -> unit = print subject\n", encoding="utf-8"
         )
         home.mkdir()
         (home / "config.toml").write_text(
-            '["tools/main"]\nsubject = "configured"\n\n["tools/main".main]\nmax-iters = 9\n',
+            '["tools/main".main]\nsubject = "configured"\nmax-iters = 9\n',
             encoding="utf-8",
         )
 
@@ -7672,7 +7671,7 @@ class TestPackageInstall:
         assert installed.returncode == 0
         assert "publish" in help_result.stdout
         assert "Publish a subject" in help_result.stdout
-        assert "Program parameters:" in command_help.stdout
+        assert "Program arguments:" in command_help.stdout
         assert "--subject" in command_help.stdout
         assert published.stdout == "flag\n9\n"
         assert configured.stdout == "configured\n9\n"

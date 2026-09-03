@@ -72,70 +72,33 @@ def _run_program(
         rt = _make_runtime(default_agent=default_agent)
     if entry_path is None:
         return run_inline_command(rt, entry_source, roots=roots, param_values=param_values)
-    discovery = rt.discover_params(prepared)
-    preflight = rt.preflight_params(
-        prepared, param_values=param_values, compiled=discovery.compiled
+    discovery = rt.discover_programs(prepared)
+    entry_program = next(program for program in discovery.programs if program.module.is_entry)
+    if not entry_program.parameters:
+        return rt.run_prepared(prepared, compiled=discovery.compiled, select_default_program=True)
+    from agm.agl.runtime.arguments import ProgramArguments
+
+    preflight = rt.preflight_arguments(
+        prepared,
+        entry_program,
+        ProgramArguments(positional=(), named=dict(param_values) if param_values else {}),
+        compiled=discovery.compiled,
     )
     if not preflight.result.ok:
         return preflight.result
-    entry_program = next(program for program in discovery.programs if program.module.is_entry)
     assert preflight.executable is not None
     return rt.run_prepared(
         prepared,
-        param_values=param_values,
         compiled=discovery.compiled,
         executable=preflight.executable,
         program_symbol=preflight.executable.program_symbols[entry_program.node_id],
+        arguments=preflight.arguments,
     )
 
 
 # ---------------------------------------------------------------------------
 # Module-graph parameter inventory
 # ---------------------------------------------------------------------------
-
-
-def test_imported_module_param_is_discovered_lowered_and_available(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """An imported module's params are host-provided runtime bindings."""
-    library_root = tmp_path / "library"
-    library_root.mkdir()
-    (library_root / "config.agl").write_text("param region: text\ndef read() -> text = region\n")
-
-    from agm.agl import PipelineDriver
-    from agm.agl.modules.roots import RootSet
-
-    roots = RootSet(roots=frozenset({library_root, REPO_STDLIB_ROOT}))
-    prepared = PipelineDriver.prepare_program(
-        "import config\nprogram def main() -> unit = print config::read()\n", roots=roots
-    )
-    runtime = PipelineDriver()
-    discovery = runtime.discover_params(prepared)
-
-    assert [(param.module_segments, param.name) for param in discovery.params] == [
-        (("config",), "region")
-    ]
-    preflight = runtime.preflight_params(
-        prepared,
-        param_values={"region": "eu"},
-        compiled=discovery.compiled,
-    )
-    assert preflight.result.ok is True
-    assert preflight.executable is not None
-    (param,) = preflight.executable.params
-    assert param.module == ModuleId.from_path("config")
-
-    main = next(program for program in discovery.programs if program.module.is_entry)
-    result = runtime.run_prepared(
-        prepared,
-        param_values={"region": "eu"},
-        compiled=discovery.compiled,
-        executable=preflight.executable,
-        program_symbol=preflight.executable.program_symbols[main.node_id],
-    )
-
-    assert result.ok is True
-    assert capsys.readouterr().out == "eu\n"
 
 
 def test_import_cycle_param_default_resolves_later_module_param(
@@ -187,56 +150,6 @@ def test_import_cycle_param_default_dependency_cycle_is_diagnostic(tmp_path: Pat
     assert diagnostic.line == 2
 
 
-def test_program_inventory_excludes_params_outside_its_import_subgraph(tmp_path: Path) -> None:
-    """A program only inherits params from modules it transitively imports."""
-    library_root = tmp_path / "library"
-    library_root.mkdir()
-    (library_root / "a.agl").write_text(
-        "param included: int = 1\nprogram def run_a() -> unit = ()\n"
-    )
-    (library_root / "b.agl").write_text("param excluded: int\n")
-
-    from agm.agl import PipelineDriver
-    from agm.agl.modules.roots import RootSet
-
-    roots = RootSet(roots=frozenset({library_root, REPO_STDLIB_ROOT}))
-    prepared = PipelineDriver.prepare_program(
-        "import a\nimport b\nprogram def main() -> unit = ()\n", roots=roots
-    )
-    discovery = PipelineDriver().discover_params(prepared)
-    program_a = next(
-        program for program in discovery.programs if program.qualified_path == "a::run_a"
-    )
-
-    assert [param.name for param in discovery.params_for(program_a)] == ["included"]
-
-    runtime = PipelineDriver()
-    preflight = runtime.preflight_params(
-        prepared,
-        compiled=discovery.compiled,
-        program=program_a,
-    )
-
-    assert preflight.result.ok, preflight.result.diagnostics
-    assert preflight.executable is not None
-    assert [param.public_name for param in preflight.executable.params] == ["included"]
-    from agm.agl.runtime.codec import TextCodec
-
-    class ExtraCodec(TextCodec):
-        @property
-        def name(self) -> str:
-            return "extra"
-
-    runtime.register_codec(ExtraCodec())
-    result = runtime.run_prepared(
-        prepared,
-        compiled=discovery.compiled,
-        executable=preflight.executable,
-        program_symbol=preflight.executable.program_symbols[program_a.node_id],
-    )
-    assert result.ok, result.diagnostics
-
-
 def test_selected_program_preflight_excludes_unreachable_call_sites(tmp_path: Path) -> None:
     library_root = tmp_path / "library"
     library_root.mkdir()
@@ -245,17 +158,23 @@ def test_selected_program_preflight_excludes_unreachable_call_sites(tmp_path: Pa
 
     from agm.agl import PipelineDriver
     from agm.agl.modules.roots import RootSet
+    from agm.agl.runtime.arguments import ProgramArguments
 
     prepared = PipelineDriver.prepare_program(
         "import a\nimport b\nprogram def main() -> unit = ()\n",
         roots=RootSet(roots=frozenset({library_root, REPO_STDLIB_ROOT})),
     )
     runtime = PipelineDriver()
-    discovery = runtime.discover_params(prepared)
+    discovery = runtime.discover_programs(prepared)
     assert discovery.compiled is not None, discovery.diagnostics
     selected = next(program for program in discovery.programs if program.qualified_path == "a::run")
 
-    preflight = runtime.preflight_params(prepared, compiled=discovery.compiled, program=selected)
+    preflight = runtime.preflight_arguments(
+        prepared,
+        selected,
+        ProgramArguments(positional=(), named={}),
+        compiled=discovery.compiled,
+    )
 
     assert preflight.result.ok, preflight.result.diagnostics
     assert [site.callee for site in preflight.result.call_sites] == ["ask"]
@@ -270,15 +189,21 @@ def test_selected_program_does_not_wire_unreachable_extern(tmp_path: Path) -> No
 
     from agm.agl import PipelineDriver
     from agm.agl.modules.roots import RootSet
+    from agm.agl.runtime.arguments import ProgramArguments
 
     prepared = PipelineDriver.prepare_program(
         "import a\nimport b\nprogram def main() -> unit = ()\n",
         roots=RootSet(roots=frozenset({library_root, REPO_STDLIB_ROOT})),
     )
     runtime = PipelineDriver()
-    discovery = runtime.discover_params(prepared)
+    discovery = runtime.discover_programs(prepared)
     selected = next(program for program in discovery.programs if program.qualified_path == "a::run")
-    preflight = runtime.preflight_params(prepared, compiled=discovery.compiled, program=selected)
+    preflight = runtime.preflight_arguments(
+        prepared,
+        selected,
+        ProgramArguments(positional=(), named={}),
+        compiled=discovery.compiled,
+    )
     assert preflight.result.ok
     assert preflight.executable is not None
 
@@ -643,35 +568,37 @@ class TestAgentValueCrossModule:
 
 
 # ---------------------------------------------------------------------------
-# Multi-module + params integration
+# Multi-module + program-argument integration
 # ---------------------------------------------------------------------------
 
 
-class TestMultiFileParams:
-    """params and imported modules work together."""
+class TestMultiFileProgramArguments:
+    """A program's own value parameters and imported modules work together."""
 
-    def test_param_with_imported_function(
+    def test_program_argument_with_imported_function(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """An entry with a param can call an imported function with that param."""
+        """An entry program can call an imported function with its own argument."""
         lib_dir = tmp_path / "lib"
         lib_dir.mkdir()
         (lib_dir / "math.agl").write_text("def square(n: int) -> int = n * n\n")
 
-        source = "import math::*\nparam n: int\nlet r = square(n)\nprint r\n"
+        source = (
+            "import math::*\nprogram def main(n: int) -> unit =\n  let r = square(n)\n  print r\n"
+        )
 
         result = _run_program(source, roots_dirs=[lib_dir], param_values={"n": 7})
         assert result.ok is True
         captured = capsys.readouterr()
         assert "49" in captured.out
 
-    def test_missing_param_in_multifile_fails(self, tmp_path: Path) -> None:
-        """A missing required param in a multi-file program fails cleanly."""
+    def test_missing_program_argument_in_multifile_fails(self, tmp_path: Path) -> None:
+        """A missing required program argument in a multi-file program fails cleanly."""
         lib_dir = tmp_path / "lib"
         lib_dir.mkdir()
         (lib_dir / "calc.agl").write_text("def sq(n: int) -> int = n * n\n")
 
-        source = "import calc::*\nparam n: int\nlet r = sq(n)\nprint r\n"
+        source = "import calc::*\nprogram def main(n: int) -> unit =\n  let r = sq(n)\n  print r\n"
 
         result = _run_program(source, roots_dirs=[lib_dir], param_values={})
         assert result.ok is False

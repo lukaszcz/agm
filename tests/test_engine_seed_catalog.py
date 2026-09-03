@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from agm.agl.runtime.params import engine_default_settings, raw_option_str
+from agm.agl.runtime.engine_config import engine_default_settings, raw_option_str
 from agm.cli_support.engine_seeds import build_host_engine_seeds
 from agm.config.engine_keys import ENGINE_KEY_NAMES, ENGINE_KEYS, TRACE_ENGINE_KEYS
 from agm.config.general import ExecConfig

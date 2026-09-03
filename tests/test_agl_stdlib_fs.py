@@ -25,22 +25,13 @@ _STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
 
 
 def _run_file(source: str, path: Path, *, roots: RootSet) -> object:
+    """Run *source*'s entry ``program def main() -> unit`` (no arguments)."""
     runtime = PipelineDriver()
     prepared = PipelineDriver.prepare_program(source, entry_path=path, roots=roots)
-    discovery = runtime.discover_params(prepared)
-    if discovery.checked is None:
+    discovery = runtime.discover_programs(prepared)
+    if discovery.compiled is None:
         return runtime.run_prepared(prepared)
-    preflight = runtime.preflight_params(prepared, compiled=discovery.compiled)
-    if not preflight.result.ok:
-        return preflight.result
-    (program,) = [item for item in discovery.programs if item.module.is_entry]
-    assert preflight.executable is not None
-    return runtime.run_prepared(
-        prepared,
-        compiled=discovery.compiled,
-        executable=preflight.executable,
-        program_symbol=preflight.executable.program_symbols[program.node_id],
-    )
+    return runtime.run_prepared(prepared, compiled=discovery.compiled, select_default_program=True)
 
 
 def test_fs_operations_use_typed_text_paths_relative_to_the_invocation_cwd(

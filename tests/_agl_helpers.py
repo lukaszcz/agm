@@ -202,8 +202,9 @@ def run_inline_command(
     Routes through :meth:`PipelineDriver.preflight_arguments` (binding
     ``positional``/``param_values`` as the entry program's own value
     arguments) when the selected entry ``program def`` declares parameters,
-    and through the ``param``-mechanism :meth:`PipelineDriver.preflight_params`
-    path otherwise.
+    and through plain default-program selection otherwise — a module-level
+    ``param`` reachable from the entry receives no host-supplied value
+    either way; it resolves only from its own source default.
     """
     prepared = prepare_inline_command(
         source,
@@ -213,57 +214,41 @@ def run_inline_command(
     )
     param_values = run_kwargs.pop("param_values", None)
     positional = run_kwargs.pop("positional", None)
-    discovery = runtime.discover_params(prepared)
+    discovery = runtime.discover_programs(prepared)
     if discovery.compiled is None:
-        return runtime.run_prepared(prepared, param_values=param_values, **run_kwargs)
+        return runtime.run_prepared(prepared, **run_kwargs)
     entry_programs = [program for program in discovery.programs if program.module.is_entry]
-    assert len(entry_programs) == 1
-    entry_program = entry_programs[0]
+    assert len(entry_programs) <= 1
+    entry_program = entry_programs[0] if entry_programs else None
 
-    if entry_program.parameters:
-        assert not discovery.params_for(entry_program), (
-            "scenario binds 'params' as the entry program's own arguments when it "
-            "declares value parameters; a module 'param' reachable from it would "
-            "silently keep its default instead of taking 'params' - no fixture may "
-            "combine a parameterized program def with a reachable module param"
+    if entry_program is None or not entry_program.parameters:
+        assert not param_values and not positional, (
+            "scenario supplied 'param_values'/'positional' but the entry program "
+            "declares no value parameters to receive them - check the fixture's "
+            "program signature"
         )
-        argument_preflight = runtime.preflight_arguments(
-            prepared,
-            entry_program,
-            ProgramArguments(
-                positional=tuple(positional) if positional else (),
-                named=dict(param_values) if param_values else {},
-            ),
-            compiled=discovery.compiled,
-        )
-        if not argument_preflight.result.ok:
-            return argument_preflight.result
-        assert argument_preflight.executable is not None
         return runtime.run_prepared(
-            prepared,
-            compiled=discovery.compiled,
-            executable=argument_preflight.executable,
-            program_symbol=argument_preflight.executable.program_symbols[entry_program.node_id],
-            arguments=argument_preflight.arguments,
-            **run_kwargs,
+            prepared, compiled=discovery.compiled, select_default_program=True, **run_kwargs
         )
 
-    assert not positional, (
-        "scenario supplied 'positional' but the entry program declares no "
-        "parameters to receive them - check the fixture's program signature"
+    argument_preflight = runtime.preflight_arguments(
+        prepared,
+        entry_program,
+        ProgramArguments(
+            positional=tuple(positional) if positional else (),
+            named=dict(param_values) if param_values else {},
+        ),
+        compiled=discovery.compiled,
     )
-    preflight = runtime.preflight_params(
-        prepared, param_values=param_values, compiled=discovery.compiled
-    )
-    if not preflight.result.ok:
-        return preflight.result
-    assert preflight.executable is not None
+    if not argument_preflight.result.ok:
+        return argument_preflight.result
+    assert argument_preflight.executable is not None
     return runtime.run_prepared(
         prepared,
-        param_values=param_values,
         compiled=discovery.compiled,
-        executable=preflight.executable,
-        program_symbol=preflight.executable.program_symbols[entry_program.node_id],
+        executable=argument_preflight.executable,
+        program_symbol=argument_preflight.executable.program_symbols[entry_program.node_id],
+        arguments=argument_preflight.arguments,
         **run_kwargs,
     )
 

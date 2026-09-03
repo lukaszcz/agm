@@ -34,6 +34,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
+from agm.agl.diagnostics import Diagnostic
 from agm.agl.ir.contracts import ContractRequest, DecodeSchema
 from agm.agl.runtime.codec import OutputCodec
 from agm.agl.semantics.types import (
@@ -52,6 +53,8 @@ from agm.agl.semantics.types import (
 from agm.agl.typecheck.env import OutputContractSpec
 
 if TYPE_CHECKING:
+    from agm.agl.ir.ids import ContractId
+    from agm.agl.ir.program import ExecutableProgram
     from agm.agl.semantics.type_table import TypeTable
 
 
@@ -144,6 +147,30 @@ def materialize_ir_contract(
         defs=defs,
         structured_exec=request.structured_exec,
     )
+
+
+def materialize_ir_contracts(
+    executable: "ExecutableProgram", codecs: Mapping[str, OutputCodec]
+) -> "tuple[dict[ContractId, OutputContract], list[Diagnostic]]":
+    """Materialize every host codec contract exclusively from linked IR metadata.
+
+    Loops :func:`materialize_ir_contract` over ``executable.contracts``,
+    collecting a diagnostic per contract that names an unregistered codec
+    rather than raising: a host-configuration error surfaces as a normal
+    pre-execution diagnostic instead of an exception. Shared by
+    ``PipelineDriver._execute_ir`` and the REPL's ``entry_pipeline``.
+    """
+    materialized: "dict[ContractId, OutputContract]" = {}
+    errors: list[Diagnostic] = []
+    for contract_id, request in executable.contracts.items():
+        try:
+            contract = materialize_ir_contract(request, codecs)
+        except ValueError as exc:
+            errors.append(Diagnostic(message=f"Contract error: {exc}", line=1))
+            continue
+        if contract is not None:
+            materialized[contract_id] = contract
+    return materialized, errors
 
 
 def _call_make_contract(

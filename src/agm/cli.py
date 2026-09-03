@@ -80,7 +80,7 @@ from agm.parser import (
 )
 
 if TYPE_CHECKING:
-    from agm.agl.runtime.types import ParamDeclInfo, ProgramDeclInfo
+    from agm.agl.runtime.types import ProgramDeclInfo
 
 _HELP_TEXTS = parser_helpers._HELP_TEXTS
 _HELP_ALIASES = parser_helpers._HELP_ALIASES
@@ -999,18 +999,14 @@ def _discover_exec_help_material(
     command: str | None,
     module_paths: list[str] | None,
     no_stdlib: bool,
-) -> "tuple[tuple[ParamDeclInfo, ...], tuple[ProgramDeclInfo, ...]]":
-    """Discover legacy ``param`` and ``program def`` declarations for exec help.
+) -> "tuple[ProgramDeclInfo, ...]":
+    """Discover ``program def`` declarations for exec help.
 
-    Shared by ``_exec_print_help``'s ``Program parameters:``/``Program
-    arguments:`` sections and ``_exec_short_help_value_flags``'s bare-``-h``
-    disambiguation, so both degrade identically on any discovery failure
-    (syntax errors, unreadable files, etc.) to empty inventories.
+    Shared by ``_exec_print_help``'s ``Program arguments:`` section and
+    ``_exec_short_help_value_flags``'s bare-``-h`` disambiguation, so both
+    degrade identically on any discovery failure (syntax errors, unreadable
+    files, etc.) to an empty inventory.
     """
-    from agm.cli_support.exec_params import (
-        discover_params_from_installed_reference,
-        discover_params_from_source,
-    )
     from agm.cli_support.exec_target import FileEntry, InlineSource, PackageProgramReference
     from agm.cli_support.program_discovery import (
         discover_program_declarations_from_installed_reference,
@@ -1042,13 +1038,6 @@ def _discover_exec_help_material(
                 proj_dir=context.proj_dir,
             )
             assert source is not None
-            params = discover_params_from_source(
-                source,
-                inline_source=isinstance(target, InlineSource),
-                entry_path=entry_path,
-                roots=exec_roots.roots,
-                default_stdlib=not no_stdlib,
-            )
             programs = discover_program_declarations_from_source(
                 source,
                 inline_source=isinstance(target, InlineSource),
@@ -1057,13 +1046,6 @@ def _discover_exec_help_material(
                 default_stdlib=not no_stdlib,
             )
         elif isinstance(target, PackageProgramReference):
-            params = discover_params_from_installed_reference(
-                target,
-                home=context.home,
-                proj_dir=context.proj_dir,
-                cwd=context.cwd,
-                default_stdlib=not no_stdlib,
-            )
             programs = discover_program_declarations_from_installed_reference(
                 target,
                 home=context.home,
@@ -1072,12 +1054,10 @@ def _discover_exec_help_material(
                 default_stdlib=not no_stdlib,
             )
         else:
-            params = ()
             programs = ()
     except (Exception, SystemExit):
-        params = ()
         programs = ()
-    return params, programs
+    return programs
 
 
 def _exec_short_help_value_flags(
@@ -1090,18 +1070,15 @@ def _exec_short_help_value_flags(
 ) -> frozenset[str]:
     """Return every flag consuming a following ``VALUE`` token, for bare-``-h`` disambiguation.
 
-    Unions the legacy ``param`` inventory's own value-taking flags with the
-    selected entry program's own value-parameter flags (via
-    ``ProgramOptionMap.value_taking_flags``) — the two halves
+    The selected entry program's own value-parameter flags (via
+    ``ProgramOptionMap.value_taking_flags``) are what
     ``short_help_requested`` checks against, so a value legitimately spelled
-    ``-h`` for either mechanism is recognized as consumed, not as a
-    short-help request.
+    ``-h`` is recognized as consumed, not as a short-help request.
     """
-    from agm.cli_support.exec_params import param_value_taking_flags
     from agm.cli_support.program_discovery import select_entry_program
     from agm.cli_support.program_options import program_option_map_or_none
 
-    params, programs = _discover_exec_help_material(
+    programs = _discover_exec_help_material(
         file=file, command=command, module_paths=module_paths, no_stdlib=no_stdlib
     )
     selection = select_entry_program(programs, requested=program)
@@ -1110,9 +1087,7 @@ def _exec_short_help_value_flags(
         if selection.selected is None
         else program_option_map_or_none(selection.selected.parameters)
     )
-    return param_value_taking_flags(params) | (
-        frozenset() if option_map is None else option_map.value_taking_flags()
-    )
+    return frozenset() if option_map is None else option_map.value_taking_flags()
 
 
 def _exec_print_help(
@@ -1123,25 +1098,21 @@ def _exec_print_help(
     module_paths: list[str] | None = None,
     no_stdlib: bool = False,
 ) -> None:
-    """Print exec help, optionally with program param/argument sections, then exit 0.
+    """Print exec help, optionally with a ``Program arguments:`` section, then exit 0.
 
     When FILE or -c is provided and the source can be prepared + typechecked,
-    appends the discovered legacy ``Program parameters:`` section and the
-    ``Program arguments:`` section (one per declared ``program def``, its own
-    value parameters). Degrades silently on any error (syntax errors,
-    unreadable files, etc.).
+    appends the ``Program arguments:`` section (one per declared ``program
+    def``, its own value parameters). Degrades silently on any error (syntax
+    errors, unreadable files, etc.).
     """
-    from agm.cli_support.exec_params import render_param_help_section
     from agm.cli_support.program_discovery import select_entry_program
     from agm.cli_support.program_options import render_program_arguments_help
 
     print_help_for_command_path(["exec"])
 
-    params, programs = _discover_exec_help_material(
+    programs = _discover_exec_help_material(
         file=file, command=command, module_paths=module_paths, no_stdlib=no_stdlib
     )
-    if params:
-        print(render_param_help_section(params), end="")
     if programs:
         selection = select_entry_program(programs, requested=program)
         print(

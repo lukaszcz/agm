@@ -50,6 +50,7 @@ __all__ = [
     "bind_program_arguments_for",
     "decode_param_value",
     "default_program_arguments",
+    "missing_required_param_diagnostics",
 ]
 
 
@@ -152,9 +153,8 @@ def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
     """Decode a raw host param value against *decoder* into a typed ``Value``.
 
     The single decode path shared by program-argument binding
-    (:func:`bind_program_arguments`) and the module ``param``/config decode
-    path (``runtime.params.decode_or_diagnose_param`` and
-    ``runtime.params.convert_param_value``). ``text`` params are taken
+    (:func:`bind_program_arguments`) and the host engine-config decode path
+    (``runtime.engine_config.convert_host_value``). ``text`` params are taken
     verbatim; every other value crosses the canonical JSON boundary (strict
     parse, integral-decimal normalization, JSON-Schema validation, then the
     typeless ``decode_value`` walk).
@@ -313,6 +313,41 @@ def default_program_arguments(
     if diagnostics:
         return (), diagnostics
     return tuple(UseDefault(param_index=i) for i in range(len(signature))), ()
+
+
+def missing_required_param_diagnostics(
+    executable: "ExecutableProgram", *, detail: str | None = None
+) -> "tuple[Diagnostic, ...]":
+    """Return one diagnostic per required ``param`` with no supplied value.
+
+    No host surface supplies a value to a ``param`` declaration any more, so
+    a required one (no default expression) can never be satisfied. Called by
+    both ``PipelineDriver._execute_ir`` and the REPL's own pre-execution
+    check before an ``IrInterpreter`` run, so neither falls through to the
+    interpreter's default-resolution treating this as the host-contract
+    violation it exists to catch for a genuinely unreachable case.
+    ``check_prepared`` never calls this — a required ``param`` with no
+    default is not an error at check time.
+
+    *detail*, when given, replaces the generic wording with a caller-specific
+    remedy (the REPL asks the author to "provide a default expression").
+    """
+    from agm.agl.runtime.types import public_param_spelling
+
+    remedy = detail if detail is not None else "no default expression and no supplied value"
+    diagnostics = []
+    for param in executable.params:
+        if not param.required:
+            continue
+        display_name = public_param_spelling(param.qualified_public_name)
+        diagnostics.append(
+            Diagnostic(
+                message=f"Missing required param {display_name!r}: {remedy}.",
+                line=param.location.start_line,
+                column=param.location.start_col,
+            )
+        )
+    return tuple(diagnostics)
 
 
 def _diagnose_binding_error(exc: ArgumentBindingError, signature: ProgramSignature) -> Diagnostic:

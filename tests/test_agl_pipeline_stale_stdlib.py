@@ -48,28 +48,28 @@ class TestPrepareProgramDefaultRootsVersionMismatch:
         assert prepared.diagnostics
         assert "corrupt active std package" in prepared.diagnostics[0].message
 
-    def test_version_mismatch_diagnostic_surfaces_from_discover_params(
+    def test_version_mismatch_diagnostic_surfaces_from_discover_programs(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``discover_params`` reports why its default stdlib could not load."""
+        """``discover_programs`` reports why its default stdlib could not load."""
         monkeypatch.setattr(module_roots, "resolve_stdlib_root", _raise_version_mismatch)
 
-        prepared = PipelineDriver.prepare_program("param x: int\nprogram def main() -> unit = ()")
-        discovery = PipelineDriver().discover_params(prepared)
+        prepared = PipelineDriver.prepare_program("program def main() -> unit = ()")
+        discovery = PipelineDriver().discover_programs(prepared)
 
-        assert discovery.params == ()
+        assert discovery.programs == ()
         assert discovery.diagnostics
         assert "0.0.1" in discovery.diagnostics[0].message
 
 
-class TestDiscoverParamsFromSourceVersionMismatch:
-    def test_help_param_discovery_degrades_to_empty_without_crashing(
+class TestDiscoverProgramDeclarationsFromSourceVersionMismatch:
+    def test_help_program_discovery_degrades_to_empty_without_crashing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The ``--help``/completion path degrades gracefully on a mismatch."""
         monkeypatch.setattr(module_roots, "resolve_stdlib_root", _raise_version_mismatch)
-        from agm.cli_support.exec_params import discover_params_from_source
+        from agm.cli_support.program_discovery import discover_program_declarations_from_source
 
-        params = discover_params_from_source("param x: int\nprogram def main() -> unit = ()")
+        programs = discover_program_declarations_from_source("program def main() -> unit = ()")
 
-        assert params == ()
+        assert programs == ()

@@ -460,8 +460,8 @@ def test_import_inside_an_inline_nested_block_still_names_the_block() -> None:
 
 def test_static_root_rejection_without_a_program_def_omits_the_inline_explanation() -> None:
     """Source declaring no entry is not told to move items into a program body."""
-    statement = PipelineDriver().run("print 1", param_values={})
-    binding = PipelineDriver().run("let x = 1 + 1", param_values={})
+    statement = PipelineDriver().run("print 1")
+    binding = PipelineDriver().run("let x = 1 + 1")
 
     for result in (statement, binding):
         assert not result.ok
@@ -470,10 +470,8 @@ def test_static_root_rejection_without_a_program_def_omits_the_inline_explanatio
 
 def test_static_root_rejection_explains_a_declared_inline_program_def() -> None:
     """Inline source with its own entry is told where its items belong."""
-    statement = PipelineDriver().run("program def main() -> unit = ()\nprint 1", param_values={})
-    binding = PipelineDriver().run(
-        "program def main() -> unit = ()\nlet x = 1 + 1", param_values={}
-    )
+    statement = PipelineDriver().run("program def main() -> unit = ()\nprint 1")
+    binding = PipelineDriver().run("program def main() -> unit = ()\nlet x = 1 + 1")
 
     for result in (statement, binding):
         assert not result.ok

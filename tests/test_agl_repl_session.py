@@ -3728,8 +3728,8 @@ class TestParams:
         assert "name" in r.diagnostics[0].message
         assert "required" in r.diagnostics[0].message
 
-    def test_unset_param_diagnostic_names_the_prompt_entry_namespace(self) -> None:
-        """The prompt has no module name, so its params read as ``@entry::``.
+    def test_unset_param_diagnostic_names_the_bare_prompt_param(self) -> None:
+        """The prompt has no module name, so its param reads as the bare name.
 
         The entry module's internal sentinel is not a spelling a user can type
         and must never reach a diagnostic.
@@ -3739,8 +3739,9 @@ class TestParams:
         r = s.eval_entry("param name: text")
 
         assert not r.ok
-        assert "'@entry::name'" in r.diagnostics[0].message
+        assert "'name'" in r.diagnostics[0].message
         assert "<entry>" not in r.diagnostics[0].message
+        assert "@entry" not in r.diagnostics[0].message
 
     def test_imported_required_param_fails_before_interpreter_creation(
         self, tmp_path: Path

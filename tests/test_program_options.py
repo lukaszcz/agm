@@ -147,7 +147,7 @@ class TestEngineKeyFlags:
         assert "--no-default-agent" not in flags
 
     def test_reserved_flags_includes_every_engine_key_flag(self) -> None:
-        from agm.cli_support.exec_params import RESERVED_FLAGS
+        from agm.cli_support.program_options import RESERVED_FLAGS
 
         assert engine_key_flags() <= RESERVED_FLAGS
 

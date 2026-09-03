@@ -19,33 +19,28 @@ if TYPE_CHECKING:
     from agm.agl.syntax.spans import SourceSpan
 
 __all__ = [
-    "ENTRY_PARAM_QUALIFIER",
     "CallSiteInfo",
     "HostEnvironment",
-    "ParamDeclInfo",
     "ProgramDeclInfo",
     "ProgramParamInfo",
     "public_param_spelling",
 ]
 
-ENTRY_PARAM_QUALIFIER = "@entry"
-"""The shell-safe namespace a param of an unnamed entry module is addressed in."""
 
-
-def public_param_spelling(qualified_name: str, *, entry_qualifier: str | None = None) -> str:
+def public_param_spelling(qualified_name: str) -> str:
     """Return the user-facing spelling of a module-qualified param name.
 
     The entry module is an internal identity with no user-facing name, so a
-    qualified spelling that leaks its sentinel is meaningless in a diagnostic
-    or a CLI flag. A file-backed entry is addressed by its module route
-    (*entry_qualifier*); every other entry by the reserved
-    :data:`ENTRY_PARAM_QUALIFIER` namespace, which no module route can claim.
-    Names qualified by a real module are returned unchanged.
+    qualified spelling that leaks its sentinel is meaningless in a diagnostic.
+    When *qualified_name* is qualified by the entry sentinel, the sentinel is
+    stripped and the bare remainder — the name as the author wrote it — is
+    returned. A name qualified by a real module is returned unchanged, since
+    that qualification is what distinguishes two same-named params.
     """
     qualifier, separator, remainder = qualified_name.partition("::")
     if not separator or qualifier != ENTRY_DISPLAY:
         return qualified_name
-    return f"{entry_qualifier or ENTRY_PARAM_QUALIFIER}{separator}{remainder}"
+    return remainder
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,33 +146,3 @@ class ProgramDeclInfo:
         if self.module.is_entry:
             return self.declaration_path
         return f"{self.module.path_str()}::{self.declaration_path}"
-
-
-@dataclass(frozen=True, slots=True)
-class ParamDeclInfo:
-    """Static summary of one ``param`` declaration in a program.
-
-    ``module_segments`` and ``name`` together retain the declaration's
-    external identity. ``name`` is its scope-path spelling: a root param's
-    bare name, or a scoped param's full ``::``-joined path spelling. The
-    module-qualified spelling disambiguates same-named params in one program
-    inventory. ``is_entry`` keeps the synthetic entry-module identity separate
-    from its user-facing option spelling. ``entry_qualifier`` supplies that
-    spelling for file-backed entries without changing their internal identity.
-    """
-
-    name: str
-    type: "AglType"
-    has_default: bool
-    line: int
-    col: int
-    module_segments: tuple[str, ...] = ()
-    is_entry: bool = False
-    entry_qualifier: str | None = None
-
-    @property
-    def qualified_name(self) -> str:
-        """Return the module-qualified external spelling."""
-        if not self.module_segments:
-            return self.name
-        return f"{'/'.join(self.module_segments)}::{self.name}"

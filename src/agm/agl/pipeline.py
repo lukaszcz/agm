@@ -1,12 +1,12 @@
 """PipelineDriver — top-of-stack orchestrator for the AgL execution pipeline.
 
 Drives the full ``parse → scope → typecheck → matchcompile → lower/link → IR eval`` pipeline:
-registers agents/codecs, validates host params, materializes output
-contracts, and executes the program (or stops after static checking for
+registers agents/codecs, validates host-supplied program arguments, materializes
+output contracts, and executes the program (or stops after static checking for
 ``agm exec --dry-run``).  Structured outputs use the JSON codec with
 lenient-by-default recovery.
 
-``agm.agl.runtime`` is the eval-free services layer (agents, codecs, params,
+``agm.agl.runtime`` is the eval-free services layer (agents, codecs, arguments,
 types).  This module is the top-of-stack host façade that depends on both
 ``runtime`` services and ``agm.agl.eval``.
 """
@@ -32,13 +32,13 @@ from agm.agl.eval.ir_interpreter import (
 from agm.agl.ir.nodes import UseDefault
 from agm.agl.recursion import NestingTooDeepError, frontend_recursion_boundary
 from agm.agl.runtime.agents import AgentFn
-from agm.agl.runtime.params import _materialize_ir_contracts, _prepare_ir_params
+from agm.agl.runtime.arguments import missing_required_param_diagnostics
+from agm.agl.runtime.contract import materialize_ir_contracts
 from agm.agl.runtime.types import (
     CallSiteInfo as CallSiteInfo,
 )
 from agm.agl.runtime.types import (
     HostEnvironment,
-    ParamDeclInfo,
     ProgramDeclInfo,
     ProgramParamInfo,
 )
@@ -98,35 +98,16 @@ class _ExecutableProvenance:
     executable: "ExecutableProgram"
     prepared: "PreparedProgram"
     capabilities: "HostCapabilities"
-    selected_module: "ModuleId | None"
-
-
-@dataclass(frozen=True, slots=True)
-class ParamDiscovery:
-    """Result of ``PipelineDriver.discover_params``."""
-
-    params: tuple[ParamDeclInfo, ...]
-    checked: "CheckedProgram | None"
-    diagnostics: tuple[Diagnostic, ...]
-    warnings: tuple[Diagnostic, ...]
-    compiled: "MatchCompiledProgram | None" = None
-    programs: tuple[ProgramDeclInfo, ...] = ()
-    param_inventories: Mapping[int, tuple[ParamDeclInfo, ...]] = field(default_factory=dict)
-
-    def params_for(self, program: ProgramDeclInfo) -> tuple[ParamDeclInfo, ...]:
-        """Return the parameter inventory reachable from *program*'s module."""
-        return self.param_inventories.get(program.node_id, ())
+    selected_module: "ModuleId"
 
 
 @dataclass(frozen=True, slots=True)
 class ProgramDiscovery:
     """Result of ``PipelineDriver.discover_programs``.
 
-    Like :class:`ParamDiscovery`, but reports every ``program def``
-    declaration with its own typed value-parameter signature
-    (``ProgramDeclInfo.parameters``) instead of the ``param``-declaration
-    inventory: a host driving :meth:`PipelineDriver.preflight_arguments`
-    never needs that inventory.
+    Reports every ``program def`` declaration with its own typed
+    value-parameter signature (``ProgramDeclInfo.parameters``), ready for
+    :meth:`PipelineDriver.preflight_arguments`.
     """
 
     programs: tuple[ProgramDeclInfo, ...]
@@ -157,27 +138,8 @@ class _ProgramStaticResult:
 
 
 @dataclass(frozen=True, slots=True)
-class ParamPreflight:
-    """Result of ``PipelineDriver.preflight_params``.
-
-    ``result``
-        The check-only run result: ``ok`` iff every param validated.
-    ``executable``
-        The lowered program the params were checked against, or ``None`` when a
-        pass before lowering failed. Hand it back to the same
-        ``PipelineDriver.run_prepared`` as ``executable`` to execute it without
-        lowering the program a second time.
-    """
-
-    result: "RunResult"
-    executable: "ExecutableProgram | None"
-
-
-@dataclass(frozen=True, slots=True)
 class ArgumentPreflight:
     """Result of ``PipelineDriver.preflight_arguments``.
-
-    Mirrors :class:`ParamPreflight` for a program's own value parameters.
 
     ``result``
         The check-only run result: ``ok`` iff the static pipeline succeeded
@@ -461,7 +423,7 @@ class PipelineDriver:
         executable: "ExecutableProgram",
         resolved: "ResolvedProgram",
         capabilities: "HostCapabilities",
-    ) -> "tuple[ExecutableProgram | None, ModuleId | None]":
+    ) -> "tuple[ExecutableProgram | None, ModuleId]":
         """Validate a preflight executable and retain its selected module."""
         provenance = self._executable_provenance.get(id(executable))
         if provenance is None:
@@ -479,7 +441,6 @@ class PipelineDriver:
         executable: "ExecutableProgram",
         *,
         host_env: HostEnvironment,
-        param_values: Mapping[str, object],
         check_only: bool,
         log_file: "Path | None",
         warnings: list[Diagnostic],
@@ -495,18 +456,19 @@ class PipelineDriver:
         """Run a freshly lowered ``executable`` — the shared tail of the
         shared pipeline tail.
 
-        Validates external params (unless *validate_params* is ``False``),
-        materializes host codec contracts, honours the ``check_only`` dry-run
-        stop (call-site inventory, no execution), then builds and runs the
-        :class:`IrInterpreter`, mapping an uncaught ``AglRaise`` to a failing
-        ``RunResult``.  All return paths carry *warnings*.
+        Reports any required ``param`` with no supplied value (unless
+        *validate_params* is ``False``), materializes host codec contracts,
+        honours the ``check_only`` dry-run stop (call-site inventory, no
+        execution), then builds and runs the :class:`IrInterpreter`, mapping
+        an uncaught ``AglRaise`` to a failing ``RunResult``.  All return paths
+        carry *warnings*.
 
         *validate_params* is a private knob: nothing between the
-        ``_prepare_ir_params`` call and the ``check_only`` return reads its
-        result, so skipping it (used only by :meth:`check_prepared`) loses
-        nothing else. It is never exposed publicly — every public entry point
-        that reaches this method other than :meth:`check_prepared` keeps
-        validating params.
+        ``missing_required_param_diagnostics`` call and the ``check_only``
+        return reads its result, so skipping it (used only by
+        :meth:`check_prepared`) loses nothing else. It is never exposed
+        publicly — every public entry point that reaches this method other
+        than :meth:`check_prepared` keeps validating params.
 
         *arguments* is *program_symbol*'s own bound value-parameter argument
         list, in declaration order. When the caller has already validated it
@@ -519,15 +481,14 @@ class PipelineDriver:
         bind_program_arguments` reports for an explicit miss — never an
         interpreter arity crash.
         """
-        ir_param_values: "dict[SymbolId, Value]"
         if validate_params:
-            ir_param_values, param_errors = _prepare_ir_params(executable, param_values)
+            param_errors = missing_required_param_diagnostics(executable)
             if param_errors:
-                return RunResult(ok=False, diagnostics=param_errors, error=None, warnings=warnings)
-        else:
-            ir_param_values = {}
+                return RunResult(
+                    ok=False, diagnostics=list(param_errors), error=None, warnings=warnings
+                )
 
-        host_contracts, contract_errors = _materialize_ir_contracts(executable, host_env.codecs)
+        host_contracts, contract_errors = materialize_ir_contracts(executable, host_env.codecs)
         if contract_errors:
             return RunResult(
                 ok=False,
@@ -649,7 +610,6 @@ class PipelineDriver:
                 shell_exec_timeout=self._shell_exec_timeout,
                 trace=trace,
                 max_call_depth=self._default_call_depth_limit,
-                param_values=ir_param_values,
                 host_contracts=host_contracts,
                 extern_registry=host_env.extern_registry,
                 host_reconfigurer=reconfigurer,
@@ -814,7 +774,7 @@ class PipelineDriver:
         unknown engine key, or a graph with no loaded ``std/config``) is
         captured as a diagnostic naming the override's origin; a type or
         constant-expression violation surfaces later, from the ordinary
-        ``builtin var`` checking in :meth:`run_prepared`/:meth:`discover_params`.
+        ``builtin var`` checking in :meth:`run_prepared`/:meth:`discover_programs`.
 
         Non-raising in the same way as :meth:`prepare_program`: every load,
         override, or scope failure is captured into
@@ -1027,7 +987,6 @@ class PipelineDriver:
         self,
         source: str,
         *,
-        param_values: Mapping[str, object] | None = None,
         check_only: bool = False,
         log_file: "Path | None" = None,
         entry_path: "Path | None" = None,
@@ -1051,7 +1010,6 @@ class PipelineDriver:
                 package_roots=package_roots,
                 default_stdlib=default_stdlib,
             ),
-            param_values=param_values,
             check_only=check_only,
             log_file=log_file,
             builtin_var_seeds=builtin_var_seeds,
@@ -1067,11 +1025,11 @@ class PipelineDriver:
     ) -> "_ProgramStaticResult":
         """Run typecheck + match compilation, reusing a supplied artifact.
 
-        The static-pipeline steps shared by :meth:`discover_params` and
-        :meth:`discover_programs`: both need the checked and match-compiled
-        program (and a confirmed entry module) before building their own
-        program-declaration products, and neither should repeat the other's
-        typecheck/match-compile/artifact-provenance logic.
+        The static-pipeline steps :meth:`discover_programs` needs before
+        building its own program-declaration products: entry-module
+        resolution, typecheck, match compilation, and (when self-validation
+        is enabled) artifact-provenance checking against a reused *compiled*
+        artifact.
 
         On success both :attr:`~_ProgramStaticResult.checked` and
         :attr:`~_ProgramStaticResult.compiled` are non-``None``. On failure
@@ -1136,91 +1094,6 @@ class PipelineDriver:
             checked=checked, compiled=compiled, diagnostics=(), warnings=all_warnings
         )
 
-    def discover_params(
-        self,
-        prepared: PreparedProgram,
-        *,
-        compiled: "MatchCompiledProgram | None" = None,
-    ) -> ParamDiscovery:
-        """Discover parameter inventories and linked ``program def`` declarations.
-
-        Every program receives the params declared by its module and its
-        transitive imports. A supplied artifact is reused; otherwise the
-        successful artifact is returned for later lowering by
-        :meth:`run_prepared`.
-        """
-        from agm.agl.modules.ids import ENTRY_ID
-        from agm.agl.syntax.nodes import ParamDecl, scoped_public_name, static_items
-
-        static = self._discover_static(prepared, compiled=compiled)
-        if not static.ok:
-            return ParamDiscovery(
-                params=(),
-                checked=static.checked,
-                diagnostics=static.diagnostics,
-                warnings=static.warnings,
-            )
-        checked = static.checked
-        assert checked is not None, "compiler bug: _discover_static.ok without a checked program"
-
-        entry_qualifier = _entry_param_module_qualifier(prepared)
-
-        infos_by_module: dict[ModuleId, tuple[ParamDeclInfo, ...]] = {}
-        for module_id, checked_module in checked.modules.items():
-            module_infos: list[ParamDeclInfo] = []
-            module_segments = module_id.segments if not module_id.is_entry else ("<entry>",)
-            for item in static_items(checked_module.resolved.program.body.items):
-                if isinstance(item, ParamDecl):
-                    param_type = checked_module.type_env.get_binding_type(item.node_id)
-                    assert param_type is not None, (
-                        f"Param {item.name!r} has no recorded binding type; "
-                        "checker invariant violated."
-                    )
-                    module_infos.append(
-                        ParamDeclInfo(
-                            name=scoped_public_name(item.scope_path, item.name),
-                            type=param_type,
-                            has_default=item.default is not None,
-                            line=item.span.start_line,
-                            col=item.span.start_col,
-                            module_segments=module_segments,
-                            is_entry=module_id.is_entry,
-                            entry_qualifier=entry_qualifier if module_id.is_entry else None,
-                        )
-                    )
-            infos_by_module[module_id] = tuple(module_infos)
-
-        program_infos = _program_decl_infos(checked)
-
-        # Programs declared in the same module share an identical inventory
-        # (each is the reachable-subgraph param set of its declaring module),
-        # so cache by module id rather than re-walking the reachability BFS
-        # once per program def.
-        resolved = prepared.resolved
-        assert resolved is not None, "compiler bug: _discover_static.ok without a resolved program"
-        graph = resolved.graph
-        inventory_cache: dict[ModuleId, tuple[ParamDeclInfo, ...]] = {}
-
-        def cached_param_inventory(inventory_module_id: ModuleId) -> tuple[ParamDeclInfo, ...]:
-            cached = inventory_cache.get(inventory_module_id)
-            if cached is None:
-                cached = _param_inventory(inventory_module_id, graph, infos_by_module)
-                inventory_cache[inventory_module_id] = cached
-            return cached
-
-        inventories = {
-            program.node_id: cached_param_inventory(program.module) for program in program_infos
-        }
-        return ParamDiscovery(
-            params=cached_param_inventory(ENTRY_ID),
-            checked=checked,
-            diagnostics=(),
-            warnings=static.warnings,
-            compiled=static.compiled,
-            programs=program_infos,
-            param_inventories=inventories,
-        )
-
     def discover_programs(
         self,
         prepared: PreparedProgram,
@@ -1229,12 +1102,11 @@ class PipelineDriver:
     ) -> ProgramDiscovery:
         """Discover every ``program def`` declaration with its typed parameter signature.
 
-        Runs the same static pipeline as :meth:`discover_params` (shared
-        through :meth:`_discover_static`), but reports each program's own
-        value-parameter signature (``ProgramDeclInfo.parameters``) instead of
-        building the ``param``-declaration inventory: a host driving
-        :meth:`preflight_arguments`/:meth:`run_prepared` with ``arguments``
-        never needs that inventory.
+        A supplied artifact is reused; otherwise the successful artifact is
+        returned for later lowering by :meth:`run_prepared`. Reports each
+        program's own value-parameter signature (``ProgramDeclInfo.parameters``),
+        ready for :meth:`preflight_arguments`/:meth:`run_prepared` with
+        ``arguments``.
         """
         static = self._discover_static(prepared, compiled=compiled)
         if not static.ok:
@@ -1288,7 +1160,6 @@ class PipelineDriver:
         self,
         prepared: PreparedProgram,
         *,
-        param_values: Mapping[str, object] | None = None,
         check_only: bool = False,
         log_file: "Path | None" = None,
         compiled: "MatchCompiledProgram | None" = None,
@@ -1312,7 +1183,7 @@ class PipelineDriver:
 
         ``compiled``
             When the caller has already typechecked and match-compiled the program
-            (for example via :meth:`discover_params`), pass the result
+            (for example via :meth:`discover_programs`), pass the result
             here to skip those static passes. ``None`` runs them here.
 
         ``program_symbol``
@@ -1333,7 +1204,7 @@ class PipelineDriver:
 
         ``executable``
             When this driver has already lowered this exact program (via
-            :meth:`preflight_params`), pass the executable here to run it as-is:
+            :meth:`preflight_arguments`), pass the executable here to run it as-is:
             contract materialization and lowering are skipped, so a program is
             lowered only once however many times a host resumes it. A changed
             host capability set invalidates the executable and lowers afresh;
@@ -1342,7 +1213,6 @@ class PipelineDriver:
         """
         result, _executable = self._run_program(
             prepared,
-            param_values=param_values,
             check_only=check_only,
             log_file=log_file,
             compiled=compiled,
@@ -1391,23 +1261,20 @@ class PipelineDriver:
     def _lower_and_record(
         self,
         prepared: PreparedProgram,
+        program: ProgramDeclInfo,
         *,
         compiled: "MatchCompiledProgram | None" = None,
-        program: ProgramDeclInfo | None = None,
-        param_values: Mapping[str, object] | None = None,
     ) -> "tuple[RunResult, ExecutableProgram | None]":
         """Lower *prepared* under ``check_only`` and record the executable's provenance.
 
-        Shared tail of :meth:`preflight_params` and :meth:`preflight_arguments`:
-        both must lower the program (selecting *program*'s module when one is
-        given) without executing it, then register the lowered executable's
-        cache provenance so a later ``run_prepared(executable=...)`` call can
-        validate and reuse it instead of lowering a second time.
+        The tail of :meth:`preflight_arguments`: lowers the program, selecting
+        *program*'s module, without executing it, then registers the lowered
+        executable's cache provenance so a later ``run_prepared(executable=...)``
+        call can validate and reuse it instead of lowering a second time.
         """
         capabilities = self.host_environment().capabilities
         result, executable = self._run_program(
             prepared,
-            param_values=param_values,
             check_only=True,
             compiled=compiled,
             selected_program=program,
@@ -1417,31 +1284,9 @@ class PipelineDriver:
                 executable=executable,
                 prepared=prepared,
                 capabilities=capabilities,
-                selected_module=None if program is None else program.module,
+                selected_module=program.module,
             )
         return result, executable
-
-    def preflight_params(
-        self,
-        prepared: PreparedProgram,
-        *,
-        param_values: Mapping[str, object] | None = None,
-        compiled: "MatchCompiledProgram | None" = None,
-        program: ProgramDeclInfo | None = None,
-    ) -> ParamPreflight:
-        """Validate external params against the program without executing it.
-
-        Params are validated against the LOWERED program, so a host that must
-        reject bad params before it commits to any run side effect has to lower
-        first. This runs the static pipeline exactly as :meth:`run_prepared`
-        does under ``check_only`` and hands the lowered program back, so the host
-        can then execute it (``run_prepared(..., executable=...)``) on this
-        driver without paying for a second lowering.
-        """
-        result, executable = self._lower_and_record(
-            prepared, compiled=compiled, program=program, param_values=param_values
-        )
-        return ParamPreflight(result=result, executable=executable)
 
     def preflight_arguments(
         self,
@@ -1453,9 +1298,9 @@ class PipelineDriver:
     ) -> ArgumentPreflight:
         """Validate host-supplied *arguments* against *program*'s own parameters.
 
-        Mirrors :meth:`preflight_params`: runs the static pipeline exactly as
-        :meth:`run_prepared` does under ``check_only``, then binds and decodes
-        *arguments* against the lowered program's signature for *program*
+        Runs the static pipeline exactly as :meth:`run_prepared` does under
+        ``check_only``, then binds and decodes *arguments* against the
+        lowered program's signature for *program*
         (:func:`~agm.agl.runtime.arguments.bind_program_arguments_for`). Hand
         the lowered executable and the bound arguments back to
         :meth:`run_prepared` (``executable=``, ``arguments=``) to execute it
@@ -1463,7 +1308,7 @@ class PipelineDriver:
         """
         from agm.agl.runtime.arguments import bind_program_arguments_for
 
-        result, executable = self._lower_and_record(prepared, compiled=compiled, program=program)
+        result, executable = self._lower_and_record(prepared, program, compiled=compiled)
         if executable is None or not result.ok:
             return ArgumentPreflight(result=result, executable=executable)
 
@@ -1484,7 +1329,6 @@ class PipelineDriver:
         self,
         prepared: PreparedProgram,
         *,
-        param_values: Mapping[str, object] | None = None,
         check_only: bool = False,
         log_file: "Path | None" = None,
         compiled: "MatchCompiledProgram | None" = None,
@@ -1509,9 +1353,6 @@ class PipelineDriver:
         *validate_params* is private — see :meth:`_execute_ir`; only
         :meth:`check_prepared` passes ``False``.
         """
-        if param_values is None:
-            param_values = {}
-
         warnings: list[Diagnostic] = list(prepared.warnings)
 
         if prepared.resolved is None:
@@ -1530,11 +1371,9 @@ class PipelineDriver:
         capabilities = host_env.capabilities
         selected_module = None if selected_program is None else selected_program.module
         if executable is not None:
-            executable, cached_selection = self._validate_cached_executable(
+            executable, selected_module = self._validate_cached_executable(
                 executable, resolved, capabilities
             )
-            if cached_selection is not None:
-                selected_module = cached_selection
         if compiled is not None:
             if self_validation_enabled():
                 _check_program_artifact_provenance(resolved, compiled.checked)
@@ -1657,7 +1496,6 @@ class PipelineDriver:
             self._execute_ir(
                 executable,
                 host_env=host_env,
-                param_values=param_values,
                 check_only=check_only,
                 log_file=log_file,
                 warnings=warnings,
@@ -1732,7 +1570,16 @@ def _reachable_modules(
 def _select_program_inventory(
     executable: "ExecutableProgram", graph: "ModuleGraph", module_id: "ModuleId"
 ) -> "ExecutableProgram":
-    """Restrict a selected program to its runtime modules and source inventories."""
+    """Restrict a selected program to its runtime modules and source inventories.
+
+    The ``params=`` restriction keeps a required ``param`` declared in a
+    module *unreachable* from the selected program from failing that
+    program's run: :meth:`PipelineDriver._execute_ir` reports every required
+    ``param`` still on ``executable.params`` via
+    :func:`~agm.agl.runtime.arguments.missing_required_param_diagnostics`, so
+    an unfiltered ``executable.params`` would fail a program over a
+    declaration it never depends on.
+    """
     source_reachable = frozenset(graph.source_reachable_modules(module_id))
     runtime_reachable = (
         frozenset(_reachable_modules(module_id, graph.adjacency)) | graph.ambient_modules
@@ -1755,10 +1602,9 @@ def _select_program_inventory(
 def _program_decl_infos(checked: "CheckedProgram") -> tuple[ProgramDeclInfo, ...]:
     """Return every ``program def`` declaration's info, in stable sorted order.
 
-    Shared by :meth:`PipelineDriver.discover_params` and
-    :meth:`PipelineDriver.discover_programs`: both walk *checked*'s modules
-    identically to find ``program def`` declarations, each paired with its
-    own typed value-parameter signature.
+    Walks *checked*'s modules to find every ``program def`` declaration, each
+    paired with its own typed value-parameter signature. Used by
+    :meth:`PipelineDriver.discover_programs`.
     """
     from agm.agl.syntax.nodes import FuncDef, static_items
 
@@ -1810,22 +1656,6 @@ def _program_param_infos(
             span=ast_param.span,
         )
         for ast_param, param_spec in zip(funcdef.params, signature.params, strict=True)
-    )
-
-
-def _param_inventory(
-    module_id: "ModuleId",
-    graph: "ModuleGraph",
-    infos_by_module: "Mapping[ModuleId, tuple[ParamDeclInfo, ...]]",
-) -> tuple[ParamDeclInfo, ...]:
-    """Return params declared in *module_id*'s dependency subgraph.
-
-    The loader's adjacency is the sole reachability authority. In particular,
-    export declarations load dependency modules just like imports and therefore
-    contribute their params to a program inventory.
-    """
-    return tuple(
-        info for mid in graph.source_reachable_modules(module_id) for info in infos_by_module[mid]
     )
 
 
@@ -2004,19 +1834,6 @@ def _apply_setting_overrides(
         modules[STD_CONFIG_ID] = std_config
 
     return dc_replace(graph, modules=modules), next_id, diagnostics
-
-
-def _entry_param_module_qualifier(prepared: PreparedProgram) -> str | None:
-    """Return the user-facing module route for a file-backed entry module."""
-
-    if prepared.entry_path is None:
-        return None
-    entry_path = prepared.entry_path.resolve()
-    for package in prepared.roots.packages:
-        if entry_path.is_relative_to(package.module_root):
-            relative = entry_path.relative_to(package.module_root).with_suffix("")
-            return "/".join((package.manifest.name, *relative.parts))
-    return entry_path.stem
 
 
 def _check_artifact_provenance(

@@ -385,7 +385,9 @@ class TestDiagnoseBindingErrorMissingRequired:
 
 
 class TestDecodeParamValue:
-    """``decode_param_value`` moved here unchanged from ``runtime.params``."""
+    """``decode_param_value`` takes ``text`` verbatim, decodes every other type
+    through the canonical JSON boundary, and raises on a strict-JSON parse
+    failure or a type/shape mismatch."""
 
     def test_text_verbatim(self) -> None:
         assert decode_param_value(_decoder(TextType()), "hello") == TextValue("hello")

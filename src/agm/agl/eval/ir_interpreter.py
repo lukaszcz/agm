@@ -141,6 +141,7 @@ from agm.agl.ir.validate import InvalidIrError
 from agm.agl.modules.ids import STD_CONFIG_ID, STD_ENV_ID, ModuleId
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
+from agm.agl.runtime.engine_config import engine_default_settings
 from agm.agl.runtime.externs import (
     AglCallableProxy,
     ExternCallWindow,
@@ -148,7 +149,6 @@ from agm.agl.runtime.externs import (
     ExternRuntimeState,
 )
 from agm.agl.runtime.option import none_value, option_text, some_value
-from agm.agl.runtime.params import engine_default_settings
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import encode_value
 from agm.agl.runtime.sessions import AgentDispatcherSessionHost

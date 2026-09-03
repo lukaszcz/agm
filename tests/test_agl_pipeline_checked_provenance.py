@@ -15,7 +15,13 @@ import pytest
 
 from agm.agl.lower import lower_program
 from agm.agl.modules.roots import RootSet
-from agm.agl.pipeline import ArtifactProvenanceError, PipelineDriver, PreparedProgram
+from agm.agl.pipeline import (
+    ArgumentPreflight,
+    ArtifactProvenanceError,
+    PipelineDriver,
+    PreparedProgram,
+)
+from agm.agl.runtime.arguments import ProgramArguments
 from agm.agl.runtime.codec import TextCodec
 from tests._agl_helpers import prepare_inline_command
 
@@ -29,12 +35,27 @@ def _prepare_graph(source: str) -> PreparedProgram:
     )
 
 
+def _preflight(runtime: PipelineDriver, prepared: PreparedProgram) -> ArgumentPreflight:
+    """Preflight the wrapped entry program's (empty) argument list.
+
+    Every source in this file is a bare inline statement, wrapped into a
+    zero-parameter synthetic ``program def main``. Only the resulting
+    lowered executable matters here — this file tests artifact provenance,
+    not argument binding.
+    """
+    discovery = runtime.discover_programs(prepared)
+    (program,) = discovery.programs
+    return runtime.preflight_arguments(
+        prepared, program, ProgramArguments(positional=(), named={}), compiled=discovery.compiled
+    )
+
+
 def test_single_run_rejects_checked_artifact_from_different_prepared_program(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     runtime = PipelineDriver()
     prepared_a = prepare_inline_command('print "stale"')
-    discovery_a = runtime.discover_params(prepared_a)
+    discovery_a = runtime.discover_programs(prepared_a)
     assert discovery_a.checked is not None
     prepared_b = prepare_inline_command('print "fresh"')
 
@@ -49,7 +70,7 @@ def test_program_run_rejects_checked_artifact_from_different_prepared_program(
 ) -> None:
     runtime = PipelineDriver()
     prepared_a = _prepare_graph('print "stale"')
-    discovery_a = runtime.discover_params(prepared_a)
+    discovery_a = runtime.discover_programs(prepared_a)
     assert discovery_a.checked is not None
     prepared_b = _prepare_graph('print "fresh"')
 
@@ -64,7 +85,7 @@ def test_run_rejects_executable_from_different_prepared_program(
 ) -> None:
     runtime = PipelineDriver()
     prepared_a = prepare_inline_command('print "stale"')
-    preflight_a = runtime.preflight_params(prepared_a)
+    preflight_a = _preflight(runtime, prepared_a)
     assert preflight_a.result.ok
     assert preflight_a.executable is not None
     prepared_b = prepare_inline_command('print "fresh"')
@@ -84,7 +105,7 @@ def test_run_rejects_executable_issued_by_another_pipeline(
 ) -> None:
     issuer = PipelineDriver()
     prepared = prepare_inline_command('print "stale"')
-    preflight = issuer.preflight_params(prepared)
+    preflight = _preflight(issuer, prepared)
     assert preflight.result.ok
     assert preflight.executable is not None
 
@@ -105,7 +126,7 @@ def test_run_resumes_the_executable_from_its_preflight(
     prepared = prepare_inline_command('print "fresh"')
 
     with patch("agm.agl.lower.lower_program", wraps=lower_program) as lower:
-        preflight = runtime.preflight_params(prepared)
+        preflight = _preflight(runtime, prepared)
         assert preflight.result.ok
         assert preflight.executable is not None
 
@@ -132,7 +153,7 @@ def test_run_relowers_a_preflight_executable_when_host_capabilities_change(
     prepared = prepare_inline_command('print "fresh"')
 
     with patch("agm.agl.lower.lower_program", wraps=lower_program) as lower:
-        preflight = runtime.preflight_params(prepared)
+        preflight = _preflight(runtime, prepared)
         assert preflight.result.ok
         assert preflight.executable is not None
         runtime.register_codec(ExtraCodec())

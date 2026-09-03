@@ -29,9 +29,14 @@ coverage_core := "sysmon"
 # Run `just test-budget` to see the ranking this number is calibrated against.
 check_cpu_budget := "15"
 
+# Delete the coverage data files a run leaves behind in the working tree
+[private]
+clean-coverage:
+    @find . -maxdepth 1 -type f -name '.coverage*' -delete
+
 # Run the test suite
 test:
-    cleanup_coverage() { find . -maxdepth 1 -type f -name '.coverage*' -delete; }; trap cleanup_coverage EXIT; \
+    trap 'just clean-coverage' EXIT; \
     COVERAGE_CORE={{coverage_core}} AGM_TEST_MAX_CPU_SECONDS={{check_cpu_budget}} \
     uv run python -m pytest tests/ -q -n auto --dist worksteal --cov=agm --cov=stdlib/std --cov-branch --cov-fail-under={{check_coverage}} --cov-report=term:skip-covered
 
@@ -45,7 +50,7 @@ test_report_top := "25"
 #
 # Report the most expensive tests, or fail any that overrun a CPU budget
 test-budget:
-    cleanup_coverage() { find . -maxdepth 1 -type f -name '.coverage*' -delete; }; trap cleanup_coverage EXIT; \
+    trap 'just clean-coverage' EXIT; \
     COVERAGE_CORE={{coverage_core}} AGM_TEST_REPORT_TOP={{test_report_top}} AGM_TEST_MAX_CPU_SECONDS={{test_cpu_budget}} \
     uv run python -m pytest tests/ -q -n auto --dist worksteal --cov=agm --cov=stdlib/std --cov-branch --cov-fail-under=0 --cov-report=
 
@@ -106,25 +111,40 @@ typecheck:
 #
 # The static checks read the tree while the suite runs it, so they are
 # independent and run alongside it: on a green tree their cost disappears behind
-# the suite's runtime entirely. A failure is still reported the moment it is
-# known -- well before the suite finishes -- so a type or lint error surfaces as
-# early as it would have when the gates ran one after another. A clean static
-# run has nothing urgent to say, so it waits for the suite rather than splicing
-# itself into pytest's progress line.
+# the suite's runtime entirely. The first failure ends the run -- whichever side
+# it comes from, the other is killed rather than left to finish work whose
+# verdict no longer matters. Job control gives each side its own process group,
+# so a signal reaches the whole tree, pytest's workers included; the INT trap is
+# what keeps Ctrl-C reaching them too, now that they no longer share this
+# shell's group.
 check:
-    static_log=$(mktemp); \
-    trap 'rm -f "$static_log"' EXIT; \
+    @static_log=$(mktemp); \
+    kill_group() { kill -- -"$1" 2>/dev/null || true; }; \
+    set -m; \
     ( just typecheck && just lint && just vulture ) > "$static_log" 2>&1 & \
     static=$!; \
     just test & \
     tests=$!; \
-    static_status=0; \
-    wait "$static" || static_status=$?; \
-    if (( static_status )); then printf '\n'; cat "$static_log"; fi; \
-    tests_status=0; \
-    wait "$tests" || tests_status=$?; \
-    if (( ! static_status )); then cat "$static_log"; fi; \
-    exit $(( static_status | tests_status ))
+    set +m; \
+    trap 'kill_group "$static"; kill_group "$tests"; just clean-coverage; exit 130' INT TERM; \
+    trap 'rm -f "$static_log"' EXIT; \
+    first=0; \
+    first_status=0; \
+    wait -n -p first "$static" "$tests" || first_status=$?; \
+    other=$(( first == static ? tests : static )); \
+    if (( first_status )); then \
+        kill_group "$other"; \
+        wait "$other" 2>/dev/null || true; \
+        just clean-coverage; \
+        printf '\n'; \
+        cat "$static_log"; \
+        if (( other == static )); then echo "static checks interrupted by the failure above"; fi; \
+        exit "$first_status"; \
+    fi; \
+    other_status=0; \
+    wait "$other" || other_status=$?; \
+    cat "$static_log"; \
+    exit "$other_status"
 
 # Install the agm CLI into an isolated environment
 install-agm:

@@ -647,19 +647,10 @@ class EntryPipeline:
         contract_payloads: Mapping[int, "ContractPayload"],
     ) -> EntryResult:
         """Lower and execute one program entry in the persistent IR image."""
-        from agm.agl.eval.ir_interpreter import (
-            HostConfigurationError,
-            IrInterpreter,
-            ParameterDefaultCycleError,
-        )
+        from agm.agl.eval.ir_interpreter import HostConfigurationError, IrInterpreter
         from agm.agl.lower import lower_repl_program
-        from agm.agl.pipeline import (
-            _parameter_default_cycle_diagnostic,
-            _wire_extern_registry,
-            exception_value_to_run_error,
-        )
+        from agm.agl.pipeline import _wire_extern_registry, exception_value_to_run_error
         from agm.agl.recursion import NestingTooDeepError, frontend_recursion_boundary
-        from agm.agl.runtime.arguments import missing_required_param_diagnostics
         from agm.agl.runtime.contract import materialize_ir_contracts
         from agm.agl.runtime.request import AgentCancelled
         from agm.agl.runtime.trace import TraceStore
@@ -700,17 +691,6 @@ class EntryPipeline:
                 else Diagnostic(message=str(exc), line=1)
             )
             return self._ctx._fail([diagnostic], warnings)
-        # The REPL supplies no external param values (no CLI, no config): a
-        # ``param`` with no source default can never be satisfied, so report a
-        # clean diagnostic before the interpreter runs, rather than let
-        # ``IrInterpreter._resolve_param_default`` treat it as the host
-        # contract violation it is meant to catch.
-        missing_diagnostics = missing_required_param_diagnostics(
-            lowered.program, detail="provide a default expression"
-        )
-        if missing_diagnostics:
-            self._ctx._link_image.restore_state(link_snapshot)
-            return self._ctx._fail(list(missing_diagnostics), warnings)
         extern_diagnostics = _wire_extern_registry(
             checked=checked_program,
             capabilities=host_env.capabilities,
@@ -841,23 +821,20 @@ class EntryPipeline:
             self._ctx._link_image.mark_linked(module_ids)
 
         def completed_library_module_ids() -> frozenset[ModuleId]:
-            """Return newly initialized modules whose dependencies also completed.
+            """Return newly loaded modules retained by this entry.
 
-            Every newly loaded module answers the same question: its own params
-            were installed and every one of its initializers ran, and each of
-            its dependencies is retained too. No module is privileged -- the
-            standard library reaches this test exactly as a user library does.
+            A module is retained only when its own initializers all ran AND
+            every dependency it needs is retained too. An interrupt can abort
+            a run between modules, so a module later in initialization order
+            can complete while an earlier one it does not depend on does not;
+            and a module import cycle makes the loader's initialization order
+            arbitrary within the cycle, so a completed module can still
+            depend on a later, unretained one. The dependency fixpoint below
+            prunes those out.
             """
             candidates: set[ModuleId] = set()
             for module_id in new_modules:
                 module = lowered.program.modules[module_id]
-                module_params = tuple(
-                    param for param in lowered.program.params if param.module == module_id
-                )
-                if not all(
-                    param.symbol in interp.entry_param_symbols_installed for param in module_params
-                ):
-                    continue
                 completed_indices = interp.module_completed_initializer_indices.get(
                     module_id, set()
                 )
@@ -893,18 +870,14 @@ class EntryPipeline:
         ) -> EntryResult:
             """Keep what this entry completed, drop what it did not, and report.
 
-            The entry frame is always populated by the closure pre-pass before
-            params run (see ``IrInterpreter.run``), so a declaration completed
-            before a failing param default stays promoted. The promotion plan
-            itself is conservative: it excludes params whose symbols were not
-            installed and applies the declaration-dependency fixpoint. Unlike a
-            rejected entry, this one keeps a partial link delta rather than
-            being restored wholesale, and needs no nominal rollback of its
-            own: the link image's nominal state, including any ``builtin``
-            declaration's host-mint override, is rebuilt from the shared type
-            table on every lowering. Library modules whose params and
-            initializers did complete are retained, provided their
-            dependencies completed too.
+            The promotion plan applies the declaration-dependency fixpoint
+            over the entry's completed IR initializers. Unlike a rejected
+            entry, this one keeps a partial link delta rather than being
+            restored wholesale, and needs no nominal rollback of its own: the
+            link image's nominal state, including any ``builtin`` declaration's
+            host-mint override, is rebuilt from the shared type table on every
+            lowering. Library modules whose initializers did complete are
+            retained, provided their dependencies completed too.
             """
             trace.run_end(ok=False)
             self._persist_interpreter_settings(interp, trace)
@@ -913,7 +886,6 @@ class EntryPipeline:
                 interp.module_completed_initializer_indices.get(
                     lowered.program.entry_module, set()
                 ),
-                interp.entry_param_symbols_installed,
                 self._ctx._loaded_lib_modules.keys() | completed_module_ids,
             )
             installed = promote(partial=True, promoted_declaration_ids=promoted)
@@ -949,11 +921,6 @@ class EntryPipeline:
                 span=exc.span,
             )
             return partial_failure(diagnostics=[], error=error)
-        except ParameterDefaultCycleError as exc:
-            return partial_failure(
-                diagnostics=[_parameter_default_cycle_diagnostic(lowered.program, exc)],
-                error=None,
-            )
         except HostConfigurationError as exc:
             # A host-backed library value may be read after earlier entry work
             # completed. Preserve that completed state while reporting the
@@ -976,7 +943,6 @@ class EntryPipeline:
             partial=False,
             promoted_declaration_ids=lowered.promotion_plan.completed_declaration_ids(
                 range(len(lowered.program.modules[lowered.program.entry_module].initializers)),
-                interp.entry_param_symbols_installed,
                 checked_program.modules.keys(),
             ),
         )

@@ -65,7 +65,7 @@ The following words are **always reserved** and can never be used as
 variable or function names:
 
 ```text
-record enum type param program def fn let var for while do until done
+record enum type program def fn let var for while do until done
 if else case of try catch raise return break continue exception extends builtin extern as as?
 and or not is in to downto by with true false null
 infixl infixr prio
@@ -95,8 +95,8 @@ as a field name or an annotated function parameter.
 
 **Contextual keywords** — `print`, `ask`, and `exec` are NOT reserved; they
 lex as plain `NAME` tokens and are given their built-in meaning during scope
-resolution. They may not be declared with `let`, `var`, or `param`, may not be
-declared as functions, and may not appear as pattern or catch
+resolution. They may not be declared with `let` or `var`, may not be
+declared as functions or function parameters, and may not appear as pattern or catch
 binders — but they remain legal as field and method names, which live in a
 type's own member namespace. The distinct raw-tail spellings
 `exec$` and `ask$` are reserved for their raw forms and cannot be used as names.

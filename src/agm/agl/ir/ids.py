@@ -40,7 +40,7 @@ class SourceId:
 
 @dataclass(frozen=True, slots=True)
 class SymbolId:
-    """Linker-allocated integer handle for a named binding (let/var/param).
+    """Linker-allocated integer handle for a named binding (let/var/function parameter).
 
     Unique within a single ``ExecutableProgram``.
     """

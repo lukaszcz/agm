@@ -21,7 +21,7 @@ All value display — interpolation, `print`, `render`, `as text`, REPL echo —
 ## Code Entry Points
 
 - `src/agm/agl/runtime/agents.py`, `sessions.py`, `request.py` — agent dispatch, session bridging, request/response types.
-- `src/agm/agl/runtime/codec.py`, `contract.py`, `convert.py`, `params.py` — codecs, contracts, conversion, parameter values.
+- `src/agm/agl/runtime/codec.py`, `contract.py`, `convert.py`, `engine_config.py` — codecs, contracts, conversion, engine settings and host-value conversion.
 - `src/agm/agl/runtime/render.py`, `serialize.py` — rendering and JSON serialization.
 - `src/agm/agl/runtime/trace.py`, `host_settings.py`, `types.py`, `option.py` — tracing, live settings, host environment types, `Option` construction.
 - `src/agm/agl/runtime/externs.py`, `boundary.py` — the FFI ([ffi.md](ffi.md)).

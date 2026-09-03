@@ -426,7 +426,6 @@ def lower_program(
             None,
         ),
         program_signatures=_program_signatures(checked.modules, link.fn_node_to_sym, type_table),
-        params=tuple(param for mid in ordered_mids for param in module_lowerers[mid]._params),
         contracts=dict(link.contracts),
         dry_run_inventory=dry_run_inventory,
         builtin_nominals=link.builtin_nominals,

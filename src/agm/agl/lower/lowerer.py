@@ -16,7 +16,7 @@ Supported AST nodes
   Items (top-level and block-level)
     LetDecl, VarDecl, AssignStmt (name target and indexed target)
     Declarations that have no runtime action:
-      RecordDef, EnumDef, TypeAlias, FuncDef, ParamDecl, ImportDecl, ExportDecl
+      RecordDef, EnumDef, TypeAlias, FuncDef, ImportDecl, ExportDecl
 
 Any AST node outside this set raises ``NotImplementedError`` with a clear
 message.  A missing checker side-table entry is a compiler bug and raises
@@ -138,7 +138,6 @@ from agm.agl.ir.program import (
     ExternFunctionBody,
     FunctionDescriptor,
     IrFunctionBody,
-    IrParam,
     NominalDescriptor,
     NominalKind,
     SourceFile,
@@ -241,7 +240,6 @@ from agm.agl.syntax.nodes import (
     NameTarget,
     NullLit,
     Param,
-    ParamDecl,
     Pattern,
     Placeholder,
     Raise,
@@ -270,7 +268,6 @@ from agm.agl.syntax.resources import ResourceError, resolve_resource, resource_p
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import (
     build_format_instructions,
-    build_param_decoder,
     derive_schema_and_decode,
 )
 from agm.agl.typecheck.env import (
@@ -491,7 +488,6 @@ class _Lowerer:
         self._compiled_sites = sites
         self._resource_root = resource_root
         self._has_std_env = has_std_env
-        self._params: list[IrParam] = []
         # Shared TypeTable built during checking; resolves record/enum field
         # and variant shapes for constructor lowering, nominal descriptors,
         # and contract/param schema derivation.
@@ -745,7 +741,6 @@ class _Lowerer:
                 | EnumDef()
                 | ExceptionDef()
                 | TypeAlias()
-                | ParamDecl()
                 | ScopeRegion()
                 | BuiltinVarDecl()
                 | ImportDecl()
@@ -3561,10 +3556,6 @@ class _Lowerer:
                     return self._lower_extern_funcdef(funcdef)
                 return self._lower_funcdef(funcdef)
 
-            case ParamDecl() as param_decl:
-                self._lower_param_decl(param_decl)
-                return None
-
             case (
                 RecordDef()
                 | EnumDef()
@@ -3587,43 +3578,6 @@ class _Lowerer:
             case _:
                 # Anything else must be an expression.
                 return self.lower_expr(item)
-
-    def _lower_param_decl(self, param: "ParamDecl") -> None:
-        """Lower a module ``ParamDecl`` to an ``IrParam``.
-
-        Allocates a PUBLIC ``SymbolId`` for the param and appends an ``IrParam``
-        to ``self._params``. Does NOT emit an initializer
-        into ``ir_items`` — params are installed by the evaluator's ``run()``
-        from ``program.params + param_values`` BEFORE any module initializer runs.
-
-        A scoped param's public name — both the symbol's and the ``IrParam``'s —
-        is its full path spelling (``"Deploy::region"``), matching the external
-        key the CLI/config layer uses; a root param's path is empty, leaving its
-        bare name.
-        """
-        public_name = scoped_public_name(param.scope_path, param.name)
-        sym = self._alloc_sym(
-            param.node_id,
-            name=public_name,
-            mutable=False,
-            public=True,
-            owner=self._module_id,
-        )
-        binding_type = self._binding_type(param.node_id)
-        if param.default is not None:
-            default_ir: IrExpr | None = self.lower_coerced(param.default, binding_type)
-        else:
-            default_ir = None
-        ir_param = IrParam(
-            symbol=sym,
-            public_name=public_name,
-            module=self._module_id,
-            required=(param.default is None),
-            default=default_ir,
-            location=self._loc(param.span),
-            external_decoder=build_param_decoder(binding_type, self._type_table),
-        )
-        self._params.append(ir_param)
 
     def _lower_assign(
         self,

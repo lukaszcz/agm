@@ -1,5 +1,5 @@
 {
-  "note": "This program has no param declarations and no agent calls, so exactly one execution path exists. The single scenario pins bare rendering for every fieldless nominal value regardless of where its record is declared.",
+  "note": "This program declares no program arguments and makes no agent calls, so exactly one execution path exists. The single scenario pins bare rendering for every fieldless nominal value regardless of where its record is declared.",
   "scenarios": [
     {
       "name": "fieldless_nominals_render_bare",

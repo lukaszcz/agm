@@ -73,7 +73,6 @@ from agm.agl.ir import (
     IrMakeRecord,
     IrNominalCaseKey,
     IrNominalIs,
-    IrParam,
     IrPrint,
     IrRaise,
     IrSequence,
@@ -147,7 +146,6 @@ def _make_program(
     functions: "dict[FunctionId, FunctionDescriptor] | None" = None,
     program_symbols: dict[int, SymbolId] | None = None,
     program_functions: dict[SymbolId, FunctionId] | None = None,
-    params: tuple[IrParam, ...] = (),
 ) -> ExecutableProgram:
     """Build a minimal single-module ExecutableProgram."""
     sources = {_SOURCE_ID: SourceFile(display_name="<test>", normalized_text=_SOURCE_TEXT)}
@@ -160,7 +158,6 @@ def _make_program(
         functions=functions or {},
         program_symbols={} if program_symbols is None else program_symbols,
         program_functions={} if program_functions is None else program_functions,
-        params=params,
     )
 
 
@@ -1732,68 +1729,6 @@ class TestFunctionEvaluation:
 
         assert "closure" in result
 
-    @pytest.mark.parametrize(
-        "default",
-        (
-            IrLoad(_LOC, SymbolId(998)),
-            IrAssign(_LOC, SymbolId(999), IrConstInt(_LOC, 1)),
-        ),
-    )
-    def test_param_default_with_unknown_symbol_raises_invalid_ir(self, default: IrExpr) -> None:
-        from agm.agl.ir.program import IrParam
-
-        param_sym, descriptor = _let_sym(700, "value")
-        param = IrParam(
-            symbol=param_sym,
-            public_name="value",
-            required=False,
-            default=default,
-            location=_LOC,
-        )
-
-        with pytest.raises(InvalidIrError):
-            IrInterpreter(_make_program((), {param_sym: descriptor}, params=(param,))).run()
-
-    def test_param_default_can_call_top_level_function(self) -> None:
-        """Entry param defaults can call functions whose closure initializer appears later."""
-        from agm.agl.ir.program import IrParam
-
-        param_sym = SymbolId(700)
-        fn_desc = _make_fn_descriptor(IrConstInt(_LOC, 42))
-        param = IrParam(
-            symbol=param_sym,
-            public_name="x",
-            required=False,
-            default=IrDirectCall(_LOC, _FN_ID, ()),
-            location=_LOC,
-        )
-        prog = ExecutableProgram(
-            entry_module=ENTRY_ID,
-            modules={
-                ENTRY_ID: ExecutableModule(
-                    module_id=ENTRY_ID,
-                    initializers=(IrBind(_LOC, _FN_SID, IrMakeClosure(_LOC, _FN_ID, ())),),
-                )
-            },
-            symbols={
-                _FN_SID: _fn_sym_desc(),
-                param_sym: SymbolDescriptor(
-                    symbol_id=param_sym,
-                    mutable=False,
-                    public_name="x",
-                    owner=ENTRY_ID,
-                ),
-            },
-            nominals={},
-            sources={_SOURCE_ID: SourceFile(display_name="<test>", normalized_text="x")},
-            functions={_FN_ID: fn_desc},
-            params=(param,),
-        )
-
-        result = IrInterpreter(prog).run()
-
-        assert result["x"] == IntValue(42)
-
     def test_agl_raise_preserves_inner_function_span(self) -> None:
         """Nested AglRaise failures keep the innermost IR node location."""
         from agm.agl.semantics.exceptions import AglRaise
@@ -2119,16 +2054,23 @@ class TestSelectedProgramExecution:
         assert exc_info.value.exc.display_name == "RecursionError"
         assert exc_info.value.span == _LOC
 
-    def test_python_recursion_during_param_setup_does_not_use_selected_entry_span(
+    def test_python_recursion_during_module_initialization_has_no_entry_span(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The selected-entry fallback applies only after parameter setup succeeds."""
+        """A ``RecursionError`` from a module initializer is not the entry's own.
+
+        ``IrInterpreter.run`` sets a selected entry's span only around
+        ``_invoke_program`` (see the sibling test above); the outer boundary
+        around module initialization converts an escaping Python
+        ``RecursionError`` too, but leaves ``span`` unset even when
+        ``program_symbol`` is provided, since the failure never reached the
+        selected entry.
+        """
+        from agm.agl.modules.ids import ModuleId
         from agm.agl.semantics.exceptions import AglRaise
 
-        fn_id = FunctionId(98)
-        fn_symbol = SymbolId(98)
-        param_symbol = SymbolId(97)
-        param_default = IrConstUnit(_LOC)
+        fn_id = FunctionId(99)
+        fn_symbol = SymbolId(99)
         descriptor = FunctionDescriptor(
             function_id=fn_id,
             function_symbol=fn_symbol,
@@ -2144,35 +2086,17 @@ class TestSelectedProgramExecution:
                     mutable=False,
                     public_name="main",
                     owner=ENTRY_ID,
-                ),
-                param_symbol: SymbolDescriptor(
-                    symbol_id=param_symbol,
-                    mutable=False,
-                    public_name="value",
-                    owner=ENTRY_ID,
-                ),
+                )
             },
             functions={fn_id: descriptor},
             program_symbols={10: fn_symbol},
             program_functions={fn_symbol: fn_id},
-            params=(
-                IrParam(
-                    symbol=param_symbol,
-                    public_name="value",
-                    required=False,
-                    default=param_default,
-                    location=_LOC,
-                ),
-            ),
         )
-        original_eval = IrInterpreter._eval
 
-        def recurse_for_param_default(self: IrInterpreter, node: IrExpr) -> Value:
-            if node is param_default:
-                raise RecursionError
-            return original_eval(self, node)
+        def raise_python_recursion(self: IrInterpreter, module_id: ModuleId, node: IrExpr) -> None:
+            raise RecursionError
 
-        monkeypatch.setattr(IrInterpreter, "_eval", recurse_for_param_default)
+        monkeypatch.setattr(IrInterpreter, "_eval_and_record_initializer", raise_python_recursion)
 
         with pytest.raises(AglRaise) as exc_info:
             IrInterpreter(program).run(program_symbol=fn_symbol)
@@ -2319,37 +2243,12 @@ class TestIndirectCallInterpreterDefensivePaths:
 
 
 # ===========================================================================
-# IrPrint and IrParam evaluator tests
+# IrPrint evaluator tests
 # ===========================================================================
 
 
 class TestPrintParseJsonParam:
     """Unit tests for host operations in the IrInterpreter."""
-
-    def test_required_param_without_value_raises_invalid_ir_error(self) -> None:
-        """run() raises InvalidIrError when a required param has no value supplied."""
-        from agm.agl.ir.program import IrParam
-
-        sym, desc = _let_sym(0, "n")
-        p = IrParam(
-            symbol=sym,
-            public_name="n",
-            required=True,
-            default=None,
-            location=_LOC,
-        )
-        prog = ExecutableProgram(
-            entry_module=ENTRY_ID,
-            modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=())},
-            symbols={sym: desc},
-            nominals={},
-            sources={_SOURCE_ID: SourceFile(display_name="<test>", normalized_text="n")},
-            functions={},
-            params=(p,),
-        )
-        # No param_values provided — the required param has no value
-        with pytest.raises(InvalidIrError, match="n"):
-            IrInterpreter(prog).run()
 
     def test_ir_print_returns_void(self, capsys: pytest.CaptureFixture[str]) -> None:
         """IrPrint writes its argument and yields unprintable unit."""

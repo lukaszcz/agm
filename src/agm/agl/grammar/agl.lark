@@ -132,7 +132,6 @@ _sep: _NEWLINE | SEMICOLON
             | enum_def
             | exception_def
             | type_alias
-            | param_decl
             | infix_decl
             | func_def
             | program_func_def
@@ -234,9 +233,6 @@ type_alias: "type" decl_head type_params? EQ type_expr
 
 type_params: type_lsqb type_param_list RSQB
 type_param_list: name (COMMA name)*
-
-// param declaration: "param" name [: type_expr] [= default_expr]
-param_decl: "param" name type_ann? (EQ expr)?
 
 // infix declaration: user-defined symbolic binary operator associativity and priority.
 // Priority may be a literal integer or relative to an existing operator priority.

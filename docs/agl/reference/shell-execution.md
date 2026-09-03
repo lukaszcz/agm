@@ -14,9 +14,9 @@ let completed: unit = exec "make build" # unit form; raises ExecError on nonzero
 
 Like `ask`, `exec` is a **contextual keyword**
 ([Lexical structure](lexical-structure.md)): in call position it denotes the
-built-in shell executor; it cannot be declared with `let`/`var`/`param` or
-as a function; it cannot be bound as a function value; it remains legal
-as a field name. A host may statically disallow shell execution altogether,
+built-in shell executor; it cannot be declared with `let`/`var`, as a
+function, or as a function parameter name; it cannot be bound as a function
+value; it remains legal as a field name. A host may statically disallow shell execution altogether,
 in which case every `exec` call is a static error.
 
 ## Spawn parameters

@@ -1102,7 +1102,6 @@ class ReplSession:
             FuncDef,
             InfixDecl,
             LetDecl,
-            ParamDecl,
             RecordDef,
             TypeAlias,
             VarDecl,
@@ -1122,12 +1121,11 @@ class ReplSession:
             ExceptionDef,
             FuncDef,
             LetDecl,
-            ParamDecl,
             RecordDef,
             TypeAlias,
             VarDecl,
         )
-        binding_items = (FuncDef, ParamDecl, VarDecl)
+        binding_items = (FuncDef, VarDecl)
         promotion_bindings = {
             item.name: entry_root.bindings[item.name]
             for item in program.body.items
@@ -1515,8 +1513,8 @@ class ReplSession:
     ) -> list[str]:
         """Return every promoted declaration name for a partial entry's report.
 
-        Ordered by the entry's source items: a promoted value binding (agent /
-        function / param / var) or a promoted type declaration (record / enum /
+        Ordered by the entry's source items: a promoted value binding (function /
+        var) or a promoted type declaration (record / enum /
         exception / type alias) contributes its declared name; a promoted ``let``
         contributes each selected binder in pattern order. An enum's variant
         names are never listed separately, only the enum's own declared name.
@@ -1526,14 +1524,13 @@ class ReplSession:
             ExceptionDef,
             FuncDef,
             LetDecl,
-            ParamDecl,
             RecordDef,
             TypeAlias,
             VarDecl,
             pattern_binder_candidates,
         )
 
-        binding_items = (FuncDef, ParamDecl, VarDecl)
+        binding_items = (FuncDef, VarDecl)
         type_items = (RecordDef, EnumDef, ExceptionDef, TypeAlias)
         installed: list[str] = []
         for item in program.body.items:
@@ -1597,7 +1594,6 @@ class ReplSession:
             ExceptionDef,
             FuncDef,
             LetDecl,
-            ParamDecl,
             RecordDef,
             ScopeRegion,
             TypeAlias,
@@ -1633,7 +1629,6 @@ class ReplSession:
                 EnumDef,
                 ExceptionDef,
                 TypeAlias,
-                ParamDecl,
                 FuncDef,
             ),
         ):

@@ -30,7 +30,7 @@ class EntryResult:
         Classified by the entry's LAST item: a bare ``Expr`` → ``"expression"``
         (``value``/``value_type`` set); ``let``/``var`` → ``"binding"``
         (``name``/``value_type``/``value``); ``record``/``enum``/``exception``/
-        ``type``/``param``/``def``/``agent`` and a ``scope … end`` region →
+        ``type``/``def`` and a ``scope … end`` region →
         ``"declaration"``; ``:=``, an ``import``/``export``/``use``/fixity
         declaration, or a side-effecting expr (``print``, etc.) →
         ``"statement"``; a REPL-only bare type expression (``int``, a declared
@@ -55,7 +55,7 @@ class EntryResult:
         record or enum handle to its field / constructor declarations.
     ``diagnostics``
         Pre-execution error diagnostics (parse/scope/typecheck/matchcompile/
-        contract/unset param).  Empty on success.
+        contract/unset program argument).  Empty on success.
     ``warnings``
         Advisory warnings from the lexer and static passes (for example a TAB
         or unused binding), surfaced on every non-parse/scope path.

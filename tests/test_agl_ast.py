@@ -87,7 +87,6 @@ from agm.agl.syntax import (
     NameTarget,
     NullLit,
     Param,
-    ParamDecl,
     ParamKind,
     Pattern,
     PatternField,
@@ -1224,17 +1223,6 @@ class TestDeclarations:
         node = TypeAlias(name="Names", type_expr=t, span=self._s(), node_id=1)
         assert node.name == "Names"
 
-    def test_param_decl_annotated(self) -> None:
-        t = TextT(span=self._s(), node_id=2)
-        node = ParamDecl(name="spec", annotation=t, default=None, span=self._s(), node_id=1)
-        assert node.name == "spec"
-        assert node.annotation is t
-
-    def test_param_decl_unannotated(self) -> None:
-        node = ParamDecl(name="spec", annotation=None, default=None, span=self._s(), node_id=1)
-        assert node.name == "spec"
-        assert node.annotation is None
-
     def test_func_def_is_declaration(self) -> None:
         import typing
 
@@ -1493,8 +1481,6 @@ class TestVisitorWalk:
             span=s,
             node_id=2141,
         )
-        param_decl = ParamDecl(name="spec", annotation=text_t, default=None, span=s, node_id=215)
-
         _std = ParamKind.STANDARD
         p_unit = Param(name="u", type_expr=unit_t, kind=_std, default=None, span=s, node_id=218)
         p_receiver = Param(
@@ -1678,12 +1664,6 @@ class TestVisitorWalk:
         assign_stmt = AssignStmt(target=name_target, value=index_access, span=s, node_id=606)
         indexed_assign_stmt = AssignStmt(target=index_target, value=int_lit, span=s, node_id=607)
 
-        # Param decl without annotation (exercises None branch in walk)
-        input_no_ann = ParamDecl(name="bare", annotation=None, default=None, span=s, node_id=609)
-
-        # Param with default (exercises the default branch in walk(Param))
-        # Already covered in func_def (p_func has a default).
-
         # Block at the top level
         top_block = Block(
             items=(
@@ -1691,8 +1671,6 @@ class TestVisitorWalk:
                 enum_def,
                 exception_def,
                 type_alias,
-                param_decl,
-                input_no_ann,
                 func_def,
                 let_decl,
                 let_with_type,
@@ -2259,26 +2237,6 @@ class TestVisitorWalk:
         walk(p, visited.append)
 
         assert visited == [p, p_type]
-
-    def test_walk_param_decl_without_annotation(self) -> None:
-        from agm.agl.syntax.visitor import walk
-
-        s = span()
-        node = ParamDecl(name="spec", annotation=None, default=None, span=s, node_id=1)
-        visited: list[object] = []
-        walk(node, visited.append)
-        # Only the ParamDecl itself is visited; the missing annotation adds no child.
-        assert visited == [node]
-
-    def test_walk_param_decl_with_default(self) -> None:
-        from agm.agl.syntax.visitor import walk
-
-        s = span()
-        default = IntLit(value=1, span=s, node_id=2)
-        node = ParamDecl(name="spec", annotation=None, default=default, span=s, node_id=1)
-        visited: list[object] = []
-        walk(node, visited.append)
-        assert visited == [node, default]
 
     def test_walk_return_visits_optional_value(self) -> None:
         from agm.agl.syntax.visitor import walk

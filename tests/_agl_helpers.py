@@ -80,7 +80,6 @@ from agm.agl.syntax import (
     ImportDecl,
     InfixDecl,
     LetDecl,
-    ParamDecl,
     RecordDef,
     ScopeRegion,
     TypeAlias,
@@ -118,7 +117,6 @@ def file_program(source: str) -> str:
         EnumDef,
         ExceptionDef,
         TypeAlias,
-        ParamDecl,
         BuiltinVarDecl,
         InfixDecl,
         ImportDecl,
@@ -202,9 +200,7 @@ def run_inline_command(
     Routes through :meth:`PipelineDriver.preflight_arguments` (binding
     ``positional``/``param_values`` as the entry program's own value
     arguments) when the selected entry ``program def`` declares parameters,
-    and through plain default-program selection otherwise — a module-level
-    ``param`` reachable from the entry receives no host-supplied value
-    either way; it resolves only from its own source default.
+    and through plain default-program selection otherwise.
     """
     prepared = prepare_inline_command(
         source,

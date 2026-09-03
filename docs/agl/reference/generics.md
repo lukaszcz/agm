@@ -465,8 +465,8 @@ growing (`Perfect[T]` referencing `Perfect[Pair[T, T]]`, as above). Four
 positions require schema-relevant instantiations to close finitely: a
 JSON-decoded `ask`/`exec` response type ([Agent calls](agent-calls.md)), the
 target of a fallible `as` or `as?` cast
-([Expressions](expressions.md#casts-as-and-as)), a non-`text` host `param`
-declaration ([Host environment](host-environment.md#params)), and an `extern
+([Expressions](expressions.md#casts-as-and-as)), a non-`text` `program def`
+value parameter ([Host environment](host-environment.md#program-arguments)), and an `extern
 def` parameter or result ([Python FFI](ffi.md)). The first three derive a
 **finite JSON Schema**; the FFI requires the same finite closure without
 deriving any schema, since values cross the boundary by their runtime

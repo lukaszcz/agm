@@ -226,17 +226,21 @@ class TestFallbackAgent:
 
 
 class TestInputValidationRuntime:
-    """Param validation before execution."""
+    """Program-argument validation before execution."""
 
-    def test_missing_param_fails_not_ok(self) -> None:
+    def test_missing_program_argument_fails_not_ok(self) -> None:
         rt = PipelineDriver()
-        result = run_inline_command(rt, "param spec\nprint spec", param_values={})
+        result = run_inline_command(
+            rt, "program def main(spec: text) -> unit = print spec", param_values={}
+        )
         assert result.ok is False
         assert result.error is None  # host error, not AgL exception
 
-    def test_missing_param_mentions_name(self) -> None:
+    def test_missing_program_argument_mentions_name(self) -> None:
         rt = PipelineDriver()
-        result = run_inline_command(rt, "param spec\nprint spec", param_values={})
+        result = run_inline_command(
+            rt, "program def main(spec: text) -> unit = print spec", param_values={}
+        )
         msgs = " ".join(d.message for d in result.diagnostics)
         assert "spec" in msgs.lower()
 
@@ -249,7 +253,7 @@ class TestInputValidationRuntime:
         )
         assert result.ok is True
 
-    def test_no_agent_called_on_param_failure(self) -> None:
+    def test_no_agent_called_on_missing_program_argument(self) -> None:
         calls: list[str] = []
 
         def agent(req: AgentRequest) -> str:
@@ -257,7 +261,11 @@ class TestInputValidationRuntime:
             return "ok"
 
         rt = PipelineDriver(agent_dispatcher=agent)
-        run_inline_command(rt, 'param x\nask("Hi")', param_values={})
+        run_inline_command(
+            rt,
+            'program def main(x: text) -> unit =\n  let _ = ask("Hi")\n  ()',
+            param_values={},
+        )
         assert calls == []
 
     def test_int_program_argument_json_parsed(self, capsys: pytest.CaptureFixture[str]) -> None:
@@ -277,11 +285,11 @@ class TestInputValidationRuntime:
         assert result.ok is False
         assert result.error is None
 
-    def test_missing_param_reports_declaration_line(self) -> None:
-        """the missing-param diagnostic carries the declaration's line."""
+    def test_missing_program_argument_reports_declaration_line(self) -> None:
+        """the missing-argument diagnostic carries the ``program def`` line."""
         rt = PipelineDriver()
-        # ``param spec`` is on line 3; the diagnostic must report line 3, not 1.
-        src = "let a = 1\nlet b = 2\nparam spec\nprint spec"
+        # ``program def main`` is on line 3; the diagnostic must report line 3, not 1.
+        src = "let a = 1\nlet b = 2\nprogram def main(spec: text) -> unit = print spec"
         result = run_inline_command(rt, src, param_values={})
         assert result.ok is False
         missing = [d for d in result.diagnostics if "spec" in d.message.lower()]
@@ -689,7 +697,6 @@ class TestTokenConstants:
         assert keywords.KW_RECORD == "record"
         assert keywords.KW_ENUM == "enum"
         assert keywords.KW_TYPE == "type"
-        assert keywords.KW_PARAM == "param"
         assert keywords.KW_LET == "let"
         assert keywords.KW_VAR == "var"
         assert keywords.KW_DO == "do"
@@ -811,10 +818,15 @@ class TestDryRunCheckOnly:
         assert site.codec_name == "none"
         assert site.has_schema is False
 
-    def test_check_only_param_validation_still_runs(self) -> None:
+    def test_check_only_program_argument_validation_still_runs(self) -> None:
         rt = PipelineDriver()
-        # Missing declared param is caught even under check_only.
-        result = run_inline_command(rt, "param msg\nprint msg", param_values={}, check_only=True)
+        # A missing required program argument is caught even under check_only.
+        result = run_inline_command(
+            rt,
+            "program def main(msg: text) -> unit = print msg",
+            param_values={},
+            check_only=True,
+        )
         assert result.ok is False
         assert any("msg" in d.message for d in result.diagnostics)
 
@@ -864,12 +876,14 @@ class TestDecimalSerialization:
 
 
 class TestWarningsThreadedOnFailurePaths:
-    """typecheck warnings survive param-validation failure paths."""
+    """typecheck warnings survive program-argument-validation failure paths."""
 
-    def test_warning_and_missing_param_both_visible(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_warning_and_missing_program_argument_both_visible(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # Inject a checker warning through the
         # CheckedModule the runtime threads from ``check``.  This exercises the
-        # real failure path (missing param) while a warning is present.
+        # real failure path (missing required program argument) while a warning is present.
         from dataclasses import replace
 
         import agm.agl.typecheck.program as tc_mod
@@ -885,12 +899,14 @@ class TestWarningsThreadedOnFailurePaths:
         monkeypatch.setattr(tc_mod, "check_program", check_with_warning)
 
         rt = PipelineDriver()
-        result = run_inline_command(rt, "param msg\nprint msg", param_values={})
+        result = run_inline_command(
+            rt, "program def main(msg: text) -> unit = print msg", param_values={}
+        )
         assert result.ok is False
         # The warning is threaded onto its own channel even on a failure path.
         warning_messages = [d.message for d in result.warnings]
         assert any("a checker warning" in m for m in warning_messages)
-        # The missing-param error lands in diagnostics (errors only).
+        # The missing-argument error lands in diagnostics (errors only).
         error_messages = [d.message for d in result.diagnostics]
         assert any("msg" in m for m in error_messages)
         # Channels stay separate: no warning leaks into diagnostics.
@@ -3183,53 +3199,6 @@ class TestDiscoverProgramsGraph:
         ]
         assert discovery.programs[0].qualified_path == "review::main"
         assert discovery.programs[-1].qualified_path == "helper::helper"
-
-    def test_required_param_diagnostics_follow_loader_export_edges_only(
-        self, tmp_path: pathlib.Path
-    ) -> None:
-        """A required, no-default ``param`` in a module the selected program never
-        reaches by export edge must not block that program's run — only params
-        reachable from the selected program's own module are checked."""
-        from agm.agl.modules.roots import RootSet
-        from agm.agl.runtime.arguments import ProgramArguments
-
-        (tmp_path / "runner.agl").write_text("export settings\nprogram def main() -> unit = ()\n")
-        (tmp_path / "settings.agl").write_text('param token: text = "ok"\n')
-        (tmp_path / "unrelated.agl").write_text("param ignored: text\n")
-        prepared = PipelineDriver.prepare_program(
-            "import runner\nimport unrelated\nprogram def entry() -> unit = ()\n",
-            entry_path=tmp_path / "entry.agl",
-            roots=RootSet(roots=frozenset({tmp_path})),
-            default_stdlib=False,
-        )
-
-        rt = PipelineDriver()
-        discovery = rt.discover_programs(prepared)
-        assert discovery.diagnostics == ()
-        runner = next(
-            program for program in discovery.programs if program.module.path_str() == "runner"
-        )
-
-        preflight = rt.preflight_arguments(
-            prepared,
-            runner,
-            ProgramArguments(positional=(), named={}),
-            compiled=discovery.compiled,
-        )
-        assert preflight.result.ok
-        executable = preflight.executable
-        assert executable is not None
-
-        # ``unrelated::ignored`` is required with no default, but ``runner::main``
-        # never exports or imports ``unrelated``, so it must not block this run.
-        result = rt.run_prepared(
-            prepared,
-            compiled=discovery.compiled,
-            executable=executable,
-            program_symbol=executable.program_symbols[runner.node_id],
-            arguments=preflight.arguments,
-        )
-        assert result.ok
 
     def test_discover_programs_failure_returns_diagnostics(self, tmp_path: pathlib.Path) -> None:
         """discover_programs returns diagnostics when the prepare phase failed."""

@@ -161,7 +161,6 @@ from agm.agl.ir.program import (
     ExecutableProgram,
     ExternFunctionBody,
     IrFunctionBody,
-    IrParam,
     IrProgramParam,
     NominalKind,
     SourceFile,
@@ -1495,11 +1494,6 @@ def _validate_program_tables(ctx: _Context) -> None:
                 )
             _validate_program_param(program_param, ctx)
 
-    # 6. params table — each IrParam must reference a registered symbol, and
-    #    the default expression (if present) must be structurally valid.
-    for ir_param in program.params:
-        _validate_ir_param(ir_param, ctx)
-
     # 6. contracts table — each ContractRequest must be consistent.
     for cid, contract_req in program.contracts.items():
         _validate_contract_request(cid, contract_req, ctx)
@@ -1508,32 +1502,11 @@ def _validate_program_tables(ctx: _Context) -> None:
     # SourceId; key consistency is structural to dict construction.)
 
 
-def _validate_ir_param(param: IrParam, ctx: _Context) -> None:
-    """Validate a single ``IrParam`` descriptor (deep tier)."""
-    _validate_location(param.location, ctx)
-    if ctx.deep:
-        if param.symbol not in ctx.program.symbols:
-            raise InvalidIrError(
-                f"IrParam public_name={param.public_name!r} references"
-                f" symbol_id={param.symbol.value!r} which is not in program.symbols"
-            )
-        if param.external_decoder is not None:
-            _check_decode_nominals(
-                param.external_decoder.decode,
-                param.external_decoder.defs,
-                ctx,
-            )
-    if param.default is not None:
-        _validate_expr(param.default, ctx)
-
-
 def _validate_program_param(param: IrProgramParam, ctx: _Context) -> None:
     """Validate a single ``IrProgramParam`` descriptor.
 
     Called only from :func:`_validate_program_tables`, itself run only in the
-    deep tier, so every check here inherently needs the program tables —
-    unlike :func:`_validate_ir_param`, which also runs at the cheap tier and
-    so gates its own table-lookup checks on ``ctx.deep`` internally.
+    deep tier.
     """
     _check_decode_nominals(param.external_decoder.decode, param.external_decoder.defs, ctx)
 
@@ -1635,8 +1608,3 @@ def validate_ir(program: ExecutableProgram, *, deep: bool = True) -> None:
 
     if deep:
         _check_payload_dominance(ctx)
-
-    # Cheap-tier param validation (location checks only — deep is in _validate_program_tables).
-    if not deep:
-        for ir_param in program.params:
-            _validate_ir_param(ir_param, ctx)

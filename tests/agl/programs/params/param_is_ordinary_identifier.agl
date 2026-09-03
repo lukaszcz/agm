@@ -1,0 +1,14 @@
+# `param` is not a reserved keyword: it is legal as a `let` binding name, a
+# record field name, a function parameter name, and a `program def`'s own
+# parameter name, all in the same program.
+
+record Config(param: int)
+
+def scale(param: int) -> int = param * 2
+
+program def main(param: int) -> unit =
+  let param = param + 1
+  print param
+  print scale(param)
+  let cfg = Config(param = param)
+  print cfg.param

@@ -20,9 +20,9 @@ A block with no marker is the default and MUST statically compile, so a newly
 added doc example is checked automatically unless it is explicitly opted out.
 
 "Statically compiles" means the pipeline reached a lowered program. A program
-that lowers but would fail only at run time — for example a required ``param``
-left unbound here — still counts as compiling, exactly as ``--dry-run`` treats
-it.
+that lowers but would fail only at run time — for example a required
+``program def`` value parameter left unbound here — still counts as
+compiling, exactly as ``--dry-run`` treats it.
 """
 
 from __future__ import annotations
@@ -115,8 +115,8 @@ def _statically_compiles(source: str) -> tuple[bool, list[str]]:
 
     Runs the full static pipeline without executing anything, as
     ``agm exec --dry-run`` does. ``check_prepared`` never resolves or
-    validates a program's arguments, so a required ``param`` with no default
-    is silently accepted here and only lowering failures are reported.
+    validates a program's arguments, so a required value parameter with no
+    default is silently accepted here and only lowering failures are reported.
     """
     buffer = io.StringIO()
     with redirect_stdout(buffer):

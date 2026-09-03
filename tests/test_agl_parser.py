@@ -85,7 +85,6 @@ from agm.agl.syntax import (
     NameTarget,
     NullLit,
     Param,
-    ParamDecl,
     ParamKind,
     PatternField,
     Placeholder,
@@ -704,7 +703,7 @@ class TestTypeExpressions:
 
 
 # ---------------------------------------------------------------------------
-# Declarations: record / enum / type alias / param / program / agent / config
+# Declarations: record / enum / type alias / program / agent / config
 # ---------------------------------------------------------------------------
 
 
@@ -869,17 +868,6 @@ class TestDeclarations:
         assert isinstance(ta, TypeAlias)
         assert ta.name == "Name"
         assert isinstance(ta.type_expr, TextT)
-
-    def test_param_decl_no_annotation(self) -> None:
-        inp = first(parse("param spec"))
-        assert isinstance(inp, ParamDecl)
-        assert inp.name == "spec"
-        assert inp.annotation is None
-
-    def test_param_decl_annotated(self) -> None:
-        inp = first(parse("param count: int"))
-        assert isinstance(inp, ParamDecl)
-        assert isinstance(inp.annotation, IntT)
 
     def test_exception_def_simple(self) -> None:
         exc = first(parse("exception MyErr(msg: text)"))
@@ -1109,14 +1097,6 @@ class TestScopeRegions:
         assert isinstance(region, ScopeRegion)
         (member,) = region.items
         assert isinstance(member, (LetDecl, VarDecl))
-        assert [segment.name for segment in member.scope_path] == ["Point"]
-
-    def test_region_admits_param(self) -> None:
-        region = first(parse("scope Point\n  param value\nend Point"))
-
-        assert isinstance(region, ScopeRegion)
-        (member,) = region.items
-        assert isinstance(member, ParamDecl)
         assert [segment.name for segment in member.scope_path] == ["Point"]
 
     def test_region_preserves_end_identifiers_in_declaration_suites(self) -> None:

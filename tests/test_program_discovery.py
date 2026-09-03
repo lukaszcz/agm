@@ -38,14 +38,13 @@ class TestProgramDeclarationDiscovery:
         from agm.cli_support.program_discovery import discover_program_declarations_from_source
 
         assert (
-            discover_program_declarations_from_source("param count: int =", inline_source=True)
-            == ()
+            discover_program_declarations_from_source("let count: int =", inline_source=True) == ()
         )
 
     def test_invalid_file_source_degrades_to_no_programs(self) -> None:
         from agm.cli_support.program_discovery import discover_program_declarations_from_source
 
-        assert discover_program_declarations_from_source("param count: int =") == ()
+        assert discover_program_declarations_from_source("let count: int =") == ()
 
     def test_a_file_sources_unexpected_pipeline_exception_degrades_to_no_programs(
         self, monkeypatch: pytest.MonkeyPatch

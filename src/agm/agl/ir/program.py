@@ -23,10 +23,10 @@ from dataclasses import dataclass, field
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
 from agm.agl.ir.builtin_vars import BuiltinVarKey
 from agm.agl.ir.contracts import ContractRequest, ExceptionFieldEncode, ParamDecoder
-from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
+from agm.agl.ir.ids import ContractId, FunctionId, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import IrExpr, IrFunctionParam
 from agm.agl.ir.zones import ParamZone
-from agm.agl.modules.ids import ENTRY_ID, ModuleId, spell_scope_path
+from agm.agl.modules.ids import ModuleId, spell_scope_path
 
 __all__ = [
     "ContractId",
@@ -38,7 +38,6 @@ __all__ = [
     "FunctionDescriptor",
     "FunctionImpl",
     "IrFunctionBody",
-    "IrParam",
     "IrProgramParam",
     "NominalDescriptor",
     "NominalKind",
@@ -68,10 +67,10 @@ class NominalKind(enum.Enum):
 
 @dataclass(frozen=True, slots=True)
 class SymbolDescriptor:
-    """Descriptor for a named binding (let/var/param).
+    """Descriptor for a named binding (let/var/function parameter).
 
     ``symbol_id`` — the linker-allocated identity handle.
-    ``mutable``   — ``True`` for ``var`` bindings, ``False`` for ``let``/params.
+    ``mutable``   — ``True`` for ``var`` bindings, ``False`` for ``let``/parameters.
     ``public_name`` — the user-facing name (for error messages / debug);
                       ``None`` for synthesised lowering-internal symbols.
     ``owner``     — the module or function that declares this symbol.
@@ -240,43 +239,6 @@ class ExecutableModule:
 
 
 # ---------------------------------------------------------------------------
-# Module parameter descriptor
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class IrParam:
-    """Descriptor for a module ``param`` declaration.
-
-    ``symbol``      — the linker-allocated ``SymbolId`` for this param binding.
-    ``module``      — the declaring module's logical identity.
-    ``public_name`` — the scope-path user-facing param name.
-    ``required``    — ``True`` when the param has no default (host must supply
-                      a value; reaching ``run()`` without one is a host bug).
-    ``default``     — an ``IrExpr`` to evaluate when the host supplies no value
-                      (``None`` when ``required`` is ``True``).
-    ``location``    — source location of the ``param`` declaration.
-
-    ``IrParam`` is metadata — it is NOT a member of ``IrExpr``.  The IR
-    evaluator reads ``program.params`` in ``run()`` and installs each param's
-    value into the base frame BEFORE running any module initializer.
-    """
-
-    symbol: SymbolId
-    public_name: str
-    required: bool
-    default: "IrExpr | None"
-    location: Location
-    external_decoder: ParamDecoder | None = None
-    module: ModuleId = ENTRY_ID
-
-    @property
-    def qualified_public_name(self) -> str:
-        """Return this param's module-qualified external spelling."""
-        return f"{self.module.display()}::{self.public_name}"
-
-
-# ---------------------------------------------------------------------------
 # Program parameter signatures
 # ---------------------------------------------------------------------------
 
@@ -293,9 +255,8 @@ class IrProgramParam:
     ``external_decoder``   — decodes one raw host-supplied value into this
                              parameter's checked type.
 
-    Distinct from ``IrParam`` (a module ``param`` declaration): a program
-    parameter is an ordinary value parameter of its ``program def`` — bound by
-    an ordinary call, not installed into the base frame before it runs.
+    A program parameter is an ordinary value parameter of its ``program
+    def`` — bound by an ordinary call.
     """
 
     name: str
@@ -401,7 +362,6 @@ class ExecutableProgram:
     program_functions: dict[SymbolId, FunctionId] = field(default_factory=dict)
     synthetic_main_symbol: SymbolId | None = None
     program_signatures: Mapping[SymbolId, tuple[IrProgramParam, ...]] = field(default_factory=dict)
-    params: tuple[IrParam, ...] = ()
     contracts: dict["ContractId", "ContractRequest"] = field(default_factory=dict)
     dry_run_inventory: "tuple[DryRunEntry, ...]" = ()
     builtin_nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS

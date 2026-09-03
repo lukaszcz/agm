@@ -735,9 +735,8 @@ def _run_prepared_entry(
 
     Routes through :meth:`PipelineDriver.preflight_arguments` (binding
     *positional*/*param_values* as the entry program's own value arguments)
-    when the selected entry ``program def`` declares parameters. No host
-    surface can supply a ``param`` declaration's value; a program with no
-    parameters just runs.
+    when the selected entry ``program def`` declares parameters. A program
+    with no parameters just runs.
     """
     discovery = runtime.discover_programs(prepared)
     if discovery.compiled is None:

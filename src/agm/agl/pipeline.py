@@ -27,12 +27,10 @@ from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
 from agm.agl.eval.ir_interpreter import (
     HostConfigurationError,
     IrInterpreter,
-    ParameterDefaultCycleError,
 )
 from agm.agl.ir.nodes import UseDefault
 from agm.agl.recursion import NestingTooDeepError, frontend_recursion_boundary
 from agm.agl.runtime.agents import AgentFn
-from agm.agl.runtime.arguments import missing_required_param_diagnostics
 from agm.agl.runtime.contract import materialize_ir_contracts
 from agm.agl.runtime.types import (
     CallSiteInfo as CallSiteInfo,
@@ -265,13 +263,13 @@ class RunResult:
         uncaught AgL exception.  ``warnings`` never affect ``ok``.
     ``diagnostics``
         Pre-execution FAILURES only: error-severity items from
-        lex/parse/scope/typecheck/matchcompile/param-validation.  Each entry has a
+        lex/parse/scope/typecheck/matchcompile/program-argument-validation.  Each entry has a
         ``.message`` (str) and a ``.line`` (int, 1-based).  Warnings are a
         SEPARATE channel and NEVER appear here; on a successful run this list is
         empty.
     ``warnings``
         Advisory warning-severity diagnostics (e.g. an unused binding)
-        surfaced on EVERY path — success, static failure, param-validation
+        surfaced on EVERY path — success, static failure, program-argument-validation
         failure, and uncaught exception.  Same ``Diagnostic`` type as
         ``diagnostics`` but with ``.severity == "warning"``.  Reported to the
         user but never cause the run to fail (never affect ``ok``).
@@ -450,25 +448,15 @@ class PipelineDriver:
         process_environment: "Mapping[str, str] | None" = None,
         program_symbol: "SymbolId | None" = None,
         select_default_program: bool = False,
-        validate_params: bool = True,
         arguments: "tuple[Value | UseDefault, ...] | None" = None,
     ) -> RunResult:
         """Run a freshly lowered ``executable`` — the shared tail of the
         shared pipeline tail.
 
-        Reports any required ``param`` with no supplied value (unless
-        *validate_params* is ``False``), materializes host codec contracts,
-        honours the ``check_only`` dry-run stop (call-site inventory, no
-        execution), then builds and runs the :class:`IrInterpreter`, mapping
-        an uncaught ``AglRaise`` to a failing ``RunResult``.  All return paths
-        carry *warnings*.
-
-        *validate_params* is a private knob: nothing between the
-        ``missing_required_param_diagnostics`` call and the ``check_only``
-        return reads its result, so skipping it (used only by
-        :meth:`check_prepared`) loses nothing else. It is never exposed
-        publicly — every public entry point that reaches this method other
-        than :meth:`check_prepared` keeps validating params.
+        Materializes host codec contracts, honours the ``check_only`` dry-run
+        stop (call-site inventory, no execution), then builds and runs the
+        :class:`IrInterpreter`, mapping an uncaught ``AglRaise`` to a failing
+        ``RunResult``. All return paths carry *warnings*.
 
         *arguments* is *program_symbol*'s own bound value-parameter argument
         list, in declaration order. When the caller has already validated it
@@ -481,13 +469,6 @@ class PipelineDriver:
         bind_program_arguments` reports for an explicit miss — never an
         interpreter arity crash.
         """
-        if validate_params:
-            param_errors = missing_required_param_diagnostics(executable)
-            if param_errors:
-                return RunResult(
-                    ok=False, diagnostics=list(param_errors), error=None, warnings=warnings
-                )
-
         host_contracts, contract_errors = materialize_ir_contracts(executable, host_env.codecs)
         if contract_errors:
             return RunResult(
@@ -518,7 +499,7 @@ class PipelineDriver:
                 program_symbol = entry_programs[0]
 
         # ----------------------------------------------------------------
-        # [check_only] --dry-run stop: the full static pipeline, param
+        # [check_only] --dry-run stop: the full static pipeline, program-argument
         # validation, and contract materialization have all succeeded.  Stop
         # before executing any statement — no program output, no evaluation
         # side effects, no extern companion imports, and no trace is written.
@@ -645,16 +626,6 @@ class PipelineDriver:
         except SystemExit as exc:
             trace.run_end(ok=exc.code is None or exc.code == 0)
             raise
-        except ParameterDefaultCycleError as exc:
-            trace.run_end(ok=False)
-            return RunResult(
-                ok=False,
-                diagnostics=[_parameter_default_cycle_diagnostic(executable, exc)],
-                error=None,
-                warnings=list(warnings),
-                bindings={},
-                trace_path=trace.path,
-            )
         except HostConfigurationError as exc:
             # An invalid startup host value, or an unseeded non-engine binding
             # read during evaluation, is a host-configuration failure (exit 1
@@ -1236,27 +1207,17 @@ class PipelineDriver:
     ) -> RunResult:
         """Run the full static pipeline over *prepared*, with no execution.
 
-        Drives typecheck, match compilation, custom-contract payload
-        materialization, and lowering — everything ``run_prepared`` does with
-        ``check_only=True`` except host parameter binding: no params are
-        resolved or validated, and nothing is executed. This is the entry
-        point for a static checker (``agm check``) that must accept a module
-        declaring a required ``param`` with no default, while still reporting
-        every other static failure lowering catches (an invalid
-        ``resource``/``resource-dir`` path, an unmaterializable output
-        contract).
+        An intent-revealing façade over ``run_prepared(..., check_only=True)``:
+        drives typecheck, match compilation, custom-contract payload
+        materialization, and lowering, reporting every static failure
+        lowering catches (an invalid ``resource``/``resource-dir`` path, an
+        unmaterializable output contract), with no execution.
 
         ``compiled``
             As in :meth:`run_prepared`: a caller-supplied typecheck/match-compile
             artifact to reuse instead of running those passes here.
         """
-        result, _executable = self._run_program(
-            prepared,
-            check_only=True,
-            compiled=compiled,
-            validate_params=False,
-        )
-        return result
+        return self.run_prepared(prepared, check_only=True, compiled=compiled)
 
     def _lower_and_record(
         self,
@@ -1341,7 +1302,6 @@ class PipelineDriver:
         program_symbol: "SymbolId | None" = None,
         select_default_program: bool = False,
         selected_program: ProgramDeclInfo | None = None,
-        validate_params: bool = True,
         arguments: "tuple[Value | UseDefault, ...] | None" = None,
     ) -> "tuple[RunResult, ExecutableProgram | None]":
         """Back program execution and parameter preflight with one pipeline body.
@@ -1349,9 +1309,6 @@ class PipelineDriver:
         Returns the run result together with the lowered program it ran (the one
         supplied as *executable*, or the one lowered here), or ``None`` when a
         pass before lowering failed.
-
-        *validate_params* is private — see :meth:`_execute_ir`; only
-        :meth:`check_prepared` passes ``False``.
         """
         warnings: list[Diagnostic] = list(prepared.warnings)
 
@@ -1505,7 +1462,6 @@ class PipelineDriver:
                 process_environment=process_environment,
                 program_symbol=program_symbol,
                 select_default_program=select_default_program,
-                validate_params=validate_params,
                 arguments=arguments,
             ),
             executable,
@@ -1570,16 +1526,7 @@ def _reachable_modules(
 def _select_program_inventory(
     executable: "ExecutableProgram", graph: "ModuleGraph", module_id: "ModuleId"
 ) -> "ExecutableProgram":
-    """Restrict a selected program to its runtime modules and source inventories.
-
-    The ``params=`` restriction keeps a required ``param`` declared in a
-    module *unreachable* from the selected program from failing that
-    program's run: :meth:`PipelineDriver._execute_ir` reports every required
-    ``param`` still on ``executable.params`` via
-    :func:`~agm.agl.runtime.arguments.missing_required_param_diagnostics`, so
-    an unfiltered ``executable.params`` would fail a program over a
-    declaration it never depends on.
-    """
+    """Restrict a selected program to its runtime modules and source inventory."""
     source_reachable = frozenset(graph.source_reachable_modules(module_id))
     runtime_reachable = (
         frozenset(_reachable_modules(module_id, graph.adjacency)) | graph.ambient_modules
@@ -1590,7 +1537,6 @@ def _select_program_inventory(
         modules={
             mid: module for mid, module in executable.modules.items() if mid in runtime_reachable
         },
-        params=tuple(param for param in executable.params if param.module in source_reachable),
         dry_run_inventory=tuple(
             call_site
             for call_site in executable.dry_run_inventory
@@ -2138,20 +2084,6 @@ def assemble_host_environment(
         capabilities=capabilities,
         codecs=all_codecs,
         extern_registry=extern_registry if extern_registry is not None else ExternRegistry(),
-    )
-
-
-def _parameter_default_cycle_diagnostic(
-    executable: "ExecutableProgram", exc: ParameterDefaultCycleError
-) -> Diagnostic:
-    """Render an evaluator-detected parameter-default cycle at its source module."""
-    location = exc.location
-    source = executable.sources[location.source_id]
-    return Diagnostic(
-        message=str(exc),
-        line=location.start_line,
-        column=location.start_col,
-        source_label=source.display_name,
     )
 
 

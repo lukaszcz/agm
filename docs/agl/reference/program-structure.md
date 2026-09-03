@@ -5,8 +5,9 @@
 ## Programs
 
 An AgL program is a module block. A file-backed module root is static: it
-holds declarations, parameters, and constant `let`/`var` initializers, while
-bare expressions and assignments belong in a `program def` body. Items are
+holds declarations and constant `let`/`var` initializers, while bare
+expressions, assignments, and a program's own value parameters belong to a
+`program def` signature and body. Items are
 separated by newlines or semicolons. There is no syntactic distinction between
 *statements* and *expressions*: every item is an expression with a well-defined
 type, and executable bodies are expression-oriented sequences.
@@ -23,7 +24,6 @@ item          ::= import_decl                     (* header position only *)
              | builtin_modifier? enum_def          (* root only *)
              | type_alias                          (* root only *)
              | builtin_modifier? exception_def     (* root only *)
-             | param_decl                          (* root or scope region *)
              | program_func_def                    (* root or scope region *)
              | infix_decl                          (* root only *)
              | builtin_var_def                     (* root or standard-library scope region *)
@@ -47,7 +47,7 @@ inside a named scope region. See [Modules](modules.md) and
 
 A named scope region is a module item containing nested regions, header `use`
 and `import` declarations, `export` declarations, static declarations,
-`param` declarations, and `let`/`var` bindings. Its matching `scope`/`end`
+`program def` declarations, and `let`/`var` bindings. Its matching `scope`/`end`
 syntax, declaration and binder paths, and visibility rules are described in
 [Named scopes](scopes.md).
 
@@ -69,11 +69,6 @@ region.
   nominal identity, exactly like an ordinary scoped type — but its complete
   scoped name is shared with the host across the whole program and may be
   declared only once at that path; see [Built-in functions](functions.md#built-in-functions).
-- **`param` declarations** — parameters are legal at a module root or in a
-  named scope region, with no declaration-path shorthand. A parameter belongs
-  to its declaring module. A program receives external values for the params in
-  its module and transitive imports. A scoped parameter's short external
-  spelling is its full scope path; see [Named scopes](scopes.md#parameters).
 - **`import`/`use`/`export` declarations** — module-system declarations;
   root-only or members of a named scope region. A scoped import tail or use
   contributes bare names only to its own region and nested regions; an import's qualifier route
@@ -85,9 +80,12 @@ region.
   builtin, extern, or method. It may appear at the module root or as a non-method
   member of a named scope region (never in an ordinary nested block or as a type
   method), remains callable like any other function, and is addressed by its
-  declaration path (`main`, `review::main`). `agm exec` selects declarations
-  from its file entry module; declarations reached through imports remain ordinary
-  callable functions.
+  declaration path (`main`, `review::main`). Its value parameters are the
+  program's own external inputs: the host supplies them from CLI options and
+  qualified config, falling back to their declared defaults; see
+  [Host environment](host-environment.md#program-arguments). `agm exec` selects
+  declarations from its file entry module; declarations reached through
+  imports remain ordinary callable functions.
 - **`builtin var` declarations** — body-less host-backed mutable bindings.
   Any standard-library module may declare one; entry programs and ordinary
   libraries cannot. A declaration may be a member of a named scope region and

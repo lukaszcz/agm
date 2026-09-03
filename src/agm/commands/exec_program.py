@@ -270,9 +270,9 @@ def _resolve_registered_program_target(
     """Resolve a registered program's installed reference, verifying its owning package.
 
     Returns ``None`` (rather than raising) on any resolution failure or a
-    package mismatch, so both param and program-declaration discovery below
-    can degrade to an empty inventory instead of surfacing a resolution
-    error from an advisory help/completion path.
+    package mismatch, so program-declaration discovery below can degrade to
+    an empty inventory instead of surfacing a resolution error from an
+    advisory help/completion path.
     """
     target = resolve_installed_reference(
         program, home=context.home, proj_dir=context.proj_dir, cwd=context.cwd
@@ -609,13 +609,12 @@ def run(
         )
     arguments = ProgramArguments(positional=cli_arguments.positional, named=program_named)
 
-    # Program arguments (and any required, source-defaulted ``param``) are
-    # validated against the lowered program, so this preflight lowers the
-    # graph.  It must report a failure (exit 1) BEFORE the trace file is
-    # prepared and the runner is built — hence a check-only pass here rather
-    # than letting the run below surface it.  The lowered program it produces
-    # is handed to that run, so the graph is lowered exactly once per
-    # invocation.
+    # Program arguments are validated against the lowered program, so this
+    # preflight lowers the graph.  It must report a failure (exit 1) BEFORE
+    # the trace file is prepared and the runner is built — hence a
+    # check-only pass here rather than letting the run below surface it.
+    # The lowered program it produces is handed to that run, so the graph
+    # is lowered exactly once per invocation.
     executable: "ExecutableProgram | None" = None
     program_symbol = None
     arguments_bound: "tuple[Value | UseDefault, ...] | None" = None

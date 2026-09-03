@@ -413,17 +413,6 @@ class TestPersistence:
         assert len(session._ir_base_frame) == initial_frame_size + 2
         assert session.bindings() == [("value", IntType(), IntValue(2))]
 
-    def test_lambda_binding_initializes_repl_parameter_default(self) -> None:
-        session = open_session()
-
-        result = session.eval_entry("let f = fn() -> int => 7\nparam value: int = f()")
-
-        assert result.ok, result.diagnostics
-        bindings = {name: value for name, _type, value in session.bindings()}
-        assert set(bindings) == {"f", "value"}
-        assert bindings["value"] == IntValue(7)
-        assert session.eval_entry("f()").value == IntValue(7)
-
     def test_top_level_return_rejected_and_session_continues(self) -> None:
         s = open_session()
         bad = s.eval_entry("return 1")
@@ -631,20 +620,6 @@ class TestPersistence:
         assert later.value == IntValue(55)
         assert s.type_of("fib") == "int -> int"
 
-    def test_partial_promotion_tracks_lazy_initializers_by_identity(self) -> None:
-        session = open_session()
-
-        failed = session.eval_entry(
-            "let broken: decimal = 1 / 0\nlet later = 7\nparam p: int = later"
-        )
-
-        assert not failed.ok
-        bindings = {name: value for name, _type, value in session.bindings()}
-        assert bindings == {"later": IntValue(7)}
-        assert session.eval_entry("later").value == IntValue(7)
-        assert not session.eval_entry("broken").ok
-        assert not session.eval_entry("p").ok
-
     def test_failed_recursive_candidate_entry_promotes_nothing(self) -> None:
         s = open_session()
         assert s.eval_entry("let stable = 1").ok
@@ -668,7 +643,7 @@ class TestPersistence:
 
 
 class TestScopedBindingRetention:
-    """A scoped ``let``/``var``/``param`` retains across REPL entries.
+    """A scoped ``let``/``var`` retains across REPL entries.
 
     Mirrors how scoped declarations (``def``, types) already retain by path
     atom in ``TestPersistence`` above: a same-path binding declared later
@@ -3366,67 +3341,16 @@ class TestFailureEffects:
         assert [name for name, _typ, _value in s.bindings()] == ["f"]
         assert not s.eval_entry("x").ok
 
-    def test_runtime_raise_preserves_completed_param(self) -> None:
-        s = open_session()
-        result = s.eval_entry("param p: int = 7\nlet z: decimal = 1 / 0")
-        assert not result.ok
-        followup = s.eval_entry("p")
-        assert followup.ok, followup.diagnostics
-        assert followup.value == IntValue(7)
-
-    def test_runtime_raise_excludes_param_declared_after_failure(self) -> None:
-        # Regression: a runtime failure that precedes a later ``param``
-        # declaration must not promote that param. The IR interpreter installs
-        # every param into the base frame up front, so a naive
-        # ``symbol in base frame`` check would wrongly treat the later param as
-        # installed even though the scope-promotion loop excluded its binding
-        # by source position.
-        s = open_session()
-        result = s.eval_entry("let z: decimal = 1 / 0\nparam q: int = 5")
-        assert not result.ok
-        # The later param was excluded from the session scope.
-        assert not s.eval_entry("q").ok
-
-    def test_runtime_raise_does_not_install_failing_param_default(self) -> None:
-        s = open_session()
-        result = s.eval_entry("param p: decimal = 1 / 0")
-        assert not result.ok
-        assert not s.eval_entry("p").ok
-
-    def test_failing_param_default_still_promotes_completed_type_with_no_function(self) -> None:
-        # Regression: when the entry declares no zero-capture function closure,
-        # a failing ``param`` default used to roll back EVERY declaration in the
-        # entry, including a record type that fully completed before the param
-        # was reached — an accidental gate on whether the entry happened to
-        # declare a function, not on what actually finished.
-        s = open_session()
-
-        result = s.eval_entry("record Point\n  x: int\nparam p: int = [1, 2][9]")
-
-        assert not result.ok
-        followup = s.eval_entry("Point(x = 1)")
-        assert followup.ok, followup.diagnostics
-
-    def test_runtime_raise_does_not_promote_param_with_unpromoted_self_qualified_type(self) -> None:
+    def test_runtime_raise_does_not_promote_let_with_unpromoted_self_qualified_type(self) -> None:
         s = open_session()
 
         result = s.eval_entry(
-            'param p: ::R\nlet stop: int = raise Abort(message = "stop")\nrecord R\n  value: int'
+            'let p: ::R = R(value = 1)\nlet stop: int = raise Abort(message = "stop")\n'
+            "record R\n  value: int"
         )
 
         assert not result.ok
         assert not s.eval_entry("p").ok
-
-    def test_runtime_raise_promotes_preinstalled_function_before_failing_param_default(
-        self,
-    ) -> None:
-        s = open_session()
-
-        result = s.eval_entry("def f() -> int = 1\nparam p: decimal = 1 / 0")
-
-        assert not result.ok
-        assert result.installed == ("f",)
-        assert s.eval_entry("f()").value == IntValue(1)
 
     def test_runtime_raise_does_not_promote_later_type(self) -> None:
         s = open_session()
@@ -3712,102 +3636,6 @@ class TestAgentDeclarations:
         s.reset()
         r = s.eval_entry('transient "hi"')
         assert not r.ok
-
-
-# ---------------------------------------------------------------------------
-# Params
-# ---------------------------------------------------------------------------
-
-
-class TestParams:
-    def test_unset_param_reference_is_clean_error(self) -> None:
-        s = open_session()
-        r = s.eval_entry("param name: text")
-        assert not r.ok
-        assert r.diagnostics
-        assert "name" in r.diagnostics[0].message
-        assert "required" in r.diagnostics[0].message
-
-    def test_unset_param_diagnostic_names_the_bare_prompt_param(self) -> None:
-        """The prompt has no module name, so its param reads as the bare name.
-
-        The entry module's internal sentinel is not a spelling a user can type
-        and must never reach a diagnostic.
-        """
-        s = open_session()
-
-        r = s.eval_entry("param name: text")
-
-        assert not r.ok
-        assert "'name'" in r.diagnostics[0].message
-        assert "<entry>" not in r.diagnostics[0].message
-        assert "@entry" not in r.diagnostics[0].message
-
-    def test_imported_required_param_fails_before_interpreter_creation(
-        self, tmp_path: Path
-    ) -> None:
-        (tmp_path / "settings.agl").write_text("param token: text\n")
-        session = open_session(lib_root=tmp_path, default_stdlib=False)
-
-        result = session.eval_entry("import settings\n()")
-
-        assert not result.ok
-        assert "required" in result.diagnostics[0].message
-        assert "token" in result.diagnostics[0].message
-
-    def test_import_cycle_param_default_dependency_cycle_is_diagnostic(
-        self, tmp_path: Path
-    ) -> None:
-        (tmp_path / "a.agl").write_text(
-            "import b\nparam a_value: int = b::read()\ndef read() -> int = a_value\n"
-        )
-        (tmp_path / "b.agl").write_text(
-            "import a\nparam b_value: int = a::read()\ndef read() -> int = b_value\n"
-        )
-        session = open_session(lib_root=tmp_path, default_stdlib=False)
-
-        result = session.eval_entry("import a\n()")
-
-        assert not result.ok
-        assert result.error is None
-        assert len(result.diagnostics) == 1
-        assert "cycle" in result.diagnostics[0].message.lower()
-
-    def test_declared_param_typed_value(self) -> None:
-        s = open_session()
-        s.eval_entry("param count: int = 42")
-        r = s.eval_entry("count + 1")
-        assert r.ok
-        assert _int(r.value) == 43
-
-    def test_param_default_is_in_bindings(self) -> None:
-        s = open_session()
-        s.eval_entry('param name: text = "hi"')
-        assert any(n == "name" for n, _t, _v in s.bindings())
-
-    def test_unset_scoped_param_reference_is_clean_error(self) -> None:
-        # A required scoped param must report the same clean diagnostic as a
-        # root param and leave the session alive for later entries, not crash
-        # with an unhandled IR error.
-        s = open_session()
-        r = s.eval_entry("scope A\n  param p: int\nend A\n\nprint(A::p)")
-        assert not r.ok
-        assert r.diagnostics
-        assert "A::p" in r.diagnostics[0].message
-        assert "required" in r.diagnostics[0].message
-        after = s.eval_entry('"still alive"')
-        assert after.ok
-        assert _text(after.value) == "still alive"
-
-    def test_scoped_param_failing_default_does_not_corrupt_next_entry(self) -> None:
-        # A scoped param whose default raises must not be promoted; the next
-        # entry must degrade gracefully rather than crash on an unbound symbol.
-        s = open_session()
-        first = s.eval_entry('scope A\n  param p: int = "x" as int\nend A')
-        assert not first.ok
-        second = s.eval_entry("let q = A::p + 1")
-        assert not second.ok
-        assert second.diagnostics
 
 
 # ---------------------------------------------------------------------------
@@ -4454,40 +4282,6 @@ class TestTraceLogging:
 # ---------------------------------------------------------------------------
 # Removed legacy preset API
 # ---------------------------------------------------------------------------
-
-
-class TestParamRedeclaration:
-    def test_redeclare_param_purges_stale_value_from_bindings(self) -> None:
-        s = open_session()
-        r1 = s.eval_entry("param x: int = 5")
-        assert r1.ok
-        r2 = s.eval_entry("param x: int = 10")
-        assert r2.ok
-        ins2 = {name: val for name, _t, val in s.bindings()}
-        assert _int(ins2["x"]) == 10
-
-    def test_redeclare_param_then_reference_uses_the_new_value(self) -> None:
-        s = open_session()
-        s.eval_entry("param x: int = 5")
-        s.eval_entry("param x: int = 10")
-        r = s.eval_entry("x + 1")
-        assert r.ok
-        assert _int(r.value) == 11
-
-    def test_reset_after_redeclaring_a_param_clears_it(self) -> None:
-        s = open_session()
-        s.eval_entry("param x: int = 5")
-        s.eval_entry("param x: int = 10")
-        s.reset()
-        # The redeclared param is gone from the value scope too, so the name
-        # no longer resolves and can be redeclared from scratch.
-        gone = s.eval_entry("x + 1")
-        assert not gone.ok
-        again = s.eval_entry("param x: int = 7")
-        assert again.ok
-        r = s.eval_entry("x + 1")
-        assert r.ok
-        assert _int(r.value) == 8
 
 
 # ---------------------------------------------------------------------------
@@ -5844,6 +5638,56 @@ class TestImports:
         assert r2.ok, r2.diagnostics
         assert _int(r2.value) == 42
 
+    def test_repl_prunes_both_import_cycle_members_when_one_is_interrupted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Regression: an interrupt partway through an import cycle must not
+        # retain one cycle member while dropping the other. ``a`` imports
+        # ``b`` and vice versa; ``a`` completes trivially (it has no
+        # initializers of its own) while an interrupt lands between ``b``'s
+        # two initializers, so ``b`` never completes. A check limited to each
+        # module's own initializers would retain ``a`` anyway, even though it
+        # depends on the now-dropped ``b`` through the import cycle -- the
+        # module-adjacency fixpoint must prune ``a`` too.
+        from agm.agl.eval.ir_interpreter import IrInterpreter
+        from agm.agl.ir.nodes import IrExpr
+        from agm.agl.modules.ids import ModuleId
+
+        (tmp_path / "a.agl").write_text("import b\ndef a_val() -> int = 1\n")
+        (tmp_path / "b.agl").write_text("import a\nlet x = 1\nlet y = 2\ndef b_val() -> int = 2\n")
+        s = self._make_session_with_root(tmp_path)
+
+        a_id = ModuleId(("a",))
+        b_id = ModuleId(("b",))
+        original = IrInterpreter._eval_and_record_initializer
+        seen_for_b = 0
+
+        def flaky(interp: IrInterpreter, module_id: ModuleId, node: IrExpr) -> None:
+            nonlocal seen_for_b
+            if module_id == b_id:
+                seen_for_b += 1
+                if seen_for_b == 2:
+                    raise KeyboardInterrupt
+            original(interp, module_id, node)
+
+        monkeypatch.setattr(IrInterpreter, "_eval_and_record_initializer", flaky)
+
+        interrupted = s.eval_entry("import a::*\na_val()")
+        assert not interrupted.ok
+        # ``a`` completed its own (empty) initializer list, but must not be
+        # retained on its own: it depends on ``b``, which never completed.
+        assert a_id not in s._loaded_lib_modules
+        assert b_id not in s._loaded_lib_modules
+
+        monkeypatch.setattr(IrInterpreter, "_eval_and_record_initializer", original)
+        # The wildcard import was never retained for a partial failure (only a
+        # fully successful entry keeps its import context), so a later entry
+        # referencing the unqualified name reports it as undefined rather
+        # than resolving to a half-linked module.
+        later = s.eval_entry("a_val()")
+        assert not later.ok
+        assert later.diagnostics
+
     def test_mutated_imported_module_state_survives_a_later_reimport(self, tmp_path: Path) -> None:
         # An imported module is linked into the persistent image once. A later
         # entry -- whether it imports something else or names the same module
@@ -5868,20 +5712,6 @@ class TestImports:
         assert _int(unrelated_import.value) == 9
         assert reimported.ok, reimported.diagnostics
         assert _int(reimported.value) == 9
-
-    def test_runtime_failure_prunes_entry_function_depending_on_incomplete_module(
-        self, tmp_path: Path
-    ) -> None:
-        (tmp_path / "unstable.agl").write_text(
-            "param seed: int = [1, 2][9]\ndef get_seed() -> int = seed\n"
-        )
-        session = self._make_session_with_root(tmp_path)
-
-        failed = session.eval_entry("import unstable::*\ndef retained() -> int = get_seed()")
-
-        assert not failed.ok
-        assert "retained" not in failed.installed
-        assert not session.eval_entry("retained()").ok
 
     def test_scope_error_in_graph_mode(self, tmp_path: Path) -> None:
         # Declaring a reserved built-in name as an agent in program context

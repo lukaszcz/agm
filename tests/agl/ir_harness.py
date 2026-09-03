@@ -11,7 +11,7 @@ from pathlib import Path
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.eval.ir_interpreter import IrInterpreter
-from agm.agl.ir.ids import NominalId, SymbolId
+from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import IrBlock, IrConstUnit, IrExpr
 from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody, IrFunctionBody
 from agm.agl.lexer import spaced_qualifier_collector
@@ -221,13 +221,6 @@ def extern_caps() -> HostCapabilities:
     return HostCapabilities(supports_extern=True, codec_kinds=base.codec_kinds)
 
 
-def _build_ir_param_values(
-    executable: ExecutableProgram, param_values: dict[str, Value]
-) -> dict[SymbolId, Value]:
-    by_name = {param.public_name: param.symbol for param in executable.params}
-    return {by_name[name]: value for name, value in param_values.items()}
-
-
 def lower_ir(
     source: str,
     *,
@@ -268,7 +261,6 @@ def lower_inline_ir(
 
 def _run_ir(
     source: str,
-    param_values: dict[str, Value] | None = None,
     *,
     caps: HostCapabilities | None = None,
     agent_dispatcher: AgentFn | None = None,
@@ -277,49 +269,32 @@ def _run_ir(
     shell_exec_timeout: float | None = None,
 ) -> tuple[dict[str, Value], str]:
     executable = lower_inline_ir(source, caps=caps, default_stdlib=default_stdlib)
-    params = _build_ir_param_values(executable, param_values) if param_values else None
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         result = IrInterpreter(
             executable,
             agent_dispatcher=agent_dispatcher,
-            param_values=params,
             process_environment=process_environment,
             shell_exec_timeout=shell_exec_timeout,
         ).run(program_symbol=executable.synthetic_main_symbol)
     return result, output.getvalue()
 
 
-def evaluate_ir(
-    source: str,
-    param_values: dict[str, Value] | None = None,
-    *,
-    default_stdlib: bool = True,
-) -> dict[str, Value]:
+def evaluate_ir(source: str, *, default_stdlib: bool = True) -> dict[str, Value]:
     """Run a statement-oriented inline command and return module bindings."""
-    result, _ = _run_ir(source, param_values, default_stdlib=default_stdlib)
+    result, _ = _run_ir(source, default_stdlib=default_stdlib)
     return result
 
 
-def evaluate_ir_output(
-    source: str,
-    param_values: dict[str, Value] | None = None,
-    *,
-    default_stdlib: bool = True,
-) -> str:
+def evaluate_ir_output(source: str, *, default_stdlib: bool = True) -> str:
     """Run the program through the IR pipeline and return its captured stdout."""
-    _, output = _run_ir(source, param_values, default_stdlib=default_stdlib)
+    _, output = _run_ir(source, default_stdlib=default_stdlib)
     return output
 
 
-def evaluate_ir_raises(
-    source: str,
-    param_values: dict[str, Value] | None = None,
-    *,
-    default_stdlib: bool = True,
-) -> ExceptionValue:
+def evaluate_ir_raises(source: str, *, default_stdlib: bool = True) -> ExceptionValue:
     try:
-        _run_ir(source, param_values, default_stdlib=default_stdlib)
+        _run_ir(source, default_stdlib=default_stdlib)
     except AglRaise as exc:
         return exc.exc
     raise AssertionError("IR pipeline did not raise AglRaise")
@@ -385,7 +360,6 @@ def evaluate_ir_with_externs(
     companion_source: str,
     tmp_path: Path,
     *,
-    param_values: dict[str, Value] | None = None,
     caps: HostCapabilities | None = None,
 ) -> tuple[dict[str, Value], str]:
     """Run a single-module program declaring ``extern def`` end to end.
@@ -393,10 +367,9 @@ def evaluate_ir_with_externs(
     Returns ``(bindings, captured_stdout)``, mirroring ``_run_ir``.
     """
     executable, registry = _prepare_extern_program(source, companion_source, tmp_path, caps=caps)
-    params = _build_ir_param_values(executable, param_values) if param_values else None
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
-        result = IrInterpreter(executable, param_values=params, extern_registry=registry).run(
+        result = IrInterpreter(executable, extern_registry=registry).run(
             program_symbol=executable.synthetic_main_symbol
         )
     return result, output.getvalue()

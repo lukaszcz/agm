@@ -53,7 +53,7 @@
 ;; ---------------------------------------------------------------------------
 
 (defconst agl-keywords
-  '("record" "enum" "type" "param" "program" "def" "fn" "let" "var"
+  '("record" "enum" "type" "program" "def" "fn" "let" "var"
     "for" "while" "do" "until" "done" "if" "else" "case" "of" "try" "catch"
     "raise" "return" "break" "continue" "exception" "extends" "builtin"
     "extern" "as" "as?" "and" "or" "not" "is" "in" "to" "downto" "by" "with"
@@ -1060,7 +1060,7 @@ same way `agl--search-catch-binder' checks for a trailing `as'."
   "Search forward for boundary-safe KEYWORD followed by a decl-head chain.
 
 Search is bounded by LIMIT.  Used for `def'/`record'/`enum'/`type'/
-`exception'/`let'/`var'/`param' (font-lock declared-name faces) and for
+`exception'/`let'/`var' (font-lock declared-name faces) and for
 `scope'/`end' (imenu's scope-nesting tracker) -- the single matcher
 both font-lock and imenu are built on.
 
@@ -1135,7 +1135,6 @@ success."
    (list (lambda (limit) (agl--search-decl-head "exception" limit)) '(3 'font-lock-type-face))
    (list (lambda (limit) (agl--search-decl-head "let" limit nil t)) '(3 'font-lock-variable-name-face))
    (list (lambda (limit) (agl--search-decl-head "var" limit nil t)) '(3 'font-lock-variable-name-face))
-   (list (lambda (limit) (agl--search-decl-head "param" limit)) '(3 'font-lock-variable-name-face))
    (list #'agl--search-catch-binder '(1 'font-lock-variable-name-face))
    (list #'agl--match-type-annotation '(1 'font-lock-type-face))
    (list #'agl--match-interpolation-delims

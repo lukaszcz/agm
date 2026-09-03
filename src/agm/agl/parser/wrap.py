@@ -14,7 +14,6 @@ _ROOT_DECLARATIONS = (
     syntax.EnumDef,
     syntax.ExceptionDef,
     syntax.TypeAlias,
-    syntax.ParamDecl,
     syntax.BuiltinVarDecl,
     syntax.InfixDecl,
     syntax.ImportDecl,

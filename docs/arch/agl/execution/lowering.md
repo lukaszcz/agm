@@ -2,7 +2,7 @@
 
 ## Lowering and Linking
 
-Lowering consumes the match-compiled program and emits one linked, typeless executable program. It translates expressions directed by expected types, allocates program-local identities (symbols, functions, contracts, sources, nominals), and links modules in the loader's reverse-topological import-SCC order — function closures first, then static `let`/`var` initializers in source order — so forward references work. Params from every module become descriptors installed before initialization. Each emitted initializer records the source item it completes, which the REPL uses to promote declarations independently.
+Lowering consumes the match-compiled program and emits one linked, typeless executable program. It translates expressions directed by expected types, allocates program-local identities (symbols, functions, contracts, sources, nominals), and links modules in the loader's reverse-topological import-SCC order — function closures first, then static `let`/`var` initializers in source order — so forward references work. Each `program def`'s own value parameters become a host-facing signature (see below). Each emitted initializer records the source item it completes, which the REPL uses to promote declarations independently.
 
 Everything type-dependent is read from the checker's side tables — argument bindings, output contracts, selected constructors and methods, cast recipes, codec schema and decode walks, JSON encode plans — never re-inferred; that is what keeps the IR and evaluator typeless. Type arguments are erased. Nominal identity survives as `NominalId`, the checker's own declaration identity, with module, scope path, and name on the linked descriptor; shapes, including mutable fields and enum member layouts, come from the shared `TypeTable`.
 
@@ -12,7 +12,7 @@ Notable lowering shapes:
 - **Match sites.** Case and destructuring `let` traverse the same decision DAG: singleton decisions project only the demanded fields, alternatives become `IrCase` keyed by member-record identity, and `IrField` is the single nominal projection. A bare-name or `_` `let` is one bind instruction.
 - **Mutation.** `IrAssign` stores a `var` cell; `IrIndexSet` mutates a container reached by reference; `IrFieldSet` writes a `var` field of a precisely typed record.
 - **Resources.** `resource`/`resource-dir` resolve while linking against the declaring module's filesystem anchor into absolute paths; a missing or escaping target stops linking.
-- **Bindings.** Scoped `let`/`var`/`param` publish under their full path spelling in run results and REPL echo; functions are never published as bindings.
+- **Bindings.** Scoped `let`/`var` publish under their full path spelling in run results and REPL echo; functions are never published as bindings.
 
 ## The IR
 

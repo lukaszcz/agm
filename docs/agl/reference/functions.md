@@ -172,7 +172,11 @@ three **zones** that determine how arguments at the call site are matched:
 For `def`/`extern def`/`builtin def`/lambda, the **default zone is standard**: a
 parameter list with no markers has all parameters in the standard zone
 (positional or named). A method receiver `self` is the exception: it is always
-positional-only. Markers switch zones at the boundary they appear at:
+positional-only. A `program def`'s parameter list defaults to the **named-only**
+zone instead: a plain `name: text` parameter is addressed only by `--name`
+([Host environment](host-environment.md#program-arguments)); an explicit
+`@pos, …, /` marker opens a positional slot. Markers switch zones at the
+boundary they appear at:
 
 <!-- agl-check: fragment -->
 ```agl

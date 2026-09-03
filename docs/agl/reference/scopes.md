@@ -55,8 +55,8 @@ program def main() -> unit =
 
 A region contains nested regions, header `use` and `import` declarations,
 `export` declarations, static declarations (`def`, `program def`, `extern def`,
-`record`, `enum`, `exception`, `type`, every `builtin` form), `param`
-declarations, and `let`/`var` bindings. Bare expressions, `:=` assignments, and infix declarations are not allowed there.
+`record`, `enum`, `exception`, `type`, every `builtin` form), and `let`/`var`
+bindings. Bare expressions, `:=` assignments, and infix declarations are not allowed there.
 
 ## Binder paths
 
@@ -119,30 +119,6 @@ item order, together with the rest of the module's initializers, wherever the
 region falls in the source text. A scope split across separate blocks resumes
 exactly where the earlier block left off; a region never defers, reorders, or
 repeats initialization.
-
-## Parameters
-
-A region also admits `param` declarations, with no declaration-path
-shorthand — only the region form:
-
-```agl
-scope Deploy
-  param region: text = "eu"
-  param replicas: int
-end Deploy
-
-program def main() -> unit =
-  let _ = print("%{Deploy::region} x %{Deploy::replicas}")
-```
-
-A scoped parameter follows the same member and duplicate rules as every other
-member: visible bare inside its region, by its exact path from outside, and
-through `use`. A parameter's **short external spelling** — the CLI flag name when it is
-unambiguous — is its full path spelling (`Deploy::region`), which is what makes
-grouping related parameters under one scope useful. A module-qualified spelling
-identifies the declaration when another inventory param shares that short name.
-See [Host environment](host-environment.md#params) for how the host resolves an
-external param value.
 
 ## Import and export
 
@@ -209,10 +185,10 @@ module root, so it bypasses a nearer scoped member.
 
 A static declaration (`def` or a type) is visible throughout its
 scope regardless of textual order, matching the module root, where a `def` may
-call another declared later in the same file. A `let`, `var`, or `param`
+call another declared later in the same file. A `let` or `var`
 binding is different: it is visible only to references that follow it
 textually, in its own region or elsewhere in the module — exactly like a
-root-level `let` or `param`. This holds across separate blocks of the same
+root-level `let` or `var`. This holds across separate blocks of the same
 scope: a member declared in an earlier `scope A` block cannot see a binding a
 later `scope A` block introduces, while the reverse order works. The same
 textual rule governs a binding reached through `use`: a reference sees the
@@ -333,7 +309,7 @@ are described in [Modules](modules.md).
 
 ## REPL
 
-A scoped `let`/`var`/`param` persists across REPL entries by its full path,
+A scoped `let`/`var` persists across REPL entries by its full path,
 exactly like a scoped `def` or type: a later entry may extend an existing
 scope with a new member, and a same-path binding declared later replaces the
 earlier one rather than colliding with it. A duplicate at the same path

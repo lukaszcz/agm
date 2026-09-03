@@ -126,7 +126,6 @@ _SCOPED_DECLARATIONS = (
     syntax.TypeAlias,
     syntax.LetDecl,
     syntax.VarDecl,
-    syntax.ParamDecl,
     syntax.ImportDecl,
     syntax.ExportDecl,
     syntax.UseDecl,
@@ -716,19 +715,6 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
     # Declarations
     # ------------------------------------------------------------------
-
-    def param_decl(self, meta: Meta, args: _Args) -> syntax.ParamDecl:
-        # Grammar: "param" name type_ann? (EQ expr)?
-        name_tok = _find_name_token(args)
-        ann, default = _extract_ann_and_optional_expr(args[1:])
-        span = self._span_from_meta(meta)
-        return syntax.ParamDecl(
-            name=str(name_tok),
-            annotation=ann,
-            default=default,
-            span=span,
-            node_id=self._next_id(),
-        )
 
     def builtin_var_def(self, meta: Meta, args: _Args) -> syntax.BuiltinVarDecl:
         """builtin_var_def: "builtin" _NEWLINE? VAR name type_ann (EQ expr)?"""
@@ -3839,11 +3825,6 @@ def _rewrite_item(
         )
     if isinstance(item, syntax.ExceptionDef):
         return replace(item, fields=tuple(_rewrite_param(p, table, builder) for p in item.fields))
-    if isinstance(item, syntax.ParamDecl):
-        return replace(
-            item,
-            default=None if item.default is None else _rewrite_expr(item.default, table, builder),
-        )
     return item
 
 
@@ -4157,7 +4138,7 @@ def _extract_ann_and_value(
 def _extract_ann_and_optional_expr(
     tail: _Args,
 ) -> tuple[TypeExpr | None, syntax.Expr | None]:
-    """Extract (type_ann, optional_expr) from a param declaration tail."""
+    """Extract (type_ann, optional_expr) from a parameter definition tail."""
     ann: TypeExpr | None = None
     value: syntax.Expr | None = None
     for a in tail:

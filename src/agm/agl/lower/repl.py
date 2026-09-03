@@ -23,7 +23,6 @@ from agm.agl.syntax.nodes import (
     InfixDecl,
     Item,
     LetDecl,
-    ParamDecl,
     RecordDef,
     ScopeRegion,
     TypeAlias,
@@ -41,7 +40,6 @@ if TYPE_CHECKING:
 __all__ = [
     "LinkImage",
     "LoweredReplEntry",
-    "ParamOrigin",
     "ReplPromotionPlan",
     "lower_repl_program",
 ]
@@ -96,14 +94,6 @@ class LinkImage:
 
 
 @dataclass(frozen=True, slots=True)
-class ParamOrigin:
-    """Pair a source parameter declaration with its lowering symbol identity."""
-
-    declaration_id: int
-    symbol: SymbolId
-
-
-@dataclass(frozen=True, slots=True)
 class ReplPromotionPlan:
     """Relate source declarations to the entry initializers that complete them.
 
@@ -111,32 +101,25 @@ class ReplPromotionPlan:
     declarations appear later in source. Non-function source declarations become
     eligible when execution reaches their source-order initializer frontier.
     This makes partial REPL promotion depend on completed IR initializers rather
-    than diagnostic source locations. A ``param`` installs during a pre-pass
-    that runs before every module initializer (see ``IrInterpreter.run``), so
-    its completion cannot be read off that frontier and is tracked separately
-    via the symbols the interpreter actually installed. Runtime references
-    into imported modules are retained separately so promotion can require the
-    owning modules to be available.
+    than diagnostic source locations. Runtime references into imported modules
+    are retained separately so promotion can require the owning modules to be
+    available.
     """
 
     source_declaration_ids: tuple[frozenset[int], ...]
     initializers: tuple[InitializerOrigin, ...]
-    params: tuple[ParamOrigin, ...]
     declaration_dependencies: Mapping[int, frozenset[int]]
     imported_module_dependencies: Mapping[int, frozenset[ModuleId]]
 
     def completed_declaration_ids(
         self,
         completed_initializer_indices: Collection[int],
-        installed_param_symbols: Collection[SymbolId],
         available_module_ids: Collection[ModuleId],
     ) -> frozenset[int]:
         """Return declarations whose local and imported dependencies are available.
 
-        A param whose pre-pass install did not complete is excluded even when
-        its source position falls before the initializer frontier. Imported
-        runtime references are safe only when their owning library module
-        initialized completely or was already retained by the session.
+        Imported runtime references are safe only when their owning library
+        module initialized completely or was already retained by the session.
         """
         completed_indices = set(completed_initializer_indices)
         assert all(0 <= index < len(self.initializers) for index in completed_indices)
@@ -153,12 +136,6 @@ class ReplPromotionPlan:
         )
         for declaration_ids in self.source_declaration_ids[:source_frontier]:
             completed.update(declaration_ids)
-
-        completed.difference_update(
-            origin.declaration_id
-            for origin in self.params
-            if origin.symbol not in installed_param_symbols
-        )
 
         dependencies = self.declaration_dependencies
         available_modules = set(available_module_ids)
@@ -211,7 +188,6 @@ def _item_declaration_ids(item: Item, checked: "CheckedModule") -> frozenset[int
             ExceptionDef,
             FuncDef,
             InfixDecl,
-            ParamDecl,
             RecordDef,
             TypeAlias,
             VarDecl,
@@ -328,7 +304,6 @@ def _declaration_dependencies(
 def _promotion_plan(
     checked: "CheckedModule",
     initializer_origins: tuple[InitializerOrigin, ...],
-    decl_to_sym: Mapping[int, SymbolId],
     library_module_ids: Collection[ModuleId],
 ) -> ReplPromotionPlan:
     """Consume lowering's origins and add dependency-safe promotion metadata.
@@ -340,11 +315,6 @@ def _promotion_plan(
     """
     leaf_items = tuple(static_items(checked.resolved.program.body.items))
     source_declaration_ids = tuple(_item_declaration_ids(item, checked) for item in leaf_items)
-    params = tuple(
-        ParamOrigin(declaration_id=item.node_id, symbol=decl_to_sym[item.node_id])
-        for item in leaf_items
-        if isinstance(item, ParamDecl)
-    )
     entry_declaration_ids = frozenset().union(*source_declaration_ids, frozenset())
     # A top-level nominal handle promotes with its own source item. Synthetic
     # inline-member records promote with their EnumDef owner instead, so a
@@ -391,7 +361,6 @@ def _promotion_plan(
     return ReplPromotionPlan(
         source_declaration_ids=source_declaration_ids,
         initializers=initializer_origins,
-        params=params,
         declaration_dependencies=MappingProxyType(declaration_dependencies),
         imported_module_dependencies=MappingProxyType(imported_module_dependencies),
     )
@@ -445,7 +414,6 @@ def lower_repl_program(
         promotion_plan=_promotion_plan(
             checked.modules[checked.entry_id],
             image._state.initializer_origins[program.entry_module],
-            image._state.decl_to_sym,
             frozenset(checked.modules) - {checked.entry_id},
         ),
     )

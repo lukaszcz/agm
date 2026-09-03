@@ -945,7 +945,7 @@ class IrIterNext:
 class IrCapture:
     """A captured outer variable in an IrMakeClosure.
 
-    by_cell: True for var (share the Cell), False for let/param (snapshot value).
+    by_cell: True for var (share the Cell), False for let/function parameter (snapshot value).
     """
 
     symbol: SymbolId

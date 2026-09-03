@@ -46,7 +46,7 @@ options. Built-in methods are call-only; `let f = reviewer.ask` and
 `let f = reviewer.ask::[text]` are static errors.
 
 `ask` is a **contextual keyword**: it cannot be declared with `let`, `var`,
-or `param`; it may not be bound as a function value (`let f = ask` is a static error, because `ask`'s type is
+or as a function parameter name; it may not be bound as a function value (`let f = ask` is a static error, because `ask`'s type is
 not a fully expressible monomorphic type). It remains legal as a
 record/enum **field name**.
 

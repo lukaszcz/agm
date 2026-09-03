@@ -175,17 +175,17 @@ class TestCheckCommand:
         assert captured.out == ""
         assert captured.err == ""
 
-    def test_undefaulted_required_param_does_not_report_missing_param(
+    def test_undefaulted_required_program_parameter_does_not_report_missing_argument(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """``check`` never param-checks: a required ``param`` with no default is silent.
+        """``check`` never argument-checks: a required parameter with no default is silent.
 
-        Regression test: ``run_prepared(check_only=True)`` used to report a
-        missing required ``param`` before the check-only stop, so this file
-        would falsely report ``Missing required param: 'name'`` on every save.
+        ``check`` statically validates a program without selecting it or binding
+        any arguments, so a required ``program def`` parameter with no default
+        never reports a missing-argument diagnostic on every save.
         """
         agl_file = tmp_path / "greet.agl"
-        agl_file.write_text("param name: text\nprogram def main() -> unit =\n  print name\n")
+        agl_file.write_text("program def main(name: text) -> unit =\n  print name\n")
 
         check_command.run(CheckArgs(files=[str(agl_file)]))
 
@@ -199,8 +199,8 @@ class TestCheckCommand:
         """A `resource` referencing a nonexistent path is caught during lowering.
 
         Regression test for the fix above: ``check`` must reach lowering (not
-        stop at match compilation) to still catch this, even though it no
-        longer param-checks.
+        stop at match compilation) to still catch this, even though it never
+        validates a program's arguments.
         """
         agl_file = tmp_path / "res.agl"
         agl_file.write_text(

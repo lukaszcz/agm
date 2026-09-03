@@ -21,7 +21,6 @@ from agm.agl.syntax import (
     ImportDecl,
     InfixDecl,
     LetDecl,
-    ParamDecl,
     RecordDef,
     ScopeRegion,
     TypeAlias,
@@ -44,7 +43,6 @@ record Item()
 enum State = Ready
 exception Problem()
 type Count = int
-param input: text
 infixl |> at 12
 
 scope Shared
@@ -63,8 +61,8 @@ print value
     wrapped, transformed_next_node_id = wrap_inline_program(program, next_node_id=next_node_id)
 
     root_items = wrapped.body.items
-    assert root_items[:-1] == original_items[:12]
-    assert all(actual is expected for actual, expected in zip(root_items[:-1], original_items[:12]))
+    assert root_items[:-1] == original_items[:11]
+    assert all(actual is expected for actual, expected in zip(root_items[:-1], original_items[:11]))
     assert all(
         isinstance(
             item,
@@ -76,7 +74,6 @@ print value
                 EnumDef,
                 ExceptionDef,
                 TypeAlias,
-                ParamDecl,
                 InfixDecl,
                 ScopeRegion,
                 BuiltinVarDecl,
@@ -95,8 +92,8 @@ print value
     assert main.type_param_slots == ()
     assert isinstance(main.return_type, UnitT)
     assert isinstance(main.body, Block)
-    assert main.body.items == original_items[12:]
-    assert all(actual is expected for actual, expected in zip(main.body.items, original_items[12:]))
+    assert main.body.items == original_items[11:]
+    assert all(actual is expected for actual, expected in zip(main.body.items, original_items[11:]))
     assert all(isinstance(item, (LetDecl, VarDecl, AssignStmt)) for item in main.body.items[:3])
     assert isinstance(main.body.items[3], Call)
     assert transformed_next_node_id == next_node_id + 3

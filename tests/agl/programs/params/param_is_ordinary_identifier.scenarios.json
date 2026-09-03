@@ -1,0 +1,31 @@
+{
+  "scenarios": [
+    {
+      "name": "param_spellings_all_work",
+      "params": {
+        "param": 5
+      },
+      "expect": {
+        "stdout": "6\n12\n6\n"
+      }
+    },
+    {
+      "name": "param_spellings_all_work_at_zero",
+      "params": {
+        "param": 0
+      },
+      "expect": {
+        "stdout": "1\n2\n1\n"
+      }
+    },
+    {
+      "name": "param_spellings_all_work_with_a_negative_value",
+      "params": {
+        "param": -3
+      },
+      "expect": {
+        "stdout": "-2\n-4\n-2\n"
+      }
+    }
+  ]
+}

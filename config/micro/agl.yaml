@@ -34,7 +34,7 @@ rules:
 
     # Module/scope headers and declaration modifiers.
     - preproc: "\\b(import|use|export|hiding|scope|end|builtin|extern)\\b"
-    - statement: "\\b(record|enum|type|exception|extends|param|program|def|fn|let|var|infixl|infixr|prio)\\b"
+    - statement: "\\b(record|enum|type|exception|extends|program|def|fn|let|var|infixl|infixr|prio)\\b"
 
     # Control flow and expression keywords.
     - statement: "\\b(for|while|do|until|done|if|else|case|of|try|catch|raise|break|continue|return)\\b"

@@ -40,8 +40,8 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 # entry file's stem is its module component. A longer module suffix resolves
 # ambiguity; ``["review-tools/judge".review]`` is an exact module anchor.
 # The same table also supplies a selected ``program def``'s own value
-# parameters, keyed by name like a param. CLI options override config values
-# for both. Inline ``-c`` params are CLI-only.
+# parameters, keyed by name. CLI options override config values for both.
+# Inline ``-c`` value parameters are CLI-only.
 #
 # [review-workflow.main]
 # timeout = "60s"               # engine-key override for this program
@@ -49,8 +49,8 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 # region = "us-east"            # a program def's own text value parameter
 #
 # [judge.review]
-# topic = "security"            # text param — verbatim string
-# verbose = true                 # bool param — native TOML bool
-# max-iter = 3                   # int param — native TOML integer
-# tags = ["bug", "audit"]       # list param — TOML array (or a JSON string)
-# ratio = "0.75"                # decimal params must be quoted strings
+# topic = "security"            # text parameter — verbatim string
+# verbose = true                 # bool parameter — native TOML bool
+# max-iter = 3                   # int parameter — native TOML integer
+# tags = ["bug", "audit"]       # list parameter — TOML array (or a JSON string)
+# ratio = "0.75"                # decimal parameters must be quoted strings

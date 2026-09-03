@@ -138,7 +138,6 @@ def _find_varref(program: object, name: str, occurrence: int = -1) -> VarRef:
         IndexAccess,
         InterpSegment,
         IsTest,
-        ParamDecl,
         Raise,
         ScopeRegion,
         UnaryNeg,
@@ -225,9 +224,6 @@ def _find_varref(program: object, name: str, occurrence: int = -1) -> VarRef:
         elif isinstance(node, DictLit):
             for entry in node.entries:
                 walk(entry.value)
-        elif isinstance(node, ParamDecl):
-            if node.default is not None:
-                walk(node.default)
 
     walk(program)
     assert results, f"No VarRef named {name!r} found"
@@ -615,72 +611,6 @@ class TestScopedBindings:
         resolved = parse_and_resolve_file("let A::B::x = 1\nvar A::B::y = 2")
         assert set(resolved.scope_nodes[("A", "B")].members) == {"x", "y"}
         assert resolved.scope_nodes[("A", "B")].parent is resolved.scope_nodes[("A",)]
-
-
-# ---------------------------------------------------------------------------
-# Scoped `param` -- a member of its path, region-form only (no shorthand)
-# ---------------------------------------------------------------------------
-
-
-class TestScopedParam:
-    """A `param` declared inside a scope region is a member of that path,
-    following the same member/duplicate rules as every other member.
-    """
-
-    def test_bare_visible_inside_its_own_region(self) -> None:
-        resolved = parse_and_resolve(
-            "scope Deploy\n  param region: text\n  def read() -> text = region\nend Deploy\n"
-            "\n"
-            "Deploy::read()"
-        )
-        assert _ref(resolved, "region").kind is BinderKind.param_binding
-        assert _ref(resolved, "region").scope_path == ("Deploy",)
-
-    def test_bare_visible_from_a_nested_region_via_the_outward_walk(self) -> None:
-        resolved = parse_and_resolve(
-            "scope Deploy\n  param region: text\n\n  scope Inner\n"
-            "    def read() -> text = region\n  end Inner\nend Deploy\n\nDeploy::Inner::read()"
-        )
-        assert _ref(resolved, "region").kind is BinderKind.param_binding
-
-    def test_exact_path_reference_from_outside_the_region(self) -> None:
-        resolved = parse_and_resolve(
-            "scope Deploy\n  param region: text\nend Deploy\n\nDeploy::region"
-        )
-        assert _ref(resolved, "region").scope_path == ("Deploy",)
-        assert _ref(resolved, "region").kind is BinderKind.param_binding
-
-    def test_visible_after_use(self) -> None:
-        resolved = parse_and_resolve(
-            "use Deploy::*\n\nscope Deploy\n  param region: text\nend Deploy\n\nregion"
-        )
-        assert _ref(resolved, "region").scope_path == ("Deploy",)
-
-    def test_repeated_region_blocks_extend_the_same_scope(self) -> None:
-        resolved = parse_and_resolve(
-            "scope Deploy\n  param region: text\nend Deploy\n"
-            "\n"
-            "scope Deploy\n  param replicas: int\nend Deploy\n\n()"
-        )
-        assert set(resolved.scope_nodes[("Deploy",)].members) == {"region", "replicas"}
-
-    def test_earlier_block_cannot_see_a_later_blocks_param(self) -> None:
-        with pytest.raises(AglScopeError):
-            parse_and_resolve(
-                "scope A\n  def f() -> text = A::region\nend A\n"
-                "\n"
-                "scope A\n  param region: text\nend A\n\nA::f()"
-            )
-
-    def test_reference_textually_before_the_param_is_rejected(self) -> None:
-        with pytest.raises(AglScopeError):
-            parse_and_resolve_file(
-                "def f() -> text = Deploy::region\n\nscope Deploy\n  param region: text\nend Deploy"
-            )
-
-    def test_param_rejected_inside_a_function_body(self) -> None:
-        with pytest.raises(AglScopeError, match="param"):
-            parse_and_resolve("def f() =\n  param x\n  0\nf()")
 
 
 class TestScopedBindingUsePrecedence:
@@ -1129,14 +1059,6 @@ class TestAcceptance:
         assert ref.kind == BinderKind.var_binding
         assert ref.mutable
 
-    def test_param_at_root(self) -> None:
-        r = parse_and_resolve("param spec\nspec")
-        assert _ref(r, "spec").kind == BinderKind.param_binding
-
-    def test_param_with_type(self) -> None:
-        r = parse_and_resolve("param spec: text\nprint spec")
-        assert _ref(r, "spec").kind == BinderKind.param_binding
-
     def test_let_referencing_a_typed_let_binding(self) -> None:
         r = parse_and_resolve('let spec: text = "x"\nlet x = spec\nx')
         assert _ref(r, "x").kind == BinderKind.let_binding
@@ -1162,10 +1084,6 @@ class TestAcceptance:
 
         captured = _find_varref(resolved.program, "value")
         assert resolved.resolution[captured.node_id].kind is BinderKind.pattern_slot
-
-    def test_multiple_inputs(self) -> None:
-        r = parse_and_resolve("param spec\nparam max_severity: int\nspec")
-        assert _ref(r, "spec").kind == BinderKind.param_binding
 
     def test_unit_lit(self) -> None:
         r = parse_and_resolve("()")
@@ -1240,20 +1158,6 @@ class TestBlockScoping:
         line, msg = diag(err)
         assert line == 2
         assert "a" in msg
-
-    def test_redeclaration_input_with_let(self) -> None:
-        with pytest.raises(AglScopeError) as exc_info:
-            parse_and_resolve_file('param spec\nlet spec = "again"')
-        err = exc_info.value
-        line, msg = diag(err)
-        assert line == 2
-        assert "spec" in msg
-
-    def test_redeclaration_input_with_input(self) -> None:
-        err = reject_scope("param x\nparam x\nx")
-        line, msg = diag(err)
-        assert line == 2
-        assert "x" in msg
 
 
 class TestLetPatternCompatibility:
@@ -1376,11 +1280,10 @@ class TestAssignErrors:
         "source",
         (
             "let stable = 1\nstable := 2\nstable",
-            "param spec\nspec := 2\nspec",
             "try\n  ()\ncatch _ as err =>\n  err := 1\n",
             "def f(x: int) -> int = x\nf := 1\nf(1)",
         ),
-        ids=("let", "param", "catch-binder", "function"),
+        ids=("let", "catch-binder", "function"),
     )
     def test_unqualified_assign_to_immutable_resolves_and_defers_to_typecheck(
         self, source: str
@@ -1464,24 +1367,6 @@ class TestReservedNames:
         line, msg = diag(err)
         assert line == 1
         assert "exec" in msg
-
-    def test_reserve_ask_input(self) -> None:
-        err = reject_scope("param ask")
-        line, msg = diag(err)
-        assert line == 1
-        assert "ask" in msg
-
-    def test_reserve_exec_input(self) -> None:
-        err = reject_scope("param exec")
-        line, msg = diag(err)
-        assert line == 1
-        assert "exec" in msg
-
-    def test_reserve_print_input(self) -> None:
-        err = reject_scope("param print")
-        line, msg = diag(err)
-        assert line == 1
-        assert "print" in msg
 
     def test_reserve_ask_def(self) -> None:
         err = reject_scope("def ask() -> int = 1\nask()")
@@ -2683,14 +2568,6 @@ class TestResolutionSideTable:
         assert ref.name == "n"
         assert ref.mutable
 
-    def test_param_binding_is_immutable(self) -> None:
-        r = parse_and_resolve("param spec\nspec")
-        varref = r.program.body.items[1]
-        assert isinstance(varref, VarRef)
-        ref = r.resolution[varref.node_id]
-        assert ref.name == "spec"
-        assert not ref.mutable
-
     def test_interp_varref_resolved(self) -> None:
         r = parse_and_resolve('let name: text = "x"\nlet q = "Hello %{name}"\nq')
         let_q = r.program.body.items[1]
@@ -3071,26 +2948,6 @@ class TestDirectASTConstruction:
         assert line == 2
         assert "'type'" in msg, "the diagnostic names the misplaced declaration kind"
         assert "top level" in msg.lower()
-
-    # --- param not at root ---
-
-    def test_param_inside_if_rejected(self) -> None:
-        err = reject_scope("if true =>\n  param late\n| else =>\n  ()\n")
-        line, msg = diag(err)
-        assert line == 2
-        assert "param" in msg.lower()
-
-    def test_param_inside_do_rejected(self) -> None:
-        err = reject_scope("do[2]\n  param x\nuntil true\n")
-        line, msg = diag(err)
-        assert line == 2
-        assert "param" in msg.lower()
-
-    def test_param_inside_try_rejected(self) -> None:
-        err = reject_scope("try\n  param x\ncatch _ =>\n  ()\n")
-        line, msg = diag(err)
-        assert line == 2
-        assert "param" in msg.lower()
 
     def test_program_inside_if_rejected(self) -> None:
         err = reject_scope("if true =>\n  program def nested() = ()\n| else =>\n  ()\n")

@@ -260,7 +260,7 @@ class QualifierChain:
 
 @dataclass(frozen=True, slots=True)
 class VarRef:
-    """Reference to a variable, param binding, or qualified constructor."""
+    """Reference to a variable, function parameter, or qualified constructor."""
 
     name: str
     span: SourceSpan = dc_field(compare=False)
@@ -1252,33 +1252,8 @@ class TypeAlias(GenericDeclaration):
     scope_path: tuple[ScopeSegment, ...] = ()
 
 
-@dataclass(frozen=True, slots=True)
-class ParamDecl:
-    """``param name[: TypeExpr] [= expr]`` declaration.
-
-    The type ``annotation`` is optional: ``param spec`` is equivalent to
-    ``param spec: text``.  The default (``text``) is applied by the TYPECHECK
-    pass, not synthesized by the parser, so ``annotation`` is ``None`` when the
-    source omits it.
-
-    The ``default`` expression is optional; ``None`` when omitted.
-
-    ``scope_path`` is non-empty for a ``param`` declared as a member of a named
-    scope region; there is no declaration-path shorthand for ``param``, so this
-    is always the enclosing region's path, never a prefix parsed from the
-    declaration head itself.
-    """
-
-    name: str
-    annotation: TypeExpr | None
-    default: Expr | None
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-    scope_path: tuple[ScopeSegment, ...] = ()
-
-
 def scoped_public_name(scope_path: tuple[ScopeSegment, ...], name: str) -> str:
-    """Return the full path spelling of a scoped binding's or param's public name.
+    """Return the full path spelling of a scoped binding's public name.
 
     A root declaration's public name is its bare name; a scoped one's is its
     full path spelling (``"Deploy::region"``), matching how the language
@@ -1294,7 +1269,7 @@ def scoped_public_name(scope_path: tuple[ScopeSegment, ...], name: str) -> str:
 
 
 def resolved_public_name(scope_path: tuple[str, ...], name: str) -> str:
-    """Return the full path spelling of a scoped binding's or param's public name.
+    """Return the full path spelling of a scoped binding's public name.
 
     Takes an already-resolved scope path (plain names, as scope-node maps key
     on); spells the same public name as ``scoped_public_name``.
@@ -1375,9 +1350,9 @@ def static_items(items: tuple[Item, ...]) -> Iterator[Item]:
     Named scope regions are transparent to whole-module item collection: a
     region's own items are spliced into its parent's stream, in textual
     order, so a caller that needs every item regardless of nesting depth —
-    e.g. discovering every ``param`` declaration for its external key — walks
-    one flat sequence. ``static_type_items`` and ``static_function_items``
-    are this walk narrowed to one item kind.
+    e.g. discovering every ``program def`` declaration for its external
+    config key — walks one flat sequence. ``static_type_items`` and
+    ``static_function_items`` are this walk narrowed to one item kind.
     """
     for item in items:
         if isinstance(item, ScopeRegion):
@@ -1430,7 +1405,6 @@ Declaration = (
     | EnumDef
     | ExceptionDef
     | TypeAlias
-    | ParamDecl
     | BuiltinVarDecl
     | InfixDecl
     | ImportDecl
@@ -1458,7 +1432,6 @@ ScopeItem = (
     | TypeAlias
     | LetDecl
     | VarDecl
-    | ParamDecl
     | BuiltinVarDecl
 )
 

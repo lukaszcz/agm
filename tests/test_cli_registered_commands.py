@@ -215,9 +215,8 @@ def test_registered_command_help_recognizes_program_value_argument_flags(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """``-h`` disambiguation and help rendering also cover a program's own
-    value parameters (not only legacy ``param`` declarations): a bare ``-h``
-    is short help, but ``-h`` supplied as a value-taking flag's own VALUE is
-    not.
+    value parameters: a bare ``-h`` is short help, but ``-h`` supplied as a
+    value-taking flag's own VALUE is not.
     """
     import agm.cli_dispatch as dispatch
     import agm.commands.exec_program as exec_program
@@ -370,8 +369,8 @@ def test_registered_command_program_option_error_renders_shared_usage_help(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A CLI parse failure against a selected program's own value parameters
-    renders through the same ``registered_command_help`` rendering as a
-    legacy ``param`` parse failure, including the program's own usage line.
+    renders through the same ``registered_command_help`` rendering, including
+    the program's own usage line.
     """
     import agm.cli_dispatch as dispatch
 
@@ -880,7 +879,7 @@ def test_plain_exec_argument_error_still_renders_the_base_exec_usage(
     import agm.commands.exec as exec_command
 
     source = tmp_path / "main.agl"
-    source.write_text("param level: text\nprogram def main() -> unit = ()\n", encoding="utf-8")
+    source.write_text("program def main() -> unit = ()\n", encoding="utf-8")
 
     with pytest.raises(SystemExit) as exc_info:
         exec_command.run(

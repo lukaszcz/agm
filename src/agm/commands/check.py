@@ -6,10 +6,10 @@ resolution, type checking, match compilation, and lowering) over each given
 diagnostics to stderr. Unlike ``agm exec``, no file needs to declare a
 ``program def`` — library modules can be checked too. A declared ``program
 def`` is validated as part of the module it lives in, but ``check`` never
-selects, param-checks, or runs one: it never evaluates anything and never
-invokes an agent. Every file is checked even when an earlier one failed;
-exit code is 1 iff any file produced an error-severity diagnostic, was
-unreadable/missing, or had an invalid module-root configuration.
+selects, validates its arguments, or runs one: it never evaluates anything
+and never invokes an agent. Every file is checked even when an earlier one
+failed; exit code is 1 iff any file produced an error-severity diagnostic,
+was unreadable/missing, or had an invalid module-root configuration.
 
 Static path and reuse: this reuses exactly the same building blocks
 ``agm exec`` uses for module resolution and file reading
@@ -27,9 +27,9 @@ Lowering (rather than stopping at match compilation, as the REPL's own
 ``resource``/``resource-dir`` path, an unmaterializable output contract —
 surface only during contract materialization and lowering, not during type
 checking. ``check_prepared`` reaches exactly that far and no further: it
-never resolves or validates a program's arguments, so a ``param`` declaration
-with no default anywhere in a checked file's module graph is silently
-accepted, unlike under ``agm exec --dry-run``.
+never resolves or validates a program's arguments, so a required ``program
+def`` value parameter with no default is silently accepted, unlike under
+``agm exec --dry-run``.
 
 Warnings (on ``RunResult.warnings``) are a separate channel from error
 diagnostics, printed to stderr but never affecting the exit code — the same

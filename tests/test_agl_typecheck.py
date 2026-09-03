@@ -76,7 +76,6 @@ from agm.agl.syntax.nodes import (
     LetDecl,
     NamedArg,
     Param,
-    ParamDecl,
     ParamKind,
     Placeholder,
     Program,
@@ -1385,13 +1384,12 @@ class TestAssignImmutability:
         ("source", "line", "phrase"),
         (
             ("let stable = 1\nstable := 2\nstable", 2, "declared with 'let'"),
-            ("param spec\nspec := 2\nspec", 2, "parameter binding"),
             ("try\n  ()\ncatch _ as err =>\n  err := 1\n", 4, "catch binder"),
             ("def f(n: int) -> int =\n  n := 2\n  n\nf(1)", 2, "parameter binding"),
             ("def f(x: int) -> int = x\nf := 1\nf(1)", 2, "function (def) binding"),
             ("for x in [1, 2, 3] do\n  x := x + 1\ndone", 2, "for-loop variable binding"),
         ),
-        ids=("let", "param", "catch-binder", "def-param", "function", "loop-var"),
+        ids=("let", "catch-binder", "def-param", "function", "loop-var"),
     )
     def test_assign_to_immutable_binder_is_rejected(
         self, source: str, line: int, phrase: str
@@ -1714,81 +1712,6 @@ class TestQualifiedGenericFunctionBuiltinCollisions:
         err = reject_any("def render[T](value: T) -> array[T] = [value]\nrender(1)")
 
         assert "built-in" in err.to_diagnostic().message.lower()
-
-
-class TestParamDeclTypes:
-    """A root ``param``'s type is its annotation, the type of its default,
-    or the ``text`` fallback when it declares neither.
-    """
-
-    def test_param_no_annotation_is_text(self) -> None:
-        r = accept_type("param x\nx")
-        decl = r.resolved.program.body.items[0]
-        assert isinstance(decl, ParamDecl)
-        assert r.type_env.get_binding_type(decl.node_id) == TextType()
-
-    def test_param_bottom_default_without_annotation_raises(self) -> None:
-        err = reject_type('param x = raise Abort(message = "e")\nx')
-        assert "infer" in str(err).lower()
-
-
-class TestScopedParamTypes:
-    """A scoped `param`'s type is annotated, defaulted, or inferred exactly as
-    a root `param`, keyed by node id like every other binding.
-    """
-
-    @pytest.mark.parametrize("name", ("timeout", "default-agent", "strict-json"))
-    def test_engine_setting_names_are_reserved_for_params(self, name: str) -> None:
-        err = reject_type(f"param {name}: text\n()")
-
-        assert "engine setting name" in err.to_diagnostic().message
-
-    def test_annotation_and_default_combine(self) -> None:
-        r = accept_type('scope Deploy\n  param region: text = "eu"\nend Deploy\n\nDeploy::region')
-        region = r.resolved.program.body.items[0]
-        assert isinstance(region, ScopeRegion)
-        (param_decl,) = [item for item in region.items if isinstance(item, ParamDecl)]
-        assert r.type_env.get_binding_type(param_decl.node_id) == TextType()
-
-    def test_type_inferred_from_default_without_annotation(self) -> None:
-        r = accept_type("scope Deploy\n  param replicas = 3\nend Deploy\n\nDeploy::replicas")
-        region = r.resolved.program.body.items[0]
-        assert isinstance(region, ScopeRegion)
-        (param_decl,) = [item for item in region.items if isinstance(item, ParamDecl)]
-        assert r.type_env.get_binding_type(param_decl.node_id) == IntType()
-
-    def test_defaults_to_text_without_annotation_or_default(self) -> None:
-        r = accept_type("scope Deploy\n  param region\nend Deploy\n\nDeploy::region")
-        region = r.resolved.program.body.items[0]
-        assert isinstance(region, ScopeRegion)
-        (param_decl,) = [item for item in region.items if isinstance(item, ParamDecl)]
-        assert r.type_env.get_binding_type(param_decl.node_id) == TextType()
-
-    def test_annotation_mismatch_reports_the_params_span(self) -> None:
-        err = reject_type('scope Deploy\n  param region: int = "eu"\nend Deploy\n\n()')
-        d = err.to_diagnostic()
-        assert d.line == 2
-        assert "int" in d.message and "text" in d.message
-
-    def test_annotation_resolves_a_bare_sibling_type_declared_in_the_same_region(self) -> None:
-        r = accept_type(
-            "scope Deploy\n  record Target(name: text)\n  param target: Target\nend Deploy\n"
-            "\n"
-            "Deploy::target"
-        )
-        region = r.resolved.program.body.items[0]
-        assert isinstance(region, ScopeRegion)
-        (param_decl,) = [item for item in region.items if isinstance(item, ParamDecl)]
-        binding_type = r.type_env.get_binding_type(param_decl.node_id)
-        assert isinstance(binding_type, RecordType)
-        assert binding_type.name == "Target"
-        assert binding_type.scope_path == ("Deploy",)
-
-    def test_scoped_param_and_def_cannot_share_a_name(self) -> None:
-        """Already enforced by the scope pass; pinned here so the collision is
-        confirmed not to reach typechecking as an unresolved-reference crash."""
-        with pytest.raises(AglScopeError):
-            parse_resolve_check("scope Deploy\n  def f() -> int = 0\n  param f\nend Deploy\n\n()")
 
 
 _EXEC_RESULT_FIELDS = "  stdout: text\n  exit-code: int\n  stderr: text\n  timed-out: bool\n"
@@ -2498,27 +2421,6 @@ class TestBlockTyping:
     def test_let_followed_by_expr(self) -> None:
         r = accept_type("let x = 1\nlet y = 2\nx + y")
         assert r.node_types[r.resolved.program.body.items[2].node_id] == IntType()
-
-    def test_param_declaration(self) -> None:
-        # A param declaration is a legal block item and contributes no value of
-        # its own; the reference to it is what carries the type.
-        r = accept_type("param x\nx")
-        assert r.node_types[r.resolved.program.body.items[1].node_id] == TextType()
-
-    def test_param_with_annotation(self) -> None:
-        r = accept_type("param n: int\nn")
-        param_decl = r.resolved.program.body.items[0]
-        assert isinstance(param_decl, ParamDecl)
-        assert r.type_env.get_binding_type(param_decl.node_id) == IntType()
-        assert r.node_types[r.resolved.program.body.items[1].node_id] == IntType()
-
-    def test_param_defaults_to_text(self) -> None:
-        r = accept_type("param x\nx")
-        prog = r.resolved.program
-        param_decl = prog.body.items[0]
-        assert isinstance(param_decl, ParamDecl)
-        binding_type = r.type_env.get_binding_type(param_decl.node_id)
-        assert binding_type == TextType()
 
 
 # ---------------------------------------------------------------------------
@@ -12936,12 +12838,6 @@ _TREE_SRC = "enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)\
 _PHANTOM_GROWING_TYPE_SRC = "record R[T]\n  children: array[R[array[T]]]\n"
 
 
-class TestParameterWireTypes:
-    def test_agent_parameter_is_rejected_as_not_json_serializable(self) -> None:
-        err = reject_type("param value: unit\nvalue")
-        assert "json-serializable" in str(err).lower()
-
-
 class TestNoFiniteSchemaUseSites:
     def test_ask_growing_type_rejected(self) -> None:
         err = reject_type(_GROWING_TYPE_SRC + 'ask::[Perfect[int]]("Q")')
@@ -12975,12 +12871,6 @@ class TestNoFiniteSchemaUseSites:
         assert "perfect[int]" in msg
         assert "cast target" in msg
 
-    def test_param_growing_type_rejected(self) -> None:
-        err = reject_type(_GROWING_TYPE_SRC + "param p: Perfect[int]\np")
-        msg = str(err).lower()
-        assert "perfect[int]" in msg
-        assert "parameter type" in msg
-
     def test_program_parameter_growing_type_rejected(self) -> None:
         err = reject_type(_GROWING_TYPE_SRC + "program def main(p: Perfect[int]) -> unit = ()")
         msg = str(err).lower()
@@ -13011,8 +12901,11 @@ class TestNoFiniteSchemaUseSites:
         assert "holder" in msg
         assert "perfect" in msg
 
-    def test_param_growing_type_reachable_through_field_rejected(self) -> None:
-        src = _GROWING_TYPE_SRC + "record Holder\n  p: Perfect[int]\nparam h: Holder\nh"
+    def test_program_parameter_growing_type_reachable_through_field_rejected(self) -> None:
+        src = (
+            _GROWING_TYPE_SRC
+            + "record Holder\n  p: Perfect[int]\nprogram def main(h: Holder) -> unit = ()"
+        )
         err = reject_type(src)
         msg = str(err).lower()
         assert "holder" in msg
@@ -13482,6 +13375,36 @@ def test_agent_is_an_ordinary_declaration_name(source: str, expected_name: str |
     else:
         assert isinstance(trailing, RecordType)
         assert trailing.name == expected_name
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_type"),
+    [
+        ("let param = 1\nparam", IntType()),
+        ("record Config(param: int)\nConfig(param = 1)", None),
+        ("def f(param: int) -> int = param\nf(1)", IntType()),
+        ("program def main(param: int) -> unit = print param", UnitType()),
+    ],
+    ids=("let-binding", "field-name", "function-parameter", "program-def-parameter"),
+)
+def test_param_is_an_ordinary_identifier(source: str, expected_type: Type | None) -> None:
+    """`param` is not a reserved keyword.
+
+    It is legal as a `let` binding name, a record field name, a function
+    parameter name, and a `program def`'s own parameter name -- each site
+    resolves `param` to the value it was bound to, so the checker still
+    assigns the expected type to the expression that uses it.
+    """
+    checked = accept_type(source)
+    last = checked.resolved.program.body.items[-1]
+    node = last.body if isinstance(last, FuncDef) else last
+    assert node is not None
+    node_type = checked.node_types[node.node_id]
+    if expected_type is None:
+        assert isinstance(node_type, RecordType)
+        assert node_type.name == "Config"
+    else:
+        assert node_type == expected_type
 
 
 class TestSessionPreludeTypes:

@@ -14,7 +14,7 @@ Every loaded module except `std/prelude` receives the `std/prelude` prelude unle
 
 ## Infix Resolution
 
-User-operator chains are resolved once the graph is known, using each module's local declarations plus every operator made bare-visible at the chain's lexical scope. Conflicting fixities in one layer are rejected before scope runs. The graph keeps both full import/export adjacency and source-authored adjacency without loader injections, so execution uses the former while parameter discovery and dry-run inventories use the latter.
+User-operator chains are resolved once the graph is known, using each module's local declarations plus every operator made bare-visible at the chain's lexical scope. Conflicting fixities in one layer are rejected before scope runs. The graph keeps both full import/export adjacency and source-authored adjacency without loader injections, so execution uses the former while `CheckedProgram.runtime_modules` and dry-run call-site inventories use the latter.
 
 ## Compilation Caches
 

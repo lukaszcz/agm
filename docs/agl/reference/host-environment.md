@@ -3,9 +3,10 @@
 [← Index](index.md)
 
 An AgL program does not run in a vacuum: a **host** embeds the language,
-supplies the agents, provides external param values, executes shell commands, and
-records the trace. This chapter specifies the contract between a program and
-its host — what a program may assume, and which knobs are host-configurable.
+supplies the agents, provides external values for a selected program's own
+arguments, executes shell commands, and records the trace. This chapter
+specifies the contract between a program and its host — what a program may
+assume, and which knobs are host-configurable.
 
 ## The execution pipeline
 
@@ -16,8 +17,8 @@ A conforming host processes a program in this order:
 3. **Static validation** against the host's *capability catalog*. Any type
    error, non-exhaustive case, or redundant case arm aborts here. Independent
    advisory diagnostics are collected separately.
-4. **Param validation** — externally provided values are checked against the
-   program's `param` declarations.
+4. **Program-argument validation** — externally provided values are checked
+   against the selected `program def`'s own value parameters.
 5. **Contract materialization** — every agent-call and `exec` site's output
    contract (codec, schema, format instructions) is built.
 6. **Execution.**
@@ -54,43 +55,51 @@ Each registration declares which type kinds it supports, and every
 execution — an unsupported codec/type combination is a static error, not a
 runtime surprise.
 
-## Params
+## Program arguments
 
-Parameters are declared with `param` ([Bindings and scope](bindings-and-scope.md))
-and may be supplied by the host as named external values at run start. A
-program's inventory includes its module's params and those of its transitive
-imports. A scoped param is supplied under its full path spelling —
-`param Deploy::region` is named `Deploy::region` by the host, e.g.
-`--Deploy::region` on the CLI. A module-qualified CLI spelling, for example
-`--review-tools/judge::Deploy::region`, is used when inventory params have the
-same short spelling. If ordinary qualified positive and boolean-negative flags
-collide, the CLI's canonical spelling adds `@module::` before the module route, for
-example `--@module::no-settings::region` and `--no-@module::settings::region`; help and shell
-completion show the selected forms.
+A `program def`'s own value parameters ([Functions](functions.md#parameters))
+are its external inputs. The host supplies them as named external values at
+run start, resolved for the **selected** program only — a program reached
+only through an import keeps its parameters as ordinary function arguments,
+supplied by its caller, not by the host.
 
-Validation happens after type checking and **before any statement executes**:
+A positional-only or standard parameter accepts a positional CLI token; a
+standard or named-only parameter accepts `--name value`, `--name=value`, or,
+for `bool` and `Option[T]`, the negated form `--no-name`. A `program def`'s
+parameter list defaults to the **named-only** zone, so a plain `name: text`
+parameter is addressed only by `--name`; an explicit `@pos, …, /` marker opens
+a positional slot. A doubled `--` ends option parsing, so a later
+`--`-prefixed token is collected positionally instead of being read as a flag.
+Supplying the same parameter twice (by any combination of position and name)
+is a usage error, as is a flag naming no declared parameter.
 
-- a required param (no default) for which no external value is provided,
-- an external value supplied for a name that is not a declared param, and
-- an external value that fails its declared type
+Validation happens after type checking and **before any statement executes**.
+Each parameter's effective value resolves as:
 
-are each **host invocation errors** — reported like static failures, not
-catchable in-language. Optional params whose external value is absent have
-their default expression evaluated at that point in declaration order before
-execution begins.
+```
+CLI token (--name / positional)  >  qualified config table  >  declared default
+```
 
-`text` params take their external value verbatim. A param of any other type
-is parsed from its JSON representation **strictly** (externally supplied
-values are not chatty agent output, so no lenient recovery applies) and
-validated against the declared type.
+A **positional-only** parameter has no `--flag`, so a config-table entry
+naming it can never reach the argument binder — it falls back to its declared
+default and is reported with a distinct positional-only warning, not the
+generic "not a declared program argument" one. A required parameter (no
+default) for which no external value is provided is a **host invocation
+error** — reported like a static failure, not catchable in-language, before
+any statement executes.
 
-The declared type must be JSON-wire-serializable, including for a param whose
-default is always used. Runtime-only values such as `unit` and functions are not valid program param
-types because the executable always
-includes external-decoder metadata for every declared param. A
-[recursive](types.md#recursive-types) record or enum param decodes normally,
-subject to the same finite-schema restriction as an agent output type or cast
-target — see [Generics](generics.md#the-finite-schema-boundary).
+`text` parameters take their external value verbatim. A parameter of any
+other type is parsed from its JSON representation **strictly** (externally
+supplied values are not chatty agent output, so no lenient recovery applies)
+and validated against the declared type.
+
+The declared type must be JSON-wire-serializable, including for a parameter
+whose default is always used. Runtime-only values such as `unit` and
+functions are not valid program-argument types because the executable always
+includes external-decoder metadata for every declared value parameter. A
+[recursive](types.md#recursive-types) record or enum parameter decodes
+normally, subject to the same finite-schema restriction as an agent output
+type or cast target — see [Generics](generics.md#the-finite-schema-boundary).
 
 ## Host-configurable settings
 
@@ -121,8 +130,8 @@ Import `std/config` and read or write a setting through a qualified target
 `agm exec` resolves initial values as:
 
 ```
-setting X:       source (std/config::X := e)  >  CLI --X  >  qualified program table  >  [exec].X  >  declared default
-param Y:         CLI --Y / --module::Y         >  qualified config table  >  source default (param Y = e) > required error
+setting X:    source (std/config::X := e)  >  CLI --X  >  qualified program table  >  [exec].X  >  declared default
+argument Y:   CLI token (--Y / positional) >  qualified program table             >  declared default > required error
 ```
 
 The CLI flag and config-file layers supply a setting's **initial** value; a
@@ -131,17 +140,19 @@ A program that never writes a setting keeps the value chosen by the CLI/config
 layers.
 
 `agm repl` resolves engine settings as source writes > CLI > `[exec]` > declared
-default. It supplies no external param values at all, so every param it sees
-must carry a source default.
+default. It supplies no external argument values at all, so a program it runs
+must carry a source default for every value parameter it declares.
 
 ### Config-file schema
 
 `[exec]` holds global engine defaults with kebab field names (`strict-json`,
-`max-iters`, `log-file`). Qualified tables use a module suffix and declaration
-scope path. The selected entry program's engine settings use its qualified
-program table; every discovered param uses its declaring module path. A longer
-suffix, including an exact quoted module route, disambiguates same-leaf modules.
-Inline `-c` params are CLI-only.
+`max-iters`, `log-file`). A qualified table uses a module suffix (the entry
+file's stem, or a package's declared route) and the selected program's own
+declaration name — `[prog.main]` for a program named `main` in a file whose
+stem or route is `prog`. The same table supplies both that program's engine-key
+overrides and its own value parameters. A longer suffix, including an exact
+quoted module route, disambiguates same-leaf modules. Inline `-c` value
+parameters are CLI-only.
 
 ### Positional effect
 
@@ -223,7 +234,7 @@ A run ends in one of three ways:
 
 1. **Success** — all statements executed; the host can observe the final
    bindings, each scoped one under its full path spelling.
-2. **Pre-execution failure** — a static error, param-validation error, or
+2. **Pre-execution failure** — a static error, program-argument validation error, or
    host configuration error; nothing was executed.
 3. **Uncaught exception** — the program started and an exception reached the
    top. The host reports the exception's type name, fields, and the source

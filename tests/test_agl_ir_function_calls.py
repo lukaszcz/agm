@@ -471,15 +471,15 @@ def test_function_reads_static_root_var() -> None:
     assert ir["result"] == IntValue(0)
 
 
-def test_param_default_function_assigns_prior_static_var() -> None:
-    """A parameter default may call a function that assigns a preceding static var."""
+def test_static_let_calls_function_assigning_prior_static_var() -> None:
+    """A static let's initializer may call a function that assigns a preceding static var."""
     source = (
         "var counter = 0\n"
         "def increment() -> int =\n"
         "  counter := counter + 1\n"
         "  counter\n"
-        "param result: int = increment()\n"
-        "program def main() -> unit = ()"
+        "let result = increment()\n"
+        "()"
     )
 
     ir = evaluate_ir(source)
@@ -488,24 +488,13 @@ def test_param_default_function_assigns_prior_static_var() -> None:
     assert ir["result"] == IntValue(1)
 
 
-def test_param_default_reads_later_host_supplied_param() -> None:
-    source = (
-        "param a: int = read_b()\nparam b: int\ndef read_b() -> int = b\nlet result = a + b\n()"
-    )
-
-    ir = evaluate_ir(source, {"b": IntValue(40)}, default_stdlib=False)
-
-    assert ir["a"] == IntValue(40)
-    assert ir["result"] == IntValue(80)
-
-
-def test_param_default_reads_prior_destructured_static_let() -> None:
-    """A parameter default may read binders from a preceding destructuring let."""
+def test_static_let_reads_prior_destructured_static_let() -> None:
+    """A static let's initializer may read binders from a preceding destructuring let."""
     source = (
         "record Pair(left: int, right: int)\n"
         "let Pair(left, right) = Pair(left = 20, right = 22)\n"
-        "param result: int = left + right\n"
-        "program def main() -> unit = ()"
+        "let result = left + right\n"
+        "()"
     )
 
     ir = evaluate_ir(source)

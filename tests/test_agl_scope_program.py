@@ -66,7 +66,6 @@ def _find_varref(program: object, name: str) -> VarRef | None:
         Lambda,
         LetDecl,
         Loop,
-        ParamDecl,
         Program,
         Raise,
         ScopeRegion,
@@ -174,9 +173,6 @@ def _find_varref(program: object, name: str) -> VarRef | None:
                 r = walk(entry.value)
                 if r is not None:
                     return r
-        if isinstance(node, ParamDecl):
-            if node.default is not None:
-                return walk(node.default)
         return None
 
     return walk(program)
@@ -1087,7 +1083,7 @@ class TestBuiltinVarPlacement:
 
 
 class TestStaticModuleRoots:
-    def test_let_var_and_param_are_allowed_at_library_root_and_in_scope_regions(
+    def test_let_and_var_are_allowed_at_library_root_and_in_scope_regions(
         self, tmp_path: Path
     ) -> None:
         graph = _make_graph_from_files(
@@ -1097,12 +1093,10 @@ class TestStaticModuleRoots:
                 "mylib": (
                     "let root = 1\n"
                     "var total = 0\n"
-                    "param retry: int = 3\n"
                     "\n"
                     "scope Review\n"
                     '  let title = "review"\n'
                     "  var attempts = 0\n"
-                    "  param limit: int = 2\n"
                     "end Review"
                 ),
             },

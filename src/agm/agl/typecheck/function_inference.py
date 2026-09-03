@@ -40,7 +40,6 @@ from agm.agl.syntax.nodes import (
     FuncDef,
     LetDecl,
     Param,
-    ParamDecl,
     ParamKind,
     Program,
     VarDecl,
@@ -378,7 +377,7 @@ def _seed_candidate_visible_bindings(
                 session.visible_binding_snapshots[(module.module_id, item.node_id)] = (
                     module.env.snapshot_binding_types()
                 )
-            elif isinstance(item, (LetDecl, ParamDecl, VarDecl)):
+            elif isinstance(item, (LetDecl, VarDecl)):
                 if _references_tainted_binding(module, item, tainted):
                     if isinstance(item, LetDecl):
                         # A let site's selected binders are the declaration ids

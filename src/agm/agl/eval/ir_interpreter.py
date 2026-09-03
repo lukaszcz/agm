@@ -135,7 +135,6 @@ from agm.agl.ir.program import (
     ExternFunctionBody,
     FunctionDescriptor,
     IrFunctionBody,
-    IrParam,
 )
 from agm.agl.ir.validate import InvalidIrError
 from agm.agl.modules.ids import STD_CONFIG_ID, STD_ENV_ID, ModuleId
@@ -195,7 +194,6 @@ __all__ = [
     "HostConfigurationError",
     "MissingBuiltinVarSeedError",
     "IrInterpreter",
-    "ParameterDefaultCycleError",
     "_apply_coercion",
     "_make_exc_value",
 ]
@@ -224,16 +222,6 @@ def _rebind_host_enum_member(
                 fields=value.fields,
             )
     return value
-
-
-class ParameterDefaultCycleError(Exception):
-    """Module parameter defaults depend on one another cyclically."""
-
-    def __init__(self, cycle: tuple[IrParam, ...]) -> None:
-        self.cycle = cycle
-        self.location = cycle[-2].location
-        rendered = " -> ".join(param.qualified_public_name for param in cycle)
-        super().__init__(f"Parameter defaults form a dependency cycle: {rendered}.")
 
 
 class HostConfigurationError(Exception):
@@ -471,17 +459,6 @@ def _apply_coercion(value: Value, coercion: Coercion) -> Value:
 # ---------------------------------------------------------------------------
 
 
-def _static_initializer_symbols(initializer: IrExpr) -> tuple[SymbolId, ...]:
-    """Return the binding symbols materialized by one module initializer."""
-    match initializer:
-        case IrBind(symbol=sym):
-            return (sym,)
-        case IrSequence(items=items):
-            return tuple(symbol for item in items for symbol in _static_initializer_symbols(item))
-        case _:
-            return ()
-
-
 class IrInterpreter:
     """Evaluates an ``ExecutableProgram`` using the frame/cell model.
 
@@ -501,7 +478,6 @@ class IrInterpreter:
         *,
         trace: TraceStore | None = None,
         max_call_depth: int = DEFAULT_MAX_CALL_DEPTH,
-        param_values: Mapping[SymbolId, Value] | None = None,
         agent_dispatcher: AgentFn | None = None,
         session_host: "SessionHost | None" = None,
         close_sessions: bool = True,
@@ -525,24 +501,10 @@ class IrInterpreter:
             for module in program.modules.values()
             for index, initializer in enumerate(module.initializers)
         }
-        self.entry_param_symbols_installed: set[SymbolId] = set()
-        self._static_bindings: dict[SymbolId, tuple[ModuleId, IrExpr]] = {
-            symbol: (module.module_id, initializer)
-            for module in program.modules.values()
-            for initializer in module.initializers
-            for symbol in _static_initializer_symbols(initializer)
-        }
-        self._evaluated_static_binding_ids: set[int] = set()
-        self._resolving_param_defaults = False
-        self._params_by_symbol = {param.symbol: param for param in program.params}
-        self._param_default_stack: list[IrParam] = []
         self._synthetic_main_frame: Frame | None = None
         self._call_depth: int = 0
         self._trace: TraceStore = trace if trace is not None else noop_trace()
         self._max_call_depth: int = max_call_depth
-        self._param_values: Mapping[SymbolId, Value] = (
-            param_values if param_values is not None else {}
-        )
         self._agent_dispatcher = agent_dispatcher
         self._session_host: SessionHost = (
             session_host
@@ -1173,10 +1135,9 @@ class IrInterpreter:
     ) -> dict[str, Value]:
         """Execute all modules in order and return the entry module's public bindings.
 
-        Installs every linked module param into the base frame BEFORE any module
-        initializer runs, then iterates over all modules in insertion order
-        (library modules first, entry last) executing each module's initializers.
-        When *program_symbol* is provided, invokes that selected ``program def``
+        Iterates over all modules in insertion order (library modules first,
+        entry last), executing each module's initializers. When
+        *program_symbol* is provided, invokes that selected ``program def``
         with *arguments* — its own pre-evaluated parameter values, positionally
         matching its signature, with ``UseDefault`` in place of an omitted
         defaulted parameter — before leaving the same managed execution
@@ -1198,26 +1159,10 @@ class IrInterpreter:
         try:
             with preserve_primary_error(cleanup, label="agent session cleanup"):
                 with decimal.localcontext(AGL_DECIMAL_CONTEXT):
-                    # Closures install before params: a failing param default must
-                    # still let already-installed closures (and any declarations
-                    # completed earlier in the entry) be promoted. Promotion itself
-                    # is driven by ``lowered.promotion_plan.completed_declaration_ids``
-                    # (see ``entry_pipeline.completed_declaration_ids``), which is
-                    # conservative on its own — it excludes params whose symbols were
-                    # never installed and applies the declaration-dependency
-                    # fixpoint — so no separate "did the entry frame start" gate is
-                    # needed here.
                     self._install_function_closures()
-                    self._resolving_param_defaults = True
-                    try:
-                        self._install_params()
-                    finally:
-                        self._resolving_param_defaults = False
-
                     for mod in self._program.modules.values():
                         for node in mod.initializers:
-                            if id(node) not in self._evaluated_static_binding_ids:
-                                self._eval_and_record_initializer(mod.module_id, node)
+                            self._eval_and_record_initializer(mod.module_id, node)
                     if program_symbol is not None:
                         try:
                             self._invoke_program(program_symbol, arguments)
@@ -1244,44 +1189,6 @@ class IrInterpreter:
         self.module_completed_initializer_indices.setdefault(module_id, set()).add(
             self._initializer_indices[id(node)]
         )
-
-    def _install_params(self) -> None:
-        """Install module parameters before initializers, resolving defaults on demand."""
-        for ir_param in self._program.params:
-            if ir_param.symbol in self._param_values:
-                self._frames[0][ir_param.symbol] = self._param_values[ir_param.symbol]
-                self.entry_param_symbols_installed.add(ir_param.symbol)
-        for ir_param in self._program.params:
-            if ir_param.symbol not in self._frames[0]:
-                self._resolve_param_default(ir_param)
-
-    def _resolve_param_default(self, ir_param: IrParam) -> None:
-        """Evaluate one omitted parameter default, detecting dependency cycles."""
-        for index, active in enumerate(self._param_default_stack):
-            if active.symbol == ir_param.symbol:
-                cycle = (*self._param_default_stack[index:], ir_param)
-                raise ParameterDefaultCycleError(cycle)
-        if ir_param.default is None:
-            raise InvalidIrError(
-                f"Required param {ir_param.public_name!r} has no value;"
-                " the host must supply a value for required params before calling run()"
-            )
-
-        self._param_default_stack.append(ir_param)
-        try:
-            self._frames[0][ir_param.symbol] = self._eval(ir_param.default)
-        finally:
-            self._param_default_stack.pop()
-        self.entry_param_symbols_installed.add(ir_param.symbol)
-
-    def _eval_static_binding(self, module_id: ModuleId, initializer: IrExpr) -> None:
-        """Evaluate a parameter-default dependency in the module base frame."""
-        self._frames.append(self._frames[0])
-        try:
-            self._eval_and_record_initializer(module_id, initializer)
-        finally:
-            self._frames.pop()
-        self._evaluated_static_binding_ids.add(id(initializer))
 
     def _eval_initializer(self, node: IrExpr) -> Value:
         match node:
@@ -1391,16 +1298,6 @@ class IrInterpreter:
                     (frame[sym] for frame in reversed(self._frames) if sym in frame),
                     None,
                 )
-                if slot is None and self._resolving_param_defaults:
-                    ir_param = self._params_by_symbol.get(sym)
-                    if ir_param is not None:
-                        self._resolve_param_default(ir_param)
-                        slot = self._frames[0][sym]
-                    else:
-                        binding = self._static_bindings.pop(sym, None)
-                        if binding is not None:
-                            self._eval_static_binding(*binding)
-                            slot = self._frames[0][sym]
                 if slot is None:
                     raise InvalidIrError(
                         f"IrLoad: symbol_id={sym.value!r} is not bound in the frame"
@@ -1424,11 +1321,6 @@ class IrInterpreter:
                     # Module vars live in the base frame and are intentionally
                     # not closure captures.
                     slot = self._frames[0].get(sym)
-                if slot is None and self._resolving_param_defaults:
-                    binding = self._static_bindings.pop(sym, None)
-                    if binding is not None:
-                        self._eval_static_binding(*binding)
-                        slot = self._frames[0][sym]
                 if not isinstance(slot, Cell):
                     desc = self._program.symbols.get(sym)
                     if desc is None:

@@ -885,8 +885,8 @@ The following are static errors:
    or a built-in exception name ([Exceptions](exceptions.md)).
 2. Duplicate record fields, duplicate enum member declarations or terminal
    names, or duplicate fields within one inline member.
-3. References to unknown types in records, enums, aliases, or `param`
-   declarations.
+3. References to unknown types in records, enums, aliases, or function
+   parameter declarations.
 4. Cyclic aliases.
 5. An **uninhabitable** record, enum, or exception — see
    [Recursive types](#recursive-types).

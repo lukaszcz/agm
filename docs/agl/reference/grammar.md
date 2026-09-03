@@ -30,7 +30,6 @@ item       ::= import_decl                  (* header position only; scope_item 
              | type_alias                   (* root only *)
              | builtin_modifier? exception_def (* root only *)
              | export_decl                  (* header position only; scope_item also permits it *)
-             | param_decl                   (* module root or scope region *)
              | program_func_def             (* root or scope region *)
              | infix_decl                   (* root only *)
              | func_def                     (* root only *)
@@ -65,7 +64,6 @@ scope_item   ::= scope_region | use_decl
                | builtin_var_def
                | builtin_modifier? record_def | builtin_modifier? enum_def
                | builtin_modifier? exception_def | builtin_func_def
-               | param_decl
                | let_decl | var_decl
 ```
 
@@ -77,8 +75,8 @@ scope region. They may nest, and a multi-segment header is equivalent to
 nested single-segment regions. Scope
 regions contain nested regions, header `use` and `import` declarations,
 `export` declarations, static declarations (including every `builtin` form),
-`param` declarations, `program def` declarations, and `let`/`var` bindings;
-bare expressions, `:=` assignments, and infix declarations are not permitted. `scope` is contextual at item start before a scope path, and `end`
+`program def` declarations, and `let`/`var` bindings; bare expressions, `:=`
+assignments, and infix declarations are not permitted. `scope` is contextual at item start before a scope path, and `end`
 is contextual only for a complete closer at an open region's layout level;
 both remain ordinary names in expression positions.
 
@@ -252,8 +250,7 @@ type_param       ::= name | "_"
 
 param_marker     ::= "/" | "*" | "@" NAME    (* NAME must be pos, std, or named *)
 
-param_decl       ::= "param" name type_ann? ("=" expr)?
-program_func_def ::= "program" NEWLINE? "def" decl_head "(" ")" ("->" "unit")? ("=" func_body | suite)
+program_func_def ::= "program" NEWLINE? "def" decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
 
 ```
 

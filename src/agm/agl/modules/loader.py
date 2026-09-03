@@ -718,7 +718,6 @@ def _raw_chain_scope_paths(program: syntax.Program) -> dict[int, _OperatorPath]:
                     syntax.ExceptionDef,
                     syntax.FuncDef,
                     syntax.LetDecl,
-                    syntax.ParamDecl,
                     syntax.RecordDef,
                     syntax.TypeAlias,
                     syntax.VarDecl,

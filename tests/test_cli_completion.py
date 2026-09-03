@@ -195,9 +195,8 @@ def test_registered_param_completion_degrades_on_unknown_or_unavailable_commands
 def test_registered_command_param_completion_offers_program_value_argument_flags(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Completion for a registered command also offers the referenced program's
-    own value-parameter flags (and ``--no-`` forms), not only legacy ``param``
-    flags.
+    """Completion for a registered command offers the referenced program's
+    own value-parameter flags (and ``--no-`` forms).
     """
     import semver
 
@@ -1667,17 +1666,6 @@ class TestExecCommandShellComplete:
     def _complete(self, args: list[str], incomplete: str) -> list[str]:
         sc = ShellComplete(self._get_cli(), {}, "agm", "_TYPER_COMPLETE_ARGS")
         return [c.value for c in sc.get_completions(args, incomplete)]
-
-    def test_module_root_engine_key_param_is_not_offered(self, tmp_path: Path) -> None:
-        module_root = tmp_path / "modules"
-        module_root.mkdir()
-        (module_root / "settings.agl").write_text("param max-iters: int\n")
-        entry = tmp_path / "prog.agl"
-        entry.write_text("import settings\nprogram def main() -> unit = ()\n")
-
-        result = self._complete(["exec", "-I", str(module_root), str(entry)], "--")
-
-        assert "--settings::max-iters" not in result
 
     def test_file_program_value_arguments_offer_their_flags(self, tmp_path: Path) -> None:
         """``agm exec FILE --<TAB>`` also offers the program's own value-parameter flags."""

@@ -566,27 +566,6 @@ class TestReplRun:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(42)
 
-    def test_imported_required_param_is_a_clean_diagnostic(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        fake_plain_console: list[dict[str, object]],
-    ) -> None:
-        """The REPL supplies no external param values, so a required imported
-        param (no source default) fails cleanly rather than crashing."""
-        home = _isolated_home(monkeypatch, tmp_path)
-        config_dir = home / ".agm"
-        config_dir.mkdir()
-        (config_dir / "config.toml").write_text(f'[modules]\nroots = ["{tmp_path}"]\n')
-        (tmp_path / "settings.agl").write_text("param region: text\n")
-
-        repl_command.run(_args())
-        session: ReplSession = fake_plain_console[0]["session"]
-        result = session.eval_entry("import settings\n()")
-
-        assert not result.ok
-        assert result.diagnostics
-
     def test_cli_agent_seeds_and_repl_write_persists(
         self,
         monkeypatch: pytest.MonkeyPatch,

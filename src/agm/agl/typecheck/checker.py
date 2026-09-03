@@ -18,8 +18,6 @@ Rules implemented
       execution-stage conclusion.
     - ``var name: T = e`` — check ``e`` against ``T``.
     - Other untyped initializers infer from the literal/expression.
-    - ``param name[: T] [= default]`` — defaults to ``text`` when unannotated
-      and defaultless; otherwise defaults are checked/inferred.
 4.  ``name := e`` — expected type is the binding's declared type.
 5.  ``print(expr)`` — accepts any value and yields ``unit``.
 6.  ``render(expr, pretty:, quote_strings:)`` — accepts any value and yields ``text``.
@@ -157,7 +155,6 @@ from agm.agl.syntax.nodes import (
     Loop,
     NameTarget,
     NullLit,
-    ParamDecl,
     ParamKind,
     Pattern,
     Placeholder,
@@ -901,12 +898,7 @@ class _Checker:
         exempt, as it never becomes a flag or config key.
         """
         for param, spec in zip(node.params, sig.params, strict=True):
-            self._reject_undecodable_boundary_type(
-                spec.type,
-                param.span,
-                use="a program parameter type",
-                subject="Program parameter type",
-            )
+            self._reject_undecodable_boundary_type(spec.type, param.span)
             if param.kind != ParamKind.POSITIONAL_ONLY and param.name in ENGINE_KEY_NAMES:
                 raise AglTypeError(
                     f"Program parameter '{param.name}' conflicts with an engine setting name.",
@@ -1106,10 +1098,6 @@ class _Checker:
             with self._own_type_scope(item):
                 self._check_builtin_var(item)
             return UnitType()
-        if isinstance(item, ParamDecl):
-            with self._own_type_scope(item):
-                self._check_param(item)
-            return UnitType()
         if isinstance(item, (ImportDecl, ExportDecl, UseDecl, InfixDecl)):
             return UnitType()  # The program module-system pass processes imports/exports.
         # --- Binders ---
@@ -1143,9 +1131,7 @@ class _Checker:
         return self._check_expr(item, expected=expected)
 
     @contextmanager
-    def _own_type_scope(
-        self, item: LetDecl | VarDecl | ParamDecl | BuiltinVarDecl
-    ) -> Iterator[None]:
+    def _own_type_scope(self, item: LetDecl | VarDecl | BuiltinVarDecl) -> Iterator[None]:
         """Resolve *item*'s own type expressions in its declared scope path.
 
         A scope-region member (either spelling — the region form or the
@@ -1280,61 +1266,22 @@ class _Checker:
             session.current_declaration_id = old_declaration_id
             self._candidate_session = None
 
-    def _check_param(self, stmt: ParamDecl) -> None:
-        if stmt.name in ENGINE_KEY_NAMES:
-            raise AglTypeError(
-                f"Param '{stmt.name}' conflicts with an engine setting name.", span=stmt.span
-            )
-        ann_type = (
-            self._env.resolve_type_expr(stmt.annotation, span=stmt.span)
-            if stmt.annotation is not None
-            else None
-        )
-        if stmt.default is not None:
-            val_type = self._check_boundary_expr(stmt.default, expected=ann_type)
-            if ann_type is not None:
-                self._assert_assignable_from(val_type, ann_type, stmt.span, stmt.default)
-                declared_type = ann_type
-            else:
-                if isinstance(val_type, BottomType):
-                    raise AglTypeError(
-                        "Cannot infer type of param: default always raises. Add a type annotation.",
-                        span=stmt.span,
-                    )
-                declared_type = val_type
-        else:
-            declared_type = ann_type if ann_type is not None else TextType()
-        # A non-text param round-trips through the JSON boundary (schema +
-        # decode) at lowering time (see ``type_schema.build_param_decoder``).
-        # Reject both kinds of non-decodable type here rather than crashing at
-        # lowering: infinite instantiation closures have no finite schema, and
-        # non-data values (unit, functions, exceptions, …) have no
-        # JSON wire representation at all. Text params are taken verbatim.
-        self._reject_undecodable_boundary_type(
-            declared_type, stmt.span, use="a parameter type", subject="Param type"
-        )
-        self._env.set_binding_type(stmt.node_id, declared_type)
-
-    def _reject_undecodable_boundary_type(
-        self, typ: Type, span: SourceSpan, *, use: str, subject: str
-    ) -> None:
+    def _reject_undecodable_boundary_type(self, typ: Type, span: SourceSpan) -> None:
         """Raise unless *typ* can cross the host/JSON boundary.
 
-        Shared by ``_check_param`` and ``_validate_program_parameters``: both
-        kinds of host-facing bindings round-trip through JSON decoding, so
-        both reject a non-finite schema and a non-wire-serializable type the
-        same way. Text is taken verbatim and is always exempt. *use* feeds
-        ``no_finite_schema_message``; *subject* names the binding kind in the
-        wire-serializability message.
+        Used by ``_validate_program_parameters``: a program parameter
+        round-trips through JSON decoding, so this rejects a non-finite
+        schema and a non-wire-serializable type. Text is taken verbatim and
+        is always exempt.
         """
         if isinstance(typ, TextType):
             return
-        message = self._env.type_table.no_finite_schema_message(typ, use=use)
+        message = self._env.type_table.no_finite_schema_message(typ, use="a program parameter type")
         if message is not None:
             raise AglTypeError(message, span=span)
         if not self._type_is_wire_serializable(typ):
             raise AglTypeError(
-                f"{subject} '{typ!r}' cannot be decoded from JSON; "
+                f"Program parameter type '{typ!r}' cannot be decoded from JSON; "
                 "use text or a JSON-serializable data type.",
                 span=span,
             )

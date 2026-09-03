@@ -2,7 +2,7 @@
 
 [← Index](index.md)
 
-AgL has two value binders (`let` and `var`), destructive assignment, a param declaration, and a
+AgL has two value binders (`let` and `var`), destructive assignment, and a
 function declaration (`def`). There is no bare
 assignment: `x = e` as an item is a syntax error — use `let`/`var` to bind or
 `:=` to reassign. The equality operator is `==`
@@ -143,10 +143,10 @@ binding, field, closure capture, or loop cursor that references the same
 array or dictionary observes the change.
 
 Indexed assignment is legal on **any** array- or dict-typed expression: a
-`let` binding, a `param`, a function argument, a record or exception field, a
+`let` binding, a function argument, a record or exception field, a
 function call result, and a qualified read all work as the container of
-`target[index] := value`. `let` and `param` guarantee only that the *name*
-cannot be rebound; they say nothing about the contents of what the name
+`target[index] := value`. `let` guarantees only that the *name*
+cannot be rebound; it says nothing about the contents of what the name
 refers to, so mutating an array or dict through one is not a rebinding and is
 not restricted. A bare `name := value` — an actual rebinding, with no index —
 remains a static error unless `name` is a mutable `var` binding. Array
@@ -183,13 +183,13 @@ Static rules, all checked before execution:
 1. Redeclaring a name in the same scope is an error.
 2. Assignment to an undeclared name is an error.
 3. A bare `name := value` (no index) to an immutable binding is an error; the
-   diagnostic names the binder kind — `let`, `param`, a catch binder, or a
-   pattern binding.
+   diagnostic names the binder kind — `let`, a function parameter, a catch
+   binder, or a pattern binding.
 4. A field-assignment target must be a `var` field of a record or
    enum-member record; an enum-typed receiver must be narrowed first.
 5. Reading a name that is not visible in the current scope chain is an error.
 6. The contextual keywords `ask` and `exec` cannot be used as binding or
-   param names.
+   parameter names.
 
 ## `def` — function declarations
 
@@ -245,47 +245,6 @@ program def main() -> unit =
   let double = fn(x: int) => x * 2   # double: int -> int
   let f: int -> text = classify     # explicit function type annotation
   ```
-
-## `param` — declared program parameters
-
-```ebnf
-param_decl ::= "param" name (":" type_expr)? ("=" expr)?
-```
-
-`param` declarations are legal at the module root or as a member of a named
-scope region in every entry and library module ([Named scopes](scopes.md#parameters)
-— no declaration-path shorthand). An engine-setting leaf name cannot be used
-for a param, including within a named scope. Each enters its scope as an immutable binding.
-A param may declare a type, a default expression, both, or neither. Without an
-explicit type or default, the param defaults to `text`.
-
-Each program's parameter inventory includes params declared in its module and
-in its transitive imports. Every inventory parameter receives a host value or
-default before execution, so imported functions can read their module's params.
-Defaults resolve parameter dependencies independently of declaration and module
-order, including dependencies reached through function calls. A cycle among
-omitted parameter defaults is a host invocation error.
-
-```agl
-param spec                 # same as: param spec: text
-param max_severity: int
-param metadata: json
-param limit: int = 10
-```
-
-At run start, before any expression evaluates, the host validates provided
-values for every parameter in the selected program's inventory. Required params
-without an external value or default, and params whose external values fail
-conversion, are *host invocation errors* — not AgL exceptions and not catchable
-in-language. Extra external values are ignored by the runtime after CLI/config
-resolution.
-
-Every discovered parameter must have a JSON-wire-serializable type,
-even when it has a default and the host does not supply a value. Supported param
-types are `text`,
-`int`, `decimal`, `bool`, `json`, arrays, dictionaries, records, and enums.
-Runtime-only types such as `unit` and function types cannot be used as program
-param types. `Agent` is ordinary enum data and is valid wherever an enum is.
 
 ## `builtin var` — host-backed bindings
 

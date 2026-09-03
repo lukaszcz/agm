@@ -112,10 +112,6 @@
   (agl-flt--with-buffer "var total = 0\n"
     (should (eq (agl-flt--face-of "total") 'font-lock-variable-name-face))))
 
-(ert-deftest agl-flt-param-name-is-variable-face ()
-  (agl-flt--with-buffer "param retries: int = 3\n"
-    (should (eq (agl-flt--face-of "retries") 'font-lock-variable-name-face))))
-
 ;; A `var' field marker is a declaration position too, so the field it marks
 ;; is faced like any other mutable binding, in every form that declares one.
 

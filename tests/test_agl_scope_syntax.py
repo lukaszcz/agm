@@ -24,7 +24,6 @@ from agm.agl.syntax import (
     ImportDecl,
     Item,
     LetDecl,
-    ParamDecl,
     RecordDef,
     ScopeRegion,
     ScopeSegment,
@@ -269,57 +268,6 @@ def test_var_binder_path_rejects_a_module_route_segment() -> None:
 def test_var_binder_path_rejects_a_type_applied_segment() -> None:
     with pytest.raises(AglSyntaxError):
         parse_program("var A[int]::x = 0")
-
-
-# ---------------------------------------------------------------------------
-# `param` region membership (no declaration-path shorthand)
-# ---------------------------------------------------------------------------
-
-
-def test_param_is_admitted_inside_a_scope_region() -> None:
-    program = parse_program("scope Deploy\n  param region: text\nend Deploy")
-
-    (region,) = program.body.items
-    assert isinstance(region, ScopeRegion)
-    (member,) = region.items
-    assert isinstance(member, ParamDecl)
-    assert member.name == "region"
-    assert [segment.name for segment in member.scope_path] == ["Deploy"]
-
-
-def test_param_accumulates_scope_path_across_nested_regions() -> None:
-    program = parse_program("scope A\n\n  scope B\n    param x\n  end B\nend A")
-
-    (outer,) = program.body.items
-    assert isinstance(outer, ScopeRegion)
-    (inner,) = outer.items
-    assert isinstance(inner, ScopeRegion)
-    (member,) = inner.items
-    assert isinstance(member, ParamDecl)
-    assert [segment.name for segment in member.scope_path] == ["A", "B"]
-
-
-def test_param_accepts_a_multi_segment_region_header() -> None:
-    program = parse_program("scope A::B\n  param x\nend A::B")
-
-    (outer,) = program.body.items
-    assert isinstance(outer, ScopeRegion)
-    (inner,) = outer.items
-    assert isinstance(inner, ScopeRegion)
-    (member,) = inner.items
-    assert isinstance(member, ParamDecl)
-    assert [segment.name for segment in member.scope_path] == ["A", "B"]
-
-
-def test_param_has_no_declaration_path_shorthand() -> None:
-    """Unlike `def`/`let`/`var`, `param` has only the region spelling."""
-    with pytest.raises(AglSyntaxError):
-        parse_program("param A::x")
-
-
-def test_param_still_rejected_inside_a_function_body() -> None:
-    with pytest.raises(AglScopeError, match="param"):
-        resolve_entry("def f() =\n  param x\n  0\nf()")
 
 
 # ---------------------------------------------------------------------------
@@ -634,17 +582,17 @@ def test_ast_walk_visits_use_and_export_selection_paths() -> None:
     assert sum(isinstance(node, ScopeSegment) for node in visited) == 3
 
 
-def test_ast_walk_visits_a_scoped_params_scope_path_segments() -> None:
+def test_ast_walk_visits_a_scoped_funcs_scope_path_segments() -> None:
     from agm.agl.syntax.visitor import walk
 
-    program = parse_program("scope A::B\n  param x\nend A::B")
+    program = parse_program("scope A::B\n  def f() -> unit = ()\nend A::B")
     visited: list[object] = []
 
     walk(program, visited.append)
 
     # Two segments from the nested ScopeRegion headers ("A", "B") plus two more
-    # from the ParamDecl's own accumulated `scope_path` ("A", "B").
-    assert sum(isinstance(node, ParamDecl) for node in visited) == 1
+    # from the FuncDef's own accumulated `scope_path` ("A", "B").
+    assert sum(isinstance(node, FuncDef) for node in visited) == 1
     assert sum(isinstance(node, ScopeSegment) for node in visited) == 4
 
 

@@ -64,10 +64,10 @@ def test_single_run_rejects_cached_artifact_from_different_prepared_program(
     check_only: bool, capsys: pytest.CaptureFixture[str]
 ) -> None:
     runtime = PipelineDriver()
-    prepared_a = prepare_inline_command('param a: int = 1\nprint "stale %{a}"')
+    prepared_a = prepare_inline_command('let a = 1\nprint "stale %{a}"')
     discovery_a = runtime.discover_programs(prepared_a)
     assert discovery_a.compiled is not None
-    prepared_b = prepare_inline_command('param b: int = 2\nprint "fresh %{b}"')
+    prepared_b = prepare_inline_command('let b = 2\nprint "fresh %{b}"')
 
     with pytest.raises(ArtifactProvenanceError):
         runtime.run_prepared(
@@ -80,15 +80,15 @@ def test_single_run_rejects_cached_artifact_from_different_prepared_program(
 
 
 def test_program_discovery_rejects_cached_artifact_from_different_prepared_program() -> None:
-    _prepared_a, discovery_a = _compiled("param a: int = 1\na")
-    prepared_b = _prepare_graph('param b: text = "b"\nb')
+    _prepared_a, discovery_a = _compiled("let a = 1\na")
+    prepared_b = _prepare_graph('let b = "b"\nb')
 
     with pytest.raises(ArtifactProvenanceError):
         PipelineDriver().discover_programs(prepared_b, compiled=discovery_a.compiled)
 
 
 def test_program_discovery_rejects_cached_artifact_with_different_entry_identity() -> None:
-    prepared, discovery = _compiled("param value: int = 1\nvalue")
+    prepared, discovery = _compiled("let value = 1\nvalue")
     assert discovery.compiled is not None
     wrong_entry_checked = replace(
         discovery.compiled.checked,

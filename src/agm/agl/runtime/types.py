@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from agm.agl.modules.ids import ENTRY_DISPLAY
-
 if TYPE_CHECKING:
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.ir.zones import ParamZone
@@ -23,24 +21,7 @@ __all__ = [
     "HostEnvironment",
     "ProgramDeclInfo",
     "ProgramParamInfo",
-    "public_param_spelling",
 ]
-
-
-def public_param_spelling(qualified_name: str) -> str:
-    """Return the user-facing spelling of a module-qualified param name.
-
-    The entry module is an internal identity with no user-facing name, so a
-    qualified spelling that leaks its sentinel is meaningless in a diagnostic.
-    When *qualified_name* is qualified by the entry sentinel, the sentinel is
-    stripped and the bare remainder — the name as the author wrote it — is
-    returned. A name qualified by a real module is returned unchanged, since
-    that qualification is what distinguishes two same-named params.
-    """
-    qualifier, separator, remainder = qualified_name.partition("::")
-    if not separator or qualifier != ENTRY_DISPLAY:
-        return qualified_name
-    return remainder
 
 
 @dataclass(frozen=True, slots=True)

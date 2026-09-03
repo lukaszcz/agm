@@ -73,7 +73,6 @@ from agm.agl.syntax.nodes import (
     NameTarget,
     NullLit,
     Param,
-    ParamDecl,
     PatternField,
     Placeholder,
     Program,
@@ -189,7 +188,6 @@ class Visitor:
     def visit_EnumDef(self, node: EnumDef) -> None: ...
     def visit_ExceptionDef(self, node: ExceptionDef) -> None: ...
     def visit_TypeAlias(self, node: TypeAlias) -> None: ...
-    def visit_ParamDecl(self, node: ParamDecl) -> None: ...
     def visit_FuncDef(self, node: FuncDef) -> None: ...
     def visit_BuiltinVarDecl(self, node: BuiltinVarDecl) -> None: ...
     def visit_InfixDecl(self, node: InfixDecl) -> None: ...
@@ -302,7 +300,6 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         EnumDef,
         ExceptionDef,
         TypeAlias,
-        ParamDecl,
         FuncDef,
         BuiltinVarDecl,
         InfixDecl,
@@ -496,14 +493,6 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         for scope_segment in node.scope_path:
             walk(scope_segment, callback)
         walk(node.type_expr, callback)
-
-    elif isinstance(node, ParamDecl):
-        for scope_segment in node.scope_path:
-            walk(scope_segment, callback)
-        if node.annotation is not None:
-            walk(node.annotation, callback)
-        if node.default is not None:
-            walk(node.default, callback)
 
     elif isinstance(node, FuncDef):
         for scope_segment in node.scope_path:

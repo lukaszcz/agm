@@ -26,11 +26,9 @@ Scope rules
    ``_`` is always a discard wildcard and never resolves as a readable name.
 4. Pattern variables and catch binders are immutable and branch-local.
 5. ``loop`` body bindings are visible to the ``until`` condition but not after.
-6. ``param`` declarations are valid at the module root and in named scope
-   regions in every module; ``program def`` follows the same placement rule.
-7. ``def`` declarations are valid at the module root and in named scope
-   regions; a pre-pass collects them by path so root and same-scope members
-   support mutual recursion.
+6. ``def`` declarations, including ``program def``, are valid at the module
+   root and in named scope regions; a pre-pass collects them by path so root
+   and same-scope members support mutual recursion.
 
 Built-in call classification
 -----------------------------
@@ -158,7 +156,6 @@ from agm.agl.syntax.nodes import (
     Loop,
     NameTarget,
     NullLit,
-    ParamDecl,
     Pattern,
     Placeholder,
     Program,
@@ -1777,7 +1774,7 @@ class _Resolver:
             sp = span if isinstance(span, SourceSpan) else None
             raise AglScopeError(
                 f"'{name}' is a reserved contextual keyword and cannot be "
-                "used as a variable or param name.",
+                "used as a binding or parameter name.",
                 span=sp,
             )
 
@@ -1882,8 +1879,6 @@ class _Resolver:
                         span=item.span,
                     )
                 self._resolve_assign(item)
-            elif isinstance(item, ParamDecl):
-                self._resolve_param(item)
             else:
                 # Pure expression item (Expr union).
                 if self._at_root and not self._allow_root_statements:
@@ -2968,36 +2963,6 @@ class _Resolver:
             )
         self._resolution[node.node_id] = ref
         self._resolve_expr(node.value)
-
-    def _resolve_param(self, node: ParamDecl) -> None:
-        """Resolve a ``param`` declaration in any module, root or region alike.
-
-        A region does not clear ``_at_root`` (see ``_resolve_scope_region``),
-        so this single check admits both a root ``param`` and one declared
-        inside a scope region while still rejecting one nested in an ordinary
-        block. There is no declaration-path shorthand for ``param``, so unlike
-        ``let``/``var`` this needs no wrapper branching on ``node.scope_path``:
-        ``_define`` below already routes to the current scope's member layer
-        when a region pushed one.
-        """
-        if not self._at_root:
-            raise AglScopeError(
-                f"'param' declarations are only allowed at a static module root or "
-                f"inside a named scope region (found 'param {node.name}' in a nested block).",
-                span=node.span,
-            )
-        self._check_not_reserved(node.name, node.span)
-        if node.default is not None:
-            self._resolve_expr(node.default)
-        ref = BindingRef(
-            name=node.name,
-            mutable=False,
-            decl_span=node.span,
-            decl_node_id=node.node_id,
-            kind=BinderKind.param_binding,
-            module_id=self._module_id,
-        )
-        self._define(node.name, ref)
 
     # ------------------------------------------------------------------
     # Expression resolution

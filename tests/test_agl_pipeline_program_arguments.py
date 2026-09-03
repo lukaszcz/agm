@@ -5,7 +5,7 @@ per program), ``PipelineDriver.preflight_arguments`` (binding and decoding
 host-supplied arguments against a program's signature without executing it),
 and ``PipelineDriver.run_prepared(arguments=...)`` (executing with the bound
 arguments) — the only host surface that can supply a value into a running
-program; a ``param`` declaration resolves only from its own default.
+program.
 """
 
 from __future__ import annotations

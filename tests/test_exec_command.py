@@ -315,7 +315,10 @@ class TestExecCommandArgParsing:
     def test_exec_inline_param_token_from_file_slot(
         self, runner: CliRunner, recorded_runs: list[object]
     ) -> None:
-        result = invoke(runner, ["exec", "-c", "param msg\nprint msg", "--msg", "hello"])
+        result = invoke(
+            runner,
+            ["exec", "-c", "program def main(msg: text) -> unit = print msg", "--msg", "hello"],
+        )
         assert result.exit_code == 0
         args = recorded_runs[0]
         assert getattr(args, "file") is None
@@ -1241,23 +1244,6 @@ class TestExecCommandExitCodes:
 
         assert exec_command.run(args) is None
 
-    def test_missing_param_exits_1(self, tmp_path: Path) -> None:
-        agl_file = tmp_path / "test.agl"
-        write_file_program(agl_file, "param msg\nprint msg\n")
-        from agm.cli_support.args import ExecArgs
-
-        args = ExecArgs(
-            file=str(agl_file),
-            param_tokens=[],  # missing 'msg'
-            strict_json=None,
-            max_iters=None,
-            no_log=False,
-            log_file=None,
-        )
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(args)
-        assert exc_info.value.code == 1
-
     def test_program_with_required_argument_exits_1_without_a_traceback(
         self, tmp_path: Path
     ) -> None:
@@ -1280,45 +1266,6 @@ class TestExecCommandExitCodes:
             exec_command.run(args)
         assert exc_info.value.code == 1
 
-    def test_param_default_can_read_a_static_binding(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        agl_file = tmp_path / "test.agl"
-        write_file_program(
-            agl_file,
-            "let base = 1\nparam value: int = base\nprogram def demo() -> unit = print value\n",
-        )
-
-        assert exec_command.run(_exec_args(agl_file)) is None
-        assert capsys.readouterr().out == "1\n"
-
-    def test_param_default_can_read_a_mutable_static_binding(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        agl_file = tmp_path / "test.agl"
-        write_file_program(
-            agl_file,
-            "var base = 1\nparam value: int = base\nprogram def demo() -> unit = print value\n",
-        )
-
-        assert exec_command.run(_exec_args(agl_file)) is None
-        assert capsys.readouterr().out == "1\n"
-
-    def test_param_default_function_preserves_lazy_static_binding(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        agl_file = tmp_path / "test.agl"
-        write_file_program(
-            agl_file,
-            "let base = 1\n"
-            "def get_base() -> int = base\n"
-            "param value: int = get_base()\n"
-            "program def demo() -> unit = print base\n",
-        )
-
-        assert exec_command.run(_exec_args(agl_file)) is None
-        assert capsys.readouterr().out == "1\n"
-
     def test_legacy_params_section_does_not_supply_values(
         self,
         tmp_path: Path,
@@ -1337,20 +1284,11 @@ class TestExecCommandExitCodes:
         )
         agl_file = tmp_path / "test.agl"
         write_file_program(
-            agl_file, 'param msg: text = "default"\nprogram def demo() -> unit = print msg\n'
+            agl_file, 'program def demo(msg: text = "default") -> unit = print msg\n'
         )
 
         assert exec_command.run(_exec_args(agl_file)) is None
         assert capsys.readouterr().out == "default\n"
-
-    def test_engine_key_named_param_is_rejected(self, tmp_path: Path) -> None:
-        agl_file = tmp_path / "test.agl"
-        write_file_program(agl_file, 'param timeout: text = "30s"\nprint timeout\n')
-
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args(agl_file))
-
-        assert exc_info.value.code == 1
 
     def test_ask_program_dispatches_through_the_value_dispatcher(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -3258,8 +3196,7 @@ class TestEntryModuleConfig:
 
     Qualified config/CLI binding of a selected program's own value
     parameters is covered by ``TestProgramValueArguments``; these tests
-    exercise the surrounding entry-stem/reserved-name/engine-key machinery,
-    which is orthogonal to ``param``.
+    exercise the surrounding entry-stem/reserved-name/engine-key machinery.
     """
 
     def test_qualified_engine_config_conflict_exits_cleanly(
@@ -3290,15 +3227,6 @@ class TestEntryModuleConfig:
 
         assert exc_info.value.code == 1
         assert "Error: invalid exec configuration" in capsys.readouterr().err
-
-    def test_reserved_entry_stem_cannot_declare_params(self, tmp_path: Path) -> None:
-        agl_file = tmp_path / "exec.agl"
-        write_file_program(agl_file, 'param region: text = "eu"\n')
-
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
-
-        assert exc_info.value.code == 1
 
     def test_reserved_entry_stem_without_params_runs_normally(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -3585,26 +3513,6 @@ class TestProgramValueArguments:
         assert exc_info.value.code == 1
         assert capsys.readouterr().err.startswith("Error:")
 
-    def test_param_declaration_coexists_with_program_arguments_on_its_own_default(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """A ``param`` alongside a ``program def`` resolves only from its own default.
-
-        No host surface can supply ``greeting``'s value anymore; only the
-        program's own ``name`` argument is CLI-addressable.
-        """
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file,
-            'param greeting: text = "hi"\n'
-            'program def main(name: text) -> unit = print(greeting + " " + name)\n',
-        )
-
-        assert (
-            exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--name", "world"])) is None
-        )
-        assert capsys.readouterr().out == "hi world\n"
-
     def test_an_unknown_flag_after_a_valid_one_is_the_programs_own_usage_error(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -3704,22 +3612,6 @@ class TestProgramValueArguments:
         assert "positional-only" in positional_warning
         assert "is not a declared" not in positional_warning
         assert "is not a declared program argument" in undeclared_warning
-
-    def test_legacy_flag_supplied_twice_is_a_usage_error(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file, 'param greeting: text = "hi"\nprogram def main() -> unit = print greeting\n'
-        )
-
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(
-                _exec_args_no_log(agl_file, param_tokens=["--greeting", "a", "--greeting", "b"])
-            )
-
-        assert exc_info.value.code == 1
-        assert capsys.readouterr().err
 
     def test_option_type_argument_from_config_table(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

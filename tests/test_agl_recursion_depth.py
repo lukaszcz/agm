@@ -87,6 +87,23 @@ class TestPythonRecursionErrorBackstop:
         assert result.error is not None
         assert result.error.type_name == "RecursionError"
 
+    def test_backstop_during_a_repl_root_initializer_is_catchable(self) -> None:
+        """A REPL session's root `let` runs as a module initializer, not a program invocation.
+
+        Deep non-tail recursion there exercises the Python-``RecursionError``
+        backstop in ``IrInterpreter.run``'s outer boundary (around every
+        module initializer), distinct from the inner boundary around the
+        invoked entry that the tests above cover.
+        """
+        session = ReplSession(default_call_depth_limit=1_000_000)
+        defn = session.eval_entry(_PRELUDE)
+        assert defn.ok, defn.diagnostics
+
+        result = session.eval_entry("let out: int = sum_to(1000000)")
+        assert not result.ok
+        assert result.error is not None
+        assert result.error.type_name == "RecursionError"
+
 
 def _nested_parens(depth: int) -> str:
     return f"let x: int = {'(' * depth}1{')' * depth}\nprint(x)\n"

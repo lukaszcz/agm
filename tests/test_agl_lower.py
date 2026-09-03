@@ -21,7 +21,7 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.contracts import ConversionFailureMode, ConversionStrategy, RecordEncode
-from agm.agl.ir.ids import NominalId, SymbolId
+from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import (
     IrArith,
     IrAsk,
@@ -89,7 +89,7 @@ from agm.agl.ir.validate import validate_ir
 from agm.agl.ir.zones import ParamZone
 from agm.agl.lower import LinkImage, LoweredReplEntry, compile_coercion, lower_repl_program
 from agm.agl.lower.lowerer import InitializerOrigin, _Lowerer
-from agm.agl.lower.repl import ParamOrigin, ReplPromotionPlan
+from agm.agl.lower.repl import ReplPromotionPlan
 from agm.agl.matchcompile import MatchCompiledProgram, compile_program_matches
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import build_repl_graph
@@ -120,7 +120,6 @@ from agm.agl.syntax.nodes import (
     FuncDef,
     Lambda,
     LetDecl,
-    ParamDecl,
     Placeholder,
     VarRef,
     pattern_binder_candidates,
@@ -243,46 +242,17 @@ def test_lower_repl_entry_accumulates_tables_and_resolves_prior_symbols() -> Non
     assert second.program.modules[second.program.entry_module].initializers
 
 
-def test_repl_promotion_plan_pairs_params_with_lowered_symbols() -> None:
-    source = "param first: int = 1\nparam second: int = 2\n()"
-    image = LinkImage()
-    lowered, _next_id, _root_scope, checked = _repl_entry(source, image=image)
-
-    expected = tuple(
-        (item.node_id, image._state.decl_to_sym[item.node_id])
-        for item in checked.resolved.program.body.items
-        if isinstance(item, ParamDecl)
-    )
-    assert (
-        tuple((origin.declaration_id, origin.symbol) for origin in lowered.promotion_plan.params)
-        == expected
-    )
-
-
-def test_repl_promotion_excludes_uninstalled_params_before_dependency_closure() -> None:
-    plan = ReplPromotionPlan(
-        source_declaration_ids=(frozenset({10}), frozenset()),
-        initializers=(InitializerOrigin(source_index=1, is_function=False),),
-        params=(ParamOrigin(declaration_id=10, symbol=SymbolId(7)),),
-        declaration_dependencies={},
-        imported_module_dependencies={},
-    )
-
-    assert plan.completed_declaration_ids(set(), set(), set()) == frozenset()
-
-
 def test_repl_promotion_requires_imported_runtime_modules_to_be_available() -> None:
     library_id = ModuleId(("library",))
     plan = ReplPromotionPlan(
         source_declaration_ids=(frozenset({10}),),
         initializers=(InitializerOrigin(source_index=0, is_function=True),),
-        params=(),
         declaration_dependencies={},
         imported_module_dependencies={10: frozenset({library_id})},
     )
 
-    assert plan.completed_declaration_ids({0}, set(), set()) == frozenset()
-    assert plan.completed_declaration_ids({0}, set(), {library_id}) == frozenset({10})
+    assert plan.completed_declaration_ids({0}, set()) == frozenset()
+    assert plan.completed_declaration_ids({0}, {library_id}) == frozenset({10})
 
 
 def test_lower_repl_trailing_binder_has_no_expression_marker() -> None:
@@ -2484,7 +2454,7 @@ class TestLowerGraph:
         # lowering; call validate_ir explicitly so the test pins it regardless.
         validate_ir(prog, deep=True)
 
-    def test_lower_program_keeps_module_params_and_already_linked_modules(
+    def test_lower_program_keeps_module_initializer_origins_and_already_linked_modules(
         self, tmp_path: Path
     ) -> None:
         import os
@@ -2496,7 +2466,7 @@ class TestLowerGraph:
         from agm.agl.scope.program import resolve_program
         from agm.agl.typecheck.program import check_program
 
-        lib_source = "param retained: int = 1\ndef first() -> int = 1\ndef second() -> int = 2\n"
+        lib_source = "let retained = 1\ndef first() -> int = 1\ndef second() -> int = 2\n"
         entry_source = "import lib\nprogram def main() -> unit =\n  let value = lib::first()\n"
         root = tmp_path / "root"
         root.mkdir()
@@ -2524,12 +2494,8 @@ class TestLowerGraph:
                 item = items[origin.source_index]
                 assert origin.is_function == (isinstance(item, FuncDef) and not item.is_builtin)
 
-        library_params = [param for param in program.params if param.module == lib_mid]
-        assert [param.public_name for param in library_params] == ["retained"]
-        assert library_params[0].qualified_public_name == "lib::retained"
-
         library_origins = link.initializer_origins[lib_mid]
-        assert len(library_origins) == 2
+        assert len(library_origins) == 3
         sentinel = tuple(reversed(library_origins))
         link.initializer_origins[lib_mid] = sentinel
         relinked = lower_program(
@@ -2623,7 +2589,7 @@ class TestLowerGraph:
 
 
 # ---------------------------------------------------------------------------
-# Golden lowering: print and parameter declarations
+# Golden lowering: host operations
 # ---------------------------------------------------------------------------
 
 
@@ -2764,65 +2730,6 @@ class TestHostOpLowering:
         assert isinstance(ir_bind.value, IrCopyValue)
         assert ir_bind.value.kind is CopyKind.DEEP
         assert isinstance(ir_bind.value.value, IrCoerce)
-
-    def test_param_required_lowers_to_ir_param(self) -> None:
-        """A required param (no default) produces an IrParam with required=True and no default."""
-        from agm.agl.ir.program import IrParam
-
-        source = "param n: int\nlet result = n + 1\n()"
-        prog = _lower(source)
-        assert len(prog.params) == 1
-        p = prog.params[0]
-        assert isinstance(p, IrParam)
-        assert p.public_name == "n"
-        assert p.required is True
-        assert p.default is None
-
-    def test_param_with_default_lowers_to_ir_param(self) -> None:
-        """A param with a default produces an IrParam with required=False and a default expr."""
-        from agm.agl.ir.nodes import IrConstInt
-        from agm.agl.ir.program import IrParam
-
-        source = "param n: int = 7\nlet result = n + 1\n()"
-        prog = _lower(source)
-        assert len(prog.params) == 1
-        p = prog.params[0]
-        assert isinstance(p, IrParam)
-        assert p.public_name == "n"
-        assert p.required is False
-        assert isinstance(p.default, IrConstInt), (
-            f"Expected IrConstInt default, got {type(p.default).__name__}"
-        )
-        assert p.default.value == 7
-
-    def test_multiple_params_all_in_program_params(self) -> None:
-        """Multiple param declarations each produce an IrParam in program.params."""
-        source = "param x: int\nparam y: int = 5\nlet sum = x + y\n()"
-        prog = _lower(source)
-        assert len(prog.params) == 2
-        public_names = {p.public_name for p in prog.params}
-        assert public_names == {"x", "y"}
-        required_map = {p.public_name: p.required for p in prog.params}
-        assert required_map["x"] is True
-        assert required_map["y"] is False
-
-    def test_scoped_param_public_name_is_its_full_path_spelling(self) -> None:
-        """A scoped param's IrParam.public_name is its full `::` path, the
-        external key CLI/config lookups use."""
-        source = 'scope Deploy\n  param region: text = "eu"\nend Deploy\n\nDeploy::region'
-        prog = _lower(source)
-        assert len(prog.params) == 1
-        p = prog.params[0]
-        assert p.public_name == "Deploy::region"
-
-    def test_scoped_param_symbol_public_name_matches_its_ir_param(self) -> None:
-        """The allocated symbol's own public_name matches the IrParam's, so
-        REPL echo/result collection stays keyed by the same external spelling."""
-        source = "scope A\n\n  scope B\n    param x: int\n  end B\nend A\n\nA::B::x"
-        prog = _lower(source)
-        (p,) = prog.params
-        assert p.public_name == "A::B::x"
-        assert prog.symbols[p.symbol].public_name == "A::B::x"
 
     def test_ask_lowers_to_ir_ask_m6b(self) -> None:
         """ask() now lowers to IrAsk."""

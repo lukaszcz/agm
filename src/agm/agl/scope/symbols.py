@@ -201,7 +201,7 @@ class BinderKind(enum.Enum):
     ``var_binding``
         A ``var`` declaration (mutable).
     ``param_binding``
-        A ``param`` declaration or function/lambda parameter (immutable).
+        A function or lambda parameter (immutable).
     ``catch_binder``
         The binder introduced by a ``catch e`` clause (immutable, branch-local).
     ``pattern_binding``

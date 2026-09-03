@@ -124,14 +124,10 @@ class TestKeywordsAndIdentifiers:
             ("NAME", "exec"),
         ]
 
-    def test_param_is_reserved_keyword(self) -> None:
-        # `param` is a reserved keyword — its token type is the literal string.
+    def test_param_is_ordinary_identifier(self) -> None:
+        # `param` is an ordinary identifier — not a reserved keyword.
         result = tok("param")
-        assert result == [("param", "param")]
-
-    def test_param_not_var_name(self) -> None:
-        types = [t for t, _ in tok("param")]
-        assert "NAME" not in types
+        assert result == [("NAME", "param")]
 
     def test_program_is_reserved_keyword(self) -> None:
         # `program` is a reserved keyword — its token type is the literal string.

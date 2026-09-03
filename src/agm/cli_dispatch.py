@@ -16,7 +16,7 @@ from agm.config.context import current_config_context
 from agm.core import dry_run
 
 if TYPE_CHECKING:
-    from agm.agl.runtime.types import ParamDeclInfo
+    from agm.agl.runtime.types import ParamDeclInfo, ProgramDeclInfo
     from agm.packages.activation import ActivationIndex, CommandRegistration
 
 
@@ -72,21 +72,33 @@ def registered_command_help(
     registration: CommandRegistration,
     *,
     params: tuple[ParamDeclInfo, ...] | None = None,
+    program: "ProgramDeclInfo | None" = None,
 ) -> str:
     """Render help for one package-registered command.
 
-    Pass *params* when the caller has already discovered the program's
-    parameter inventory, so rendering help does not compile it again.
+    Pass *params* when the caller has already discovered the legacy
+    ``param`` inventory, and *program* when the caller has already
+    discovered the referenced ``program def``'s own declaration, so
+    rendering help does not compile either one again. Leaving either at its
+    ``None`` default triggers a fresh discovery here, exactly as if none had
+    been found — harmless when the caller's own discovery legitimately came
+    back empty too; ``registered_program_declaration`` already degrades its
+    own failures to ``None``, so no further guard is needed here.
+
+    The usage line names *program*'s own positional slots and options, not
+    the raw declaration path, so it reads like the command the reader
+    actually invokes rather than the ``program def`` behind it.
     """
-    description = registration.description or "Run the registered AgL program."
-    lines = [
-        f"agm {path_name} [--PARAM VALUE]... [--dry-run]",
-        "",
-        description,
-        "",
-        "Options:",
-        "  --dry-run  Statically check the program without executing it.",
-    ]
+    if program is None:
+        from agm.commands.exec_program import registered_program_declaration
+
+        program = registered_program_declaration(registration.program, registration.package)
+    option_map = None
+    if program is not None:
+        from agm.cli_support.program_options import program_option_map_or_none
+
+        option_map = program_option_map_or_none(program.parameters)
+
     try:
         if params is not None:
             from agm.cli_support.exec_params import param_option_flags
@@ -98,8 +110,29 @@ def registered_command_help(
             flags = registered_program_param_flags(registration.program, registration.package)
     except (Exception, SystemExit):
         flags = ()
+
+    usage = (
+        option_map.usage_line(f"agm {path_name}") if option_map is not None else f"agm {path_name}"
+    )
+    if flags:
+        usage += " [--PARAM VALUE]..."
+    usage += " [--dry-run]"
+
+    description = registration.description or "Run the registered AgL program."
+    lines = [
+        usage,
+        "",
+        description,
+        "",
+        "Options:",
+        "  --dry-run  Statically check the program without executing it.",
+    ]
     if flags:
         lines.extend(("", "Program parameters:", *(f"  {flag}" for flag in flags)))
+    if option_map is not None:
+        described = option_map.option_lines()
+        if described:
+            lines.extend(("", "Program arguments:", *(f"  {line}" for line in described)))
     return "\n".join(lines) + "\n"
 
 
@@ -156,20 +189,37 @@ class RegisteredProgramCommand(TyperCommand):
 
     def invoke(self, ctx: click.Context) -> None:
         params: tuple[ParamDeclInfo, ...] | None = None
+        program: "ProgramDeclInfo | None" = None
         help_requested = "--help" in ctx.args
         if not help_requested and "-h" in ctx.args:
             # This is the first point at which an unknown command has been proven
             # to be registered, so AgL remains unloaded for all builtin commands.
-            from agm.cli_support.exec_params import short_help_requested
-            from agm.commands.exec_program import registered_program_params
+            from agm.cli_support.exec_params import param_value_taking_flags
+            from agm.cli_support.program_options import (
+                program_option_map_or_none,
+                short_help_requested,
+            )
+            from agm.commands.exec_program import (
+                registered_program_declaration,
+                registered_program_params,
+            )
 
             params = registered_program_params(
                 self._registration.program, self._registration.package
             )
-            help_requested = short_help_requested(params, ctx.args)
+            program = registered_program_declaration(
+                self._registration.program, self._registration.package
+            )
+            option_map = None if program is None else program_option_map_or_none(program.parameters)
+            value_flags = param_value_taking_flags(params) | (
+                frozenset[str]() if option_map is None else option_map.value_taking_flags()
+            )
+            help_requested = short_help_requested(ctx.args, value_flags=value_flags)
         if help_requested:
             print(
-                registered_command_help(self._path_name, self._registration, params=params),
+                registered_command_help(
+                    self._path_name, self._registration, params=params, program=program
+                ),
                 end="",
             )
             return
@@ -186,7 +236,9 @@ class RegisteredProgramCommand(TyperCommand):
             print(f"error: {exc.message}", file=sys.stderr)
             print(file=sys.stderr)
             print(
-                registered_command_help(self._path_name, self._registration, params=exc.params),
+                registered_command_help(
+                    self._path_name, self._registration, params=exc.params, program=exc.program
+                ),
                 end="",
                 file=sys.stderr,
             )

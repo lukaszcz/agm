@@ -1,6 +1,6 @@
 # Packages
 
-The package domain defines portable, versioned AgL module collections. A package is a `package.toml` manifest plus a module tree named after the package, so its modules import under a stable package-qualified path. A manifest may declare version-floor dependencies, literal resources, and CLI commands backed by parameterless `program def` entries. The store, installation, and the managed `std` package are covered in [package-store.md](package-store.md).
+The package domain defines portable, versioned AgL module collections. A package is a `package.toml` manifest plus a module tree named after the package, so its modules import under a stable package-qualified path. A manifest may declare version-floor dependencies, literal resources, and CLI commands backed by `program def` entries with no type parameters and an explicit unit result; value parameters project onto the command's CLI surface exactly as they do for `agm exec`. The store, installation, and the managed `std` package are covered in [package-store.md](package-store.md).
 
 ## Package Model
 
@@ -15,7 +15,7 @@ The package domain defines portable, versioned AgL module collections. A package
 
 ## Registered Commands
 
-A manifest `[commands]` table maps a single- or multi-word CLI path to a package-owned `program def`. Activation rejects command conflicts unless the later installation passes `--shadow`. Each invocation derives its effective command registry from the selected package manifests — so project `[packages]` pins affect dispatch, help, and completion — and CLI dispatch resolves the longest registered path and runs it through the same execution host as `agm exec` after verifying manifest and module ownership ([cli.md](cli.md)).
+A manifest `[commands]` table maps a single- or multi-word CLI path to a package-owned `program def`. Activation rejects command conflicts unless the later installation passes `--shadow`. Each invocation derives its effective command registry from the selected package manifests — so project `[packages]` pins affect dispatch, help, and completion — and CLI dispatch resolves the longest registered path and runs it through the same execution host as `agm exec` after verifying manifest and module ownership, binding the referenced program's own CLI arguments and qualified config table the same way ([cli.md](cli.md)).
 
 ## Façade
 

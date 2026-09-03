@@ -93,8 +93,10 @@ __all__ = [
     "engine_key_flags",
     "option_none_raw",
     "option_some_raw",
+    "program_option_map_or_none",
     "project_option",
     "render_program_arguments_help",
+    "short_help_requested",
 ]
 
 # Zones whose parameter fills a positional CLI slot.
@@ -417,16 +419,28 @@ class ProgramOptionMap:
         its type, and whether it is required or has a default; no
         per-parameter help text is rendered.
         """
-        if not self.options:
+        described = self.option_lines()
+        if not described:
             return ""
-        lines = ["Options:"]
+        return "\n".join(("Options:", *(f"  {line}" for line in described))) + "\n"
+
+    def option_lines(self) -> tuple[str, ...]:
+        """Return one description line per name-addressable parameter, unindented.
+
+        The body of :meth:`render_help_section` without its ``Options:``
+        header, for a caller that supplies a header of its own — a
+        registered command lists its parameters directly under its own
+        section, where a nested ``Options:`` would only repeat the heading
+        above it.
+        """
+        described: list[str] = []
         for param, projected in self.options:
             flag_str = "/".join((*projected.flags, *projected.negative_flags))
             if projected.takes_value:
                 flag_str = f"{flag_str} VALUE"
             status = "(optional, has default)" if param.has_default else "(required)"
-            lines.append(f"  {flag_str}  {param.type!r}  {status}")
-        return "\n".join(lines) + "\n"
+            described.append(f"{flag_str}  {param.type!r}  {status}")
+        return tuple(described)
 
     def completion_items(self) -> tuple[str, ...]:
         """Return every completable CLI token: each option's flags and negative forms."""
@@ -435,6 +449,23 @@ class ProgramOptionMap:
             items.extend(projected.flags)
             items.extend(projected.negative_flags)
         return tuple(items)
+
+    def value_taking_flags(self) -> frozenset[str]:
+        """Return every positive flag that consumes a following ``VALUE`` token.
+
+        Used to disambiguate a bare ``-h`` token from a plausible ``VALUE``
+        supplied to a preceding value-taking flag (a ``text``/JSON-form
+        argument can legitimately be the literal string ``-h``) — one half of
+        the *value_flags* :func:`short_help_requested` checks against, the
+        other half being the legacy ``param`` inventory's own value-taking
+        flags (``exec_params.param_value_taking_flags``).
+        """
+        return frozenset(
+            flag
+            for _param, projected in self.options
+            if projected.takes_value
+            for flag in projected.flags
+        )
 
 
 def build_program_option_map(
@@ -470,8 +501,23 @@ def build_program_option_map(
     return ProgramOptionMap(positional=positional, options=options)
 
 
+def program_option_map_or_none(
+    signature: "tuple[ProgramParamInfo, ...]",
+) -> "ProgramOptionMap | None":
+    """Build *signature*'s option map, degrading a collision to ``None``.
+
+    For advisory surfaces (help, completion, ``-h`` disambiguation) that show
+    no program-argument flags on a reservation collision, rather than the
+    host diagnostic the execution path raises via :func:`build_program_option_map`.
+    """
+    result = build_program_option_map(signature)
+    return result if isinstance(result, ProgramOptionMap) else None
+
+
 def render_program_arguments_help(
-    entry_programs: "tuple[ProgramDeclInfo, ...]", *, selected: "ProgramDeclInfo | None"
+    entry_programs: "tuple[ProgramDeclInfo, ...]",
+    *,
+    selected: "ProgramDeclInfo | None",
 ) -> str:
     """Render the ``Program arguments:`` section of ``agm exec --help``.
 
@@ -490,14 +536,46 @@ def render_program_arguments_help(
     candidates = (selected,) if selected is not None else entry_programs
     lines: list[str] = ["Program arguments:"]
     for candidate in candidates:
-        option_map_result = build_program_option_map(candidate.parameters)
-        if not isinstance(option_map_result, ProgramOptionMap):
+        option_map = program_option_map_or_none(candidate.parameters)
+        if option_map is None:
             continue
-        lines.append(f"  Usage: {option_map_result.usage_line(candidate.declaration_path)}")
+        lines.append(f"  Usage: {option_map.usage_line(candidate.declaration_path)}")
         if selected is not None:
-            help_section = option_map_result.render_help_section()
+            help_section = option_map.render_help_section()
             if help_section:
                 lines.extend(f"  {line}" for line in help_section.splitlines())
     if len(lines) == 1:
         return ""
     return "\n".join(lines) + "\n"
+
+
+def short_help_requested(tokens: Sequence[str], *, value_flags: frozenset[str]) -> bool:
+    """Return whether an unconsumed ``-h`` occurs in *tokens*.
+
+    *value_flags* names every flag that consumes a following ``VALUE`` token
+    — typically the union of a legacy ``param`` inventory's own value-taking
+    flags (``exec_params.param_value_taking_flags``) and a selected program's
+    own (:meth:`ProgramOptionMap.value_taking_flags`) — so a value
+    legitimately spelled ``-h`` for one of them is recognized as consumed,
+    not as a short-help request.
+
+    A bare ``--`` ends option parsing, the same convention
+    :meth:`ProgramOptionMap.parse_tokens` applies: every token from there on
+    is positional, so a program can legitimately receive ``-h`` as one of its
+    own arguments after it.
+    """
+    consume_value = False
+    options_ended = False
+    for token in tokens:
+        if not options_ended and token == "--":
+            options_ended = True
+            continue
+        if options_ended:
+            continue
+        if consume_value:
+            consume_value = False
+        elif token == "-h":
+            return True
+        elif token in value_flags:
+            consume_value = True
+    return False

@@ -127,6 +127,45 @@ def test_installed_exec_reference_offers_program_param_completion(
     assert "--level" in values
 
 
+def test_installed_exec_reference_offers_program_value_argument_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import semver
+
+    from agm.config.context import ConfigContext
+    from agm.packages.activation import ActivationIndex, ActivePackage, write_activation_index
+
+    home = tmp_path / "home"
+    package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
+    module = package_root / "tools" / "review.agl"
+    module.parent.mkdir(parents=True)
+    (package_root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    module.write_text(
+        "program def main(region: text, verbose: bool = false) -> unit = print region\n",
+        encoding="utf-8",
+    )
+    write_record(package_root)
+    write_activation_index(
+        ActivationIndex({"tools": ActivePackage(semver.Version.parse("1.0.0"))}), home=home
+    )
+    monkeypatch.setattr(
+        completion, "current_config_context", lambda: ConfigContext(home, None, tmp_path)
+    )
+
+    from agm.cli import app
+
+    shell_complete = ShellComplete(typer.main.get_command(app), {}, "agm", "_TYPER_COMPLETE_ARGS")
+    values = [
+        item.value for item in shell_complete.get_completions(["exec", "tools/review::main"], "--")
+    ]
+
+    assert "--region" in values
+    assert "--verbose" in values
+    assert "--no-verbose" in values
+
+
 @pytest.mark.skipif(
     os.name != "posix" or (hasattr(os, "geteuid") and os.geteuid() == 0),
     reason="permission bits are meaningless for root or on non-POSIX platforms",
@@ -185,6 +224,63 @@ def test_registered_param_completion_degrades_on_unknown_or_unavailable_commands
     )
 
     assert completion.registered_command_param_completion(["tools", "lint"], "--") == []
+
+
+def test_registered_command_param_completion_offers_program_value_argument_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Completion for a registered command also offers the referenced program's
+    own value-parameter flags (and ``--no-`` forms), not only legacy ``param``
+    flags.
+    """
+    import semver
+
+    from agm.config.context import ConfigContext
+    from agm.packages.activation import (
+        ActivationIndex,
+        ActivePackage,
+        CommandRegistration,
+        write_activation_index,
+    )
+
+    home = tmp_path / "home"
+    package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
+    package_root.mkdir(parents=True)
+    (package_root / "tools").mkdir()
+    (package_root / "tools" / "lint.agl").write_text(
+        "program def main(tag: text, verbose: bool = false) -> unit = ()\n", encoding="utf-8"
+    )
+    (package_root / "package.toml").write_text(
+        """[package]
+name = "tools"
+version = "1.0.0"
+
+[commands]
+"tools lint" = { program = "tools/lint::main" }
+""",
+        encoding="utf-8",
+    )
+    write_record(package_root)
+    write_activation_index(
+        ActivationIndex(
+            packages={"tools": ActivePackage(semver.Version.parse("1.0.0"))},
+            commands={"tools lint": CommandRegistration("tools", "tools/lint::main")},
+        ),
+        home=home,
+    )
+    monkeypatch.setattr(
+        completion, "current_config_context", lambda: ConfigContext(home, None, tmp_path)
+    )
+
+    values = [
+        item.value
+        for item in completion.registered_command_param_completion(["tools", "lint"], "--")
+    ]
+
+    assert "--tag" in values
+    assert "--verbose" in values
+    assert "--no-verbose" in values
+    assert "--dry-run" in values
 
 
 def test_complete_registered_commands_silently_degrades_on_bad_index(
@@ -1679,6 +1775,26 @@ class TestExecCommandShellComplete:
         result = self._complete(["exec", "-c", "param count: int\nprint count"], "--")
         assert "--count" in result
 
+    def test_file_program_value_arguments_offer_their_flags(self, tmp_path: Path) -> None:
+        """``agm exec FILE --<TAB>`` also offers the program's own value-parameter flags."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "program def main(name: text, verbose: bool = false) -> unit = print name\n"
+        )
+
+        result = self._complete(["exec", str(agl_file)], "--")
+
+        assert "--name" in result
+        assert "--verbose" in result
+        assert "--no-verbose" in result
+
+    def test_command_flag_source_offers_program_value_argument_flags(self) -> None:
+        """``agm exec -c 'program def ...' --<TAB>`` discovers value-argument flags too."""
+        result = self._complete(
+            ["exec", "-c", "program def main(count: int) -> unit = print count"], "--"
+        )
+        assert "--count" in result
+
     def test_nonexistent_file_degrades_to_base_completion(self) -> None:
         """Unreadable file degrades to standard exec option completion (no crash)."""
         result = self._complete(["exec", "/nonexistent/prog.agl"], "--")
@@ -1764,6 +1880,63 @@ class TestExecParamCompletionItems:
         )
         items = completion._exec_param_completion_items("param x: text\n", "--")
         assert items == []
+
+
+class TestProgramArgumentCompletionItems:
+    """Unit tests for ``_program_argument_completion_items``."""
+
+    def _programs(self, source: str) -> tuple[Any, ...]:
+        from agm.cli_support.program_discovery import discover_program_declarations_from_source
+
+        return discover_program_declarations_from_source(source)
+
+    def test_text_and_bool_value_parameters_offer_their_flags(self) -> None:
+        programs = self._programs(
+            "program def main(name: text, verbose: bool = false) -> unit = print name\n"
+        )
+
+        values = [
+            item.value
+            for item in completion._program_argument_completion_items(programs, None, "--")
+        ]
+
+        assert "--name" in values
+        assert "--verbose" in values
+        assert "--no-verbose" in values
+
+    def test_incomplete_prefix_filters_results(self) -> None:
+        programs = self._programs("program def main(apple: text, banana: text) -> unit = ()\n")
+
+        values = [
+            item.value
+            for item in completion._program_argument_completion_items(programs, None, "--a")
+        ]
+
+        assert values == ["--apple"]
+
+    def test_no_selected_program_returns_empty(self) -> None:
+        programs = self._programs(
+            "program def one() -> unit = ()\nprogram def two() -> unit = ()\n"
+        )
+
+        assert completion._program_argument_completion_items(programs, None, "--") == []
+
+    def test_requested_name_selects_among_several_programs(self) -> None:
+        programs = self._programs(
+            "program def one(alpha: text) -> unit = ()\nprogram def two(beta: text) -> unit = ()\n"
+        )
+
+        values = [
+            item.value
+            for item in completion._program_argument_completion_items(programs, "two", "--")
+        ]
+
+        assert values == ["--beta"]
+
+    def test_reservation_collision_degrades_to_empty(self) -> None:
+        programs = self._programs("program def main(help: text) -> unit = ()\n")
+
+        assert completion._program_argument_completion_items(programs, None, "--") == []
 
 
 class TestExecCommandShellCompleteEdgeCases:

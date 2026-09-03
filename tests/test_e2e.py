@@ -7681,6 +7681,48 @@ class TestPackageInstall:
         assert uninstalled.returncode == 0
         assert unknown.returncode != 0
 
+    def test_registered_commands_honor_program_value_arguments_and_config(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """A registered command's own ``program def`` value parameters bind
+        exactly like ``agm exec``'s: positional and option arguments, CLI
+        overriding the program's qualified config table, and ``--help``/``-h``
+        rendering a "Program arguments" section from the signature.
+        """
+        home = tmp_path / "agm-home"
+        env["AGM_HOME"] = str(home)
+        package = _write_store_test_package(tmp_path / "tools-source", "tools", "1.0.0")
+        (package / "package.toml").write_text(
+            '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
+            "[commands]\n"
+            'greet = { program = "tools/main::main", description = "Greet someone" }\n',
+            encoding="utf-8",
+        )
+        (package / "tools" / "main.agl").write_text(
+            'program def main(@pos, name: text, /, tag: text = "default") -> unit =\n'
+            '  print(name + ":" + tag)\n',
+            encoding="utf-8",
+        )
+        home.mkdir()
+        (home / "config.toml").write_text(
+            '["tools/main".main]\ntag = "configured"\n', encoding="utf-8"
+        )
+
+        installed = run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
+        command_help = run_agm(["greet", "--help"], env=env, cwd=tmp_path)
+        short_help = run_agm(["greet", "-h"], env=env, cwd=tmp_path)
+        configured = run_agm(["greet", "alice"], env=env, cwd=tmp_path)
+        overridden = run_agm(["greet", "alice", "--tag", "cli"], env=env, cwd=tmp_path)
+
+        assert installed.returncode == 0
+        assert "Program arguments" in command_help.stdout
+        assert "--tag" in command_help.stdout
+        assert "Greet someone" in command_help.stdout
+        assert short_help.returncode == 0
+        assert "Program arguments" in short_help.stdout
+        assert configured.stdout == "alice:configured\n"
+        assert overridden.stdout == "alice:cli\n"
+
     def test_editable_registered_command_rereads_its_manifest_at_dispatch(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

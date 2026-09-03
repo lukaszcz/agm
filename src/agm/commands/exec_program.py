@@ -69,7 +69,7 @@ from agm.agl.diagnostics import format_diagnostic
 from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.arguments import ProgramArguments, bind_program_arguments_for
 from agm.agl.runtime.host_settings import HostSettingsPolicy
-from agm.agl.runtime.types import ParamDeclInfo
+from agm.agl.runtime.types import ParamDeclInfo, ProgramDeclInfo
 from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES
 from agm.agl.syntax.nodes import FuncDef, ParamDecl, static_items
 from agm.cli_support.args import ExecArgs
@@ -86,7 +86,10 @@ from agm.cli_support.exec_target import (
     PackageProgramReference,
     resolve_installed_reference,
 )
-from agm.cli_support.program_discovery import select_entry_program
+from agm.cli_support.program_discovery import (
+    discover_program_declarations_from_installed_reference,
+    select_entry_program,
+)
 from agm.cli_support.program_options import (
     DuplicateOptionFlagError,
     ProgramOptionError,
@@ -132,16 +135,24 @@ class RegisteredParamUsageError(Exception):
 
     Covers both a legacy ``param`` declaration's ``--flag`` and a selected
     program's own value-parameter option (``ProgramOptionMap.parse_tokens``).
-    Carries the parse-failure message and the program's parameter inventory so
-    the caller can render a usage message appropriate to how the program was
-    invoked: a plain ``agm exec`` usage error, or (for a dispatched registered
-    command) the shared registered-command help rendering.
+    Carries the parse-failure message, the program's legacy parameter
+    inventory, and the selected ``program def``'s own declaration (when one
+    was selected) so the caller can render a usage message appropriate to how
+    the program was invoked — a plain ``agm exec`` usage error, or (for a
+    dispatched registered command) the shared registered-command help
+    rendering — without a second discovery pass over the same source.
     """
 
-    def __init__(self, message: str, params: tuple[ParamDeclInfo, ...]) -> None:
+    def __init__(
+        self,
+        message: str,
+        params: tuple[ParamDeclInfo, ...],
+        program: ProgramDeclInfo | None = None,
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.params = params
+        self.program = program
 
 
 def _entry_module_segments(
@@ -267,6 +278,26 @@ def _config_raw_value(projected: ProjectedOption, raw: object) -> object:
     return raw
 
 
+def _resolve_registered_program_target(
+    program: str, package_name: str, *, context: ConfigContext
+) -> PackageProgramReference | None:
+    """Resolve a registered program's installed reference, verifying its owning package.
+
+    Returns ``None`` (rather than raising) on any resolution failure or a
+    package mismatch, so both param and program-declaration discovery below
+    can degrade to an empty inventory instead of surfacing a resolution
+    error from an advisory help/completion path.
+    """
+    target = resolve_installed_reference(
+        program, home=context.home, proj_dir=context.proj_dir, cwd=context.cwd
+    )
+    if not isinstance(target, PackageProgramReference):
+        return None
+    if target.module_id.segments[0] != package_name:
+        return None
+    return target
+
+
 def registered_program_params(
     program: str, package_name: str, *, context: ConfigContext | None = None
 ) -> tuple[ParamDeclInfo, ...]:
@@ -274,12 +305,8 @@ def registered_program_params(
     try:
         if context is None:
             context = current_config_context()
-        target = resolve_installed_reference(
-            program, home=context.home, proj_dir=context.proj_dir, cwd=context.cwd
-        )
-        if not isinstance(target, PackageProgramReference):
-            return ()
-        if target.module_id.segments[0] != package_name:
+        target = _resolve_registered_program_target(program, package_name, context=context)
+        if target is None:
             return ()
         return discover_params_from_installed_reference(
             target,
@@ -296,6 +323,37 @@ def registered_program_param_flags(
 ) -> tuple[str, ...]:
     """Discover parameter flags for a registered program, degrading on failure."""
     return param_option_flags(registered_program_params(program, package_name, context=context))
+
+
+def registered_program_declaration(
+    program: str, package_name: str, *, context: ConfigContext | None = None
+) -> ProgramDeclInfo | None:
+    """Discover the referenced program's own ``program def`` declaration, degrading on failure.
+
+    Unlike :func:`registered_program_params`, which returns every ``param``
+    declaration reachable from the entry module, a registered command names
+    exactly one ``program def`` declaration — the one selected here by
+    matching the installed reference's own declaration path among the entry
+    module's own candidates, via :func:`~agm.cli_support.program_discovery.select_entry_program`,
+    the one place a requested name is matched against entry-module
+    declarations. An imported module's same-named declaration never
+    shadows it.
+    """
+    try:
+        if context is None:
+            context = current_config_context()
+        target = _resolve_registered_program_target(program, package_name, context=context)
+        if target is None:
+            return None
+        declarations = discover_program_declarations_from_installed_reference(
+            target,
+            home=context.home,
+            proj_dir=context.proj_dir,
+            cwd=context.cwd,
+        )
+        return select_entry_program(declarations, requested=target.declaration_path).selected
+    except (Exception, SystemExit):
+        return None
 
 
 def run(
@@ -582,16 +640,16 @@ def run(
                 selected_params, args.param_tokens, collect_leftovers=True
             )
         except ValueError as exc:
-            raise RegisteredParamUsageError(str(exc), selected_params) from exc
+            raise RegisteredParamUsageError(str(exc), selected_params, selected_program) from exc
         try:
             cli_arguments = program_option_map.parse_tokens(program_tokens)
         except ValueError as exc:
-            raise RegisteredParamUsageError(str(exc), selected_params) from exc
+            raise RegisteredParamUsageError(str(exc), selected_params, selected_program) from exc
     else:
         try:
             cli_params = parse_param_tokens(selected_params, args.param_tokens)
         except ValueError as exc:
-            raise RegisteredParamUsageError(str(exc), selected_params) from exc
+            raise RegisteredParamUsageError(str(exc), selected_params, selected_program) from exc
         cli_arguments = ProgramArguments(positional=(), named={})
 
     if entry_stem is not None:

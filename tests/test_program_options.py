@@ -518,6 +518,31 @@ class TestUsageLine:
         assert option_map.usage_line("main") == "main"
 
 
+class TestOptionLines:
+    def test_no_options_describes_nothing(self) -> None:
+        option_map = _map(_param("file", TextType(), ParamZone.POSITIONAL_ONLY))
+        assert option_map.option_lines() == ()
+
+    def test_one_line_per_name_addressable_parameter(self) -> None:
+        option_map = _map(_param("name", TextType()), _param("verbose", BoolType()))
+        described = option_map.option_lines()
+        assert len(described) == 2
+        assert described[0].startswith("--name")
+        assert described[1].startswith("--verbose")
+
+    def test_lines_are_unindented_and_carry_no_header(self) -> None:
+        option_map = _map(_param("name", TextType()))
+        described = option_map.option_lines()
+        assert "Options:" not in described
+        assert described[0] == described[0].lstrip()
+
+    def test_render_help_section_indents_the_same_lines_under_a_header(self) -> None:
+        option_map = _map(_param("name", TextType()), _param("verbose", BoolType()))
+        section = option_map.render_help_section().splitlines()
+        assert section[0] == "Options:"
+        assert section[1:] == [f"  {line}" for line in option_map.option_lines()]
+
+
 class TestRenderHelpSection:
     def test_no_options_renders_nothing(self) -> None:
         option_map = _map(_param("file", TextType(), ParamZone.POSITIONAL_ONLY))
@@ -573,3 +598,56 @@ class TestCompletionItems:
     def test_text_option_contributes_only_its_positive_flag(self) -> None:
         option_map = _map(_param("name", TextType()))
         assert option_map.completion_items() == ("--name",)
+
+
+class TestValueTakingFlags:
+    def test_bool_option_contributes_no_value_taking_flag(self) -> None:
+        option_map = _map(_param("verbose", BoolType()))
+        assert option_map.value_taking_flags() == frozenset()
+
+    def test_positional_only_params_contribute_no_value_taking_flag(self) -> None:
+        option_map = _map(_param("file", TextType(), ParamZone.POSITIONAL_ONLY))
+        assert option_map.value_taking_flags() == frozenset()
+
+    def test_text_and_option_shapes_contribute_their_positive_flag_only(self) -> None:
+        option_map = _map(_param("name", TextType()), _param("region", _option_type(TextType())))
+        assert option_map.value_taking_flags() == frozenset({"--name", "--region"})
+
+
+class TestProgramOptionMapOrNone:
+    def test_returns_the_built_map_for_a_valid_signature(self) -> None:
+        from agm.cli_support.program_options import program_option_map_or_none
+
+        option_map = program_option_map_or_none((_param("name", TextType()),))
+
+        assert isinstance(option_map, ProgramOptionMap)
+        assert option_map.completion_items() == ("--name",)
+
+    def test_degrades_to_none_on_a_reservation_collision(self) -> None:
+        from agm.cli_support.program_options import program_option_map_or_none
+
+        assert program_option_map_or_none((_param("help", TextType()),)) is None
+
+
+class TestShortHelpRequested:
+    def test_bare_short_flag_is_a_help_request(self) -> None:
+        from agm.cli_support.program_options import short_help_requested
+
+        assert short_help_requested(["-h"], value_flags=frozenset()) is True
+
+    def test_short_flag_consumed_as_a_preceding_value_flags_value_is_not_a_help_request(
+        self,
+    ) -> None:
+        from agm.cli_support.program_options import short_help_requested
+
+        assert short_help_requested(["--name", "-h"], value_flags=frozenset({"--name"})) is False
+
+    def test_short_flag_as_the_first_positional_is_a_help_request(self) -> None:
+        from agm.cli_support.program_options import short_help_requested
+
+        assert short_help_requested(["-h", "extra"], value_flags=frozenset()) is True
+
+    def test_short_flag_after_end_of_options_marker_is_not_a_help_request(self) -> None:
+        from agm.cli_support.program_options import short_help_requested
+
+        assert short_help_requested(["--", "-h"], value_flags=frozenset()) is False

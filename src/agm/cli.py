@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 
 import typer
 
@@ -78,6 +78,9 @@ from agm.parser import (
     print_help_for_command_path,
     print_overview,
 )
+
+if TYPE_CHECKING:
+    from agm.agl.runtime.types import ParamDeclInfo, ProgramDeclInfo
 
 _HELP_TEXTS = parser_helpers._HELP_TEXTS
 _HELP_ALIASES = parser_helpers._HELP_ALIASES
@@ -990,37 +993,30 @@ def new(
     )
 
 
-def _exec_print_help(
+def _discover_exec_help_material(
     *,
     file: str | None,
     command: str | None,
-    program: str | None = None,
-    module_paths: list[str] | None = None,
-    no_stdlib: bool = False,
-) -> None:
-    """Print exec help, optionally with program param/argument sections, then exit 0.
+    module_paths: list[str] | None,
+    no_stdlib: bool,
+) -> "tuple[tuple[ParamDeclInfo, ...], tuple[ProgramDeclInfo, ...]]":
+    """Discover legacy ``param`` and ``program def`` declarations for exec help.
 
-    When FILE or -c is provided and the source can be prepared + typechecked,
-    appends the discovered legacy ``Program parameters:`` section and the
-    ``Program arguments:`` section (one per declared ``program def``, its own
-    value parameters). Degrades silently on any error (syntax errors,
-    unreadable files, etc.).
+    Shared by ``_exec_print_help``'s ``Program parameters:``/``Program
+    arguments:`` sections and ``_exec_short_help_value_flags``'s bare-``-h``
+    disambiguation, so both degrade identically on any discovery failure
+    (syntax errors, unreadable files, etc.) to empty inventories.
     """
     from agm.cli_support.exec_params import (
         discover_params_from_installed_reference,
         discover_params_from_source,
-        render_param_help_section,
     )
     from agm.cli_support.exec_target import FileEntry, InlineSource, PackageProgramReference
     from agm.cli_support.program_discovery import (
         discover_program_declarations_from_installed_reference,
         discover_program_declarations_from_source,
-        select_entry_program,
     )
-    from agm.cli_support.program_options import render_program_arguments_help
     from agm.core.fs import read_text_arg
-
-    print_help_for_command_path(["exec"])
 
     try:
         from agm.cli_support.exec_roots import effective_exec_roots
@@ -1081,6 +1077,69 @@ def _exec_print_help(
     except (Exception, SystemExit):
         params = ()
         programs = ()
+    return params, programs
+
+
+def _exec_short_help_value_flags(
+    *,
+    file: str | None,
+    command: str | None,
+    program: str | None,
+    module_paths: list[str] | None,
+    no_stdlib: bool,
+) -> frozenset[str]:
+    """Return every flag consuming a following ``VALUE`` token, for bare-``-h`` disambiguation.
+
+    Unions the legacy ``param`` inventory's own value-taking flags with the
+    selected entry program's own value-parameter flags (via
+    ``ProgramOptionMap.value_taking_flags``) — the two halves
+    ``short_help_requested`` checks against, so a value legitimately spelled
+    ``-h`` for either mechanism is recognized as consumed, not as a
+    short-help request.
+    """
+    from agm.cli_support.exec_params import param_value_taking_flags
+    from agm.cli_support.program_discovery import select_entry_program
+    from agm.cli_support.program_options import program_option_map_or_none
+
+    params, programs = _discover_exec_help_material(
+        file=file, command=command, module_paths=module_paths, no_stdlib=no_stdlib
+    )
+    selection = select_entry_program(programs, requested=program)
+    option_map = (
+        None
+        if selection.selected is None
+        else program_option_map_or_none(selection.selected.parameters)
+    )
+    return param_value_taking_flags(params) | (
+        frozenset() if option_map is None else option_map.value_taking_flags()
+    )
+
+
+def _exec_print_help(
+    *,
+    file: str | None,
+    command: str | None,
+    program: str | None = None,
+    module_paths: list[str] | None = None,
+    no_stdlib: bool = False,
+) -> None:
+    """Print exec help, optionally with program param/argument sections, then exit 0.
+
+    When FILE or -c is provided and the source can be prepared + typechecked,
+    appends the discovered legacy ``Program parameters:`` section and the
+    ``Program arguments:`` section (one per declared ``program def``, its own
+    value parameters). Degrades silently on any error (syntax errors,
+    unreadable files, etc.).
+    """
+    from agm.cli_support.exec_params import render_param_help_section
+    from agm.cli_support.program_discovery import select_entry_program
+    from agm.cli_support.program_options import render_program_arguments_help
+
+    print_help_for_command_path(["exec"])
+
+    params, programs = _discover_exec_help_material(
+        file=file, command=command, module_paths=module_paths, no_stdlib=no_stdlib
+    )
     if params:
         print(render_param_help_section(params), end="")
     if programs:
@@ -1212,7 +1271,23 @@ def exec_cmd(
     # - ``agm exec --help``  → Click assigns ``--help`` to ``file``
     # - ``agm exec -h``      → Click assigns ``-h`` to ``file``
     # - ``agm exec FILE --help`` → FILE is correct; ``--help`` lands in ctx.args
-    if file in ("--help", "-h") or "--help" in ctx.args or "-h" in ctx.args:
+    # ``--help`` always triggers; a bare ``-h`` is disambiguated from a value
+    # legitimately spelled ``-h`` for a preceding value-taking param/program
+    # flag, since text/JSON-form arguments can hold that exact string.
+    help_requested = file == "--help" or "--help" in ctx.args
+    if not help_requested and (file == "-h" or "-h" in ctx.args):
+        from agm.cli_support.program_options import short_help_requested
+
+        tokens = (file, *ctx.args) if file == "-h" else tuple(ctx.args)
+        value_flags = _exec_short_help_value_flags(
+            file=file,
+            command=command,
+            program=program,
+            module_paths=module_paths,
+            no_stdlib=no_stdlib,
+        )
+        help_requested = short_help_requested(tokens, value_flags=value_flags)
+    if help_requested:
         # When the help flag was misassigned to ``file``, recover a following
         # FILE from the pass-through tokens so its parameters can still be shown.
         effective_file = file

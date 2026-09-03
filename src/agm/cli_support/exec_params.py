@@ -20,7 +20,7 @@ but one named ``timeout_val`` does not.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, overload
@@ -227,20 +227,18 @@ def param_option_flags(params: tuple[ParamDeclInfo, ...]) -> tuple[str, ...]:
     return tuple(flag for flag, _param, _bool_value in _param_flag_map(params).bindings)
 
 
-def short_help_requested(params: tuple[ParamDeclInfo, ...], tokens: Sequence[str]) -> bool:
-    """Return whether an unconsumed ``-h`` occurs in program argument *tokens*."""
-    value_flags = {
+def param_value_taking_flags(params: tuple[ParamDeclInfo, ...]) -> frozenset[str]:
+    """Return every selected flag from *params* that consumes a following ``VALUE`` token.
+
+    One half of the *value_flags*
+    :func:`~agm.cli_support.program_options.short_help_requested` checks
+    against, the other half being a selected program's own value parameters,
+    projected through
+    :meth:`~agm.cli_support.program_options.ProgramOptionMap.value_taking_flags`.
+    """
+    return frozenset(
         flag for flag, _param, bool_value in _param_flag_map(params).bindings if bool_value is None
-    }
-    consume_value = False
-    for token in tokens:
-        if consume_value:
-            consume_value = False
-        elif token == "-h":
-            return True
-        elif token in value_flags:
-            consume_value = True
-    return False
+    )
 
 
 def discover_params_from_source(

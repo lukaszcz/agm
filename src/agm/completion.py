@@ -19,6 +19,7 @@ from agm.project.dependency_checkout import main_dep_repo
 
 if TYPE_CHECKING:
     from agm.agl.modules.roots import RootSet
+    from agm.agl.runtime.types import ProgramDeclInfo
 
 from agm.project.layout import (
     current_workspace_or_project_root,
@@ -231,16 +232,31 @@ def registered_command_completion(
 def registered_command_param_completion(
     command_path: Sequence[str], incomplete: str
 ) -> list[CompletionItem]:
-    """Complete parameters for an already resolved registered command."""
+    """Complete parameters for an already resolved registered command.
+
+    Combines the legacy ``param`` flags with the referenced program's own
+    value-parameter option flags (and their ``--no-`` forms), the same two
+    mechanisms ``registered_command_help`` renders.
+    """
     try:
         from agm.cli_dispatch import load_command_index, resolve_registered_command
-        from agm.commands.exec_program import registered_program_param_flags
+        from agm.cli_support.program_options import program_option_map_or_none
+        from agm.commands.exec_program import (
+            registered_program_declaration,
+            registered_program_param_flags,
+        )
 
         context = current_config_context()
         index = load_command_index(home=context.home, proj_dir=context.proj_dir, cwd=context.cwd)
         resolution = resolve_registered_command(command_path, index.commands)
         if resolution is None:
             return []
+        declaration = registered_program_declaration(
+            resolution.registration.program, resolution.registration.package, context=context
+        )
+        option_map = (
+            None if declaration is None else program_option_map_or_none(declaration.parameters)
+        )
         flags = (
             "--dry-run",
             *registered_program_param_flags(
@@ -248,6 +264,7 @@ def registered_command_param_completion(
                 resolution.registration.package,
                 context=context,
             ),
+            *(() if option_map is None else option_map.completion_items()),
         )
         return [CompletionItem(flag) for flag in flags if flag.startswith(incomplete)]
     except (Exception, SystemExit):
@@ -499,6 +516,34 @@ def _exec_param_completion_items(
     ]
 
 
+def _program_argument_completion_items(
+    programs: "tuple[ProgramDeclInfo, ...]", requested: str | None, incomplete: str
+) -> list[CompletionItem]:
+    """Return ``CompletionItem`` objects for the selected program's own value-parameter flags.
+
+    *programs* is a discovered inventory (from source or an installed
+    reference); *requested* is the ``-p``/``--program`` value already parsed
+    into ``ctx.params``, resolved to one candidate exactly as ``agm exec
+    --help`` resolves it (:func:`~agm.cli_support.program_discovery.
+    select_entry_program`), so completion never disagrees with help about
+    which program's flags apply. Degrades silently to ``[]``.
+    """
+    from agm.cli_support.program_discovery import select_entry_program
+    from agm.cli_support.program_options import program_option_map_or_none
+
+    selection = select_entry_program(programs, requested=requested)
+    if selection.selected is None:
+        return []
+    option_map = program_option_map_or_none(selection.selected.parameters)
+    if option_map is None:
+        return []
+    return [
+        CompletionItem(flag)
+        for flag in option_map.completion_items()
+        if flag.startswith(incomplete)
+    ]
+
+
 class ExecCommand(TyperCommand):
     """Typer Command subclass for ``agm exec`` that augments shell completion.
 
@@ -525,6 +570,8 @@ class ExecCommand(TyperCommand):
             command = raw_command if isinstance(raw_command, str) else None
             raw_file = params.get("file")
             file = raw_file if isinstance(raw_file, str) else None
+            raw_program = params.get("program")
+            requested_program = raw_program if isinstance(raw_program, str) else None
             context = current_config_context()
             target = resolve_exec_target(
                 file=file,
@@ -537,6 +584,9 @@ class ExecCommand(TyperCommand):
                 from agm.cli_support.exec_params import (
                     discover_params_from_installed_reference,
                     param_option_flags,
+                )
+                from agm.cli_support.program_discovery import (
+                    discover_program_declarations_from_installed_reference,
                 )
 
                 extra = [
@@ -552,8 +602,24 @@ class ExecCommand(TyperCommand):
                     )
                     if flag.startswith(incomplete)
                 ]
+                extra.extend(
+                    _program_argument_completion_items(
+                        discover_program_declarations_from_installed_reference(
+                            target,
+                            home=context.home,
+                            proj_dir=context.proj_dir,
+                            cwd=context.cwd,
+                            default_stdlib=not bool(params.get("no_stdlib")),
+                        ),
+                        requested_program,
+                        incomplete,
+                    )
+                )
             elif isinstance(target, (InlineSource, FileEntry)):
                 from agm.cli_support.exec_roots import effective_exec_roots
+                from agm.cli_support.program_discovery import (
+                    discover_program_declarations_from_source,
+                )
 
                 source = command if isinstance(target, InlineSource) else target.path.read_text()
                 entry_path = target.path if isinstance(target, FileEntry) else None
@@ -578,6 +644,19 @@ class ExecCommand(TyperCommand):
                     entry_path=entry_path,
                     roots=exec_roots.roots,
                     default_stdlib=not bool(params.get("no_stdlib")),
+                )
+                extra.extend(
+                    _program_argument_completion_items(
+                        discover_program_declarations_from_source(
+                            source,
+                            inline_source=isinstance(target, InlineSource),
+                            entry_path=entry_path,
+                            roots=exec_roots.roots,
+                            default_stdlib=not bool(params.get("no_stdlib")),
+                        ),
+                        requested_program,
+                        incomplete,
+                    )
                 )
             else:
                 return base

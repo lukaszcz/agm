@@ -272,6 +272,38 @@ class TestExecCommandArgParsing:
         assert "--msg" in result.output
         assert recorded_runs == []
 
+    def test_exec_bare_short_help_flag_prints_help(
+        self, runner: CliRunner, recorded_runs: list[object]
+    ) -> None:
+        result = invoke(runner, ["exec", "-h"])
+        assert result.exit_code == 0
+        assert "agm exec" in result.output
+        assert recorded_runs == []
+
+    def test_exec_short_help_flag_after_file_discovers_file_params(
+        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    ) -> None:
+        agl_file = tmp_path / "test.agl"
+        write_file_program(agl_file, "param msg: text\n")
+
+        result = invoke(runner, ["exec", str(agl_file), "-h"])
+
+        assert result.exit_code == 0
+        assert "--msg" in result.output
+        assert recorded_runs == []
+
+    def test_exec_short_help_flag_consumed_as_a_param_value_is_not_help(
+        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    ) -> None:
+        agl_file = tmp_path / "test.agl"
+        write_file_program(agl_file, "param msg: text\n")
+
+        result = invoke(runner, ["exec", str(agl_file), "--msg", "-h"])
+
+        assert result.exit_code == 0
+        assert recorded_runs != []
+        assert getattr(recorded_runs[0], "param_tokens") == ["--msg", "-h"]
+
     def test_exec_param_before_file_is_usage_error(
         self, runner: CliRunner, recorded_runs: list[object]
     ) -> None:

@@ -236,7 +236,6 @@ class TestPackageDiscipline:
         "declaration",
         (
             "program def main[T]() -> unit = ()",
-            "program def main(value: int) -> unit = ()",
             "program def main() -> int = 1",
             "program def main() = ()",
         ),
@@ -249,6 +248,12 @@ class TestPackageDiscipline:
 
         with pytest.raises(DisciplineError):
             validate_package(package)
+
+    def test_accepts_registered_program_with_value_parameters(self, tmp_path: Path) -> None:
+        package = _custom_package(tmp_path, command_path="start")
+        (package.module_root / "main.agl").write_text("program def main(value: int) -> unit = ()\n")
+
+        validate_package(package)
 
     def test_rejects_module_without_referenced_program(self, tmp_path: Path) -> None:
         package = _custom_package(tmp_path, command_path="start")

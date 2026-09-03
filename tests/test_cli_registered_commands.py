@@ -214,6 +214,42 @@ def test_registered_command_help_does_not_dispatch_program(
     assert calls == [("tools/lint::main", ["--message", "-h"])]
 
 
+def test_registered_command_help_recognizes_program_value_argument_flags(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``-h`` disambiguation and help rendering also cover a program's own
+    value parameters (not only legacy ``param`` declarations): a bare ``-h``
+    is short help, but ``-h`` supplied as a value-taking flag's own VALUE is
+    not.
+    """
+    import agm.cli_dispatch as dispatch
+    import agm.commands.exec_program as exec_program
+    from agm.cli_support.program_discovery import discover_program_declarations_from_source
+
+    context = ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
+    index = ActivationIndex(
+        commands={"tools lint": CommandRegistration("tools", "tools/lint::main")}
+    )
+    monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
+    monkeypatch.setattr(dispatch, "load_command_index", lambda **_: index)
+    monkeypatch.setattr(exec_program, "registered_program_params", lambda *_a, **_k: ())
+    (program,) = discover_program_declarations_from_source(
+        "program def main(tag: text) -> unit = print tag"
+    )
+    monkeypatch.setattr(exec_program, "registered_program_declaration", lambda *_a, **_k: program)
+    calls: list[object] = []
+    monkeypatch.setattr(exec_program, "run_registered", lambda *args, **kwargs: calls.append(args))
+
+    bare_short = invoke(CliRunner(), ["tools", "lint", "-h"])
+    value_short = invoke(CliRunner(), ["tools", "lint", "--tag", "-h"])
+
+    assert bare_short.exit_code == 0
+    assert "Program arguments:" in bare_short.output
+    assert "--tag" in bare_short.output
+    assert value_short.exit_code == 0
+    assert calls == [("tools/lint::main", ["--tag", "-h"])]
+
+
 def test_help_command_renders_registered_command_help(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -261,6 +297,186 @@ def test_registered_command_help_degrades_when_param_discovery_fails(
     )
 
     assert "Program parameters:\n  --level" in text
+
+
+def test_registered_command_help_omits_program_arguments_on_a_reservation_collision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A value parameter that collides with a reserved flag (e.g. ``help``) renders
+    no ``Program arguments:`` section at all, rather than an empty one:
+    ``program_option_map_or_none`` degrades the whole option map to ``None`` on
+    a collision.
+    """
+    import agm.cli_dispatch as dispatch
+    import agm.commands.exec_program as exec_program
+    from agm.cli_support.program_discovery import discover_program_declarations_from_source
+
+    (program,) = discover_program_declarations_from_source(
+        "program def main(help: text) -> unit = print help"
+    )
+    monkeypatch.setattr(exec_program, "registered_program_declaration", lambda *_a, **_k: program)
+
+    text = dispatch.registered_command_help(
+        "tools lint", CommandRegistration("tools", "tools/lint::main")
+    )
+
+    assert "Program arguments:" not in text
+
+
+def test_registered_command_help_usage_line_reflects_the_program_signature() -> None:
+    """The rendered usage line names the invoking command and the program's
+    own positional slots and options, not the raw ``program def`` declaration
+    path.
+    """
+    import agm.cli_dispatch as dispatch
+    from agm.cli_support.program_discovery import discover_program_declarations_from_source
+
+    (program,) = discover_program_declarations_from_source(
+        'program def main(@pos, name: text, /, tag: text = "default") -> unit = ()'
+    )
+
+    text = dispatch.registered_command_help(
+        "tools greet",
+        CommandRegistration("tools", "tools/greet::main"),
+        params=(),
+        program=program,
+    )
+
+    first_line = text.splitlines()[0]
+    assert first_line.startswith("agm tools greet ")
+    assert "<name>" in first_line
+    assert "[OPTIONS]" in first_line
+    assert "main" not in first_line
+
+
+def test_registered_command_help_omits_the_legacy_param_marker_when_none_are_declared() -> None:
+    """No ``[--PARAM VALUE]...`` marker renders when the registration owns no
+    legacy ``param`` declarations, since the marker would otherwise falsely
+    imply one.
+    """
+    import agm.cli_dispatch as dispatch
+    from agm.cli_support.program_discovery import discover_program_declarations_from_source
+
+    (program,) = discover_program_declarations_from_source(
+        "program def main(tag: text) -> unit = ()"
+    )
+
+    text = dispatch.registered_command_help(
+        "tools greet",
+        CommandRegistration("tools", "tools/greet::main"),
+        params=(),
+        program=program,
+    )
+
+    assert "[--PARAM VALUE]..." not in text
+
+
+def test_registered_command_help_renders_no_contentless_sections_for_a_parameterless_program() -> (
+    None
+):
+    """A registered command backed by a parameterless ``program def`` and no
+    legacy ``param`` declarations renders a plain usage line with no empty
+    ``Program parameters:``/``Program arguments:`` section.
+    """
+    import agm.cli_dispatch as dispatch
+    from agm.cli_support.program_discovery import discover_program_declarations_from_source
+
+    (program,) = discover_program_declarations_from_source("program def main() -> unit = ()")
+
+    text = dispatch.registered_command_help(
+        "tools greet",
+        CommandRegistration("tools", "tools/greet::main"),
+        params=(),
+        program=program,
+    )
+
+    assert text.splitlines()[0] == "agm tools greet [--dry-run]"
+    assert "Program parameters:" not in text
+    assert "Program arguments:" not in text
+
+
+def test_registered_command_program_option_error_renders_shared_usage_help(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A CLI parse failure against a selected program's own value parameters
+    renders through the same ``registered_command_help`` rendering as a
+    legacy ``param`` parse failure, including the program's own usage line.
+    """
+    import agm.cli_dispatch as dispatch
+
+    home = tmp_path / "home"
+    package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
+    module = package_root / "tools" / "greet.agl"
+    module.parent.mkdir(parents=True)
+    (package_root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
+        '[commands]\n"tools greet" = { program = "tools/greet::main", '
+        'description = "Greet someone" }\n',
+        encoding="utf-8",
+    )
+    module.write_text("program def main(@pos, name: text) -> unit = print name\n", encoding="utf-8")
+    write_record(package_root)
+    write_activation_index(
+        ActivationIndex({"tools": ActivePackage(semver.Version.parse("1.0.0"))}), home=home
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(
+        dispatch,
+        "load_command_index",
+        lambda **_: ActivationIndex(
+            commands={
+                "tools greet": CommandRegistration("tools", "tools/greet::main", "Greet someone")
+            }
+        ),
+    )
+
+    result = invoke(CliRunner(), ["tools", "greet", "alice", "--nope", "x"])
+
+    assert result.exit_code == 1
+    err = result.output
+    assert "error: Unknown option: '--nope'" in err
+    assert "agm tools greet <name> [--dry-run]" in err
+    assert "Greet someone" in err
+
+
+def test_registered_command_binds_a_negated_bool_value_argument(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A registered command's ``--no-<name>`` negation actually binds
+    ``false`` to the referenced program's own bool value parameter, not
+    merely offered by completion.
+    """
+    import agm.cli_dispatch as dispatch
+
+    home = tmp_path / "home"
+    package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
+    module = package_root / "tools" / "run.agl"
+    module.parent.mkdir(parents=True)
+    (package_root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
+        '[commands]\n"tools run" = { program = "tools/run::main" }\n',
+        encoding="utf-8",
+    )
+    module.write_text(
+        "program def main(verbose: bool = true) -> unit = print verbose\n", encoding="utf-8"
+    )
+    write_record(package_root)
+    write_activation_index(
+        ActivationIndex({"tools": ActivePackage(semver.Version.parse("1.0.0"))}), home=home
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(
+        dispatch,
+        "load_command_index",
+        lambda **_: ActivationIndex(
+            commands={"tools run": CommandRegistration("tools", "tools/run::main")}
+        ),
+    )
+
+    result = invoke(CliRunner(), ["tools", "run", "--no-verbose"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "false\n"
 
 
 def test_registered_command_help_returns_false_when_index_is_unavailable(
@@ -710,7 +926,7 @@ def test_registered_command_param_error_handles_no_description_or_params(
 
     assert result.exit_code == 1
     err = result.output
-    assert "agm tools lint [--PARAM VALUE]... [--dry-run]" in err
+    assert "agm tools lint [--dry-run]" in err
     assert "Run the registered AgL program." in err
     assert "Program parameters:" not in err
 
@@ -1020,3 +1236,84 @@ def test_registered_params_ignore_a_program_owned_by_another_package(tmp_path: P
 
     assert registered_program_params("tools/main::main", "tools", context=context) != ()
     assert registered_program_params("tools/main::main", "other", context=context) == ()
+
+
+def test_registered_program_declaration_finds_the_referenced_program(tmp_path: Path) -> None:
+    from agm.commands.exec_program import registered_program_declaration
+
+    context = ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
+
+    assert registered_program_declaration("not-a-reference", "tools", context=context) is None
+    assert registered_program_declaration("tools/bad-name::main", "tools", context=context) is None
+    assert registered_program_declaration("other/lint::main", "tools", context=context) is None
+
+
+def test_registered_program_declaration_finds_its_own_value_parameters(tmp_path: Path) -> None:
+    """A registration's program reference resolves to its own ``program def``
+
+    declaration, carrying its value-parameter signature — not a different
+    program declared in the same module.
+    """
+    from agm.commands.exec_program import registered_program_declaration
+
+    write_installed_package(
+        tmp_path,
+        "tools",
+        source=("program def other() -> unit = ()\nprogram def main(level: text) -> unit = ()\n"),
+    )
+    context = ConfigContext(home=tmp_path, proj_dir=None, cwd=tmp_path)
+
+    declaration = registered_program_declaration("tools/main::main", "tools", context=context)
+
+    assert declaration is not None
+    assert declaration.declaration_path == "main"
+    assert [param.name for param in declaration.parameters] == ["level"]
+    assert registered_program_declaration("tools/main::main", "other", context=context) is None
+
+
+def test_registered_program_declaration_prefers_the_entry_module_over_an_import(
+    tmp_path: Path,
+) -> None:
+    """An imported module's same-named ``program def`` never shadows the entry
+    module's own declaration sharing that declaration path.
+    """
+    from agm.commands.exec_program import registered_program_declaration
+
+    home = tmp_path / "home"
+    package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
+    entry = package_root / "tools" / "main.agl"
+    helper = package_root / "tools" / "helper.agl"
+    entry.parent.mkdir(parents=True)
+    (package_root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    helper.write_text("program def main(other: int) -> unit = ()\n", encoding="utf-8")
+    entry.write_text(
+        "import tools/helper\nprogram def main(level: text) -> unit = ()\n", encoding="utf-8"
+    )
+    write_record(package_root)
+    write_activation_index(
+        ActivationIndex({"tools": ActivePackage(semver.Version.parse("1.0.0"))}), home=home
+    )
+    context = ConfigContext(home=home, proj_dir=None, cwd=tmp_path)
+
+    declaration = registered_program_declaration("tools/main::main", "tools", context=context)
+
+    assert declaration is not None
+    assert [param.name for param in declaration.parameters] == ["level"]
+
+
+def test_registered_program_declaration_degrades_when_selection_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import agm.cli_support.exec_target as exec_target
+    from agm.commands.exec_program import registered_program_declaration
+
+    context = ConfigContext(tmp_path / "home", None, tmp_path)
+    monkeypatch.setattr(
+        exec_target,
+        "select_active_packages",
+        lambda **_: (_ for _ in ()).throw(RuntimeError("unavailable")),
+    )
+
+    assert registered_program_declaration("tools/lint::main", "tools", context=context) is None

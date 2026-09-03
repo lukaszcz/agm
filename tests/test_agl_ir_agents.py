@@ -331,9 +331,9 @@ def test_unit_typed_ask() -> None:
 
 
 def test_ask_inside_function() -> None:
-    """A root function uses an agent supplied by an immutable root parameter."""
+    """A root function uses an agent supplied by an immutable root binding."""
     source = """\
-param namer: Agent = AgentCommand("namer")
+let namer: Agent = AgentCommand("namer")
 def get_name(prompt: text) -> text = ask(prompt, agent = namer)
 let name: text = get_name("What is the name?")
 name

@@ -90,7 +90,9 @@ class TestSourceDiscovery:
             resolve_installed_reference,
         )
 
-        module = write_installed_package(tmp_path, "tools")
+        module = write_installed_package(
+            tmp_path, "tools", source="param level: text\nprogram def main() -> unit = ()\n"
+        )
         target = resolve_installed_reference(
             "tools/main::main", home=tmp_path, proj_dir=None, cwd=tmp_path
         )

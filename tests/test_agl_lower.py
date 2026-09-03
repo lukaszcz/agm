@@ -3670,7 +3670,7 @@ class TestLoopDesugar:
         __n and __count, before the IrLoop.
         """
         source = (
-            "param items: array[int]\n"
+            "let items: array[int] = []\n"
             "var total: int = 0\n"
             "for x in items while x < 10 do[5]\n"
             "  total := total + x\n"
@@ -3771,7 +3771,9 @@ class TestLoopDesugar:
 
     def test_for_iter_kind_array(self) -> None:
         """``for x in items`` over ``array[int]`` selects IterKind.ARRAY."""
-        source = "param items: array[int]\nvar n: int = 0\nfor x in items do\n  n := n + x\ndone\n"
+        source = (
+            "let items: array[int] = []\nvar n: int = 0\nfor x in items do\n  n := n + x\ndone\n"
+        )
         node = _get_loop_ir(source)
         assert isinstance(node, IrSequence), (
             f"for over array: expected IrSequence, got {type(node).__name__}"
@@ -3787,7 +3789,7 @@ class TestLoopDesugar:
 
     def test_for_iter_kind_dict_keys(self) -> None:
         """``for k in d`` over ``dict[text, int]`` selects IterKind.DICT_KEYS."""
-        source = "param d: dict[text, int]\nvar n: int = 0\nfor k in d do\n  n := n + 1\ndone\n"
+        source = "let d: dict[text, int] = {}\nvar n: int = 0\nfor k in d do\n  n := n + 1\ndone\n"
         node = _get_loop_ir(source)
         assert isinstance(node, IrSequence), (
             f"for over dict: expected IrSequence, got {type(node).__name__}"
@@ -3803,7 +3805,7 @@ class TestLoopDesugar:
 
     def test_for_iter_kind_text(self) -> None:
         """``for ch in s`` over ``text`` selects IterKind.TEXT."""
-        source = "param s: text\nvar n: int = 0\nfor ch in s do\n  n := n + 1\ndone\n"
+        source = 'let s: text = ""\nvar n: int = 0\nfor ch in s do\n  n := n + 1\ndone\n'
         node = _get_loop_ir(source)
         assert isinstance(node, IrSequence), (
             f"for over text: expected IrSequence, got {type(node).__name__}"
@@ -4134,7 +4136,7 @@ class TestRangeForDesugar:
     def test_collection_for_regression(self) -> None:
         """Collection ``for`` still lowers to IrIterInit / IrIterHasNext / IrIterNext."""
         source = (
-            "param items: array[int]\n"
+            "let items: array[int] = []\n"
             "var total: int = 0\n"
             "for x in items do\n"
             "  total := total + x\n"

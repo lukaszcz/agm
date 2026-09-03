@@ -9101,11 +9101,16 @@ class TestExecCommand:
         assert result.returncode == 0
         assert result.stdout.strip() == "inline ok"
 
-    def test_exec_passes_named_param_to_program(self, tmp_path: Path, env: dict[str, str]) -> None:
+    def test_exec_passes_named_argument_to_program(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
         work = tmp_path / "work"
         work.mkdir()
         program = work / "greet.agl"
-        write_file_program(program, 'param name\nprint "hi "\nprint name\n', encoding="utf-8")
+        program.write_text(
+            'program def main(name: text) -> unit =\n  print "hi "\n  print name\n',
+            encoding="utf-8",
+        )
 
         result = run_agm(["exec", str(program), "--name", "world"], env=env, cwd=str(work))
 
@@ -9167,9 +9172,7 @@ class TestExecCommand:
         work = tmp_path / "work"
         work.mkdir()
         program = work / "review_workflow.agl"
-        write_file_program(
-            program,
-            "param task: text\n"
+        program.write_text(
             "record Issue\n"
             "  description: text\n"
             "enum Review\n"
@@ -9177,21 +9180,23 @@ class TestExecCommand:
             "  | Fail(issues: array[Issue])\n"
             "enum Fix\n"
             "  | Complete(output: text)\n"
-            'let impl = AgentCommand("impl-runner \\%{SESSION_ID}")\n'
-            'let reviewer = AgentCommand("review-runner \\%{SESSION_ID}")\n'
-            'var artifact: text = impl.ask("Implement %{task}")\n'
-            "var review: Review = Pass\n"
-            "do[3]\n"
-            '  review := reviewer.ask("Review %{artifact}")\n'
-            "  case review of\n"
-            "    | Pass() => ()\n"
-            "    | Fail(issues) =>\n"
-            '        let fix: Fix = impl.ask("Fix %{issues} in %{artifact}")\n'
-            "        case fix of\n"
-            "          | Complete(output) =>\n"
-            "              artifact := output\n"
-            "until review is Pass\n"
-            "print artifact\n",
+            "\n"
+            "program def main(task: text) -> unit =\n"
+            '  let impl = AgentCommand("impl-runner \\%{SESSION_ID}")\n'
+            '  let reviewer = AgentCommand("review-runner \\%{SESSION_ID}")\n'
+            '  var artifact: text = impl.ask("Implement %{task}")\n'
+            "  var review: Review = Pass\n"
+            "  do[3]\n"
+            '    review := reviewer.ask("Review %{artifact}")\n'
+            "    case review of\n"
+            "      | Pass() => ()\n"
+            "      | Fail(issues) =>\n"
+            '          let fix: Fix = impl.ask("Fix %{issues} in %{artifact}")\n'
+            "          case fix of\n"
+            "            | Complete(output) =>\n"
+            "                artifact := output\n"
+            "  until review is Pass\n"
+            "  print artifact\n",
             encoding="utf-8",
         )
 

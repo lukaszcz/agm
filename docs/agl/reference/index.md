@@ -40,8 +40,6 @@ oriented orchestration language whose core ideas are:
 A taste of the language:
 
 ```agl
-param spec: text
-
 enum Review
   | Pass
   | Fail(issues: array[text])
@@ -60,7 +58,7 @@ def review_and_fix(artifact: text) -> text =
         "Fix these issues:\n%{issues}\n\nCurrent:\n%{artifact}"
       )
 
-program def main() -> unit =
+program def main(spec: text) -> unit =
   var artifact: text = impl.ask("Implement %{spec}")
 
   do[5]

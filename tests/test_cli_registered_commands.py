@@ -1231,7 +1231,9 @@ def test_registered_params_ignore_a_program_owned_by_another_package(tmp_path: P
     the registration itself is not trusted to describe that command's params."""
     from agm.commands.exec_program import registered_program_params
 
-    write_installed_package(tmp_path, "tools")
+    write_installed_package(
+        tmp_path, "tools", source="param level: text\nprogram def main() -> unit = ()\n"
+    )
     context = ConfigContext(home=tmp_path, proj_dir=None, cwd=tmp_path)
 
     assert registered_program_params("tools/main::main", "tools", context=context) != ()

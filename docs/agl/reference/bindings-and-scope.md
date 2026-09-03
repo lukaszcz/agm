@@ -549,7 +549,7 @@ Each call opens a fresh scope with the function's parameters bound. Defaults
 are evaluated in the function's **definition** scope (not the call site):
 
 ```agl
-param default_limit: int = 3
+let default_limit: int = 3
 
 def summarize(doc: text, limit: int = default_limit) -> text =
   "[%{limit}] %{doc}"

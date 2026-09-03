@@ -31,8 +31,6 @@ from tests._agl_helpers import run_inline_command
 
 # A non-tail recursive helper plus a variant guarded by a ``try``/``catch``.
 _PRELUDE = """
-param depth: int
-
 def sum_to(n: int) -> int =
   if n == 0 => 0 else => n + sum_to(n - 1)
 
@@ -45,9 +43,9 @@ def guarded(d: int) -> int =
 def _run(initializer: str, *, depth: int, max_call_depth: int):
     # ``out`` is bound then used so the block ends in an expression, keeping
     # ``out`` a public binding the caller can inspect.
-    source = f"{_PRELUDE}let out: int = {initializer}\nprint(out)\n"
+    source = f"{_PRELUDE}let depth: int = {depth}\nlet out: int = {initializer}\nprint(out)\n"
     driver = PipelineDriver(default_call_depth_limit=max_call_depth)
-    return run_inline_command(driver, source, param_values={"depth": depth})
+    return run_inline_command(driver, source)
 
 
 class TestGuardIsAuthoritative:

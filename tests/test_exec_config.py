@@ -203,13 +203,13 @@ class TestPackageEntryConfigRoute:
     reached by file path, by installed reference, or as a registered command.
     """
 
-    _SOURCE = 'param level: text = "unset"\nprogram def main() -> unit = print level\n'
+    _SOURCE = 'program def main(level: text = "unset") -> unit = print level\n'
 
     def _install(self, tmp_path: Path) -> tuple[Path, Path]:
-        """Install a one-module ``tools`` package and configure its param."""
+        """Install a one-module ``tools`` package and configure its program argument."""
         home = tmp_path / "home"
         module = write_installed_package(home, "tools", source=self._SOURCE)
-        (home / ".agm" / "config.toml").write_text('[tools.main]\nlevel = "prod"\n')
+        (home / ".agm" / "config.toml").write_text('[tools.main.main]\nlevel = "prod"\n')
         return home, module
 
     def _use_home(self, monkeypatch: pytest.MonkeyPatch, home: Path, cwd: Path) -> None:
@@ -254,7 +254,7 @@ class TestPackageEntryConfigRoute:
         """A file that no selected package owns is still addressed by its stem."""
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[loose]\nlevel = "stem"\n')
+        (home / ".agm" / "config.toml").write_text('[loose.main]\nlevel = "stem"\n')
         loose = tmp_path / "loose.agl"
         loose.write_text(self._SOURCE, encoding="utf-8")
         self._use_home(monkeypatch, home, tmp_path)

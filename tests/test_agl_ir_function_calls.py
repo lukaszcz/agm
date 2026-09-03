@@ -249,10 +249,10 @@ def test_function_with_let_in_body() -> None:
     assert ir["result"] == IntValue(25)
 
 
-def test_function_reads_root_parameter() -> None:
-    """A root function reads an immutable root parameter."""
+def test_function_reads_root_binding() -> None:
+    """A root function reads an immutable root binding."""
     source = (
-        "param offset: int = 10\n"
+        "let offset: int = 10\n"
         "def add_offset(x: int) -> int = x + offset\n"
         "let result = add_offset(5)\n()"
     )
@@ -276,9 +276,9 @@ def test_function_with_case_in_body() -> None:
 
 
 def test_function_with_unary_in_body() -> None:
-    """Function body with unary negation reads a root parameter."""
+    """Function body with unary negation reads a root binding."""
     source = (
-        "param scale: int = 2\n"
+        "let scale: int = 2\n"
         "def neg_scaled(x: int) -> int = -(x * scale)\n"
         "let result = neg_scaled(3)\n()"
     )
@@ -299,9 +299,9 @@ def test_function_with_named_args_in_body_call() -> None:
 
 
 def test_function_with_array_in_body() -> None:
-    """Function body containing an array literal reads a root parameter."""
+    """Function body containing an array literal reads a root binding."""
     source = (
-        "param base: int = 1\n"
+        "let base: int = 1\n"
         "def make_array(x: int) -> array[int] = [base, x, x * 2]\n"
         "let result = make_array(3)\n()"
     )
@@ -335,9 +335,9 @@ def test_function_with_cast_in_body() -> None:
 
 
 def test_function_with_template_in_body() -> None:
-    """Function body containing a template literal reads a root parameter."""
+    """Function body containing a template literal reads a root binding."""
     source = (
-        'param prefix: text = "Item"\n'
+        'let prefix: text = "Item"\n'
         'def label(n: int) -> text = "%{prefix} #%{n}"\n'
         "let result = label(5)\n()"
     )
@@ -392,10 +392,10 @@ def test_function_with_do_done_loop_in_body() -> None:
     assert ir["result"] == IntValue(0)
 
 
-def test_function_with_var_and_assignment_root_parameter() -> None:
-    """Function body uses a local var and an immutable root parameter."""
+def test_function_with_var_and_assignment_root_binding() -> None:
+    """Function body uses a local var and an immutable root binding."""
     source = (
-        "param factor: int = 3\n"
+        "let factor: int = 3\n"
         "def triple_then_add(x: int, y: int) -> int =\n"
         "  var acc = factor * x\n"
         "  acc := acc + y\n"
@@ -420,10 +420,10 @@ def test_function_with_raise_in_body() -> None:
     assert ir["result"] == IntValue(6)
 
 
-def test_function_with_index_access_and_root_parameter() -> None:
-    """Function body indexes an immutable root parameter."""
+def test_function_with_index_access_and_root_binding() -> None:
+    """Function body indexes an immutable root binding."""
     source = (
-        "param items: array[int] = [10, 20, 30]\n"
+        "let items: array[int] = [10, 20, 30]\n"
         "def get_item(i: int) -> int = items[i]\n"
         "let result = get_item(1)\n()"
     )
@@ -431,10 +431,10 @@ def test_function_with_index_access_and_root_parameter() -> None:
     assert ir["result"] == IntValue(20)
 
 
-def test_function_with_dict_literal_and_root_parameter() -> None:
-    """Function body with dict literal reads an immutable root parameter."""
+def test_function_with_dict_literal_and_root_binding() -> None:
+    """Function body with dict literal reads an immutable root binding."""
     source = (
-        "param base: int = 10\n"
+        "let base: int = 10\n"
         'def make_dict(x: int) -> dict[text, int] = {"a": base + x, "b": x}\n'
         "let result = make_dict(5)\n()"
     )
@@ -444,11 +444,11 @@ def test_function_with_dict_literal_and_root_parameter() -> None:
     assert ir["result"] == DictValue({"a": IntValue(15), "b": IntValue(5)})
 
 
-def test_function_with_is_test_and_root_parameter() -> None:
-    """Function body with is-test reads an immutable root parameter."""
+def test_function_with_is_test_and_root_binding() -> None:
+    """Function body with is-test reads an immutable root binding."""
     source = (
         "enum Color | Red | Green | Blue\n"
-        "param my_color: Color = Red()\n"
+        "let my_color: Color = Red()\n"
         "def check_red(c: Color) -> bool = c is Red or my_color is Red\n"
         "let result = check_red(Green())\n()"
     )
@@ -684,11 +684,11 @@ def test_program_entry_depth_limit_error_carries_entry_span() -> None:
     assert exc_info.value.span is not None
 
 
-def test_root_parameter_through_nested_positions_and_pattern_locals() -> None:
-    """A root parameter is visible through case arms; pattern binders stay local."""
+def test_root_binding_through_nested_positions_and_pattern_locals() -> None:
+    """A root binding is visible through case arms; pattern binders stay local."""
     source = (
         "enum Shape | Circle(radius: int) | Square(side: int)\n"
-        "param multiplier: int = 3\n"
+        "let multiplier: int = 3\n"
         "def describe(s: Shape) -> int =\n"
         "  case s of\n"
         "    | Circle(radius = _ as r) => r * multiplier\n"

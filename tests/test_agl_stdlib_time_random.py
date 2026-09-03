@@ -164,10 +164,9 @@ def test_random_state_is_isolated_between_concurrent_real_interpreters(tmp_path:
     entry_path = tmp_path / "entry.agl"
     entry_path.write_text(
         "import std/random\n"
-        "param run_seed: int\n"
         "extern def checkpoint() -> unit\n"
         "extern def report(seed: int, first: int, second: int) -> unit\n"
-        "program def main() -> unit =\n"
+        "program def main(run_seed: int) -> unit =\n"
         "  random::seed(run_seed)\n"
         "  checkpoint()\n"
         "  let first = random::below(1000000)\n"
@@ -192,14 +191,11 @@ def test_random_state_is_isolated_between_concurrent_real_interpreters(tmp_path:
         _StateCompanion, registry.load_companion(ENTRY_ID, entry_path.with_suffix(".py"))
     )
     program_symbol = next(iter(executable.program_functions))
-    run_seed_symbol = executable.params[0].symbol
 
     def run(seed: int) -> tuple[int, int]:
-        IrInterpreter(
-            executable,
-            extern_registry=registry,
-            param_values={run_seed_symbol: IntValue(seed)},
-        ).run(program_symbol=program_symbol)
+        IrInterpreter(executable, extern_registry=registry).run(
+            program_symbol=program_symbol, arguments=(IntValue(seed),)
+        )
         return state_companion.results.pop(seed)
 
     expected = {seed: run(seed) for seed in (713, 91)}

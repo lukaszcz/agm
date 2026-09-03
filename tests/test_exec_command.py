@@ -711,7 +711,7 @@ class TestExecCommandBehavior:
         from agm.cli_support.args import ExecArgs
 
         unreadable = tmp_path / "pkg::mod"
-        unreadable.write_text("param level: text\n", encoding="utf-8")
+        unreadable.write_text("let level: int = 1\n", encoding="utf-8")
         unreadable.chmod(0)
         try:
             args = ExecArgs(
@@ -870,11 +870,11 @@ class TestExecCommandEdgePaths:
         captured = capsys.readouterr()
         assert captured.out == "ok\n"
 
-    def test_unknown_param_option_exits_1(
+    def test_unknown_program_option_exits_1(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        write_file_program(agl_file, 'param msg: text = "ok"\nprint msg\n')
+        write_file_program(agl_file, 'program def main(msg: text = "ok") -> unit = print msg\n')
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args(agl_file, param_tokens=["--unknown"]))
@@ -1217,8 +1217,9 @@ class TestExecLowersGraphOnce:
         lowerings = self._count_lowerings(monkeypatch)
         (tmp_path / "helper.agl").write_text('def greet(who: text) -> text = "hi %{who}"\n')
         agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file, 'import helper::*\nparam who: text = "world"\nprint helper::greet(who)\n'
+        agl_file.write_text(
+            'import helper::*\nprogram def main(who: text = "world") -> unit = '
+            "print helper::greet(who)\n"
         )
 
         assert exec_command.run(_exec_args(agl_file, param_tokens=["--who", "agl"])) is None
@@ -1238,7 +1239,7 @@ class TestExecLowersGraphOnce:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            'let impl = AgentCommand("impl")\nparam task: text = "do it"\nimpl.ask(task)\n',
+            'let impl = AgentCommand("impl")\nlet task: text = "do it"\nimpl.ask(task)\n',
         )
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
@@ -1250,12 +1251,12 @@ class TestExecLowersGraphOnce:
         assert "call-sites:" in captured.out
         assert len(lowerings) == 1
 
-    def test_param_error_exits_1_before_the_trace_file_is_prepared(
+    def test_program_argument_error_exits_1_before_the_trace_file_is_prepared(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """A param failure preempts the run: no trace file, no program output."""
+        """A required-argument failure preempts the run: no trace file, no program output."""
         agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, 'param n: int\nprint "n=%{n}"\n')
+        write_file_program(agl_file, 'program def main(n: int) -> unit = print "n=%{n}"\n')
         log_path = tmp_path / "trace.jsonl"
 
         with pytest.raises(SystemExit) as exc_info:
@@ -4892,7 +4893,7 @@ class TestExecDevelopmentPackages:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
         (home / ".agm" / "config.toml").write_text(
-            '["alpha/main"]\nmessage = "package-qualified"\n'
+            '["alpha/main".main]\nmessage = "package-qualified"\n'
         )
         monkeypatch.setattr(
             exec_engine,
@@ -4904,9 +4905,7 @@ class TestExecDevelopmentPackages:
         (alpha / "alpha").mkdir(parents=True)
         (alpha / "package.toml").write_text('[package]\nname = "alpha"\nversion = "1.0.0"\n')
         entry = alpha / "alpha" / "main.agl"
-        entry.write_text(
-            'param message: text = "default"\nprogram def main() -> unit = print message\n'
-        )
+        entry.write_text('program def main(message: text = "default") -> unit = print message\n')
 
         assert exec_command.run(_exec_args_no_log(entry)) is None
         assert capsys.readouterr().out == "package-qualified\n"

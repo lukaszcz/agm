@@ -478,7 +478,7 @@ class TestScopedBindings:
 
     def test_double_colon_anchors_at_the_module_root_from_inside_a_region(self) -> None:
         resolved = parse_and_resolve_file(
-            "param x: int\n\nscope A\n  let x = 2\n  def read() -> int = ::x\nend A"
+            "let x: int = 1\n\nscope A\n  let x = 2\n  def read() -> int = ::x\nend A"
         )
         assert _ref(resolved, "x").scope_path == ()
 
@@ -1137,12 +1137,12 @@ class TestAcceptance:
         r = parse_and_resolve("param spec: text\nprint spec")
         assert _ref(r, "spec").kind == BinderKind.param_binding
 
-    def test_let_after_input(self) -> None:
-        r = parse_and_resolve("param spec\nlet x = spec\nx")
+    def test_let_referencing_a_typed_let_binding(self) -> None:
+        r = parse_and_resolve('let spec: text = "x"\nlet x = spec\nx')
         assert _ref(r, "x").kind == BinderKind.let_binding
 
     def test_let_with_interpolation(self) -> None:
-        r = parse_and_resolve('param name\nlet greeting = "Hello %{name}"\ngreeting')
+        r = parse_and_resolve('let name: text = "x"\nlet greeting = "Hello %{name}"\ngreeting')
         assert _ref(r, "greeting").kind == BinderKind.let_binding
 
     def test_simple_let_captured_by_function_still_resolves(self) -> None:
@@ -2692,7 +2692,7 @@ class TestResolutionSideTable:
         assert not ref.mutable
 
     def test_interp_varref_resolved(self) -> None:
-        r = parse_and_resolve('param name\nlet q = "Hello %{name}"\nq')
+        r = parse_and_resolve('let name: text = "x"\nlet q = "Hello %{name}"\nq')
         let_q = r.program.body.items[1]
         assert isinstance(let_q, LetDecl)
         tmpl = let_q.value

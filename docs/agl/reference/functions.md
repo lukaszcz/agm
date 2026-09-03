@@ -913,9 +913,7 @@ def review_artifact(artifact: text) -> Review =
   )
   r
 
-param spec: text
-
-program def main() -> unit =
+program def main(spec: text) -> unit =
   let artifact: text = ask "Implement %{spec}"
   let result = review_artifact(artifact)
 

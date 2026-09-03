@@ -175,10 +175,10 @@ let value = 1
     (
         "Config::answer\nlet Config::answer = 42",
         "Config::answer\n\nscope Config\n  let answer = 42\nend Config",
-        "Config::answer\n\nscope Config\n  param answer: int = 42\nend Config",
-        "answer\nparam answer: int = 42",
+        "Config::answer\n\nscope Config\n  var answer: int = 42\nend Config",
+        "answer\nvar answer: int = 42",
     ),
-    ids=("shorthand-let", "region-let", "scoped-param", "root-param"),
+    ids=("shorthand-let", "region-let", "scoped-var", "root-var"),
 )
 def test_inline_expression_cannot_reference_a_later_textual_binding(source: str) -> None:
     parsed = PipelineDriver.parse_entry(source)

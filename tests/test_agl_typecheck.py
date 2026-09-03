@@ -7904,7 +7904,7 @@ class TestProvisionalContainerLiterals:
 
     def test_empty_literals_are_solved_by_branch_common_types(self) -> None:
         checked = accept_type(
-            "param choose_empty: bool\n"
+            "let choose_empty: bool = true\n"
             "let xs = if choose_empty => [] else => [1]\n"
             "let values = if choose_empty => {} else => {answer: 1}\n"
             "values"
@@ -7938,7 +7938,7 @@ class TestProvisionalContainerLiterals:
                 "annotate the literal with its enum type",
             ),
             (
-                "param choose_number: bool\n"
+                "let choose_number: bool = true\n"
                 "enum Option[T]\n"
                 "  | some(value: T)\n"
                 'if choose_number => some(value = 1) else => some(value = "wrong")',
@@ -7976,7 +7976,7 @@ class TestProvisionalContainerLiterals:
 
     def test_uncontextual_member_branches_require_an_enum_annotation(self) -> None:
         error = reject_type(
-            "param choose_none: bool\n"
+            "let choose_none: bool = true\n"
             "enum Option[T]\n"
             "  | none\n"
             "  | some(value: T)\n"
@@ -7986,7 +7986,7 @@ class TestProvisionalContainerLiterals:
 
     def test_unrelated_record_branches_keep_the_normal_mismatch_diagnostic(self) -> None:
         error = reject_type(
-            "param select_left: bool\n"
+            "let select_left: bool = true\n"
             "record Left()\n"
             "record Right()\n"
             "if select_left => Left() else => Right()"
@@ -8061,7 +8061,7 @@ class TestProvisionalContainerLiterals:
 
     def test_concrete_container_and_branch_widening_is_unchanged(self) -> None:
         checked = accept_type(
-            "param choose_decimal: bool\n"
+            "let choose_decimal: bool = true\n"
             "let xs = [1, 2.5]\n"
             "let value = if choose_decimal => 1 else => 2.5\n"
             "value"
@@ -9201,8 +9201,8 @@ class TestIndexTypechecking:
         assert isinstance(assign.target, IndexTarget)
         assert result.node_types[assign.target.obj.node_id] == ArrayType(elem=IntType())
 
-    def test_parsed_indexed_assignment_accepts_param_array(self) -> None:
-        result = accept_type("param xs: array[int]\nxs[0] := 2\nxs")
+    def test_parsed_indexed_assignment_accepts_let_array(self) -> None:
+        result = accept_type("let xs: array[int] = [1]\nxs[0] := 2\nxs")
         program = result.resolved.program
         assert program is not None
         final_expr = program.body.items[-1]
@@ -13088,8 +13088,8 @@ class TestNoFiniteSchemaUseSites:
         r = accept_type(_TREE_SRC + 'let raw: text = "{}"\nraw as Tree')
         assert r.resolved.program is not None
 
-    def test_param_finite_recursive_type_accepted(self) -> None:
-        r = accept_type(_TREE_SRC + "param t: Tree\nt")
+    def test_program_parameter_finite_recursive_type_accepted(self) -> None:
+        r = accept_type(_TREE_SRC + "program def main(t: Tree) -> unit = ()")
         assert r.resolved.program is not None
 
     @pytest.mark.parametrize(
@@ -13098,7 +13098,7 @@ class TestNoFiniteSchemaUseSites:
             'ask::[R[int]]("Q")',
             'exec::[R[int]]("cmd")',
             'let raw: text = "{}"\nraw as R[int]',
-            "param r: R[int]\nr",
+            "program def main(r: R[int]) -> unit = ()",
         ],
     )
     def test_phantom_growing_recursive_type_accepted_at_schema_boundary(
@@ -13511,7 +13511,7 @@ class TestSessionPreludeTypes:
         "source",
         (
             'ask::[Session]("Q")',
-            "param session: Session\nsession",
+            "program def main(session: Session) -> unit = ()",
             "def encode(session: Session) -> json = session as json\n()",
         ),
     )
@@ -13535,14 +13535,16 @@ class TestSessionPreludeTypes:
 
     def test_session_transport_and_stats_remain_json_serializable(self) -> None:
         checked = accept_type(
-            "param transport: SessionTransport\n"
-            "param stats: SessionStats\n"
-            "let transport_json: json = Cli as json\n"
-            "let stats_json: json = SessionStats(input-tokens = 1, output-tokens = 2, "
+            "program def main(transport: SessionTransport, stats: SessionStats) -> unit =\n"
+            "  let transport_json: json = Cli as json\n"
+            "  let stats_json: json = SessionStats(input-tokens = 1, output-tokens = 2, "
             "cost = 3.0, context-percent = 4.0) as json\n"
-            "stats_json"
+            "  ()"
         )
-        transport_decl, stats_decl = checked.resolved.program.body.items[2:4]
+        program_def = checked.resolved.program.body.items[0]
+        assert isinstance(program_def, FuncDef)
+        assert isinstance(program_def.body, Block)
+        transport_decl, stats_decl = program_def.body.items[0:2]
         assert isinstance(transport_decl, LetDecl)
         assert isinstance(stats_decl, LetDecl)
         assert checked.node_types[transport_decl.value.node_id] == JsonType()
@@ -13565,11 +13567,11 @@ class TestSessionPreludeTypes:
         assert "session" in str(exc_info.value).lower()
 
 
-def test_agent_enum_is_a_json_serializable_param_type() -> None:
+def test_agent_enum_is_a_json_serializable_program_parameter_type() -> None:
     """Agent values are ordinary enum data at the JSON parameter boundary."""
-    checked = accept_type("param selected: Agent\nselected")
-    decl = checked.resolved.program.body.items[0]
-    assert isinstance(decl, ParamDecl)
-    binding_type = checked.type_env.get_binding_type(decl.node_id)
+    checked = accept_type("program def main(selected: Agent) -> unit = ()")
+    program_def = checked.resolved.program.body.items[0]
+    assert isinstance(program_def, FuncDef)
+    binding_type = checked.type_env.get_binding_type(program_def.params[0].node_id)
     assert isinstance(binding_type, EnumType)
     assert binding_type.name == "Agent"

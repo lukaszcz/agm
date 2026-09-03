@@ -42,7 +42,7 @@ def test_complete_registered_commands_reads_active_index(
     package_root.mkdir(parents=True)
     (package_root / "tools").mkdir()
     (package_root / "tools" / "lint.agl").write_text(
-        "param level: text\nprogram def main() -> unit = ()\n", encoding="utf-8"
+        "program def main(level: text) -> unit = ()\n", encoding="utf-8"
     )
     (package_root / "package.toml").write_text(
         """[package]
@@ -180,7 +180,7 @@ def test_completion_treats_an_unreadable_colon_named_file_as_a_file_not_a_refere
     to read it) rather than treating it as a package reference.
     """
     unreadable = tmp_path / "pkg::mod.agl"
-    unreadable.write_text("param level: text\n", encoding="utf-8")
+    unreadable.write_text("let level: int = 1\n", encoding="utf-8")
     unreadable.chmod(0)
     try:
         from agm.cli_support.exec_target import is_installed_reference
@@ -1965,7 +1965,7 @@ class TestExecCommandShellCompleteEdgeCases:
         from click.shell_completion import _resolve_context
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param msg: text\n")
+        agl_file.write_text("program def main(msg: text) -> unit = ()\n")
 
         cli = self._get_cli()
         exec_cmd = self._get_exec_cmd()
@@ -1982,7 +1982,7 @@ class TestExecCommandShellCompleteEdgeCases:
         from click.shell_completion import _resolve_context
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param msg: text\n")
+        agl_file.write_text("program def main(msg: text) -> unit = ()\n")
         cli = self._get_cli()
         ctx = _resolve_context(cli, {}, "agm", ["exec", str(agl_file)])
         ctx.params["module_paths"] = module_paths

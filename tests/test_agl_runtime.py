@@ -1014,9 +1014,7 @@ class TestCapabilitiesBuiltFromRegistrations:
     def test_as_renderer_syntax_is_parse_error(self) -> None:
         """``%{x as name}`` is a syntax error (renderer syntax removed)."""
         rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
-        result = run_inline_command(
-            rt, 'param x\nlet y = ask "see %{x as fancy}"', param_values={"x": "hi"}
-        )
+        result = run_inline_command(rt, 'let x: text = "hi"\nlet y = ask "see %{x as fancy}"')
         assert result.ok is False
 
 
@@ -2200,11 +2198,7 @@ class TestUniformRenderingInPrompts:
             return "ok"
 
         rt = PipelineDriver(agent_dispatcher=agent)
-        result = run_inline_command(
-            rt,
-            'param x\nask("see: %{x}")',
-            param_values={"x": "hello"},
-        )
+        result = run_inline_command(rt, 'let x: text = "hello"\nask("see: %{x}")')
         assert result.ok is True
         assert received, "agent should have been called"
         prompt = received[0].prompt

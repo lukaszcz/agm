@@ -893,7 +893,7 @@ def test_pipeline_nonraising_helpers_defend_against_wrong_artifact_kind(
 def test_single_and_program_discovery_surface_match_errors() -> None:
     runtime = PipelineDriver()
     discovery = runtime.discover_params(
-        prepare_inline_command("param n: int = 1\ncase true of | true => n")
+        prepare_inline_command("let n: int = 1\ncase true of | true => n")
     )
     assert discovery.compiled is None
     assert any("Non-exhaustive" in item.message for item in discovery.diagnostics)
@@ -929,7 +929,7 @@ def test_single_discovery_and_cached_run_compile_matches_once(
     )
     runtime = PipelineDriver()
     prepared = prepare_inline_command(
-        "param selected: bool = true\ncase selected of | true => 1 | false => 0"
+        "let selected: bool = true\ncase selected of | true => 1 | false => 0"
     )
 
     discovery = runtime.discover_params(prepared)
@@ -964,7 +964,7 @@ def test_program_discovery_and_cached_run_compile_matches_once(
     )
     runtime = PipelineDriver()
     prepared = _prepared_program(
-        "param selected: bool = true\ncase selected of | true => 1 | false => 0"
+        "let selected: bool = true\ncase selected of | true => 1 | false => 0"
     )
 
     discovery = runtime.discover_params(prepared)

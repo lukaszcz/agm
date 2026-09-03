@@ -43,7 +43,10 @@ def std_compatibility_bound(requirement: str) -> str:
 
 
 def write_installed_package(
-    home: Path, name: str, *, source: str = "param level: text\nprogram def main() -> unit = ()\n"
+    home: Path,
+    name: str,
+    *,
+    source: str = "program def main(level: text) -> unit = ()\n",
 ) -> Path:
     """Install and activate a one-module package named *name* under *home*.
 

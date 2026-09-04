@@ -4133,6 +4133,31 @@ class TestExecProgramSelection:
         assert "main" in captured.err
         assert captured.out == ""
 
+    def test_unknown_program_is_rejected_before_reading_a_program_config_table(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A -p naming no program never falls back to the sole program's config table."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[sole.main]\ntimeout = "x"\n')
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        agl_file = tmp_path / "sole.agl"
+        write_file_program(agl_file, 'program def main() -> unit = print "sole"\n')
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file, program="missing"))
+
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "missing" in captured.err
+        assert captured.out == ""
+
     def test_rejects_a_file_without_a_program_definition(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

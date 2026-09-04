@@ -83,6 +83,7 @@ from agm.cli_support.exec_target import (
 )
 from agm.cli_support.program_discovery import (
     discover_program_declarations_from_installed_reference,
+    select_declared_program,
     select_entry_program,
 )
 from agm.cli_support.program_options import (
@@ -273,9 +274,9 @@ def registered_program_declaration(
     A registered command names exactly one ``program def`` declaration — the
     one selected here by matching the installed reference's own declaration
     path among the entry module's own candidates, via
-    :func:`~agm.cli_support.program_discovery.select_entry_program`, the one
-    place a requested name is matched against entry-module declarations. An
-    imported module's same-named declaration never shadows it.
+    :func:`~agm.cli_support.program_discovery.select_entry_program`, which
+    matches a requested name against entry-module declarations. An imported
+    module's same-named declaration never shadows it.
     """
     try:
         if context is None:
@@ -359,20 +360,16 @@ def run(
     parsed_programs = tuple(
         item for item in parsed_items if isinstance(item, FuncDef) and item.is_program
     )
-    selected_parsed_program = (
-        parsed_programs[0]
-        if len(parsed_programs) == 1
-        else next(
-            (
-                item
-                for item in parsed_programs
-                if "::".join((*(segment.name for segment in item.scope_path), item.name))
-                == args.program
-            ),
-            None,
-        )
-        if args.program is not None
-        else None
+    # The engine settings a program's own config table overrides must be known
+    # before the pipeline that discovers declarations can be built, so this
+    # pre-pass applies ``select_declared_program``'s rule to the parsed AST.
+    # ``select_entry_program`` still makes the authoritative selection below.
+    selected_parsed_program = select_declared_program(
+        parsed_programs,
+        requested=args.program,
+        declaration_path=lambda item: "::".join(
+            (*(segment.name for segment in item.scope_path), item.name)
+        ),
     )
     engine_program_table: dict[str, object] = {}
     if entry_stem is not None and selected_parsed_program is not None:
@@ -507,8 +504,8 @@ def run(
             print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
         raise SystemExit(1)
 
-    # ``select_entry_program`` is the one place a requested ``-p``/``--program``
-    # name is matched against the entry module's own declarations, shared with
+    # ``select_entry_program`` matches a requested ``-p``/``--program`` name
+    # against the entry module's own declarations, shared with
     # ``cli._exec_print_help``'s degraded help rendering, so the two surfaces
     # can never disagree about which program a given name selects.
     selection = select_entry_program(discovery.programs, requested=args.program)

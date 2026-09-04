@@ -5,19 +5,22 @@
 ``PipelineDriver.discover_programs`` (:class:`~agm.agl.pipeline.ProgramDiscovery`)
 as their own standalone pipeline pass.
 
-:func:`select_entry_program` is the one place a requested ``-p``/``--program``
-name is matched against the entry module's own ``program def`` declarations,
-shared by ``commands.exec_program.run`` (which turns an unresolved selection
-into a host diagnostic) and ``cli._exec_print_help`` (which degrades an
-unresolved selection to a usage-line listing), so the two surfaces can never
-disagree about which program a given name selects.
+:func:`select_entry_program` matches a requested ``-p``/``--program`` name
+against the entry module's own ``program def`` declarations, shared by
+``commands.exec_program.run`` (which turns an unresolved selection into a host
+diagnostic) and ``cli._exec_print_help`` (which degrades an unresolved
+selection to a usage-line listing), so the two surfaces can never disagree
+about which program a given name selects. :func:`select_declared_program`
+holds the selection rule itself, for the one caller that must apply it before
+declarations exist.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from agm.agl.modules.roots import RootSet
 from agm.agl.runtime.request import AgentResponse
@@ -26,8 +29,11 @@ if TYPE_CHECKING:
     from agm.agl.runtime.types import ProgramDeclInfo
     from agm.cli_support.exec_target import PackageProgramReference
 
+_ProgramT = TypeVar("_ProgramT")
+
 __all__ = [
     "ProgramSelection",
+    "select_declared_program",
     "discover_program_declarations_from_installed_reference",
     "discover_program_declarations_from_source",
     "discover_programs_for_target",
@@ -212,19 +218,42 @@ class ProgramSelection:
     requested_unmatched: bool
 
 
+def select_declared_program(
+    candidates: "Sequence[_ProgramT]",
+    *,
+    requested: str | None,
+    declaration_path: "Callable[[_ProgramT], str]",
+) -> "_ProgramT | None":
+    """Apply the entry-program selection rule to *candidates*.
+
+    A *requested* name selects only the candidate whose declaration path it
+    spells, never a differently named one; with no request, a sole candidate
+    is selected implicitly and several are left unselected. Held here so the
+    AST pre-pass in ``commands.exec_program.run`` — which must resolve the
+    selected program's qualified engine-config table before the pipeline that
+    produces :class:`ProgramDeclInfo` values can be built — applies exactly
+    the rule :func:`select_entry_program` applies later.
+    """
+    if requested is not None:
+        return next(
+            (candidate for candidate in candidates if declaration_path(candidate) == requested),
+            None,
+        )
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def select_entry_program(
     programs: "tuple[ProgramDeclInfo, ...]", *, requested: str | None
 ) -> ProgramSelection:
     """Filter *programs* to the entry module's own declarations and apply *requested*."""
     entry_programs = tuple(program for program in programs if program.is_entry)
-    if requested is not None:
-        selected = next(
-            (program for program in entry_programs if program.declaration_path == requested), None
-        )
-        return ProgramSelection(
-            entry_programs=entry_programs, selected=selected, requested_unmatched=selected is None
-        )
-    selected = entry_programs[0] if len(entry_programs) == 1 else None
+    selected = select_declared_program(
+        entry_programs,
+        requested=requested,
+        declaration_path=lambda program: program.declaration_path,
+    )
     return ProgramSelection(
-        entry_programs=entry_programs, selected=selected, requested_unmatched=False
+        entry_programs=entry_programs,
+        selected=selected,
+        requested_unmatched=requested is not None and selected is None,
     )

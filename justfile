@@ -113,27 +113,24 @@ typecheck:
 # independent and run alongside it: on a green tree their cost disappears behind
 # the suite's runtime entirely. The first failure ends the run -- whichever side
 # it comes from, the other is killed rather than left to finish work whose
-# verdict no longer matters. Job control gives each side its own process group,
-# so a signal reaches the whole tree, pytest's workers included; the INT trap is
-# what keeps Ctrl-C reaching them too, now that they no longer share this
-# shell's group.
+# verdict no longer matters. Both sides stay in this shell's process group, so
+# the suite keeps the terminal it draws its progress on and Ctrl-C still reaches
+# it; ending a side therefore walks its process tree, since there is no group of
+# its own to signal.
 check:
     @static_log=$(mktemp); \
-    kill_group() { kill -- -"$1" 2>/dev/null || true; }; \
-    set -m; \
+    trap 'rm -f "$static_log"' EXIT; \
+    kill_tree() { local kid; for kid in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$kid"; done; kill "$1" 2>/dev/null || true; }; \
     ( just typecheck && just lint && just vulture ) > "$static_log" 2>&1 & \
     static=$!; \
     just test & \
     tests=$!; \
-    set +m; \
-    trap 'kill_group "$static"; kill_group "$tests"; just clean-coverage; exit 130' INT TERM; \
-    trap 'rm -f "$static_log"' EXIT; \
     first=0; \
     first_status=0; \
     wait -n -p first "$static" "$tests" || first_status=$?; \
     other=$(( first == static ? tests : static )); \
     if (( first_status )); then \
-        kill_group "$other"; \
+        kill_tree "$other"; \
         wait "$other" 2>/dev/null || true; \
         just clean-coverage; \
         printf '\n'; \

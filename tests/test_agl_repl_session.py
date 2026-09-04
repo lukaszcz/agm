@@ -1406,9 +1406,9 @@ class TestBuiltinIdentityAcrossEntries:
         assert failed.error is not None
 
         result = s.eval_entry(
-            "let step = 0\n"
+            "let stride = 0\n"
             "try\n"
-            "  for i in 1 to 5 by step do\n"
+            "  for i in 1 to 5 step stride do\n"
             "    ()\n"
             "  done\n"
             "catch RangeError as error =>\n"
@@ -1580,9 +1580,9 @@ class TestBuiltinIdentityWithStandardLibrary:
         declare = s.eval_entry(
             "scope A\n"
             "  builtin exception RangeError extends Exception()\n"
-            "  def trigger(step: int) -> unit =\n"
+            "  def trigger(stride: int) -> unit =\n"
             "    try\n"
-            "      for i in 1 to 5 by step do\n"
+            "      for i in 1 to 5 step stride do\n"
             "        ()\n"
             "      done\n"
             "    catch RangeError as error =>\n"
@@ -6355,9 +6355,9 @@ class TestUnpromotedNominalDeclarationEffects:
         assert not failed.ok
 
         caught = s.eval_entry(
-            "let step = 0\n"
+            "let stride = 0\n"
             "try\n"
-            "  for i in 1 to 5 by step do\n"
+            "  for i in 1 to 5 step stride do\n"
             "    ()\n"
             "  done\n"
             "catch RangeError as error =>\n"
@@ -6400,7 +6400,7 @@ class TestUnpromotedNominalDeclarationEffects:
         )
         assert not failed.ok
 
-        raised = s.eval_entry("let step = 0\nfor i in 1 to 5 by step do\n  ()\ndone")
+        raised = s.eval_entry("let stride = 0\nfor i in 1 to 5 step stride do\n  ()\ndone")
 
         assert not raised.ok
         assert raised.error is not None

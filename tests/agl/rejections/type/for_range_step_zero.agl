@@ -1,4 +1,4 @@
 program def main() -> unit =
-  for i in 1 to 5 by "two" do
+  for i in 1 to 5 step 0 do
     ()
   done

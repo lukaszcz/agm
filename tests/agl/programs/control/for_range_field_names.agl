@@ -1,17 +1,19 @@
-# Field names 'to', 'downto', 'by' remain usable in record fields after becoming keywords.
-# Regression: keyword admission in field_name position for to/downto/by.
-record Step
-  by: int
+# Operator words stay usable as record fields: `.` and `:` positions never
+# promote them. Regression: the range operators in field_name position.
+record Stride
+  step: int
   to: int
   downto: int
+  or: int
 
 program def main() -> unit =
-  let s = Step(by = 3, to = 10, downto = 2)
-  print s.by
+  let s = Stride(step = 3, to = 10, downto = 2, or = 7)
+  print s.step
   print s.to
   print s.downto
+  print s.or
 
-  for i in s.by to s.to do
+  for i in s.step to s.to step s.step do
     ()
   done
   print "ok"

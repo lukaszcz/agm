@@ -56,7 +56,7 @@
   '("record" "enum" "type" "program" "def" "fn" "let" "var"
     "for" "while" "do" "until" "done" "if" "else" "case" "of" "try" "catch"
     "raise" "return" "break" "continue" "exception" "extends" "builtin"
-    "extern" "as" "as?" "and" "or" "not" "is" "in" "to" "downto" "by" "with"
+    "extern" "as" "as?"
     "true" "false" "null" "infixl" "infixr" "prio")
   "Reserved AgL keywords.
 
@@ -66,14 +66,26 @@ Canonical source: `src/agm/agl/keywords.py' (the `KEYWORDS' frozenset).")
   '("true" "false" "null")
   "AgL literal keywords, a subset of `agl-keywords'.")
 
+(defconst agl-operator-keywords
+  '("and" "or" "not" "is" "in" "to" "downto" "step" "with")
+  "AgL operator words, a subset of `agl-soft-keywords'.
+
+Promoted to operators in operator position only, but painted as
+keywords wherever they appear: lexical highlighting cannot tell that
+position from a member name, and the operator reading is the common
+one.")
+
 (defconst agl-soft-keywords
-  '("import" "use" "export" "hiding" "scope" "end")
+  '("import" "use" "export" "hiding" "scope" "end"
+    "and" "or" "not" "is" "in" "to" "downto" "step" "with")
   "AgL soft (contextually promoted) keywords.
 
-Ordinary identifiers outside their promotion window.  Canonical
-source: `src/agm/agl/keywords.py' (the `SOFT_KEYWORDS' frozenset),
-whose promoted token types are `src/agm/agl/lexer/tokens.py''s
-`SOFT_KEYWORD_TOKENS' (IMPORT, USE, HIDING, EXPORT, SCOPE, END).")
+Ordinary identifiers outside their promotion window.  The operator
+words are promoted in operator position only, so they name members
+and fields everywhere else.  Canonical source:
+`src/agm/agl/keywords.py' (the `SOFT_KEYWORDS' frozenset), whose
+promoted token types are `src/agm/agl/lexer/tokens.py''s
+`SOFT_KEYWORD_TOKENS'.")
 
 (defconst agl-contextual-builtins
   '("print" "render" "exec" "ask" "ask-request"
@@ -544,18 +556,20 @@ function only ever adjusts the start of the region."
 ;; explicitly overrides string face for `%{' / `}' delimiters.
 ;; ---------------------------------------------------------------------------
 
-(defconst agl--reserved-keyword-only-names
-  (let (result)
-    (dolist (kw agl-keywords (nreverse result))
-      (unless (member kw agl-constant-keywords)
-        (push kw result))))
-  "`agl-keywords' minus `agl-constant-keywords'.
+(defconst agl--keyword-face-names
+  (append
+   (let (result)
+     (dolist (kw agl-keywords (nreverse result))
+       (unless (member kw agl-constant-keywords)
+         (push kw result))))
+   agl-operator-keywords)
+  "`agl-keywords' minus `agl-constant-keywords', plus `agl-operator-keywords'.
 
-The subset that gets `font-lock-keyword-face' rather than
+The words that get `font-lock-keyword-face' rather than
 `font-lock-constant-face'.")
 
-(defconst agl--reserved-keyword-re (regexp-opt agl--reserved-keyword-only-names)
-  "Regexp matching one reserved AgL keyword (excluding the literal constants).")
+(defconst agl--keyword-face-re (regexp-opt agl--keyword-face-names)
+  "Regexp matching one keyword-faced AgL word (excluding the literal constants).")
 
 (defconst agl--constant-keyword-re (regexp-opt agl-constant-keywords)
   "Regexp matching one of `agl-constant-keywords'.")
@@ -680,8 +694,8 @@ The window is item-start, followed by a `NAME (:: NAME)*' closer path."
          (looking-at agl--name-re))))
 
 (defun agl--match-reserved-keyword (limit)
-  "`font-lock-keywords' MATCHER for reserved AgL keywords, up to LIMIT."
-  (agl--search-ident-forward agl--reserved-keyword-re limit))
+  "`font-lock-keywords' MATCHER for keyword-faced AgL words, up to LIMIT."
+  (agl--search-ident-forward agl--keyword-face-re limit))
 
 (defun agl--match-constant-keyword (limit)
   "`font-lock-keywords' MATCHER for `true'/`false'/`null', up to LIMIT."

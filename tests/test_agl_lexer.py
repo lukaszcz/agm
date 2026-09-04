@@ -1724,7 +1724,7 @@ class TestAgLSnippets:
         result = tok("x <= y and a >= b")
         types = [t for t, _ in result]
         assert "LE" in types
-        assert "and" in types
+        assert "AND" in types
         assert "GE" in types
 
     def test_complex_program_fragment(self) -> None:
@@ -1771,16 +1771,16 @@ case review of
     def test_not_and_or_keywords(self) -> None:
         result = tok("not true and false or null")
         types = [t for t, _ in result]
-        assert "not" in types
-        assert "and" in types
-        assert "or" in types
+        assert "NOT" in types
+        assert "AND" in types
+        assert "OR" in types
 
     def test_is_in_keywords(self) -> None:
         result = tok("x is A and y in z")
         types = [t for t, _ in result]
-        assert "is" in types
-        assert "and" in types
-        assert "in" in types
+        assert "IS" in types
+        assert "AND" in types
+        assert "IN" in types
 
 
 # ---------------------------------------------------------------------------
@@ -2461,9 +2461,10 @@ class TestKeywordReservation:
         assert types == ["def", "fn"]
 
     def test_control_flow_words_are_reserved(self) -> None:
-        # let/var/do/until/if/else/case/of/try/catch/raise/as/and/or/not
-        # are reserved keywords.
-        source = "let var set do until if else case of try catch raise as and or not"
+        # let/var/do/until/if/else/case/of/try/catch/raise/as are reserved
+        # keywords.  The operator words are soft (see
+        # tests/test_agl_soft_operator_keywords.py).
+        source = "let var set do until if else case of try catch raise as"
         result = tok(source)
         types = [t for t, _ in result]
         for kw in (
@@ -2479,9 +2480,6 @@ class TestKeywordReservation:
             "catch",
             "raise",
             "as",
-            "and",
-            "or",
-            "not",
         ):
             assert kw in types, f"keyword {kw!r} must still be reserved"
 

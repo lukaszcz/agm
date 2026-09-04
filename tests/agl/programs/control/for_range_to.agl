@@ -1,9 +1,9 @@
-# Range for with 'to': ascending inclusive iteration with by step.
-# Exercises: for i in a to b by k, step overshoot, degenerate (zero-iteration) range.
+# Range for with 'to': ascending inclusive iteration with an explicit step.
+# Exercises: for i in a to b step k, step overshoot, degenerate (zero-iteration) range.
 
 program def main(start: int, stop: int, step: int) -> unit =
   var total: int = 0
-  for i in start to stop by step do
+  for i in start to stop step step do
     total := total + i
   done
   print total

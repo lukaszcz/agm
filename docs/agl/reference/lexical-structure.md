@@ -67,7 +67,7 @@ variable or function names:
 ```text
 record enum type program def fn let var for while do until done
 if else case of try catch raise return break continue exception extends builtin extern as as?
-and or not is in to downto by with true false null
+true false null
 infixl infixr prio
 ```
 
@@ -79,14 +79,7 @@ spelling. `as?` is always reserved and cannot be used as an identifier.
 `agent` is an ordinary identifier, including in binding, pattern, and field
 positions.
 
-`to`, `downto`, and `by` are reserved (they introduce the range tail of a
-`for` clause) but are still accepted as **field names** (record/enum field
-definitions, named constructor arguments, dict shorthand keys, postfix field
-access, and pattern field keys). They cannot be used as variable, pattern, or
-catch binders. This preserves existing uses such as `Tagged(by: value)`.
-
-`with` (the record-update operator) is fully reserved: unlike `to`, `downto`,
-and `by`, it is not accepted as a field name.
+`by` carries no syntactic role: the range stride is spelled `step`.
 
 `self` is a **contextual identifier**, not a keyword. It is special only as the
 first parameter of a `def` in a record, enum, or exception scope, where it is
@@ -109,9 +102,11 @@ reserved for standard-library declarations that are implemented by the host.
 `extern` is reserved for declarations implemented by a companion Python file
 (see [Python FFI](ffi.md)).
 
+Soft keywords are **not reserved**: each is promoted to its own token only
+inside a promotion window, and remains a valid identifier everywhere else.
+
 **Module and scope soft keywords** — `import`, `use`, `export`, `hiding`,
-`scope`, and `end` are **not reserved**. They remain valid identifiers in all
-positions except:
+`scope`, and `end` remain valid identifiers in all positions except:
 
 | Keyword | Promoted to | Window |
 |---------|-------------|--------|
@@ -126,6 +121,24 @@ A scope closer must repeat exactly the path of the region it closes. At other
 layout levels, `end` remains a name;
 for example it can be a record field or the first expression in a declaration
 suite.
+
+**Operator soft keywords** — `and`, `or`, `not`, `is`, `in`, `to`, `downto`,
+`step`, and `with` spell the built-in operators. An operator's spelling only
+has to be unambiguous where an operand could stand instead, so each is promoted
+in operator position alone:
+
+| Keywords | Promoted to | Window |
+|----------|-------------|--------|
+| `and` `or` `is` `in` `to` `downto` `step` `with` | `AND` `OR` `IS` `IN` `TO` `DOWNTO` `STEP` `WITH` | Directly after a token that closes an operand |
+| `not` | `NOT` | Directly before a token that can start an operand |
+
+A following `=` or `:` marks a name either way — no operand starts with
+either — and after `.`, `::` or a declaration keyword only a name can stand.
+So `Option::or`, `flag.not()`, `R(step = 2)` and a `with: int` field all name
+members the way any other spelling does, while `a or b`, `not ready` and
+`1 to 9 step 2` read as operators. The one position an operator word cannot
+reach is an enum variant name, where a case branch may legitimately begin with
+`not`.
 
 Examples where they remain plain identifiers:
 

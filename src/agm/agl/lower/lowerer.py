@@ -793,8 +793,8 @@ class _Lowerer:
                     self._scan_captures(node.for_iter, local_ids, captured)
                 if node.for_range_to is not None:
                     self._scan_captures(node.for_range_to, local_ids, captured)
-                if node.for_range_by is not None:
-                    self._scan_captures(node.for_range_by, local_ids, captured)
+                if node.for_range_step is not None:
+                    self._scan_captures(node.for_range_step, local_ids, captured)
                 if node.bound is not None:
                     self._scan_captures(node.bound, local_ids, captured)
                 if node.for_var is not None:
@@ -1476,7 +1476,7 @@ class _Lowerer:
                 for_iter=for_iter_expr,
                 for_range_to=for_range_to_expr,
                 for_range_down=for_range_down,
-                for_range_by=for_range_by_expr,
+                for_range_step=for_range_step_expr,
                 while_cond=while_cond_expr,
                 bound=bound_expr,
                 body=body_expr,
@@ -1489,7 +1489,7 @@ class _Lowerer:
                     for_iter_expr=for_iter_expr,
                     for_range_to_expr=for_range_to_expr,
                     for_range_down=for_range_down,
-                    for_range_by_expr=for_range_by_expr,
+                    for_range_step_expr=for_range_step_expr,
                     while_cond_expr=while_cond_expr,
                     bound_expr=bound_expr,
                     body_expr=body_expr,
@@ -1530,7 +1530,7 @@ class _Lowerer:
         for_iter_expr: "Expr | None",
         for_range_to_expr: "Expr | None",
         for_range_down: bool,
-        for_range_by_expr: "Expr | None",
+        for_range_step_expr: "Expr | None",
         while_cond_expr: "Expr | None",
         bound_expr: "Expr | None",
         body_expr: "Expr",
@@ -1548,7 +1548,7 @@ class _Lowerer:
         **Integer-range for — pre-loop** (when ``for_range_to_expr`` is not ``None``):
         - ``IrBind(__cur, lower_coerced(for_iter_expr, IntType()))`` — mutable cursor (start ``a``)
         - ``IrBind(__end, lower_coerced(for_range_to_expr, IntType()))`` — immutable (bound ``b``)
-        - ``IrBind(__step, lower_coerced(for_range_by_expr, IntType()))`` or ``IrConstInt(1)``
+        - ``IrBind(__step, lower_coerced(for_range_step_expr, IntType()))`` or ``IrConstInt(1)``
         - ``IrIf(step <= 0 => IrRaise(RangeError))`` — step guard
         - (followed by the optional ``[n]`` bound items as for collection)
 
@@ -1604,8 +1604,8 @@ class _Lowerer:
             # __step: immutable int; from by-expr or default 1
             step_sym = self._alloc_synthetic_sym(mutable=False)
             step_value: IrExpr
-            if for_range_by_expr is not None:
-                step_value = self.lower_coerced(for_range_by_expr, IntType())
+            if for_range_step_expr is not None:
+                step_value = self.lower_coerced(for_range_step_expr, IntType())
             else:
                 step_value = IrConstInt(location=loc, value=1)
             pre_items.append(IrBind(location=loc, symbol=step_sym, value=step_value))

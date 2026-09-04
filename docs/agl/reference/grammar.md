@@ -14,7 +14,7 @@ they describe a line break and indentation change, not text written in source.
 
 ```ebnf
 name       ::= NAME | OP_NAME
-field_name ::= NAME | "to" | "downto" | "by"
+field_name ::= NAME
 
 program      ::= module_block EOF
 
@@ -423,7 +423,7 @@ while `xs [0]` is not.
 loop        ::= for_clause? while_clause? "do" loop_bound?
                 (suite loop_end? | inline_body loop_end)
 for_clause  ::= "for" name "in" or_expr range_tail? NEWLINE?
-range_tail  ::= ("to" | "downto") or_expr ("by" or_expr)?
+range_tail  ::= ("to" | "downto") or_expr ("step" or_expr)?
 while_clause::= "while" or_expr NEWLINE?
 loop_bound  ::= "[" or_expr "]"           (* int; n <= 0 runs zero iterations *)
 loop_end    ::= "until" or_expr | "done"   (* omitted terminator allowed in suite form *)

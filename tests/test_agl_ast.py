@@ -850,7 +850,7 @@ class TestLoopNode:
             for_iter=None,
             for_range_to=None,
             for_range_down=False,
-            for_range_by=None,
+            for_range_step=None,
             while_cond=None,
             bound=None,
             body=body,
@@ -871,7 +871,7 @@ class TestLoopNode:
             for_iter=None,
             for_range_to=None,
             for_range_down=False,
-            for_range_by=None,
+            for_range_step=None,
             while_cond=None,
             bound=bound,
             body=body,
@@ -890,7 +890,7 @@ class TestLoopNode:
             for_iter=None,
             for_range_to=None,
             for_range_down=False,
-            for_range_by=None,
+            for_range_step=None,
             while_cond=None,
             bound=None,
             body=body,
@@ -910,7 +910,7 @@ class TestLoopNode:
             for_iter=None,
             for_range_to=None,
             for_range_down=False,
-            for_range_by=None,
+            for_range_step=None,
             while_cond=None,
             bound=bound,
             body=body,
@@ -923,7 +923,7 @@ class TestLoopNode:
             for_iter=None,
             for_range_to=None,
             for_range_down=False,
-            for_range_by=None,
+            for_range_step=None,
             while_cond=None,
             bound=bound,
             body=body,
@@ -940,7 +940,7 @@ class TestLoopNode:
             for_iter=None,
             for_range_to=None,
             for_range_down=False,
-            for_range_by=None,
+            for_range_step=None,
             while_cond=None,
             bound=None,
             body=body,
@@ -1612,7 +1612,7 @@ class TestVisitorWalk:
             for_iter=None,
             for_range_to=None,
             for_range_down=False,
-            for_range_by=None,
+            for_range_step=None,
             while_cond=None,
             bound=do_limit,
             body=do_body,
@@ -2031,7 +2031,7 @@ class TestVisitorWalk:
             for_iter=None,
             for_range_to=None,
             for_range_down=False,
-            for_range_by=None,
+            for_range_step=None,
             while_cond=None,
             bound=None,
             body=body,
@@ -2058,7 +2058,7 @@ class TestVisitorWalk:
             for_iter=None,
             for_range_to=None,
             for_range_down=False,
-            for_range_by=None,
+            for_range_step=None,
             while_cond=None,
             bound=None,
             body=body,
@@ -2087,7 +2087,7 @@ class TestVisitorWalk:
             for_iter=None,
             for_range_to=None,
             for_range_down=False,
-            for_range_by=None,
+            for_range_step=None,
             while_cond=None,
             bound=bound,
             body=body,
@@ -2118,7 +2118,7 @@ class TestVisitorWalk:
             for_iter=for_iter,
             for_range_to=None,
             for_range_down=False,
-            for_range_by=None,
+            for_range_step=None,
             while_cond=while_cond,
             bound=None,
             body=body,
@@ -2138,20 +2138,20 @@ class TestVisitorWalk:
         assert visited[4] is cond
 
     def test_walk_loop_range_for_visits_range_fields(self) -> None:
-        """walk(Loop with range fields) visits start, range_to, range_by in order."""
+        """walk(Loop with range fields) visits start, range_to, range_step in order."""
         from agm.agl.syntax.visitor import walk
 
         s = self._s()
         start = IntLit(value=1, span=s, node_id=10)
         range_to = IntLit(value=10, span=s, node_id=11)
-        range_by = IntLit(value=2, span=s, node_id=12)
+        range_step = IntLit(value=2, span=s, node_id=12)
         body = UnitLit(span=s, node_id=2)
         node = Loop(
             for_var="i",
             for_iter=start,
             for_range_to=range_to,
             for_range_down=False,
-            for_range_by=range_by,
+            for_range_step=range_step,
             while_cond=None,
             bound=None,
             body=body,
@@ -2163,11 +2163,11 @@ class TestVisitorWalk:
         visited: list[object] = []
         walk(node, visited.append)
 
-        # Order: start (for_iter), range_to, range_by, body
+        # Order: start (for_iter), range_to, range_step, body
         assert visited[0] is node
         assert visited[1] is start
         assert visited[2] is range_to
-        assert visited[3] is range_by
+        assert visited[3] is range_step
         assert visited[4] is body
 
     def test_walk_try_visits_body_then_handlers(self) -> None:

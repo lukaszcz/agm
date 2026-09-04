@@ -4318,7 +4318,7 @@ class _Resolver:
         - ``bound`` (if any)
         - ``for_iter`` (if any) — the range start value for a range ``for``
         - ``for_range_to`` (if any) — the range upper/lower bound
-        - ``for_range_by`` (if any) — the range step
+        - ``for_range_step`` (if any) — the range step
 
         Then a single child scope is opened and ``for_var`` (if any) is bound
         immutably into it.  The loop interior (``while_cond``, body,
@@ -4342,8 +4342,8 @@ class _Resolver:
             self._resolve_expr(node.for_iter)
         if node.for_range_to is not None:
             self._resolve_expr(node.for_range_to)
-        if node.for_range_by is not None:
-            self._resolve_expr(node.for_range_by)
+        if node.for_range_step is not None:
+            self._resolve_expr(node.for_range_step)
         with self._child_scope(node.node_id) as loop_scope:
             with self._loop_body_ctx():
                 # Bind for_var (immutable) before resolving while_cond/body/until_cond.

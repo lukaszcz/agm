@@ -3672,17 +3672,17 @@ class _Checker:
                         f"'for' range bound must be int; got '{to_type!r}'.",
                         span=node.for_range_to.span,
                     )
-            if node.for_range_by is not None:
-                by_type = self._check_expr(node.for_range_by, expected=None)
-                with self._frame_direct_candidate_use(exprs=(node.for_range_by,)):
+            if node.for_range_step is not None:
+                by_type = self._check_expr(node.for_range_step, expected=None)
+                with self._frame_direct_candidate_use(exprs=(node.for_range_step,)):
                     if not self._is_type_or_bottom(by_type, IntType):
                         raise AglTypeError(
                             f"'for' range step must be int; got '{by_type!r}'.",
-                            span=node.for_range_by.span,
+                            span=node.for_range_step.span,
                         )
                 # Static guard: a literal step <= 0 is always wrong.
                 # IntLit(0) → zero; UnaryNeg(IntLit(k)) with k >= 1 → always negative.
-                by_expr = node.for_range_by
+                by_expr = node.for_range_step
                 if isinstance(by_expr, IntLit) and by_expr.value <= 0:
                     raise AglTypeError(
                         f"loop step must be positive; got a literal step of {by_expr.value}.",

@@ -45,16 +45,21 @@ from agm.agl.keywords import (
     KW_IMPORT,
     KW_SCOPE,
     KW_USE,
+    OPERATOR_SOFT_KEYWORDS,
+    PREFIX_SOFT_KEYWORDS,
 )
 from agm.agl.lexer.errors import LexError
 from agm.agl.lexer.layout import layout
 from agm.agl.lexer.scanner import _Scanner
 from agm.agl.lexer.tokens import (
     CALL_LBRACE,
+    COLON,
     DCOLON,
     DECIMAL,
     DO_LSQB,
+    DOT,
     END,
+    EQ,
     EXPORT,
     GRAMMAR_TOKEN_REMAP,
     HIDING,
@@ -68,6 +73,7 @@ from agm.agl.lexer.tokens import (
     MODPATH,
     MODQUAL,
     NAME,
+    NOT,
     OP_NAME,
     RBRACE,
     RPAR,
@@ -131,7 +137,7 @@ _INFIX_OPERAND_START_TYPES = frozenset(
         DCOLON,
         "break",
         "continue",
-        "not",
+        NOT,
         MINUS,
     }
 )
@@ -200,8 +206,46 @@ def _remap(tokens: Iterator[Token]) -> Iterator[Token]:
 
 _ITEM_START_TYPES = frozenset({"_NEWLINE", "_INDENT", "_DEDENT", "SEMICOLON"})
 
+# Token types that close an operand, and so put the next token in operator
+# position.  An operator name does not close one (it expects an operand of its
+# own), and neither do `break`/`continue`, which end a statement rather than a
+# value.
+_OPERAND_END_TYPES = _EXPRESSION_END_TYPES - {OP_NAME, "break", "continue"}
+
+# A soft operator word followed by one of these spells a name: `=` opens a
+# named argument or a default, `:` a field or parameter type.  No operand
+# starts with either.
+_NAME_MARKER_TYPES = frozenset({EQ, COLON})
+
+# Positions where only a name can stand, whatever an operand could otherwise
+# do there.  Infix words are excluded from these anyway (none closes an
+# operand); the prefix word `not` needs them spelled out.
+_NAME_ONLY_PREV_TYPES = frozenset({DOT, DCOLON, "def", "record", "enum", "exception", "type", "as"})
+
 # The three header keywords whose clause a hiding promotion can terminate.
 _HEADER_TYPES = frozenset({IMPORT, USE, EXPORT})
+
+
+def _promotes_as_operator(word: str, prev_type: str | None, next_type: str | None) -> bool:
+    """Whether an operator word stands in operator position rather than naming a member.
+
+    An infix word is an operator exactly when it follows an operand; the prefix
+    word ``not`` exactly when it precedes one.  Either way a following ``=`` or
+    ``:`` marks a name, and a preceding ``.``, ``::`` or declaration keyword
+    means only a name can stand there.
+
+    The neighbours are compared in scanner form: this pass runs after the
+    parser path has remapped reserved keywords to their grammar spellings, and
+    the token inventories above are canonical scanner types.
+    """
+    prev = _scanner_token_type(prev_type) if prev_type is not None else None
+    if next_type is not None and _scanner_token_type(next_type) in _NAME_MARKER_TYPES:
+        return False
+    if prev in _NAME_ONLY_PREV_TYPES:
+        return False
+    if word in PREFIX_SOFT_KEYWORDS:
+        return prev not in _OPERAND_END_TYPES
+    return prev in _OPERAND_END_TYPES
 
 
 def _retype(tok: Token, new_type: str) -> Token:
@@ -313,6 +357,7 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
     - 'import' → IMPORT, 'use' → USE, and 'export' → EXPORT at item-start.
     - 'scope' → SCOPE at item-start before a scope path.
     - 'end' → END only for a complete closer at its region's layout level.
+    - an operator word → its upper-cased type in operator position only.
     """
     result: list[Token] = []
     scope_layouts: list[int] = []
@@ -348,6 +393,10 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
             ):
                 tok = _retype(tok, END)
                 scope_layouts.pop()
+            elif tv in OPERATOR_SOFT_KEYWORDS and _promotes_as_operator(
+                tv, prev_type, tokens[index + 1].type if index + 1 < len(tokens) else None
+            ):
+                tok = _retype(tok, tv.upper())
 
         result.append(tok)
         prev_type = tok.type

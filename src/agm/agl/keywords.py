@@ -4,6 +4,13 @@
 holds the spellings the lexer promotes contextually and that stay ordinary names
 everywhere else.
 
+The operator words are soft. An operator's spelling only has to be unambiguous
+where an operand could stand instead: `INFIX_SOFT_KEYWORDS` are operators when
+they follow an operand, `PREFIX_SOFT_KEYWORDS` when they precede one. After a
+`.` or `::`, or before the `=` of a named argument or the `:` of a field
+declaration, they are ordinary names, so `Option::or` and `flag.not()` name
+members the way any other spelling does.
+
 Every syntax-highlighting definition mirrors both inventories and must be
 updated alongside them: `config/micro/agl.yaml` (Micro), `config/emacs/agl-mode.el`
 (`agl-keywords`, `agl-soft-keywords`, and the other keyword-inventory constants
@@ -57,11 +64,12 @@ KW_INFIXR = "infixr"
 KW_PRIO = "prio"
 KW_TO = "to"
 KW_DOWNTO = "downto"
-KW_BY = "by"
+KW_STEP = "step"
 KW_WITH = "with"
 
 # Soft keywords: promoted to their own token type only inside a promotion
-# window (item start, or a module header), and ordinary names everywhere else.
+# window (item start, a module header, or operator position), and ordinary
+# names everywhere else.
 # `at`, which introduces an infix priority, is contextual too but is never
 # promoted -- it stays a NAME token and is recognized by the AST builder.
 KW_IMPORT = "import"
@@ -102,31 +110,45 @@ KEYWORDS: frozenset[str] = frozenset(
         KW_RETURN,
         KW_AS,
         KW_AS_QUESTION,
-        KW_AND,
-        KW_OR,
-        KW_NOT,
-        KW_IS,
-        KW_IN,
         KW_TRUE,
         KW_FALSE,
         KW_NULL,
         KW_INFIXL,
         KW_INFIXR,
         KW_PRIO,
+    }
+)
+
+#: Operator words promoted when they follow an operand.
+INFIX_SOFT_KEYWORDS: frozenset[str] = frozenset(
+    {
+        KW_AND,
+        KW_OR,
+        KW_IS,
+        KW_IN,
         KW_TO,
         KW_DOWNTO,
-        KW_BY,
+        KW_STEP,
         KW_WITH,
     }
 )
 
-SOFT_KEYWORDS: frozenset[str] = frozenset(
-    {
-        KW_IMPORT,
-        KW_USE,
-        KW_EXPORT,
-        KW_HIDING,
-        KW_SCOPE,
-        KW_END,
-    }
+#: Operator words promoted when they precede an operand.
+PREFIX_SOFT_KEYWORDS: frozenset[str] = frozenset({KW_NOT})
+
+#: Every operator word, whichever side of its operand it takes.
+OPERATOR_SOFT_KEYWORDS: frozenset[str] = INFIX_SOFT_KEYWORDS | PREFIX_SOFT_KEYWORDS
+
+SOFT_KEYWORDS: frozenset[str] = (
+    frozenset(
+        {
+            KW_IMPORT,
+            KW_USE,
+            KW_EXPORT,
+            KW_HIDING,
+            KW_SCOPE,
+            KW_END,
+        }
+    )
+    | OPERATOR_SOFT_KEYWORDS
 )

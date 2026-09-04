@@ -21,7 +21,7 @@ qualifier_chain ::= "::" qualifier_segment* | qualifier_segment+
 qualifier_segment ::= ["/"] NAME ("/" NAME)* "::"
                     | NAME "[" type_expr ("," type_expr)* "]" "::"
 name           ::= NAME | OP_NAME
-field_name     ::= NAME | "to" | "downto" | "by"
+field_name     ::= NAME
 
 pattern_fields ::= pattern_field ("," pattern_field)* ","?
 pattern_field  ::= pattern                                (* positional sub-pattern *)

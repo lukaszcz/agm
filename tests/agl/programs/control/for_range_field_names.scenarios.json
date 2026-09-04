@@ -1,10 +1,10 @@
 {
   "scenarios": [
     {
-      "name": "by_to_as_field_names_work",
+      "name": "operator_words_as_field_names_work",
       "params": {},
       "expect": {
-        "stdout": "3\n10\n2\nok\n"
+        "stdout": "3\n10\n2\n7\nok\n"
       }
     }
   ]

@@ -4,7 +4,7 @@ The hand-written lexer handles layout (INDENT/DEDENT), string templates with `%{
 
 ## Keywords
 
-`keywords.py` is the single inventory of reserved words and of the contextual header words (`import`, `use`, `export`, `hiding`, `scope`, `end`), which are ordinary names outside their declaration contexts. The lexer, the grammar's token contract, the REPL highlighter, and the editor modes all derive from it rather than repeating spellings.
+`keywords.py` is the single inventory of reserved words and of the soft keywords, which are ordinary names outside their promotion window: the header words (`import`, `use`, `export`, `hiding`, `scope`, `end`) outside their declaration contexts, and the operator words (`and`, `or`, `not`, `is`, `in`, `to`, `downto`, `step`, `with`) outside operator position, which is what lets a member be named `or` or `not`. The lexer, the grammar's token contract, the REPL highlighter, and the editor modes all derive from it rather than repeating spellings.
 
 ## What the AST Preserves
 

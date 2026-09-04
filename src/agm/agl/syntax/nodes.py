@@ -598,7 +598,7 @@ class Loop:
     for_range_down:
         ``True`` for a ``downto`` range, ``False`` for a ``to`` range or when
         there is no range clause.
-    for_range_by:
+    for_range_step:
         The step expression for an integer-range ``for`` clause (``by k``), or
         ``None`` when the step is the default (1).  Always ``None`` when
         ``for_range_to`` is ``None``.
@@ -618,7 +618,7 @@ class Loop:
     for_iter: Expr | None
     for_range_to: Expr | None
     for_range_down: bool
-    for_range_by: Expr | None
+    for_range_step: Expr | None
     while_cond: Expr | None
     bound: Expr | None
     body: Expr
@@ -633,7 +633,7 @@ class Loop:
         for_iter: Expr | None = None,
         for_range_to: Expr | None = None,
         for_range_down: bool = False,
-        for_range_by: Expr | None = None,
+        for_range_step: Expr | None = None,
         while_cond: Expr | None = None,
         bound: Expr | None = None,
         body: Expr,
@@ -653,7 +653,7 @@ class Loop:
         object.__setattr__(self, "for_iter", for_iter)
         object.__setattr__(self, "for_range_to", for_range_to)
         object.__setattr__(self, "for_range_down", for_range_down)
-        object.__setattr__(self, "for_range_by", for_range_by)
+        object.__setattr__(self, "for_range_step", for_range_step)
         object.__setattr__(self, "while_cond", while_cond)
         object.__setattr__(self, "bound", bound)
         object.__setattr__(self, "body", body)

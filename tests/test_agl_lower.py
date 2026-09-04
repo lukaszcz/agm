@@ -1472,7 +1472,7 @@ class TestBuiltinNominalsTable:
         """
         from tests.agl.ir_harness import evaluate_ir_raises
 
-        source = "let step = 0\nfor i in 1 to 5 by step do\n  ()\ndone\n"
+        source = "let stride = 0\nfor i in 1 to 5 step stride do\n  ()\ndone\n"
         program = _lower(source)
         exc = evaluate_ir_raises(source)
         assert exc.display_name == "RangeError"
@@ -1501,8 +1501,8 @@ class TestBuiltinNominalsTable:
             "  builtin exception RangeError extends Exception()\n"
             "end A\n"
             "\n"
-            "let step = 0\n"
-            "for i in 1 to 5 by step do\n"
+            "let stride = 0\n"
+            "for i in 1 to 5 step stride do\n"
             "  ()\n"
             "done\n"
         )
@@ -1998,7 +1998,7 @@ class TestScanCapturesLoopForIterWhileCond:
             for_iter=for_iter_ref,
             for_range_to=None,
             for_range_down=False,
-            for_range_by=None,
+            for_range_step=None,
             while_cond=while_cond_ref,
             bound=None,
             body=body,
@@ -3868,9 +3868,9 @@ class TestRangeForDesugar:
         assert advance.op is ArithOp.SUB
         assert advance.kind is ArithKind.INT
 
-    def test_to_by_k_step_bind_is_expr(self) -> None:
-        """``for i in 1 to 10 by 3`` __step bind comes from the ``by`` expression."""
-        source = "for i in 1 to 10 by 3 do\n  ()\ndone\n"
+    def test_to_step_k_bind_is_expr(self) -> None:
+        """``for i in 1 to 10 step 3`` __step bind comes from the ``step`` expression."""
+        source = "for i in 1 to 10 step 3 do\n  ()\ndone\n"
         node = _get_loop_ir(source)
         assert isinstance(node, IrSequence)
         # Pre-loop: cur, end, step, guard, loop
@@ -3879,9 +3879,9 @@ class TestRangeForDesugar:
         assert isinstance(step_bind.value, IrConstInt)
         assert step_bind.value.value == 3
 
-    def test_downto_by_k_advance_uses_sub(self) -> None:
-        """``for i in 10 downto 1 by 2`` advance is SUB with __step from ``by``."""
-        source = "for i in 10 downto 1 by 2 do\n  ()\ndone\n"
+    def test_downto_step_k_advance_uses_sub(self) -> None:
+        """``for i in 10 downto 1 step 2`` advance is SUB with __step from ``step``."""
+        source = "for i in 10 downto 1 step 2 do\n  ()\ndone\n"
         node = _get_loop_ir(source)
         assert isinstance(node, IrSequence)
         _cur_bind, _end_bind, step_bind, _guard, loop = node.items
@@ -3989,7 +3989,7 @@ class TestRangeForDesugar:
 
     def test_range_for_no_iterator_ops(self) -> None:
         """A range ``for`` must NOT emit IrIterInit, IrIterHasNext, or IrIterNext."""
-        source = "for i in 1 to 100 by 2 do\n  ()\ndone\n"
+        source = "for i in 1 to 100 step 2 do\n  ()\ndone\n"
         prog = _lower(source)
         # Serialise to a string and scan for iterator node class names
         prog_repr = repr(prog)
@@ -4002,12 +4002,12 @@ class TestRangeForDesugar:
 
         When a lambda contains a range ``for`` whose bounds/step reference parameters
         of the enclosing function, ``_scan_captures`` must walk ``for_range_to`` and
-        ``for_range_by`` to detect those free variables.  The resulting
+        ``for_range_step`` to detect those free variables.  The resulting
         ``IrMakeClosure.captures`` must contain entries for both outer parameters.
         """
         source = (
             "def make_fn(end_val: int, step_val: int) -> unit =\n"
-            "  let _g = fn() -> unit => for i in 1 to end_val by step_val do () done\n"
+            "  let _g = fn() -> unit => for i in 1 to end_val step step_val do () done\n"
             "  ()\n"
             "make_fn(5, 1)\n"
         )
@@ -4029,7 +4029,7 @@ class TestRangeForDesugar:
                     g_closure = captured_value
                     break
         assert g_closure is not None, "Expected IrMakeClosure for _g in make_fn body"
-        # _scan_captures must have walked for_range_to / for_range_by and found
+        # _scan_captures must have walked for_range_to / for_range_step and found
         # end_val and step_val as free variables captured from make_fn's params.
         captures = g_closure.captures
         assert len(captures) == 2, f"Expected 2 captures (end_val + step_val), got {captures!r}"

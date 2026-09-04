@@ -38,7 +38,7 @@ rules:
 
     # Control flow and expression keywords.
     - statement: "\\b(for|while|do|until|done|if|else|case|of|try|catch|raise|break|continue|return)\\b"
-    - statement: "\\b(as|and|or|not|is|in|to|downto|by|with)\\b"
+    - statement: "\\b(as|and|or|not|is|in|to|downto|step|with)\\b"
 
     # Contextual built-ins and primitive type names.
     - identifier: "\\b(print|render|exec|ask|shallow-copy|copy|resource)\\b"

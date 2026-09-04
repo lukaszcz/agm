@@ -2194,7 +2194,7 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    # range_tail / range_dir / range_by transformers.
+    # range_tail / range_dir / range_step transformers.
     # These produce intermediate tuples consumed by for_clause.
 
     def range_to(self, meta: Meta, args: _Args) -> bool:
@@ -2205,16 +2205,16 @@ class AstBuilder(Transformer):
         """range_dir: DOWNTO -> range_downto — direction flag True (descending)."""
         return True
 
-    def range_by(self, meta: Meta, args: _Args) -> syntax.Expr:
-        """range_by: BY or_expr — return the step expression."""
+    def range_step(self, meta: Meta, args: _Args) -> syntax.Expr:
+        """range_step: STEP or_expr — return the step expression."""
         return cast(syntax.Expr, _find_non_token(args))
 
     def range_tail(self, meta: Meta, args: _Args) -> tuple[bool, syntax.Expr, syntax.Expr | None]:
-        """range_tail: range_dir or_expr range_by?
+        """range_tail: range_dir or_expr range_step?
 
         Returns (is_downto, to_bound_expr, by_step_expr_or_None).
         The grammar guarantees exactly: one bool (range_dir result) followed by
-        one or two Exprs (bound from or_expr, then optional step from range_by).
+        one or two Exprs (bound from or_expr, then optional step from range_step).
         """
         # Separate the direction flag from the expression arguments.
         is_down: bool = next(a for a in args if isinstance(a, bool))
@@ -2230,13 +2230,13 @@ class AstBuilder(Transformer):
         """for_clause: "for" name "in" or_expr range_tail? _NEWLINE?
 
         Returns a 5-tuple:
-          (var_name, start_expr, range_to_expr, range_down, range_by_expr)
+          (var_name, start_expr, range_to_expr, range_down, range_step_expr)
 
         For a collection for (no range_tail):
-          range_to_expr=None, range_down=False, range_by_expr=None.
+          range_to_expr=None, range_down=False, range_step_expr=None.
         For a range for (range_tail present):
           range_to_expr is the upper/lower bound; range_down is True for downto;
-          range_by_expr is the step or None for default step.
+          range_step_expr is the step or None for default step.
         """
         name_tok = next(a for a in args if isinstance(a, Token))
         # Separate range_tail tuple (3-element tuple starting with bool) from
@@ -2251,10 +2251,10 @@ class AstBuilder(Transformer):
         )
         start_expr = cast(syntax.Expr, next(a for a in args if _is_expr_node(a)))
         if range_tail_result is not None:
-            range_down, range_to, range_by = range_tail_result
+            range_down, range_to, range_step = range_tail_result
         else:
-            range_down, range_to, range_by = False, None, None
-        return (str(name_tok), start_expr, range_to, range_down, range_by)
+            range_down, range_to, range_step = False, None, None
+        return (str(name_tok), start_expr, range_to, range_down, range_step)
 
     def while_clause(self, meta: Meta, args: _Args) -> syntax.Expr:
         """while_clause: "while" or_expr _NEWLINE?
@@ -2355,9 +2355,9 @@ class AstBuilder(Transformer):
         for_iter: syntax.Expr | None = None
         for_range_to: syntax.Expr | None = None
         for_range_down: bool = False
-        for_range_by: syntax.Expr | None = None
+        for_range_step: syntax.Expr | None = None
         if clauses[0] is not None:
-            for_var, for_iter, for_range_to, for_range_down, for_range_by = clauses[0]
+            for_var, for_iter, for_range_to, for_range_down, for_range_step = clauses[0]
         while_cond: syntax.Expr | None = clauses[1]
 
         # Invariants: range for requires var + start + bound; collection for has no bound.
@@ -2366,7 +2366,7 @@ class AstBuilder(Transformer):
             assert for_iter is not None, "loop_expr: range for missing start expression"
         else:
             assert not for_range_down, "loop_expr: range_down set without range_to"
-            assert for_range_by is None, "loop_expr: range_by set without range_to"
+            assert for_range_step is None, "loop_expr: range_step set without range_to"
 
         # loop_end is always the last child; do_body is second-to-last.
         until_cond: syntax.Expr | None = cast("syntax.Expr | None", children[-1])
@@ -2384,7 +2384,7 @@ class AstBuilder(Transformer):
             for_iter=for_iter,
             for_range_to=for_range_to,
             for_range_down=for_range_down,
-            for_range_by=for_range_by,
+            for_range_step=for_range_step,
             while_cond=while_cond,
             bound=bound,
             body=body,
@@ -3937,10 +3937,10 @@ def _rewrite_expr(
                 else _rewrite_expr(expr.for_range_to, table, builder)
             ),
             for_range_down=expr.for_range_down,
-            for_range_by=(
+            for_range_step=(
                 None
-                if expr.for_range_by is None
-                else _rewrite_expr(expr.for_range_by, table, builder)
+                if expr.for_range_step is None
+                else _rewrite_expr(expr.for_range_step, table, builder)
             ),
             while_cond=(
                 None if expr.while_cond is None else _rewrite_expr(expr.while_cond, table, builder)

@@ -7,7 +7,7 @@ program def main(down_start: int = 10, down_stop: int = 5, down_step: int = 2) -
   var step_val: int = 1
   var count: int = 0
 
-  for i in 1 to end_val by step_val do
+  for i in 1 to end_val step step_val do
     count := count + 1
     end_val := end_val + 100
     step_val := step_val + 100
@@ -18,7 +18,7 @@ program def main(down_start: int = 10, down_stop: int = 5, down_step: int = 2) -
   var stop_var: int = down_stop
   var step_var: int = down_step
   var count2: int = 0
-  for i in down_start downto stop_var by step_var do
+  for i in down_start downto stop_var step step_var do
     count2 := count2 + 1
     step_var := step_var + 100
   done

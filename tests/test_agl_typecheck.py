@@ -4570,7 +4570,7 @@ class TestFuncDef:
         [
             "def f() -> int =\n  for i in (return 1) to 3 do () done\nf",
             "def f() -> int =\n  for i in 1 to (return 1) do () done\nf",
-            "def f() -> int =\n  for i in 1 to 3 by (return 1) do () done\nf",
+            "def f() -> int =\n  for i in 1 to 3 step (return 1) do () done\nf",
             "def f() -> int =\n  for x in (return 1) do () done\nf",
             "def f() -> int =\n  while (return 1) do\n    ()\nf",
             "def f() -> int =\n  do\n    ()\n  until (return 1)\nf",
@@ -8632,9 +8632,9 @@ class TestHostContractBuiltinIdentity:
         r = accept_type(
             "scope A\n"
             "  builtin exception RangeError extends Exception()\n"
-            "  def trigger(step: int) -> unit =\n"
+            "  def trigger(stride: int) -> unit =\n"
             "    try\n"
-            "      for i in 1 to 5 by step do\n"
+            "      for i in 1 to 5 step stride do\n"
             "        ()\n"
             "      done\n"
             "    catch RangeError as e =>\n"

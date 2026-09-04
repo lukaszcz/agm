@@ -132,7 +132,7 @@ an optional bound and a body:
 loop        ::= for_clause? while_clause? "do" loop_bound?
                 (suite loop_end? | inline_seq loop_end)
 for_clause  ::= "for" name "in" or_expr range_tail? NEWLINE?
-range_tail  ::= ("to" | "downto") or_expr ("by" or_expr)?
+range_tail  ::= ("to" | "downto") or_expr ("step" or_expr)?
 while_clause::= "while" or_expr NEWLINE?
 loop_bound  ::= "[" or_expr "]"
 loop_end    ::= "until" or_expr | "done"
@@ -164,7 +164,7 @@ done
 
 # integer range: i = a, a+step, … up/down to and including b
 for i in 1 to n do print i done
-for i in n downto 1 by 2 do print i done
+for i in n downto 1 step 2 do print i done
 
 # while with an explicit bound (safety limit)
 var i: int = 0
@@ -214,7 +214,7 @@ at loop entry regardless of any mutation performed during the loop.
 
 **`for` — integer range.** `for i in a to b` runs `i = a, a+1, …, b`
 (inclusive); `for i in a downto b` runs `i = a, a-1, …, b` (inclusive).
-An optional `by k` sets the step (a positive `int`); an omitted step is `1`.
+An optional `step k` sets the stride (a positive `int`); an omitted step is `1`.
 Bounds and step are each evaluated exactly once at loop entry, in source
 order (`a`, then `b`, then `k`). A degenerate range (`a > b` for `to`,
 `a < b` for `downto`) runs the body zero times and completes normally. A

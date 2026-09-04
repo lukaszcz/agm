@@ -4,7 +4,7 @@
 program def main(step: int) -> unit =
   var total: int = 0
   try
-    for i in 1 to 5 by step do
+    for i in 1 to 5 step step do
       total := total + i
     done
   catch RangeError as e =>

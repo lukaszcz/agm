@@ -79,11 +79,10 @@
 %declare IMPORT USE HIDING EXPORT SCOPE END MODQUAL MODPATH WILDCARD
 %declare PLACEHOLDER PLACEHOLDER_NUM
 %declare AS_QUESTION
-// TO, DOWNTO, BY: declared so they can appear in `field_name` (a keyword
-// admitted as a record/key identifier). Using declared
-// terminals (rather than string literals) is the mechanism that makes them
-// referenceable by name in field_name without grammar conflicts.
-%declare TO DOWNTO BY
+// TO, DOWNTO, STEP: the range operators.  Declared rather than written as
+// string literals because they are soft keywords: the lexer promotes them to
+// these types only in operator position, and leaves them NAME elsewhere.
+%declare TO DOWNTO STEP
 %declare INT DECIMAL
 %declare ASSIGN EQ EQ_EQ NEQ LT LE GT GE
 %declare PLUS MINUS STAR SLASH AT
@@ -183,10 +182,10 @@ record_body: param_marker? _INDENT block_entry (_NEWLINE block_entry)* _NEWLINE?
 
 field_def: VAR? field_name COLON type_expr
 
-// field_name: a record/struct field or named-key reference. `to`, `downto`,
-// and `by` are admitted so existing field uses like `tagged(by: T)` remain
-// valid after those words became reserved keywords.
-?field_name: NAME | TO | DOWNTO | BY
+// field_name: a record/struct field or named-key reference. Operator words
+// reach here as plain names — the lexer never promotes one before the `:` of
+// a field or the `=` of a named argument.
+?field_name: NAME
 ?name: NAME | OP_NAME
 
 // enum_def: flat variant list using the |-continuation layout rule.
@@ -432,10 +431,10 @@ while_clause : "while" or_expr _NEWLINE?
 // When absent, the for clause iterates a collection (array/dict/text).
 // When present, the for clause iterates an integer counter from the
 // start expression (stored in for_iter) up or down to the bound expression.
-range_tail   : range_dir or_expr range_by?
+range_tail   : range_dir or_expr range_step?
 range_dir    : TO     -> range_to
              | DOWNTO -> range_downto
-range_by     : BY or_expr
+range_step   : STEP or_expr
 
 // loop_bound: [expr] — an arbitrary int-typed expression as the iteration bound.
 loop_bound: DO_LSQB or_expr RSQB

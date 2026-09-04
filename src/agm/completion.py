@@ -553,7 +553,7 @@ class ExecCommand(TyperCommand):
                         cwd=context.cwd,
                         default_stdlib=not bool(params.get("no_stdlib")),
                     ),
-                    requested_program,
+                    target.declaration_path if requested_program is None else requested_program,
                     incomplete,
                 )
             elif isinstance(target, (InlineSource, FileEntry)):

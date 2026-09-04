@@ -304,6 +304,18 @@ class TestExecCommandArgParsing:
         assert recorded_runs != []
         assert getattr(recorded_runs[0], "param_tokens") == ["--msg", "-h"]
 
+    def test_exec_inline_short_help_value_normalizes_the_option_bound_as_file(
+        self, runner: CliRunner, recorded_runs: list[object]
+    ) -> None:
+        source = "program def main(name: text) -> unit = print name"
+
+        result = invoke(runner, ["exec", "-c", source, "--name", "-h"])
+
+        assert result.exit_code == 0
+        assert len(recorded_runs) == 1
+        assert getattr(recorded_runs[0], "file") is None
+        assert getattr(recorded_runs[0], "param_tokens") == ["--name", "-h"]
+
     def test_exec_param_before_file_is_usage_error(
         self, runner: CliRunner, recorded_runs: list[object]
     ) -> None:
@@ -549,6 +561,30 @@ class TestExecDynamicHelp:
         out = capsys.readouterr().out
         assert "agm exec" in out
         assert "Program arguments:" not in out
+
+    def test_exec_help_for_installed_reference_uses_its_selected_program(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from agm.config.context import ConfigContext
+        from tests._package_helpers import write_installed_package
+
+        home = tmp_path / "home"
+        write_installed_package(
+            home,
+            "tools",
+            source=(
+                "program def first() -> unit = ()\nprogram def second(region: text) -> unit = ()\n"
+            ),
+        )
+        monkeypatch.setattr(
+            "agm.config.context.current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        with pytest.raises(SystemExit):
+            cli._exec_print_help(file="tools/main::second", command=None)
+
+        assert "--region" in capsys.readouterr().out
 
 
 class TestExecCommandBehavior:
@@ -3438,6 +3474,28 @@ class TestProgramValueArguments:
 
         assert exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--tag", "cli"])) is None
         assert capsys.readouterr().out == "cli\n"
+
+    def test_positional_argument_overrides_configured_standard_parameter(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[prog.main]\ntag = "configured"\n')
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            'program def main(@pos, id: text, /, tag: text) -> unit = print(id + ":" + tag)\n',
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file, param_tokens=["one", "cli"])) is None
+        assert capsys.readouterr().out == "one:cli\n"
 
     def test_signature_default_used_when_cli_and_config_omit(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

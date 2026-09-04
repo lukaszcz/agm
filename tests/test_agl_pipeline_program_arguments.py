@@ -198,6 +198,15 @@ class TestRunFacadeDerivesArgumentsFromTheProgramSignature:
         messages = " | ".join(d.message for d in result.diagnostics)
         assert "value" in messages
 
+    def test_check_only_required_parameter_program_reports_a_clean_diagnostic(self) -> None:
+        result = PipelineDriver().run(
+            "program def main(value: int) -> unit = print value\n", check_only=True
+        )
+        assert not result.ok
+        assert result.error is None
+        messages = " | ".join(d.message for d in result.diagnostics)
+        assert "value" in messages
+
 
 class TestRaisingDefault:
     def test_a_raising_default_yields_the_same_run_error_shape_as_a_body_raise(self) -> None:

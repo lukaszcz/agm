@@ -580,7 +580,7 @@ def run(
     # from its qualified table (e.g. ``[workflow.main]``) — the same table an
     # engine-key override reads, and the same ``QualifiedConfigKey`` shape.
     # Precedence is CLI > config table > signature default, so config values
-    # are folded in beneath the CLI-supplied ``named`` mapping.
+    # are folded in beneath CLI values supplied by either syntax.
     program_named: dict[str, object] = dict(cli_arguments.named)
     if entry_stem is not None and program_option_map is not None and selected_program is not None:
         program_path = selected_program.scope_path + (selected_program.name,)
@@ -594,8 +594,12 @@ def run(
             print(f"Error: invalid qualified configuration: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
         projected_by_name = {info.name: projected for info, projected in program_option_map.options}
+        positional_names = {
+            info.name for info in program_option_map.positional[: len(cli_arguments.positional)]
+        }
+        cli_supplied_names = set(program_named) | positional_names
         for name, key in argument_keys.items():
-            if key in configured_arguments and name not in program_named:
+            if key in configured_arguments and name not in cli_supplied_names:
                 program_named[name] = _config_raw_value(
                     projected_by_name[name], configured_arguments[key]
                 )

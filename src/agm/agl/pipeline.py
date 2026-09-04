@@ -499,24 +499,6 @@ class PipelineDriver:
                 program_symbol = entry_programs[0]
 
         # ----------------------------------------------------------------
-        # [check_only] --dry-run stop: the full static pipeline, program-argument
-        # validation, and contract materialization have all succeeded.  Stop
-        # before executing any statement — no program output, no evaluation
-        # side effects, no extern companion imports, and no trace is written.
-        # ----------------------------------------------------------------
-        if check_only:
-            inventory = _build_call_inventory_from_ir(executable.dry_run_inventory)
-            return RunResult(
-                ok=True,
-                diagnostics=[],
-                error=None,
-                warnings=list(warnings),
-                bindings={},
-                call_sites=tuple(inventory),
-                trace_path=None,
-            )
-
-        # ----------------------------------------------------------------
         # Program entry arguments. ``None`` means the caller consulted no
         # argument source (:meth:`preflight_arguments` was never run for this
         # invocation): derive one from the selected program's own signature,
@@ -541,6 +523,24 @@ class PipelineDriver:
                 )
         elif arguments is None:
             arguments = ()
+
+        # ----------------------------------------------------------------
+        # [check_only] --dry-run stop: the full static pipeline, program-argument
+        # validation, and contract materialization have all succeeded.  Stop
+        # before executing any statement — no program output, no evaluation
+        # side effects, no extern companion imports, and no trace is written.
+        # ----------------------------------------------------------------
+        if check_only:
+            inventory = _build_call_inventory_from_ir(executable.dry_run_inventory)
+            return RunResult(
+                ok=True,
+                diagnostics=[],
+                error=None,
+                warnings=list(warnings),
+                bindings={},
+                call_sites=tuple(inventory),
+                trace_path=None,
+            )
 
         # ----------------------------------------------------------------
         # Build and run the interpreter

@@ -132,6 +132,46 @@ def test_installed_exec_reference_offers_program_value_argument_completion(
     assert "--no-verbose" in values
 
 
+def test_installed_exec_reference_uses_its_selected_program_for_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import semver
+
+    from agm.config.context import ConfigContext
+    from agm.packages.activation import ActivationIndex, ActivePackage, write_activation_index
+
+    home = tmp_path / "home"
+    package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
+    module = package_root / "tools" / "review.agl"
+    module.parent.mkdir(parents=True)
+    (package_root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    module.write_text(
+        "program def first(level: text) -> unit = ()\n"
+        "program def second(region: text) -> unit = ()\n",
+        encoding="utf-8",
+    )
+    write_record(package_root)
+    write_activation_index(
+        ActivationIndex({"tools": ActivePackage(semver.Version.parse("1.0.0"))}), home=home
+    )
+    monkeypatch.setattr(
+        completion, "current_config_context", lambda: ConfigContext(home, None, tmp_path)
+    )
+
+    from agm.cli import app
+
+    shell_complete = ShellComplete(typer.main.get_command(app), {}, "agm", "_TYPER_COMPLETE_ARGS")
+    values = [
+        item.value
+        for item in shell_complete.get_completions(["exec", "tools/review::second"], "--")
+    ]
+
+    assert "--region" in values
+    assert "--level" not in values
+
+
 @pytest.mark.skipif(
     os.name != "posix" or (hasattr(os, "geteuid") and os.geteuid() == 0),
     reason="permission bits are meaningless for root or on non-POSIX platforms",

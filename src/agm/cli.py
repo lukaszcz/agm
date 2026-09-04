@@ -999,13 +999,15 @@ def _discover_exec_help_material(
     command: str | None,
     module_paths: list[str] | None,
     no_stdlib: bool,
-) -> "tuple[ProgramDeclInfo, ...]":
+) -> "tuple[tuple[ProgramDeclInfo, ...], str | None]":
     """Discover ``program def`` declarations for exec help.
 
     Shared by ``_exec_print_help``'s ``Program arguments:`` section and
     ``_exec_short_help_value_flags``'s bare-``-h`` disambiguation, so both
     degrade identically on any discovery failure (syntax errors, unreadable
-    files, etc.) to an empty inventory.
+    files, etc.) to an empty inventory. An installed reference's declaration
+    path accompanies its inventory so that its selected program stays selected
+    without an explicit ``-p``/``--program`` flag.
     """
     from agm.cli_support.exec_target import FileEntry, InlineSource, PackageProgramReference
     from agm.cli_support.program_discovery import (
@@ -1027,6 +1029,7 @@ def _discover_exec_help_material(
             proj_dir=context.proj_dir,
             cwd=context.cwd,
         )
+        requested_program = None
         if isinstance(target, (InlineSource, FileEntry)):
             source = command if isinstance(target, InlineSource) else read_text_arg(target.path)
             entry_path = target.path if isinstance(target, FileEntry) else None
@@ -1053,11 +1056,14 @@ def _discover_exec_help_material(
                 cwd=context.cwd,
                 default_stdlib=not no_stdlib,
             )
+            requested_program = target.declaration_path
         else:
             programs = ()
+            requested_program = None
     except (Exception, SystemExit):
         programs = ()
-    return programs
+        requested_program = None
+    return programs, requested_program
 
 
 def _exec_short_help_value_flags(
@@ -1078,10 +1084,12 @@ def _exec_short_help_value_flags(
     from agm.cli_support.program_discovery import select_entry_program
     from agm.cli_support.program_options import program_option_map_or_none
 
-    programs = _discover_exec_help_material(
+    programs, referenced_program = _discover_exec_help_material(
         file=file, command=command, module_paths=module_paths, no_stdlib=no_stdlib
     )
-    selection = select_entry_program(programs, requested=program)
+    selection = select_entry_program(
+        programs, requested=program if program is not None else referenced_program
+    )
     option_map = (
         None
         if selection.selected is None
@@ -1110,11 +1118,13 @@ def _exec_print_help(
 
     print_help_for_command_path(["exec"])
 
-    programs = _discover_exec_help_material(
+    programs, referenced_program = _discover_exec_help_material(
         file=file, command=command, module_paths=module_paths, no_stdlib=no_stdlib
     )
     if programs:
-        selection = select_entry_program(programs, requested=program)
+        selection = select_entry_program(
+            programs, requested=program if program is not None else referenced_program
+        )
         print(
             render_program_arguments_help(selection.entry_programs, selected=selection.selected),
             end="",
@@ -1245,6 +1255,13 @@ def exec_cmd(
     # ``--help`` always triggers; a bare ``-h`` is disambiguated from a value
     # legitimately spelled ``-h`` for a preceding value-taking param/program
     # flag, since text/JSON-form arguments can hold that exact string.
+    # Under ``ignore_unknown_options``, Click may bind an inline program
+    # option to FILE. Normalize that shape before using the source to decide
+    # whether a following ``-h`` is help or that option's value.
+    if command is not None and file is not None and file.startswith("--"):
+        ctx.args.insert(0, file)
+        file = None
+
     help_requested = file == "--help" or "--help" in ctx.args
     if not help_requested and (file == "-h" or "-h" in ctx.args):
         from agm.cli_support.program_options import short_help_requested

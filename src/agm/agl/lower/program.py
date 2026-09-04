@@ -7,7 +7,7 @@ symbol/function/nominal table and per-module initializer sequences.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Mapping
 
 from agm.agl.ir.builtin_vars import BuiltinVarKey, builtin_var_key
 from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode
@@ -43,6 +43,7 @@ from agm.agl.syntax.nodes import BuiltinVarDecl, FuncDef, static_items
 from agm.agl.type_schema import build_encode_plan, build_param_decoder
 from agm.agl.typecheck.arguments import zone_of
 from agm.agl.typecheck.env import CheckedModule, FunctionSignature
+from agm.agl.typecheck.program import program_funcdefs
 from agm.util.text import normalize_newlines
 
 __all__ = ["lower_program"]
@@ -80,22 +81,6 @@ def _exception_field_encodes(
     return result
 
 
-def _program_funcdefs(
-    modules: Mapping[ModuleId, CheckedModule],
-) -> Iterator[tuple[CheckedModule, FuncDef]]:
-    """Yield every ``is_program`` ``FuncDef`` across all linked modules, with its module.
-
-    Shared by every table keyed on a program's declaration, so each is built
-    from the same walk over the ``program def`` declarations.
-    """
-    return (
-        (cm, item)
-        for cm in modules.values()
-        for item in static_items(cm.resolved.program.body.items)
-        if isinstance(item, FuncDef) and item.is_program
-    )
-
-
 def _program_signature(sig: FunctionSignature, type_table: TypeTable) -> tuple[IrProgramParam, ...]:
     """Build one program's host-facing parameter signature from its checked type."""
     return tuple(
@@ -116,7 +101,7 @@ def _program_signatures(
 ) -> dict[SymbolId, tuple[IrProgramParam, ...]]:
     """Build every linked ``program def``'s host-facing parameter signature."""
     result: dict[SymbolId, tuple[IrProgramParam, ...]] = {}
-    for cm, item in _program_funcdefs(modules):
+    for _mid, cm, item in program_funcdefs(modules):
         sig = cm.type_env.get_function_signature_by_node_id(item.node_id)
         assert sig is not None, f"compiler bug: no function signature for program {item.name!r}"
         result[fn_node_to_sym[item.node_id]] = _program_signature(sig, type_table)
@@ -438,6 +423,10 @@ def lower_program(
     dry_run_inventory = tuple(dry_run_entries)
     exception_field_encodes = _exception_field_encodes(type_table)
     live_functions, live_symbols = _live_functions_and_symbols(link, executable_modules)
+    program_symbols = {
+        item.node_id: link.fn_node_to_sym[item.node_id]
+        for _mid, _cm, item in program_funcdefs(checked.modules)
+    }
     program = ExecutableProgram(
         entry_module=checked.entry_id,
         modules=executable_modules,
@@ -445,13 +434,9 @@ def lower_program(
         nominals=dict(link.nominals),
         sources=dict(link.sources),
         functions=live_functions,
-        program_symbols={
-            item.node_id: link.fn_node_to_sym[item.node_id]
-            for _cm, item in _program_funcdefs(checked.modules)
-        },
+        program_symbols=program_symbols,
         program_functions={
-            link.fn_node_to_sym[item.node_id]: link.fn_node_to_id[item.node_id]
-            for _cm, item in _program_funcdefs(checked.modules)
+            symbol: link.fn_node_to_id[node_id] for node_id, symbol in program_symbols.items()
         },
         synthetic_main_symbol=next(
             (

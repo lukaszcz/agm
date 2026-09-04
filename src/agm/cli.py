@@ -993,109 +993,22 @@ def new(
     )
 
 
-def _discover_exec_help_material(
-    *,
-    file: str | None,
-    command: str | None,
-    module_paths: list[str] | None,
-    no_stdlib: bool,
-) -> "tuple[tuple[ProgramDeclInfo, ...], str | None]":
-    """Discover ``program def`` declarations for exec help.
+def _exec_selected_help_program(
+    material: "tuple[tuple[ProgramDeclInfo, ...], str | None]", *, program: str | None
+) -> "ProgramDeclInfo | None":
+    """Resolve which discovered program an exec invocation addresses.
 
-    Shared by ``_exec_print_help``'s ``Program arguments:`` section and
-    ``_exec_short_help_value_flags``'s bare-``-h`` disambiguation, so both
-    degrade identically on any discovery failure (syntax errors, unreadable
-    files, etc.) to an empty inventory. An installed reference's declaration
-    path accompanies its inventory so that its selected program stays selected
-    without an explicit ``-p``/``--program`` flag.
-    """
-    from agm.cli_support.exec_target import FileEntry, InlineSource, PackageProgramReference
-    from agm.cli_support.program_discovery import (
-        discover_program_declarations_from_installed_reference,
-        discover_program_declarations_from_source,
-    )
-    from agm.core.fs import read_text_arg
-
-    try:
-        from agm.cli_support.exec_roots import effective_exec_roots
-        from agm.cli_support.exec_target import resolve_exec_target
-        from agm.config.context import current_config_context
-
-        context = current_config_context()
-        target = resolve_exec_target(
-            file=file,
-            command=command,
-            home=context.home,
-            proj_dir=context.proj_dir,
-            cwd=context.cwd,
-        )
-        requested_program = None
-        if isinstance(target, (InlineSource, FileEntry)):
-            source = command if isinstance(target, InlineSource) else read_text_arg(target.path)
-            entry_path = target.path if isinstance(target, FileEntry) else None
-            exec_roots = effective_exec_roots(
-                entry_path=entry_path,
-                module_paths=[] if module_paths is None else module_paths,
-                cwd=context.cwd,
-                home=context.home,
-                proj_dir=context.proj_dir,
-            )
-            assert source is not None
-            programs = discover_program_declarations_from_source(
-                source,
-                inline_source=isinstance(target, InlineSource),
-                entry_path=entry_path,
-                roots=exec_roots.roots,
-                default_stdlib=not no_stdlib,
-            )
-        elif isinstance(target, PackageProgramReference):
-            programs = discover_program_declarations_from_installed_reference(
-                target,
-                home=context.home,
-                proj_dir=context.proj_dir,
-                cwd=context.cwd,
-                default_stdlib=not no_stdlib,
-            )
-            requested_program = target.declaration_path
-        else:
-            programs = ()
-            requested_program = None
-    except (Exception, SystemExit):
-        programs = ()
-        requested_program = None
-    return programs, requested_program
-
-
-def _exec_short_help_value_flags(
-    *,
-    file: str | None,
-    command: str | None,
-    program: str | None,
-    module_paths: list[str] | None,
-    no_stdlib: bool,
-) -> frozenset[str]:
-    """Return every flag consuming a following ``VALUE`` token, for bare-``-h`` disambiguation.
-
-    The selected entry program's own value-parameter flags (via
-    ``ProgramOptionMap.value_taking_flags``) are what
-    ``short_help_requested`` checks against, so a value legitimately spelled
-    ``-h`` is recognized as consumed, not as a short-help request.
+    *material* is one ``program_discovery.discover_programs_for_target`` result. An explicit
+    ``-p``/``--program`` wins; otherwise an installed reference's own
+    declaration path selects the program it named.
     """
     from agm.cli_support.program_discovery import select_entry_program
-    from agm.cli_support.program_options import program_option_map_or_none
 
-    programs, referenced_program = _discover_exec_help_material(
-        file=file, command=command, module_paths=module_paths, no_stdlib=no_stdlib
-    )
+    programs, referenced_program = material
     selection = select_entry_program(
         programs, requested=program if program is not None else referenced_program
     )
-    option_map = (
-        None
-        if selection.selected is None
-        else program_option_map_or_none(selection.selected.parameters)
-    )
-    return frozenset() if option_map is None else option_map.value_taking_flags()
+    return selection.selected
 
 
 def _exec_print_help(
@@ -1105,6 +1018,7 @@ def _exec_print_help(
     program: str | None = None,
     module_paths: list[str] | None = None,
     no_stdlib: bool = False,
+    material: "tuple[tuple[ProgramDeclInfo, ...], str | None] | None" = None,
 ) -> None:
     """Print exec help, optionally with a ``Program arguments:`` section, then exit 0.
 
@@ -1112,15 +1026,25 @@ def _exec_print_help(
     appends the ``Program arguments:`` section (one per declared ``program
     def``, its own value parameters). Degrades silently on any error (syntax
     errors, unreadable files, etc.).
+
+    *material* is a ``program_discovery.discover_programs_for_target`` result the caller
+    already holds — bare-``-h`` disambiguation discovers the same programs
+    from the same inputs before it can know the token was a help request, so
+    reusing its result spares this surface a second full static pipeline.
     """
-    from agm.cli_support.program_discovery import select_entry_program
+    from agm.cli_support.program_discovery import (
+        discover_programs_for_target,
+        select_entry_program,
+    )
     from agm.cli_support.program_options import render_program_arguments_help
 
     print_help_for_command_path(["exec"])
 
-    programs, referenced_program = _discover_exec_help_material(
-        file=file, command=command, module_paths=module_paths, no_stdlib=no_stdlib
-    )
+    if material is None:
+        material = discover_programs_for_target(
+            file=file, command=command, module_paths=module_paths, no_stdlib=no_stdlib
+        )
+    programs, referenced_program = material
     if programs:
         selection = select_entry_program(
             programs, requested=program if program is not None else referenced_program
@@ -1263,32 +1187,43 @@ def exec_cmd(
         file = None
 
     help_requested = file == "--help" or "--help" in ctx.args
+    # When the help flag was misassigned to ``file``, recover a following FILE
+    # from the pass-through tokens so its parameters can still be shown.
+    effective_file = file
+    if file in ("--help", "-h"):
+        effective_file = next((token for token in ctx.args if token not in ("--help", "-h")), None)
+    help_material: "tuple[tuple[ProgramDeclInfo, ...], str | None] | None" = None
     if not help_requested and (file == "-h" or "-h" in ctx.args):
-        from agm.cli_support.program_options import short_help_requested
+        from agm.cli_support.program_discovery import discover_programs_for_target
+        from agm.cli_support.program_options import program_value_taking_flags, short_help_requested
 
         tokens = (file, *ctx.args) if file == "-h" else tuple(ctx.args)
-        value_flags = _exec_short_help_value_flags(
-            file=file,
-            command=command,
-            program=program,
-            module_paths=module_paths,
-            no_stdlib=no_stdlib,
-        )
-        help_requested = short_help_requested(tokens, value_flags=value_flags)
-    if help_requested:
-        # When the help flag was misassigned to ``file``, recover a following
-        # FILE from the pass-through tokens so its parameters can still be shown.
-        effective_file = file
-        if file in ("--help", "-h"):
-            effective_file = next(
-                (token for token in ctx.args if token not in ("--help", "-h")), None
+        # A larger value-flag set can only consume more ``-h`` tokens, never
+        # fewer, so the empty set is the cheap upper bound: when even it finds
+        # no unconsumed ``-h`` (one after a ``--`` marker, say), no program
+        # signature could turn the token into help, and the static pipeline
+        # that would derive that signature is skipped entirely.
+        if short_help_requested(tokens, value_flags=frozenset()):
+            help_material = discover_programs_for_target(
+                file=effective_file,
+                command=command,
+                module_paths=module_paths,
+                no_stdlib=no_stdlib,
             )
+            help_requested = short_help_requested(
+                tokens,
+                value_flags=program_value_taking_flags(
+                    _exec_selected_help_program(help_material, program=program)
+                ),
+            )
+    if help_requested:
         _exec_print_help(
             file=effective_file,
             command=command,
             program=program,
             module_paths=module_paths,
             no_stdlib=no_stdlib,
+            material=help_material,
         )
     del _dry_run
     # Under ``ignore_unknown_options``, Click binds the first unrecognised token to the
@@ -1303,13 +1238,12 @@ def exec_cmd(
             "error: program parameter options must come after the FILE argument"
             f" (got option '{file}' where a FILE was expected)",
         )
-    param_tokens = list(ctx.args)
+    argument_tokens = list(ctx.args)
     if command is not None and file is not None:
-        if file.startswith("--"):
-            param_tokens.insert(0, file)
-            file = None
-        else:
-            exit_with_usage_error(["exec"], "error: argument FILE not allowed with -c/--command")
+        # A program option Click mis-bound to FILE was already moved back into
+        # ``ctx.args`` above, so a FILE still standing here names a real path,
+        # and a path alongside -c/--command is a usage error.
+        exit_with_usage_error(["exec"], "error: argument FILE not allowed with -c/--command")
     if command is None and file is None:
         exit_with_usage_error(["exec"], "error: one of the arguments FILE -c/--command is required")
     _check_log_flags_exclusive("exec", no_log=no_log, log=log, log_file=log_file)
@@ -1328,7 +1262,7 @@ def exec_cmd(
             file=file,
             command=command,
             program=program,
-            param_tokens=param_tokens,
+            argument_tokens=argument_tokens,
             strict_json=strict_json,
             max_iters=max_iters,
             max_call_depth=max_call_depth,

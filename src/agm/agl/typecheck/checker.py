@@ -1300,9 +1300,7 @@ class _Checker:
         """
         if isinstance(typ, TextType):
             return
-        message = self._env.type_table.no_finite_schema_message(typ, use="a program parameter type")
-        if message is not None:
-            raise AglTypeError(message, span=span)
+        self._reject_unbounded_extern_type(typ, span=span, use="a program parameter type")
         if not self._type_is_wire_serializable(typ):
             raise AglTypeError(
                 f"Program parameter type '{typ!r}' cannot be decoded from JSON; "

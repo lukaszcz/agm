@@ -71,31 +71,25 @@ def registered_command_help(
     path_name: str,
     registration: CommandRegistration,
     *,
-    program: "ProgramDeclInfo | None" = None,
+    program: "ProgramDeclInfo | None",
 ) -> str:
     """Render help for one package-registered command.
 
-    Pass *program* when the caller has already discovered the referenced
-    ``program def``'s own declaration, so rendering help does not compile it
-    again. Leaving it at its ``None`` default triggers a fresh discovery
-    here, exactly as if none had been found — harmless when the caller's own
-    discovery legitimately came back empty too; ``registered_program_declaration``
-    already degrades its own failures to ``None``, so no further guard is
-    needed here.
+    *program* is the caller's own discovery result for the referenced
+    ``program def`` — a declaration, or ``None`` when discovery was attempted
+    and found nothing (an unresolvable reference, a package mismatch, or a
+    source that no longer compiles). It is required rather than defaulted so
+    that a ``None`` here can never be mistaken for "not looked up yet" and
+    trigger a second full compile of a program the caller already failed to
+    discover.
 
     The usage line names *program*'s own positional slots and options, not
     the raw declaration path, so it reads like the command the reader
     actually invokes rather than the ``program def`` behind it.
     """
-    if program is None:
-        from agm.commands.exec_program import registered_program_declaration
+    from agm.cli_support.program_options import program_option_map_for
 
-        program = registered_program_declaration(registration.program, registration.package)
-    option_map = None
-    if program is not None:
-        from agm.cli_support.program_options import program_option_map_or_none
-
-        option_map = program_option_map_or_none(program.parameters)
+    option_map = program_option_map_for(program)
 
     usage = (
         option_map.usage_line(f"agm {path_name}") if option_map is not None else f"agm {path_name}"
@@ -129,7 +123,10 @@ def print_registered_command_help(command_path: Sequence[str]) -> bool:
     registration = index.commands.get(path_name)
     if registration is None:
         return False
-    print(registered_command_help(path_name, registration), end="")
+    from agm.commands.exec_program import registered_program_declaration
+
+    program = registered_program_declaration(registration.program, registration.package)
+    print(registered_command_help(path_name, registration, program=program), end="")
     return True
 
 
@@ -169,29 +166,38 @@ class RegisteredProgramCommand(TyperCommand):
         self._path_name = path_name
         self._registration = registration
 
+    def _discover_program(self) -> "ProgramDeclInfo | None":
+        """Discover the referenced ``program def``'s declaration, or ``None``."""
+        from agm.commands.exec_program import registered_program_declaration
+
+        return registered_program_declaration(
+            self._registration.program, self._registration.package
+        )
+
     def invoke(self, ctx: click.Context) -> None:
         program: "ProgramDeclInfo | None" = None
+        discovered = False
         help_requested = "--help" in ctx.args
         if not help_requested and "-h" in ctx.args:
             # This is the first point at which an unknown command has been proven
             # to be registered, so AgL remains unloaded for all builtin commands.
             from agm.cli_support.program_options import (
-                program_option_map_or_none,
+                program_value_taking_flags,
                 short_help_requested,
             )
-            from agm.commands.exec_program import registered_program_declaration
 
-            program = registered_program_declaration(
-                self._registration.program, self._registration.package
+            program = self._discover_program()
+            discovered = True
+            help_requested = short_help_requested(
+                ctx.args, value_flags=program_value_taking_flags(program)
             )
-            option_map = None if program is None else program_option_map_or_none(program.parameters)
-            value_flags = (
-                frozenset[str]() if option_map is None else option_map.value_taking_flags()
-            )
-            help_requested = short_help_requested(ctx.args, value_flags=value_flags)
         if help_requested:
             print(
-                registered_command_help(self._path_name, self._registration, program=program),
+                registered_command_help(
+                    self._path_name,
+                    self._registration,
+                    program=program if discovered else self._discover_program(),
+                ),
                 end="",
             )
             return

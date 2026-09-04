@@ -489,12 +489,10 @@ def _program_argument_completion_items(
     which program's flags apply. Degrades silently to ``[]``.
     """
     from agm.cli_support.program_discovery import select_entry_program
-    from agm.cli_support.program_options import program_option_map_or_none
+    from agm.cli_support.program_options import program_option_map_for
 
     selection = select_entry_program(programs, requested=requested)
-    if selection.selected is None:
-        return []
-    option_map = program_option_map_or_none(selection.selected.parameters)
+    option_map = program_option_map_for(selection.selected)
     if option_map is None:
         return []
     return [
@@ -517,86 +515,42 @@ class ExecCommand(TyperCommand):
         base = super().shell_complete(ctx, incomplete)
         if not incomplete.startswith("-"):
             return base
+        from agm.cli_support.program_discovery import discover_programs_for_target
+
+        params = cast(dict[str, object], ctx.params)
+        raw_command = params.get("command")
+        raw_file = params.get("file")
+        raw_program = params.get("program")
+        requested_program = raw_program if isinstance(raw_program, str) else None
+        raw_module_paths = params.get("module_paths")
+        module_paths: list[str] = []
+        if isinstance(raw_module_paths, (list, tuple)):
+            paths = cast(list[object] | tuple[object, ...], raw_module_paths)
+            if all(isinstance(path, str) for path in paths):
+                module_paths = [cast(str, path) for path in paths]
         try:
-            from agm.cli_support.exec_target import (
-                FileEntry,
-                InlineSource,
-                PackageProgramReference,
-                resolve_exec_target,
+            programs, referenced_program = discover_programs_for_target(
+                file=raw_file if isinstance(raw_file, str) else None,
+                command=raw_command if isinstance(raw_command, str) else None,
+                module_paths=module_paths,
+                no_stdlib=bool(params.get("no_stdlib")),
             )
-
-            params = cast(dict[str, object], ctx.params)
-            raw_command = params.get("command")
-            command = raw_command if isinstance(raw_command, str) else None
-            raw_file = params.get("file")
-            file = raw_file if isinstance(raw_file, str) else None
-            raw_program = params.get("program")
-            requested_program = raw_program if isinstance(raw_program, str) else None
-            context = current_config_context()
-            target = resolve_exec_target(
-                file=file,
-                command=command,
-                home=context.home,
-                proj_dir=context.proj_dir,
-                cwd=context.cwd,
-            )
-            if isinstance(target, PackageProgramReference):
-                from agm.cli_support.program_discovery import (
-                    discover_program_declarations_from_installed_reference,
-                )
-
-                extra = _program_argument_completion_items(
-                    discover_program_declarations_from_installed_reference(
-                        target,
-                        home=context.home,
-                        proj_dir=context.proj_dir,
-                        cwd=context.cwd,
-                        default_stdlib=not bool(params.get("no_stdlib")),
-                    ),
-                    target.declaration_path if requested_program is None else requested_program,
-                    incomplete,
-                )
-            elif isinstance(target, (InlineSource, FileEntry)):
-                from agm.cli_support.exec_roots import effective_exec_roots
-                from agm.cli_support.program_discovery import (
-                    discover_program_declarations_from_source,
-                )
-
-                source = command if isinstance(target, InlineSource) else target.path.read_text()
-                entry_path = target.path if isinstance(target, FileEntry) else None
-                raw_module_paths = params.get("module_paths")
-                module_paths: list[str] = []
-                if isinstance(raw_module_paths, (list, tuple)):
-                    paths = cast(list[object] | tuple[object, ...], raw_module_paths)
-                    if all(isinstance(path, str) for path in paths):
-                        module_paths = [cast(str, path) for path in paths]
-                exec_roots = effective_exec_roots(
-                    entry_path=entry_path,
-                    module_paths=module_paths,
-                    cwd=context.cwd,
-                    home=context.home,
-                    proj_dir=context.proj_dir,
-                )
-                assert source is not None
-                extra = _program_argument_completion_items(
-                    discover_program_declarations_from_source(
-                        source,
-                        inline_source=isinstance(target, InlineSource),
-                        entry_path=entry_path,
-                        roots=exec_roots.roots,
-                        default_stdlib=not bool(params.get("no_stdlib")),
-                    ),
-                    requested_program,
-                    incomplete,
-                )
-            else:
+            if not programs:
                 return base
+            extra = _program_argument_completion_items(
+                programs,
+                requested_program if requested_program is not None else referenced_program,
+                incomplete,
+            )
+            items_by_value: dict[str, CompletionItem] = {}
+            for item in (*base, *extra):
+                items_by_value[cast(str, item.value)] = item
+            return list(items_by_value.values())
         except (Exception, SystemExit):
+            # Completion is advisory: any failure past the shared discovery
+            # (option-map projection, item building) degrades to the built-in
+            # exec options rather than breaking the user's shell.
             return base
-        items_by_value: dict[str, CompletionItem] = {}
-        for item in (*base, *extra):
-            items_by_value[cast(str, item.value)] = item
-        return list(items_by_value.values())
 
 
 def complete_revise_command_or_review_file(

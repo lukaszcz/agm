@@ -116,26 +116,6 @@ class ProgramDiscovery:
 
 
 @dataclass(frozen=True, slots=True)
-class _ProgramStaticResult:
-    """Shared result of the static pipeline steps common to program discovery.
-
-    Returned by ``PipelineDriver._discover_static``. ``ok`` is ``True`` iff
-    typecheck, match compilation, and the entry-module check all succeeded,
-    in which case ``checked`` and ``compiled`` are both non-``None``.
-    """
-
-    checked: "CheckedProgram | None"
-    compiled: "MatchCompiledProgram | None"
-    diagnostics: tuple[Diagnostic, ...]
-    warnings: tuple[Diagnostic, ...]
-
-    @property
-    def ok(self) -> bool:
-        """Return ``True`` iff every static-pipeline step succeeded."""
-        return self.compiled is not None
-
-
-@dataclass(frozen=True, slots=True)
 class ArgumentPreflight:
     """Result of ``PipelineDriver.preflight_arguments``.
 
@@ -994,7 +974,7 @@ class PipelineDriver:
         prepared: PreparedProgram,
         *,
         compiled: "MatchCompiledProgram | None" = None,
-    ) -> "_ProgramStaticResult":
+    ) -> ProgramDiscovery:
         """Run typecheck + match compilation, reusing a supplied artifact.
 
         The static-pipeline steps :meth:`discover_programs` needs before
@@ -1003,15 +983,19 @@ class PipelineDriver:
         is enabled) artifact-provenance checking against a reused *compiled*
         artifact.
 
-        On success both :attr:`~_ProgramStaticResult.checked` and
-        :attr:`~_ProgramStaticResult.compiled` are non-``None``. On failure
+        Returns a :class:`ProgramDiscovery` whose ``programs`` is always
+        empty — :meth:`discover_programs` fills it in on success.
+
+        On success both :attr:`~ProgramDiscovery.checked` and
+        :attr:`~ProgramDiscovery.compiled` are non-``None``. On failure
         ``compiled`` is always ``None``; ``checked`` is non-``None`` only for
         a match-compile failure (the checked program is still meaningful),
         and ``None`` for every earlier failure, including a missing entry
         module.
         """
         if prepared.resolved is None:
-            return _ProgramStaticResult(
+            return ProgramDiscovery(
+                programs=(),
                 checked=None,
                 compiled=None,
                 diagnostics=prepared.diagnostics,
@@ -1036,8 +1020,12 @@ class PipelineDriver:
         all_warnings = tuple(all_warnings_list)
 
         if checked is None:
-            return _ProgramStaticResult(
-                checked=None, compiled=None, diagnostics=tc_diagnostics, warnings=all_warnings
+            return ProgramDiscovery(
+                programs=(),
+                checked=None,
+                compiled=None,
+                diagnostics=tc_diagnostics,
+                warnings=all_warnings,
             )
 
         if compiled is None:
@@ -1045,7 +1033,8 @@ class PipelineDriver:
                 checked, prepared.resolved.graph, capabilities
             )
             if compiled is None:
-                return _ProgramStaticResult(
+                return ProgramDiscovery(
+                    programs=(),
                     checked=checked,
                     compiled=None,
                     diagnostics=match_diagnostics,
@@ -1053,15 +1042,16 @@ class PipelineDriver:
                 )
 
         if checked.entry_id not in checked.modules:
-            return _ProgramStaticResult(
+            return ProgramDiscovery(
+                programs=(),
                 checked=None,
                 compiled=None,
                 diagnostics=(Diagnostic(message="Entry module not found in program", line=1),),
                 warnings=all_warnings,
             )
 
-        return _ProgramStaticResult(
-            checked=checked, compiled=compiled, diagnostics=(), warnings=all_warnings
+        return ProgramDiscovery(
+            programs=(), checked=checked, compiled=compiled, diagnostics=(), warnings=all_warnings
         )
 
     def discover_programs(
@@ -1079,23 +1069,10 @@ class PipelineDriver:
         ``arguments``.
         """
         static = self._discover_static(prepared, compiled=compiled)
-        if not static.ok:
-            return ProgramDiscovery(
-                programs=(),
-                checked=static.checked,
-                compiled=None,
-                diagnostics=static.diagnostics,
-                warnings=static.warnings,
-            )
         checked = static.checked
-        assert checked is not None, "compiler bug: _discover_static.ok without a checked program"
-        return ProgramDiscovery(
-            programs=_program_decl_infos(checked),
-            checked=checked,
-            compiled=static.compiled,
-            diagnostics=(),
-            warnings=static.warnings,
-        )
+        if static.compiled is None or checked is None:
+            return static
+        return replace(static, programs=_program_decl_infos(checked))
 
     def _wire_externs_or_fail(
         self,
@@ -1547,27 +1524,25 @@ def _select_program_inventory(
 def _program_decl_infos(checked: "CheckedProgram") -> tuple[ProgramDeclInfo, ...]:
     """Return every ``program def`` declaration's info, in stable sorted order.
 
-    Walks *checked*'s modules to find every ``program def`` declaration, each
-    paired with its own typed value-parameter signature. Used by
+    Pairs each ``program def`` the shared
+    :func:`~agm.agl.typecheck.program.program_funcdefs` walk yields with its
+    own typed value-parameter signature. Used by
     :meth:`PipelineDriver.discover_programs`.
     """
-    from agm.agl.syntax.nodes import FuncDef, static_items
+    from agm.agl.typecheck.program import program_funcdefs
 
-    program_infos: list[ProgramDeclInfo] = []
-    for module_id, checked_module in checked.modules.items():
-        for item in static_items(checked_module.resolved.program.body.items):
-            if isinstance(item, FuncDef) and item.is_program:
-                program_infos.append(
-                    ProgramDeclInfo(
-                        module=module_id,
-                        scope_path=tuple(segment.name for segment in item.scope_path),
-                        name=item.name,
-                        node_id=item.node_id,
-                        span=item.span,
-                        parameters=_program_param_infos(checked_module, item),
-                        is_entry=module_id == checked.entry_id,
-                    )
-                )
+    program_infos = [
+        ProgramDeclInfo(
+            module=module_id,
+            scope_path=tuple(segment.name for segment in item.scope_path),
+            name=item.name,
+            node_id=item.node_id,
+            span=item.span,
+            parameters=_program_param_infos(checked_module, item),
+            is_entry=module_id == checked.entry_id,
+        )
+        for module_id, checked_module, item in program_funcdefs(checked.modules)
+    ]
     program_infos.sort(
         key=lambda info: (
             not info.is_entry,

@@ -131,8 +131,8 @@ def test_registered_command_dispatches_trailing_arguments(
     monkeypatch.setattr(
         exec_program,
         "run_registered",
-        lambda program, param_tokens, *, package, command_path: calls.append(
-            (program, param_tokens, package, command_path)
+        lambda program, argument_tokens, *, package, command_path: calls.append(
+            (program, argument_tokens, package, command_path)
         ),
     )
 
@@ -159,7 +159,9 @@ def test_registered_command_treats_only_standalone_dry_run_as_global(
     monkeypatch.setattr(
         exec_program,
         "run_registered",
-        lambda _program, param_tokens, **_kwargs: calls.append((param_tokens, dry_run.enabled())),
+        lambda _program, argument_tokens, **_kwargs: calls.append(
+            (argument_tokens, dry_run.enabled())
+        ),
     )
 
     value_result = invoke(CliRunner(), ["tools", "lint", "--level=--dry-run"])
@@ -266,16 +268,11 @@ def test_help_command_renders_registered_command_help(
     assert "Lint package inputs" in result.output
 
 
-def test_registered_command_help_degrades_when_program_discovery_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_registered_command_help_degrades_when_program_discovery_fails() -> None:
     import agm.cli_dispatch as dispatch
-    import agm.commands.exec_program as exec_program
-
-    monkeypatch.setattr(exec_program, "registered_program_declaration", lambda *_a, **_k: None)
 
     text = dispatch.registered_command_help(
-        "tools lint", CommandRegistration("tools", "tools/lint::main")
+        "tools lint", CommandRegistration("tools", "tools/lint::main"), program=None
     )
 
     assert "Run the registered AgL program." in text
@@ -286,34 +283,29 @@ def test_registered_command_help_degrades_when_program_discovery_fails(
     (program,) = discover_program_declarations_from_source(
         "program def main(level: text) -> unit = ()"
     )
-    monkeypatch.setattr(exec_program, "registered_program_declaration", lambda *_a, **_k: program)
 
     text = dispatch.registered_command_help(
-        "tools lint", CommandRegistration("tools", "tools/lint::main")
+        "tools lint", CommandRegistration("tools", "tools/lint::main"), program=program
     )
 
     assert "Program arguments:\n  --level" in text
 
 
-def test_registered_command_help_omits_program_arguments_on_a_reservation_collision(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_registered_command_help_omits_program_arguments_on_a_reservation_collision() -> None:
     """A value parameter that collides with a reserved flag (e.g. ``help``) renders
     no ``Program arguments:`` section at all, rather than an empty one:
     ``program_option_map_or_none`` degrades the whole option map to ``None`` on
     a collision.
     """
     import agm.cli_dispatch as dispatch
-    import agm.commands.exec_program as exec_program
     from agm.cli_support.program_discovery import discover_program_declarations_from_source
 
     (program,) = discover_program_declarations_from_source(
         "program def main(help: text) -> unit = print help"
     )
-    monkeypatch.setattr(exec_program, "registered_program_declaration", lambda *_a, **_k: program)
 
     text = dispatch.registered_command_help(
-        "tools lint", CommandRegistration("tools", "tools/lint::main")
+        "tools lint", CommandRegistration("tools", "tools/lint::main"), program=program
     )
 
     assert "Program arguments:" not in text
@@ -575,7 +567,7 @@ def test_exec_installed_reference_preserves_all_file_options(
         strict_json=True,
         no_log=True,
         log_file="trace.jsonl",
-        param_tokens=["--subject", "changes"],
+        argument_tokens=["--subject", "changes"],
         log=True,
         module_paths=["modules"],
         no_stdlib=True,
@@ -773,7 +765,7 @@ def test_program_argument_parse_failure_raises_a_typed_usage_error(tmp_path: Pat
         exec_program.run(
             ExecArgs(
                 file=str(source),
-                param_tokens=["--unknown"],
+                argument_tokens=["--unknown"],
                 strict_json=None,
                 no_log=False,
                 log_file=None,
@@ -885,7 +877,7 @@ def test_plain_exec_argument_error_still_renders_the_base_exec_usage(
         exec_command.run(
             ExecArgs(
                 file=str(source),
-                param_tokens=["--unknown"],
+                argument_tokens=["--unknown"],
                 strict_json=None,
                 no_log=False,
                 log_file=None,
@@ -1015,7 +1007,7 @@ def test_editable_registered_dispatch_uses_the_live_manifest(
             ExecArgs(
                 file=str(updated.resolve()),
                 program="main",
-                param_tokens=[],
+                argument_tokens=[],
                 strict_json=None,
                 no_log=False,
                 log_file=None,

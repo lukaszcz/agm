@@ -51,11 +51,11 @@ def _exec_args(
     *,
     log_file: str | None = None,
     no_log: bool = False,
-    param_tokens: list[str] | None = None,
+    argument_tokens: list[str] | None = None,
 ) -> ExecArgs:
     return ExecArgs(
         file=str(agl_file),
-        param_tokens=param_tokens or [],
+        argument_tokens=argument_tokens or [],
         strict_json=None,
         no_log=no_log,
         log_file=log_file,

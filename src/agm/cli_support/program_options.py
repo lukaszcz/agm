@@ -91,9 +91,12 @@ __all__ = [
     "ValueForm",
     "build_program_option_map",
     "engine_key_flags",
+    "native_raw_value",
     "option_none_raw",
     "option_some_raw",
+    "program_option_map_for",
     "program_option_map_or_none",
+    "program_value_taking_flags",
     "project_option",
     "render_program_arguments_help",
     "short_help_requested",
@@ -123,6 +126,10 @@ class ValueForm(enum.Enum):
 class ProjectedOption:
     """One type's CLI surface, as :func:`project_option` derives it.
 
+    ``value_form`` is the one stored discriminant: ``negative_flags`` and
+    ``takes_value`` both follow from it, so :attr:`takes_value` is derived
+    rather than stored and cannot disagree with the form.
+
     ``option_inner`` is ``T`` when ``value_form`` is :attr:`ValueForm.OPTION`
     and ``None`` for every other form — computed once here rather than
     re-derived from the parameter's type on every token, so the raw-value
@@ -131,9 +138,13 @@ class ProjectedOption:
 
     flags: tuple[str, ...]
     negative_flags: tuple[str, ...]
-    takes_value: bool
     value_form: ValueForm
     option_inner: "AglType | None" = None
+
+    @property
+    def takes_value(self) -> bool:
+        """Return whether this option consumes a following ``VALUE`` token."""
+        return self.value_form is not ValueForm.BOOL
 
 
 def _option_inner(type_: "AglType") -> "AglType | None":
@@ -145,27 +156,21 @@ def _option_inner(type_: "AglType") -> "AglType | None":
 
 def project_option(name: str, type_: "AglType") -> ProjectedOption:
     """Project one *name*/*type_* pair (a program parameter or an engine key) onto its CLI flags."""
-    flag = f"--{name}"
-    negative = f"--no-{name}"
-    if isinstance(type_, BoolType):
-        return ProjectedOption(
-            flags=(flag,), negative_flags=(negative,), takes_value=False, value_form=ValueForm.BOOL
-        )
     inner = _option_inner(type_)
-    if inner is not None:
-        return ProjectedOption(
-            flags=(flag,),
-            negative_flags=(negative,),
-            takes_value=True,
-            value_form=ValueForm.OPTION,
-            option_inner=inner,
-        )
-    if isinstance(type_, TextType):
-        return ProjectedOption(
-            flags=(flag,), negative_flags=(), takes_value=True, value_form=ValueForm.TEXT
-        )
+    if isinstance(type_, BoolType):
+        form = ValueForm.BOOL
+    elif inner is not None:
+        form = ValueForm.OPTION
+    elif isinstance(type_, TextType):
+        form = ValueForm.TEXT
+    else:
+        form = ValueForm.JSON
+    negated = form in (ValueForm.BOOL, ValueForm.OPTION)
     return ProjectedOption(
-        flags=(flag,), negative_flags=(), takes_value=True, value_form=ValueForm.JSON
+        flags=(f"--{name}",),
+        negative_flags=(f"--no-{name}",) if negated else (),
+        value_form=form,
+        option_inner=inner if form is ValueForm.OPTION else None,
     )
 
 
@@ -280,6 +285,24 @@ def option_some_raw(value: object) -> object:
 def option_none_raw() -> object:
     """Return the ``None`` envelope ``decode_param_value`` expects for an ``Option[T]`` value."""
     return {"$case": "None"}
+
+
+def native_raw_value(projected: ProjectedOption, raw: object) -> object:
+    """Project one already-native host value onto *projected*'s raw argument shape.
+
+    The config-table counterpart of :func:`_positive_raw`, which applies the
+    same ``Option`` rule to a CLI ``VALUE`` token. A present value for an
+    ``Option[T]`` parameter is wrapped ``Some``: a config table has no
+    ``--no-x`` equivalent, so an absent key supplies nothing at all and the
+    parameter falls back to its own default. Every other value form is
+    already a native TOML/JSON value that ``decode_param_value`` decodes
+    directly, so it passes through unchanged. Keeping this beside
+    :func:`_positive_raw` is what stops the envelope rule from being spelled
+    once per host surface.
+    """
+    if projected.value_form is ValueForm.OPTION:
+        return option_some_raw(raw)
+    return raw
 
 
 def _positive_raw(projected: ProjectedOption, flag: str, token: str) -> object:
@@ -451,8 +474,9 @@ class ProgramOptionMap:
         surface (config-key diagnostics, completions) use this to tell those
         parameters apart from a genuinely undeclared name.
         """
-        option_names = {param.name for param, _projected in self.options}
-        return frozenset(param.name for param in self.positional if param.name not in option_names)
+        return frozenset(
+            param.name for param in self.positional if param.kind is ParamZone.POSITIONAL_ONLY
+        )
 
     def completion_items(self) -> tuple[str, ...]:
         """Return every completable CLI token: each option's flags and negative forms."""
@@ -522,6 +546,30 @@ def program_option_map_or_none(
     """
     result = build_program_option_map(signature)
     return result if isinstance(result, ProgramOptionMap) else None
+
+
+def program_option_map_for(
+    program: "ProgramDeclInfo | None",
+) -> "ProgramOptionMap | None":
+    """Build *program*'s option map, degrading a missing program or a collision to ``None``.
+
+    The ``None``-tolerant form of :func:`program_option_map_or_none`, for the
+    advisory surfaces (help, completion, ``-h`` disambiguation) that hold a
+    ``ProgramDeclInfo | None`` — no program selected is the same "show no
+    program-argument flags" outcome as a colliding projection.
+    """
+    return None if program is None else program_option_map_or_none(program.parameters)
+
+
+def program_value_taking_flags(program: "ProgramDeclInfo | None") -> frozenset[str]:
+    """Return *program*'s value-taking flags, or none when it has no usable option map.
+
+    The :func:`short_help_requested` *value_flags* argument, derived in one
+    place so every caller that disambiguates a bare ``-h`` against a selected
+    program does it identically.
+    """
+    option_map = program_option_map_for(program)
+    return frozenset() if option_map is None else option_map.value_taking_flags()
 
 
 def render_program_arguments_help(

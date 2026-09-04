@@ -317,15 +317,12 @@ def default_program_arguments(
 def _diagnose_binding_error(exc: ArgumentBindingError, signature: ProgramSignature) -> Diagnostic:
     """Translate one structural zone-binding violation into a pre-execution diagnostic."""
     match exc.kind:
-        case ArgumentBindingErrorKind.MISSING_REQUIRED:
-            # Unreachable from `bind_program_arguments`, which always passes
-            # `has_default=True` so missing-required parameters accumulate
-            # instead of short-circuiting the binder.
-            assert exc.name is not None, "binder always names a missing-required parameter"
-            return diagnostic_from_span(
-                _missing_required_message(exc.name),
-                _span_for(signature, exc.name),
-            )
+        case ArgumentBindingErrorKind.MISSING_REQUIRED:  # pragma: no cover
+            # Unreachable: `bind_program_arguments` always passes
+            # `has_default=True`, so the binder never short-circuits on a
+            # missing required parameter — they accumulate and are reported
+            # per parameter there instead. Listed only for exhaustiveness.
+            raise AssertionError("binder never short-circuits on a missing required parameter")
         case ArgumentBindingErrorKind.UNKNOWN_NAME:
             assert exc.name is not None, "binder always names an unknown argument"
             return diagnostic_from_span(f"Unknown program argument: {exc.name!r}", signature.span)

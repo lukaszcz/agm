@@ -30,6 +30,7 @@ __all__ = [
     "ProgramSelection",
     "discover_program_declarations_from_installed_reference",
     "discover_program_declarations_from_source",
+    "discover_programs_for_target",
     "select_entry_program",
 ]
 
@@ -110,6 +111,85 @@ def discover_program_declarations_from_installed_reference(
         )
     except (Exception, SystemExit):
         return ()
+
+
+def discover_programs_for_target(
+    *,
+    file: str | None,
+    command: str | None,
+    module_paths: "list[str] | None",
+    no_stdlib: bool,
+) -> "tuple[tuple[ProgramDeclInfo, ...], str | None]":
+    """Resolve an ``agm exec`` source selector and discover its ``program def`` declarations.
+
+    The single advisory discovery path behind both ``agm exec --help``'s
+    ``Program arguments:`` section and ``agm exec``'s shell completion: it
+    resolves the same target the execution path would
+    (``exec_target.resolve_exec_target``), assembles the same module roots
+    (``exec_roots.effective_exec_roots``), and runs
+    :func:`discover_program_declarations_from_source` or
+    :func:`discover_program_declarations_from_installed_reference` for it. A
+    single implementation is what keeps help and completion from disagreeing
+    about which programs a given selector offers.
+
+    Returns the discovered programs and, for an installed
+    ``PACKAGE/MODULE::PROGRAM`` reference, the declaration path that reference
+    already names — the implicit ``-p``/``--program`` selection a caller
+    applies when none was given explicitly. Every failure degrades to
+    ``((), None)``: these are advisory surfaces, so an unreadable entry, an
+    unresolvable target, or a source that no longer parses shows no program
+    arguments rather than failing the command.
+    """
+    from agm.cli_support.exec_roots import effective_exec_roots
+    from agm.cli_support.exec_target import (
+        FileEntry,
+        InlineSource,
+        PackageProgramReference,
+        resolve_exec_target,
+    )
+    from agm.config.context import current_config_context
+    from agm.core.fs import read_text_arg
+
+    try:
+        context = current_config_context()
+        target = resolve_exec_target(
+            file=file,
+            command=command,
+            home=context.home,
+            proj_dir=context.proj_dir,
+            cwd=context.cwd,
+        )
+        if isinstance(target, PackageProgramReference):
+            programs = discover_program_declarations_from_installed_reference(
+                target,
+                home=context.home,
+                proj_dir=context.proj_dir,
+                cwd=context.cwd,
+                default_stdlib=not no_stdlib,
+            )
+            return programs, target.declaration_path
+        if isinstance(target, (InlineSource, FileEntry)):
+            source = command if isinstance(target, InlineSource) else read_text_arg(target.path)
+            entry_path = target.path if isinstance(target, FileEntry) else None
+            exec_roots = effective_exec_roots(
+                entry_path=entry_path,
+                module_paths=[] if module_paths is None else module_paths,
+                cwd=context.cwd,
+                home=context.home,
+                proj_dir=context.proj_dir,
+            )
+            assert source is not None
+            programs = discover_program_declarations_from_source(
+                source,
+                inline_source=isinstance(target, InlineSource),
+                entry_path=entry_path,
+                roots=exec_roots.roots,
+                default_stdlib=not no_stdlib,
+            )
+            return programs, None
+    except (Exception, SystemExit):
+        return (), None
+    return (), None
 
 
 @dataclass(frozen=True, slots=True)

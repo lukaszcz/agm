@@ -56,6 +56,7 @@ Algorithm
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Generic, Mapping, TypeVar, cast
@@ -190,6 +191,24 @@ class CheckedProgram:
     import_sccs: tuple[tuple[ModuleId, ...], ...] = ()
     resource_roots: Mapping[ModuleId, Path | None] = field(default_factory=dict)
     runtime_modules: frozenset[ModuleId] | None = None
+
+
+def program_funcdefs(
+    modules: Mapping[ModuleId, CheckedModule],
+) -> Iterator[tuple[ModuleId, CheckedModule, FuncDef]]:
+    """Yield every ``program def`` declaration across *modules*, with its owning module.
+
+    The one walk over a checked program's ``program def`` declarations, so
+    every table keyed on a program -- the lowerer's symbol, function and
+    signature tables, and the driver's discovered declaration infos -- is
+    built from the same traversal in the same order.
+    """
+    return (
+        (module_id, checked_module, item)
+        for module_id, checked_module in modules.items()
+        for item in static_items(checked_module.resolved.program.body.items)
+        if isinstance(item, FuncDef) and item.is_program
+    )
 
 
 def _assert_checked_module_closed(module: CheckedModule) -> None:

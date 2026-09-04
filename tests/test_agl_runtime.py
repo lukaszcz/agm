@@ -449,7 +449,7 @@ class TestUncaughtAgentCallErrorSpan:
         )
         args = ExecArgs(
             file=str(agl_file),
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=True,

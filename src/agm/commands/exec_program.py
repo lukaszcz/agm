@@ -89,11 +89,9 @@ from agm.cli_support.program_options import (
     DuplicateOptionFlagError,
     ProgramOptionError,
     ProgramOptionMap,
-    ProjectedOption,
     ReservedFlagError,
-    ValueForm,
     build_program_option_map,
-    option_some_raw,
+    native_raw_value,
 )
 from agm.config.context import ConfigContext, current_config_context
 from agm.config.general import GeneralConfig, exec_config_from_merged, load_general_config
@@ -245,22 +243,6 @@ def _program_option_error_message(error: ProgramOptionError) -> str:
             return f"program parameters {first!r} and {second!r} both project onto option {flag!r}"
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
-
-
-def _config_raw_value(projected: ProjectedOption, raw: object) -> object:
-    """Project one config-table value onto its parameter's raw argument shape.
-
-    Mirrors the CLI's own ``Option`` envelope-building rule
-    (``cli_support.program_options``): a present config value for an
-    ``Option[T]`` parameter is wrapped ``Some``, since a config table has no
-    ``--no-x`` equivalent — an absent key simply supplies nothing, deferring
-    to the parameter's own default. Every other value form is already a
-    native TOML/JSON value; ``decode_param_value`` decodes it directly, so it
-    passes through unchanged.
-    """
-    if projected.value_form is ValueForm.OPTION:
-        return option_some_raw(raw)
-    return raw
 
 
 def _resolve_registered_program_target(
@@ -566,12 +548,12 @@ def run(
 
     if program_option_map is not None:
         try:
-            cli_arguments = program_option_map.parse_tokens(args.param_tokens)
+            cli_arguments = program_option_map.parse_tokens(args.argument_tokens)
         except ValueError as exc:
             raise RegisteredProgramUsageError(str(exc), selected_program) from exc
-    elif args.param_tokens:
+    elif args.argument_tokens:
         raise RegisteredProgramUsageError(
-            f"unexpected argument: {args.param_tokens[0]!r}", selected_program
+            f"unexpected argument: {args.argument_tokens[0]!r}", selected_program
         )
     else:
         cli_arguments = ProgramArguments(positional=(), named={})
@@ -584,29 +566,30 @@ def run(
     program_named: dict[str, object] = dict(cli_arguments.named)
     if entry_stem is not None and program_option_map is not None and selected_program is not None:
         program_path = selected_program.scope_path + (selected_program.name,)
-        argument_keys = {
-            info.name: QualifiedConfigKey(config_entry_segments, program_path, info.name)
-            for info, _projected in program_option_map.options
+        argument_options = {
+            info.name: (
+                QualifiedConfigKey(config_entry_segments, program_path, info.name),
+                projected,
+            )
+            for info, projected in program_option_map.options
         }
+        argument_keys = [key for key, _projected in argument_options.values()]
         try:
-            configured_arguments = resolve_qualified_values(config_view, argument_keys.values())
+            configured_arguments = resolve_qualified_values(config_view, argument_keys)
         except QualifiedConfigLookupError as exc:
             print(f"Error: invalid qualified configuration: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
-        projected_by_name = {info.name: projected for info, projected in program_option_map.options}
         positional_names = {
             info.name for info in program_option_map.positional[: len(cli_arguments.positional)]
         }
         cli_supplied_names = set(program_named) | positional_names
-        for name, key in argument_keys.items():
+        for name, (key, projected) in argument_options.items():
             if key in configured_arguments and name not in cli_supplied_names:
-                program_named[name] = _config_raw_value(
-                    projected_by_name[name], configured_arguments[key]
-                )
+                program_named[name] = native_raw_value(projected, configured_arguments[key])
         _report_undeclared_config_keys(
             config_view,
             config_entry_segments,
-            argument_keys.values(),
+            argument_keys,
             scope_path=program_path,
             positional_only_names=program_option_map.positional_only_names(),
         )
@@ -744,7 +727,7 @@ def _resolve_installed_reference_or_exit(
 
 def run_registered(
     program: str,
-    param_tokens: list[str],
+    argument_tokens: list[str],
     *,
     args: ExecArgs | None = None,
     package: str | None = None,
@@ -798,7 +781,7 @@ def run_registered(
     execution_args = (
         ExecArgs(
             file=program,
-            param_tokens=param_tokens,
+            argument_tokens=argument_tokens,
             strict_json=None,
             no_log=False,
             log_file=None,

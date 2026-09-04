@@ -47,12 +47,12 @@ def invoke(runner: CliRunner, argv: list[str]) -> Result:
     return runner.invoke(get_command(cli.app), argv, prog_name="agm", catch_exceptions=False)
 
 
-def inline_args(command: str, *, param_tokens: list[str] | None = None) -> ExecArgs:
+def inline_args(command: str, *, argument_tokens: list[str] | None = None) -> ExecArgs:
     """Build the ``ExecArgs`` an ``agm exec -c SOURCE`` invocation produces."""
     return ExecArgs(
         file=None,
         command=command,
-        param_tokens=param_tokens or [],
+        argument_tokens=argument_tokens or [],
         strict_json=None,
         max_iters=None,
         no_log=True,
@@ -65,7 +65,7 @@ def file_args(path: Path) -> ExecArgs:
     return ExecArgs(
         file=str(path),
         command=None,
-        param_tokens=[],
+        argument_tokens=[],
         strict_json=None,
         max_iters=None,
         no_log=True,
@@ -117,9 +117,9 @@ class TestExecArgsParsing:
         assert result.exit_code == 0
 
         args = recorded_runs[0]
-        assert getattr(args, "param_tokens") == ["--k", "v"]
+        assert getattr(args, "argument_tokens") == ["--k", "v"]
 
-    def test_exec_multiple_param_tokens(
+    def test_exec_multiple_argument_tokens(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
@@ -129,7 +129,7 @@ class TestExecArgsParsing:
         assert result.exit_code == 0
 
         args = recorded_runs[0]
-        assert getattr(args, "param_tokens") == ["--a", "1", "--b", "2"]
+        assert getattr(args, "argument_tokens") == ["--a", "1", "--b", "2"]
 
     def test_exec_strict_json_flag(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
@@ -302,7 +302,22 @@ class TestExecCommandArgParsing:
 
         assert result.exit_code == 0
         assert recorded_runs != []
-        assert getattr(recorded_runs[0], "param_tokens") == ["--msg", "-h"]
+        assert getattr(recorded_runs[0], "argument_tokens") == ["--msg", "-h"]
+
+    def test_exec_short_help_flag_after_an_end_of_options_marker_is_not_help(
+        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    ) -> None:
+        """A ``-h`` past an end-of-options marker is a program argument, whatever
+        the program declares: no program signature can make it a help request, so
+        it reaches the program unchanged."""
+        agl_file = tmp_path / "test.agl"
+        write_file_program(agl_file, "program def main(@pos, msg: text, /) -> unit = print msg\n")
+
+        result = invoke(runner, ["exec", str(agl_file), "--", "--", "-h"])
+
+        assert result.exit_code == 0
+        assert recorded_runs != []
+        assert getattr(recorded_runs[0], "argument_tokens") == ["--", "-h"]
 
     def test_exec_inline_short_help_value_normalizes_the_option_bound_as_file(
         self, runner: CliRunner, recorded_runs: list[object]
@@ -314,7 +329,7 @@ class TestExecCommandArgParsing:
         assert result.exit_code == 0
         assert len(recorded_runs) == 1
         assert getattr(recorded_runs[0], "file") is None
-        assert getattr(recorded_runs[0], "param_tokens") == ["--name", "-h"]
+        assert getattr(recorded_runs[0], "argument_tokens") == ["--name", "-h"]
 
     def test_exec_param_before_file_is_usage_error(
         self, runner: CliRunner, recorded_runs: list[object]
@@ -334,7 +349,7 @@ class TestExecCommandArgParsing:
         assert result.exit_code == 0
         args = recorded_runs[0]
         assert getattr(args, "file") is None
-        assert getattr(args, "param_tokens") == ["--msg", "hello"]
+        assert getattr(args, "argument_tokens") == ["--msg", "hello"]
 
     def test_exec_parser_preserves_canonical_qualified_param_flags(
         self, runner: CliRunner, recorded_runs: list[object]
@@ -352,7 +367,7 @@ class TestExecCommandArgParsing:
 
         assert result.exit_code == 0
         args = recorded_runs[0]
-        assert getattr(args, "param_tokens") == [
+        assert getattr(args, "argument_tokens") == [
             "--@module::no-settings::region",
             "local",
             "--no-@module::settings::region",
@@ -362,8 +377,8 @@ class TestExecCommandArgParsing:
 class TestExecCommandInline:
     """Behavior tests for executing an inline -c/--command program."""
 
-    def _command_args(self, command: str, *, param_tokens: list[str] | None = None) -> ExecArgs:
-        return inline_args(command, param_tokens=param_tokens)
+    def _command_args(self, command: str, *, argument_tokens: list[str] | None = None) -> ExecArgs:
+        return inline_args(command, argument_tokens=argument_tokens)
 
     def test_inline_command_runs_and_prints(self, capsys: pytest.CaptureFixture[str]) -> None:
         assert exec_command.run(self._command_args('print "hello"')) is None
@@ -373,7 +388,7 @@ class TestExecCommandInline:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         args = self._command_args(
-            "program def main(msg: text) -> unit = print msg", param_tokens=["--msg", "hi"]
+            "program def main(msg: text) -> unit = print msg", argument_tokens=["--msg", "hi"]
         )
         assert exec_command.run(args) is None
         assert capsys.readouterr().out == "hi\n"
@@ -389,7 +404,7 @@ class TestExecCommandInline:
         args = ExecArgs(
             file=None,
             command=None,
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=True,
@@ -595,7 +610,7 @@ class TestExecCommandBehavior:
 
         args = ExecArgs(
             file=str(tmp_path / "nonexistent.agl"),
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=False,
@@ -612,7 +627,7 @@ class TestExecCommandBehavior:
 
         args = ExecArgs(
             file=str(tmp_path / "nonexistent.agl"),
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=False,
@@ -634,7 +649,7 @@ class TestExecCommandBehavior:
 
         args = ExecArgs(
             file=str(a_dir),
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=False,
@@ -669,7 +684,7 @@ class TestExecCommandBehavior:
         try:
             args = ExecArgs(
                 file=str(unreadable),
-                param_tokens=[],
+                argument_tokens=[],
                 strict_json=None,
                 max_iters=None,
                 no_log=False,
@@ -694,7 +709,7 @@ class TestExecCommandBehavior:
 
         args = ExecArgs(
             file=str(agl_file),
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=False,
@@ -714,7 +729,7 @@ class TestExecCommandBehavior:
 
         args = ExecArgs(
             file=str(agl_file),
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=False,
@@ -734,7 +749,7 @@ class TestExecCommandBehavior:
 
         args = ExecArgs(
             file=str(agl_file),
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=False,
@@ -748,12 +763,12 @@ class TestExecCommandBehavior:
 
 
 def _exec_args(
-    agl_file: Path, *, param_tokens: list[str] | None = None, log_file: str | None = None
+    agl_file: Path, *, argument_tokens: list[str] | None = None, log_file: str | None = None
 ) -> ExecArgs:
     """Build ExecArgs for *agl_file* with all optional flags defaulted."""
     return ExecArgs(
         file=str(agl_file),
-        param_tokens=param_tokens or [],
+        argument_tokens=argument_tokens or [],
         strict_json=None,
         max_iters=None,
         no_log=False,
@@ -830,7 +845,7 @@ class TestExecCommandEdgePaths:
         write_file_program(agl_file, 'program def main(msg: text = "ok") -> unit = print msg\n')
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args(agl_file, param_tokens=["--unknown"]))
+            exec_command.run(_exec_args(agl_file, argument_tokens=["--unknown"]))
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert "error:" in captured.err
@@ -989,7 +1004,7 @@ class TestExecCommandWarnings:
         args = ExecArgs(
             file=None,
             command="let x = undefined_name\n",
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=False,
@@ -1172,7 +1187,7 @@ class TestExecLowersGraphOnce:
             "print helper::greet(who)\n"
         )
 
-        assert exec_command.run(_exec_args(agl_file, param_tokens=["--who", "agl"])) is None
+        assert exec_command.run(_exec_args(agl_file, argument_tokens=["--who", "agl"])) is None
 
         assert capsys.readouterr().out == "hi agl\n"
         assert len(lowerings) == 1
@@ -1247,7 +1262,7 @@ class TestExecCommandExitCodes:
 
         args = ExecArgs(
             file=str(agl_file),
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=False,
@@ -1271,7 +1286,7 @@ class TestExecCommandExitCodes:
 
         args = ExecArgs(
             file=str(agl_file),
-            param_tokens=["--value", "7"],
+            argument_tokens=["--value", "7"],
             strict_json=None,
             max_iters=None,
             no_log=False,
@@ -1292,7 +1307,7 @@ class TestExecCommandExitCodes:
         write_file_program(agl_file, "program def main(value: int) -> unit = print value\n")
         args = ExecArgs(
             file=str(agl_file),
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=False,
@@ -1338,7 +1353,7 @@ class TestExecCommandExitCodes:
 
         args = ExecArgs(
             file=str(agl_file),
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=True,
@@ -1380,7 +1395,7 @@ class TestExecCommandExitCodes:
 
         args = ExecArgs(
             file=str(agl_file),
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=False,
@@ -1404,7 +1419,7 @@ class TestExecCommandExitCodes:
 
         args = ExecArgs(
             file=str(agl_file),
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=False,
@@ -1431,7 +1446,7 @@ class TestExecCommandExitCodes:
         )
         args = ExecArgs(
             file=str(agl_file),
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=False,
@@ -1453,7 +1468,7 @@ class TestExecCommandExitCodes:
 
         args = ExecArgs(
             file=str(agl_file),
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=False,
@@ -1530,7 +1545,7 @@ class TestExecConfigWiring:
 
         args = ExecArgs(
             file=str(agl_file),
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=False,
@@ -1560,7 +1575,7 @@ class TestExecConfigWiring:
 
         args = ExecArgs(
             file=str(agl_file),
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=False,  # CLI --no-strict-json overrides config true
             max_iters=7,  # CLI --max-iters overrides config 9
             no_log=False,
@@ -1594,7 +1609,7 @@ class TestExecConfigWiring:
 
         args = ExecArgs(
             file=str(agl_file),
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=False,
@@ -1627,7 +1642,7 @@ class TestExecConfigWiring:
             exec_command.run(
                 ExecArgs(
                     file=str(agl_file),
-                    param_tokens=[],
+                    argument_tokens=[],
                     strict_json=None,
                     max_iters=None,
                     no_log=True,
@@ -1640,7 +1655,7 @@ class TestExecConfigWiring:
 
 
 def _exec_args_with_fallback_runtime(
-    agl_file: Path, monkeypatch: pytest.MonkeyPatch, *, param_tokens: list[str] | None = None
+    agl_file: Path, monkeypatch: pytest.MonkeyPatch, *, argument_tokens: list[str] | None = None
 ) -> ExecArgs:
     """Return ExecArgs for *agl_file* and patch PipelineDriver to have a fallback agent.
 
@@ -1676,7 +1691,7 @@ def _exec_args_with_fallback_runtime(
             )
 
     monkeypatch.setattr(exec_engine, "PipelineDriver", FallbackRuntime)
-    return _exec_args(agl_file, param_tokens=param_tokens)
+    return _exec_args(agl_file, argument_tokens=argument_tokens)
 
 
 class TestDryRunInventory:
@@ -2000,7 +2015,7 @@ class TestJsonProgramArgumentsCLI:
         )
 
         assert (
-            exec_command.run(_exec_args_no_log(agl_file, param_tokens=['--pt={"x": 1, "y": 2}']))
+            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=['--pt={"x": 1, "y": 2}']))
             is None
         )
         assert capsys.readouterr().out.strip() == "1"
@@ -2013,7 +2028,8 @@ class TestJsonProgramArgumentsCLI:
         write_file_program(agl_file, "program def main(price: decimal) -> unit = print price\n")
 
         assert (
-            exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--price", "1.5"])) is None
+            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--price", "1.5"]))
+            is None
         )
         assert capsys.readouterr().out.strip() == "1.5"
 
@@ -2025,7 +2041,7 @@ class TestJsonProgramArgumentsCLI:
         write_file_program(agl_file, "program def main(tags: array[text]) -> unit = print tags\n")
 
         assert (
-            exec_command.run(_exec_args_no_log(agl_file, param_tokens=['--tags=["a", "b"]']))
+            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=['--tags=["a", "b"]']))
             is None
         )
         # The output should contain the rendered array.
@@ -2040,7 +2056,7 @@ class TestJsonProgramArgumentsCLI:
         )
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--pt", "not_json"]))
+            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--pt", "not_json"]))
         assert exc_info.value.code == 1
 
 
@@ -2057,7 +2073,7 @@ class TestUncaughtExceptionOutputFormat:
 
         return ExecArgs(
             file=str(agl_file),
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=True,
@@ -2099,7 +2115,7 @@ class TestExecBinaryFileError:
 
         args = ExecArgs(
             file=str(binary_file),
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=True,
@@ -2123,7 +2139,7 @@ class TestExecBinaryFileError:
 
         args = ExecArgs(
             file=str(binary_file),
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=True,
@@ -2774,7 +2790,7 @@ class TestExecSourceConfigPrecedence:
             exec_command.run(
                 ExecArgs(
                     file=str(agl_file),
-                    param_tokens=[],
+                    argument_tokens=[],
                     strict_json=None,
                     max_iters=None,
                     no_log=False,
@@ -2799,7 +2815,7 @@ class TestExecSourceConfigPrecedence:
         exec_command.run(
             ExecArgs(
                 file=str(agl_file),
-                param_tokens=[],
+                argument_tokens=[],
                 strict_json=None,
                 max_iters=None,
                 no_log=False,
@@ -2819,7 +2835,7 @@ def _exec_args_inline_no_log(
     return ExecArgs(
         file=None,
         command=command,
-        param_tokens=[],
+        argument_tokens=[],
         strict_json=strict_json,
         max_iters=max_iters,
         no_log=True,
@@ -3111,7 +3127,7 @@ class TestExecCliModulePaths:
         args = ExecArgs(
             file=str(entry),
             command=None,
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=True,
@@ -3146,7 +3162,7 @@ class TestExecCliModulePaths:
         args = ExecArgs(
             file=str(entry),
             command=None,
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=True,
@@ -3174,7 +3190,7 @@ class TestExecCliModulePaths:
         args = ExecArgs(
             file=str(entry),
             command=None,
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=True,
@@ -3214,7 +3230,7 @@ class TestExecCliModulePaths:
         args = ExecArgs(
             file=None,
             command="import util::*\nlet r = greet()\nprint r\n",
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=True,
@@ -3367,7 +3383,7 @@ class TestProgramValueArguments:
         )
 
         assert (
-            exec_command.run(_exec_args_no_log(agl_file, param_tokens=["alice", "--tag", "x"]))
+            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["alice", "--tag", "x"]))
             is None
         )
         assert capsys.readouterr().out == "alice:x\n"
@@ -3383,7 +3399,8 @@ class TestProgramValueArguments:
         )
 
         assert (
-            exec_command.run(_exec_args_no_log(agl_file, param_tokens=["alice", "--tag=y"])) is None
+            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["alice", "--tag=y"]))
+            is None
         )
         assert capsys.readouterr().out == "alice:y\n"
 
@@ -3398,10 +3415,12 @@ class TestProgramValueArguments:
         assert exec_command.run(_exec_args_no_log(agl_file)) is None
         assert capsys.readouterr().out == "false\n"
 
-        assert exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--verbose"])) is None
+        assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--verbose"])) is None
         assert capsys.readouterr().out == "true\n"
 
-        assert exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--no-verbose"])) is None
+        assert (
+            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--no-verbose"])) is None
+        )
         assert capsys.readouterr().out == "false\n"
 
     def test_option_type_wraps_and_unwraps(
@@ -3412,10 +3431,12 @@ class TestProgramValueArguments:
             agl_file, "program def main(tag: Option[text] = Option::None) -> unit = print tag\n"
         )
 
-        assert exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--tag", "eu"])) is None
+        assert (
+            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--tag", "eu"])) is None
+        )
         assert capsys.readouterr().out == 'Option::Some(value = "eu")\n'
 
-        assert exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--no-tag"])) is None
+        assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--no-tag"])) is None
         assert capsys.readouterr().out == "Option::None\n"
 
     def test_json_form_array_argument(
@@ -3427,7 +3448,8 @@ class TestProgramValueArguments:
         )
 
         assert (
-            exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--nums=[1, 2, 3]"])) is None
+            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--nums=[1, 2, 3]"]))
+            is None
         )
         output = capsys.readouterr().out
         assert "1" in output
@@ -3472,7 +3494,9 @@ class TestProgramValueArguments:
             agl_file, 'program def main(tag: text = "default") -> unit = print tag\n'
         )
 
-        assert exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--tag", "cli"])) is None
+        assert (
+            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--tag", "cli"])) is None
+        )
         assert capsys.readouterr().out == "cli\n"
 
     def test_positional_argument_overrides_configured_standard_parameter(
@@ -3494,7 +3518,7 @@ class TestProgramValueArguments:
             'program def main(@pos, id: text, /, tag: text) -> unit = print(id + ":" + tag)\n',
         )
 
-        assert exec_command.run(_exec_args_no_log(agl_file, param_tokens=["one", "cli"])) is None
+        assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["one", "cli"])) is None
         assert capsys.readouterr().out == "one:cli\n"
 
     def test_signature_default_used_when_cli_and_config_omit(
@@ -3580,7 +3604,7 @@ class TestProgramValueArguments:
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(
-                _exec_args_no_log(agl_file, param_tokens=["--name", "world", "--bogus", "x"])
+                _exec_args_no_log(agl_file, argument_tokens=["--name", "world", "--bogus", "x"])
             )
 
         assert exc_info.value.code == 1
@@ -3596,7 +3620,9 @@ class TestProgramValueArguments:
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, "program def main(@pos, name: text, /) -> unit = print name\n")
 
-        assert exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--", "--odd"])) is None
+        assert (
+            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--", "--odd"])) is None
+        )
         assert capsys.readouterr().out == "--odd\n"
 
     def test_option_supplied_twice_is_a_usage_error(
@@ -3608,7 +3634,9 @@ class TestProgramValueArguments:
         )
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file, param_tokens=["--tag", "x", "--tag", "y"]))
+            exec_command.run(
+                _exec_args_no_log(agl_file, argument_tokens=["--tag", "x", "--tag", "y"])
+            )
 
         assert exc_info.value.code == 1
         assert "tag" in capsys.readouterr().err
@@ -3628,7 +3656,9 @@ class TestProgramValueArguments:
         )
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file, param_tokens=["alice", "x", "--tag", "y"]))
+            exec_command.run(
+                _exec_args_no_log(agl_file, argument_tokens=["alice", "x", "--tag", "y"])
+            )
 
         assert exc_info.value.code == 1
         assert "tag" in capsys.readouterr().err
@@ -4079,7 +4109,7 @@ class TestExecProgramSelection:
         args = ExecArgs(
             file=None,
             command='let value = "inline"\nprint value\n',
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=True,
@@ -4104,7 +4134,7 @@ class TestExecProgramSelection:
         args = ExecArgs(
             file=None,
             command='print "only selected mains run"',
-            param_tokens=[],
+            argument_tokens=[],
             strict_json=None,
             max_iters=None,
             no_log=True,
@@ -4133,7 +4163,7 @@ class TestExecProgramSelection:
         args = ExecArgs(
             file=None,
             command='print "only selected mains run"',
-            param_tokens=["stray"],
+            argument_tokens=["stray"],
             strict_json=None,
             max_iters=None,
             no_log=True,

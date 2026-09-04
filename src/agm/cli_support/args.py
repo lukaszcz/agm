@@ -256,7 +256,7 @@ class ExecArgs:
     strict_json: bool | None
     no_log: bool
     log_file: str | None
-    param_tokens: list[str] = field(default_factory=list)
+    argument_tokens: list[str] = field(default_factory=list)
     log: bool = False
     command: str | None = None
     program: str | None = None

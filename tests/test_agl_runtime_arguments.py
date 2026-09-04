@@ -20,12 +20,10 @@ from agm.agl.runtime.arguments import (
     ProgramArguments,
     ProgramParameter,
     ProgramSignature,
-    _diagnose_binding_error,
     bind_program_arguments,
     decode_param_value,
 )
 from agm.agl.runtime.types import ProgramParamInfo
-from agm.agl.semantics.arguments import ArgumentBindingError, ArgumentBindingErrorKind
 from agm.agl.semantics.type_table import create_seeded_type_table
 from agm.agl.semantics.types import BoolType, IntType, JsonType, TextType
 from agm.agl.semantics.types import Type as AglType
@@ -366,22 +364,6 @@ class TestBindProgramArgumentsDecodeFailure:
         )
         assert values == ()
         assert {d.line for d in diagnostics} == {4, 5}
-
-
-class TestDiagnoseBindingErrorMissingRequired:
-    """``ArgumentBindingErrorKind.MISSING_REQUIRED`` is never raised by the
-    binder call inside ``bind_program_arguments`` (every ``BindParam`` claims
-    a default so it accumulates instead), but the translation function must
-    still handle it for exhaustiveness against the shared error-kind enum.
-    """
-
-    def test_translates_to_a_missing_required_diagnostic(self) -> None:
-        count = _param_and_info("count", ParamZone.NAMED_ONLY, IntType(), required=True, line=9)
-        signature = _signature(count)
-        exc = ArgumentBindingError(ArgumentBindingErrorKind.MISSING_REQUIRED, name="count")
-        diagnostic = _diagnose_binding_error(exc, signature)
-        assert "count" in diagnostic.message
-        assert diagnostic.line == 9
 
 
 class TestDecodeParamValue:

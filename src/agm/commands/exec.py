@@ -18,7 +18,7 @@ def run(args: ExecArgs) -> None:
     """Run a file, inline source, or installed program reference."""
     try:
         if args.file is not None and is_installed_reference(args.file, command=args.command):
-            exec_program.run_registered(args.file, args.param_tokens, args=args)
+            exec_program.run_registered(args.file, args.argument_tokens, args=args)
             return
         exec_program.run(args)
     except RegisteredProgramUsageError as exc:

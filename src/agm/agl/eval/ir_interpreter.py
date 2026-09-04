@@ -1088,17 +1088,15 @@ class IrInterpreter:
     # Public entry point
     # ------------------------------------------------------------------
 
-    def _program_entry(
-        self, symbol: SymbolId
-    ) -> "tuple[FunctionDescriptor, IrFunctionBody, Location]":
-        """Look up a selected ``program def``'s descriptor, body, and entry-point span."""
+    def _program_entry(self, symbol: SymbolId) -> "tuple[FunctionDescriptor, IrFunctionBody]":
+        """Look up a selected ``program def``'s descriptor and body."""
         descriptor = self._program.functions[self._program.program_functions[symbol]]
         assert isinstance(descriptor.impl, IrFunctionBody)
-        return descriptor, descriptor.impl, descriptor.impl.body.location
+        return descriptor, descriptor.impl
 
     def _program_entry_location(self, symbol: SymbolId) -> Location:
         """Return the selected ``program def`` body's source location."""
-        return self._program_entry(symbol)[2]
+        return self._program_entry(symbol)[1].body.location
 
     def _invoke_program(
         self, symbol: SymbolId, arguments: "tuple[Value | UseDefault, ...]"
@@ -1110,7 +1108,8 @@ class IrInterpreter:
         same function descriptor, with an entry-point error span attached to
         any depth-limit or body error.
         """
-        desc, impl, location = self._program_entry(symbol)
+        desc, impl = self._program_entry(symbol)
+        location = impl.body.location
         try:
             self._check_call_depth()
             closure_val = self._get_closure_for(desc.function_id)

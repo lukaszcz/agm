@@ -283,7 +283,7 @@ class TestPackageEntryConfigRoute:
                 strict_json=None,
                 no_log=False,
                 log_file=None,
-                param_tokens=["--level", "bare"],
+                argument_tokens=["--level", "bare"],
             )
         )
         assert capsys.readouterr().out == "bare\n"

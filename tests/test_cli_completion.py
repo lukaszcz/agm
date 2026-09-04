@@ -119,6 +119,10 @@ def test_installed_exec_reference_offers_program_value_argument_completion(
     monkeypatch.setattr(
         completion, "current_config_context", lambda: ConfigContext(home, None, tmp_path)
     )
+    monkeypatch.setattr(
+        "agm.config.context.current_config_context",
+        lambda: ConfigContext(home, None, tmp_path),
+    )
 
     from agm.cli import app
 
@@ -158,6 +162,10 @@ def test_installed_exec_reference_uses_its_selected_program_for_completion(
     )
     monkeypatch.setattr(
         completion, "current_config_context", lambda: ConfigContext(home, None, tmp_path)
+    )
+    monkeypatch.setattr(
+        "agm.config.context.current_config_context",
+        lambda: ConfigContext(home, None, tmp_path),
     )
 
     from agm.cli import app

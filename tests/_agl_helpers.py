@@ -504,3 +504,27 @@ def agl_roots(*paths: Path, include_stdlib: bool = True) -> RootSet:
         roots=frozenset(roots),
         stdlib_roots=frozenset({REPO_STDLIB_ROOT}) if include_stdlib else frozenset(),
     )
+
+
+def agl_std_package_roots(*paths: Path) -> RootSet:
+    """Assemble roots that also mount the repository standard library as a package.
+
+    A real invocation on a standard-library file mounts the ``std`` package
+    that owns it, so the file is compiled under the module id its manifest
+    declares rather than anonymously.  A test that reaches such a file without
+    mounting its package compiles a configuration production never runs.
+    """
+    from agm.agl.modules.roots import assemble_roots
+    from agm.packages.manifest import load_manifest
+    from agm.packages.model import PackageInfo
+
+    std_package = PackageInfo(REPO_STDLIB_ROOT, load_manifest(REPO_STDLIB_ROOT / "package.toml"))
+    return assemble_roots(
+        invocation_root=None,
+        stdlib_root=REPO_STDLIB_ROOT,
+        lib_root=None,
+        configured=[],
+        cli=(str(path) for path in paths),
+        cwd=REPO_STDLIB_ROOT,
+        package_roots=(std_package,),
+    )

@@ -15,12 +15,16 @@ phase of the AgL module system:
    disjoint from every graph it is served into.
 4. Terminate traversal when a module id is already loaded — this makes cycles
    finite and safe.
-5. Reject any import whose canonical file identity equals the entry file.
+5. Reject any import that resolves to the entry file under an id other than
+   the entry's own.
 6. Compute Strongly-Connected Components (SCCs) via Tarjan's algorithm for
    diagnostics.
 
-The result is a :class:`ModuleGraph` keyed by :data:`~agm.agl.modules.ids.ENTRY_ID`
-for the entry plus a :class:`~agm.agl.modules.ids.ModuleId` per library module.
+The result is a :class:`ModuleGraph` keyed by one
+:class:`~agm.agl.modules.ids.ModuleId` per module. The entry is keyed by the
+module id its owning package declares for its file, and by
+:data:`~agm.agl.modules.ids.ENTRY_ID` when the source has no module identity
+(inline ``-c`` source, a REPL splice, or a file no package owns).
 """
 
 from __future__ import annotations
@@ -34,12 +38,19 @@ from pathlib import Path
 import agm.agl.syntax as syntax
 from agm.agl.lexer import spaced_qualifier_collector
 from agm.agl.modules.errors import (
+    AmbiguousModule,
     ImportEntryError,
     MissingExternCompanion,
     ModuleNotFound,
     PackageImportVisibilityError,
 )
-from agm.agl.modules.ids import ENTRY_ID, STD_BUILTIN_METHODS_ID, STD_PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import (
+    ENTRY_ID,
+    STD_BUILTIN_METHODS_ID,
+    STD_PRELUDE_ID,
+    ModuleId,
+    expand_module_wildcard,
+)
 from agm.agl.modules.parsed_module_cache import (
     InfixSignature,
     cached_chain_scope_paths,
@@ -77,8 +88,9 @@ class LoadedModule:
     Attributes
     ----------
     module_id:
-        The logical identifier of this module.  For the entry program this is
-        :data:`~agm.agl.modules.ids.ENTRY_ID`.
+        The logical identifier of this module.  The entry program carries the
+        module id its package declares for its file, or
+        :data:`~agm.agl.modules.ids.ENTRY_ID` when it has no module identity.
     program:
         The ``Program`` AST produced by parsing this module's source text.
     path:
@@ -146,10 +158,12 @@ class ModuleGraph:
     ----------
     modules:
         ``{ModuleId: LoadedModule}`` for every reachable module (entry +
-        library imports).  The entry is keyed by
-        :data:`~agm.agl.modules.ids.ENTRY_ID`.
+        library imports), the entry keyed by :attr:`entry_id`.
     entry_id:
-        Always :data:`~agm.agl.modules.ids.ENTRY_ID`.
+        The entry module's identity: the module id its owning package declares
+        for its file, or :data:`~agm.agl.modules.ids.ENTRY_ID` when the entry
+        source has no module identity. Ask for the entry by this id rather
+        than by the sentinel.
     sccs:
         Strongly-connected components of the dependency graph, computed by
         Tarjan's algorithm. Each SCC is a tuple of :class:`ModuleId` values;
@@ -390,19 +404,14 @@ def _operator_export_paths(program: syntax.Program, name: str) -> set[_OperatorP
     return paths or {(name,)}
 
 
-def _dependency_targets(
-    decl: ImportDecl | ExportDecl, modules: Mapping[ModuleId, LoadedModule]
-) -> tuple[ModuleId, ...]:
-    """Return loaded targets for one import or export declaration."""
+def _dependency_targets(decl: ImportDecl | ExportDecl, graph: ModuleGraph) -> tuple[ModuleId, ...]:
+    """Return loaded targets for one import or export declaration.
+
+    A wildcard expands over the loaded modules its prefix reaches.
+    """
     if not decl.wildcard:
         return (ModuleId(segments=tuple(decl.module_path)),)
-    prefix = tuple(decl.module_path)
-    return tuple(
-        sorted(
-            (mid for mid in modules if not mid.is_entry and mid.segments[: len(prefix)] == prefix),
-            key=ModuleId.path_str,
-        )
-    )
+    return expand_module_wildcard(tuple(decl.module_path), graph.modules)
 
 
 _OperatorPath = tuple[str, ...]
@@ -510,7 +519,7 @@ def _operator_export_maps(
         changed_decls: list[ExportDecl] = []
         for mid, loaded in graph.modules.items():
             for decl in loaded.export_decls:
-                for target in _dependency_targets(decl, graph.modules):
+                for target in _dependency_targets(decl, graph):
                     for path, origins in _forwarded_operator_exports(
                         decl, exports.get(target, {})
                     ).items():
@@ -619,7 +628,7 @@ def _used_operator_surface(
         decl_scope = _operator_decl_scope_path(import_decl)
         tail = import_decl.tail
         bare_here = tail is not None and scope_path[: len(decl_scope)] == decl_scope
-        for target in _dependency_targets(import_decl, graph.modules):
+        for target in _dependency_targets(import_decl, graph):
             surface = _imported_operator_surface(import_decl, exports.get(target, {}))
             if route in _operator_import_routes(import_decl, target):
                 absorb(surface, routed_path)
@@ -669,7 +678,7 @@ def _operator_bare_layers(
         if tail is None:
             continue
         members: dict[_OperatorPath, set[_OperatorOrigin]] = {}
-        for target in _dependency_targets(decl, graph.modules):
+        for target in _dependency_targets(decl, graph):
             surface = _imported_operator_surface(decl, exports.get(target, {}))
             for path, origins in _bare_operator_members(tail, surface).items():
                 members.setdefault(path, set()).update(origins)
@@ -758,7 +767,7 @@ def _reject_obvious_scoped_reexport_cycles(graph: ModuleGraph) -> None:
         for declaration in loaded.export_decls:
             if declaration.items or declaration.hidden:
                 continue
-            for target in _dependency_targets(declaration, graph.modules):
+            for target in _dependency_targets(declaration, graph):
                 adjacency[mid].append(target)
                 declarations.setdefault((mid, target), []).append(declaration)
 
@@ -831,14 +840,14 @@ def _resolve_graph_infix(
     session_origins: dict[str, _OperatorOrigin] = {}
     if session_infix is not None:
         for name, fixity in session_infix.items():
-            origin = (ENTRY_ID, f"<session:{name}>")
+            origin = (graph.entry_id, f"<session:{name}>")
             session_origins[name] = origin
             origin_fixities[origin] = fixity
     unresolved: AglSyntaxError | None = None
 
     def visible_at(mid: ModuleId, scope_path: _OperatorPath) -> dict[str, set[_OperatorOrigin]]:
         visible = _visible_operator_origins(scope_path, bare_layers[mid])
-        if mid == ENTRY_ID:
+        if mid == graph.entry_id:
             for name, origin in session_origins.items():
                 visible.setdefault(name, set()).add(origin)
         return visible
@@ -902,7 +911,7 @@ def _resolve_graph_infix(
             else:
                 root_conflicts.add(name)
         root_conflicts.difference_update(own_names)
-        if mid == ENTRY_ID:
+        if mid == graph.entry_id:
             entry_infix_ambient = root_ambient
         root_table = build_infix_operator_table(declarations[mid], root_ambient)
 
@@ -1056,6 +1065,7 @@ def _parse_imported_module(
 def _load_into_graph(
     entry_loaded: LoadedModule,
     *,
+    entry_id: ModuleId,
     roots: RootSet,
     canonical_entry_path: Path | None,
     seed_modules: dict[ModuleId, LoadedModule],
@@ -1078,11 +1088,17 @@ def _load_into_graph(
 
     Returns the assembled :class:`ModuleGraph`, the next free node id, and the
     dict of modules loaded during this call (those not in *seed_modules*), after
-    their source infix chains are resolved to match the returned graph.
+    their source infix chains are resolved to match the returned graph.  A named
+    entry is among them: it was loaded now, under a module id anything else in
+    the graph may name, so a caller asking what this call made available must
+    see it exactly as it would had an import reached the same file.  An
+    anonymous entry is not, since no id names it.
     """
     modules: dict[ModuleId, LoadedModule] = dict(seed_modules)
-    modules[ENTRY_ID] = entry_loaded
+    modules[entry_id] = entry_loaded
     newly_loaded: dict[ModuleId, LoadedModule] = {}
+    if not entry_id.is_entry:
+        newly_loaded[entry_id] = entry_loaded
     adj: dict[ModuleId, list[ModuleId]] = {}
     source_adj: dict[ModuleId, list[ModuleId]] = {}
     next_id = start_id
@@ -1123,13 +1139,13 @@ def _load_into_graph(
         new_pairs.sort(key=_pair_sort_key)
         queue.extend(new_pairs)
 
-    _resolve_dependencies(ENTRY_ID, (*entry_loaded.imports, *entry_loaded.export_decls))
+    _resolve_dependencies(entry_id, (*entry_loaded.imports, *entry_loaded.export_decls))
 
     # Cached modules were loaded in an earlier REPL compilation. Rebuild their
     # adjacency before draining the queue so any dependency absent from this
     # invocation's cache is loaded normally.
     for mid, loaded in modules.items():
-        if mid != ENTRY_ID:
+        if mid != entry_id:
             _resolve_dependencies(mid, (*loaded.imports, *loaded.export_decls))
 
     if default_stdlib:
@@ -1179,9 +1195,15 @@ def _load_into_graph(
             continue
         ambient_modules.add(current)
         pending.extend(adj[current])
+    # The entry is reached because the host named it, so it is never ambient
+    # however the closure happens to run through it. Retaining it would put a
+    # freshly parsed module into every other module's artifact sources and
+    # would strip the ambient ordering guarantee from the whole graph whenever
+    # the entry is the registry itself.
+    ambient_modules.discard(entry_id)
     graph = ModuleGraph(
         modules=modules,
-        entry_id=ENTRY_ID,
+        entry_id=entry_id,
         sccs=sccs,
         adjacency={mid: tuple(targets) for mid, targets in adj.items()},
         source_adjacency={mid: tuple(targets) for mid, targets in source_adj.items()},
@@ -1239,10 +1261,46 @@ def parse_entry_module(
     )
 
 
+def _entry_module_id(canonical_entry_path: Path | None, roots: RootSet) -> ModuleId:
+    """Return the identity the graph's entry module is keyed by.
+
+    A mounted package's manifest declares a module tree, so a file inside one
+    is that package's module however it was reached: it keeps its declared id,
+    and the rest of the package may import it back.  Every other entry — inline
+    ``-c`` source, a REPL splice, a file under a loose root — has no module
+    identity and takes :data:`~agm.agl.modules.ids.ENTRY_ID`.
+
+    An identity is only worth having when it is the one everything else would
+    reach the file by, so the derived id is kept only if resolving it against
+    the same roots leads back to this very file.  Where it cannot — the id is
+    unspellable, resolves nowhere, resolves to several files, or resolves to a
+    different one — the file simply has no identity, exactly like a loose one.
+    """
+    if canonical_entry_path is None:
+        return ENTRY_ID
+    derived = roots.package_module_id_for(canonical_entry_path)
+    if derived is None or not _resolves_back_to(derived, canonical_entry_path, roots):
+        return ENTRY_ID
+    return derived
+
+
+def _resolves_back_to(module_id: ModuleId, path: Path, roots: RootSet) -> bool:
+    """Return whether *module_id* is spellable and *roots* resolve it to *path*."""
+    try:
+        ModuleId.from_path(module_id.path_str())
+    except ValueError:
+        return False
+    try:
+        return resolve_module(module_id, roots) == path
+    except (AmbiguousModule, ModuleNotFound):
+        return False
+
+
 def _build_entry_loaded_module(
     program: syntax.Program,
     next_id: int,
     *,
+    entry_id: ModuleId,
     canonical_entry_path: Path | None,
     entry_source_id: SourceId,
     default_stdlib: bool,
@@ -1255,15 +1313,16 @@ def _build_entry_loaded_module(
     :func:`build_repl_graph` (given an already-parsed entry from the REPL's
     own per-entry parse). Injects the ``std/prelude`` prelude import when
     *default_stdlib* is set, consuming one more node id, and derives the
-    companion path for a declared extern. Returns the built module together
-    with the next free node id.
+    companion path for a declared extern. The prelude never imports itself, so
+    an entry that *is* ``std/prelude`` is exempt exactly as the library path
+    is. Returns the built module together with the next free node id.
     """
-    if default_stdlib:
+    if default_stdlib and entry_id != STD_PRELUDE_ID:
         program = _with_default_stdlib_import(program, import_node_id=next_id)
         next_id += 1
     imports = _extract_imports(program)
     entry_loaded = LoadedModule(
-        module_id=ENTRY_ID,
+        module_id=entry_id,
         program=program,
         path=canonical_entry_path,
         source=entry_source_id,
@@ -1271,7 +1330,7 @@ def _build_entry_loaded_module(
         export_decls=_extract_exports(program),
         source_text=source_text,
         spaced_qualifiers=spaced_qualifiers,
-        companion_path=_companion_path_for(ENTRY_ID, program, canonical_entry_path),
+        companion_path=_companion_path_for(entry_id, program, canonical_entry_path),
     )
     return entry_loaded, next_id
 
@@ -1316,9 +1375,11 @@ def load_graph(
         When any module's source text fails to parse.
     """
     parsed_entry = parse_entry_module(entry_source, entry_path=entry_path)
+    entry_id = _entry_module_id(parsed_entry.canonical_path, roots)
     entry_loaded, next_id = _build_entry_loaded_module(
         parsed_entry.program,
         parsed_entry.next_id,
+        entry_id=entry_id,
         canonical_entry_path=parsed_entry.canonical_path,
         entry_source_id=parsed_entry.source_id,
         default_stdlib=default_stdlib,
@@ -1328,6 +1389,7 @@ def load_graph(
 
     graph, _next_id, _newly_loaded = _load_into_graph(
         entry_loaded,
+        entry_id=entry_id,
         roots=roots,
         canonical_entry_path=parsed_entry.canonical_path,
         seed_modules={},
@@ -1401,14 +1463,17 @@ def build_repl_graph(
     tuple[ModuleGraph, int, dict[ModuleId, LoadedModule]]
         - The full :class:`ModuleGraph` (entry + all library modules).
         - The updated ``next_start_id`` after loading any new modules.
-        - A dict of newly-loaded modules (not in *cached*) for promotion.
+        - A dict of newly-loaded modules (not in *cached*) for promotion,
+          including the entry when a package names it.
     """
     canonical_entry_path, source_id = entry_source_id(path, default_label=default_label)
 
     seed_modules = dict(cached)
+    entry_id = _entry_module_id(canonical_entry_path, roots)
     entry_loaded, next_start_id = _build_entry_loaded_module(
         program,
         next_start_id,
+        entry_id=entry_id,
         canonical_entry_path=canonical_entry_path,
         entry_source_id=source_id,
         default_stdlib=default_stdlib,
@@ -1418,6 +1483,7 @@ def build_repl_graph(
 
     return _load_into_graph(
         entry_loaded,
+        entry_id=entry_id,
         roots=roots,
         canonical_entry_path=canonical_entry_path,
         seed_modules=seed_modules,

@@ -127,6 +127,7 @@ def _make_program(name: str, *, is_entry: bool = True) -> ProgramDeclInfo:
         node_id=0,
         span=SourceSpan(1, 1, 1, 2, 0, 1),
         parameters=(),
+        is_entry=is_entry,
     )
 
 

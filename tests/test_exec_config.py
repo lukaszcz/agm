@@ -262,3 +262,28 @@ class TestPackageEntryConfigRoute:
         exec_engine.run(ExecArgs(file=str(loose), strict_json=None, no_log=False, log_file=None))
 
         assert capsys.readouterr().out == "stem\n"
+
+    def test_package_entry_program_parameter_keeps_its_bare_cli_spelling(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A package-owned entry's parameters are still spelled as the program's own.
+
+        The entry module carries its package identity internally; that must not
+        leak into the selected program's CLI surface.
+        """
+        home, module = self._install(tmp_path)
+        self._use_home(monkeypatch, home, tmp_path)
+
+        exec_engine.run(
+            ExecArgs(
+                file=str(module),
+                strict_json=None,
+                no_log=False,
+                log_file=None,
+                param_tokens=["--level", "bare"],
+            )
+        )
+        assert capsys.readouterr().out == "bare\n"

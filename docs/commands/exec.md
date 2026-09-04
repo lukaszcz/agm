@@ -35,7 +35,7 @@ belong in the program body.
 
 - the directory of `FILE` (or the working directory for `-c`),
 - when that directory is inside a development package, its containing package and the recursive closure of dependencies declared with relative `path` sources in their manifests,
-- the selected standard library: the active immutable `<AGM-home>/packages/std/<AGM_VERSION>/` package when it matches the running binary; a selected active package with a different version is an error, while AGM's bundled copy (`agm/stdlib` in an installed wheel or the in-repo `stdlib/` tree in a source checkout) is used when no active package is selected or the matching store tree is absent; `AGM_STDLIB` overrides this selection without mounting the active package as an additional root,
+- the selected standard library: a development `std` package checkout whose own module tree holds `FILE` (or the working directory) when there is one, whatever version it declares; otherwise the active immutable `<AGM-home>/packages/std/<AGM_VERSION>/` package when it matches the running binary, where a selected active package with a different version is an error, while AGM's bundled copy (`agm/stdlib` in an installed wheel or the in-repo `stdlib/` tree in a source checkout) is used when no active package is selected or the matching store tree is absent; `AGM_STDLIB` overrides this whole selection without mounting the active package as an additional root,
 - the selected AGM home's global `lib` directory (overridable via `[modules] lib_root` in config),
 - any roots declared under `[modules] roots` in any config layer,
 - any roots added with `-I`/`--module-path`.
@@ -282,13 +282,14 @@ with nothing run.
 
 Qualified tables address declarations by module suffix and scope path. A loose entry
 file's `.agl` stem is its module component. A file executed directly from a package — a
-development checkout or an installed store tree — instead retains its package-qualified
-module route, just like an installed package reference. For example, a `review::main`
-program in `review-tools/review` reads both its engine overrides and its own value
-parameters from `[review-tools.review.review.main]`; a shorter unambiguous suffix, or an
-exact quoted module route such as `["review-tools/review".review.main]`, also resolves it.
-`runner` remains an `[exec]`-only setting. Inline `-c` source has no file-derived route, so
-its program's own value parameters are CLI-only (CLI value, then signature default).
+development checkout, an installed store tree, or the selected standard library — instead
+retains its package-qualified module route, just like an installed package reference. For
+example, a `review::main` program in `review-tools/review` reads both its engine overrides
+and its own value parameters from `[review-tools.review.review.main]`; a shorter
+unambiguous suffix, or an exact quoted module route such as
+`["review-tools/review".review.main]`, also resolves it. `runner` remains an `[exec]`-only
+setting. Inline `-c` source has no file-derived route, so its program's own value parameters
+are CLI-only (CLI value, then signature default).
 
 A key in the selected program's own table that names neither one of its own
 name-addressable value parameters nor an engine setting (typically a

@@ -10,7 +10,9 @@ or a `use` declaration adds selected declarations to a bare namespace.
 
 A module identity is its slash path: the relative path to its `.agl` file,
 without the suffix. For example, `utils/strings.agl` has identity
-`utils/strings`. The entry program has no path identity.
+`utils/strings`. An entry program that no [package](packages.md) owns has no
+path identity; a file inside a package keeps its package-qualified identity even
+when it is the entry.
 
 A slash path is written byte-adjacent wherever it appears — in a header, a
 qualifier, or a wildcard tail. `a/b` is a path; `a / b`, spaced on both sides,
@@ -22,6 +24,10 @@ A module must resolve to exactly one file across the configured library roots.
 No matching file is an error; more than one matching file is also an error.
 There is no root-priority shadowing. Wildcard imports select matching modules
 from the same global module set.
+
+A module inside a [package](packages.md) has the package name as the first
+segment of its path and may import only its own package, the package's
+declared dependencies, and the standard library.
 
 ## Imports
 

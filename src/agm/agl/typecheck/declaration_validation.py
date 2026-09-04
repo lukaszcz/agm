@@ -295,17 +295,18 @@ def _raise_collision(
     )
 
 
-def _module_visit_order(module_id: ModuleId) -> tuple[bool, tuple[str, ...]]:
-    """Sort key placing the entry module after every other module.
+def _module_visit_order(module_id: ModuleId, entry_id: ModuleId) -> tuple[bool, tuple[str, ...]]:
+    """Sort key placing the program's entry module after every other module.
 
     A duplicate between a library declaration and the program's own is then
     reported at the program's own, more actionable, declaration.
     """
-    return (module_id.is_entry, module_id.segments)
+    return (module_id == entry_id, module_id.segments)
 
 
 def _builtin_bare_declarations(
     modules: Mapping[ModuleId, ModuleResolution],
+    entry_id: ModuleId,
 ) -> list[tuple[ModuleId, tuple[str, ...], str, SourceSpan]]:
     """List every builtin type and builtin def declaration by scoped name.
 
@@ -320,7 +321,7 @@ def _builtin_bare_declarations(
     several duplicate declarations always reports the same one.
     """
     found: list[tuple[ModuleId, tuple[str, ...], str, SourceSpan]] = []
-    for module_id in sorted(modules, key=_module_visit_order):
+    for module_id in sorted(modules, key=partial(_module_visit_order, entry_id=entry_id)):
         resolved = modules[module_id]
         for item in static_items(resolved.program.body.items):
             if not isinstance(item, (RecordDef, EnumDef, ExceptionDef, FuncDef)):
@@ -334,6 +335,7 @@ def _builtin_bare_declarations(
 
 def validate_builtin_declaration_uniqueness(
     modules: Mapping[ModuleId, ModuleResolution],
+    entry_id: ModuleId,
 ) -> None:
     """Reject a builtin name declared more than once at the same scope path.
 
@@ -343,7 +345,7 @@ def validate_builtin_declaration_uniqueness(
     Types and defs still share one namespace at any one scoped name.
     """
     first_seen: dict[tuple[str, ...], tuple[ModuleId, tuple[str, ...], SourceSpan]] = {}
-    for module_id, path, name, span in _builtin_bare_declarations(modules):
+    for module_id, path, name, span in _builtin_bare_declarations(modules, entry_id):
         key = (*path, name)
         prior = first_seen.get(key)
         if prior is None:

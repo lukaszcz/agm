@@ -195,7 +195,7 @@ from agm.agl.typecheck.builtins import (
     BuiltinCallChecker,
     PendingBuiltinObligation,
 )
-from agm.agl.typecheck.constructors import ConstructorChecker
+from agm.agl.typecheck.constructors import ConstructorChecker, type_name_not_a_value
 from agm.agl.typecheck.env import (
     AglTypeError,
     ArgumentBindings,
@@ -497,6 +497,7 @@ def _builtin_function_signature(
             return FunctionSignature(
                 params=(
                     _std_param("prompt", TextType()),
+                    _std_param("agent", BUILTIN_PRELUDE_TYPES["Agent"], has_default=True),
                     _std_param("format", TextType(), has_default=True),
                     _std_param("strict-json", BoolType(), has_default=True),
                     _std_param(
@@ -510,8 +511,19 @@ def _builtin_function_signature(
             )
         case "ask-request":
             return FunctionSignature(
-                params=(_std_param("prompt", TextType()),),
+                params=(
+                    _std_param("prompt", TextType()),
+                    _std_param("agent", BUILTIN_PRELUDE_TYPES["Agent"], has_default=True),
+                    _std_param("format", TextType(), has_default=True),
+                    _std_param("strict-json", BoolType(), has_default=True),
+                    _std_param(
+                        "on-parse-error",
+                        BUILTIN_PRELUDE_TYPES["ParsePolicy"],
+                        has_default=True,
+                    ),
+                ),
                 result=BUILTIN_PRELUDE_TYPES["AgentRequest"],
+                type_params=("T",),
             )
         case "exec":
             return FunctionSignature(
@@ -786,6 +798,18 @@ class _Checker:
         self._return_collected_provenance_stack: list[list[tuple[Type, set[int]]]] = []
         self._return_extern_targets_stack: list[list[_ExternTarget]] = []
 
+    def _is_entry_local(self, ref: BindingRef) -> bool:
+        """Return whether *ref* binds a declaration of a module with no identity.
+
+        True when this module has no module path of its own and *ref* is
+        declared in it rather than imported from a library.  Such a binding has
+        no owning named module for a bare constructor reference to resolve
+        against, so the reference is a type name used as a value.  A module a
+        package names is resolved against that name whether the host selected
+        it or an import reached it.
+        """
+        return self._module_id.is_entry and ref.module_id == self._module_id
+
     # ------------------------------------------------------------------
     # Pre-registration of function signatures
     # ------------------------------------------------------------------
@@ -854,7 +878,7 @@ class _Checker:
             and node.name in _BUILTIN_FUNC_NAMES
             and not node.is_builtin
             and not is_qualified_function_member(
-                self._resolved.is_entry_module,
+                not self._module_id.is_entry,
                 tuple(segment.name for segment in node.scope_path),
             )
         ):
@@ -1918,15 +1942,11 @@ class _Checker:
             )
         ref = self._binding_for(node.node_id)
         if ref.kind is BinderKind.constructor_binding:
-            if not ref.module_id.is_entry:
+            if not self._is_entry_local(ref):
                 return self._constructors.check_cross_module_constructor_as_value(
                     ref, span=node.span, expected=expected
                 )
-            raise AglTypeError(
-                f"'{node.name}' is a type name, not a value; "
-                "use it with a constructor call (e.g. 'EnumName::Variant' or 'RecordName(...)').",
-                span=node.span,
-            )
+            raise type_name_not_a_value(node.name, node.span)
         typ = self._require_binding_type(ref)
         # Every generic function occurrence receives fresh flexible variables.
         # They remain local to the enclosing expression region, so a higher-order
@@ -2956,9 +2976,8 @@ class _Checker:
                     callee_ref=callee_ref,
                     hole_indices=hole_indices,
                 )
-            if (
-                callee_ref.kind is BinderKind.constructor_binding
-                and not callee_ref.module_id.is_entry
+            if callee_ref.kind is BinderKind.constructor_binding and not self._is_entry_local(
+                callee_ref
             ):
                 return self._constructors.check_cross_module_constructor_call(
                     node, callee_ref, expected=expected, hole_indices=hole_indices

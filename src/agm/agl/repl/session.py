@@ -327,8 +327,9 @@ class ReplSession:
         # Source log of successfully-promoted entries (for dump_source / :save).
         self._source_log: list[str] = []
         # Constructor candidates from prior promoted entries, keyed by constructor
-        # name → ordered tuple of ConstructorRef.  Passed to resolve() as ambient
-        # so that subsequent entries can reference constructors from prior entries.
+        # name → ordered tuple of ConstructorRef.  Passed to resolve_program()
+        # as ambient so that subsequent entries can reference constructors from
+        # prior entries.
         self._ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] = {}
         # The subset of the above that were bare-visible (not only
         # qualifier-visible) at the end of the entry that declared them.
@@ -419,7 +420,9 @@ class ReplSession:
 
         cwd = self._cwd if self._cwd is not None else Path.cwd()
         if self._stdlib_root is None:
-            self._stdlib_root = resolve_stdlib_root(home=current_config_context(cwd=cwd).home)
+            self._stdlib_root = resolve_stdlib_root(
+                home=current_config_context(cwd=cwd).home, anchor=cwd
+            )
         self._roots = assemble_roots(
             invocation_root=cwd,
             stdlib_root=self._stdlib_root,
@@ -477,7 +480,6 @@ class ReplSession:
         ordinary entry.
         """
         from agm.agl.diagnostics import AglError
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.parser import parse_program_seeded
         from agm.agl.repl.entry_pipeline import OverrideRejected
 
@@ -523,7 +525,8 @@ class ReplSession:
 
             self._loaded_lib_modules.update(loaded.new_modules)
             self._next_node_id = loaded.new_next_id
-            self._type_env = loaded.checked_program.modules[ENTRY_ID].type_env
+            checked_program = loaded.checked_program
+            self._type_env = checked_program.modules[checked_program.entry_id].type_env
             if cache_key is not None:
                 _bootstrap_cache[cache_key] = _BootstrapSnapshot(
                     modules=dict(loaded.new_modules),
@@ -798,7 +801,6 @@ class ReplSession:
             ModuleNotFound,
             ModulePrefixNotFound,
         )
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.parser import AglSyntaxError, parse_program_seeded
         from agm.agl.scope import AglScopeError
         from agm.agl.typecheck import AglTypeError
@@ -821,7 +823,7 @@ class ReplSession:
             ImportEntryError,
         ):
             return None
-        return checked_program.modules[ENTRY_ID].type_env
+        return checked_program.modules[checked_program.entry_id].type_env
 
     def _eval_entry_pipeline(self, text: str, *, check_only: bool = False) -> EntryResult:
         """Run the resolve → typecheck → matchcompile → lower/eval entry core.
@@ -1716,7 +1718,6 @@ class ReplSession:
         failure, or ``AglError`` for match errors or a non-expression entry.
         """
         from agm.agl.lexer import spaced_qualifier_collector
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.parser import parse_program_seeded
         from agm.agl.syntax.nodes import Binder, Declaration
 
@@ -1737,7 +1738,7 @@ class ReplSession:
         checked_program = self._entry_pipeline.resolve_and_check_program(
             program, next_node_id, host_env, spaced_qualifiers=tuple(spaced_sink)
         )
-        checked = checked_program.modules[ENTRY_ID]
+        checked = checked_program.modules[checked_program.entry_id]
         from agm.agl.matchcompile import (
             cached_module_sites,
             compile_program_matches,

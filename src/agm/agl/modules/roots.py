@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from agm.agl.modules.ids import ModuleId
+
 if TYPE_CHECKING:
     from agm.packages.model import PackageInfo
 
@@ -92,6 +94,28 @@ class RootSet:
             return True
         return any(path.is_relative_to(module_root) for module_root in mounted_module_roots)
 
+    def package_module_id_for(self, path: Path) -> ModuleId | None:
+        """Return the module id a mounted package gives *path*, if one owns it.
+
+        A package manifest declares a module tree, so a file inside one has a
+        module identity independent of how it was reached: the loader keys a
+        directly executed or checked package file by this id rather than by the
+        anonymous entry sentinel, and the command layer routes its
+        configuration under the same path.  ``None`` for a file no mounted
+        package owns — a loose root is where the user happened to invoke the
+        tool, not a declaration that its files are modules.
+        """
+        # Locally imported: ``agm.packages.discipline`` imports this module, so
+        # the ownership rule is borrowed rather than mirrored or imported back
+        # at module scope.
+        from agm.packages.model import owning_package
+
+        package = owning_package(path, self.packages)
+        if package is None:
+            return None
+        relative = path.resolve().relative_to(package.root).with_suffix("")
+        return ModuleId(segments=relative.parts)
+
     def is_standard_library_path(self, path: Path) -> bool:
         """Return whether *path* belongs to a host-selected standard-library root.
 
@@ -143,11 +167,13 @@ def assemble_roots(
     cwd:
         Current working directory; used to resolve relative CLI paths.
     package_roots:
-        Mounted non-``std`` packages, regardless of whether their roots come
-        from a development directory or a future package store. A supplied
-        ``std`` package is ignored because ``stdlib_root`` is its exclusive
-        mounting seam. Package mounts expose only the package's declared
-        module tree unless the same path is also supplied as an ordinary root.
+        Mounted packages, regardless of whether their roots come from a
+        development directory or a future package store. A ``std`` package
+        belongs here only when *stdlib_root* already selected that very tree,
+        so the standard library keeps exactly one mounted root while still
+        owning the files under it. Package mounts expose only the package's
+        declared module tree unless the same path is also supplied as an
+        ordinary root.
 
     All roots are user-expanded, made absolute, and canonicalized before
     de-duplication.  Non-existent roots are dropped silently (resolution

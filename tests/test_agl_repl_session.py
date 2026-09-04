@@ -1270,6 +1270,27 @@ _PARSE_POLICY_VARIANTS = "  | Abort\n  | Retry(n: int)\n"
 # so a program without the standard library must supply an equivalent one.
 _OPTION_DECL = "enum Option[T] =\n  | None\n  | Some(value: T)\n"
 
+# ``ask-request`` mirrors ``ask``'s whole call surface, so its declaration
+# carries the same shaping options and target type parameter. The free form
+# also declares the optional ``agent`` the receiver form takes from its
+# receiver instead; without the standard library its canonical default,
+# ``std/config::default-agent``, is out of reach, and a ``builtin def``
+# default is resolved but never checked, so a local variant stands in.
+_ASK_REQUEST_OPTIONS = (
+    "  prompt: text,\n"
+    '  format: text = "",\n'
+    "  strict-json: bool = false,\n"
+    "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+)
+_ASK_REQUEST_FREE_OPTIONS = (
+    "  prompt: text,\n"
+    '  agent: Agent = AgentCommand(command = "noop"),\n'
+    '  format: text = "",\n'
+    "  strict-json: bool = false,\n"
+    "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+)
+_ASK_REQUEST_DECL = f"builtin def ask-request[T](\n{_ASK_REQUEST_FREE_OPTIONS}) -> AgentRequest\n"
+
 
 def _session_with_import_root(root: Path) -> ReplSession:
     """Create a ``ReplSession`` with *root* as the only module search root."""
@@ -1768,7 +1789,8 @@ class TestAgentRequestBuiltinIdentity:
             f"{_OPTION_DECL}"
             f"builtin\nenum Agent\n{_AGENT_VARIANTS}"
             f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}"
-            "builtin def ask-request(prompt: text) -> AgentRequest\n"
+            f"builtin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}"
+            f"{_ASK_REQUEST_DECL}"
         )
         assert declare.ok, declare.diagnostics
 
@@ -1889,7 +1911,8 @@ class TestAgentArgumentBuiltinIdentity:
             f"{_OPTION_DECL}"
             f"builtin\nenum Agent\n{_AGENT_VARIANTS}"
             f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}"
-            "builtin def ask-request(prompt: text) -> AgentRequest\n"
+            f"builtin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}"
+            f"{_ASK_REQUEST_DECL}"
         )
         assert declare.ok, declare.diagnostics
 
@@ -1948,7 +1971,10 @@ class TestAgentArgumentBuiltinIdentity:
         s = open_session()
         declare = s.eval_entry(
             f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}"
-            "builtin def Agent::ask-request(self, prompt: text) -> AgentRequest\n"
+            "builtin def Agent::ask-request[T](\n"
+            "  self,\n"
+            f"{_ASK_REQUEST_OPTIONS}"
+            ") -> AgentRequest\n"
             "end A\n"
         )
         assert declare.ok, declare.diagnostics
@@ -7856,7 +7882,7 @@ class TestDeferredStdlibResolution:
         import agm.config.module_roots as module_roots
         from agm.config.module_roots import StdlibVersionMismatchError
 
-        def _raise_version_mismatch(*, home: Path) -> Path:
+        def _raise_version_mismatch(*, home: Path, anchor: Path | None = None) -> Path:
             raise StdlibVersionMismatchError("0.0.1", "0.1.0")
 
         monkeypatch.delenv("AGM_STDLIB", raising=False)

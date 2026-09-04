@@ -1105,13 +1105,14 @@ def terminal_name(display_name: str) -> str:
 def spells_bare(module_id: ModuleId, name: str) -> bool:
     """Return whether a nominal owned by *module_id* named *name* spells bare.
 
-    True for the entry module — a program's own declarations never need a
-    qualifier — for the host's own reserved identities, which name no module a
-    reader could write, and for a standard-library module's declaration of one
-    of the built-in host names, so a built-in exception or prelude record/enum
-    reads the same in diagnostics wherever it is declared. Any other module —
-    including an ordinary, non-builtin standard-library declaration — still
-    qualifies, matching how a reader would write it.
+    True for a module with no path identity, whose declarations there is no
+    qualifier to write; for the host's own reserved identities, which name no
+    module a reader could write; and for a standard-library module's
+    declaration of one of the built-in host names, so a built-in exception or
+    prelude record/enum reads the same in diagnostics wherever it is declared.
+    Any named module — including an ordinary, non-builtin standard-library
+    declaration, and a named module the host happened to select as the entry —
+    still qualifies, matching how a reader would write it.
 
     Shared by ``RecordType``/``EnumType``/``ExceptionType.__repr__`` and
     ``semantics.type_table.qualified_decl_name``.

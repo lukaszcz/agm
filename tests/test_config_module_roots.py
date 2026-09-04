@@ -446,3 +446,109 @@ class TestResolveStdlibRoot:
         monkeypatch.setattr(stdlib_locator, "__file__", str(locator))
 
         assert resolve_stdlib_root(home=tmp_path / "home", env={}) == bundled_stdlib
+
+
+def _write_std_checkout(root: Path, version: str) -> Path:
+    """Create a development ``std`` package checkout at *root*."""
+    (root / "std").mkdir(parents=True)
+    (root / "package.toml").write_text(
+        f'[package]\nname = "std"\nversion = "{version}"\n', encoding="utf-8"
+    )
+    return root
+
+
+class TestResolveStdlibRootFromAnchor:
+    """The ``std`` checkout containing the anchor is the standard library."""
+
+    def test_development_std_checkout_containing_the_anchor_is_selected(
+        self, tmp_path: Path
+    ) -> None:
+        home = tmp_path / "home"
+        home.mkdir()
+        checkout = _write_std_checkout(tmp_path / "checkout", AGM_VERSION)
+
+        selected = resolve_stdlib_root(home=home, env={}, anchor=checkout / "std" / "agent.agl")
+
+        assert selected == checkout.resolve()
+
+    def test_development_std_checkout_outranks_a_mismatched_active_store_package(
+        self, tmp_path: Path
+    ) -> None:
+        """Editing a checkout must not be blocked by a stale activated store tree."""
+        home = tmp_path / "home"
+        _activate_stdlib(home, "0.0.1")
+        checkout = _write_std_checkout(tmp_path / "checkout", "9.9.9")
+
+        selected = resolve_stdlib_root(home=home, env={}, anchor=checkout / "std" / "agent.agl")
+
+        assert selected == checkout.resolve()
+
+    def test_anchor_inside_the_immutable_store_keeps_store_selection(self, tmp_path: Path) -> None:
+        """A store tree is owned by activation, so it is never a development checkout."""
+        home = tmp_path / "home"
+        store_stdlib = _activate_stdlib(home, "0.0.1")
+        # ``_activate_stdlib`` copies the repository manifest verbatim; make the
+        # store tree self-consistent so it is recognized by its canonical path.
+        (store_stdlib / "package.toml").write_text(
+            '[package]\nname = "std"\nversion = "0.0.1"\n', encoding="utf-8"
+        )
+
+        with pytest.raises(StdlibVersionMismatchError):
+            resolve_stdlib_root(home=home, env={}, anchor=store_stdlib / "std" / "prelude.agl")
+
+    def test_agm_stdlib_override_outranks_a_development_std_checkout(self, tmp_path: Path) -> None:
+        home = tmp_path / "home"
+        home.mkdir()
+        checkout = _write_std_checkout(tmp_path / "checkout", AGM_VERSION)
+        override = tmp_path / "override"
+        override.mkdir()
+
+        selected = resolve_stdlib_root(
+            home=home,
+            env={"AGM_STDLIB": str(override)},
+            anchor=checkout / "std" / "agent.agl",
+        )
+
+        assert selected == override
+
+    def test_anchor_in_a_non_std_development_package_keeps_store_selection(
+        self, tmp_path: Path
+    ) -> None:
+        home = tmp_path / "home"
+        store_stdlib = _activate_stdlib(home, AGM_VERSION)
+        alpha = tmp_path / "alpha"
+        (alpha / "alpha").mkdir(parents=True)
+        (alpha / "package.toml").write_text(
+            '[package]\nname = "alpha"\nversion = "1.0.0"\n', encoding="utf-8"
+        )
+
+        selected = resolve_stdlib_root(home=home, env={}, anchor=alpha / "alpha" / "main.agl")
+
+        assert selected == store_stdlib.resolve()
+
+    def test_unreadable_anchor_manifest_keeps_store_selection(self, tmp_path: Path) -> None:
+        """A broken manifest is reported by package discovery, not by stdlib selection."""
+        home = tmp_path / "home"
+        store_stdlib = _activate_stdlib(home, AGM_VERSION)
+        broken = tmp_path / "broken"
+        broken.mkdir()
+        (broken / "package.toml").write_text("not valid = [", encoding="utf-8")
+
+        selected = resolve_stdlib_root(home=home, env={}, anchor=broken / "main.agl")
+
+        assert selected == store_stdlib.resolve()
+
+    def test_std_package_whose_modules_exclude_the_anchor_is_not_the_standard_library(
+        self, tmp_path: Path
+    ) -> None:
+        """An unrelated package named ``std`` stays inert for the files beside it."""
+        home = tmp_path / "home"
+        store_stdlib = _activate_stdlib(home, AGM_VERSION)
+        unrelated = _write_std_checkout(tmp_path / "work", "9.9.9")
+        (unrelated / "src").mkdir()
+
+        beside = resolve_stdlib_root(home=home, env={}, anchor=unrelated / "src" / "main.agl")
+        at_the_root = resolve_stdlib_root(home=home, env={}, anchor=unrelated)
+
+        assert beside == store_stdlib.resolve()
+        assert at_the_root == store_stdlib.resolve()

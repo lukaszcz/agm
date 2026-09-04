@@ -2068,11 +2068,28 @@ class TestTypedCalls:
         # array-literal juxtaposition of the argument that follows it.
         call = first(parse("f::[int] [1,2,3]"))
         assert isinstance(call, Call)
-        assert isinstance(call.callee, TypeApply)
-        assert isinstance(call.callee.expr, VarRef)
-        assert call.callee.expr.name == "f"
-        assert isinstance(call.callee.type_args[0], IntT)
+        assert isinstance(call.callee, VarRef)
+        assert call.callee.name == "f"
+        assert isinstance(call.type_args[0], IntT)
         assert isinstance(call.args[0], ArrayLit)
+
+    def test_juxt_call_carries_explicit_type_args(self) -> None:
+        """``f::[int] x`` is the typed call ``f::[int](x)``, as with parens."""
+        call = first(parse('ask::[int] "p"'))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, VarRef)
+        assert call.callee.name == "ask"
+        assert isinstance(call.type_args[0], IntT)
+        assert isinstance(call.args[0], StringLit)
+
+    def test_raw_tail_juxt_call_carries_explicit_type_args(self) -> None:
+        """A raw-tail juxt argument keeps the callee's explicit type args too."""
+        call = first(parse("f::[int] exec$ date"))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, VarRef)
+        assert call.callee.name == "f"
+        assert isinstance(call.type_args[0], IntT)
+        assert isinstance(call.args[0], Call)
 
     def test_typed_call_accepts_field_access_callee(self) -> None:
         prog = parse("f.g::[T](x)")

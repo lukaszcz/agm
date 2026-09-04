@@ -2918,16 +2918,36 @@ class TestAskRequest:
         "call",
         (
             'ask-request::[int]("Q")',
-            'ask-request("Q", format = "json")',
-            'ask-request("Q", strict-json = true)',
-            'ask-request("Q", on-parse-error = Retry(n = 1))',
+            'ask-request::[int]("Q", format = "json")',
+            'ask-request::[int]("Q", strict-json = true)',
+            'ask-request::[int]("Q", on-parse-error = Retry(n = 1))',
             'let agent = AgentCommand("worker")\nagent.ask-request::[int]("Q")',
-            'let agent = AgentCommand("worker")\nagent.ask-request("Q", strict-json = true)',
+            'let agent = AgentCommand("worker")\nagent.ask-request::[int]("Q", strict-json = true)',
         ),
     )
-    def test_rejects_type_arguments_and_parse_options(self, call: str) -> None:
-        err = reject_type(call)
-        assert "ask-request" in str(err)
+    def test_accepts_the_same_shaping_options_as_ask(self, call: str) -> None:
+        accept_type(call)
+
+    def test_type_argument_selects_the_requested_contract(self) -> None:
+        r = accept_type('ask-request::[int]("Q")')
+        call = r.resolved.program.body.items[0]
+        assert isinstance(call, Call)
+        spec = r.contract_specs[call.node_id]
+        assert spec.target_type == IntType()
+        assert spec.codec_name == "json"
+
+    def test_type_argument_leaves_the_result_type_alone(self) -> None:
+        r = accept_type('let r: AgentRequest = ask-request::[int]("Q")\nr')
+        decl = r.resolved.program.body.items[0]
+        assert isinstance(decl, LetDecl)
+        selected = r.type_env.type_table.builtin_declaration("AgentRequest")
+        assert selected is not None
+        assert r.type_env.get_binding_type(decl.pattern.node_id) == selected.handle()
+
+    def test_typed_call_site_record(self) -> None:
+        r = accept_type('ask-request::[int]("Q")')
+        assert r.call_sites[0].callee == "ask-request"
+        assert r.call_sites[0].target_type == IntType()
 
     def test_call_site_record(self) -> None:
         r = accept_type('ask-request("Q")')
@@ -8332,6 +8352,40 @@ _AGENT_REQUEST_FIELDS_TC = (
 
 _PARSE_POLICY_VARIANTS_TC = "  | Abort\n  | Retry(n: int)\n"
 
+# ``ask-request`` mirrors ``ask``'s whole call surface, so its declaration
+# carries the same shaping options and target type parameter. The free form
+# also declares the optional ``agent`` the receiver form takes from its
+# receiver instead.
+_ASK_REQUEST_OPTIONS_TC = (
+    "  prompt: text,\n"
+    '  format: text = "",\n'
+    "  strict-json: bool = false,\n"
+    "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+)
+_ASK_REQUEST_FREE_OPTIONS_TC = (
+    "  prompt: text,\n"
+    '  agent: Agent = AgentCommand(command = "x"),\n'
+    '  format: text = "",\n'
+    "  strict-json: bool = false,\n"
+    "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+)
+_ASK_REQUEST_DECL_TC = (
+    f"builtin def ask-request[T](\n{_ASK_REQUEST_FREE_OPTIONS_TC}) -> AgentRequest\n"
+)
+# Without the standard library there is no ``std/config::default-agent`` to name
+# and a program may not declare a ``builtin var`` of its own, so this
+# declaration's ``agent`` default is a stand-in: a ``builtin def`` default is
+# resolved but never checked, since the host supplies the value.
+_ASK_REQUEST_NO_STDLIB_DECL_TC = (
+    "builtin def ask-request[T](\n"
+    "  prompt: text,\n"
+    '  agent: Agent = "",\n'
+    '  format: text = "",\n'
+    "  strict-json: bool = false,\n"
+    "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+    ") -> AgentRequest\n"
+)
+
 
 class TestHostContractBuiltinIdentity:
     def test_scoped_agent_does_not_affect_ask_request(self) -> None:
@@ -8390,7 +8444,8 @@ class TestHostContractBuiltinIdentity:
             "  | None\n"
             "  | Some(value: T)\n"
             f"builtin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
-            "builtin def ask-request(prompt: text) -> AgentRequest\n"
+            f"builtin enum ParsePolicy\n{_PARSE_POLICY_VARIANTS_TC}"
+            f"{_ASK_REQUEST_NO_STDLIB_DECL_TC}"
             'ask-request("hi")\n',
             default_stdlib=False,
         )
@@ -8461,7 +8516,7 @@ class TestHostContractBuiltinIdentity:
             "scope A\n"
             f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
             f"builtin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
-            "builtin def ask-request(prompt: text) -> AgentRequest\n"
+            f"{_ASK_REQUEST_DECL_TC}"
             "end A\n()\n"
         )
         region = r.resolved.program.body.items[0]
@@ -8469,7 +8524,7 @@ class TestHostContractBuiltinIdentity:
         func_def = next(item for item in region.items if isinstance(item, FuncDef))
         signature = r.type_env.get_binding_type(func_def.node_id)
         assert isinstance(signature, FunctionType)
-        assert signature.params == (TextType(),)
+        assert signature.params[0] == TextType()
         assert isinstance(signature.result, RecordType)
         assert signature.result.scope_path == ("A",)
 
@@ -8481,7 +8536,7 @@ class TestHostContractBuiltinIdentity:
             "scope A\n"
             f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
             f"builtin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
-            "builtin def ask-request(prompt: text) -> Agent\n"
+            f"builtin def ask-request[T](\n{_ASK_REQUEST_FREE_OPTIONS_TC}) -> Agent\n"
             "end A\n()\n"
         )
         assert "ask-request" in err.to_diagnostic().message
@@ -8496,7 +8551,10 @@ class TestHostContractBuiltinIdentity:
         err = reject_type(
             "scope A\n"
             f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
-            "builtin def Agent::ask-request(self, prompt: text) -> AgentRequest\n"
+            "builtin def Agent::ask-request[T](\n"
+            "  self,\n"
+            f"{_ASK_REQUEST_OPTIONS_TC}"
+            ") -> AgentRequest\n"
             'let g: Agent = Agent::AgentCommand("x")\n'
             'let q = g.ask-request("hi")\n'
             "end A\n()\n"

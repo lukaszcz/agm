@@ -1388,6 +1388,36 @@ def test_open_imported_bare_alias_of_imported_enum_is_a_type_name_not_a_value(
         )
 
 
+def test_imported_generic_alias_of_enum_is_a_type_name_not_a_value(tmp_path: Path) -> None:
+    """A generic alias of an enum has no bare constructor to use as a value.
+
+    Unlike ``test_module_qualified_alias_of_imported_enum_is_a_type_name_not_a_value``,
+    the alias here is itself generic, so it takes the cross-module *generic*
+    constructor path. It must report the same "type name, not a value"
+    diagnostic rather than leaking an internal assertion.
+    """
+    with pytest.raises(AglTypeError, match="not a value"):
+        _check_program(
+            tmp_path,
+            {
+                "entry": "import lib\nprint(lib::Alias)",
+                "lib": "enum Opt[T]\n  | Nothing\n  | Just(v: T)\n\ntype Alias[T] = Opt[T]",
+            },
+        )
+
+
+def test_imported_generic_alias_of_enum_is_not_callable(tmp_path: Path) -> None:
+    """The same alias in call position reports the same diagnostic."""
+    with pytest.raises(AglTypeError, match="not a value"):
+        _check_program(
+            tmp_path,
+            {
+                "entry": "import lib\nprint(lib::Alias(1))",
+                "lib": "enum Opt[T]\n  | Nothing\n  | Just(v: T)\n\ntype Alias[T] = Opt[T]",
+            },
+        )
+
+
 def test_imported_generic_alias_to_record_is_a_constructor_value(tmp_path: Path) -> None:
     """A generic alias retains its target record constructor signature."""
     checked = _check_program(

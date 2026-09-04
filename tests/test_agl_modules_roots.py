@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.roots import RootSet, assemble_roots
 from agm.packages.manifest import load_manifest
 from agm.packages.model import PackageInfo
@@ -559,3 +560,63 @@ class TestAssembleRoots:
             cwd=tmp_path,
         )
         assert len(rs.roots) == 0
+
+
+class TestPackageModuleIdFor:
+    """A mounted package names the modules of its declared module tree."""
+
+    def test_module_tree_file_gets_its_package_qualified_id(self, tmp_path: Path) -> None:
+        package = _package_with_a_rogue_module(tmp_path)
+        roots = _roots_for(tmp_path, package, loose=False)
+
+        assert roots.package_module_id_for(package.module_root / "main.agl") == ModuleId(
+            segments=("demo", "main")
+        )
+
+    def test_nested_module_keeps_every_segment(self, tmp_path: Path) -> None:
+        package = _package_with_a_rogue_module(tmp_path)
+        nested = package.module_root / "sub" / "deep.agl"
+        nested.parent.mkdir(parents=True)
+        nested.write_text("")
+        roots = _roots_for(tmp_path, package, loose=False)
+
+        assert roots.package_module_id_for(nested) == ModuleId(segments=("demo", "sub", "deep"))
+
+    def test_file_outside_the_module_tree_is_unowned(self, tmp_path: Path) -> None:
+        package = _package_with_a_rogue_module(tmp_path)
+        roots = _roots_for(tmp_path, package, loose=False)
+
+        assert roots.package_module_id_for(package.root / "assets" / "rogue.agl") is None
+
+    def test_file_under_no_mounted_package_is_unowned(self, tmp_path: Path) -> None:
+        loose = tmp_path / "loose"
+        loose.mkdir()
+        (loose / "main.agl").write_text("")
+        roots = assemble_roots(
+            invocation_root=loose,
+            lib_root=None,
+            configured=[],
+            cli=[],
+            cwd=tmp_path,
+        )
+
+        assert roots.package_module_id_for(loose / "main.agl") is None
+
+    def test_the_innermost_package_owns_a_nested_module_tree(self, tmp_path: Path) -> None:
+        outer = _package_with_a_rogue_module(tmp_path, "demo")
+        inner_root = outer.module_root / "vendor"
+        (inner_root / "inner").mkdir(parents=True)
+        (inner_root / "package.toml").write_text('[package]\nname = "inner"\nversion = "1.0.0"\n')
+        module = inner_root / "inner" / "mod.agl"
+        module.write_text("")
+        inner = PackageInfo(inner_root, load_manifest(inner_root / "package.toml"))
+        roots = assemble_roots(
+            invocation_root=None,
+            lib_root=None,
+            configured=[],
+            cli=[],
+            cwd=tmp_path,
+            package_roots=(outer, inner),
+        )
+
+        assert roots.package_module_id_for(module) == ModuleId(segments=("inner", "mod"))

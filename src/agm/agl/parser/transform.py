@@ -1617,13 +1617,25 @@ class AstBuilder(Transformer):
         `Call(callee=f, args=(arg,), named_args=())`, where the second argument
         is the juxtaposed expression (an ordinary ``juxt_arg`` Expr, or the
         ``raw_call`` desugared to its builtin Call).
+
+        A ``::[T]`` suffix on the callee is folded into the call's own type
+        arguments, exactly as :meth:`call` folds it for the parenthesized form:
+        ``f::[int] x`` and ``f::[int](x)`` are one call spelled two ways. Left
+        as a ``TypeApply`` callee, the call would instead read as a specialized
+        *value* being applied, which the built-ins — callable but never values —
+        have no form for.
         """
         # args[0] is the callee (postfix result); args[1] is the juxtaposed
         # expression — a juxt_arg Expr or a raw_call Call.
         callee = cast(syntax.Expr, args[0])
         arg_expr = cast(syntax.Expr, args[1])
+        type_args: tuple[TypeExpr, ...] = ()
+        if isinstance(callee, syntax.TypeApply):
+            type_args = callee.type_args
+            callee = callee.expr
         return syntax.Call(
             callee=callee,
+            type_args=type_args,
             args=(arg_expr,),
             named_args=(),
             span=self._span_from_meta(meta),

@@ -175,14 +175,16 @@ BUILTIN_CALL_DISPLAY_NAMES: dict[BuiltinKind | BuiltinStaticKind, str] = {
 }
 
 
-def is_qualified_function_member(is_entry_module: bool, scope_path: ScopePath) -> bool:
+def is_qualified_function_member(module_has_identity: bool, scope_path: ScopePath) -> bool:
     """Return whether a function is reachable only through a qualification.
 
-    A builtin spelling is reserved in the selected entry module's bare
-    namespace, but an imported-module or named-scope member has an independent
-    qualified namespace.
+    A builtin spelling is reserved in a bare namespace, which is all a module
+    with no module identity of its own has. A named module's members and a
+    named scope's members each have an independent qualified namespace, so the
+    spelling is free there -- and a named module keeps that namespace whether
+    it is the selected entry or one of its library imports.
     """
-    return not is_entry_module or bool(scope_path)
+    return module_has_identity or bool(scope_path)
 
 
 # ---------------------------------------------------------------------------
@@ -450,10 +452,8 @@ class BindingRef:
         ``let``.
     ``module_id``
         The :class:`~agm.agl.modules.ids.ModuleId` of the module that owns
-        this binding.  For module resolution (``resolve()``) and all
-        local bindings, this is always :data:`~agm.agl.modules.ids.ENTRY_ID`.
-        For cross-module resolution via ``resolve_program()``, cross-module
-        references carry the owning library module's id.
+        this binding: the resolved module's own id for a local binding, and
+        the library module's id for a cross-module reference.
     ``scope_path``
         The named scope path that owns this binding. The empty path is the
         module root.
@@ -659,9 +659,6 @@ class ModuleResolution:
     ``allows_root_statements``
         Whether this entry is an incremental REPL entry, whose root retains
         executable items instead of enforcing a static module root.
-    ``is_entry_module``
-        Whether this resolution belongs to the selected program entry rather
-        than one of its qualified library modules.
     ``origin_path``
         This module's canonical source file, or ``None`` for a module with no
         backing file (inline sources, REPL entries). Later passes consult it to
@@ -719,7 +716,6 @@ class ModuleResolution:
     scope_nodes: dict[ScopePath, ScopeNode] = field(default_factory=dict)
     declared_functions: dict[str, FuncDef] = field(default_factory=dict)
     allows_root_statements: bool = False
-    is_entry_module: bool = True
     origin_path: Path | None = None
     declared_type_names: frozenset[str] = frozenset()
     declared_type_paths: frozenset[ScopePath] = frozenset()

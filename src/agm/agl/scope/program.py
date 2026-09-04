@@ -35,7 +35,7 @@ from agm.agl.artifact_cache import (
     retained_module_sources,
     retained_resolved_modules,
 )
-from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.ids import ModuleId, expand_module_wildcard
 
 if TYPE_CHECKING:
     from agm.agl.modules.loader import LoadedModule, ModuleGraph
@@ -141,7 +141,11 @@ class ResolvedProgram:
         Maps each :class:`~agm.agl.modules.ids.ModuleId` to its
         :class:`ResolvedModule`.
     ``entry_id``
-        Always :data:`~agm.agl.modules.ids.ENTRY_ID`.
+        The graph's entry module identity — read from :attr:`graph` so the two
+        can never name different modules. It is the module id the entry file's
+        owning package declares, or
+        :data:`~agm.agl.modules.ids.ENTRY_ID` for a source with no module
+        identity.
     ``all_public_funcs``
         Whole-program pre-pass table mapping ``(ModuleId, name)`` to the
         :class:`~agm.agl.syntax.nodes.FuncDef` node. Contains every source-level
@@ -158,10 +162,15 @@ class ResolvedProgram:
     """
 
     modules: dict[ModuleId, ResolvedModule]
-    entry_id: ModuleId
     all_public_funcs: dict[QName, FuncDef]
     all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias]
     graph: ModuleGraph
+
+    @property
+    def entry_id(self) -> ModuleId:
+        """Return the entry module's identity, as the loaded graph keys it."""
+
+        return self.graph.entry_id
 
     @property
     def import_sccs(self) -> tuple[tuple[ModuleId, ...], ...]:
@@ -744,25 +753,19 @@ def _compute_reexport_additions(
     return result, scope_result
 
 
-def _decl_to_import_target(
-    decl: ImportDecl | ExportDecl,
-    loaded_modules: Mapping[ModuleId, object],
-) -> ImportTarget:
+def _decl_to_import_target(decl: ImportDecl | ExportDecl, graph: ModuleGraph) -> ImportTarget:
     """Map an import/export declaration to an ImportTarget using the loaded graph.
 
     For single imports, returns a ``SingleTarget`` with the resolved
-    ``ModuleId``.  For wildcard imports, returns a ``WildcardTarget`` with
-    all matching loaded modules (excluding the entry sentinel).
+    ``ModuleId``.  For wildcard imports, returns a ``WildcardTarget`` over the
+    modules the wildcard reaches.
     """
     if not decl.wildcard:
         mid = ModuleId(segments=tuple(decl.module_path))
         return SingleTarget(module=mid)
-    # Wildcard: all loaded modules whose segments start with decl.module_path
-    prefix = tuple(decl.module_path)
-    matched = frozenset(
-        mid for mid in loaded_modules if not mid.is_entry and mid.segments[: len(prefix)] == prefix
+    return WildcardTarget(
+        modules=frozenset(expand_module_wildcard(tuple(decl.module_path), graph.modules))
     )
-    return WildcardTarget(modules=matched)
 
 
 # ---------------------------------------------------------------------------
@@ -883,10 +886,10 @@ def resolve_program(
     all_targets: dict[int, ImportTarget] = {}
     for _mid, loaded in graph.modules.items():
         for decl in loaded.imports:
-            target = _decl_to_import_target(decl, graph.modules)
+            target = _decl_to_import_target(decl, graph)
             all_targets[decl.node_id] = target
         for export_decl in loaded.export_decls:
-            target = _decl_to_import_target(export_decl, graph.modules)
+            target = _decl_to_import_target(export_decl, graph)
             all_targets[export_decl.node_id] = target
 
     # ------------------------------------------------------------------
@@ -1000,7 +1003,7 @@ def resolve_program(
         if cached is not None:
             resolved_modules[mid] = cached
             continue
-        is_entry = mid.is_entry
+        is_entry = mid == graph.entry_id
         # Build cross-module constructor candidates from unqualified import tails.
         cross_module_candidates, cross_module_type_names = (
             _build_cross_module_constructor_candidates(
@@ -1032,7 +1035,6 @@ def resolve_program(
             program_import_envs=import_envs,
             all_public_types=all_public_types,
             allow_root_statements=is_entry and entry_parent_scope is not None,
-            is_entry_module=mid == graph.entry_id,
             is_standard_library_module=mid.is_standard_library,
             repl_session_scope=entry_repl_session_scope if is_entry else None,
             repl_session_scope_nodes=entry_repl_session_scope_nodes if is_entry else None,
@@ -1061,7 +1063,6 @@ def resolve_program(
     retain_resolved_modules(retainable, resolved_modules)
     return ResolvedProgram(
         modules=resolved_modules,
-        entry_id=graph.entry_id,
         all_public_funcs=all_public_funcs,
         all_public_types=all_public_types,
         graph=graph,

@@ -10,7 +10,7 @@ The context locates the directories that contribute configuration. The project d
 
 One AGM home holds config, prompts, sandbox settings, the AgL global library, and the package store: `AGM_HOME` when set, otherwise a populated `<install-prefix>/.agm` beside the executable, otherwise `~/.agm`. `just install` populates the prefix tree and installs the config templates from the repository's `config/`.
 
-The AgL standard library resolves from `AGM_STDLIB` (an unchecked escape hatch), then the active managed `std` store package, which must exactly match the running AGM version, then the shipped fallback tree that `stdlib_locator.py` finds at the repository root in a checkout or bundled inside the wheel. See [package-store.md](package-store.md) for the managed package.
+The AgL standard library resolves from `AGM_STDLIB` (an unchecked escape hatch), then a development `std` checkout whose module tree holds the invocation's anchor (the entry file, or the working directory) so the library is checked and run from the tree being edited, then the active managed `std` store package, which must exactly match the running AGM version, then the shipped fallback tree that `stdlib_locator.py` finds at the repository root in a checkout or bundled inside the wheel. See [package-store.md](package-store.md) for the managed package.
 
 ## Layering and Precedence
 

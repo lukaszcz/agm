@@ -3287,24 +3287,19 @@ class _Lowerer:
                 agent = self.lower_expr(named_agent)
                 session = None
 
-        # ask-request neither dispatches nor parses output — it builds an
-        # AgentRequest whose contract fields are fixed constants — so it needs
-        # neither a retry count nor an output contract, and steps 3 and 4 below
-        # apply to ``ask`` alone.
-        if is_request:
-            if agent is None:
-                agent = IrBuiltinLoad(
-                    location=loc,
-                    key=builtin_var_key(STD_CONFIG_ID, (), "default-agent"),
-                )
-            return IrAskRequest(location=loc, agent=agent, prompt=prompt_ir)
-
         # 3. Determine max_attempts from the on_parse_error named arg.
         max_attempts = self._extract_max_attempts(call_node)
 
         # 4. Build ContractRequest from the checker's contract_spec (if any).
-        result_type = self._checked.node_types.get(call_node.node_id)
-        is_unit = isinstance(result_type, UnitType)
+        #    ``ask-request`` describes the very contract its ``ask`` would have
+        #    dispatched, but its own checked type is the request record, so its
+        #    target type comes from the explicit type argument instead.
+        target_type = (
+            self._explicit_builtin_target_type(call_node)
+            if is_request
+            else self._checked.node_types.get(call_node.node_id)
+        )
+        is_unit = isinstance(target_type, UnitType)
 
         spec = self._checked.contract_specs.get(call_node.node_id)
         if is_unit or spec is None:
@@ -3339,6 +3334,22 @@ class _Lowerer:
             )
 
         contract_id = self._alloc_contract(contract_req)
+
+        # ask-request stops here: it builds the AgentRequest describing this
+        # contract instead of dispatching it, so it needs no session route.
+        if is_request:
+            if agent is None:
+                agent = IrBuiltinLoad(
+                    location=loc,
+                    key=builtin_var_key(STD_CONFIG_ID, (), "default-agent"),
+                )
+            return IrAskRequest(
+                location=loc,
+                agent=agent,
+                prompt=prompt_ir,
+                contract_id=contract_id,
+                max_attempts=max_attempts,
+            )
 
         if session is not None:
             return IrSessionAsk(

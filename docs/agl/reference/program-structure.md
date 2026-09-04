@@ -91,9 +91,10 @@ region.
   or config key. `agm exec` selects declarations from its file entry module;
   declarations reached through imports remain ordinary callable functions.
 - **`builtin var` declarations** — body-less host-backed mutable bindings.
-  Any standard-library module may declare one; entry programs and ordinary
-  libraries cannot. A declaration may be a member of a named scope region and
-  is read and written through its full path like any other scoped member.
+  A module whose path identity lies under `std` may declare one, whether it is
+  the entry program or one of its imports; no other module may. A declaration
+  may be a member of a named scope region and is read and written through its
+  full path like any other scoped member.
   `std/config` exclusively owns engine settings; other standard-library
   modules own their domain-specific ambient bindings.
 - **`infix` declarations** — root-only operator-fixity declarations.

@@ -258,11 +258,12 @@ constant expression of the declared type: literals, literal containers,
 constructor applications, and a unary operator over any of those (`-1`,
 `not true`) are allowed; reads, calls other than constructors, and binary
 operators are not. The `builtin` marker may be on the same line as `var` or on
-the line directly above it. A declaration may appear only at the root, or in a named scope region, of a
-standard-library module; declarations in entry programs or ordinary library
-modules are static errors regardless of scoping. A binding's host identity is
-its defining module, scope path, and name, so equal names in different scopes
-or standard-library modules are independent. Root `std/config` bindings are
+the line directly above it. A declaration may appear only at the root, or in a
+named scope region, of a module whose path identity lies under `std`, which it
+keeps whether it is the entry program or one of its imports; a declaration in
+any other module is a static error regardless of scoping. A binding's host
+identity is its defining module, scope path, and name, so equal names in
+different scopes or modules are independent. Root `std/config` bindings are
 the program's engine settings; scoped `std/config` bindings are ordinary
 host-backed values:
 

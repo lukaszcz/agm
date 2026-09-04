@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 # Regex for a valid identifier segment: must start with letter or underscore,
@@ -167,14 +167,35 @@ def spell_declaration(
     return f"{module_id.display()}::{scoped}"
 
 
+def expand_module_wildcard(
+    prefix: tuple[str, ...], module_ids: Iterable[ModuleId]
+) -> tuple[ModuleId, ...]:
+    """Return the loaded modules a wildcard import or export names.
+
+    A wildcard reaches every loaded module whose path starts with *prefix*.
+    An entry with no module identity is unreachable — its sentinel segment is
+    unspellable — while an entry a package names is an ordinary member of that
+    package's module tree and is reached like any other.  The result is ordered
+    by logical path so two expansions of the same graph agree.
+    """
+    return tuple(
+        sorted(
+            (mid for mid in module_ids if mid.segments[: len(prefix)] == prefix),
+            key=ModuleId.path_str,
+        )
+    )
+
+
 # ------------------------------------------------------------------
 # Sentinels
 # ------------------------------------------------------------------
 
-#: Distinguished sentinel representing the entry module (the script passed to
-#: ``agm exec`` or supplied via ``-c``).  Its reserved segment contains a NUL
-#: byte, so no real ``.agl`` file on disk can produce a colliding ``ModuleId``
-#: via :meth:`ModuleId.from_path`.  Use ``module_id.is_entry`` to test.
+#: Distinguished sentinel representing an entry module with no module identity
+#: of its own -- source supplied via ``-c``, a REPL entry, or a file no mounted
+#: package owns.  (An entry inside a package keeps that package's declared
+#: module id instead.)  Its reserved segment contains a NUL byte, so no real
+#: ``.agl`` file on disk can produce a colliding ``ModuleId`` via
+#: :meth:`ModuleId.from_path`.  Use ``module_id.is_entry`` to test.
 ENTRY_ID: ModuleId = ModuleId(segments=(_ENTRY_SEGMENT,))
 
 #: Distinguished sentinel owning the host's *reserved* nominal identities --

@@ -2771,13 +2771,13 @@ class TestHostOpLowering:
         assert contract.codec_name == "none"
         assert contract.is_unit is True
 
-    def test_ask_request_lowers_to_ir_ask_request_without_a_contract(self) -> None:
-        """ask-request lowers to IrAskRequest and allocates nothing in program.contracts."""
+    def test_ask_request_lowers_to_ir_ask_request_with_its_contract(self) -> None:
+        """ask-request lowers to IrAskRequest carrying the contract it describes."""
         from agm.agl.ir.nodes import IrAskRequest
 
         source = (
             'let worker = AgentCommand("worker")\n'
-            'let req = ask-request("my prompt", agent = worker)\n()'
+            'let req = ask-request::[int]("my prompt", agent = worker)\n()'
         )
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
@@ -2793,12 +2793,12 @@ class TestHostOpLowering:
         )
         ask_req = ask_req_binds[0].value
         assert isinstance(ask_req, IrAskRequest)
-        # ask-request is fixed-text and side-effect-free: it dispatches nothing and
-        # parses nothing, so lowering it must allocate no ContractRequest at all.
-        assert prog.contracts == {}, f"Expected no allocated contracts, got {prog.contracts!r}"
+        # The request describes the contract its ask would have dispatched, so
+        # lowering allocates that contract even though nothing dispatches it.
+        assert prog.contracts[ask_req.contract_id].target_type_label == "int"
 
-    def test_ask_request_method_form_allocates_no_contract(self) -> None:
-        """Agent::ask-request(...) goes through the same contract-free lowering path."""
+    def test_ask_request_method_form_allocates_the_same_contract(self) -> None:
+        """Agent::ask-request(...) goes through the same contract lowering path."""
         from agm.agl.ir.nodes import IrAskRequest
 
         source = (
@@ -2807,12 +2807,16 @@ class TestHostOpLowering:
         )
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
-        assert any(
-            isinstance(n, (IrSequence, IrBind))
-            and isinstance(_let_root_capture(n).value, IrAskRequest)
+        requests = [
+            _let_root_capture(n).value
             for n in inits
-        ), "Expected the method form to lower to an IrAskRequest"
-        assert prog.contracts == {}, f"Expected no allocated contracts, got {prog.contracts!r}"
+            if isinstance(n, (IrSequence, IrBind))
+            and isinstance(_let_root_capture(n).value, IrAskRequest)
+        ]
+        assert len(requests) == 1, "Expected the method form to lower to an IrAskRequest"
+        request = requests[0]
+        assert isinstance(request, IrAskRequest)
+        assert prog.contracts[request.contract_id].target_type_label == "text"
 
     def test_ask_request_does_not_shift_the_contracts_of_other_host_calls(self) -> None:
         """Mixing ask-request with ask/exec leaves every allocated contract resolvable."""
@@ -2829,12 +2833,13 @@ class TestHostOpLowering:
             _let_root_capture(n).value if isinstance(n, (IrSequence, IrBind)) else n
             for n in prog.modules[prog.entry_module].initializers
         ]
-        assert any(isinstance(n, IrAskRequest) for n in nodes)
-        parsing_nodes = [n for n in nodes if isinstance(n, (IrAsk, IrExec))]
-        assert len(parsing_nodes) == 2, f"Expected one IrAsk and one IrExec, got {parsing_nodes!r}"
-        # Only the dispatching host ops allocate, and each still resolves.
-        assert len(prog.contracts) == 2, f"Expected exactly 2 contracts, got {prog.contracts!r}"
-        for node in parsing_nodes:
+        contract_nodes = [n for n in nodes if isinstance(n, (IrAsk, IrAskRequest, IrExec))]
+        assert len(contract_nodes) == 3, (
+            f"Expected one IrAsk, one IrAskRequest and one IrExec, got {contract_nodes!r}"
+        )
+        # Every host op with an output contract allocates its own, and each resolves.
+        assert len(prog.contracts) == 3, f"Expected exactly 3 contracts, got {prog.contracts!r}"
+        for node in contract_nodes:
             assert node.contract_id in prog.contracts, (
                 f"{type(node).__name__}.contract_id {node.contract_id} not in program.contracts"
             )

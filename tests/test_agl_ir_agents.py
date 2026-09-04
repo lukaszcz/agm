@@ -16,6 +16,7 @@ from agm.agl.semantics.values import (
     BoolValue,
     ExceptionValue,
     IntValue,
+    JsonValue,
     RecordValue,
     TextValue,
 )
@@ -466,6 +467,83 @@ prompt_text
     assert req.fields["json-schema"].display_name.rsplit("::", maxsplit=1)[-1] == "None"
 
 
+def test_ask_request_carries_the_requested_output_contract() -> None:
+    """A typed ask-request records the contract its ask would have dispatched."""
+    source = """\
+record Answer
+  value: int
+
+let worker = AgentCommand("worker")
+let req = ask-request::[Answer]("How many?", agent = worker, strict-json = true)
+req
+"""
+    ir = evaluate_ir_with_agents(source, scripts={"worker": []})
+
+    req = ir["req"]
+    assert isinstance(req, RecordValue)
+    target = req.fields["target-type"]
+    assert isinstance(target, RecordValue)
+    assert target.display_name == "Option::Some"
+    assert target.fields["value"] == TextValue("Answer")
+    schema = req.fields["json-schema"]
+    assert isinstance(schema, RecordValue)
+    assert schema.display_name == "Option::Some"
+    assert isinstance(schema.fields["value"], JsonValue)
+    assert "value" in _json.dumps(schema.fields["value"].raw)
+    instructions = req.fields["format-instructions"]
+    assert isinstance(instructions, RecordValue)
+    assert instructions.display_name == "Option::Some"
+    metadata = req.fields["metadata"]
+    assert isinstance(metadata, JsonValue)
+    assert isinstance(metadata.raw, dict)
+    assert metadata.raw["codec_name"] == "json"
+    assert metadata.raw["strict_json"] is True
+
+
+def test_ask_request_records_its_retry_policy() -> None:
+    """``on-parse-error`` shapes the attempt budget recorded on the request."""
+    source = """\
+let worker = AgentCommand("worker")
+let req = ask-request::[int]("How many?", agent = worker, on-parse-error = Retry(n = 2))
+req
+"""
+    ir = evaluate_ir_with_agents(source, scripts={"worker": []})
+
+    req = ir["req"]
+    assert isinstance(req, RecordValue)
+    metadata = req.fields["metadata"]
+    assert isinstance(metadata, JsonValue)
+    assert isinstance(metadata.raw, dict)
+    assert metadata.raw["max_attempts"] == 3
+
+
+def test_ask_request_juxtaposed_with_type_args() -> None:
+    """``ask-request::[T] prompt`` is the juxtaposed form of the typed call."""
+    source = """\
+let req = ask-request::[int] "How many?"
+req
+"""
+    ir = evaluate_ir_with_agents(source, scripts={}, default_responses=[])
+
+    req = ir["req"]
+    assert isinstance(req, RecordValue)
+    target = req.fields["target-type"]
+    assert isinstance(target, RecordValue)
+    assert target.fields["value"] == TextValue("int")
+
+
+def test_ask_juxtaposed_with_type_args_parses_its_output() -> None:
+    """``ask::[T] prompt`` dispatches and parses like ``ask::[T](prompt)``."""
+    source = """\
+let worker = AgentCommand("worker")
+let answer: int = worker.ask::[int] "How many?"
+answer
+"""
+    ir = evaluate_ir_with_agents(source, scripts={"worker": ["42"]})
+
+    assert ir["answer"] == IntValue(42)
+
+
 # ---------------------------------------------------------------------------
 # retry with schema validation error (covers result.errors branch)
 # ---------------------------------------------------------------------------
@@ -593,23 +671,24 @@ s
 # ---------------------------------------------------------------------------
 
 
-def test_validate_ir_ask_missing_contract() -> None:
-    """validate_ir: IrAsk referencing missing contract_id → InvalidIrError."""
+@pytest.mark.parametrize("request_only", (False, True))
+def test_validate_ir_ask_missing_contract(request_only: bool) -> None:
+    """validate_ir: an ask node referencing a missing contract_id → InvalidIrError."""
 
     from agm.agl.ir.ids import ContractId, Location, SourceId
-    from agm.agl.ir.nodes import IrAsk, IrConstText
+    from agm.agl.ir.nodes import IrAsk, IrAskRequest, IrConstText
     from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
     from agm.agl.ir.validate import InvalidIrError, validate_ir
     from agm.agl.modules.ids import ENTRY_ID
 
     src_id = SourceId(0)
     dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    bad_cid = ContractId(999)
-    ask_node = IrAsk(
+    node_type: type[IrAsk] | type[IrAskRequest] = IrAskRequest if request_only else IrAsk
+    ask_node = node_type(
         location=dummy_loc,
         agent=IrConstText(location=dummy_loc, value="ask"),
         prompt=IrConstText(location=dummy_loc, value="test"),
-        contract_id=bad_cid,
+        contract_id=ContractId(999),
         max_attempts=1,
     )
     prog = ExecutableProgram(
@@ -624,12 +703,13 @@ def test_validate_ir_ask_missing_contract() -> None:
         validate_ir(prog, deep=True)
 
 
-def test_validate_ir_ask_max_attempts_zero() -> None:
-    """validate_ir: IrAsk with max_attempts=0 → InvalidIrError."""
+@pytest.mark.parametrize("request_only", (False, True))
+def test_validate_ir_ask_max_attempts_zero(request_only: bool) -> None:
+    """validate_ir: an ask node with max_attempts=0 → InvalidIrError."""
 
     from agm.agl.ir.contracts import ContractRequest
     from agm.agl.ir.ids import ContractId, Location, SourceId
-    from agm.agl.ir.nodes import IrAsk, IrConstText
+    from agm.agl.ir.nodes import IrAsk, IrAskRequest, IrConstText
     from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
     from agm.agl.ir.validate import InvalidIrError, validate_ir
     from agm.agl.modules.ids import ENTRY_ID
@@ -647,7 +727,8 @@ def test_validate_ir_ask_max_attempts_zero() -> None:
         format_instructions="",
         is_unit=False,
     )
-    ask_node = IrAsk(
+    node_type: type[IrAsk] | type[IrAskRequest] = IrAskRequest if request_only else IrAsk
+    ask_node = node_type(
         location=dummy_loc,
         agent=IrConstText(location=dummy_loc, value="ask"),
         prompt=IrConstText(location=dummy_loc, value="test"),
@@ -1722,9 +1803,10 @@ def test_validate_ir_ask_deep_valid_contract() -> None:
     validate_ir(prog, deep=True)
 
 
-def test_validate_ir_ask_request_deep_valid_without_a_contract() -> None:
-    """validate_ir: a well-formed IrAskRequest passes deep validation without a contract."""
-    from agm.agl.ir.ids import Location, SourceId
+def test_validate_ir_ask_request_deep_valid_contract() -> None:
+    """validate_ir: a well-formed IrAskRequest passes deep validation."""
+    from agm.agl.ir.contracts import ContractRequest
+    from agm.agl.ir.ids import ContractId, Location, SourceId
     from agm.agl.ir.nodes import IrAskRequest, IrConstText
     from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
     from agm.agl.ir.validate import validate_ir
@@ -1732,10 +1814,13 @@ def test_validate_ir_ask_request_deep_valid_without_a_contract() -> None:
 
     src_id = SourceId(0)
     dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
+    cid = ContractId(0)
     node = IrAskRequest(
         location=dummy_loc,
         agent=IrConstText(location=dummy_loc, value="ask"),
         prompt=IrConstText(location=dummy_loc, value="test"),
+        contract_id=cid,
+        max_attempts=1,
     )
     prog = ExecutableProgram(
         entry_module=ENTRY_ID,
@@ -1743,7 +1828,18 @@ def test_validate_ir_ask_request_deep_valid_without_a_contract() -> None:
         symbols={},
         nominals={},
         sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={},  # ask-request allocates no contract, and deep validation needs none.
+        contracts={
+            cid: ContractRequest(
+                codec_name="text",
+                strict_json=None,
+                json_schema=None,
+                decode=None,
+                target_type_label="text",
+                structured_exec=False,
+                format_instructions="",
+                is_unit=False,
+            )
+        },
     )
     validate_ir(prog, deep=True)
 
@@ -1784,10 +1880,11 @@ n
     assert ir["n"] == IntValue(7)
 
 
-def test_validate_ir_ask_shallow_does_not_check_contracts() -> None:
-    """validate_ir: IrAsk in shallow (deep=False) validation skips contract checks (656->exit)."""
+@pytest.mark.parametrize("request_only", (False, True))
+def test_validate_ir_ask_shallow_does_not_check_contracts(request_only: bool) -> None:
+    """validate_ir: shallow (deep=False) validation skips an ask node's contract checks."""
     from agm.agl.ir.ids import ContractId, Location, SourceId
-    from agm.agl.ir.nodes import IrAsk, IrConstText
+    from agm.agl.ir.nodes import IrAsk, IrAskRequest, IrConstText
     from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
     from agm.agl.ir.validate import validate_ir
     from agm.agl.modules.ids import ENTRY_ID
@@ -1795,7 +1892,8 @@ def test_validate_ir_ask_shallow_does_not_check_contracts() -> None:
     src_id = SourceId(0)
     dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     bad_cid = ContractId(999)
-    node = IrAsk(
+    node_type: type[IrAsk] | type[IrAskRequest] = IrAskRequest if request_only else IrAsk
+    node = node_type(
         location=dummy_loc,
         agent=IrConstText(location=dummy_loc, value="ask"),
         prompt=IrConstText(location=dummy_loc, value="test"),
@@ -2377,35 +2475,28 @@ def test_ir_ask_request_rejects_a_non_agent_value(request_only: bool) -> None:
         start_line=1,
         start_col=0,
     )
+    contract_id = ContractId(0)
     node: IrAsk | IrAskRequest
-    if request_only:
-        node = IrAskRequest(
-            location=location,
-            agent=IrConstInt(location=location, value=1),
-            prompt=IrConstText(location=location, value="prompt"),
+    node_type: type[IrAsk] | type[IrAskRequest] = IrAskRequest if request_only else IrAsk
+    node = node_type(
+        location=location,
+        agent=IrConstInt(location=location, value=1),
+        prompt=IrConstText(location=location, value="prompt"),
+        contract_id=contract_id,
+        max_attempts=1,
+    )
+    contracts: dict[ContractId, ContractRequest] = {
+        contract_id: ContractRequest(
+            codec_name="text",
+            strict_json=None,
+            json_schema=None,
+            decode=None,
+            target_type_label="text",
+            structured_exec=False,
+            format_instructions="",
+            is_unit=False,
         )
-        contracts: dict[ContractId, ContractRequest] = {}
-    else:
-        contract_id = ContractId(0)
-        node = IrAsk(
-            location=location,
-            agent=IrConstInt(location=location, value=1),
-            prompt=IrConstText(location=location, value="prompt"),
-            contract_id=contract_id,
-            max_attempts=1,
-        )
-        contracts = {
-            contract_id: ContractRequest(
-                codec_name="text",
-                strict_json=None,
-                json_schema=None,
-                decode=None,
-                target_type_label="text",
-                structured_exec=False,
-                format_instructions="",
-                is_unit=False,
-            )
-        }
+    }
     program = ExecutableProgram(
         entry_module=ENTRY_ID,
         modules={

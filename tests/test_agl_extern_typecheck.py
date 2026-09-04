@@ -88,6 +88,7 @@ _ASK_BUILTIN_SOURCE = (
     "\n"
     "builtin def ask[T](\n"
     "  prompt: text,\n"
+    '  agent: Agent = AgentCommand(command = "x"),\n'
     '  format: text = "",\n'
     "  strict-json: bool = false,\n"
     "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"

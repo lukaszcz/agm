@@ -25,6 +25,7 @@ from agm.agl.semantics.types import (
     TypeVarType,
 )
 from agm.agl.syntax.nodes import ParamKind
+from agm.agl.typecheck.builtins import BuiltinCallChecker
 from agm.agl.typecheck.checker import (
     _builtin_function_signature,
     _builtin_function_signature_alternates,
@@ -92,15 +93,18 @@ def test_stdlib_ask_signature_is_context_inferred_with_optional_arguments() -> N
     assert ask_sig.result == TypeVarType("T")
     params = ask_sig.params
     assert params[0].name == "prompt" and params[0].type == TextType() and not params[0].has_default
-    assert params[1].name == "format" and params[1].type == TextType() and params[1].has_default
+    agent_param = params[1]
+    assert agent_param.name == "agent" and agent_param.has_default
+    assert isinstance(agent_param.type, EnumType) and agent_param.type.name == "Agent"
+    assert params[2].name == "format" and params[2].type == TextType() and params[2].has_default
     assert (
-        params[2].name == "strict-json" and params[2].type == BoolType() and params[2].has_default
+        params[3].name == "strict-json" and params[3].type == BoolType() and params[3].has_default
     )
-    p4 = params[3]
-    assert p4.name == "on-parse-error"
-    assert isinstance(p4.type, EnumType)
-    assert p4.type.name == "ParsePolicy"
-    assert p4.has_default is True
+    policy_param = params[4]
+    assert policy_param.name == "on-parse-error"
+    assert isinstance(policy_param.type, EnumType)
+    assert policy_param.type.name == "ParsePolicy"
+    assert policy_param.has_default is True
 
 
 def test_canonical_builtin_signatures_name_the_shared_prelude_handles() -> None:
@@ -117,6 +121,22 @@ def test_canonical_builtin_signatures_name_the_shared_prelude_handles() -> None:
     exec_sig = _builtin_function_signature("exec")
     assert exec_sig is not None
     assert exec_sig.result == BUILTIN_PRELUDE_TYPES["ExecResult"]
+
+
+def test_ask_surfaces_declare_every_named_argument_they_accept() -> None:
+    """The declared surface and the accepted named arguments are one surface.
+
+    An ``ask``/``ask-request`` call is checked against the accepted named-argument
+    set rather than against the declaration it was resolved from, so only this
+    ties the two together; the declaration in turn cannot deviate from the
+    canonical signature (:func:`_builtin_function_signature`) without being
+    rejected outright.
+    """
+    for name in ("ask", "ask-request"):
+        signature = _builtin_function_signature(name)
+        assert signature is not None
+        optional = {param.name for param in signature.params if param.has_default}
+        assert optional == BuiltinCallChecker._ASK_ALLOWED_NAMED_ARGS
 
 
 def test_builtin_function_signature_mismatches_are_rejected() -> None:

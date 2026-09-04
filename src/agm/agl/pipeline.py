@@ -781,8 +781,9 @@ class PipelineDriver:
             )
 
             cwd = Path.cwd()
+            entry_directory = entry_path.resolve().parent if entry_path is not None else cwd
             try:
-                default_stdlib_root = resolve_stdlib_root(home=Path.home())
+                default_stdlib_root = resolve_stdlib_root(home=Path.home(), anchor=entry_directory)
             except StdlibResolutionError as exc:
                 return PreparedProgram(
                     entry_source,
@@ -793,7 +794,7 @@ class PipelineDriver:
                     parsed.warnings,
                 )
             roots = assemble_roots(
-                invocation_root=entry_path.resolve().parent if entry_path is not None else cwd,
+                invocation_root=entry_directory,
                 stdlib_root=default_stdlib_root,
                 lib_root=resolve_lib_root(
                     ModuleRootsConfig(lib_root=None, extra=()), home=Path.home()
@@ -1009,8 +1010,6 @@ class PipelineDriver:
         and ``None`` for every earlier failure, including a missing entry
         module.
         """
-        from agm.agl.modules.ids import ENTRY_ID
-
         if prepared.resolved is None:
             return _ProgramStaticResult(
                 checked=None,
@@ -1053,7 +1052,7 @@ class PipelineDriver:
                     warnings=all_warnings,
                 )
 
-        if ENTRY_ID not in checked.modules:
+        if checked.entry_id not in checked.modules:
             return _ProgramStaticResult(
                 checked=None,
                 compiled=None,
@@ -1566,11 +1565,12 @@ def _program_decl_infos(checked: "CheckedProgram") -> tuple[ProgramDeclInfo, ...
                         node_id=item.node_id,
                         span=item.span,
                         parameters=_program_param_infos(checked_module, item),
+                        is_entry=module_id == checked.entry_id,
                     )
                 )
     program_infos.sort(
         key=lambda info: (
-            not info.module.is_entry,
+            not info.is_entry,
             info.module.path_str(),
             info.declaration_path,
         )

@@ -24,7 +24,7 @@ The `agm.packages` public façade resolves its exports lazily. Package model lea
 ## Code Entry Points
 
 - `src/agm/packages/manifest.py` — manifest schema and the distribution-manifest view.
-- `src/agm/packages/model.py`, `development.py` — package identity, version selection, `std` compatibility bounds, development-package discovery.
+- `src/agm/packages/model.py`, `development.py` — package identity, version selection, `std` compatibility bounds, development-package discovery (the containing checkout of a path, and its path-dependency closure).
 - `src/agm/packages/dependencies.py` — dependency-closure resolution.
 - `src/agm/packages/discipline.py` — manifest, tree, and graph validation for directory and archive packages.
 - `src/agm/packages/__init__.py` — the lazy façade; `layout.py` — pure store-path constants usable from the config layer.

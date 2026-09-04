@@ -25,7 +25,7 @@ from agm.agl.syntax.nodes import ImportDecl
 from agm.agl.syntax.spans import SourceId
 from agm.packages.manifest import load_manifest
 from agm.packages.model import PackageInfo
-from tests._agl_helpers import agl_roots
+from tests._agl_helpers import agl_roots, agl_std_package_roots
 from tests._timeouts import fail_if_slow
 
 # ---------------------------------------------------------------------------
@@ -968,6 +968,182 @@ class TestRejectImportOfEntry:
         _write_module(root, "lib")
         graph = load_graph("import lib", entry_path=None, roots=_roots(root))
         assert ModuleId.from_path("lib") in graph.modules
+
+
+class TestPackageOwnedEntryIdentity:
+    """A package's own file is loaded under the module id its package declares."""
+
+    def test_mutually_importing_package_modules_load_from_either_entry(
+        self, tmp_path: Path
+    ) -> None:
+        """The entry keeps its package identity, so a module may import it back."""
+        duo = _package(tmp_path, "duo")
+        entry = _write_module(duo.root, "duo/a", "import duo/b\ndef fa() -> int = duo/b::fb()\n")
+        _write_module(duo.root, "duo/b", "import duo/a\ndef fb() -> int = 2\n")
+
+        graph = load_graph(
+            entry.read_text(),
+            entry_path=entry,
+            roots=_package_roots(tmp_path, duo),
+            default_stdlib=False,
+        )
+
+        entry_id = ModuleId.from_path("duo/a")
+        assert graph.entry_id == entry_id
+        assert graph.entry_id.display() == "duo/a"
+        assert graph.modules[entry_id].path == entry.resolve()
+        assert graph.adjacency[ModuleId.from_path("duo/b")] == (entry_id,)
+
+    def test_loose_entry_keeps_the_entry_sentinel(self, tmp_path: Path) -> None:
+        root = tmp_path / "r"
+        root.mkdir()
+        entry = root / "main.agl"
+        entry.write_text(_MINIMAL)
+
+        graph = load_graph(_MINIMAL, entry_path=entry, roots=_roots(root), default_stdlib=False)
+
+        assert graph.entry_id == ENTRY_ID
+        assert graph.entry_id.display() == "<entry>"
+
+    def test_inline_entry_keeps_the_entry_sentinel(self, tmp_path: Path) -> None:
+        graph = load_graph(_MINIMAL, entry_path=None, roots=_roots(tmp_path), default_stdlib=False)
+
+        assert graph.entry_id == ENTRY_ID
+
+    def test_package_file_outside_the_module_tree_keeps_the_entry_sentinel(
+        self, tmp_path: Path
+    ) -> None:
+        """Ownership is the declared module tree, not merely living under a root."""
+        demo = _package(tmp_path, "demo")
+        rogue = demo.root / "assets" / "rogue.agl"
+        _write_agl(rogue, _MINIMAL)
+
+        graph = load_graph(
+            _MINIMAL,
+            entry_path=rogue,
+            roots=_package_roots(tmp_path, demo),
+            default_stdlib=False,
+        )
+
+        assert graph.entry_id == ENTRY_ID
+
+    def test_standard_library_entry_is_not_given_its_own_prelude_import(
+        self, tmp_path: Path
+    ) -> None:
+        """``std/prelude`` checked directly would otherwise import itself."""
+        std = _package(tmp_path, "std")
+        prelude = _write_module(std.root, "std/prelude", _MINIMAL)
+
+        graph = load_graph(
+            _MINIMAL,
+            entry_path=prelude,
+            roots=_package_roots(tmp_path, std),
+            default_stdlib=True,
+        )
+
+        assert graph.entry_id == STD_PRELUDE_ID
+        assert graph.modules[STD_PRELUDE_ID].imports == ()
+
+    def test_standard_library_entry_still_receives_the_prelude(self, tmp_path: Path) -> None:
+        std = _package(tmp_path, "std")
+        _write_module(std.root, "std/prelude", _MINIMAL)
+        entry = _write_module(std.root, "std/other", _MINIMAL)
+
+        graph = load_graph(
+            _MINIMAL,
+            entry_path=entry,
+            roots=_package_roots(tmp_path, std),
+            default_stdlib=True,
+        )
+
+        assert graph.entry_id == ModuleId.from_path("std/other")
+        assert STD_PRELUDE_ID in graph.modules
+
+    def test_an_ambiguously_resolving_entry_id_falls_back_to_the_sentinel(
+        self, tmp_path: Path
+    ) -> None:
+        """Identity and resolution agree by construction, or there is no identity."""
+        first_parent = tmp_path / "first"
+        first_parent.mkdir()
+        second_parent = tmp_path / "second"
+        second_parent.mkdir()
+        first = _package(first_parent, "duo")
+        second = _package(second_parent, "duo")
+        entry = _write_module(first.root, "duo/a")
+        _write_module(second.root, "duo/a")
+
+        graph = load_graph(
+            _MINIMAL,
+            entry_path=entry,
+            roots=_package_roots(tmp_path, first, loose_roots=(second.root,)),
+            default_stdlib=False,
+        )
+
+        assert graph.entry_id == ENTRY_ID
+
+    def test_an_unspellable_entry_id_falls_back_to_the_sentinel(self, tmp_path: Path) -> None:
+        """A file name no module path can spell names no module."""
+        duo = _package(tmp_path, "duo")
+        entry = duo.root / "duo" / "my-mod.agl"
+        _write_agl(entry, _MINIMAL)
+
+        graph = load_graph(
+            _MINIMAL,
+            entry_path=entry,
+            roots=_package_roots(tmp_path, duo),
+            default_stdlib=False,
+        )
+
+        assert graph.entry_id == ENTRY_ID
+
+    def test_an_entry_id_no_root_resolves_falls_back_to_the_sentinel(self, tmp_path: Path) -> None:
+        """A package whose root is not searched names nothing the graph can reach."""
+        duo = _package(tmp_path, "duo")
+        entry = _write_module(duo.root, "duo/a")
+
+        graph = load_graph(
+            _MINIMAL,
+            entry_path=entry,
+            roots=RootSet(roots=frozenset(), packages=(duo,)),
+            default_stdlib=False,
+        )
+
+        assert graph.entry_id == ENTRY_ID
+
+
+class TestEntryIsNeverAmbient:
+    """Ambient means reached only through the loader's own injected import.
+
+    The entry file is reached because the host named it, so it is never an
+    ambient module -- not even when it is the builtin-method registry the
+    loader injects, or one of the modules that registry reaches.
+    """
+
+    @pytest.mark.parametrize("module", ["math", "prelude", "builtin-methods"])
+    def test_a_standard_library_entry_is_not_ambient(self, module: str) -> None:
+        entry = _REPO_STDLIB_ROOT / "std" / f"{module}.agl"
+
+        graph = load_graph(entry.read_text(), entry_path=entry, roots=agl_std_package_roots())
+
+        assert graph.entry_id == ModuleId.from_path(f"std/{module}")
+        assert graph.entry_id not in graph.ambient_modules
+
+    def test_no_library_module_retains_an_unimported_entry_among_its_sources(self) -> None:
+        """A freshly parsed entry in every module's sources defeats the artifact cache.
+
+        No module imports the builtin-method registry, so nothing depends on
+        this entry and nothing may list it.
+        """
+        from agm.agl.artifact_cache import retained_module_sources
+
+        entry = _REPO_STDLIB_ROOT / "std" / "builtin-methods.agl"
+        graph = load_graph(entry.read_text(), entry_path=entry, roots=agl_std_package_roots())
+        entry_module = graph.modules[graph.entry_id]
+
+        sources = retained_module_sources(graph)
+
+        assert sources
+        assert all(entry_module not in retained for retained in sources.values())
 
 
 # ---------------------------------------------------------------------------

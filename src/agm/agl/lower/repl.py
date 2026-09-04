@@ -197,12 +197,18 @@ def _item_declaration_ids(item: Item, checked: "CheckedModule") -> frozenset[int
     return frozenset()
 
 
-def _nominal_dependencies(typ: "Type", nominal_dependency_ids: Mapping[int, int]) -> set[int]:
-    """Map nominal identities in *typ* to their promotable source declarations."""
+def _nominal_dependencies(
+    typ: "Type", nominal_dependency_ids: Mapping[int, int], entry_id: ModuleId
+) -> set[int]:
+    """Map nominal identities in *typ* to their promotable source declarations.
+
+    Only a nominal declared by the entry module itself is promotable; one from a
+    library module travels with that module's retained image instead.
+    """
     return {
         nominal_dependency_ids[nominal.decl_id]
         for nominal in iter_nominal_types(typ)
-        if nominal.module_id.is_entry and nominal.decl_id in nominal_dependency_ids
+        if nominal.module_id == entry_id and nominal.decl_id in nominal_dependency_ids
     }
 
 
@@ -257,15 +263,21 @@ def _declaration_dependencies(
             dependencies.add(constructor.owner_decl_node_id)
         typ = checked.node_types.get(node_id)
         if typ is not None:
-            dependencies.update(_nominal_dependencies(typ, nominal_dependency_ids))
+            dependencies.update(
+                _nominal_dependencies(typ, nominal_dependency_ids, checked.module_id)
+            )
 
     walk(item, collect)
     if isinstance(item, FuncDef):
         signature = checked.type_env.get_function_signature_by_node_id(item.node_id)
         assert signature is not None, f"compiler bug: no signature for {item.name!r}"
         for parameter in signature.params:
-            dependencies.update(_nominal_dependencies(parameter.type, nominal_dependency_ids))
-        dependencies.update(_nominal_dependencies(signature.result, nominal_dependency_ids))
+            dependencies.update(
+                _nominal_dependencies(parameter.type, nominal_dependency_ids, checked.module_id)
+            )
+        dependencies.update(
+            _nominal_dependencies(signature.result, nominal_dependency_ids, checked.module_id)
+        )
     typedef = (
         checked.type_env.type_table.get(
             checked.module_id,
@@ -277,16 +289,22 @@ def _declaration_dependencies(
     )
     if typedef is not None:
         for _, field_type in typedef.fields:
-            dependencies.update(_nominal_dependencies(field_type, nominal_dependency_ids))
+            dependencies.update(
+                _nominal_dependencies(field_type, nominal_dependency_ids, checked.module_id)
+            )
         for member in typedef.members:
-            dependencies.update(_nominal_dependencies(member, nominal_dependency_ids))
+            dependencies.update(
+                _nominal_dependencies(member, nominal_dependency_ids, checked.module_id)
+            )
             for field_type in checked.type_env.type_table.record_fields(member).values():
-                dependencies.update(_nominal_dependencies(field_type, nominal_dependency_ids))
+                dependencies.update(
+                    _nominal_dependencies(field_type, nominal_dependency_ids, checked.module_id)
+                )
         if typedef.base is not None:
             base_typedef = checked.type_env.type_table.get_by_id(typedef.base)
             if (
                 base_typedef is not None
-                and base_typedef.module_id.is_entry
+                and base_typedef.module_id == checked.module_id
                 and base_typedef.decl_node_id in nominal_dependency_ids
             ):
                 dependencies.add(nominal_dependency_ids[base_typedef.decl_node_id])
@@ -297,7 +315,11 @@ def _declaration_dependencies(
             scope_path=tuple(segment.name for segment in item.scope_path),
         )
         assert alias_template is not None, f"compiler bug: no type alias for {item.name!r}"
-        dependencies.update(_nominal_dependencies(alias_template.template, nominal_dependency_ids))
+        dependencies.update(
+            _nominal_dependencies(
+                alias_template.template, nominal_dependency_ids, checked.module_id
+            )
+        )
     return frozenset(dependencies), frozenset(imported_modules)
 
 

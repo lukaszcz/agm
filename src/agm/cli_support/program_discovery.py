@@ -117,7 +117,7 @@ class ProgramSelection:
     """The entry-module programs a host may run, and which one *requested* names.
 
     ``entry_programs`` is the discovered programs filtered to the entry
-    module's own declarations (``ProgramDeclInfo.module.is_entry``) — an
+    module's own declarations (``ProgramDeclInfo.is_entry``) — an
     imported module's own ``program def`` is discoverable but never runnable
     directly. ``selected`` is the sole entry program when there is exactly
     one and *requested* names none of them, *requested*'s own match when it
@@ -136,7 +136,7 @@ def select_entry_program(
     programs: "tuple[ProgramDeclInfo, ...]", *, requested: str | None
 ) -> ProgramSelection:
     """Filter *programs* to the entry module's own declarations and apply *requested*."""
-    entry_programs = tuple(program for program in programs if program.module.is_entry)
+    entry_programs = tuple(program for program in programs if program.is_entry)
     if requested is not None:
         selected = next(
             (program for program in entry_programs if program.declaration_path == requested), None

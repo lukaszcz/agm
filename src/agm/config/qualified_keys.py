@@ -145,9 +145,11 @@ def route_table_paths(
     """Return the config table paths that address one route, in read order.
 
     Every module-suffix spelling, shortest first, then the exact quoted module
-    anchor; paths rooted in an AGM configuration section are excluded. This is
-    the single routing rule shared by value resolution and leaf enumeration, so
-    a caller can tell which routes a given table serves.
+    anchor. AGM's top-level configuration sections are excluded, except that a
+    single-segment loose-file module with a reserved stem may address one of
+    its nested declaration tables. This is the single routing rule shared by
+    value resolution and leaf enumeration, so a caller can tell which routes a
+    given table serves.
     """
     suffix_paths = [
         (*module_segments[-depth:], *scope_path) for depth in range(1, len(module_segments) + 1)
@@ -156,7 +158,9 @@ def route_table_paths(
     paths: list[tuple[str, ...]] = []
     seen_paths: set[tuple[str, ...]] = set()
     for path in (*suffix_paths, anchor_path):
-        if path[0] not in RESERVED_CONFIG_SECTION_NAMES and path not in seen_paths:
+        is_reserved_root = path[0] in RESERVED_CONFIG_SECTION_NAMES
+        is_nested_loose_file_route = len(module_segments) == 1 and bool(scope_path)
+        if (not is_reserved_root or is_nested_loose_file_route) and path not in seen_paths:
             seen_paths.add(path)
             paths.append(path)
     return tuple(paths)

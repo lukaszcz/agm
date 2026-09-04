@@ -124,9 +124,9 @@ class TestQualifiedConfigKeys:
         "reserved_name",
         ("exec", "wsp", "wt", "deps", "modules", "packages", "params"),
     )
-    def test_reserved_sections_are_not_config_module_prefixes(self, reserved_name: str) -> None:
-        key = QualifiedConfigKey((reserved_name,), ("review",), "max-tries")
-        config = {reserved_name: {"review": {"max-tries": 1}}}
+    def test_reserved_sections_are_not_unscoped_config_modules(self, reserved_name: str) -> None:
+        key = QualifiedConfigKey((reserved_name,), (), "max-tries")
+        config = {reserved_name: {"max-tries": 1}}
 
         assert resolve_qualified_values(_config(config), (key,)) == {}
 

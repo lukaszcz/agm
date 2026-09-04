@@ -3289,6 +3289,28 @@ class TestEntryModuleConfig:
         assert exec_command.run(_exec_args_no_log(agl_file)) is None
         assert capsys.readouterr().out == "usable\n"
 
+    def test_reserved_entry_stem_uses_its_qualified_program_table(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A loose file's reserved stem still addresses its nested program table."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[exec.main]\nregion = "configured"\n')
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        agl_file = tmp_path / "exec.agl"
+        write_file_program(
+            agl_file, 'program def main(region: text = "default") -> unit = print region\n'
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == "configured\n"
+
     def test_reserved_entry_stem_still_selects_among_several_programs(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -3475,6 +3497,26 @@ class TestProgramValueArguments:
 
         assert exec_command.run(_exec_args_no_log(agl_file)) is None
         assert capsys.readouterr().out == "configured\n"
+
+    def test_config_table_supplies_a_native_string_to_a_json_argument(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A TOML string is a JSON string value, not serialized CLI JSON."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[prog.main]\ndata = "hello"\n')
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, "program def main(data: json = null) -> unit = print data\n")
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == '"hello"\n'
 
     def test_cli_overrides_configured_argument(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

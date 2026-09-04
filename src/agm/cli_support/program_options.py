@@ -73,6 +73,7 @@ from typing import TYPE_CHECKING
 
 from agm.agl.runtime.arguments import ProgramArguments
 from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
+from agm.agl.runtime.serialize import dumps_exact
 from agm.agl.semantics.engine_keys import ENGINE_KEY_TYPES
 from agm.agl.semantics.types import BoolType, TextType, is_standard_option_enum
 from agm.agl.zones import ParamZone
@@ -294,14 +295,17 @@ def native_raw_value(projected: ProjectedOption, raw: object) -> object:
     same ``Option`` rule to a CLI ``VALUE`` token. A present value for an
     ``Option[T]`` parameter is wrapped ``Some``: a config table has no
     ``--no-x`` equivalent, so an absent key supplies nothing at all and the
-    parameter falls back to its own default. Every other value form is
-    already a native TOML/JSON value that ``decode_param_value`` decodes
-    directly, so it passes through unchanged. Keeping this beside
+    parameter falls back to its own default. A native string for a JSON-form
+    parameter is encoded into JSON text, preserving its distinction from a
+    serialized CLI token; every other value form is already a native
+    TOML/JSON value that ``decode_param_value`` decodes directly. Keeping this beside
     :func:`_positive_raw` is what stops the envelope rule from being spelled
     once per host surface.
     """
     if projected.value_form is ValueForm.OPTION:
         return option_some_raw(raw)
+    if projected.value_form is ValueForm.JSON and isinstance(raw, str):
+        return dumps_exact(raw, indent=None)
     return raw
 
 

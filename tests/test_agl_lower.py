@@ -86,7 +86,6 @@ from agm.agl.ir.program import (
     IrFunctionBody,
 )
 from agm.agl.ir.validate import validate_ir
-from agm.agl.ir.zones import ParamZone
 from agm.agl.lower import LinkImage, LoweredReplEntry, compile_coercion, lower_repl_program
 from agm.agl.lower.lowerer import InitializerOrigin, _Lowerer
 from agm.agl.lower.repl import ReplPromotionPlan
@@ -126,6 +125,7 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import check_program
+from agm.agl.zones import ParamZone
 from tests._agl_helpers import agl_roots
 from tests.agl.ir_harness import _compiled_checked, compile_checked_module, lower_compiled_module
 from tests.agl.module_graph import resolve_and_check_inline_entry

@@ -89,7 +89,6 @@ from agm.agl.syntax.nodes import (
     ExceptionDef,
     FuncDef,
     LetDecl,
-    ParamKind,
     Program,
     RecordDef,
     TypeAlias,
@@ -126,6 +125,7 @@ from agm.agl.typecheck.function_inference import (
     infer_module_component_candidates,
     resolve_function_header,
 )
+from agm.agl.zones import ParamZone
 
 # ---------------------------------------------------------------------------
 # Output types
@@ -275,7 +275,7 @@ def _sync_program_env_extensions(
     program_type_table: dict[DeclKey, Type],
     program_generic_table: dict[DeclKey, GenericTypeDef],
     program_ctor_sig_table: dict[DeclKey, ConstructorSignature],
-    program_ctor_field_kinds_table: dict[DeclKey, tuple[tuple[str, ParamKind], ...]],
+    program_ctor_field_kinds_table: dict[DeclKey, tuple[tuple[str, ParamZone], ...]],
 ) -> None:
     """Copy reconciled type and constructor metadata into the program tables."""
     for _type_name, typ in env.non_builtin_type_items():
@@ -301,7 +301,7 @@ def _resolve_body_for_one(
     program_generic_table: dict[DeclKey, GenericTypeDef],
     program_alias_table: dict[DeclKey, GenericAliasDef],
     program_ctor_sig_table: dict[DeclKey, ConstructorSignature],
-    program_ctor_field_kinds_table: dict[DeclKey, tuple[tuple[str, ParamKind], ...]],
+    program_ctor_field_kinds_table: dict[DeclKey, tuple[tuple[str, ParamZone], ...]],
     resolved: ResolvedProgram,
     cross_envs: dict[ModuleId, TypeEnvironment],
 ) -> None:
@@ -456,7 +456,7 @@ def _build_program_type_table(
     dict[DeclKey, GenericTypeDef],
     dict[DeclKey, GenericAliasDef],
     dict[DeclKey, ConstructorSignature],
-    dict[DeclKey, tuple[tuple[str, ParamKind], ...]],
+    dict[DeclKey, tuple[tuple[str, ParamZone], ...]],
 ]:
     """Phase 1: collect and resolve all public type declarations across all modules.
 
@@ -562,7 +562,7 @@ def _build_program_type_table(
                 alias_decls[_decl_key(mid, item)] = item
     program_alias_keys = frozenset(alias_decls)
     program_ctor_sig_table: dict[DeclKey, ConstructorSignature] = {}
-    program_ctor_field_kinds_table: dict[DeclKey, tuple[tuple[str, ParamKind], ...]] = {}
+    program_ctor_field_kinds_table: dict[DeclKey, tuple[tuple[str, ParamZone], ...]] = {}
 
     # Build per-module cross-module-aware environments and builders for
     # body resolution.  Each env knows the full program_type_table and its own
@@ -891,7 +891,7 @@ def _prepare_module_environment(
     program_generic_table: dict[DeclKey, GenericTypeDef],
     program_alias_table: dict[DeclKey, GenericAliasDef],
     program_ctor_sig_table: dict[DeclKey, ConstructorSignature],
-    program_ctor_field_kinds_table: dict[DeclKey, tuple[tuple[str, ParamKind], ...]],
+    program_ctor_field_kinds_table: dict[DeclKey, tuple[tuple[str, ParamZone], ...]],
     type_table: TypeTable,
     entry_seed_env: TypeEnvironment | None = None,
 ) -> TypeEnvironment:

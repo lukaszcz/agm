@@ -15,7 +15,6 @@ from agm.agl.diagnostics import Diagnostic
 from agm.agl.ir.contracts import ParamDecoder
 from agm.agl.ir.nodes import UseDefault
 from agm.agl.ir.program import IrProgramParam
-from agm.agl.ir.zones import ParamZone
 from agm.agl.runtime.arguments import (
     ProgramArguments,
     ProgramParameter,
@@ -30,6 +29,7 @@ from agm.agl.semantics.types import Type as AglType
 from agm.agl.semantics.values import BoolValue, IntValue, JsonValue, TextValue
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import build_param_decoder
+from agm.agl.zones import ParamZone
 
 _TABLE = create_seeded_type_table()
 

@@ -12,10 +12,9 @@ constructor patterns use; this module exists so callers outside the
 typechecker can share the same binding rule.
 
 ``kind`` is a :class:`ParamZone` value (``POSITIONAL_ONLY``, ``STANDARD``,
-``NAMED_ONLY``) rather than the AST's ``ParamKind`` enum: ``ParamZone`` is
-the IR-level zone enum from ``agm.agl.ir.zones``, re-exported here so
-existing call sites keep importing it from this module; the typecheck
-wrapper maps ``ParamKind`` to ``ParamZone`` at its boundary.
+``NAMED_ONLY``) -- the shared zone enum from ``agm.agl.zones``, the same one
+the AST's ``Param.kind`` carries, re-exported here so existing call sites
+keep importing it from this module.
 
 Algorithm (positional-greedy with named-only shorthand)
 ---------------------------------------------------------
@@ -51,7 +50,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import TypeVar
 
-from agm.agl.ir.zones import ParamZone
+from agm.agl.zones import ParamZone
 
 T = TypeVar("T")
 

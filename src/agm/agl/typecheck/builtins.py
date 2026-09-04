@@ -40,7 +40,6 @@ from agm.agl.syntax.nodes import (
     Expr,
     IntLit,
     NamedArg,
-    ParamKind,
     QualifierAnchor,
     StringLit,
     VarRef,
@@ -55,6 +54,7 @@ from agm.agl.typecheck.env import (
     ParamSpec,
     TypeEnvironment,
 )
+from agm.agl.zones import ParamZone
 
 # ---------------------------------------------------------------------------
 # Deferred built-in obligations
@@ -265,19 +265,19 @@ class BuiltinCallChecker:
                 ParamSpec(
                     name="agent",
                     type=self._builtin_contract_type("Agent"),
-                    kind=ParamKind.STANDARD,
+                    kind=ParamZone.STANDARD,
                     has_default=False,
                 ),
                 ParamSpec(
                     name="transport",
                     type=transport,
-                    kind=ParamKind.STANDARD,
+                    kind=ParamZone.STANDARD,
                     has_default=True,
                 ),
                 ParamSpec(
                     name="name",
                     type=TextType(),
-                    kind=ParamKind.STANDARD,
+                    kind=ParamZone.STANDARD,
                     has_default=True,
                 ),
             ),
@@ -307,7 +307,7 @@ class BuiltinCallChecker:
         return self._check_static_call(
             node,
             "Session::compact",
-            (ParamSpec("instructions", TextType(), ParamKind.STANDARD, has_default=True),),
+            (ParamSpec("instructions", TextType(), ParamZone.STANDARD, has_default=True),),
             UnitType(),
         )
 
@@ -330,7 +330,7 @@ class BuiltinCallChecker:
         return self._check_static_call(
             node,
             "Session::set-name",
-            (ParamSpec("name", TextType(), ParamKind.STANDARD, has_default=False),),
+            (ParamSpec("name", TextType(), ParamZone.STANDARD, has_default=False),),
             UnitType(),
         )
 

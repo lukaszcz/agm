@@ -61,7 +61,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
 @pytest.mark.parametrize(
     ("package", "allowed"),
     [
-        ("ir", ("agm.agl.ir", "agm.agl.modules.ids")),
+        ("ir", ("agm.agl.ir", "agm.agl.modules.ids", "agm.agl.zones")),
         (
             "lower",
             (
@@ -115,6 +115,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
                 "agm.agl.semantics",
                 "agm.agl.syntax",
                 "agm.agl.typecheck",
+                "agm.agl.zones",
             ),
         ),
         (
@@ -124,6 +125,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
                 "agm.agl.modules.ids",
                 "agm.agl.self_validation",
                 "agm.agl.semantics",
+                "agm.agl.zones",
             ),
         ),
         (
@@ -131,6 +133,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
             (
                 "agm.agl.modules.ids",
                 "agm.agl.syntax",
+                "agm.agl.zones",
             ),
         ),
         (
@@ -156,6 +159,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
                 "agm.agl.syntax.spans",
                 "agm.agl.typecheck.env",
                 "agm.agl.type_schema",
+                "agm.agl.zones",
             ),
         ),
     ],
@@ -181,6 +185,7 @@ def test_ir_all_agm_dependencies_are_explicit() -> None:
     allowed = (
         "agm.agl.ir",
         "agm.agl.modules.ids",
+        "agm.agl.zones",
         "agm.config.engine_keys",
     )
     violations = [

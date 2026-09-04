@@ -41,7 +41,6 @@ from agm.agl.semantics.type_table import TypeDef, TypeTable, is_json_convertible
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
 from agm.agl.syntax.nodes import BuiltinVarDecl, FuncDef, static_items
 from agm.agl.type_schema import build_encode_plan, build_param_decoder
-from agm.agl.typecheck.arguments import zone_of
 from agm.agl.typecheck.env import CheckedModule, FunctionSignature
 from agm.agl.typecheck.program import program_funcdefs
 from agm.util.text import normalize_newlines
@@ -86,7 +85,7 @@ def _program_signature(sig: FunctionSignature, type_table: TypeTable) -> tuple[I
     return tuple(
         IrProgramParam(
             name=param.name,
-            kind=zone_of(param.kind),
+            kind=param.kind,
             required=not param.has_default,
             external_decoder=build_param_decoder(param.type, type_table),
         )

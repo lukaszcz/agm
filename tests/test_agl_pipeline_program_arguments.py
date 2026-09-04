@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import pytest
 
-from agm.agl.ir.zones import ParamZone
 from agm.agl.pipeline import PipelineDriver, PreparedProgram
 from agm.agl.runtime.arguments import ProgramArguments
 from agm.agl.semantics.types import BoolType, IntType, TextType
+from agm.agl.zones import ParamZone
 
 
 def _prepared(source: str) -> PreparedProgram:

@@ -36,11 +36,11 @@ if TYPE_CHECKING:
 
     from agm.agl.ir.contracts import ParamDecoder
     from agm.agl.ir.program import ExecutableProgram, IrProgramParam
-    from agm.agl.ir.zones import ParamZone
     from agm.agl.runtime.types import ProgramDeclInfo, ProgramParamInfo
     from agm.agl.semantics.types import Type as AglType
     from agm.agl.semantics.values import Value
     from agm.agl.syntax.spans import SourceSpan
+    from agm.agl.zones import ParamZone
 
 __all__ = [
     "ProgramArguments",

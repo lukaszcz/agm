@@ -41,7 +41,6 @@ from agm.agl.semantics import arguments as pure
 from agm.agl.syntax.nodes import (
     Expr,
     NamedArg,
-    ParamKind,
     Pattern,
     PatternField,
     VarPattern,
@@ -49,31 +48,9 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.env import AglTypeError, ParamSpec
+from agm.agl.zones import ParamZone
 
 T = TypeVar("T")
-
-
-def zone_of(kind: ParamKind) -> pure.ParamZone:
-    """Map the AST's ``ParamKind`` to the IR-level ``ParamZone``.
-
-    Public because it is the one place that converts a checked parameter's
-    ``ParamKind`` to the shared ``ParamZone`` enum; other passes below the
-    checker (e.g. the lowerer, building a program's host-facing signature)
-    reuse it rather than declaring their own converter.
-
-    A ``match`` over the enum (rather than a dict lookup) so mypy's
-    exhaustiveness check catches a new ``ParamKind`` member that has no
-    corresponding zone.
-    """
-    match kind:
-        case ParamKind.POSITIONAL_ONLY:
-            return pure.ParamZone.POSITIONAL_ONLY
-        case ParamKind.STANDARD:
-            return pure.ParamZone.STANDARD
-        case ParamKind.NAMED_ONLY:
-            return pure.ParamZone.NAMED_ONLY
-        case _ as unreachable:  # pragma: no cover
-            assert_never(unreachable)
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +67,7 @@ class BindParam:
     """
 
     name: str
-    kind: ParamKind
+    kind: ParamZone
     has_default: bool
 
 
@@ -161,7 +138,7 @@ def bind_arguments(
         required param.
     """
     pure_params = [
-        pure.BindParam(name=p.name, kind=zone_of(p.kind), has_default=p.has_default) for p in params
+        pure.BindParam(name=p.name, kind=p.kind, has_default=p.has_default) for p in params
     ]
     pure_named = [(bn.name, bn.value) for bn in named]
     try:
@@ -235,7 +212,7 @@ def _to_agl_type_error(
 
 
 def bind_constructor_args(
-    field_kinds: tuple[tuple[str, ParamKind], ...],
+    field_kinds: tuple[tuple[str, ParamZone], ...],
     positional: Sequence[Expr],
     named: Sequence[NamedArg],
     *,
@@ -252,7 +229,7 @@ def bind_constructor_args(
     Parameters
     ----------
     field_kinds:
-        Ordered ``(field_name, ParamKind)`` pairs from the constructor's
+        Ordered ``(field_name, ParamZone)`` pairs from the constructor's
         field-kinds registry — produced by ``get_constructor_field_kinds``.
     positional:
         Positional argument expressions in source order.
@@ -345,7 +322,7 @@ def bind_call_args(
 
 
 def bind_pattern_args(
-    field_kinds: tuple[tuple[str, ParamKind], ...],
+    field_kinds: tuple[tuple[str, ParamZone], ...],
     positional: Sequence[Pattern],
     named: Sequence[PatternField],
     *,

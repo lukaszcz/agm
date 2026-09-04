@@ -85,7 +85,6 @@ from agm.agl.syntax import (
     NameTarget,
     NullLit,
     Param,
-    ParamKind,
     PatternField,
     Placeholder,
     Program,
@@ -124,6 +123,7 @@ from agm.agl.syntax.types import (
     TextT,
     UnitT,
 )
+from agm.agl.zones import ParamZone
 from agm.core.process import ProcessCaptureResult
 from tests._agl_helpers import run_inline_command
 
@@ -746,9 +746,9 @@ class TestDeclarations:
         rec = first(parse("record R(var x: int, /, y: int, *, var z: int)"))
         assert isinstance(rec, RecordDef)
         assert tuple(field.kind for field in rec.fields) == (
-            ParamKind.POSITIONAL_ONLY,
-            ParamKind.STANDARD,
-            ParamKind.NAMED_ONLY,
+            ParamZone.POSITIONAL_ONLY,
+            ParamZone.STANDARD,
+            ParamZone.NAMED_ONLY,
         )
 
     def test_enum_payload_fields_accept_mutable_marker(self) -> None:
@@ -1289,17 +1289,17 @@ class TestBuiltinResolution:
 
 
 # ---------------------------------------------------------------------------
-# ParamKind — per-context default kind assignment
+# ParamZone — per-context default kind assignment
 # ---------------------------------------------------------------------------
 
 
-class TestParamKind:
-    """Transformer assigns the correct default ParamKind to each Param."""
+class TestParamZone:
+    """Transformer assigns the correct default ParamZone to each Param."""
 
     def test_def_param_is_standard(self) -> None:
         fd = first(parse("def f(x: int) -> int = x"))
         assert isinstance(fd, FuncDef)
-        assert fd.params[0].kind == ParamKind.STANDARD
+        assert fd.params[0].kind == ParamZone.STANDARD
         assert fd.params[0].mutable is False
 
     def test_lambda_param_is_standard(self) -> None:
@@ -1308,28 +1308,28 @@ class TestParamKind:
         assert isinstance(ld, LetDecl)
         lam = ld.value
         assert isinstance(lam, Lambda)
-        assert lam.params[0].kind == ParamKind.STANDARD
+        assert lam.params[0].kind == ParamZone.STANDARD
 
     def test_unmarked_record_fields_are_standard(self) -> None:
         rec = first(parse("record Point(x: int, y: int)"))
         assert isinstance(rec, RecordDef)
-        assert all(f.kind == ParamKind.STANDARD for f in rec.fields)
+        assert all(f.kind == ParamZone.STANDARD for f in rec.fields)
 
     def test_unmarked_indented_record_fields_are_standard(self) -> None:
         rec = first(parse("record Issue\n  title: text\n  severity: int"))
         assert isinstance(rec, RecordDef)
-        assert all(f.kind == ParamKind.STANDARD for f in rec.fields)
+        assert all(f.kind == ParamZone.STANDARD for f in rec.fields)
 
     def test_unmarked_exception_fields_are_standard(self) -> None:
         exc = first(parse("exception MyErr(code: int, msg: text)"))
         assert isinstance(exc, ExceptionDef)
-        assert all(f.kind == ParamKind.STANDARD for f in exc.fields)
+        assert all(f.kind == ParamZone.STANDARD for f in exc.fields)
 
     def test_unmarked_enum_payload_fields_are_standard_regardless_of_arity(self) -> None:
         en = first(parse("enum Result\n  | Ok(value: int, tag: text)\n  | Err(msg: text)"))
         assert isinstance(en, EnumDef)
         assert all(
-            field.kind == ParamKind.STANDARD for member in en.members for field in member.fields
+            field.kind == ParamZone.STANDARD for member in en.members for field in member.fields
         )
 
 
@@ -1339,7 +1339,7 @@ class TestParamKind:
 
 
 class TestMarkerParams:
-    """Grammar markers (/ * @pos @std @named) resolve to concrete ParamKinds."""
+    """Grammar markers (/ * @pos @std @named) resolve to concrete ParamZones."""
 
     # --- def / lambda param_list ---
 
@@ -1347,53 +1347,53 @@ class TestMarkerParams:
         """def f(x: int, /, y: int) → x pos-only, y standard."""
         fd = first(parse("def f(x: int, /, y: int) -> int = x"))
         assert isinstance(fd, FuncDef)
-        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
-        assert fd.params[1].kind == ParamKind.STANDARD
+        assert fd.params[0].kind == ParamZone.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamZone.STANDARD
 
     def test_slash_star_def_all_three_zones(self) -> None:
         """def g(x: int, /, y: int, *, z: int) → pos-only / std / named-only."""
         fd = first(parse("def g(x: int, /, y: int, *, z: int) -> int = x"))
         assert isinstance(fd, FuncDef)
-        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
-        assert fd.params[1].kind == ParamKind.STANDARD
-        assert fd.params[2].kind == ParamKind.NAMED_ONLY
+        assert fd.params[0].kind == ParamZone.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamZone.STANDARD
+        assert fd.params[2].kind == ParamZone.NAMED_ONLY
 
     def test_at_markers_def_all_three_zones(self) -> None:
         """@std / @named forms produce the same result as / *."""
         fd = first(parse("def g(x: int, @std, y: int, @named, z: int) -> int = x"))
         assert isinstance(fd, FuncDef)
-        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
-        assert fd.params[1].kind == ParamKind.STANDARD
-        assert fd.params[2].kind == ParamKind.NAMED_ONLY
+        assert fd.params[0].kind == ParamZone.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamZone.STANDARD
+        assert fd.params[2].kind == ParamZone.NAMED_ONLY
 
     def test_trailing_slash_makes_all_pos_only(self) -> None:
         """def f(x: int, y: int, /) → both positional-only."""
         fd = first(parse("def f(x: int, y: int, /) -> int = x"))
         assert isinstance(fd, FuncDef)
-        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
-        assert fd.params[1].kind == ParamKind.POSITIONAL_ONLY
+        assert fd.params[0].kind == ParamZone.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamZone.POSITIONAL_ONLY
 
     def test_leading_at_pos_def(self) -> None:
         """def f(@pos, x: int, y: int) → both positional-only."""
         fd = first(parse("def f(@pos, x: int, y: int) -> int = x"))
         assert isinstance(fd, FuncDef)
-        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
-        assert fd.params[1].kind == ParamKind.POSITIONAL_ONLY
+        assert fd.params[0].kind == ParamZone.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamZone.POSITIONAL_ONLY
 
     def test_star_only_makes_all_named_only(self) -> None:
         """def f(*, x: int, y: int) → both named-only."""
         fd = first(parse("def f(*, x: int, y: int) -> int = x"))
         assert isinstance(fd, FuncDef)
-        assert fd.params[0].kind == ParamKind.NAMED_ONLY
-        assert fd.params[1].kind == ParamKind.NAMED_ONLY
+        assert fd.params[0].kind == ParamZone.NAMED_ONLY
+        assert fd.params[1].kind == ParamZone.NAMED_ONLY
 
     def test_slash_star_interchangeable_with_at_markers(self) -> None:
         """/ ≡ @std and * ≡ @named — mix them in one list."""
         fd = first(parse("def h(a: int, @std, b: int, *, c: int) -> int = a"))
         assert isinstance(fd, FuncDef)
-        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
-        assert fd.params[1].kind == ParamKind.STANDARD
-        assert fd.params[2].kind == ParamKind.NAMED_ONLY
+        assert fd.params[0].kind == ParamZone.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamZone.STANDARD
+        assert fd.params[2].kind == ParamZone.NAMED_ONLY
 
     def test_lambda_markers(self) -> None:
         """Lambda param markers work the same as def."""
@@ -1401,8 +1401,8 @@ class TestMarkerParams:
         assert isinstance(ld, LetDecl)
         lam = ld.value
         assert isinstance(lam, Lambda)
-        assert lam.params[0].kind == ParamKind.POSITIONAL_ONLY
-        assert lam.params[1].kind == ParamKind.STANDARD
+        assert lam.params[0].kind == ParamZone.POSITIONAL_ONLY
+        assert lam.params[1].kind == ParamZone.STANDARD
 
     # --- record bodies ---
 
@@ -1410,38 +1410,38 @@ class TestMarkerParams:
         """record R(x: int, /, y: int) — paren body with /."""
         rec = first(parse("record R(x: int, /, y: int)"))
         assert isinstance(rec, RecordDef)
-        assert rec.fields[0].kind == ParamKind.POSITIONAL_ONLY
-        assert rec.fields[1].kind == ParamKind.STANDARD
+        assert rec.fields[0].kind == ParamZone.POSITIONAL_ONLY
+        assert rec.fields[1].kind == ParamZone.STANDARD
 
     def test_record_paren_leading_at_std(self) -> None:
         """record Pair(@std, fst: int, snd: int) — leading @std makes both standard."""
         rec = first(parse("record Pair(@std, fst: int, snd: int)"))
         assert isinstance(rec, RecordDef)
-        assert rec.fields[0].kind == ParamKind.STANDARD
-        assert rec.fields[1].kind == ParamKind.STANDARD
+        assert rec.fields[0].kind == ParamZone.STANDARD
+        assert rec.fields[1].kind == ParamZone.STANDARD
 
     def test_record_inline_slash(self) -> None:
         """Inline record body with / marker."""
         rec = first(parse("record R x: int, /, y: int"))
         assert isinstance(rec, RecordDef)
-        assert rec.fields[0].kind == ParamKind.POSITIONAL_ONLY
-        assert rec.fields[1].kind == ParamKind.STANDARD
+        assert rec.fields[0].kind == ParamZone.POSITIONAL_ONLY
+        assert rec.fields[1].kind == ParamZone.STANDARD
 
     def test_record_indent_own_line_marker(self) -> None:
         """Indent body with own-line @std marker."""
         src = "record R\n  x: int\n  @std\n  y: int"
         rec = first(parse(src))
         assert isinstance(rec, RecordDef)
-        assert rec.fields[0].kind == ParamKind.POSITIONAL_ONLY
-        assert rec.fields[1].kind == ParamKind.STANDARD
+        assert rec.fields[0].kind == ParamZone.POSITIONAL_ONLY
+        assert rec.fields[1].kind == ParamZone.STANDARD
 
     def test_record_indent_leading_marker(self) -> None:
         """Indent body with leading @std marker before block."""
         src = "record R @std\n  fst: int\n  snd: int"
         rec = first(parse(src))
         assert isinstance(rec, RecordDef)
-        assert rec.fields[0].kind == ParamKind.STANDARD
-        assert rec.fields[1].kind == ParamKind.STANDARD
+        assert rec.fields[0].kind == ParamZone.STANDARD
+        assert rec.fields[1].kind == ParamZone.STANDARD
 
     # --- exception bodies ---
 
@@ -1449,16 +1449,16 @@ class TestMarkerParams:
         """exception E(code: int, /, msg: text) — paren body with /."""
         exc = first(parse("exception E(code: int, /, msg: text)"))
         assert isinstance(exc, ExceptionDef)
-        assert exc.fields[0].kind == ParamKind.POSITIONAL_ONLY
-        assert exc.fields[1].kind == ParamKind.STANDARD
+        assert exc.fields[0].kind == ParamZone.POSITIONAL_ONLY
+        assert exc.fields[1].kind == ParamZone.STANDARD
 
     def test_exception_indent_own_line_marker(self) -> None:
         """Indent exception body with own-line marker."""
         src = "exception E\n  code: int\n  @std\n  msg: text"
         exc = first(parse(src))
         assert isinstance(exc, ExceptionDef)
-        assert exc.fields[0].kind == ParamKind.POSITIONAL_ONLY
-        assert exc.fields[1].kind == ParamKind.STANDARD
+        assert exc.fields[0].kind == ParamZone.POSITIONAL_ONLY
+        assert exc.fields[1].kind == ParamZone.STANDARD
 
     # --- enum variant payload ---
 
@@ -1469,17 +1469,17 @@ class TestMarkerParams:
         assert isinstance(rec, RecordDef)
         assert isinstance(exc, ExceptionDef)
         assert isinstance(en, EnumDef)
-        assert all(field.kind == ParamKind.NAMED_ONLY for field in rec.fields)
-        assert all(field.kind == ParamKind.NAMED_ONLY for field in exc.fields)
-        assert en.members[1].fields[0].kind == ParamKind.NAMED_ONLY
+        assert all(field.kind == ParamZone.NAMED_ONLY for field in rec.fields)
+        assert all(field.kind == ParamZone.NAMED_ONLY for field in exc.fields)
+        assert en.members[1].fields[0].kind == ParamZone.NAMED_ONLY
 
     def test_enum_variant_with_slash(self) -> None:
         """Multi-field variant with / — first pos-only, rest standard."""
         en = first(parse("enum R\n  | A(x: int, /, y: int)\n  | B"))
         assert isinstance(en, EnumDef)
         a = en.members[0]
-        assert a.fields[0].kind == ParamKind.POSITIONAL_ONLY
-        assert a.fields[1].kind == ParamKind.STANDARD
+        assert a.fields[0].kind == ParamZone.POSITIONAL_ONLY
+        assert a.fields[1].kind == ParamZone.STANDARD
 
     # --- error cases ---
 
@@ -1505,47 +1505,47 @@ class TestMarkerParams:
 
 
 # ---------------------------------------------------------------------------
-# ParamKind — program def's named-only default zone
+# ParamZone — program def's named-only default zone
 # ---------------------------------------------------------------------------
 
 
-class TestProgramParamKind:
+class TestProgramParamZone:
     """A marker-less ``program def`` parameter list defaults to named-only."""
 
     def test_program_def_markerless_params_are_named_only(self) -> None:
         fd = first(parse('program def main(a: int, b: text = "x") -> unit = ()'))
         assert isinstance(fd, FuncDef)
-        assert fd.params[0].kind == ParamKind.NAMED_ONLY
-        assert fd.params[1].kind == ParamKind.NAMED_ONLY
+        assert fd.params[0].kind == ParamZone.NAMED_ONLY
+        assert fd.params[1].kind == ParamZone.NAMED_ONLY
 
     def test_def_markerless_params_stay_standard(self) -> None:
         fd = first(parse("def f(a: int, b: text) -> int = 1"))
         assert isinstance(fd, FuncDef)
-        assert fd.params[0].kind == ParamKind.STANDARD
-        assert fd.params[1].kind == ParamKind.STANDARD
+        assert fd.params[0].kind == ParamZone.STANDARD
+        assert fd.params[1].kind == ParamZone.STANDARD
 
     def test_program_def_leading_at_pos_all_positional_only(self) -> None:
         """program def main(@pos, a: int, b: int) → both positional-only."""
         fd = first(parse("program def main(@pos, a: int, b: int) -> unit = ()"))
         assert isinstance(fd, FuncDef)
-        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
-        assert fd.params[1].kind == ParamKind.POSITIONAL_ONLY
+        assert fd.params[0].kind == ParamZone.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamZone.POSITIONAL_ONLY
 
     def test_program_def_trailing_slash_all_positional_only(self) -> None:
         """program def main(a: int, b: int, /) → both positional-only."""
         fd = first(parse("program def main(a: int, b: int, /) -> unit = ()"))
         assert isinstance(fd, FuncDef)
-        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
-        assert fd.params[1].kind == ParamKind.POSITIONAL_ONLY
+        assert fd.params[0].kind == ParamZone.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamZone.POSITIONAL_ONLY
 
     def test_program_def_slash_star_matches_def_marker_semantics(self) -> None:
         """Explicit markers override the named-only default exactly as they
         would override the standard default in an ordinary def."""
         fd = first(parse("program def main(a: int, /, b: int, *, c: int) -> unit = ()"))
         assert isinstance(fd, FuncDef)
-        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
-        assert fd.params[1].kind == ParamKind.STANDARD
-        assert fd.params[2].kind == ParamKind.NAMED_ONLY
+        assert fd.params[0].kind == ParamZone.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamZone.STANDARD
+        assert fd.params[2].kind == ParamZone.NAMED_ONLY
 
 
 # ---------------------------------------------------------------------------
@@ -1575,13 +1575,13 @@ class TestFuncDef:
         fd = first(parse("def Point::x(self) -> int = 1"))
         assert isinstance(fd, FuncDef)
         assert fd.params[0].type_expr is None
-        assert fd.params[0].kind is ParamKind.STANDARD
+        assert fd.params[0].kind is ParamZone.STANDARD
 
     def test_annotated_self_remains_an_ordinary_parameter(self) -> None:
         fd = first(parse("def Point::x(self: Point) -> int = 1"))
         assert isinstance(fd, FuncDef)
         assert isinstance(fd.params[0].type_expr, NameT)
-        assert fd.params[0].kind is ParamKind.STANDARD
+        assert fd.params[0].kind is ParamZone.STANDARD
 
     def test_bare_self_has_the_same_ast_in_declaration_and_region_forms(self) -> None:
         direct = first(parse("def Point::x(self) -> int = 1"))

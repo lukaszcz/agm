@@ -78,8 +78,9 @@ from agm.agl.semantics.types import (
     match_nominal_owner_template,
     substitute,
 )
-from agm.agl.syntax.nodes import Expr, ParamKind, Pattern, QualifierAnchor, QualifierChain
+from agm.agl.syntax.nodes import Expr, Pattern, QualifierAnchor, QualifierChain
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.zones import ParamZone
 
 #: Every built-in name a module's type namespace carries a reserved fallback
 #: binding for, whether or not any source declares it.
@@ -143,7 +144,7 @@ class ParamSpec:
 
     name: str
     type: Type
-    kind: ParamKind
+    kind: ParamZone
     has_default: bool
 
 
@@ -655,7 +656,7 @@ class TypeEnvironment:
         program_alias_keys: frozenset[DeclKey] | None = None,
         program_alias_resolver: Callable[[DeclKey, SourceSpan | None], Type | None] | None = None,
         program_ctor_sig_table: Mapping[DeclKey, ConstructorSignature] | None = None,
-        program_ctor_field_kinds_table: Mapping[DeclKey, tuple[tuple[str, ParamKind], ...]]
+        program_ctor_field_kinds_table: Mapping[DeclKey, tuple[tuple[str, ParamZone], ...]]
         | None = None,
         import_env: ImportEnv | None = None,
         local_scope_paths: frozenset[ScopePath] = frozenset(),
@@ -704,13 +705,13 @@ class TypeEnvironment:
         # site is an extern call site to record.
         self._extern_node_ids: set[int] = set()
         # Constructor field-kinds registry — ((module, scope path, owner), variant)
-        # → ordered (field_name, ParamKind) pairs. Populated by _TypeBuilder
+        # → ordered (field_name, ParamZone) pairs. Populated by _TypeBuilder
         # and consumed without encoding declaration paths into strings.
-        self._constructor_field_kinds: dict[DeclKey, tuple[tuple[str, ParamKind], ...]] = {}
-        self._constructor_field_kinds_by_decl_id: dict[int, tuple[tuple[str, ParamKind], ...]] = {}
+        self._constructor_field_kinds: dict[DeclKey, tuple[tuple[str, ParamZone], ...]] = {}
+        self._constructor_field_kinds_by_decl_id: dict[int, tuple[tuple[str, ParamZone], ...]] = {}
         # Cross-module constructor field-kinds table keyed by declaration identity.
         self._program_ctor_field_kinds_table: (
-            Mapping[DeclKey, tuple[tuple[str, ParamKind], ...]] | None
+            Mapping[DeclKey, tuple[tuple[str, ParamZone], ...]] | None
         ) = program_ctor_field_kinds_table
         # Program context: None in module path.
         self._program_type_table: Mapping[DeclKey, Type] | None = program_type_table
@@ -788,7 +789,7 @@ class TypeEnvironment:
             self._types[prelude_name] = prelude_type
             if isinstance(prelude_type, RecordType):
                 fields = tuple(
-                    (fname, ParamKind.STANDARD)
+                    (fname, ParamZone.STANDARD)
                     for fname in self._type_table.record_fields(prelude_type)
                 )
                 self._constructor_field_kinds[(RESERVED_ID, (), prelude_name)] = fields
@@ -799,7 +800,7 @@ class TypeEnvironment:
             assert isinstance(prelude_type, EnumType)
             for member in self._type_table.enum_members(prelude_type):
                 fields = tuple(
-                    (fname, ParamKind.STANDARD) for fname in self._type_table.record_fields(member)
+                    (fname, ParamZone.STANDARD) for fname in self._type_table.record_fields(member)
                 )
                 self._constructor_field_kinds[(RESERVED_ID, (prelude_name,), member.name)] = fields
                 self._constructor_field_kinds_by_decl_id[member.decl_id] = fields
@@ -2585,7 +2586,7 @@ class TypeEnvironment:
     def register_constructor_field_kinds(
         self,
         owner_name: str,
-        fields: tuple[tuple[str, ParamKind], ...],
+        fields: tuple[tuple[str, ParamZone], ...],
         *,
         scope_path: ScopePath = (),
         module_id: ModuleId | None = None,
@@ -2613,7 +2614,7 @@ class TypeEnvironment:
         *,
         module_id: ModuleId | None = None,
         scope_path: ScopePath = (),
-    ) -> tuple[tuple[str, ParamKind], ...] | None:
+    ) -> tuple[tuple[str, ParamZone], ...] | None:
         """Return the ordered field-kind pairs for a constructor, or ``None`` if unknown.
 
         First checks the own-module registry; falls back to the cross-module graph table
@@ -2632,7 +2633,7 @@ class TypeEnvironment:
 
     def get_constructor_field_kinds_for_type(
         self, typ: Type | None, owner_name: str
-    ) -> tuple[tuple[str, ParamKind], ...] | None:
+    ) -> tuple[tuple[str, ParamZone], ...] | None:
         """Return field-kinds for a constructor identified by its resolved owner *typ*.
 
         ``RecordType``, ``EnumType``, and ``ExceptionType`` all carry their own
@@ -2644,14 +2645,14 @@ class TypeEnvironment:
         exactly like a record's fields), rather than through the registered-kinds
         table records/enums use, since an exception's kinds are never pre-registered
         (see ``TypeEnvironment.
-        __init__``).  ``exception_field_kinds`` returns ``ParamKind.value``
+        __init__``).  ``exception_field_kinds`` returns ``ParamZone.value``
         strings rather than the enum (``semantics`` may not import
-        ``syntax.nodes``), so each is converted back with ``ParamKind(...)``
+        ``syntax.nodes``), so each is converted back with ``ParamZone(...)``
         here, in the ``typecheck`` layer.
         """
         if isinstance(typ, ExceptionType):
             return tuple(
-                (fname, ParamKind(kind_value))
+                (fname, ParamZone(kind_value))
                 for fname, kind_value in self._type_table.exception_field_kinds(typ)
             )
         assert isinstance(typ, RecordType), f"unexpected constructor owner type {typ!r}"
@@ -2664,7 +2665,7 @@ class TypeEnvironment:
 
     def all_constructor_field_kinds(
         self,
-    ) -> list[tuple[DeclKey, tuple[tuple[str, ParamKind], ...]]]:
+    ) -> list[tuple[DeclKey, tuple[tuple[str, ParamZone], ...]]]:
         """Return all own-module constructor field-kind entries as (key, kinds) pairs."""
         return list(self._constructor_field_kinds.items())
 

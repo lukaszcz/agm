@@ -155,7 +155,6 @@ from agm.agl.syntax.nodes import (
     Loop,
     NameTarget,
     NullLit,
-    ParamKind,
     Pattern,
     Placeholder,
     Program,
@@ -225,6 +224,7 @@ from agm.agl.typecheck.inference import (
     InferenceEngine,
     InferenceError,
 )
+from agm.agl.zones import ParamZone
 from agm.config.engine_keys import ENGINE_KEY_NAMES
 
 # ---------------------------------------------------------------------------
@@ -372,7 +372,7 @@ _IndexLike = IndexAccess | IndexTarget
 
 def _std_param(name: str, typ: Type, has_default: bool = False) -> ParamSpec:
     """Create a standard ``ParamSpec`` for an ordinary built-in parameter."""
-    return ParamSpec(name=name, type=typ, kind=ParamKind.STANDARD, has_default=has_default)
+    return ParamSpec(name=name, type=typ, kind=ParamZone.STANDARD, has_default=has_default)
 
 
 def _self_param(receiver_type: RecordType | EnumType) -> ParamSpec:
@@ -380,7 +380,7 @@ def _self_param(receiver_type: RecordType | EnumType) -> ParamSpec:
     return ParamSpec(
         name="self",
         type=receiver_type,
-        kind=ParamKind.POSITIONAL_ONLY,
+        kind=ParamZone.POSITIONAL_ONLY,
         has_default=False,
     )
 
@@ -923,7 +923,7 @@ class _Checker:
         """
         for param, spec in zip(node.params, sig.params, strict=True):
             self._reject_undecodable_boundary_type(spec.type, param.span)
-            if param.kind != ParamKind.POSITIONAL_ONLY and param.name in ENGINE_KEY_NAMES:
+            if param.kind != ParamZone.POSITIONAL_ONLY and param.name in ENGINE_KEY_NAMES:
                 raise AglTypeError(
                     f"Program parameter '{param.name}' conflicts with an engine setting name.",
                     span=param.span,
@@ -1025,7 +1025,7 @@ class _Checker:
                 ParamSpec(
                     name="self",
                     type=receiver.owner,
-                    kind=ParamKind.POSITIONAL_ONLY,
+                    kind=ParamZone.POSITIONAL_ONLY,
                     has_default=False,
                 ),
             ),
@@ -3430,7 +3430,7 @@ class _Checker:
             ParamSpec(
                 name=f"arg{index}",
                 type=ptype,
-                kind=ParamKind.STANDARD,
+                kind=ParamZone.STANDARD,
                 has_default=False,
             )
             for index, ptype in enumerate(callee_type.params)

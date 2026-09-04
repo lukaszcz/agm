@@ -71,11 +71,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from agm.agl.ir.zones import ParamZone
 from agm.agl.runtime.arguments import ProgramArguments
 from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
 from agm.agl.semantics.engine_keys import ENGINE_KEY_TYPES
 from agm.agl.semantics.types import BoolType, TextType, is_standard_option_enum
+from agm.agl.zones import ParamZone
 
 if TYPE_CHECKING:
     from agm.agl.runtime.types import ProgramDeclInfo, ProgramParamInfo

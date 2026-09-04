@@ -1562,8 +1562,6 @@ def _program_param_infos(
     ``ParamSpec`` (for its zone, type, and default) positionally — the two
     describe the same parameter list, in the same declaration order.
     """
-    from agm.agl.typecheck.arguments import zone_of
-
     signature = checked_module.type_env.get_function_signature_by_node_id(funcdef.node_id)
     assert signature is not None, (
         f"compiler bug: program {funcdef.name!r} has no recorded function signature"
@@ -1571,7 +1569,7 @@ def _program_param_infos(
     return tuple(
         ProgramParamInfo(
             name=param_spec.name,
-            kind=zone_of(param_spec.kind),
+            kind=param_spec.kind,
             type=param_spec.type,
             has_default=param_spec.has_default,
             span=ast_param.span,

@@ -37,6 +37,7 @@ from typing import TypeGuard
 
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TYPE_PARAMETER_WILDCARD, TypeExpr
+from agm.agl.zones import ParamZone
 
 # ---------------------------------------------------------------------------
 # Sentinel for the else-branch of If
@@ -420,26 +421,14 @@ class Call:
     type_args: tuple[TypeExpr, ...] = ()
 
 
-class ParamKind(enum.Enum):
-    """The zone a parameter belongs to in its parameter list.
-
-    Values are stable strings for debuggability; no code should branch on them.
-    The transformer assigns a concrete kind to every ``Param`` at parse time;
-    no downstream pass ever sees a marker token.
-    """
-
-    POSITIONAL_ONLY = "positional_only"
-    STANDARD = "standard"
-    NAMED_ONLY = "named_only"
-
-
 @dataclass(frozen=True, slots=True)
 class Param:
     """A function/lambda parameter or a record/enum-variant/exception field.
 
     ``kind`` records which zone this parameter belongs to (positional-only,
-    standard, or named-only). The transformer assigns a concrete kind to every
-    parameter, and shared argument binding enforces it for calls and patterns.
+    standard, or named-only). The transformer assigns a concrete zone to every
+    parameter at parse time -- no downstream pass ever sees a marker token --
+    and shared argument binding enforces it for calls and patterns.
     ``default`` is ``None`` for field params (records/variants/exceptions);
     only ``def``/``builtin def``/lambda params may carry a default expression.
     ``type_expr`` is ``None`` when the source omitted the annotation, which the
@@ -450,7 +439,7 @@ class Param:
 
     name: str
     type_expr: TypeExpr | None
-    kind: ParamKind
+    kind: ParamZone
     default: Expr | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)

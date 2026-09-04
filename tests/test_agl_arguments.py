@@ -11,18 +11,19 @@ import itertools
 
 import pytest
 
-from agm.agl.syntax.nodes import ParamKind, PatternField, VarPattern, WildcardPattern
+from agm.agl.syntax.nodes import PatternField, VarPattern, WildcardPattern
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.arguments import BindParam, BoundName, bind_arguments, bind_pattern_args
 from agm.agl.typecheck.env import AglTypeError
+from agm.agl.zones import ParamZone
 
 # ---------------------------------------------------------------------------
 # Test helpers
 # ---------------------------------------------------------------------------
 
-POSITIONAL_ONLY = ParamKind.POSITIONAL_ONLY
-STANDARD = ParamKind.STANDARD
-NAMED_ONLY = ParamKind.NAMED_ONLY
+POSITIONAL_ONLY = ParamZone.POSITIONAL_ONLY
+STANDARD = ParamZone.STANDARD
+NAMED_ONLY = ParamZone.NAMED_ONLY
 
 _SPAN = SourceSpan(1, 1, 1, 10, 0, 10)
 _CALL_SPAN = SourceSpan(1, 1, 1, 80, 0, 80)

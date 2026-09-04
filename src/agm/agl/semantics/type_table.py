@@ -139,12 +139,12 @@ class MethodDef:
     is_builtin: bool = False
 
 
-# ``ParamKind.value`` strings (``"positional_only"``/``"standard"``/
+# ``ParamZone.value`` strings (``"positional_only"``/``"standard"``/
 # ``"named_only"``) — ``semantics`` may not import ``syntax.nodes`` (see
 # ``tests/test_agl_dependencies.py``), so ``TypeDef.field_kinds`` below stores
-# the stable string values instead of the ``ParamKind`` enum itself; the
+# the stable string values instead of the ``ParamZone`` enum itself; the
 # ``typecheck`` layer (which already imports both) converts back with
-# ``ParamKind(value)``.
+# ``ParamZone(value)``.
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,7 +175,7 @@ class TypeDef:
                    ``@std``/``@named`` markers) for each entry of ``fields``,
                    in the same order — a field's declared kind is honored the
                    same way a record's is, it is not forced to named-only.
-                   Stored as ``ParamKind.value`` strings, not the enum itself
+                   Stored as ``ParamZone.value`` strings, not the enum itself
                    (``semantics`` may not import ``syntax.nodes``); see the
                    module-level comment above.  Unused for records/enums,
                    whose constructor kinds live in the separate
@@ -872,7 +872,7 @@ class TypeTable:
         return fields
 
     def exception_field_kinds(self, handle: ExceptionType) -> tuple[tuple[str, str], ...]:
-        """Return *handle*'s fully flattened ``(field_name, ParamKind.value)`` pairs.
+        """Return *handle*'s fully flattened ``(field_name, ParamZone.value)`` pairs.
 
         Mirrors :meth:`exception_fields`'s base-chain flattening (base fields
         first, in declaration order, then the exception's own), but carries
@@ -881,9 +881,9 @@ class TypeTable:
         ``@named`` marker exactly like a record's fields do (see
         ``TypeDef.field_kinds``); only inheritance is exception-specific.
 
-        Each kind is a ``ParamKind.value`` string, not the enum itself (see
+        Each kind is a ``ParamZone.value`` string, not the enum itself (see
         the module-level comment on ``TypeDef.field_kinds``); the caller
-        (``typecheck.env``) converts back with ``ParamKind(value)``.
+        (``typecheck.env``) converts back with ``ParamZone(value)``.
 
         Raises ``KeyError``/``AssertionError`` under the same conditions as
         :meth:`exception_fields`.
@@ -2002,7 +2002,7 @@ _EXCEPTION_ROOT_ID: DeclId = _reserved_id("Exception")
 
 
 def _named_only(count: int) -> tuple[str, ...]:
-    """Return *count* copies of the ``ParamKind.NAMED_ONLY`` value (one per own field)."""
+    """Return *count* copies of the ``ParamZone.NAMED_ONLY`` value (one per own field)."""
     return ("named_only",) * count
 
 

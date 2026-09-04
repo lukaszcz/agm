@@ -24,7 +24,6 @@ from agm.agl.semantics.types import (
     Type,
     TypeVarType,
 )
-from agm.agl.syntax.nodes import ParamKind
 from agm.agl.typecheck.builtins import BuiltinCallChecker
 from agm.agl.typecheck.checker import (
     _builtin_function_signature,
@@ -33,6 +32,7 @@ from agm.agl.typecheck.checker import (
 )
 from agm.agl.typecheck.env import AglTypeError, FunctionSignature, ParamSpec
 from agm.agl.typecheck.program import check_program
+from agm.agl.zones import ParamZone
 from tests.agl.module_graph import resolve_and_check_inline_entry, resolve_inline_entry
 
 _ROOTS = RootSet(frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
@@ -154,7 +154,7 @@ def test_builtin_function_signature_mismatches_are_rejected() -> None:
 
 
 def _ps(name: str, t: Type, has_default: bool = False) -> ParamSpec:
-    return ParamSpec(name=name, type=t, kind=ParamKind.STANDARD, has_default=has_default)
+    return ParamSpec(name=name, type=t, kind=ParamZone.STANDARD, has_default=has_default)
 
 
 def test_builtin_signature_helpers_cover_negative_paths() -> None:

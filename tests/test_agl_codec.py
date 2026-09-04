@@ -415,7 +415,7 @@ def _field_def(name: str, type_expr: tast.TypeExpr) -> ast.Param:
     return ast.Param(
         name=name,
         type_expr=type_expr,
-        kind=ast.ParamKind.NAMED_ONLY,
+        kind=ast.ParamZone.NAMED_ONLY,
         default=None,
         span=_sp(),
         node_id=_nid(),

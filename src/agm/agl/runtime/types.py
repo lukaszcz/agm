@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from agm.agl.capabilities import HostCapabilities
-    from agm.agl.ir.zones import ParamZone
     from agm.agl.modules.ids import ModuleId
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.codec import OutputCodec
@@ -15,6 +14,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.sessions import SessionHost
     from agm.agl.semantics.types import Type as AglType
     from agm.agl.syntax.spans import SourceSpan
+    from agm.agl.zones import ParamZone
 
 __all__ = [
     "CallSiteInfo",

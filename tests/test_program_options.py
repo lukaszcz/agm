@@ -7,7 +7,6 @@ from __future__ import annotations
 import pytest
 
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
-from agm.agl.ir.zones import ParamZone
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.runtime.arguments import decode_param_value
 from agm.agl.runtime.option import none_value, some_value
@@ -25,6 +24,7 @@ from agm.agl.semantics.types import (
 from agm.agl.semantics.values import ArrayValue, BoolValue, IntValue, TextValue, Value
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import build_param_decoder
+from agm.agl.zones import ParamZone
 from agm.cli_support.program_options import (
     DuplicateOptionFlagError,
     ProgramOptionMap,

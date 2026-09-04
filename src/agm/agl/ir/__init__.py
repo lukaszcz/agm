@@ -159,7 +159,7 @@ from agm.agl.ir.program import (
     VariantDescriptor,
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
-from agm.agl.ir.zones import ParamZone
+from agm.agl.zones import ParamZone
 
 __all__ = [
     "ArithKind",

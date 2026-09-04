@@ -23,7 +23,7 @@ from agm.agl.semantics.types import (
     TypeVarType,
     substitute,
 )
-from agm.agl.syntax.nodes import Call, Expr, NamedArg, ParamKind, Placeholder, VarRef
+from agm.agl.syntax.nodes import Call, Expr, NamedArg, Placeholder, VarRef
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TypeExpr
 from agm.agl.typecheck.arguments import bind_constructor_args
@@ -34,6 +34,7 @@ from agm.agl.typecheck.env import (
     TypeEnvironment,
 )
 from agm.agl.typecheck.inference import ConstraintRole, InferenceEngine
+from agm.agl.zones import ParamZone
 
 
 def type_name_not_a_value(name: str, span: SourceSpan) -> AglTypeError:
@@ -434,7 +435,7 @@ class ConstructorChecker:
         owner_name: str,
         gdef: GenericTypeDef | None,
         signature: ConstructorSignature,
-    ) -> tuple[tuple[str, ParamKind], ...]:
+    ) -> tuple[tuple[str, ParamZone], ...]:
         field_kinds = (
             self._ctx._env.get_constructor_field_kinds_for_type(gdef.template, owner_name)
             if gdef is not None
@@ -573,7 +574,7 @@ class ConstructorChecker:
 
     @staticmethod
     def _constructor_call_result_type(
-        field_kinds: tuple[tuple[str, ParamKind], ...],
+        field_kinds: tuple[tuple[str, ParamZone], ...],
         field_types: Mapping[str, Type],
         result: RecordType | EnumType | ExceptionType,
         bound_exprs: Mapping[str, Expr],
@@ -598,7 +599,7 @@ class ConstructorChecker:
         self,
         *,
         owner: RecordType | ExceptionType,
-        field_kinds: tuple[tuple[str, ParamKind], ...],
+        field_kinds: tuple[tuple[str, ParamZone], ...],
         bound_exprs: Mapping[str, Expr],
         node: Call | None,
         hole_indices: Mapping[int, int],

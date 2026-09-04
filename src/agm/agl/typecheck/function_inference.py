@@ -40,7 +40,6 @@ from agm.agl.syntax.nodes import (
     FuncDef,
     LetDecl,
     Param,
-    ParamKind,
     Program,
     VarDecl,
     VarRef,
@@ -64,6 +63,7 @@ from agm.agl.typecheck.env import (
     ParamSpec,
     TypeEnvironment,
 )
+from agm.agl.zones import ParamZone
 
 
 @dataclass(frozen=True, slots=True)
@@ -597,7 +597,7 @@ def validate_required_after_defaulted(params: Sequence[Param]) -> None:
     """Reject a required positional-fillable parameter after a defaulted one."""
     seen_pos_default = False
     for param in params:
-        is_pos_fillable = param.kind in (ParamKind.POSITIONAL_ONLY, ParamKind.STANDARD)
+        is_pos_fillable = param.kind in (ParamZone.POSITIONAL_ONLY, ParamZone.STANDARD)
         if not is_pos_fillable:
             continue
         if param.default is not None:
@@ -800,7 +800,7 @@ def resolve_function_header(
                 ParamSpec(
                     name=param.name,
                     type=receiver,
-                    kind=ParamKind.POSITIONAL_ONLY,
+                    kind=ParamZone.POSITIONAL_ONLY,
                     has_default=False,
                 )
             )

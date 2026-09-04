@@ -25,8 +25,8 @@ from agm.agl.ir.builtin_vars import BuiltinVarKey
 from agm.agl.ir.contracts import ContractRequest, ExceptionFieldEncode, ParamDecoder
 from agm.agl.ir.ids import ContractId, FunctionId, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import IrExpr, IrFunctionParam
-from agm.agl.ir.zones import ParamZone
 from agm.agl.modules.ids import ModuleId, spell_scope_path
+from agm.agl.zones import ParamZone
 
 __all__ = [
     "ContractId",

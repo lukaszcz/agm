@@ -52,6 +52,7 @@ from agm.agl.syntax.types import (
     UnitT,
     render_type_expr,
 )
+from agm.agl.zones import ParamZone
 from agm.raw_tail_catalog import RAW_TAIL_BUILTINS
 
 # Types used internally
@@ -162,7 +163,7 @@ class _ParamMarker:
     (``"/"``, ``"*"``, ``"@pos"``, etc.) for error messages.
     """
 
-    zone: syntax.ParamKind
+    zone: ParamZone
     label: str
     span: SourceSpan
 
@@ -251,18 +252,18 @@ class _RawJuxtMember:
 
 
 # Zone ordering for marker validation (strictly increasing).
-_ZONE_ORDER: dict[syntax.ParamKind, int] = {
-    syntax.ParamKind.POSITIONAL_ONLY: 0,
-    syntax.ParamKind.STANDARD: 1,
-    syntax.ParamKind.NAMED_ONLY: 2,
+_ZONE_ORDER: dict[ParamZone, int] = {
+    ParamZone.POSITIONAL_ONLY: 0,
+    ParamZone.STANDARD: 1,
+    ParamZone.NAMED_ONLY: 2,
 }
-_ZONE_BY_ORDER: dict[int, syntax.ParamKind] = {v: k for k, v in _ZONE_ORDER.items()}
+_ZONE_BY_ORDER: dict[int, ParamZone] = {v: k for k, v in _ZONE_ORDER.items()}
 
 # Zone opened by each `@`-marker name (validated in marker_at).
-_AT_ZONE: dict[str, syntax.ParamKind] = {
-    "pos": syntax.ParamKind.POSITIONAL_ONLY,
-    "std": syntax.ParamKind.STANDARD,
-    "named": syntax.ParamKind.NAMED_ONLY,
+_AT_ZONE: dict[str, ParamZone] = {
+    "pos": ParamZone.POSITIONAL_ONLY,
+    "std": ParamZone.STANDARD,
+    "named": ParamZone.NAMED_ONLY,
 }
 
 # Interleaved sequence type produced by field_list / param_list.
@@ -807,7 +808,7 @@ class AstBuilder(Transformer):
     def marker_slash(self, meta: Meta, args: _Args) -> _ParamMarker:
         """SLASH → _ParamMarker(STANDARD) — the '/' pos-only→standard boundary."""
         return _ParamMarker(
-            zone=syntax.ParamKind.STANDARD,
+            zone=ParamZone.STANDARD,
             label="/",
             span=self._span_from_meta(meta),
         )
@@ -815,7 +816,7 @@ class AstBuilder(Transformer):
     def marker_star(self, meta: Meta, args: _Args) -> _ParamMarker:
         """STAR → _ParamMarker(NAMED_ONLY) — the '*' standard→named-only boundary."""
         return _ParamMarker(
-            zone=syntax.ParamKind.NAMED_ONLY,
+            zone=ParamZone.NAMED_ONLY,
             label="*",
             span=self._span_from_meta(meta),
         )
@@ -841,14 +842,14 @@ class AstBuilder(Transformer):
         # Grammar: param_marker? _INDENT block_entry (_NEWLINE block_entry)* _NEWLINE? _DEDENT
         # block_entry is ?field_def | ?param_marker — collect all in order, then resolve.
         entries: _RawEntries = tuple(a for a in args if isinstance(a, (syntax.Param, _ParamMarker)))
-        return _resolve_params(entries, default_kind=syntax.ParamKind.STANDARD)
+        return _resolve_params(entries, default_kind=ParamZone.STANDARD)
 
     def record_paren_body(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
         # Grammar: LPAR field_list? RPAR
         # field_list returns _RawEntries; resolve with the standard default.
         for a in args:
             if _is_field_tuple(a):
-                return _resolve_params(cast(_RawEntries, a), default_kind=syntax.ParamKind.STANDARD)
+                return _resolve_params(cast(_RawEntries, a), default_kind=ParamZone.STANDARD)
         return ()
 
     record_inline_body = record_paren_body
@@ -863,7 +864,7 @@ class AstBuilder(Transformer):
         return syntax.Param(
             name=str(name_tok),
             type_expr=type_expr,
-            kind=syntax.ParamKind.STANDARD,
+            kind=ParamZone.STANDARD,
             default=None,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
@@ -959,7 +960,7 @@ class AstBuilder(Transformer):
         # field_list returns _RawEntries; payload fields default to standard.
         for a in args:
             if _is_field_tuple(a):
-                return _resolve_params(cast(_RawEntries, a), default_kind=syntax.ParamKind.STANDARD)
+                return _resolve_params(cast(_RawEntries, a), default_kind=ParamZone.STANDARD)
         return ()
 
     def field_list(self, meta: Meta, args: _Args) -> _RawEntries:
@@ -1031,7 +1032,7 @@ class AstBuilder(Transformer):
             if _is_str_tuple(a):
                 type_params_val = cast(tuple[str, ...], a)
         type_params_val = self._receiver_type_params(receiver_type) + type_params_val
-        default_kind = syntax.ParamKind.NAMED_ONLY if is_program else syntax.ParamKind.STANDARD
+        default_kind = ParamZone.NAMED_ONLY if is_program else ParamZone.STANDARD
         params, return_type, body = self._split_params_type_body(args, default_kind=default_kind)
         assert body is not None, "func_def: no body"
         return syntax.FuncDef(
@@ -1145,7 +1146,7 @@ class AstBuilder(Transformer):
         return syntax.Param(
             name=name,
             type_expr=type_expr,
-            kind=syntax.ParamKind.STANDARD,
+            kind=ParamZone.STANDARD,
             default=default,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
@@ -1454,7 +1455,7 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def _split_params_type_body(
-        self, args: _Args, *, default_kind: syntax.ParamKind = syntax.ParamKind.STANDARD
+        self, args: _Args, *, default_kind: ParamZone = ParamZone.STANDARD
     ) -> tuple[tuple[syntax.Param, ...], TypeExpr | None, syntax.Expr | None]:
         """Classify a func/lambda arg list into ``(params, return_type, body)``.
 
@@ -3478,7 +3479,7 @@ def _find_field_tuple(args: _Args) -> tuple[syntax.Param, ...]:
 def _resolve_params(
     entries: _RawEntries,
     *,
-    default_kind: syntax.ParamKind,
+    default_kind: ParamZone,
 ) -> tuple[syntax.Param, ...]:
     """Resolve a marker/param interleaving to ``Param``s with concrete ``kind``s.
 
@@ -3527,7 +3528,7 @@ def _resolve_params(
         last_order = order
 
     # Validate: @pos must be leading (no Param may precede it in entries).
-    pos_marker = next((m for m in markers if m.zone == syntax.ParamKind.POSITIONAL_ONLY), None)
+    pos_marker = next((m for m in markers if m.zone == ParamZone.POSITIONAL_ONLY), None)
     if pos_marker is not None:
         # Find the index of pos_marker in entries (by identity).
         pos_idx = next(i for i, e in enumerate(entries) if e is pos_marker)
@@ -3541,9 +3542,7 @@ def _resolve_params(
     first_marker = markers[0]
     first_order = _ZONE_ORDER[first_marker.zone]
     # initial_kind is None only when @pos is first (no params allowed before it).
-    initial_kind: syntax.ParamKind | None = (
-        None if first_order == 0 else _ZONE_BY_ORDER[first_order - 1]
-    )
+    initial_kind: ParamZone | None = None if first_order == 0 else _ZONE_BY_ORDER[first_order - 1]
 
     current = initial_kind
     result: list[syntax.Param] = []

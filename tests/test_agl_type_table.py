@@ -65,7 +65,7 @@ from agm.agl.syntax.nodes import (
     EnumDef,
     ExceptionDef,
     LetDecl,
-    ParamKind,
+    ParamZone,
     RecordDef,
     VarDecl,
     VariantDef,
@@ -1198,10 +1198,10 @@ class TestMethodRegistry:
 
 
 class TestExceptionFieldKinds:
-    """``exception_field_kinds`` returns ``ParamKind.value`` strings (not the
+    """``exception_field_kinds`` returns ``ParamZone.value`` strings (not the
     enum): ``semantics`` may not import ``syntax.nodes``, so ``TypeDef.
     field_kinds`` stores the stable string values instead (converted back to
-    ``ParamKind`` by ``typecheck.env``)."""
+    ``ParamZone`` by ``typecheck.env``)."""
 
     def test_root_only_returns_declared_field_kinds(self) -> None:
         table = TypeTable()
@@ -1212,12 +1212,12 @@ class TestExceptionFieldKinds:
                 module_id=ENTRY_ID,
                 fields=(("message", TextType()),),
                 abstract=True,
-                field_kinds=(ParamKind.NAMED_ONLY.value,),
+                field_kinds=(ParamZone.NAMED_ONLY.value,),
                 decl_node_id=700007,
             )
         )
         handle = ExceptionType(name="Exception", module_id=ENTRY_ID, decl_id=700007)
-        assert table.exception_field_kinds(handle) == (("message", ParamKind.NAMED_ONLY.value),)
+        assert table.exception_field_kinds(handle) == (("message", ParamZone.NAMED_ONLY.value),)
 
     def test_flattens_base_chain_and_honors_each_level_own_marker(self) -> None:
         """Own fields honor their declared kind at every level of the chain —
@@ -1231,7 +1231,7 @@ class TestExceptionFieldKinds:
                 module_id=ENTRY_ID,
                 fields=(("message", TextType()),),
                 abstract=True,
-                field_kinds=(ParamKind.NAMED_ONLY.value,),
+                field_kinds=(ParamZone.NAMED_ONLY.value,),
                 decl_node_id=700008,
             )
         )
@@ -1242,7 +1242,7 @@ class TestExceptionFieldKinds:
                 module_id=ENTRY_ID,
                 fields=(("code", IntType()),),
                 base=700008,
-                field_kinds=(ParamKind.STANDARD.value,),
+                field_kinds=(ParamZone.STANDARD.value,),
                 decl_node_id=700009,
             )
         )
@@ -1253,15 +1253,15 @@ class TestExceptionFieldKinds:
                 module_id=ENTRY_ID,
                 fields=(("detail", TextType()),),
                 base=700009,
-                field_kinds=(ParamKind.POSITIONAL_ONLY.value,),
+                field_kinds=(ParamZone.POSITIONAL_ONLY.value,),
                 decl_node_id=700010,
             )
         )
         handle = ExceptionType(name="Leaf", module_id=ENTRY_ID, decl_id=700010)
         assert table.exception_field_kinds(handle) == (
-            ("message", ParamKind.NAMED_ONLY.value),
-            ("code", ParamKind.STANDARD.value),
-            ("detail", ParamKind.POSITIONAL_ONLY.value),
+            ("message", ParamZone.NAMED_ONLY.value),
+            ("code", ParamZone.STANDARD.value),
+            ("detail", ParamZone.POSITIONAL_ONLY.value),
         )
 
     def test_resolves_cross_module_base(self) -> None:
@@ -1273,7 +1273,7 @@ class TestExceptionFieldKinds:
                 module_id=_LIB_ID,
                 fields=(("message", TextType()),),
                 abstract=True,
-                field_kinds=(ParamKind.NAMED_ONLY.value,),
+                field_kinds=(ParamZone.NAMED_ONLY.value,),
                 decl_node_id=700011,
             )
         )
@@ -1284,14 +1284,14 @@ class TestExceptionFieldKinds:
                 module_id=ENTRY_ID,
                 fields=(("code", IntType()),),
                 base=700011,
-                field_kinds=(ParamKind.STANDARD.value,),
+                field_kinds=(ParamZone.STANDARD.value,),
                 decl_node_id=700012,
             )
         )
         handle = ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=700012)
         assert table.exception_field_kinds(handle) == (
-            ("message", ParamKind.NAMED_ONLY.value),
-            ("code", ParamKind.STANDARD.value),
+            ("message", ParamZone.NAMED_ONLY.value),
+            ("code", ParamZone.STANDARD.value),
         )
 
     def test_returns_same_object_for_same_handle(self) -> None:
@@ -1302,7 +1302,7 @@ class TestExceptionFieldKinds:
                 name="Boom",
                 module_id=ENTRY_ID,
                 fields=(("code", IntType()),),
-                field_kinds=(ParamKind.STANDARD.value,),
+                field_kinds=(ParamZone.STANDARD.value,),
                 decl_node_id=700003,
             )
         )

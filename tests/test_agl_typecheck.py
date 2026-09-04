@@ -76,7 +76,7 @@ from agm.agl.syntax.nodes import (
     LetDecl,
     NamedArg,
     Param,
-    ParamKind,
+    ParamZone,
     Placeholder,
     Program,
     Raise,
@@ -1018,7 +1018,7 @@ class TestTypeEnvironment:
                 type_params=(),
             )
         )
-        previous.register_constructor_field_kinds("Restored", (("x", ParamKind.STANDARD),))
+        previous.register_constructor_field_kinds("Restored", (("x", ParamZone.STANDARD),))
 
         current = TypeEnvironment()
         current.register_type("Restored", TextType())
@@ -1078,8 +1078,8 @@ class TestTypeEnvironment:
                 type_params=("T",),
             )
         )
-        env.register_constructor_field_kinds("Foo", (("x", ParamKind.NAMED_ONLY),))
-        env.register_constructor_field_kinds("Foo", (("x", ParamKind.NAMED_ONLY),))
+        env.register_constructor_field_kinds("Foo", (("x", ParamZone.NAMED_ONLY),))
+        env.register_constructor_field_kinds("Foo", (("x", ParamZone.NAMED_ONLY),))
         bar_sig = ConstructorSignature(
             owner_name="Bar",
             field_names=(),
@@ -9431,9 +9431,9 @@ class TestProgramParameterValidation:
         )
         sig = checked.function_signatures["main"]
         assert [(p.name, p.kind) for p in sig.params] == [
-            ("value", ParamKind.NAMED_ONLY),
-            ("opts", ParamKind.NAMED_ONLY),
-            ("label", ParamKind.NAMED_ONLY),
+            ("value", ParamZone.NAMED_ONLY),
+            ("opts", ParamZone.NAMED_ONLY),
+            ("label", ParamZone.NAMED_ONLY),
         ]
 
     @pytest.mark.parametrize("zone", ("named-only", "standard"))
@@ -9449,7 +9449,7 @@ class TestProgramParameterValidation:
     def test_engine_key_name_is_accepted_for_a_positional_only_parameter(self) -> None:
         checked = accept_type("program def main(timeout: text, /) -> unit = ()")
         sig = checked.function_signatures["main"]
-        assert [(p.name, p.kind) for p in sig.params] == [("timeout", ParamKind.POSITIONAL_ONLY)]
+        assert [(p.name, p.kind) for p in sig.params] == [("timeout", ParamZone.POSITIONAL_ONLY)]
 
     def test_required_after_defaulted_ordering_fires_for_program_parameters(self) -> None:
         err = reject_type("program def main(a: int = 1, b: int, /) -> unit = ()")
@@ -9655,7 +9655,7 @@ class TestDefensiveGuards:
         param = Param(
             name="x",
             type_expr=param_t,
-            kind=ParamKind.STANDARD,
+            kind=ParamZone.STANDARD,
             default=None,
             span=sp,
             node_id=p_nid,
@@ -10030,7 +10030,7 @@ class TestMethodHeaders:
         signature = checked.type_env.get_function_signature("radius", scope_path=("Point",))
         assert signature is not None
         receiver = replace(signature.params[0], type=strip_decl_ids(signature.params[0].type))
-        assert receiver == ParamSpec("self", RecordType("Point"), ParamKind.POSITIONAL_ONLY, False)
+        assert receiver == ParamSpec("self", RecordType("Point"), ParamZone.POSITIONAL_ONLY, False)
 
     def test_generic_owner_builds_receiver_from_leading_method_slot(self) -> None:
         checked = accept_type(
@@ -10042,7 +10042,7 @@ class TestMethodHeaders:
         signature = checked.type_env.get_function_signature("get", scope_path=("Box",))
         assert signature is not None
         assert strip_decl_ids(signature.params[0].type) == RecordType("Box", (TypeVarType("E"),))
-        assert signature.params[0].kind is ParamKind.POSITIONAL_ONLY
+        assert signature.params[0].kind is ParamZone.POSITIONAL_ONLY
 
     @pytest.mark.parametrize(
         "source",
@@ -10122,7 +10122,7 @@ class TestMethodHeaders:
             origin_path=origin_path,
         )
         assert function.params[0].name == "self"
-        assert params[0].kind is ParamKind.POSITIONAL_ONLY
+        assert params[0].kind is ParamZone.POSITIONAL_ONLY
         assert strip_decl_ids(params[0].type) == RecordType("Point")
 
 

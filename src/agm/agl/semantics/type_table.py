@@ -94,6 +94,7 @@ from agm.agl.semantics.types import (
     is_scalar_json_shaped,
     match_nominal_owner_template,
     spells_bare,
+    standard_option_type,
     substitute,
     type_children,
 )
@@ -1881,40 +1882,20 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
             ("prompt", TextType()),
             (
                 "target-type",
-                EnumType(
-                    name="Option",
-                    type_args=(TextType(),),
-                    module_id=RESERVED_ID,
-                    decl_id=_reserved_id("Option"),
-                ),
+                standard_option_type(TextType()),
             ),
             (
                 "format-instructions",
-                EnumType(
-                    name="Option",
-                    type_args=(TextType(),),
-                    module_id=RESERVED_ID,
-                    decl_id=_reserved_id("Option"),
-                ),
+                standard_option_type(TextType()),
             ),
             (
                 "json-schema",
-                EnumType(
-                    name="Option",
-                    type_args=(JsonType(),),
-                    module_id=RESERVED_ID,
-                    decl_id=_reserved_id("Option"),
-                ),
+                standard_option_type(JsonType()),
             ),
             ("attempt", IntType()),
             (
                 "previous-error",
-                EnumType(
-                    name="Option",
-                    type_args=(TextType(),),
-                    module_id=RESERVED_ID,
-                    decl_id=_reserved_id("Option"),
-                ),
+                standard_option_type(TextType()),
             ),
             ("metadata", JsonType()),
         ),

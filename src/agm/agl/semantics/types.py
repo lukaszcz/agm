@@ -992,16 +992,26 @@ _PARSE_POLICY_TYPE = EnumType(
 # ``Agent`` — a plain enum data value that specifies an agent backend.
 _AGENT_TYPE = EnumType(name="Agent", module_id=RESERVED_ID, decl_id=_reserved_id("Agent"))
 
-_OPTION_TEXT_TYPE = EnumType(
-    name="Option",
-    type_args=(TextType(),),
-    module_id=RESERVED_ID,
-    decl_id=_reserved_id("Option"),
-)
 
-# Public alias for the ``Option[text]`` type — the single source of truth
-# shared with engine_keys and any other module that needs this type.
-OPTION_TEXT_TYPE: EnumType = _OPTION_TEXT_TYPE
+def standard_option_type(inner: Type) -> EnumType:
+    """Return the standard library's ``Option[inner]`` under the host's reserved identity.
+
+    The one constructor for a host-minted ``Option``, so every builtin
+    signature and prelude field that names one agrees on its nominal
+    identity rather than restating ``name``/``module_id``/``decl_id``.
+    :func:`is_standard_option_enum` is the matching predicate.
+    """
+    return EnumType(
+        name="Option",
+        type_args=(inner,),
+        module_id=RESERVED_ID,
+        decl_id=_reserved_id("Option"),
+    )
+
+
+# The ``Option[text]`` type — the single source of truth shared with
+# engine_keys and any other module that needs this type.
+OPTION_TEXT_TYPE: EnumType = standard_option_type(TextType())
 
 
 def is_standard_option_enum(type_: Type) -> TypeGuard[EnumType]:
@@ -1023,13 +1033,6 @@ def is_standard_option_enum(type_: Type) -> TypeGuard[EnumType]:
         and (type_.module_id.is_reserved or type_.module_id.is_standard_library)
     )
 
-
-_OPTION_JSON_TYPE = EnumType(
-    name="Option",
-    type_args=(JsonType(),),
-    module_id=RESERVED_ID,
-    decl_id=_reserved_id("Option"),
-)
 
 _OUTPUT_CONTRACT_TYPE = RecordType(
     name="OutputContract", module_id=RESERVED_ID, decl_id=_reserved_id("OutputContract")

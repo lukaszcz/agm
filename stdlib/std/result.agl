@@ -19,15 +19,25 @@ def Result::and-then[T, E, U](self, f: (T) -> Result[U, E]) -> Result[U, E] =
     | Result::Ok(value) => f(value)
     | Result::Err(error) => Result::Err(error = error)
 
-def Result::or-else[T, E](self, f: (E) -> Result[T, E]) -> Result[T, E] =
+def Result::or[T, E, F](self, other: Result[T, F]) -> Result[T, F] =
   case self of
-    | Result::Ok(_) => self
+    | Result::Ok(value) => Result::Ok(value = value)
+    | Result::Err(_) => other
+
+def Result::or-else[T, E, F](self, f: (E) -> Result[T, F]) -> Result[T, F] =
+  case self of
+    | Result::Ok(value) => Result::Ok(value = value)
     | Result::Err(error) => f(error)
 
-def Result::with-default[T, E](self, x: T) -> T =
+def Result::unwrap-or[T, E](self, x: T) -> T =
   case self of
     | Result::Ok(value) => value
     | Result::Err(_) => x
+
+def Result::unwrap-or-else[T, E](self, f: (E) -> T) -> T =
+  case self of
+    | Result::Ok(value) => value
+    | Result::Err(error) => f(error)
 
 def Result::unwrap[T, E](self) -> T =
   case self of

@@ -6,7 +6,7 @@
         "input": 2
       },
       "expect": {
-        "stdout": "3\ntrue\n2\ntrue\nfalse\neach 2\n2\n",
+        "stdout": "3\ntrue\n2\n2\n2\ntrue\nfalse\neach 2\n2\n",
         "calls": {}
       }
     },
@@ -16,7 +16,7 @@
         "input": 1
       },
       "expect": {
-        "stdout": "-1\nfalse\n1\ntrue\nfalse\neach 1\n1\n",
+        "stdout": "-1\nfalse\n1\n1\n1\ntrue\nfalse\neach 1\n1\n",
         "calls": {}
       }
     },
@@ -26,7 +26,7 @@
         "input": -1
       },
       "expect": {
-        "stdout": "-1\nfalse\n99\nfalse\ntrue\n",
+        "stdout": "-1\nfalse\n99\n98\n97\nfalse\ntrue\n",
         "raises": {
           "type": "UnwrapError"
         },

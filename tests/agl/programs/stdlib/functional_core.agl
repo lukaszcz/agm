@@ -9,7 +9,9 @@ def recover(_: text) -> Result[int, text] = Result::Ok(value = 7)
 def succeed() -> int = 9
 def fail() -> int = raise Abort(message = "failed")
 
-def project_result(result: Result[int, text]) -> int = result.with-default(0)
+def error_code(error: text) -> int = (if error == "lost" => 4 else => 0)
+
+def project_result(result: Result[int, text]) -> int = result.unwrap-or(0)
 
 program def main(mode: int) -> unit =
   case mode of
@@ -81,7 +83,7 @@ program def main(mode: int) -> unit =
           |> (fn(value: Result[int, text]) => value.or-else(recover))
           |> (fn(value: Result[int, text]) => value.unwrap())
         )
-        print(result.with-default(0))
+        print(result.unwrap-or(0))
         print(result.is-ok())
         print(result.is-err())
         print(result.ok())
@@ -94,17 +96,27 @@ program def main(mode: int) -> unit =
             value.and-then(fn(item: int) => Result::Ok(value = item + 1))
           )
           |> (fn(value: Result[int, int]) =>
-            value.or-else(fn(_: int) => Result::Ok(value = 7))
+            value.or-else(fn(_: int) -> Result[int, int] => Result::Ok(value = 7))
           )
-          |> (fn(value: Result[int, int]) => value.with-default(0))
+          |> (fn(value: Result[int, int]) => value.unwrap-or(0))
         )
-        print(lost.with-default(0))
+        print(lost.unwrap-or(0))
         print(lost.is-ok())
         print(lost.is-err())
         print(lost.ok())
         print(lost.err())
+        let fallback: Result[int, text] = Result::Ok(value = 6)
+        print(result.or(Result::Err(error = "other")).unwrap-or(0))
+        print(lost.or(fallback).unwrap-or(0))
+        print(result.unwrap-or-else(error_code))
+        print(lost.unwrap-or-else(error_code))
+        print(lost.or-else(fn(error: text) => Result::Err(error = error_code(error))).err())
         print(project_result <| Result::Ok(value = 8))
 
         print(attempt(succeed).map(increment).ok())
         print(attempt(fail).err().map(fn(error: Exception) => error.message))
-        print(attempt(fail).or-else(fn(_: Exception) => Result::Ok(value = 8)).unwrap())
+        print(
+          attempt(fail)
+          .or-else(fn(_: Exception) -> Result[int, Exception] => Result::Ok(value = 8))
+          .unwrap()
+        )

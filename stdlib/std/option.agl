@@ -22,14 +22,24 @@ def Option::filter[T](self, p: (T) -> bool) -> Option[T] =
     | Option::None => Option::None
     | Option::Some(value) => (if p(value) => self else => Option::None)
 
-def Option::or-else[T](self, other: Option[T]) -> Option[T] =
+def Option::or[T](self, other: Option[T]) -> Option[T] =
   case self of
     | Option::None => other
     | Option::Some(_) => self
 
-def Option::with-default[T](self, x: T) -> T =
+def Option::or-else[T](self, f: () -> Option[T]) -> Option[T] =
+  case self of
+    | Option::None => f()
+    | Option::Some(_) => self
+
+def Option::unwrap-or[T](self, x: T) -> T =
   case self of
     | Option::None => x
+    | Option::Some(value) => value
+
+def Option::unwrap-or-else[T](self, f: () -> T) -> T =
+  case self of
+    | Option::None => f()
     | Option::Some(value) => value
 
 def Option::unwrap[T](self) -> T =

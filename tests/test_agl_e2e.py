@@ -1641,7 +1641,7 @@ def test_std_core_option_reexport_preserves_nominal_identity(
         "import std/option::Option\n"
         "program def main() -> unit =\n"
         "  let value: CoreOption[int] = Option::Some(value = 3)\n"
-        "  print(value.with-default(0))\n",
+        "  print(value.unwrap-or(0))\n",
         roots=roots,
         default_stdlib=False,
     )

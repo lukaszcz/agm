@@ -13,9 +13,11 @@ program def main(input: int) -> unit =
   let chained = option.map(fn(value: int) => value + 1).and-then(keep_large)
   let filtered = option.filter(fn(value: int) => value > 1)
 
-  print(chained.with-default(-1))
+  print(chained.unwrap-or(-1))
   print(filtered.is-some())
-  print(option.or-else(Option::Some(value = 99)).with-default(0))
+  print(option.or(Option::Some(value = 99)).unwrap-or(0))
+  print(option.or-else(fn() => Option::Some(value = 98)).unwrap-or(0))
+  print(option.unwrap-or-else(fn() => 97))
   print(option.is-some())
   print(option.is-none())
   option.each(report)

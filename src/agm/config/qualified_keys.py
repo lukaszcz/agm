@@ -9,12 +9,12 @@ from agm.command_catalog import RESERVED_COMMAND_NAMES
 from agm.config.general import GeneralConfig
 from agm.core.toml import TomlDict
 
-# These tables describe AGM's configuration schema rather than AgL modules.
-# ``params`` is retained here to prevent the removed legacy ``[params.*]``
-# namespace from being interpreted as an AgL module route.
-RESERVED_CONFIG_SECTION_NAMES = RESERVED_COMMAND_NAMES | frozenset(
-    {"deps", "modules", "packages", "params"}
-)
+# These tables describe AGM's configuration schema rather than AgL modules, and
+# key their own nested tables by user-chosen names — a dependency, a module
+# root, a package pin. ``params`` is retained here to prevent the removed legacy
+# ``[params.*]`` namespace from being interpreted as an AgL module route.
+SCHEMA_CONFIG_SECTION_NAMES = frozenset({"deps", "modules", "packages", "params"})
+RESERVED_CONFIG_SECTION_NAMES = RESERVED_COMMAND_NAMES | SCHEMA_CONFIG_SECTION_NAMES
 _MISSING = object()
 
 
@@ -146,10 +146,14 @@ def route_table_paths(
 
     Every module-suffix spelling, shortest first, then the exact quoted module
     anchor. AGM's top-level configuration sections are excluded, except that a
-    single-segment loose-file module with a reserved stem may address one of
-    its nested declaration tables. This is the single routing rule shared by
-    value resolution and leaf enumeration, so a caller can tell which routes a
-    given table serves.
+    single-segment loose-file module named after a *command* may address one of
+    its nested declaration tables: a command section holds its own settings as
+    leaf keys, so a table one level below it is free. A section keyed by AGM's
+    own schema (:data:`SCHEMA_CONFIG_SECTION_NAMES`) is excluded at every
+    depth, because its nested tables already belong to user-chosen names, so a
+    loose file named ``packages.agl`` has no config table for its programs at
+    all. This is the single routing rule shared by value resolution and leaf
+    enumeration, so a caller can tell which routes a given table serves.
     """
     suffix_paths = [
         (*module_segments[-depth:], *scope_path) for depth in range(1, len(module_segments) + 1)
@@ -159,7 +163,11 @@ def route_table_paths(
     seen_paths: set[tuple[str, ...]] = set()
     for path in (*suffix_paths, anchor_path):
         is_reserved_root = path[0] in RESERVED_CONFIG_SECTION_NAMES
-        is_nested_loose_file_route = len(module_segments) == 1 and bool(scope_path)
+        is_nested_loose_file_route = (
+            len(module_segments) == 1
+            and bool(scope_path)
+            and path[0] not in SCHEMA_CONFIG_SECTION_NAMES
+        )
         if (not is_reserved_root or is_nested_loose_file_route) and path not in seen_paths:
             seen_paths.add(path)
             paths.append(path)

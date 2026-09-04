@@ -130,6 +130,23 @@ class TestQualifiedConfigKeys:
 
         assert resolve_qualified_values(_config(config), (key,)) == {}
 
+    @pytest.mark.parametrize("schema_name", ("deps", "modules", "packages", "params"))
+    def test_schema_sections_are_not_config_modules_at_any_depth(self, schema_name: str) -> None:
+        """A section keyed by AGM's own schema never doubles as a program table."""
+        key = QualifiedConfigKey((schema_name,), ("main",), "region")
+        config = {schema_name: {"main": {"region": "configured"}}}
+
+        assert resolve_qualified_values(_config(config), (key,)) == {}
+
+    @pytest.mark.parametrize("command_name", ("exec", "wsp", "wt"))
+    def test_command_sections_still_serve_a_loose_files_program_table(
+        self, command_name: str
+    ) -> None:
+        key = QualifiedConfigKey((command_name,), ("main",), "region")
+        config = {command_name: {"main": {"region": "configured"}}}
+
+        assert resolve_qualified_values(_config(config), (key,)) == {key: "configured"}
+
     def test_legacy_params_subtable_cannot_route_to_a_params_module(self) -> None:
         key = QualifiedConfigKey(("params", "workflow"), (), "region")
         config = {"params": {"workflow": {"region": "legacy"}}}

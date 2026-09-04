@@ -3289,10 +3289,10 @@ class TestEntryModuleConfig:
         assert exec_command.run(_exec_args_no_log(agl_file)) is None
         assert capsys.readouterr().out == "usable\n"
 
-    def test_reserved_entry_stem_uses_its_qualified_program_table(
+    def test_command_named_entry_stem_uses_its_qualified_program_table(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """A loose file's reserved stem still addresses its nested program table."""
+        """A loose file named after a command still addresses its program table."""
         from agm.config.context import ConfigContext
 
         home = tmp_path / "home"
@@ -3310,6 +3310,28 @@ class TestEntryModuleConfig:
 
         assert exec_command.run(_exec_args_no_log(agl_file)) is None
         assert capsys.readouterr().out == "configured\n"
+
+    def test_schema_named_entry_stem_has_no_qualified_program_table(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A stem keyed by AGM's own schema keeps its section; the program falls back."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[deps.main]\nregion = "configured"\n')
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        agl_file = tmp_path / "deps.agl"
+        write_file_program(
+            agl_file, 'program def main(region: text = "default") -> unit = print region\n'
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == "default\n"
 
     def test_reserved_entry_stem_still_selects_among_several_programs(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

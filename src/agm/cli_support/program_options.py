@@ -361,6 +361,11 @@ class ProgramOptionMap:
         JSON value such as ``-5``, or any other single-dash spelling; this
         parser recognizes no short-option forms.
 
+        Symmetrically, a ``--``-prefixed token is never consumed as the
+        ``VALUE`` of a preceding value-taking flag: ``--msg --x`` is a missing
+        value, not the value ``--x``. Such a value is spelled in the inline
+        form (``--msg=--x``), or positionally after a bare ``--``.
+
         :raises ValueError: for an unknown flag, a value-taking flag missing
             its value, a value given to a flag that takes none, a flag
             supplied more than once, or a malformed ``Option`` ``VALUE``
@@ -397,7 +402,7 @@ class ProgramOptionMap:
                 param, projected = negative_index[flag]
                 if has_equals:
                     raise ValueError(f"Option {flag!r} does not take a value")
-                self._store(named, param.name, _negative_raw(projected))
+                self._store(named, param.name, _negative_raw(projected), flag)
                 index += 1
                 continue
             if flag not in positive_index:
@@ -406,7 +411,7 @@ class ProgramOptionMap:
             if not projected.takes_value:
                 if has_equals:
                     raise ValueError(f"Option {flag!r} does not take a value")
-                self._store(named, param.name, True)
+                self._store(named, param.name, True, flag)
                 index += 1
                 continue
             if has_equals:
@@ -417,15 +422,21 @@ class ProgramOptionMap:
                     raise ValueError(f"Option {token!r} requires a value")
                 value_token = tokens[index + 1]
                 index += 2
-            self._store(named, param.name, _positive_raw(projected, flag, value_token))
+            self._store(named, param.name, _positive_raw(projected, flag, value_token), flag)
 
         return ProgramArguments(positional=tuple(positional), named=named)
 
     @staticmethod
-    def _store(named: dict[str, object], name: str, value: object) -> None:
-        """Record *value* for *name*, rejecting a flag supplied more than once."""
+    def _store(named: dict[str, object], name: str, value: object, flag: str) -> None:
+        """Record *value* for *name*, rejecting a parameter supplied more than once.
+
+        *flag* is the spelling the offending token actually used, so a repeated
+        negative form is reported as ``--no-x`` rather than as the ``--x`` the
+        user never typed. Both polarities fill the same parameter, so either
+        one following the other is the same duplicate.
+        """
         if name in named:
-            raise ValueError(f"Option {f'--{name}'!r} specified more than once")
+            raise ValueError(f"Option {flag!r} specified more than once")
         named[name] = value
 
     def usage_line(self, program_name: str) -> str:
@@ -622,7 +633,10 @@ def short_help_requested(tokens: Sequence[str], *, value_flags: frozenset[str]) 
     A bare ``--`` ends option parsing, the same convention
     :meth:`ProgramOptionMap.parse_tokens` applies: every token from there on
     is positional, so a program can legitimately receive ``-h`` as one of its
-    own arguments after it.
+    own arguments after it. A ``--``-prefixed token is not a value either,
+    also as in :meth:`ProgramOptionMap.parse_tokens` — the two token walkers
+    must agree about which ``-h`` is free, or a ``-h`` after a malformed flag
+    would print help instead of that flag's own usage error.
     """
     consume_value = False
     options_ended = False
@@ -632,10 +646,12 @@ def short_help_requested(tokens: Sequence[str], *, value_flags: frozenset[str]) 
             continue
         if options_ended:
             continue
-        if consume_value:
+        if consume_value and not token.startswith("--"):
             consume_value = False
-        elif token == "-h":
+            continue
+        consume_value = False
+        if token == "-h":
             return True
-        elif token in value_flags:
+        if token in value_flags:
             consume_value = True
     return False

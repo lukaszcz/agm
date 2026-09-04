@@ -436,6 +436,11 @@ class TestParseTokensErrors:
         with pytest.raises(ValueError, match="more than once"):
             option_map.parse_tokens(["--flag", "--no-flag"])
 
+    def test_duplicate_negative_flag_names_the_flag_as_typed(self) -> None:
+        option_map = _map(_param("flag", BoolType()))
+        with pytest.raises(ValueError, match="--no-flag"):
+            option_map.parse_tokens(["--no-flag", "--no-flag"])
+
     def test_empty_tokens_returns_empty_arguments(self) -> None:
         option_map = _map(_param("name", TextType()))
         args = option_map.parse_tokens([])
@@ -651,3 +656,12 @@ class TestShortHelpRequested:
         from agm.cli_support.program_options import short_help_requested
 
         assert short_help_requested(["--", "-h"], value_flags=frozenset()) is False
+
+    def test_a_flag_never_serves_as_another_flags_value(self) -> None:
+        """``--a --b -h`` binds ``-h`` to ``--b``, exactly as ``parse_tokens`` would."""
+        from agm.cli_support.program_options import short_help_requested
+
+        assert (
+            short_help_requested(["--a", "--b", "-h"], value_flags=frozenset({"--a", "--b"}))
+            is False
+        )

@@ -3002,6 +3002,35 @@ class TestTemplates:
         interps = [s for s in t.segments if isinstance(s, InterpSegment)]
         assert len(interps) == 2
 
+    @pytest.mark.parametrize("source", ['"${HOME}"', "'''${HOME}'''"])
+    def test_environment_interpolation_desugars_to_getenv(self, source: str) -> None:
+        template = first(parse(source))
+
+        assert isinstance(template, Template)
+        interpolation = template.segments[0]
+        assert isinstance(interpolation, InterpSegment)
+        assert isinstance(interpolation.expr, Call)
+        assert isinstance(interpolation.expr.callee, VarRef)
+        assert interpolation.expr.callee.name == "getenv"
+        assert interpolation.expr.callee.qualifier is not None
+        assert interpolation.expr.callee.qualifier.route_segments == ("std", "env")
+        argument = interpolation.expr.args[0]
+        assert isinstance(argument, StringLit)
+        assert argument.value == "HOME"
+
+    def test_escaped_environment_interpolation_is_literal(self) -> None:
+        text = first(parse(r'"\${HOME}"'))
+
+        assert isinstance(text, StringLit)
+        assert text.value == "${HOME}"
+
+    @pytest.mark.parametrize("source", ['"${}"', '"${HOME"'])
+    def test_malformed_environment_interpolation_is_literal(self, source: str) -> None:
+        text = first(parse(source))
+
+        assert isinstance(text, StringLit)
+        assert text.value == source[1:-1]
+
     def test_pattern_interpolated_string_raises(self) -> None:
         with pytest.raises(AglSyntaxError, match="interpolation"):
             parse('case x of | "%{y}" => ok')

@@ -5,8 +5,9 @@ The scanner handles:
 
 - CODE mode: keywords, identifiers, numbers, operators (maximal munch), and
   horizontal whitespace / ``#`` comments.
-- Template mode: single- and triple-quoted string literals with
-  ``%{...}`` interpolation and the JSON escape set plus ``\\%``.
+- Template mode: single- and triple-quoted string literals with expression
+  (``%{...}``) and environment (``${NAME}``) interpolation, plus the JSON
+  escape set, ``\\%``, and ``\\${``.
 - Layout signalling: ``_NEWLINE`` tokens carrying the next real line's leading
   indentation width (tabs expanded at ``tab_len=4``, comments skipped).
 
@@ -62,6 +63,7 @@ from agm.agl.lexer.tokens import (
     LSQB,
     LT,
     MINUS,
+    MODQUAL,
     NAME,
     NEQ,
     NEWLINE,
@@ -87,7 +89,7 @@ from agm.agl.lexer.tokens import (
 )
 from agm.agl.semantics.text_literal import ESCAPE_DECODE, INTERP_OPEN, INTERP_TRIGGER
 from agm.raw_tail_catalog import RAW_TAIL_BUILTINS
-from agm.util.ident import IDENT_STOP, is_identifier_start
+from agm.util.ident import IDENT_STOP, is_identifier, is_identifier_start
 from agm.util.text import normalize_newlines
 
 # ---------------------------------------------------------------------------
@@ -540,8 +542,20 @@ class _Scanner:
                 )
                 raise LexError("Unterminated single-line string literal", span=span)
             if ch == "\\":
-                self._advance()
-                buf.append(self._decode_escape())
+                buf.append(self._decode_template_escape())
+            elif self._is_environment_interpolation():
+                yield self._make_token(
+                    STRING_FRAGMENT,
+                    "".join(buf),
+                    frag_start_pos,
+                    frag_start_line,
+                    frag_start_col,
+                )
+                buf = []
+                yield from self._scan_environment_interpolation()
+                frag_start_pos = self._pos
+                frag_start_line = self._line
+                frag_start_col = self._col
             elif self._src.startswith(INTERP_OPEN, self._pos):
                 # Start of interpolation
                 # AgL's trigger is separate from ``agm.agent.runner`` placeholders.
@@ -569,6 +583,67 @@ class _Scanner:
                 # Literal string content: a TAB here is allowed (not advised).
                 self._advance(in_string=True)
                 buf.append(ch)
+
+    def _is_environment_interpolation(self) -> bool:
+        """Whether the cursor starts a ``${NAME}`` environment-template hole."""
+        if not self._src.startswith("${", self._pos):
+            return False
+        end = self._src.find("}", self._pos + 2)
+        if end == -1:
+            return False
+        return is_identifier(self._src[self._pos + 2 : end])
+
+    def _decode_template_escape(self) -> str:
+        """Decode the escape at the cursor in an ordinary string template."""
+        if self._src.startswith("${", self._pos + 1):
+            self._advance(in_string=True)
+            self._advance(in_string=True)
+            self._advance(in_string=True)
+            return "${"
+        self._advance()
+        return self._decode_escape()
+
+    def _scan_environment_interpolation(self) -> Iterator[Token]:
+        """Desugar ``${NAME}`` to ``%{std/env::getenv(\"NAME\")}``.
+
+        The synthetic expression uses the source span of its compact spelling.
+        It consequently has the same scope, type, and runtime behavior as the
+        explicit interpolation while retaining diagnostics at the hole the
+        author wrote.
+        """
+        start_pos = self._pos
+        start_line = self._line
+        start_col = self._col
+        self._advance(in_string=True)  # $
+        self._advance(in_string=True)  # {
+        name_start = self._pos
+        while self._peek() != "}":
+            self._advance(in_string=True)
+        name = self._src[name_start : self._pos]
+        name_end = self._pos
+        self._advance(in_string=True)  # }
+
+        def token(typ: str, value: str, start: int, end: int) -> Token:
+            return Token(
+                typ,
+                value,
+                start_pos=start,
+                line=start_line,
+                column=start_col + start - start_pos,
+                end_line=start_line,
+                end_column=start_col + end - start_pos,
+                end_pos=end,
+            )
+
+        yield token(INTERP_START, INTERP_OPEN, start_pos, name_start)
+        yield token(MODQUAL, "std/env", name_start, name_start)
+        yield token(NAME, "getenv", name_start, name_start)
+        yield token(LPAR, "(", name_start, name_start)
+        yield token(TEMPLATE_START, '"', name_start, name_start)
+        yield token(STRING_FRAGMENT, name, name_start, name_end)
+        yield token(TEMPLATE_END, '"', name_end, name_end)
+        yield token(RPAR, ")", name_end, name_end)
+        yield token(INTERP_END, "}", name_end, self._pos)
 
     def _scan_interp_code(self) -> Iterator[Token]:
         """Scan code tokens inside ``%{...}`` up to and including the closing ``}``.
@@ -679,9 +754,27 @@ class _Scanner:
                 )
                 break
             if ch == "\\":
-                self._advance()
-                decoded = self._decode_escape()
-                current_lit.append(decoded)
+                current_lit.append(self._decode_template_escape())
+            elif self._is_environment_interpolation():
+                interp_start_pos = self._pos
+                interp_start_line = self._line
+                interp_start_col = self._col
+                segments.append(
+                    _LitSeg("".join(current_lit), lit_start_pos, lit_start_line, lit_start_col)
+                )
+                current_lit = []
+                interp_tokens = list(self._scan_environment_interpolation())[1:]
+                segments.append(
+                    _InterpSeg(
+                        interp_tokens,
+                        interp_start_pos,
+                        interp_start_line,
+                        interp_start_col,
+                    )
+                )
+                lit_start_pos = self._pos
+                lit_start_line = self._line
+                lit_start_col = self._col
             elif self._src.startswith(INTERP_OPEN, self._pos):
                 # Start interpolation; remember the '%' position.
                 interp_start_pos = self._pos

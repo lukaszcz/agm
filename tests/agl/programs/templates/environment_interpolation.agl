@@ -1,0 +1,8 @@
+import std/env
+
+program def main(mode: int) -> unit =
+  case mode of
+    | 1 =>
+        print "value=${VALUE}; computed=%{1 + 2}"
+    | _ =>
+        print "missing=${MISSING}"

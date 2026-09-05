@@ -18,8 +18,8 @@ program def main(n: int, tag: text) -> unit =
   let rs: array[R] = [R(x = n, label = tag), R(x = n + 1, label = tag)]
   print(rs as json)
 
-  let by_name: dict[text, R] = {"first": R(x = n, label = tag)}
-  print(by_name as json)
+  let by-name: dict[text, R] = {"first": R(x = n, label = tag)}
+  print(by-name as json)
 
   let nested: array[array[R]] = [[R(x = n, label = tag)], []]
   print(nested as json)
@@ -44,6 +44,6 @@ program def main(n: int, tag: text) -> unit =
 
   # `as?` reports success for the same conversions.
   print(rs as? json)
-  print(by_name as? json)
+  print(by-name as? json)
   print(opts as? json)
   print(tree as? json)

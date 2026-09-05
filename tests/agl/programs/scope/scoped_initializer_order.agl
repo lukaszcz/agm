@@ -1,26 +1,26 @@
 # Runtime initialization is sequenced in the selected program body. Named
 # scopes are static declaration regions and do not perform module initialization.
 
-program def main(start: int, branch_in_region: bool = false) -> unit =
+program def main(start: int, branch-in-region: bool = false) -> unit =
   var order: int = start
   order := order + 1
-  let root_a = order
-  let scoped_x = if branch_in_region =>
+  let root-a = order
+  let scoped-x = if branch-in-region =>
     order := order + 1
     let first = order
     order := order + 1
     first + order
   else => (order := order + 1; order)
   order := order + 1
-  let nested_n = order
+  let nested-n = order
   order := order + 1
-  let scoped_y = order
+  let scoped-y = order
   order := order + 1
-  let root_b = order
+  let root-b = order
   order := order + 1
-  let scoped_z = order
+  let scoped-z = order
   order := order + 1
-  let scoped_w = order
+  let scoped-w = order
   order := order + 1
-  let root_c = order
-  print("%{root_a} %{scoped_x} %{nested_n} %{scoped_y} %{root_b} %{scoped_z} %{scoped_w} %{root_c}")
+  let root-c = order
+  print("%{root-a} %{scoped-x} %{nested-n} %{scoped-y} %{root-b} %{scoped-z} %{scoped-w} %{root-c}")

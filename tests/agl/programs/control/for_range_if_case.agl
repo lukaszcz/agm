@@ -3,12 +3,12 @@
 
 program def main(threshold: int, n: int) -> unit =
   var above: int = 0
-  var at_or_below: int = 0
+  var at-or-below: int = 0
   for i in 1 to n do
     if i > threshold =>
       above := above + 1
     else =>
-      at_or_below := at_or_below + 1
+      at-or-below := at-or-below + 1
   done
   print above
-  print at_or_below
+  print at-or-below

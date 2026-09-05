@@ -6,7 +6,7 @@ enum Lookup
   | Found(value: int)
   | Missing
 
-def try_get(d: dict[text, int], key: text) -> Lookup =
+def try-get(d: dict[text, int], key: text) -> Lookup =
   try Found(value = d[key])
   catch KeyError => Missing
 
@@ -20,11 +20,11 @@ program def main(first: int, second: int) -> unit =
   print m["a"]["b"]
   print inner["c"]
 
-  case try_get(inner, "b") of
+  case try-get(inner, "b") of
     | Found(value) => print "found %{value}"
     | Missing => print "missing"
 
-  case try_get(inner, "z") of
+  case try-get(inner, "z") of
     | Found(value) => print "found %{value}"
     | Missing => print "missing"
 

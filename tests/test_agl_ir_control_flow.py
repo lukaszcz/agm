@@ -924,12 +924,12 @@ var out = 0
 try
   raise Abort(message = "boom")
 catch Abort =>
-  let handler_val = 99
-  out := handler_val
+  let handler-val = 99
+  out := handler-val
 out
 """
     ir = evaluate_ir(source)
-    assert "handler_val" not in ir
+    assert "handler-val" not in ir
     assert ir["out"] == IntValue(99)
 
 

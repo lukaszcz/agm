@@ -207,11 +207,11 @@ later. `def`s in the same named scope have the same visibility, so they may
 call one another recursively without a forward declaration.
 
 ```agl
-def is_even(n: int) -> bool =
-  if n == 0 => true else => is_odd(n - 1)
+def is-even(n: int) -> bool =
+  if n == 0 => true else => is-odd(n - 1)
 
-def is_odd(n: int) -> bool =
-  if n == 0 => false else => is_even(n - 1)
+def is-odd(n: int) -> bool =
+  if n == 0 => false else => is-even(n - 1)
 ```
 
 A `def` may be **generic** — it can declare type parameters in a bracketed
@@ -509,10 +509,10 @@ Each call opens a fresh scope with the function's parameters bound. Defaults
 are evaluated in the function's **definition** scope (not the call site):
 
 ```agl
-let default_limit: int = 3
+let default-limit: int = 3
 
-def summarize(doc: text, limit: int = default_limit) -> text =
+def summarize(doc: text, limit: int = default-limit) -> text =
   "[%{limit}] %{doc}"
 ```
 
-`default_limit` is resolved at definition time, not call time.
+`default-limit` is resolved at definition time, not call time.

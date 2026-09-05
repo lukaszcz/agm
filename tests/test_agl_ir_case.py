@@ -195,17 +195,17 @@ enum Box
 let point = Point(2, 3)
 let scalar = 7
 let boxed = value(item = 4)
-let record_result = case point of | _ as whole => whole.x + whole.y
-let scalar_result = case scalar of | 7 as matched => matched | _ => 0
-let enum_result = case boxed of
+let record-result = case point of | _ as whole => whole.x + whole.y
+let scalar-result = case scalar of | 7 as matched => matched | _ => 0
+let enum-result = case boxed of
   | value(item = 4 as item) as first as second => item + (if first == second => 1 | else => 0)
   | value(item = _) => 0
-record_result + scalar_result + enum_result
+record-result + scalar-result + enum-result
 """
     ir = evaluate_ir(src)
-    assert ir["record_result"] == IntValue(5)
-    assert ir["scalar_result"] == IntValue(7)
-    assert ir["enum_result"] == IntValue(5)
+    assert ir["record-result"] == IntValue(5)
+    assert ir["scalar-result"] == IntValue(7)
+    assert ir["enum-result"] == IntValue(5)
 
 
 def test_case_binder_does_not_leak() -> None:
@@ -213,14 +213,14 @@ def test_case_binder_does_not_leak() -> None:
     src = """\
 let x: int = 5
 let r = case x of
-  | _ as bound_var => bound_var
+  | _ as bound-var => bound-var
 r"""
     ir = evaluate_ir(src)
     # 'bound_var' must not appear as a top-level name
-    assert "bound_var" not in ir, (
+    assert "bound-var" not in ir, (
         f"Case binder 'bound_var' leaked into IR results: {sorted(ir.keys())}"
     )
-    assert "bound_var" not in ir, (
+    assert "bound-var" not in ir, (
         f"Case binder 'bound_var' leaked into ir results: {sorted(ir.keys())}"
     )
     assert ir["r"] == IntValue(5)
@@ -374,22 +374,22 @@ record Pair
   left: int
   right: int
 var calls = 0
-var observed_left = 0
-var observed_right = 0
+var observed-left = 0
+var observed-right = 0
 def make() -> Pair =
   calls := calls + 1
   Pair(left = 2, right = 3)
 program def main() -> unit =
   let Pair(left, right) = make()
-  observed_left := left
-  observed_right := right
+  observed-left := left
+  observed-right := right
 """
     executable = lower_inline_ir(src)
     (main_symbol,) = executable.program_functions
     values = IrInterpreter(executable).run(program_symbol=main_symbol)
     assert values["calls"] == IntValue(1)
-    assert values["observed_left"] == IntValue(2)
-    assert values["observed_right"] == IntValue(3)
+    assert values["observed-left"] == IntValue(2)
+    assert values["observed-right"] == IntValue(3)
 
 
 def test_pattern_let_binders_are_local_to_function_capture_analysis() -> None:
@@ -398,10 +398,10 @@ def test_pattern_let_binders_are_local_to_function_capture_analysis() -> None:
 record Pair
   left: int
   right: int
-def sum_pair() -> int =
+def sum-pair() -> int =
   let Pair(left, right) = Pair(left = 2, right = 3)
   left + right
-let result = sum_pair()
+let result = sum-pair()
 result
 """
     assert evaluate_ir(src)["result"] == IntValue(5)

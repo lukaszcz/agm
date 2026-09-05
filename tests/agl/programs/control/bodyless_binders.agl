@@ -1,31 +1,31 @@
 # Terminal binders evaluate their RHS and keep effects in their enclosing continuation.
 var events: text = ""
 
-def log_event(event: text) -> text =
+def log-event(event: text) -> text =
   events := events + event + "|"
   event
 
 def prepare() -> unit =
-  let function_value = log_event("function")
+  let function-value = log-event("function")
 
-program def main(choose_true: bool) -> unit =
+program def main(choose-true: bool) -> unit =
   prepare()
 
-  if choose_true =>
-    let if_value = log_event("if:true")
+  if choose-true =>
+    let if-value = log-event("if:true")
   else =>
-    let if_value = log_event("if:false")
+    let if-value = log-event("if:false")
 
-  case choose_true of
+  case choose-true of
     true =>
-      let case_value = log_event("case:true")
+      let case-value = log-event("case:true")
     | false =>
-      let case_value = log_event("case:false")
+      let case-value = log-event("case:false")
 
-  let grouped: unit = ((); let parenthesized_value = log_event("grouped"))
+  let grouped: unit = ((); let parenthesized-value = log-event("grouped"))
 
   let recovered: unit = try
-    let try_value = log_event("try")
+    let try-value = log-event("try")
   catch _ =>
     ()
 

@@ -5,18 +5,18 @@
 # through the imported casts, and catches the CastError / JsonParseError that the
 # imported `parse_point` raises across the module boundary.
 import parsing as p
-import parsing::{to_int_or}
+import parsing::{to-int-or}
 
 # Imported conversion guarded by a convertibility test: succeeds or falls back,
 # never raises.
 
-program def main(amount: text, point_json: text) -> unit =
+program def main(amount: text, point-json: text) -> unit =
   let source: Agent = AgentCommand("source")
-  print(to_int_or(amount, -1) as text)
+  print(to-int-or(amount, -1) as text)
 
   # Imported fallible cast across the module boundary; caught here on failure.
   try
-    let pt = p::parse_point(point_json)
+    let pt = p::parse-point(point-json)
     print "point %{pt.x},%{pt.y}"
   catch CastError as e =>
     print "bad point: %{e.source-type} -> %{e.target-type}"
@@ -26,7 +26,7 @@ program def main(amount: text, point_json: text) -> unit =
   # An agent supplies JSON text; the imported helper validates it to a record.
   try
     let raw: text = source.ask("Return a point as JSON.")
-    let pt = p::parse_point(raw)
+    let pt = p::parse-point(raw)
     print "agent point %{pt.x},%{pt.y}"
   catch CastError as e =>
     print "agent bad point: %{e.target-type}"

@@ -6,9 +6,9 @@ enum Link
   | End
   | Cell(var next: Link)
 
-program def main(close_cycle: bool) -> unit =
+program def main(close-cycle: bool) -> unit =
   let cell = Cell(next = End)
-  if close_cycle =>
+  if close-cycle =>
     cell.next := cell
 
   try

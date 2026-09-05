@@ -256,7 +256,7 @@ class TestValueDirectedBoundary:
             "let doubled = fn(value: int) -> int => value * 2\n"
             "let built = build_and_apply(increment)\n"
             "let updated = build_update_and_apply(increment, doubled)\n"
-            "let incoming_updated = update_and_apply(Box(callback = increment), doubled)\n"
+            "let incoming-updated = update_and_apply(Box(callback = increment), doubled)\n"
         )
         companion = (
             "from agl import Box\n"
@@ -274,7 +274,7 @@ class TestValueDirectedBoundary:
 
         assert result["built"] == IntValue(3)
         assert result["updated"] == IntValue(4)
-        assert result["incoming_updated"] == IntValue(4)
+        assert result["incoming-updated"] == IntValue(4)
 
     def test_companion_exception_message_over_a_cyclic_argument_raises_cyclic_value_error(
         self, tmp_path: Path

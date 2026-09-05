@@ -84,13 +84,13 @@ def test_is_field_carrying_variant() -> None:
     source = """\
 enum Shape | Circle(radius: decimal) | Rectangle(w: decimal, h: decimal)
 let s: Shape = Shape::Circle(radius = 2.5)
-let is_circle = s is Circle
-let is_rect = s is Rectangle
+let is-circle = s is Circle
+let is-rect = s is Rectangle
 ()
 """
     ir = evaluate_ir(source)
-    assert ir["is_circle"] == BoolValue(True)
-    assert ir["is_rect"] == BoolValue(False)
+    assert ir["is-circle"] == BoolValue(True)
+    assert ir["is-rect"] == BoolValue(False)
 
 
 def test_is_qualified_variant() -> None:

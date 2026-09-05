@@ -3,7 +3,7 @@
 import routes::{ViaImportedEnum, ViaImportedAlias}
 
 program def main() -> unit =
-  let from_enum: ViaImportedEnum[int] = Member(value = 6)
-  let from_alias: ViaImportedAlias[text] = Member(value = "seven")
-  print from_enum
-  print from_alias
+  let from-enum: ViaImportedEnum[int] = Member(value = 6)
+  let from-alias: ViaImportedAlias[text] = Member(value = "seven")
+  print from-enum
+  print from-alias

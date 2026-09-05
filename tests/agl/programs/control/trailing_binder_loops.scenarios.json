@@ -4,7 +4,7 @@
       "name": "until_converges_on_first_iteration",
       "params": {
         "target": 1,
-        "use_while": false
+        "use-while": false
       },
       "expect": {
         "stdout": "until\n1\n"
@@ -14,7 +14,7 @@
       "name": "while_variant_converges_early",
       "params": {
         "target": 2,
-        "use_while": true
+        "use-while": true
       },
       "expect": {
         "stdout": "while\n2\n"
@@ -24,7 +24,7 @@
       "name": "until_exhausts_bound",
       "params": {
         "target": 4,
-        "use_while": false
+        "use-while": false
       },
       "expect": {
         "stdout": "",
@@ -40,7 +40,7 @@
       "name": "while_variant_exhausts_bound",
       "params": {
         "target": 4,
-        "use_while": true
+        "use-while": true
       },
       "expect": {
         "stdout": "",

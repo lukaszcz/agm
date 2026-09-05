@@ -16,39 +16,39 @@ def Box::map[T, U](self, f: (T) -> U) -> Box[U] = Box(value = f(self.value))
 
 def Box::stamp[T, U](self, tag: U) -> Outcome[T, U] = ok(value = self.value)
 
-def describe_outcome(result: Outcome[int, int]) -> text =
+def describe-outcome(result: Outcome[int, int]) -> text =
   case result of
     | ok(value) => "ok %{value}"
     | err(error) => "err %{error}"
 
 # The shared name "U" types `g`, a later parameter of the method call
 # (`f`), reached only after the receiver substitution has already run.
-def via_later_parameter[U](b: Box[U], g: (U) -> text) -> Box[text] = b.map(g)
+def via-later-parameter[U](b: Box[U], g: (U) -> text) -> Box[text] = b.map(g)
 
-def via_later_parameter_explicit[U](b: Box[U], g: (U) -> text) -> Box[text] = b.map::[text](g)
+def via-later-parameter-explicit[U](b: Box[U], g: (U) -> text) -> Box[text] = b.map::[text](g)
 
-def via_qualified_spelling[U](b: Box[U], g: (U) -> text) -> Box[text] = Box::map(b, g)
+def via-qualified-spelling[U](b: Box[U], g: (U) -> text) -> Box[text] = Box::map(b, g)
 
 # The shared name "U" reaches the method purely through the receiver's own
 # type argument; `tag` stays concretely typed.
-def via_receiver[U](box: Box[U], tag: int) -> Outcome[U, int] = box.stamp(tag)
+def via-receiver[U](box: Box[U], tag: int) -> Outcome[U, int] = box.stamp(tag)
 
-def via_receiver_explicit[U](box: Box[U], tag: int) -> Outcome[U, int] = box.stamp::[int](tag)
+def via-receiver-explicit[U](box: Box[U], tag: int) -> Outcome[U, int] = box.stamp::[int](tag)
 
 program def main(mode: text, base: int) -> unit =
   if
     | mode == "later_inferred" =>
-        let result = via_later_parameter(Box(value = base), fn(n: int) -> text => "v=%{n}")
+        let result = via-later-parameter(Box(value = base), fn(n: int) -> text => "v=%{n}")
         print(result.value)
     | mode == "later_explicit" =>
-        let result = via_later_parameter_explicit(Box(value = base), fn(n: int) -> text => "x=%{n}")
+        let result = via-later-parameter-explicit(Box(value = base), fn(n: int) -> text => "x=%{n}")
         print(result.value)
     | mode == "qualified_spelling" =>
-        let result = via_qualified_spelling(Box(value = base), fn(n: int) -> text => "q=%{n}")
+        let result = via-qualified-spelling(Box(value = base), fn(n: int) -> text => "q=%{n}")
         print(result.value)
     | mode == "receiver_inferred" =>
-        let result = via_receiver(Box(value = base), 404)
-        print(describe_outcome(result))
+        let result = via-receiver(Box(value = base), 404)
+        print(describe-outcome(result))
     | else =>
-        let result = via_receiver_explicit(Box(value = base), 404)
-        print(describe_outcome(result))
+        let result = via-receiver-explicit(Box(value = base), 404)
+        print(describe-outcome(result))

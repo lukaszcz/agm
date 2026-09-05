@@ -7,19 +7,19 @@ record Pair[T](first: T, second: T)
 scope A
   record Pair[T](first: T, second: T)
 
-  def make_local() -> Pair[text] =
+  def make-local() -> Pair[text] =
     let build = Pair::[text]
     build("a", "b")
 end A
 
 program def main() -> unit =
-  let root_build = Pair::[int]
-  let root = root_build(1, 2)
+  let root-build = Pair::[int]
+  let root = root-build(1, 2)
   print (root.first + root.second)
 
-  let scoped_build = A::Pair::[int]
-  let scoped = scoped_build(10, 20)
+  let scoped-build = A::Pair::[int]
+  let scoped = scoped-build(10, 20)
   print (scoped.first + scoped.second)
 
-  let inner = A::make_local()
+  let inner = A::make-local()
   print (inner.first + inner.second)

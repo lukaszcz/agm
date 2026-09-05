@@ -31,11 +31,11 @@ from tests._agl_helpers import run_inline_command
 
 # A non-tail recursive helper plus a variant guarded by a ``try``/``catch``.
 _PRELUDE = """
-def sum_to(n: int) -> int =
-  if n == 0 => 0 else => n + sum_to(n - 1)
+def sum-to(n: int) -> int =
+  if n == 0 => 0 else => n + sum-to(n - 1)
 
 def guarded(d: int) -> int =
-  try sum_to(d)
+  try sum-to(d)
   catch RecursionError as e => e.limit
 """
 
@@ -57,7 +57,7 @@ class TestGuardIsAuthoritative:
         assert result.bindings["out"] == IntValue(300)
 
     def test_uncaught_non_tail_recursion_surfaces_the_agl_exception(self) -> None:
-        result = _run("sum_to(depth)", depth=100_000, max_call_depth=300)
+        result = _run("sum-to(depth)", depth=100_000, max_call_depth=300)
         assert not result.ok
         assert result.error is not None
         assert result.error.type_name == "RecursionError"
@@ -82,7 +82,7 @@ class TestPythonRecursionErrorBackstop:
         assert result.bindings["out"] == IntValue(1_000_000)
 
     def test_uncaught_backstop_recursion_error_surfaces_the_agl_exception(self) -> None:
-        result = _run("sum_to(depth)", depth=1_000_000, max_call_depth=1_000_000)
+        result = _run("sum-to(depth)", depth=1_000_000, max_call_depth=1_000_000)
         assert not result.ok
         assert result.error is not None
         assert result.error.type_name == "RecursionError"
@@ -99,7 +99,7 @@ class TestPythonRecursionErrorBackstop:
         defn = session.eval_entry(_PRELUDE)
         assert defn.ok, defn.diagnostics
 
-        result = session.eval_entry("let out: int = sum_to(1000000)")
+        result = session.eval_entry("let out: int = sum-to(1000000)")
         assert not result.ok
         assert result.error is not None
         assert result.error.type_name == "RecursionError"

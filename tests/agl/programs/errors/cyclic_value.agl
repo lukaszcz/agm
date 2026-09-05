@@ -17,10 +17,10 @@ record DNode(children: dict[text, DNode])
 record Level1(inner: array[Level2])
 record Level2(inner: array[Level1])
 
-program def main(close_cycle: bool) -> unit =
+program def main(close-cycle: bool) -> unit =
   var xs: array[Node] = [Node(children = [])]
   let n = Node(children = xs)
-  if close_cycle =>
+  if close-cycle =>
     xs[0] := n
 
   try
@@ -46,7 +46,7 @@ program def main(close_cycle: bool) -> unit =
   # A cycle closed through a dict instead of an array.
   var dm: dict[text, DNode] = {"a": DNode(children = {})}
   let dn = DNode(children = dm)
-  if close_cycle =>
+  if close-cycle =>
     dm["a"] := dn
 
   try
@@ -59,7 +59,7 @@ program def main(close_cycle: bool) -> unit =
   var a: array[Level2] = [Level2(inner = [])]
   let l1 = Level1(inner = a)
   var b: array[Level1] = [l1]
-  if close_cycle =>
+  if close-cycle =>
     a[0] := Level2(inner = b)
 
   try

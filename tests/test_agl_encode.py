@@ -442,7 +442,7 @@ def test_encode_bytes_are_preserved_across_mocked_agent_and_ffi_boundaries(
         "record Payload\n"
         "  choice: Choice\n"
         "  choices: array[Choice]\n"
-        "  by_name: dict[text, Choice]\n"
+        "  by-name: dict[text, Choice]\n"
         "  tree: Tree\n"
         'let payload: Payload = ask("payload", agent = AgentCommand(command = "fake"))\n'
         "let encoded = payload as json\n"
@@ -450,7 +450,7 @@ def test_encode_bytes_are_preserved_across_mocked_agent_and_ffi_boundaries(
         {
             "fake": [
                 '{"choice":{"$case":"One","value":2},"choices":[{"$case":"None"},'
-                '{"$case":"One","value":3}],"by_name":{"primary":{"$case":"One",'
+                '{"$case":"One","value":3}],"by-name":{"primary":{"$case":"One",'
                 '"value":4}},"tree":{"$case":"Node","children":[{"$case":"Leaf"}]}}'
             ]
         },
@@ -459,7 +459,7 @@ def test_encode_bytes_are_preserved_across_mocked_agent_and_ffi_boundaries(
     assert isinstance(agent_encoded, JsonValue)
     assert dumps_exact(agent_encoded.raw, indent=None) == (
         '{"choice": {"$case": "One", "value": 2}, "choices": [{"$case": "None"}, '
-        '{"$case": "One", "value": 3}], "by_name": {"primary": {"$case": "One", '
+        '{"$case": "One", "value": 3}], "by-name": {"primary": {"$case": "One", '
         '"value": 4}}, "tree": {"$case": "Node", "children": [{"$case": "Leaf"}]}}'
     )
 
@@ -469,13 +469,13 @@ def test_encode_bytes_are_preserved_across_mocked_agent_and_ffi_boundaries(
         "record Payload\n"
         "  choice: Choice\n"
         "  choices: array[Choice]\n"
-        "  by_name: dict[text, Choice]\n"
+        "  by-name: dict[text, Choice]\n"
         "  tree: Tree\n"
         "extern def relay(value: json) -> json\n"
         "let payload = Payload(\n"
         "  choice = Choice::One(value = 2),\n"
         "  choices = [Choice::None, Choice::One(value = 3)],\n"
-        '  by_name = {"primary": Choice::One(value = 4)},\n'
+        '  by-name = {"primary": Choice::One(value = 4)},\n'
         "  tree = Tree::Node(children = [Tree::Leaf])\n"
         ")\n"
         "let encoded = relay(payload as json)\n"
@@ -487,7 +487,7 @@ def test_encode_bytes_are_preserved_across_mocked_agent_and_ffi_boundaries(
     assert isinstance(ffi_encoded, JsonValue)
     assert dumps_exact(ffi_encoded.raw, indent=None) == (
         '{"choice": {"$case": "One", "value": 2}, "choices": [{"$case": "None"}, '
-        '{"$case": "One", "value": 3}], "by_name": {"primary": {"$case": "One", '
+        '{"$case": "One", "value": 3}], "by-name": {"primary": {"$case": "One", '
         '"value": 4}}, "tree": {"$case": "Node", "children": [{"$case": "Leaf"}]}}'
     )
 
@@ -530,7 +530,7 @@ def test_encode_plan_distinguishes_record_and_enum_slots_for_a_shared_member() -
                             ),
                         ),
                         ("items", ArrayEncode(ScalarEncode())),
-                        ("by_name", DictEncode(ScalarEncode())),
+                        ("by-name", DictEncode(ScalarEncode())),
                     ),
                 ),
             ),
@@ -547,14 +547,14 @@ def test_encode_plan_distinguishes_record_and_enum_slots_for_a_shared_member() -
                 "plain": shared,
                 "selected": shared,
                 "items": ArrayValue([IntValue(1)]),
-                "by_name": DictValue({"n": IntValue(2)}),
+                "by-name": DictValue({"n": IntValue(2)}),
             },
         ),
     ) == {
         "plain": {"value": 7},
         "selected": {"$case": "Shared", "value": 7},
         "items": [1],
-        "by_name": {"n": 2},
+        "by-name": {"n": 2},
     }
 
 

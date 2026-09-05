@@ -17,31 +17,31 @@ record NamedPair
   right: int
 
 program def main(base: int) -> unit =
-  let positional_record = Pair(base, base + 1)
-  let named_record = Pair(left = base + 2, right = base + 3)
-  let positional_enum = PairResult(base + 4, base + 5)
-  let named_enum = PairResult(left = base + 6, right = base + 7)
-  let positional_exception = Problem(base + 8, "positional", message = "problem")
-  let named_exception = Problem(code = base + 9, detail = "named", message = "problem")
+  let positional-record = Pair(base, base + 1)
+  let named-record = Pair(left = base + 2, right = base + 3)
+  let positional-enum = PairResult(base + 4, base + 5)
+  let named-enum = PairResult(left = base + 6, right = base + 7)
+  let positional-exception = Problem(base + 8, "positional", message = "problem")
+  let named-exception = Problem(code = base + 9, detail = "named", message = "problem")
   let left = base + 10
   let right = base + 11
   let shorthand = NamedPair(left, right)
 
-  print positional_record.left
-  print positional_record.right
-  print named_record.left
-  print named_record.right
-  case positional_enum of
+  print positional-record.left
+  print positional-record.right
+  print named-record.left
+  print named-record.right
+  case positional-enum of
     | PairResult(left, right) =>
       print left
       print right
-  case named_enum of
+  case named-enum of
     | PairResult(left, right) =>
       print left
       print right
-  print positional_exception.code
-  print positional_exception.detail
-  print named_exception.code
-  print named_exception.detail
+  print positional-exception.code
+  print positional-exception.detail
+  print named-exception.code
+  print named-exception.detail
   print shorthand.left
   print shorthand.right

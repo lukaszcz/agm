@@ -13,8 +13,8 @@ program def main(code: int, note: text) -> unit =
   let many: array[Failure] = [one, Failure(message = note, code = code + 1)]
   print(many as json)
 
-  let by_stage: dict[text, Failure] = {"build": one}
-  print(by_stage as json)
+  let by-stage: dict[text, Failure] = {"build": one}
+  print(by-stage as json)
 
   # A subtype is convertible on its own terms, and its array field converts too.
   let deep = Nested(message = note, code = code, causes = [one])

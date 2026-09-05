@@ -331,7 +331,7 @@ def test_retry_reruns_the_shell_exactly_once_per_attempt(retries: int, expected_
 
 def test_t9_exec_inside_function() -> None:
     """exec() inside a function body lowers and evaluates correctly."""
-    source = 'def get_output() -> text = exec("echo from_fn")\nlet result: text = get_output()\n()'
+    source = 'def get-output() -> text = exec("echo from_fn")\nlet result: text = get-output()\n()'
     commands = {"echo from_fn": _ok("from_fn\n")}
     ir = evaluate_ir_with_shell(source, commands)
     from agm.agl.semantics.values import TextValue

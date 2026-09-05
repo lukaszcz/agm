@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "command_sessions_require_placeholders_and_reject_native_only_operations",
-      "params": {"check_invalid_opens": true},
+      "params": {"check-invalid-opens": true},
       "runtime": {"enforce_command_sessions": true},
       "agents": {
         "writer": {"responses": []},
@@ -26,7 +26,7 @@
     },
     {
       "name": "command_sessions_reject_native_only_operations_without_open_attempts",
-      "params": {"check_invalid_opens": false},
+      "params": {"check-invalid-opens": false},
       "agents": {"writer": {"responses": []}},
       "expect": {
         "stdout": "compact\nfork\nrename\nstats\n",

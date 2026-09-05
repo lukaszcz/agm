@@ -94,7 +94,7 @@ A file with a static error reports it on stderr and exits `1`:
 
 ```bash
 $ agm check bad.agl
-bad.agl:3:11: error: 'undefined_name' is not defined.
+bad.agl:3:11: error: 'undefined-name' is not defined.
 $ echo $?
 1
 ```

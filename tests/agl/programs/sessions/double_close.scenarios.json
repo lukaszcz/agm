@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "double_close_and_caught_use_after_close",
-      "params": {"ask_after_close": true},
+      "params": {"ask-after-close": true},
       "agents": {"writer": {"responses": []}},
       "expect": {
         "stdout": "ask\n",
@@ -14,7 +14,7 @@
     },
     {
       "name": "double_close_without_a_later_session_use",
-      "params": {"ask_after_close": false},
+      "params": {"ask-after-close": false},
       "agents": {"writer": {"responses": []}},
       "expect": {
         "stdout": "",

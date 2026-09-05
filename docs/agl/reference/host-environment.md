@@ -235,7 +235,7 @@ Tracing records only observable boundaries:
 - an exception only when it escapes the program uncaught.
 
 Ordinary expression evaluation is not traced. Trace records and exception
-values have no host-generated `trace_id`; a user-declared exception may still
+values have no host-generated `trace-id`; a user-declared exception may still
 have a field with that name.
 
 ## Results and termination

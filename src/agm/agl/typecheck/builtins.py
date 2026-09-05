@@ -202,7 +202,7 @@ class BuiltinCallChecker:
                 "render() requires exactly one positional argument.",
                 span=node.span,
             )
-        allowed = {"pretty", "quote_strings"}
+        allowed = {"pretty", "quote-strings"}
         for named in node.named_args:
             if named.name not in allowed:
                 raise AglTypeError(

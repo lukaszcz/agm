@@ -5,9 +5,9 @@ program def main() -> unit =
   # first-class function value are returned as-is, and remain fully usable
   # through the copy.
   let impl: Agent = AgentCommand("impl")
-  let copied_agent = copy(impl)
-  let copied_fn = shallow-copy(inc)
+  let copied-agent = copy(impl)
+  let copied-fn = shallow-copy(inc)
 
-  let result = copied_agent.ask("Do it")
+  let result = copied-agent.ask("Do it")
   print(result)
-  print(copied_fn(4))
+  print(copied-fn(4))

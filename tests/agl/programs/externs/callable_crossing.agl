@@ -6,18 +6,18 @@ extern def twice[T](f: (T) -> T, value: T) -> T
 extern def stash(f: (int) -> int) -> unit
 extern def use_stashed(value: int) -> int
 
-def add_one(value: int) -> int = value + 1
+def add-one(value: int) -> int = value + 1
 def add(left: int, right: int) -> int = left + right
 def surround(value: text) -> text = "[" + value + "]"
 
 program def main(mode: text) -> unit =
   if mode == "arity" =>
-    print apply(add_one, 4)
+    print apply(add-one, 4)
     print combine(add, 2, 5)
 
   if mode == "generic" =>
     print twice(surround, "value")
 
   if mode == "retained" =>
-    let _: unit = stash(add_one)
+    let _: unit = stash(add-one)
     print use_stashed(9)

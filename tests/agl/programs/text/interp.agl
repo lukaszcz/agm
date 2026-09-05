@@ -3,7 +3,7 @@
 # surrounding AgL template, then interpreted by the extern.
 import std/text
 
-program def main(mode: text, bad_template: text) -> unit =
+program def main(mode: text, bad-template: text) -> unit =
   let vars = {
     "name": "Ada",
     "place": "Earth",
@@ -24,9 +24,9 @@ program def main(mode: text, bad_template: text) -> unit =
 
   if mode == "functions" =>
     let direct = std/text::interp
-    let with_vars = std/text::interp(?, vars)
+    let with-vars = std/text::interp(?, vars)
     print(direct("first \%{name}", vars))
-    print(with_vars("partial \%{place}"))
+    print(with-vars("partial \%{place}"))
 
   if mode == "missing" =>
     let result = try
@@ -36,6 +36,6 @@ program def main(mode: text, bad_template: text) -> unit =
 
   if mode == "malformed" =>
     let result = try
-      std/text::interp(bad_template, vars)
+      std/text::interp(bad-template, vars)
     catch ExternError => "malformed caught"
     print(result)

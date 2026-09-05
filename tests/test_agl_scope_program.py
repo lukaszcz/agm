@@ -2893,14 +2893,14 @@ class TestExportDecl:
                     "  def alpha() -> int = 1\n"
                     "end Chosen\n"
                     "\n"
-                    "def excluded_a() -> int = 0"
+                    "def excluded-a() -> int = 0"
                 ),
                 "source/b": (
                     "scope Chosen\n"
                     "  def beta() -> int = 2\n"
                     "end Chosen\n"
                     "\n"
-                    "def excluded_b() -> int = 0"
+                    "def excluded-b() -> int = 0"
                 ),
             },
             default_stdlib=False,
@@ -2913,8 +2913,8 @@ class TestExportDecl:
         b_id = ModuleId.from_path("source/b")
         assert facade.exports[("Chosen", "alpha")] == (a_id, ("Chosen", "alpha"))
         assert facade.exports[("Chosen", "beta")] == (b_id, ("Chosen", "beta"))
-        assert "excluded_a" not in facade.exports
-        assert "excluded_b" not in facade.exports
+        assert "excluded-a" not in facade.exports
+        assert "excluded-b" not in facade.exports
 
         entry = result.modules[ENTRY_ID].resolved
         for name, module_id in (("alpha", a_id), ("beta", b_id)):

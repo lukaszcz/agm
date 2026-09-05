@@ -16,7 +16,7 @@ enum Snippet
 def label(t: Template) -> text =
   "tag=%{t.tag}"
 
-program def main(use_raw: bool) -> unit =
+program def main(use-raw: bool) -> unit =
   let t1 = Template(body = "use ${x} and \%{y} here", tag = "has \"quotes\"")
   print t1
 
@@ -37,6 +37,6 @@ program def main(use_raw: bool) -> unit =
   print "%{{"pct%": 1.50}}"
 
   # Control flow: pick the snippet based on a condition.
-  let chosen: Snippet = if use_raw => Raw(src = "plain ${x}") else => Wrapped(prefix = "**", src = "bold ${x}")
+  let chosen: Snippet = if use-raw => Raw(src = "plain ${x}") else => Wrapped(prefix = "**", src = "bold ${x}")
 
   print chosen

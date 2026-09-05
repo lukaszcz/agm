@@ -91,14 +91,14 @@ def test_default_and_named_supplied_args_evaluate_in_positional_order() -> None:
 
 def test_return_coercion() -> None:
     """Function with int body but decimal return type — coercion applied."""
-    source = "def to_dec(x: int) -> decimal = x\nlet result = to_dec(3)\n()"
+    source = "def to-dec(x: int) -> decimal = x\nlet result = to-dec(3)\n()"
     ir = evaluate_ir(source)
     assert ir["result"] == DecimalValue(decimal.Decimal("3"))
 
 
 def test_explicit_return_coercion() -> None:
     """Explicit return operands are coerced to the declared result type."""
-    source = "def to_dec(x: int) -> decimal =\n  return x\nlet result = to_dec(3)\n()"
+    source = "def to-dec(x: int) -> decimal =\n  return x\nlet result = to-dec(3)\n()"
     ir = evaluate_ir(source)
     assert ir["result"] == DecimalValue(decimal.Decimal("3"))
 
@@ -151,12 +151,12 @@ def test_self_recursion_factorial() -> None:
 def test_mutual_recursion_even_odd() -> None:
     """Mutually recursive even/odd functions."""
     source = (
-        "def is_even(n: int) -> bool =\n"
-        "  if n == 0 => true else => is_odd(n - 1)\n"
-        "def is_odd(n: int) -> bool =\n"
-        "  if n == 0 => false else => is_even(n - 1)\n"
-        "let r1 = is_even(4)\n"
-        "let r2 = is_odd(3)\n()"
+        "def is-even(n: int) -> bool =\n"
+        "  if n == 0 => true else => is-odd(n - 1)\n"
+        "def is-odd(n: int) -> bool =\n"
+        "  if n == 0 => false else => is-even(n - 1)\n"
+        "let r1 = is-even(4)\n"
+        "let r2 = is-odd(3)\n()"
     )
     ir = evaluate_ir(source)
     assert ir["r1"] == BoolValue(True)
@@ -196,12 +196,12 @@ def apply(value: int, f: (int) -> int) -> int = f(value)
 let meter = Meter(value = 4)
 let add = meter.add
 let later = add(3)
-let higher_order = apply(5, meter.add)
+let higher-order = apply(5, meter.add)
 ()
 """
     result = evaluate_ir(source)
     assert result["later"] == IntValue(7)
-    assert result["higher_order"] == IntValue(9)
+    assert result["higher-order"] == IntValue(9)
 
 
 def test_multiple_calls() -> None:
@@ -239,11 +239,11 @@ def test_simple_function_call() -> None:
 def test_function_with_let_in_body() -> None:
     """Function body with let declarations (exercises _walk_collect_locals for LetDecl)."""
     source = (
-        "def sum_of_squares(a: int, b: int) -> int =\n"
-        "  let sq_a = a * a\n"
-        "  let sq_b = b * b\n"
-        "  sq_a + sq_b\n"
-        "let result = sum_of_squares(3, 4)\n()"
+        "def sum-of-squares(a: int, b: int) -> int =\n"
+        "  let sq-a = a * a\n"
+        "  let sq-b = b * b\n"
+        "  sq-a + sq-b\n"
+        "let result = sum-of-squares(3, 4)\n()"
     )
     ir = evaluate_ir(source)
     assert ir["result"] == IntValue(25)
@@ -253,8 +253,8 @@ def test_function_reads_root_binding() -> None:
     """A root function reads an immutable root binding."""
     source = (
         "let offset: int = 10\n"
-        "def add_offset(x: int) -> int = x + offset\n"
-        "let result = add_offset(5)\n()"
+        "def add-offset(x: int) -> int = x + offset\n"
+        "let result = add-offset(5)\n()"
     )
     ir = evaluate_ir(source)
     assert ir["result"] == IntValue(15)
@@ -264,12 +264,12 @@ def test_function_with_case_in_body() -> None:
     """Function body with case expression (exercises _walk_collect_locals for Case)."""
     source = (
         "enum Color | Red | Green | Blue\n"
-        "def color_code(c: Color) -> int =\n"
+        "def color-code(c: Color) -> int =\n"
         "  case c of\n"
         "    | Red() => 1\n"
         "    | Green() => 2\n"
         "    | Blue() => 3\n"
-        "let r = color_code(Red())\n()"
+        "let r = color-code(Red())\n()"
     )
     ir = evaluate_ir(source)
     assert ir["r"] == IntValue(1)
@@ -279,8 +279,8 @@ def test_function_with_unary_in_body() -> None:
     """Function body with unary negation reads a root binding."""
     source = (
         "let scale: int = 2\n"
-        "def neg_scaled(x: int) -> int = -(x * scale)\n"
-        "let result = neg_scaled(3)\n()"
+        "def neg-scaled(x: int) -> int = -(x * scale)\n"
+        "let result = neg-scaled(3)\n()"
     )
     ir = evaluate_ir(source)
     assert ir["result"] == IntValue(-6)
@@ -291,8 +291,8 @@ def test_function_with_named_args_in_body_call() -> None:
     source = (
         'def greet(name: text, greeting: text = "Hi") -> text =\n'
         '  greeting + ", " + name + "!"\n'
-        'def greet_world(g: text) -> text = greet(name = "World", greeting = g)\n'
-        'let result = greet_world("Hello")\n()'
+        'def greet-world(g: text) -> text = greet(name = "World", greeting = g)\n'
+        'let result = greet-world("Hello")\n()'
     )
     ir = evaluate_ir(source)
     assert ir["result"] == TextValue("Hello, World!")
@@ -302,8 +302,8 @@ def test_function_with_array_in_body() -> None:
     """Function body containing an array literal reads a root binding."""
     source = (
         "let base: int = 1\n"
-        "def make_array(x: int) -> array[int] = [base, x, x * 2]\n"
-        "let result = make_array(3)\n()"
+        "def make-array(x: int) -> array[int] = [base, x, x * 2]\n"
+        "let result = make-array(3)\n()"
     )
     from agm.agl.semantics.values import ArrayValue
 
@@ -317,9 +317,9 @@ def test_function_with_field_access_in_body() -> None:
         "record Point\n"
         "  x: int\n"
         "  y: int\n"
-        "def get_x(p: Point) -> int = p.x\n"
+        "def get-x(p: Point) -> int = p.x\n"
         "let p = Point(x = 3, y = 4)\n"
-        "let result = get_x(p)\n()"
+        "let result = get-x(p)\n()"
     )
     ir = evaluate_ir(source)
     assert ir["result"] == IntValue(3)
@@ -328,7 +328,7 @@ def test_function_with_field_access_in_body() -> None:
 def test_function_with_cast_in_body() -> None:
     """Function body with cast (exercises _walk_for_captures for Cast)."""
     source = (
-        "def cast_to_decimal(x: int) -> decimal = x as decimal\nlet result = cast_to_decimal(7)\n()"
+        "def cast-to-decimal(x: int) -> decimal = x as decimal\nlet result = cast-to-decimal(7)\n()"
     )
     ir = evaluate_ir(source)
     assert ir["result"] == DecimalValue(decimal.Decimal("7"))
@@ -348,12 +348,12 @@ def test_function_with_template_in_body() -> None:
 def test_function_with_try_in_body() -> None:
     """Function body with try/catch (exercises _walk_collect_locals for Try)."""
     source = (
-        "def safe_add(a: int, b: int) -> int =\n"
+        "def safe-add(a: int, b: int) -> int =\n"
         "  try\n"
         "    a + b\n"
         "  catch ArithmeticError =>\n"
         "    0\n"
-        "let result = safe_add(3, 4)\n()"
+        "let result = safe-add(3, 4)\n()"
     )
     ir = evaluate_ir(source)
     assert ir["result"] == IntValue(7)
@@ -362,13 +362,13 @@ def test_function_with_try_in_body() -> None:
 def test_function_with_do_loop_in_body() -> None:
     """Function body with do loop (exercises _walk_collect_locals for Loop)."""
     source = (
-        "def count_to(n: int) -> int =\n"
+        "def count-to(n: int) -> int =\n"
         "  var i = 0\n"
         "  do\n"
         "    i := i + 1\n"
         "  until i >= n\n"
         "  i\n"
-        "let result = count_to(5)\n()"
+        "let result = count-to(5)\n()"
     )
     ir = evaluate_ir(source)
     assert ir["result"] == IntValue(5)
@@ -380,13 +380,13 @@ def test_function_with_do_done_loop_in_body() -> None:
     `do[0] done` runs zero iterations (bound=0 ≤ 0 exits immediately).
     """
     source = (
-        "def run_nothing(n: int) -> int =\n"
+        "def run-nothing(n: int) -> int =\n"
         "  var i = 0\n"
         "  do[n]\n"
         "    i := i + 1\n"
         "  done\n"
         "  i\n"
-        "let result = run_nothing(0)\n()"
+        "let result = run-nothing(0)\n()"
     )
     ir = evaluate_ir(source)
     assert ir["result"] == IntValue(0)
@@ -396,11 +396,11 @@ def test_function_with_var_and_assignment_root_binding() -> None:
     """Function body uses a local var and an immutable root binding."""
     source = (
         "let factor: int = 3\n"
-        "def triple_then_add(x: int, y: int) -> int =\n"
+        "def triple-then-add(x: int, y: int) -> int =\n"
         "  var acc = factor * x\n"
         "  acc := acc + y\n"
         "  acc\n"
-        "let result = triple_then_add(4, 5)\n()"
+        "let result = triple-then-add(4, 5)\n()"
     )
     ir = evaluate_ir(source)
     assert ir["result"] == IntValue(17)
@@ -409,12 +409,12 @@ def test_function_with_var_and_assignment_root_binding() -> None:
 def test_function_with_raise_in_body() -> None:
     """Function body with raise (exercises _walk_for_captures for Raise)."""
     source = (
-        "def checked_inc(n: int) -> int =\n"
+        "def checked-inc(n: int) -> int =\n"
         "  if n < 0 =>\n"
         '    raise Abort(message = "negative")\n'
         "  else =>\n"
         "    n + 1\n"
-        "let result = checked_inc(5)\n()"
+        "let result = checked-inc(5)\n()"
     )
     ir = evaluate_ir(source)
     assert ir["result"] == IntValue(6)
@@ -424,8 +424,8 @@ def test_function_with_index_access_and_root_binding() -> None:
     """Function body indexes an immutable root binding."""
     source = (
         "let items: array[int] = [10, 20, 30]\n"
-        "def get_item(i: int) -> int = items[i]\n"
-        "let result = get_item(1)\n()"
+        "def get-item(i: int) -> int = items[i]\n"
+        "let result = get-item(1)\n()"
     )
     ir = evaluate_ir(source)
     assert ir["result"] == IntValue(20)
@@ -435,8 +435,8 @@ def test_function_with_dict_literal_and_root_binding() -> None:
     """Function body with dict literal reads an immutable root binding."""
     source = (
         "let base: int = 10\n"
-        'def make_dict(x: int) -> dict[text, int] = {"a": base + x, "b": x}\n'
-        "let result = make_dict(5)\n()"
+        'def make-dict(x: int) -> dict[text, int] = {"a": base + x, "b": x}\n'
+        "let result = make-dict(5)\n()"
     )
     from agm.agl.semantics.values import DictValue
 
@@ -448,9 +448,9 @@ def test_function_with_is_test_and_root_binding() -> None:
     """Function body with is-test reads an immutable root binding."""
     source = (
         "enum Color | Red | Green | Blue\n"
-        "let my_color: Color = Red()\n"
-        "def check_red(c: Color) -> bool = c is Red or my_color is Red\n"
-        "let result = check_red(Green())\n()"
+        "let my-color: Color = Red()\n"
+        "def check-red(c: Color) -> bool = c is Red or my-color is Red\n"
+        "let result = check-red(Green())\n()"
     )
     ir = evaluate_ir(source)
     assert ir["result"] == BoolValue(True)
@@ -461,9 +461,9 @@ def test_function_reads_static_root_var() -> None:
     source = (
         "var counter = 0\n"
         "var result = 0\n"
-        "def get_counter() -> int = counter\n"
+        "def get-counter() -> int = counter\n"
         "program def main() -> unit =\n"
-        "  result := get_counter()"
+        "  result := get-counter()"
     )
     executable = lower_inline_ir(source)
     (main_symbol,) = executable.program_functions
@@ -739,11 +739,11 @@ def test_bare_variant_pattern_in_function_body() -> None:
     source = (
         "enum Flag | On | Off\n"
         "let flag = Flag::On()\n"
-        "def check_module(f: Flag) -> int =\n"
+        "def check-module(f: Flag) -> int =\n"
         "  case f of\n"
         "    | On => 1\n"
         "    | Off => 0\n"
-        "let r = check_module(flag)\n()"
+        "let r = check-module(flag)\n()"
     )
     ir = evaluate_ir(source)
     assert ir["r"] == IntValue(1)

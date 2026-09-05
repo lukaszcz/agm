@@ -1503,10 +1503,10 @@ class TestScopedBindingTypes:
         r = accept_type(
             "scope Config\n"
             "  def helper() -> int = 5\n"
-            "  let value_fn = helper\n"
+            "  let value-fn = helper\n"
             "end Config\n"
             "\n"
-            "Config::value_fn()"
+            "Config::value-fn()"
         )
         region = r.resolved.program.body.items[0]
         assert isinstance(region, ScopeRegion)
@@ -1958,11 +1958,11 @@ class TestScopedBuiltinTypes:
             "  builtin\n"
             "  record OutputContract\n"
             "    target-type: text\n"
-            "    codec_name: text\n"
+            "    codec-name: text\n"
             "    strict-json: json\n"
             "    format-instructions: text\n"
             "    json-schema: json\n"
-            "    structured_exec: bool\n"
+            "    structured-exec: bool\n"
             "  builtin\n"
             "  enum OutputContractOption =\n"
             "    | None\n"
@@ -2587,7 +2587,7 @@ class TestRenderBuiltin:
         assert r.type_env.get_binding_type(decl.pattern.node_id) == TextType()
 
     def test_render_accepts_options(self) -> None:
-        accept_type('render("hello", pretty = false, quote_strings = false)')
+        accept_type('render("hello", pretty = false, quote-strings = false)')
 
     def test_render_wrong_arg_count_rejected(self) -> None:
         err = reject_type("render(1, 2)")
@@ -3390,24 +3390,24 @@ class TestFuncDef:
             "enum NonEmpty[T]\n"
             "  | Last(value: T)\n"
             "  | More(value: T, rest: NonEmpty[T])\n"
-            "def via_value[T](items: NonEmpty[T]) =\n"
+            "def via-value[T](items: NonEmpty[T]) =\n"
             "  case items of\n"
             "    | Last(value) => value\n"
-            "    | More(value, rest) => (let next: NonEmpty[T] -> T = via_value; next(rest))\n"
-            "def via_partial[U](items: NonEmpty[U]) =\n"
+            "    | More(value, rest) => (let next: NonEmpty[T] -> T = via-value; next(rest))\n"
+            "def via-partial[U](items: NonEmpty[U]) =\n"
             "  case items of\n"
             "    | Last(value) => value\n"
-            "    | More(value, rest) => via_partial(?)(rest)\n"
-            "def via_explicit[V](items: NonEmpty[V]) =\n"
+            "    | More(value, rest) => via-partial(?)(rest)\n"
+            "def via-explicit[V](items: NonEmpty[V]) =\n"
             "  case items of\n"
             "    | Last(value) => value\n"
-            "    | More(value, rest) => via_explicit::[V](rest)\n"
-            "via_value(Last(value = 0))"
+            "    | More(value, rest) => via-explicit::[V](rest)\n"
+            "via-value(Last(value = 0))"
         )
 
-        assert checked.function_signatures["via_value"].result == TypeVarType("T")
-        assert checked.function_signatures["via_partial"].result == TypeVarType("U")
-        assert checked.function_signatures["via_explicit"].result == TypeVarType("V")
+        assert checked.function_signatures["via-value"].result == TypeVarType("T")
+        assert checked.function_signatures["via-partial"].result == TypeVarType("U")
+        assert checked.function_signatures["via-explicit"].result == TypeVarType("V")
 
     @pytest.mark.parametrize(
         "source",
@@ -3502,10 +3502,10 @@ class TestFuncDef:
 
     def test_unannotated_forward_reference_is_inferred_before_its_declaration(self) -> None:
         checked = accept_type(
-            "def use_later(n: int) = later(n)\ndef later(n: int) = n + 1\nuse_later"
+            "def use-later(n: int) = later(n)\ndef later(n: int) = n + 1\nuse-later"
         )
 
-        assert checked.function_signatures["use_later"].result == IntType()
+        assert checked.function_signatures["use-later"].result == IntType()
         assert checked.function_signatures["later"].result == IntType()
 
     def test_candidate_inference_reads_simple_let_binding(self) -> None:
@@ -3557,25 +3557,25 @@ class TestFuncDef:
 
     def test_unannotated_first_class_forward_reference_is_inferred(self) -> None:
         checked = accept_type(
-            "def use_later(n: int) =\n"
+            "def use-later(n: int) =\n"
             "  let next = later\n"
             "  next(n)\n"
             "def later(n: int) = n + 1\n"
-            "use_later"
+            "use-later"
         )
 
-        assert checked.function_signatures["use_later"].result == IntType()
+        assert checked.function_signatures["use-later"].result == IntType()
         assert checked.function_signatures["later"].result == IntType()
 
     def test_unannotated_mutual_recursion_infers_from_group_evidence(self) -> None:
         checked = accept_type(
-            "def is_even(n: int) = if n == 0 => true else => is_odd(n - 1)\n"
-            "def is_odd(n: int) = if n == 0 => false else => is_even(n - 1)\n"
-            "is_even"
+            "def is-even(n: int) = if n == 0 => true else => is-odd(n - 1)\n"
+            "def is-odd(n: int) = if n == 0 => false else => is-even(n - 1)\n"
+            "is-even"
         )
 
-        assert checked.function_signatures["is_even"].result == BoolType()
-        assert checked.function_signatures["is_odd"].result == BoolType()
+        assert checked.function_signatures["is-even"].result == BoolType()
+        assert checked.function_signatures["is-odd"].result == BoolType()
 
     def test_unannotated_mutual_recursion_without_evidence_requires_annotations(self) -> None:
         err = reject_type("def first() = second()\ndef second() = first()\nfirst")
@@ -4027,9 +4027,9 @@ class TestFuncDef:
     def test_generic_result_provenance_survives_concrete_expected_type(self) -> None:
         err = reject_type(
             "def identity[T](value: T) -> T = value\n"
-            "def expect_text(value: text) -> unit = ()\n"
+            "def expect-text(value: text) -> unit = ()\n"
             "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
-            "expect_text(identity(recurse(0)))"
+            "expect-text(identity(recurse(0)))"
         )
 
         assert "inferred return type" in str(err).lower()
@@ -4343,17 +4343,17 @@ class TestFuncDef:
 
     def test_candidate_expected_shape_mismatch_is_reported_during_discovery(self) -> None:
         reject_type(
-            "def accepts_array[T](value: array[T]) -> int = 0\n"
-            "def accepts_dict(value: dict[text, int]) -> int = 0\n"
+            "def accepts-array[T](value: array[T]) -> int = 0\n"
+            "def accepts-dict(value: dict[text, int]) -> int = 0\n"
             "def recurse(n: int) =\n"
-            "  if n == 0 => accepts_array(recurse(n)) else => accepts_dict(recurse(n))\n"
+            "  if n == 0 => accepts-array(recurse(n)) else => accepts-dict(recurse(n))\n"
             "recurse"
         )
 
     def test_candidate_result_conflict_requires_annotation(self) -> None:
         err = reject_type(
-            "def accepts_text(value: text) -> int = 0\n"
-            "def recurse(n: int) = if n == 0 => accepts_text(recurse(n)) else => 0\n"
+            "def accepts-text(value: text) -> int = 0\n"
+            "def recurse(n: int) = if n == 0 => accepts-text(recurse(n)) else => 0\n"
             "recurse"
         )
 
@@ -4792,12 +4792,12 @@ class TestPartialConstructorAndValueCalls:
             "  | failed(reason: text)\n"
             "exception Boom extends Exception\n"
             "  code: int\n"
-            "let make_status = Status::failed(reason = ?)\n"
-            "let make_boom = Boom(message = ?, code = 7)\n"
-            "make_boom"
+            "let make-status = Status::failed(reason = ?)\n"
+            "let make-boom = Boom(message = ?, code = 7)\n"
+            "make-boom"
         )
-        status_call = self._let_call(checked, "make_status")
-        boom_call = self._let_call(checked, "make_boom")
+        status_call = self._let_call(checked, "make-status")
+        boom_call = self._let_call(checked, "make-boom")
         status = checked.type_env.get_type("Status")
         assert isinstance(status, EnumType)
         assert checked.node_types[status_call.node_id] == FunctionType(
@@ -4886,12 +4886,12 @@ class TestPartialConstructorAndValueCalls:
             "  right: T\n"
             "record Box[T]\n"
             "  value: T\n"
-            "let pair_with_one = Pair(1, ?)\n"
-            "let make_box = Box::[text](value = ?)\n"
-            "make_box"
+            "let pair-with-one = Pair(1, ?)\n"
+            "let make-box = Box::[text](value = ?)\n"
+            "make-box"
         )
-        pair_call = self._let_call(checked, "pair_with_one")
-        box_call = self._let_call(checked, "make_box")
+        pair_call = self._let_call(checked, "pair-with-one")
+        box_call = self._let_call(checked, "make-box")
         assert checked.node_types[pair_call.node_id] == FunctionType(
             params=(IntType(),), result=checked.type_env.instantiate_nominal("Pair", (IntType(),))
         )
@@ -4927,9 +4927,9 @@ class TestPartialConstructorAndValueCalls:
                 "import mylib::*\n"
                 "program def main() -> unit =\n"
                 "  let make: (int) -> mylib::Point = mylib::Point(x = ?)\n"
-                "  let make_open: (int) -> Point = Point(x = ?)\n"
-                "  let make_box: (text) -> mylib::Box[text] = mylib::Box(value = ?)\n"
-                "  let make_box_open: (text) -> Box[text] = Box(value = ?)\n"
+                "  let make-open: (int) -> Point = Point(x = ?)\n"
+                "  let make-box: (text) -> mylib::Box[text] = mylib::Box(value = ?)\n"
+                "  let make-box-open: (text) -> Box[text] = Box(value = ?)\n"
             ),
             "mylib": "record Point\n  x: int\nrecord Box[T]\n  value: T",
         }
@@ -4955,7 +4955,7 @@ class TestPartialConstructorAndValueCalls:
         assert strip_decl_ids(entry.node_types[calls["make"].node_id]) == FunctionType(
             params=(IntType(),), result=point_type
         )
-        assert strip_decl_ids(entry.node_types[calls["make_open"].node_id]) == FunctionType(
+        assert strip_decl_ids(entry.node_types[calls["make-open"].node_id]) == FunctionType(
             params=(IntType(),), result=point_type
         )
         box_text_type = RecordType(
@@ -4963,18 +4963,18 @@ class TestPartialConstructorAndValueCalls:
             type_args=(TextType(),),
             module_id=ModuleId.from_path("mylib"),
         )
-        assert strip_decl_ids(entry.node_types[calls["make_box"].node_id]) == FunctionType(
+        assert strip_decl_ids(entry.node_types[calls["make-box"].node_id]) == FunctionType(
             params=(TextType(),),
             result=box_text_type,
         )
-        assert strip_decl_ids(entry.node_types[calls["make_box_open"].node_id]) == FunctionType(
+        assert strip_decl_ids(entry.node_types[calls["make-box-open"].node_id]) == FunctionType(
             params=(TextType(),),
             result=box_text_type,
         )
         assert entry.partial_calls[calls["make"].node_id].callee_kind == "constructor"
-        assert entry.partial_calls[calls["make_open"].node_id].callee_kind == "constructor"
-        assert entry.partial_calls[calls["make_box"].node_id].callee_kind == "constructor"
-        assert entry.partial_calls[calls["make_box_open"].node_id].callee_kind == "constructor"
+        assert entry.partial_calls[calls["make-open"].node_id].callee_kind == "constructor"
+        assert entry.partial_calls[calls["make-box"].node_id].callee_kind == "constructor"
+        assert entry.partial_calls[calls["make-box-open"].node_id].callee_kind == "constructor"
 
     def test_cross_module_non_generic_constructor_partial_rejects_type_args(
         self, tmp_path: object
@@ -4999,17 +4999,17 @@ class TestPartialConstructorAndValueCalls:
         checked = accept_type(
             "def add(x: int, y: int) -> int = x + y\n"
             "def digits(x: int, y: int, z: int) -> int = x * 100 + y * 10 + z\n"
-            "let add_value: (int, int) -> int = add\n"
-            "let from_value = add_value(?, 1)\n"
-            "let lambda_value = fn(x: int, y: text) -> text => y\n"
-            "let from_lambda = lambda_value(1, ?)\n"
-            "let partial_digits = digits(?, 1, ?)\n"
-            "let finish_digits = partial_digits(?, 2)\n"
-            "finish_digits"
+            "let add-value: (int, int) -> int = add\n"
+            "let from-value = add-value(?, 1)\n"
+            "let lambda-value = fn(x: int, y: text) -> text => y\n"
+            "let from-lambda = lambda-value(1, ?)\n"
+            "let partial-digits = digits(?, 1, ?)\n"
+            "let finish-digits = partial-digits(?, 2)\n"
+            "finish-digits"
         )
-        from_value = self._let_call(checked, "from_value")
-        from_lambda = self._let_call(checked, "from_lambda")
-        finish_digits = self._let_call(checked, "finish_digits")
+        from_value = self._let_call(checked, "from-value")
+        from_lambda = self._let_call(checked, "from-lambda")
+        finish_digits = self._let_call(checked, "finish-digits")
         assert checked.node_types[from_value.node_id] == FunctionType(
             params=(IntType(),), result=IntType()
         )
@@ -5125,10 +5125,10 @@ class TestProvisionalFunctionValuesAndPartials:
     def test_concrete_evidence_before_or_after_provisional_value_is_equivalent(self) -> None:
         checked = accept_type(
             "def maker[T]() -> T -> T = fn(value: T) => value\n"
-            "def value_first[T](value: T, transform: T -> T) -> T = transform(value)\n"
-            "def function_first[T](transform: T -> T, value: T) -> T = transform(value)\n"
-            "let before = value_first(1, maker())\n"
-            "let after = function_first(maker(), 1)\n"
+            "def value-first[T](value: T, transform: T -> T) -> T = transform(value)\n"
+            "def function-first[T](transform: T -> T, value: T) -> T = transform(value)\n"
+            "let before = value-first(1, maker())\n"
+            "let after = function-first(maker(), 1)\n"
             "after"
         )
         before = checked.resolved.program.body.items[3]
@@ -5397,11 +5397,11 @@ class TestPatternTyping:
             "record Point\n  x: int\n"
             "enum E\n  | A(value: int)\n  | B\n"
             "let e: E = A(1)\n"
-            "let enum_result: E = case e of | A(value = _ as item) as enum_value "
-            "=> enum_value | B => B()\n"
+            "let enum-result: E = case e of | A(value = _ as item) as enum-value "
+            "=> enum-value | B => B()\n"
             "let point = Point(2)\n"
-            "let record_result = case point of | _ as record_value => record_value.x\n"
-            "case 0 of | 0 as scalar_value => scalar_value | _ => 0"
+            "let record-result = case point of | _ as record-value => record-value.x\n"
+            "case 0 of | 0 as scalar-value => scalar-value | _ => 0"
         )
         enum_item = checked.resolved.program.body.items[3]
         record_item = checked.resolved.program.body.items[5]
@@ -6316,8 +6316,8 @@ class TestFieldAccess:
             "record Box[T]\n"
             "  value: T\n"
             "def Box::map[T, U](self, f: (T) -> U) -> Box[U] = Box(value = f(self.value))\n"
-            "def convert_member[U](b: Box[U], g: (U) -> text) -> Box[text] = b.map(g)\n"
-            "def convert_qualified[U](b: Box[U], g: (U) -> text) -> Box[text] = "
+            "def convert-member[U](b: Box[U], g: (U) -> text) -> Box[text] = b.map(g)\n"
+            "def convert-qualified[U](b: Box[U], g: (U) -> text) -> Box[text] = "
             "Box::map(b, g)\n"
         )
         member_def, qualified_def = checked.resolved.program.body.items[-2:]
@@ -6744,9 +6744,9 @@ class TestConstructors:
     def test_user_exception_may_declare_trace_id_field(self) -> None:
         result = accept_type(
             "exception Tagged extends Exception\n"
-            "  trace_id: int\n"
-            'let tagged = Tagged(message = "marked", trace_id = 7)\n'
-            "tagged.trace_id\n"
+            "  trace-id: int\n"
+            'let tagged = Tagged(message = "marked", trace-id = 7)\n'
+            "tagged.trace-id\n"
         )
         field = result.resolved.program.body.items[2]
         assert isinstance(field, FieldAccess)
@@ -6756,8 +6756,8 @@ class TestConstructors:
         assert result.node_types[field.node_id] == IntType()
 
     def test_builtin_exception_has_no_trace_id_field(self) -> None:
-        err = reject_type('Abort(message = "stop").trace_id\n')
-        assert "trace_id" in str(err)
+        err = reject_type('Abort(message = "stop").trace-id\n')
+        assert "trace-id" in str(err)
 
     def test_unknown_constructor_raises(self) -> None:
         # Unknown names are now caught at scope-resolution time (AglScopeError).
@@ -7491,8 +7491,8 @@ class TestBareConstructorTypeApply:
             "enum Outcome[T, E]\n"
             "  | ok(value: T)\n"
             "  | err(error: E)\n"
-            "let make_ok = Outcome[int, text]::ok(value = ?)\n"
-            "make_ok"
+            "let make-ok = Outcome[int, text]::ok(value = ?)\n"
+            "make-ok"
         )
         expr = checked.resolved.program.body.items[-1]
         assert isinstance(expr, VarRef)
@@ -7826,9 +7826,9 @@ class TestProvisionalContainerLiterals:
 
     def test_empty_literals_are_solved_by_branch_common_types(self) -> None:
         checked = accept_type(
-            "let choose_empty: bool = true\n"
-            "let xs = if choose_empty => [] else => [1]\n"
-            "let values = if choose_empty => {} else => {answer: 1}\n"
+            "let choose-empty: bool = true\n"
+            "let xs = if choose-empty => [] else => [1]\n"
+            "let values = if choose-empty => {} else => {answer: 1}\n"
             "values"
         )
         xs, values = checked.resolved.program.body.items[1:3]
@@ -7860,10 +7860,10 @@ class TestProvisionalContainerLiterals:
                 "annotate the literal with its enum type",
             ),
             (
-                "let choose_number: bool = true\n"
+                "let choose-number: bool = true\n"
                 "enum Option[T]\n"
                 "  | some(value: T)\n"
-                'if choose_number => some(value = 1) else => some(value = "wrong")',
+                'if choose-number => some(value = 1) else => some(value = "wrong")',
                 "annotate the expression with its enum type",
             ),
         ),
@@ -7898,20 +7898,20 @@ class TestProvisionalContainerLiterals:
 
     def test_uncontextual_member_branches_require_an_enum_annotation(self) -> None:
         error = reject_type(
-            "let choose_none: bool = true\n"
+            "let choose-none: bool = true\n"
             "enum Option[T]\n"
             "  | none\n"
             "  | some(value: T)\n"
-            "if choose_none => none else => some(value = 1)"
+            "if choose-none => none else => some(value = 1)"
         )
         assert "annotate the expression with its enum type" in str(error).lower()
 
     def test_unrelated_record_branches_keep_the_normal_mismatch_diagnostic(self) -> None:
         error = reject_type(
-            "let select_left: bool = true\n"
+            "let select-left: bool = true\n"
             "record Left()\n"
             "record Right()\n"
-            "if select_left => Left() else => Right()"
+            "if select-left => Left() else => Right()"
         )
         assert "incompatible types" in str(error).lower()
         assert "annotate the expression with its enum type" not in str(error).lower()
@@ -7983,9 +7983,9 @@ class TestProvisionalContainerLiterals:
 
     def test_concrete_container_and_branch_widening_is_unchanged(self) -> None:
         checked = accept_type(
-            "let choose_decimal: bool = true\n"
+            "let choose-decimal: bool = true\n"
             "let xs = [1, 2.5]\n"
-            "let value = if choose_decimal => 1 else => 2.5\n"
+            "let value = if choose-decimal => 1 else => 2.5\n"
             "value"
         )
         xs, value = checked.resolved.program.body.items[1:3]
@@ -9881,9 +9881,9 @@ class TestCallDispatchScopeAware:
         # A field that holds a function value must be treated as a value call.
         r = accept_type(
             "record Wrapper\n"
-            "  fn_field: (int) -> int\n"
-            "let w = Wrapper(fn_field = fn(x: int) -> int => x)\n"
-            "w.fn_field(42)"
+            "  fn-field: (int) -> int\n"
+            "let w = Wrapper(fn-field = fn(x: int) -> int => x)\n"
+            "w.fn-field(42)"
         )
         call = r.resolved.program.body.items[2]
         assert isinstance(call, Call)
@@ -10618,10 +10618,10 @@ class TestGenericFunctionInferenceRegions:
     def test_generic_function_arguments_are_order_independent_and_named(self) -> None:
         checked = accept_type(
             "def app[T](f: T -> T, x: T) -> T = f(x)\n"
-            "def app_reversed[T](x: T, f: T -> T) -> T = f(x)\n"
+            "def app-reversed[T](x: T, f: T -> T) -> T = f(x)\n"
             "def id[T](x: T) -> T = x\n"
             "let first = app(id, 0)\n"
-            "let second = app_reversed(0, id)\n"
+            "let second = app-reversed(0, id)\n"
             "let named = app(x = 0, f = id)\n"
             "named"
         )
@@ -10736,9 +10736,9 @@ class TestGenericFunctionInferenceRegions:
             "record Pair[T]\n"
             "  left: T -> T\n"
             "  right: T -> T\n"
-            "def int_id(value: int) -> int = value\n"
-            "def text_id(value: text) -> text = value\n"
-            "Pair(left = int_id, right = text_id)"
+            "def int-id(value: int) -> int = value\n"
+            "def text-id(value: text) -> text = value\n"
+            "Pair(left = int-id, right = text-id)"
         )
 
 
@@ -11162,7 +11162,7 @@ class TestGenerics:
 
     def test_dict_type_argument_is_inferred(self) -> None:
         # dict[text, T] parameter infers T from a dict[text, int] value.
-        r = accept_type('def first_val[T](d: dict[text, T]) -> T = d["k"]\nfirst_val({"k": 1})')
+        r = accept_type('def first-val[T](d: dict[text, T]) -> T = d["k"]\nfirst-val({"k": 1})')
         assert r.node_types[r.resolved.program.body.items[-1].node_id] == IntType()
 
     def test_function_type_argument_is_inferred(self) -> None:
@@ -11188,14 +11188,14 @@ class TestGenerics:
     def test_dict_type_argument_is_completed_from_expected_type(self) -> None:
         # empty[T]() -> dict[text, T]: T inferred from expected dict[text, text]
         r = accept_type(
-            "def empty_dict[T]() -> dict[text, T] = {}\nlet d: dict[text, text] = empty_dict()\nd"
+            "def empty-dict[T]() -> dict[text, T] = {}\nlet d: dict[text, text] = empty-dict()\nd"
         )
         decl = r.resolved.program.body.items[1]
         assert isinstance(decl, LetDecl)
         assert r.node_types[decl.value.node_id] == DictType(value=TextType())
         # Nothing else can fix T here: without the annotation the call has no
         # evidence for it at all.
-        reject_type("def empty_dict[T]() -> dict[text, T] = {}\nlet d = empty_dict()\nd")
+        reject_type("def empty-dict[T]() -> dict[text, T] = {}\nlet d = empty-dict()\nd")
 
     def test_concrete_result_type_mismatch_is_rejected(self) -> None:
         # A concrete result cannot satisfy an incompatible expected type.
@@ -12691,11 +12691,11 @@ class TestGenericAbstractInstanceAccess:
             "enum Option[T]\n"
             "  | none\n"
             "  | some(value: T)\n"
-            "def get_or[U](opt: Option[U], default: U) -> U =\n"
+            "def get-or[U](opt: Option[U], default: U) -> U =\n"
             "  case opt of\n"
             "    | some(value = _ as v) => v\n"
             "    | none() => default\n"
-            "let n: int = get_or(opt = some(value = 1), default = 0)\nn"
+            "let n: int = get-or(opt = some(value = 1), default = 0)\nn"
         )
         func_def = r.resolved.program.body.items[1]
         assert isinstance(func_def, FuncDef)
@@ -12714,11 +12714,11 @@ class TestGenericAbstractInstanceAccess:
             "enum Option[T]\n"
             "  | none\n"
             "  | some(value: T)\n"
-            "def get_or[U](opt: Option[U], default: U) -> U =\n"
+            "def get-or[U](opt: Option[U], default: U) -> U =\n"
             "  case opt of\n"
             "    | some(value = _ as v) => v\n"
             "    | none() => default\n"
-            "let s: text = get_or(opt = some(value = 1), default = 0)\ns"
+            "let s: text = get-or(opt = some(value = 1), default = 0)\ns"
         )
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
 
@@ -13468,24 +13468,24 @@ def test_param_is_an_ordinary_identifier(source: str, expected_type: Type | None
 class TestSessionPreludeTypes:
     def test_session_prelude_types_are_visible_with_their_declared_members(self) -> None:
         checked = accept_type(
-            "def transport_name(transport: SessionTransport) -> text =\n"
+            "def transport-name(transport: SessionTransport) -> text =\n"
             "  case transport of\n"
             '    | Cli => "cli"\n'
             '    | Rpc => "rpc"\n'
-            "def session_cost(stats: SessionStats) -> decimal = stats.cost\n"
-            "def session_error_details() -> text =\n"
+            "def session-cost(stats: SessionStats) -> decimal = stats.cost\n"
+            "def session-error-details() -> text =\n"
             "  try\n"
             '    "no error"\n'
             "  catch SessionError as error =>\n"
             '    "%{error.message}: %{error.operation}"\n'
-            "session_cost(SessionStats(input-tokens = 1, output-tokens = 2, cost = 3.0, "
+            "session-cost(SessionStats(input-tokens = 1, output-tokens = 2, cost = 3.0, "
             "context-percent = 4.0))"
         )
         # Each prelude type is reachable by its bare name with its declared
         # members: the enum's variants, the record's field, the exception's.
-        assert checked.function_signatures["transport_name"].result == TextType()
-        assert checked.function_signatures["session_cost"].result == DecimalType()
-        assert checked.function_signatures["session_error_details"].result == TextType()
+        assert checked.function_signatures["transport-name"].result == TextType()
+        assert checked.function_signatures["session-cost"].result == DecimalType()
+        assert checked.function_signatures["session-error-details"].result == TextType()
         assert checked.node_types[checked.resolved.program.body.items[-1].node_id] == DecimalType()
 
     @pytest.mark.parametrize(
@@ -13517,8 +13517,8 @@ class TestSessionPreludeTypes:
     def test_session_transport_and_stats_remain_json_serializable(self) -> None:
         checked = accept_type(
             "program def main(transport: SessionTransport, stats: SessionStats) -> unit =\n"
-            "  let transport_json: json = Cli as json\n"
-            "  let stats_json: json = SessionStats(input-tokens = 1, output-tokens = 2, "
+            "  let transport-json: json = Cli as json\n"
+            "  let stats-json: json = SessionStats(input-tokens = 1, output-tokens = 2, "
             "cost = 3.0, context-percent = 4.0) as json\n"
             "  ()"
         )

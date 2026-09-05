@@ -10,9 +10,9 @@
     {
       "name": "downto_step_fixed_despite_body_mutation",
       "params": {
-        "down_start": 20,
-        "down_stop": 1,
-        "down_step": 3
+        "down-start": 20,
+        "down-stop": 1,
+        "down-step": 3
       },
       "expect": {
         "stdout": "5\n505\n7\n"

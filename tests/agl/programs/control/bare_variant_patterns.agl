@@ -45,18 +45,18 @@ def describe(b: Box) -> text =
     | Empty => "empty"
     | Full(item) => "full:%{item}"
 
-def signal_name(s: Signal) -> text =
+def signal-name(s: Signal) -> text =
   case s of
     | Halt => "stop"
     | Go => "go"
 
-def trend_name(t: Trend) -> text =
+def trend-name(t: Trend) -> text =
   case t of
     | Halt => "flat"
     | Fall => "down"
 
 # Nested: a bare variant pattern (Red) and a field-name binder (color).
-def inner_name(w: Wrapper) -> text =
+def inner-name(w: Wrapper) -> text =
   case w of
     | Wrap(color = Red) => "wrapped-red"
     | Wrap(color) => "wrapped-%{name(color)}"
@@ -67,6 +67,6 @@ program def main(n: int = 0) -> unit =
   print(code(c))
   print(describe(Empty))
   print(describe(Full(item = n)))
-  print(inner_name(Wrap(color = c)))
-  print(signal_name(Signal::Halt))
-  print(trend_name(Trend::Halt))
+  print(inner-name(Wrap(color = c)))
+  print(signal-name(Signal::Halt))
+  print(trend-name(Trend::Halt))

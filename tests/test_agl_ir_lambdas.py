@@ -140,8 +140,8 @@ def test_higher_order_apply() -> None:
 def test_returned_lambda_called() -> None:
     """Lambda returned from a function and then called by the caller."""
     source = (
-        "def make_adder(n: int) -> (int) -> int = fn(x: int) => x + n\n"
-        "let add5 = make_adder(5)\n"
+        "def make-adder(n: int) -> (int) -> int = fn(x: int) => x + n\n"
+        "let add5 = make-adder(5)\n"
         "let r = add5(3)\n"
         "()"
     )
@@ -171,8 +171,8 @@ def test_returned_def_called() -> None:
 def test_capture_through_def_param() -> None:
     """Lambda inside def captures the def's param (capture-through)."""
     source = (
-        "def make_adder(n: int) -> (int) -> int = fn(x: int) => x + n\n"
-        "let add10 = make_adder(10)\n"
+        "def make-adder(n: int) -> (int) -> int = fn(x: int) => x + n\n"
+        "let add10 = make-adder(10)\n"
         "let r = add10(3)\n"
         "()"
     )
@@ -183,11 +183,11 @@ def test_capture_through_def_param() -> None:
 def test_capture_through_def_local_let() -> None:
     """Lambda inside def captures the def's local let binding (capture-through)."""
     source = (
-        "def make_multiplier(n: int) -> (int) -> int =\n"
+        "def make-multiplier(n: int) -> (int) -> int =\n"
         "  let factor = n * 2\n"
         "  fn(x: int) => x * factor\n"
-        "let triple_base = make_multiplier(3)\n"
-        "let r = triple_base(5)\n"
+        "let triple-base = make-multiplier(3)\n"
+        "let r = triple-base(5)\n"
         "()"
     )
     ir = evaluate_ir(source)
@@ -198,11 +198,11 @@ def test_capture_through_var_by_cell() -> None:
     """Lambda inside def captures a var (by-cell). Var mutation after lambda creation
     is visible in the lambda (cell semantics)."""
     source = (
-        "def make_counter_and_get() -> (unit) -> int =\n"
+        "def make-counter-and-get() -> (unit) -> int =\n"
         "  var count = 0\n"
         "  count := count + 1\n"
         "  fn(u: unit) => count\n"
-        "let getter = make_counter_and_get()\n"
+        "let getter = make-counter-and-get()\n"
         "let r = getter(())\n"
         "()"
     )
@@ -326,23 +326,23 @@ def test_function_values_program() -> None:
         "let dbl = fn(x: int) -> int => x * 2\n"
         "let inc = fn(x: int) => x + 1\n"
         "\n"
-        "let r_g7 = g(7)\n"
-        "let r_gm3 = g(-3)\n"
-        "let r_g0 = g(0)\n"
-        "let r_dbl4 = dbl(4)\n"
-        "let r_inc9 = inc(9)\n"
-        "let r_apply_classify = apply(classify, 10)\n"
-        "let r_apply_label = apply(label, -5)\n"
+        "let r-g7 = g(7)\n"
+        "let r-gm3 = g(-3)\n"
+        "let r-g0 = g(0)\n"
+        "let r-dbl4 = dbl(4)\n"
+        "let r-inc9 = inc(9)\n"
+        "let r-apply-classify = apply(classify, 10)\n"
+        "let r-apply-label = apply(label, -5)\n"
         "()"
     )
     ir = evaluate_ir(source)
-    assert ir["r_g7"] == TextValue("pos")
-    assert ir["r_gm3"] == TextValue("neg")
-    assert ir["r_g0"] == TextValue("zero")
-    assert ir["r_dbl4"] == IntValue(8)
-    assert ir["r_inc9"] == IntValue(10)
-    assert ir["r_apply_classify"] == TextValue("pos")
-    assert ir["r_apply_label"] == TextValue("val=neg")
+    assert ir["r-g7"] == TextValue("pos")
+    assert ir["r-gm3"] == TextValue("neg")
+    assert ir["r-g0"] == TextValue("zero")
+    assert ir["r-dbl4"] == IntValue(8)
+    assert ir["r-inc9"] == IntValue(10)
+    assert ir["r-apply-classify"] == TextValue("pos")
+    assert ir["r-apply-label"] == TextValue("val=neg")
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +352,7 @@ def test_function_values_program() -> None:
 
 def test_lambda_with_decimal_return() -> None:
     """Lambda body returns int but explicit return type is decimal — coerced."""
-    source = "let to_dec = fn(x: int) -> decimal => x\nlet r = to_dec(3)\n()"
+    source = "let to-dec = fn(x: int) -> decimal => x\nlet r = to-dec(3)\n()"
     ir = evaluate_ir(source)
     assert ir["r"] == DecimalValue(decimal.Decimal("3"))
 
@@ -394,8 +394,8 @@ def test_function_value_captures_outer_let() -> None:
     """Lambda capturing an outer let-bound variable works correctly."""
     source = (
         "let offset = 100\n"
-        "let add_offset = fn(x: int) -> int => x + offset\n"
-        "let r = add_offset(5)\n"
+        "let add-offset = fn(x: int) -> int => x + offset\n"
+        "let r = add-offset(5)\n"
         "()"
     )
     ir = evaluate_ir(source)

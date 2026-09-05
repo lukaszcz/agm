@@ -1,8 +1,8 @@
 # Explicitly close independent sessions, or leave cleanup to close them on exit.
 
-program def main(explicit_close: bool) -> unit =
+program def main(explicit-close: bool) -> unit =
   let writer = Session::open(AgentPi("writer", "model", "high"))
   let reviewer = Session::open(AgentPi("reviewer", "model", "high"))
-  if explicit_close =>
+  if explicit-close =>
     writer.close()
     reviewer.close()

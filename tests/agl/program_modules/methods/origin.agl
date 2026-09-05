@@ -3,4 +3,4 @@ record Parcel(id: int)
 
 def Parcel::label(self) -> text = "parcel-%{self.id}"
 
-def make_parcel(id: int) -> Parcel = Parcel(id = id)
+def make-parcel(id: int) -> Parcel = Parcel(id = id)

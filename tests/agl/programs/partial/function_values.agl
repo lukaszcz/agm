@@ -2,14 +2,14 @@
 
 def maker[T]() -> T -> T = fn(value: T) => value
 
-def make_pair[T]() -> (T, T) -> T = fn(left: T, right: T) => left
+def make-pair[T]() -> (T, T) -> T = fn(left: T, right: T) => left
 
 program def main(mode: text) -> unit =
   if
     | mode == "call" =>
         print(maker()(7))
     | mode == "partial" =>
-        let keep: (int) -> int = make_pair()(?, 5)
+        let keep: (int) -> int = make-pair()(?, 5)
         print(keep(8))
     | else =>
         let first = maker()(3)

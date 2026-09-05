@@ -3,8 +3,8 @@
     {
       "name": "first_item",
       "params": {
-        "first_value": 3,
-        "next_value": 4
+        "first-value": 3,
+        "next-value": 4
       },
       "expect": {
         "stdout": "4\n"
@@ -13,8 +13,8 @@
     {
       "name": "negative_item",
       "params": {
-        "first_value": -2,
-        "next_value": 9
+        "first-value": -2,
+        "next-value": 9
       },
       "expect": {
         "stdout": "9\n"

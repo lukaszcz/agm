@@ -15,18 +15,18 @@ enum Option[T]
 def choose[T](left: T, right: T) -> T = right
 def id[T](value: T) -> T = value
 
-program def main(prefer_empty: bool) -> unit =
-  let from_array_sibling = choose([], [7])
-  let from_dict_sibling = choose({}, {answer: 8})
-  let from_result: array[int] = id([])
-  let from_fields = Bundle(values = [], metadata = {}, value = 9)
+program def main(prefer-empty: bool) -> unit =
+  let from-array-sibling = choose([], [7])
+  let from-dict-sibling = choose({}, {answer: 8})
+  let from-result: array[int] = id([])
+  let from-fields = Bundle(values = [], metadata = {}, value = 9)
   let options: array[Option[int]] = [none, some(value = 10)]
-  let selected = if prefer_empty => [] else => [11]
+  let selected = if prefer-empty => [] else => [11]
 
-  print from_array_sibling
-  print from_dict_sibling
-  print from_result
-  print from_fields.values
-  print from_fields.metadata
+  print from-array-sibling
+  print from-dict-sibling
+  print from-result
+  print from-fields.values
+  print from-fields.metadata
   print options
   print selected

@@ -3,7 +3,7 @@
 record Inner(var b: int)
 record Outer(var a: Inner, stable: int)
 
-def set_value(value: Inner, next: int) -> unit =
+def set-value(value: Inner, next: int) -> unit =
   value.b := next
 
 def returned(value: Inner) -> Inner = value
@@ -14,7 +14,7 @@ program def main(seed: int, receiver: Inner) -> unit =
   let r = Outer(a = Inner(b = seed), stable = seed)
   let alias = r
   r.a.b := seed + 1
-  set_value(r.a, seed + 2)
+  set-value(r.a, seed + 2)
   returned(r.a).b := seed + 3
 
   let xs = [Inner(b = seed)]

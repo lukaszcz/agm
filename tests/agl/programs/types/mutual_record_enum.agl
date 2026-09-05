@@ -12,21 +12,21 @@ record Stmt
   name: text
   value: Expr
 
-def eval_expr(e: Expr) -> int =
+def eval-expr(e: Expr) -> int =
   case e of
     | Lit(value) => value
-    | Add(lhs, rhs) => eval_expr(lhs) + eval_expr(rhs)
+    | Add(lhs, rhs) => eval-expr(lhs) + eval-expr(rhs)
     | Block(stmts) =>
         var total: int = 0
         for s in stmts do
-          total := total + eval_expr(s.value)
+          total := total + eval-expr(s.value)
         total
 
 program def main(x: int, y: int) -> unit =
-  let block_expr = Block(stmts = [
+  let block-expr = Block(stmts = [
     Stmt(name = "a", value = Lit(value = x)),
     Stmt(name = "b", value = Add(lhs = Lit(value = y), rhs = Lit(value = 1))),
   ])
 
-  print eval_expr(block_expr)
-  print eval_expr(Add(lhs = Lit(value = x), rhs = Lit(value = y)))
+  print eval-expr(block-expr)
+  print eval-expr(Add(lhs = Lit(value = x), rhs = Lit(value = y)))

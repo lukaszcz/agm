@@ -36,18 +36,18 @@ def _reject(source: str) -> str:
 def test_session_statics_type_as_session_with_defaults_and_named_arguments() -> None:
     checked = _check(
         'let agent = Agent::AgentCommand(command = "agent")\n'
-        "let default_transport = Session::open(agent)\n"
-        'let named_transport = Session::open(agent, name = "named")\n'
-        "let explicit_transport = Session::open(\n"
+        "let default-transport = Session::open(agent)\n"
+        'let named-transport = Session::open(agent, name = "named")\n'
+        "let explicit-transport = Session::open(\n"
         "  agent,\n"
         "  transport = Option[SessionTransport]::Some(SessionTransport::Rpc),\n"
         '  name = "rpc",\n'
         ")\n"
-        "let member_transport = Session::open(\n"
+        "let member-transport = Session::open(\n"
         "  agent,\n"
         "  transport = Option[SessionTransport::Rpc]::Some(SessionTransport::Rpc),\n"
         ")\n"
-        "let default_session = Session::default()"
+        "let default-session = Session::default()"
     )
 
     calls = [
@@ -115,7 +115,7 @@ def test_nested_user_session_does_not_shadow_prelude_session_static(
 ) -> None:
     checked = _check(
         f"scope User\n{session_declaration}\nend User\n"
-        "let default_session = Session::default()\n"
+        "let default-session = Session::default()\n"
         f"{local_constructor}"
     )
     calls = [
@@ -183,7 +183,7 @@ def test_prelude_session_constructor_spelling_is_rejected_as_an_unknown_static(
 
 def test_builtin_static_cannot_be_partially_applied_or_used_as_a_value() -> None:
     partial = _reject("Session::open(?)")
-    value = _reject("let open_session = Session::open\nopen_session")
+    value = _reject("let open-session = Session::open\nopen-session")
     assert "partial" in partial.lower()
     assert "cannot be used as a value" in value.lower()
 

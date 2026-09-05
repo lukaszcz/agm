@@ -20,7 +20,7 @@ Rules implemented
     - Other untyped initializers infer from the literal/expression.
 4.  ``name := e`` — expected type is the binding's declared type.
 5.  ``print(expr)`` — accepts any value and yields ``unit``.
-6.  ``render(expr, pretty:, quote_strings:)`` — accepts any value and yields ``text``.
+6.  ``render(expr, pretty:, quote-strings:)`` — accepts any value and yields ``text``.
 7.  ``ask(prompt, ...)`` — default-session call with codec; ``Agent::ask`` selects a receiver.
 8.  ``exec(cmd, ...)`` — shell call; requires ``supports_shell_exec``.
 9.  Declared-name calls — checked against the full ``FunctionSignature``.

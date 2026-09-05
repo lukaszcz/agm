@@ -1,13 +1,13 @@
 # Free asks and Session::default share one snapshot default session.
 import std/config
 
-program def main(explicit_close: bool) -> unit =
+program def main(explicit-close: bool) -> unit =
   std/config::default-agent := AgentPi("writer", "model", "high")
   let direct = Session::default()
   let first = ask("first prompt")
   std/config::default-agent := AgentPi("reviewer", "model", "high")
   let explicit = Session::open(AgentPi("reviewer", "model", "high"))
   let interleaved = explicit.ask("explicit prompt")
-  let through_default = direct.ask("direct prompt")
+  let through-default = direct.ask("direct prompt")
   let second = ask$ second prompt
-  if explicit_close => direct.close()
+  if explicit-close => direct.close()

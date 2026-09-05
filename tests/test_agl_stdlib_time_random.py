@@ -166,12 +166,12 @@ def test_random_state_is_isolated_between_concurrent_real_interpreters(tmp_path:
         "import std/random\n"
         "extern def checkpoint() -> unit\n"
         "extern def report(seed: int, first: int, second: int) -> unit\n"
-        "program def main(run_seed: int) -> unit =\n"
-        "  random::seed(run_seed)\n"
+        "program def main(run-seed: int) -> unit =\n"
+        "  random::seed(run-seed)\n"
         "  checkpoint()\n"
         "  let first = random::below(1000000)\n"
         "  let second = random::below(1000000)\n"
-        "  report(run_seed, first, second)\n"
+        "  report(run-seed, first, second)\n"
     )
     entry_path.with_suffix(".py").write_text(
         "from threading import Barrier\n"

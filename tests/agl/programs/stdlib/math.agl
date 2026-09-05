@@ -44,14 +44,14 @@ program def main(mode: int) -> unit =
         print(math::sum-decimal([0.1, 0.2, 0.3]))
     | 3 =>
         var integers = [3, -1, 0, 2]
-        let compare_ints = fn(left: int, right: int) => left.compare(right)
-        let compare_decimals = fn(left: decimal, right: decimal) => left.compare(right)
-        print(integers.sort(compare_ints))
-        integers.sort!(compare_ints)
+        let compare-ints = fn(left: int, right: int) => left.compare(right)
+        let compare-decimals = fn(left: decimal, right: decimal) => left.compare(right)
+        print(integers.sort(compare-ints))
+        integers.sort!(compare-ints)
         print(integers)
-        print([2.5, -1.5, 0.0].sort(compare_decimals))
-        let compare_to_five = 5.compare
-        print(compare_to_five(3))
+        print([2.5, -1.5, 0.0].sort(compare-decimals))
+        let compare-to-five = 5.compare
+        print(compare-to-five(3))
         print((-8).abs().clamp(0, 5).pow(2).to-decimal().sqrt().round(1))
     | 4 =>
         let _ = 2.pow(-1)
@@ -62,10 +62,10 @@ program def main(mode: int) -> unit =
         print(17.pow(0))
         print(0.pow(5))
     | 6 =>
-        let no_ints: array[int] = []
-        let no_decimals: array[decimal] = []
-        print(math::sum(no_ints))
-        print(math::sum-decimal(no_decimals))
+        let no-ints: array[int] = []
+        let no-decimals: array[decimal] = []
+        print(math::sum(no-ints))
+        print(math::sum-decimal(no-decimals))
         print(0.0.sqrt())
         print(2.0.pow(-2))
         print(0.0.pow(0))

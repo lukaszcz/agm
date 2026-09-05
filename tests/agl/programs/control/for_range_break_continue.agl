@@ -3,16 +3,16 @@
 # Exercises: break in range for, continue in range for, continue advancing cursor.
 
 program def main(n: int) -> unit =
-  var all_continued: int = 0
+  var all-continued: int = 0
   for i in 1 to n do
-    all_continued := all_continued + 1
+    all-continued := all-continued + 1
     continue
   done
-  print all_continued
+  print all-continued
 
-  var before_n: int = 0
+  var before-n: int = 0
   for i in 1 to 100 do
     if i >= n => break
-    before_n := before_n + i
+    before-n := before-n + i
   done
-  print before_n
+  print before-n

@@ -1,29 +1,29 @@
 # Named-argument holes bind to the named parameter, including named-only params.
-var default_ticks = 0
+var default-ticks = 0
 
-def next_default() -> int =
-  default_ticks := default_ticks + 1
-  default_ticks
+def next-default() -> int =
+  default-ticks := default-ticks + 1
+  default-ticks
 
-def shaped(x: int, *, y: int, z: int = next_default()) -> int = x * 100 + y * 10 + z
+def shaped(x: int, *, y: int, z: int = next-default()) -> int = x * 100 + y * 10 + z
 
-def named_only(*, left: int, right: int = next_default()) -> int = left * 10 + right
+def named-only(*, left: int, right: int = next-default()) -> int = left * 10 + right
 
 program def main(mode: text, base: int) -> unit =
   if
     | mode == "named" =>
-        let fill_y = shaped(base, y = ?, z = 9)
-        let fill_x = shaped(x = ?, y = base, z = 8)
-        print(fill_y(4))
-        print(fill_x(3))
+        let fill-y = shaped(base, y = ?, z = 9)
+        let fill-x = shaped(x = ?, y = base, z = 8)
+        print(fill-y(4))
+        print(fill-x(3))
     | mode == "defaults" =>
-        let with_default = shaped(x = ?, y = base)
-        print(with_default(2))
-        print(with_default(2))
-        print(default_ticks)
+        let with-default = shaped(x = ?, y = base)
+        print(with-default(2))
+        print(with-default(2))
+        print(default-ticks)
     | else =>
-        let left_open = named_only(left = ?)
-        let right_open = named_only(left = base, right = ?)
-        print(left_open(6))
-        print(right_open(7))
-        print(default_ticks)
+        let left-open = named-only(left = ?)
+        let right-open = named-only(left = base, right = ?)
+        print(left-open(6))
+        print(right-open(7))
+        print(default-ticks)

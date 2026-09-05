@@ -66,8 +66,8 @@ recursion, same-module forward references, and mutual recursion when the group
 provides concrete evidence:
 
 ```agl
-def is_even(n: int) = if n == 0 => true else => is_odd(n - 1)
-def is_odd(n: int) = if n == 0 => false else => is_even(n - 1)
+def is-even(n: int) = if n == 0 => true else => is-odd(n - 1)
+def is-odd(n: int) = if n == 0 => false else => is-even(n - 1)
 ```
 
 This also applies when a later function is used as a function value or through
@@ -92,14 +92,14 @@ makes `expr` the function call's result. A bare `return` is equivalent to
 `return ()` and is valid only when the function result type is `unit`.
 
 ```agl
-def first_positive(xs: array[int]) -> int =
+def first-positive(xs: array[int]) -> int =
   for x in xs do
     if x > 0 =>
       return x
   done
   -1
 
-def log_and_stop() -> unit =
+def log-and-stop() -> unit =
   print "stopping"
   return
 ```
@@ -205,7 +205,7 @@ Named-only defaults may appear in any order:
 def greet(name: text, greeting: text = "Hello") -> text =
   "%{greeting}, %{name}!"
 
-def with_named_default(x: int, *, tag: text = "ok") -> text =
+def with-named-default(x: int, *, tag: text = "ok") -> text =
   "%{tag}: %{x}"   # tag is named-only; its default is unconstrained
 ```
 
@@ -250,15 +250,15 @@ record Person
   name: text
   address: text
 
-def Person::with_address(self, address: text) -> Person =
+def Person::with-address(self, address: text) -> Person =
   Person(name = self.name, address = address)
 
 program def main() -> unit =
   let person = Person(name = "Ada", address = "Main Street")
-  let by_member = person.with_address("East Road")
-  let by_path = Person::with_address(person, "East Road")
-  let _ = print(by_member.address)
-  let _ = print(by_path.address)
+  let by-member = person.with-address("East Road")
+  let by-path = Person::with-address(person, "East Road")
+  let _ = print(by-member.address)
+  let _ = print(by-path.address)
 ```
 
 A method may update a `var` field through `self`; `self` need not be a mutable
@@ -349,11 +349,11 @@ later. `def`s in the same named scope have the same visibility, so root and
 same-scope `def`s may use mutual recursion:
 
 ```agl
-def is_even(n: int) -> bool =
-  if n == 0 => true else => is_odd(n - 1)
+def is-even(n: int) -> bool =
+  if n == 0 => true else => is-odd(n - 1)
 
-def is_odd(n: int) -> bool =
-  if n == 0 => false else => is_even(n - 1)
+def is-odd(n: int) -> bool =
+  if n == 0 => false else => is-even(n - 1)
 ```
 
 `def` is valid at the program root and in named scope regions, but not inside
@@ -451,7 +451,7 @@ def singleton[T](x: T) -> array[T] =
   let single: array[T] = [x]
   single
 
-def via_lambda[A](x: A) -> A =
+def via-lambda[A](x: A) -> A =
   let g: A -> A = fn(y: A) -> A => y
   g(x)
 ```
@@ -628,12 +628,12 @@ program def main() -> unit =
 supplied in any order:
 
 ```agl
-def format_msg(message: text, prefix: text = "[INFO]") -> text =
+def format-msg(message: text, prefix: text = "[INFO]") -> text =
   "%{prefix} %{message}"
 
 program def main() -> unit =
-  let _ = format_msg("Done.")
-  let _ = format_msg("Done.", prefix = "!")
+  let _ = format-msg("Done.")
+  let _ = format-msg("Done.", prefix = "!")
 ```
 
 Unknown names, duplicates, and supplying a positional-only parameter by name
@@ -686,10 +686,10 @@ program def main() -> unit =
   let inc: (int) -> int = add(?, 1)
   let _ = print(inc(4))
   let plus: (int, int) -> int = add
-  let plus_two: (int) -> int = plus(?, 2)
-  let _ = print(plus_two(5))
-  let fill_edges: (int, int) -> int = digits(?, 9, ?)
-  let _ = print(fill_edges(1, 2))
+  let plus-two: (int) -> int = plus(?, 2)
+  let _ = print(plus-two(5))
+  let fill-edges: (int, int) -> int = digits(?, 9, ?)
+  let _ = print(fill-edges(1, 2))
 ```
 
 The resulting function type has one parameter for each placeholder. Each
@@ -719,10 +719,10 @@ parameters:
 def shaped(x: int, *, y: int, z: int = 0) -> int = x * 100 + y * 10 + z
 
 program def main() -> unit =
-  let fill_y: (int) -> int = shaped(3, y = ?, z = 9)
-  let fill_x: (int) -> int = shaped(x = ?, y = 4)
-  let _ = print(fill_y(5))
-  let _ = print(fill_x(2))
+  let fill-y: (int) -> int = shaped(3, y = ?, z = 9)
+  let fill-x: (int) -> int = shaped(x = ?, y = 4)
+  let _ = print(fill-y(5))
+  let _ = print(fill-x(2))
 ```
 
 For constructors, the same argument binding rules apply:
@@ -732,8 +732,8 @@ record Box[T]
   value: T
 
 program def main() -> unit =
-  let make_box: (int) -> Box[int] = Box(value = ?)
-  let _ = print(make_box(8).value)
+  let make-box: (int) -> Box[int] = Box(value = ?)
+  let _ = print(make-box(8).value)
 ```
 
 Non-placeholder arguments, and the callee expression for a function-value call,
@@ -746,18 +746,18 @@ is invoked.
 var ticks = 0
 var saved = 4
 
-def next_tick() -> int =
+def next-tick() -> int =
   ticks := ticks + 1
   ticks
 
-def add_saved(a: int, b: int) -> int = a + b
+def add-saved(a: int, b: int) -> int = a + b
 
-def stamped(x: int, suffix: int = next_tick()) -> int = x * 10 + suffix
+def stamped(x: int, suffix: int = next-tick()) -> int = x * 10 + suffix
 
 program def main() -> unit =
-  let use_saved = add_saved(?, saved)
+  let use-saved = add-saved(?, saved)
   saved := 100
-  print(use_saved(6))             # 10; captured saved = 4
+  print(use-saved(6))             # 10; captured saved = 4
 
   let stamp: (int) -> int = stamped(?)
   print(stamp(2))                 # 21
@@ -770,18 +770,18 @@ underlying call is raised when the closure is invoked:
 
 ```agl
 def add(a: int, b: int) -> int = a + b
-def fail_created() -> int = raise Abort(message = "created")
-def fail_called(x: int) -> int = raise Abort(message = "called %{x}")
+def fail-created() -> int = raise Abort(message = "created")
+def fail-called(x: int) -> int = raise Abort(message = "called %{x}")
 
 program def main() -> unit =
   let _ = try
-    let f = add(?, fail_created())
+    let f = add(?, fail-created())
     print(f(1))
   catch Abort as e =>
     print(e.message)              # created
 
   let _ = try
-    let g = fail_called(?)
+    let g = fail-called(?)
     print(g(9))
   catch Abort as e =>
     print(e.message)
@@ -797,15 +797,15 @@ the `::[…]` form.
 ```agl
 def id[T](x: T) -> T = x
 def singleton[T](x: T) -> array[T] = [x]
-def map_one[A, B](f: (A) -> B, xs: array[A]) -> array[B] = [f(xs[0])]
+def map-one[A, B](f: (A) -> B, xs: array[A]) -> array[B] = [f(xs[0])]
 
 program def main() -> unit =
-  let keep_ints: (array[int]) -> array[int] = map_one(id, ?)
-  let _ = print(keep_ints([5])[0])
-  let make_single: (int) -> array[int] = singleton(?)
-  let _ = print(make_single(7)[0])
-  let make_text = singleton::[text](?)
-  let _ = print(make_text("hi")[0])
+  let keep-ints: (array[int]) -> array[int] = map-one(id, ?)
+  let _ = print(keep-ints([5])[0])
+  let make-single: (int) -> array[int] = singleton(?)
+  let _ = print(make-single(7)[0])
+  let make-text = singleton::[text](?)
+  let _ = print(make-text("hi")[0])
 ```
 
 Error conditions are reported statically:
@@ -892,14 +892,14 @@ The types the language's own constructs name are ordinary values: a
 returned from one.
 
 ```agl
-def make_policy(retries: int) -> ParsePolicy =
+def make-policy(retries: int) -> ParsePolicy =
   if retries == 0 => ParsePolicy::Abort else => Retry(n = retries)
 ```
 
 The `on-parse-error` argument of `ask`/`exec` is the one exception: it requires
 a **syntactic** static constructor written at the call site (`Abort`, or
 `Retry(n = <int literal>)`), so a `ParsePolicy` held in a binding or returned
-from a function like `make_policy` cannot be passed to it.
+from a function like `make-policy` cannot be passed to it.
 
 ## Complete example
 
@@ -910,10 +910,10 @@ enum Review
 
 let reviewer = AgentCommand("reviewer")
 
-def summarize_issues(issues: array[text]) -> text =
+def summarize-issues(issues: array[text]) -> text =
   "Issues found:\n%{issues}"
 
-def review_artifact(artifact: text) -> Review =
+def review-artifact(artifact: text) -> Review =
   let r: Review = reviewer.ask(
     "Review this artifact:\n%{artifact}",
     on-parse-error = Retry(n = 2)
@@ -922,9 +922,9 @@ def review_artifact(artifact: text) -> Review =
 
 program def main(spec: text) -> unit =
   let artifact: text = ask "Implement %{spec}"
-  let result = review_artifact(artifact)
+  let result = review-artifact(artifact)
 
   case result of
     | Pass => print "Accepted."
-    | Fail(issues) => print(summarize_issues(issues))
+    | Fail(issues) => print(summarize-issues(issues))
 ```

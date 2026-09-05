@@ -3,14 +3,14 @@
 # methods, callbacks, and the raising unwrap path.
 import std/prelude::{Option, UnwrapError, print}
 
-def keep_large(value: int) -> Option[int] =
+def keep-large(value: int) -> Option[int] =
   if value > 2 => Option::Some(value = value) else => Option::None
 
 def report(value: int) -> unit = print("each %{value}")
 
 program def main(input: int) -> unit =
   let option: Option[int] = (if input > 0 => Option::Some(value = input) else => Option::None)
-  let chained = option.map(fn(value: int) => value + 1).and-then(keep_large)
+  let chained = option.map(fn(value: int) => value + 1).and-then(keep-large)
   let filtered = option.filter(fn(value: int) => value > 1)
 
   print(chained.unwrap-or(-1))

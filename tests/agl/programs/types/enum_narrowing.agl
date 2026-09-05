@@ -13,7 +13,7 @@ program def main() -> unit =
   let second: Second = Shared(value = 8)
   let node: Tree[int] = Tree[int]::Node(value = 9)
   let leaf: Tree[int] = Tree::Leaf
-  let text_leaf: Tree[text] = Tree::Leaf
+  let text-leaf: Tree[text] = Tree::Leaf
   print(first is Shared)
   print(second is Shared)
   print(node is Node)
@@ -21,11 +21,11 @@ program def main() -> unit =
   print(node is Tree[int]::Node)
   print(node is not Leaf)
   print(leaf is Tree::Leaf)
-  print(text_leaf is Tree::Leaf)
+  print(text-leaf is Tree::Leaf)
   let shared = first as Shared
-  let shared_again = second as Shared
+  let shared-again = second as Shared
   print(shared.double())
-  print(shared_again.double())
+  print(shared-again.double())
   let narrow = node as Tree[int]::Node
   print(narrow.value)
   print(leaf as? Tree[int]::Node)

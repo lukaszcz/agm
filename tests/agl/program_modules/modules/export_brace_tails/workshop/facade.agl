@@ -1,2 +1,2 @@
 # The facade selects and renames the formatter it publishes.
-export workshop/format::{format_text as format}
+export workshop/format::{format-text as format}

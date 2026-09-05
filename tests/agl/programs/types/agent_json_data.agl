@@ -15,23 +15,23 @@ record DirectCommand
 program def main() -> unit =
   let agent: Agent = AgentCommand("primary")
   let backup: Agent = AgentClaude("sonnet", "medium")
-  let direct_json: json = agent as json
-  let direct_round_trip: Agent = direct_json as Agent
-  print(direct_round_trip == agent)
+  let direct-json: json = agent as json
+  let direct-round-trip: Agent = direct-json as Agent
+  print(direct-round-trip == agent)
 
   let agents: array[Agent] = [agent, backup]
-  let agents_json: json = agents as json
-  let agents_round_trip: array[Agent] = agents_json as array[Agent]
-  print(agents_round_trip == agents)
+  let agents-json: json = agents as json
+  let agents-round-trip: array[Agent] = agents-json as array[Agent]
+  print(agents-round-trip == agents)
 
   let team = Team(agent = agent, backups = agents)
   let deployment = Deployment(primary = team, teams = [team])
-  let deployment_json: json = deployment as json
-  let deployment_round_trip: Deployment = deployment_json as Deployment
-  print(deployment_round_trip == deployment)
-  print(deployment_round_trip.primary.agent == agent)
+  let deployment-json: json = deployment as json
+  let deployment-round-trip: Deployment = deployment-json as Deployment
+  print(deployment-round-trip == deployment)
+  print(deployment-round-trip.primary.agent == agent)
 
   let direct = DirectCommand(command = AgentCommand("direct"))
-  let direct_slot_json: json = direct as json
-  let direct_slot_round_trip: DirectCommand = direct_slot_json as DirectCommand
-  print(direct_slot_round_trip == direct)
+  let direct-slot-json: json = direct as json
+  let direct-slot-round-trip: DirectCommand = direct-slot-json as DirectCommand
+  print(direct-slot-round-trip == direct)

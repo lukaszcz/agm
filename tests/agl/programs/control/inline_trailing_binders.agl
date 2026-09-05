@@ -4,8 +4,8 @@ program def main(target: int) -> unit =
   var rounds: int = 0
   do[3] rounds := rounds + 1; let complete = rounds >= target until complete
 
-  var single_runs: int = 0
-  do single_runs := single_runs + 1; let complete = true until complete
+  var single-runs: int = 0
+  do single-runs := single-runs + 1; let complete = true until complete
 
   print rounds
-  print single_runs
+  print single-runs

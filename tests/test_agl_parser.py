@@ -3236,7 +3236,7 @@ class TestFullPrograms:
         assert isinstance(let.type_ann, FuncT)
 
     def test_exec_result_program(self) -> None:
-        src = 'let res = exec "ls -la"\nprint(res.stdout)\nif res.exit_code != 0 => print(x)'
+        src = 'let res = exec "ls -la"\nprint(res.stdout)\nif res.exit-code != 0 => print(x)'
         prog = parse(src)
         assert len(items(prog)) == 3
 

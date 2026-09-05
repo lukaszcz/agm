@@ -7,26 +7,26 @@ enum Verdict
   | Pass
   | Fail(issues: array[text])
 
-def review_once(doc: text) -> Verdict =
+def review-once(doc: text) -> Verdict =
   reviewer.ask("Review this document: " + doc)
 
-def review_with_retry(doc: text) -> Verdict =
+def review-with-retry(doc: text) -> Verdict =
   reviewer.ask("Review this document: " + doc, on-parse-error = Retry(n = 2))
 
 # Direct call via function — result printed.
 def infinite(n: int) -> int = infinite(n + 1)
 
 program def main(topic: text) -> unit =
-  let first_verdict: Verdict = review_once(topic)
-  print(first_verdict is Pass)
+  let first-verdict: Verdict = review-once(topic)
+  print(first-verdict is Pass)
 
   # Retry-enabled call.
-  let second_verdict: Verdict = review_with_retry(topic)
-  print(second_verdict is Pass)
+  let second-verdict: Verdict = review-with-retry(topic)
+  print(second-verdict is Pass)
 
   # RecursionError caught inside try/catch.
-  let depth_result = try
+  let depth-result = try
     infinite(0)
   catch RecursionError =>
     -1
-  print depth_result
+  print depth-result

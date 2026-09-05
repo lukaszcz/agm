@@ -4,9 +4,9 @@
 
 # --- print: CastError renders in declaration-order record form ---
 
-program def main(bad_input: text) -> unit =
+program def main(bad-input: text) -> unit =
   try
-    let n = bad_input as int
+    let n = bad-input as int
     print "parsed: %{n}"
   catch CastError as e =>
     # Print the exception value directly: record-style with all fields.
@@ -18,7 +18,7 @@ program def main(bad_input: text) -> unit =
     print(e as json)
 
   # --- as? cast: check convertibility without exception ---
-  if bad_input as? int => print "got int" else => print "no int"
+  if bad-input as? int => print "got int" else => print "no int"
 
   # --- ArithmeticError rendered via print ---
   try

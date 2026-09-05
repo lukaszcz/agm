@@ -15,7 +15,7 @@ use num/arith::Operations::*
 use Local::*
 
 scope Local
-  def scope_value() -> int = 99
+  def scope-value() -> int = 99
 end Local
 
 def tag() -> int = 7
@@ -27,11 +27,11 @@ program def main(x: int, y: int) -> unit =
   print(yell("go"))
   print(st::max2(x, y) as text)
   print(st::min2(x, y) as text)
-  print(via_secret(x) as text)
+  print(via-secret(x) as text)
   print(L::alpha())
   print(L::beta())
   print(difference(y, x) as text)
-  print(scope_value() as text)
+  print(scope-value() as text)
   print(Arith::add(x, y) as text)
   print(num/arith::add(x, y) as text)
   print(num/facade::plus(x, y) as text)

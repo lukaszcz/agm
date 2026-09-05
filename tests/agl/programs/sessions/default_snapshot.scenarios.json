@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "free_asks_share_the_snapshot_default_session",
-      "params": {"explicit_close": true},
+      "params": {"explicit-close": true},
       "agents": {
         "writer": {"responses": ["first", "direct", "second"]},
         "reviewer": {"responses": ["explicit"]}
@@ -23,7 +23,7 @@
     },
     {
       "name": "default_session_cleanup_keeps_its_first_agent_snapshot",
-      "params": {"explicit_close": false},
+      "params": {"explicit-close": false},
       "agents": {
         "writer": {"responses": ["first", "direct", "second"]},
         "reviewer": {"responses": ["explicit"]}

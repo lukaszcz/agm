@@ -16,5 +16,5 @@ program def main(value: text, target: text) -> unit =
     print "target: %{e.target-type}"
     print "raw: %{e.raw}"
     # message is non-empty
-    let has_msg = e.message != ""
-    print "has_message: %{has_msg as text}"
+    let has-msg = e.message != ""
+    print "has_message: %{has-msg as text}"

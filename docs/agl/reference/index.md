@@ -47,7 +47,7 @@ enum Review
 let reviewer = AgentCommand("reviewer")
 let impl = AgentCommand("impl")
 
-def review_and_fix(artifact: text) -> text =
+def review-and-fix(artifact: text) -> text =
   let r: Review = reviewer.ask(
     "Review the artifact for correctness:\n%{artifact}",
     on-parse-error = Retry(n = 2)
@@ -62,7 +62,7 @@ program def main(spec: text) -> unit =
   var artifact: text = impl.ask("Implement %{spec}")
 
   do[5]
-    artifact := review_and_fix(artifact)
+    artifact := review-and-fix(artifact)
     let final: Review = reviewer.ask("Final review:\n%{artifact}")
   until final is Pass
 ```

@@ -10,7 +10,7 @@ import collections::*
 
 program def main(seed: int, empty: bool) -> unit =
   let maybe: Maybe[int] = if empty => none else => some(value = seed)
-  print(or_else(maybe, 0) as text)
+  print(or-else(maybe, 0) as text)
 
   # Pattern matching on the imported variant (brought in unqualified by the glob
   # import tail); the bare `none` is a nullary constructor pattern, not a binder.
@@ -20,8 +20,8 @@ program def main(seed: int, empty: bool) -> unit =
 
   # The SAME imported definition at text — erasure across the module boundary.
   let word: Maybe[text] = if empty => none else => some(value = "w%{seed}")
-  print(or_else(word, "fallback"))
+  print(or-else(word, "fallback"))
 
   # Qualified generic record type + qualified constructor, then field access.
-  let p: collections::Pair[int, text] = collections::make_pair(seed, "tag")
+  let p: collections::Pair[int, text] = collections::make-pair(seed, "tag")
   print "%{p.first}:%{p.second}"

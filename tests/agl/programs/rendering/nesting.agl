@@ -52,8 +52,8 @@ program def main() -> unit =
   # --- json fields and top-level json both render compact under print ---
   let ann = Annotated(label = "note", meta = {"key": "value", "n": 1})
   print ann
-  let top_json: json = {"key": "value", "n": 1}
-  print top_json
+  let top-json: json = {"key": "value", "n": 1}
+  print top-json
 
   # --- as json opt-in: record and enum produce compact JSON under print ---
   print(author as json)

@@ -15,7 +15,7 @@ end Scoped
 
 def Problem::label(self) -> text = "problem %{self.code}"
 
-def DetailedProblem::detail_label(self) -> text = self.label() + ": %{self.detail}"
+def DetailedProblem::detail-label(self) -> text = self.label() + ": %{self.detail}"
 
 def Scoped::Marker::label(self) -> text = "scoped %{self.code}"
 
@@ -24,13 +24,13 @@ program def main(mode: text, code: int) -> unit =
     | mode == "subtype" =>
         let problem = DetailedProblem(message = "direct", code = code, detail = "extra")
         print(problem.label())
-        print(problem.detail_label())
+        print(problem.detail-label())
     | mode == "caught" =>
         try
           raise DetailedProblem(message = "caught", code = code, detail = "handled")
         catch DetailedProblem as problem =>
           print(problem.label())
-          print(problem.detail_label())
+          print(problem.detail-label())
         catch Problem as problem =>
           print(problem.label())
     | else =>

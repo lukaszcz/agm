@@ -182,20 +182,20 @@ def test_single_module_program_infers_forward_and_mutual_returns(tmp_path: Path)
         tmp_path,
         {
             "entry": (
-                "def use_later(n: int) = later(n)\n"
+                "def use-later(n: int) = later(n)\n"
                 "def later(n: int) = n + 1\n"
-                "def is_even(n: int) = if n == 0 => true else => is_odd(n - 1)\n"
-                "def is_odd(n: int) = if n == 0 => false else => is_even(n - 1)\n"
-                "is_even(2)"
+                "def is-even(n: int) = if n == 0 => true else => is-odd(n - 1)\n"
+                "def is-odd(n: int) = if n == 0 => false else => is-even(n - 1)\n"
+                "is-even(2)"
             )
         },
     )
 
     signatures = graph.modules[ENTRY_ID].function_signatures
-    assert signatures["use_later"].result == IntType()
+    assert signatures["use-later"].result == IntType()
     assert signatures["later"].result == IntType()
-    assert signatures["is_even"].result == BoolType()
-    assert signatures["is_odd"].result == BoolType()
+    assert signatures["is-even"].result == BoolType()
+    assert signatures["is-odd"].result == BoolType()
 
 
 def test_candidate_inference_reads_a_preceding_destructuring_let_binder() -> None:
@@ -430,10 +430,10 @@ def test_cross_module_type_not_assignable(tmp_path: Path) -> None:
             "import foo\n"
             "import bar\n"
             # mycolor has type foo::Color but we try to use it where bar::Color expected
-            "def get_foo_color() -> foo::Color = foo::makeColor()\n"
-            "def expect_bar(c: bar::Color) -> bar::Color = c\n"
-            "let c = get_foo_color()\n"
-            "expect_bar(c)"  # type mismatch: foo::Color ≠ bar::Color
+            "def get-foo-color() -> foo::Color = foo::makeColor()\n"
+            "def expect-bar(c: bar::Color) -> bar::Color = c\n"
+            "let c = get-foo-color()\n"
+            "expect-bar(c)"  # type mismatch: foo::Color ≠ bar::Color
         ),
         "foo": ("enum Color\n  | Red\n  | Blue\ndef makeColor() -> Color = Red"),
         "bar": ("enum Color\n  | Red\n  | Blue\ndef makeColor() -> Color = Red"),
@@ -1594,10 +1594,10 @@ def test_module_qualified_variant_qualifier_mismatch(tmp_path: Path) -> None:
         "entry": (
             "import libA\n"
             "import libB\n"
-            "def check_module(c: libB::Color) -> text =\n"
+            "def check-module(c: libB::Color) -> text =\n"
             '  case c of | libA::Color::Red => "red" | _ => "other"\n'
             "let c = libB::Color::Red\n"
-            "check_module(c)"
+            "check-module(c)"
         ),
         "libA": ("enum Color\n  | Red\n  | Blue"),
         "libB": ("enum Color\n  | Red\n  | Blue"),
@@ -1688,7 +1688,7 @@ def test_pattern_uses_injected_enum_when_alias_route_has_same_owner(tmp_path: Pa
         "entry": (
             "import a::{Color}\n"
             "import b as Color\n"
-            "def check_module(value: Color) -> int =\n"
+            "def check-module(value: Color) -> int =\n"
             "  case value of | Color::Red => 1 | _ => 0\n"
             "0"
         ),
@@ -1740,10 +1740,10 @@ def test_module_qualified_variant_qualifier_is_not_enum(tmp_path: Path) -> None:
     modules = {
         "entry": (
             "import mylib\n"
-            "def check_module(c: mylib::Color) -> text =\n"
+            "def check-module(c: mylib::Color) -> text =\n"
             '  case c of | mylib::Point::Red => "red" | _ => "other"\n'
             "let c = mylib::Color::Red\n"
-            "check_module(c)"
+            "check-module(c)"
         ),
         "mylib": ("record Point\n  x: int\nenum Color\n  | Red\n  | Blue"),
     }
@@ -1756,10 +1756,10 @@ def test_module_qualified_variant_unknown_enum_in_pattern(tmp_path: Path) -> Non
     modules = {
         "entry": (
             "import mylib\n"
-            "def check_module(c: mylib::Color) -> text =\n"
+            "def check-module(c: mylib::Color) -> text =\n"
             '  case c of | mylib::Unknown::Red => "red" | _ => "other"\n'
             "let c = mylib::Color::Red\n"
-            "check_module(c)"
+            "check-module(c)"
         ),
         "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
@@ -2150,10 +2150,10 @@ def test_cross_module_mismatch_message_qualifies_type(tmp_path: Path) -> None:
         "entry": (
             "import foo\n"
             "import bar\n"
-            "def get_foo() -> foo::Color = foo::makeColor()\n"
-            "def expect_bar(c: bar::Color) -> bar::Color = c\n"
-            "let c = get_foo()\n"
-            "expect_bar(c)"
+            "def get-foo() -> foo::Color = foo::makeColor()\n"
+            "def expect-bar(c: bar::Color) -> bar::Color = c\n"
+            "let c = get-foo()\n"
+            "expect-bar(c)"
         ),
         "foo": ("enum Color\n  | Red\n  | Blue\ndef makeColor() -> Color = Red"),
         "bar": ("enum Color\n  | Red\n  | Blue\ndef makeColor() -> Color = Red"),
@@ -2326,10 +2326,10 @@ def test_record_type_repr_qualified_with_module(tmp_path: Path) -> None:
         "entry": (
             "import foo\n"
             "import bar\n"
-            "def get_foo() -> foo::Point = foo::makePoint()\n"
-            "def expect_bar(p: bar::Point) -> bar::Point = p\n"
-            "let p = get_foo()\n"
-            "expect_bar(p)"  # foo::Point ≠ bar::Point
+            "def get-foo() -> foo::Point = foo::makePoint()\n"
+            "def expect-bar(p: bar::Point) -> bar::Point = p\n"
+            "let p = get-foo()\n"
+            "expect-bar(p)"  # foo::Point ≠ bar::Point
         ),
         "foo": ("record Point\n  x: int\n  y: int\ndef makePoint() -> Point = Point(x = 0, y = 0)"),
         "bar": ("record Point\n  x: int\n  y: int\ndef makePoint() -> Point = Point(x = 1, y = 1)"),
@@ -2527,9 +2527,9 @@ def test_field_type_with_open_imported_function_name_is_type_error(tmp_path: Pat
 def test_cross_file_mutual_recursion_qualified(tmp_path: Path) -> None:
     """True A↔B cross-file mutual recursion typechecks successfully (qualified calls).
 
-    Module 'even' defines is_even(n) calling odd::is_odd(n-1).
-    Module 'odd'  defines is_odd(n)  calling even::is_even(n-1).
-    Entry imports both and calls even::is_even(10).
+    Module 'even' defines is-even(n) calling odd::is-odd(n-1).
+    Module 'odd'  defines is-odd(n)  calling even::is-even(n-1).
+    Entry imports both and calls even::is-even(10).
 
     Whichever of 'even'/'odd' is checked first lacks the other's function
     signatures unless a whole-program function-signature pre-pass seeds them
@@ -2539,17 +2539,17 @@ def test_cross_file_mutual_recursion_qualified(tmp_path: Path) -> None:
     modules = {
         "even": (
             "import odd\n"
-            "def is_even(n: int) -> bool =\n"
+            "def is-even(n: int) -> bool =\n"
             "  if n == 0 => true\n"
-            "  | else => odd::is_odd(n - 1)"
+            "  | else => odd::is-odd(n - 1)"
         ),
         "odd": (
             "import even\n"
-            "def is_odd(n: int) -> bool =\n"
+            "def is-odd(n: int) -> bool =\n"
             "  if n == 0 => false\n"
-            "  | else => even::is_even(n - 1)"
+            "  | else => even::is-even(n - 1)"
         ),
-        "entry": ("import even\nlet result = even::is_even(10)\nresult"),
+        "entry": ("import even\nlet result = even::is-even(10)\nresult"),
     }
     cg = _check_program(tmp_path, modules)
     mid_even = ModuleId.from_path("even")
@@ -2571,17 +2571,17 @@ def test_cross_file_mutual_recursion_open_import(tmp_path: Path) -> None:
     modules = {
         "even": (
             "import odd::*\n"
-            "def is_even(n: int) -> bool =\n"
+            "def is-even(n: int) -> bool =\n"
             "  if n == 0 => true\n"
-            "  | else => is_odd(n - 1)"
+            "  | else => is-odd(n - 1)"
         ),
         "odd": (
             "import even::*\n"
-            "def is_odd(n: int) -> bool =\n"
+            "def is-odd(n: int) -> bool =\n"
             "  if n == 0 => false\n"
-            "  | else => is_even(n - 1)"
+            "  | else => is-even(n - 1)"
         ),
-        "entry": ("import even::*\nlet result = is_even(10)\nresult"),
+        "entry": ("import even::*\nlet result = is-even(10)\nresult"),
     }
     cg = _check_program(tmp_path, modules)
     mid_even = ModuleId.from_path("even")
@@ -2616,8 +2616,8 @@ def test_importer_consumes_inferred_unannotated_dependency(tmp_path: Path) -> No
 @pytest.mark.parametrize(
     ("import_form", "even_call", "odd_call"),
     (
-        ("import", "odd::is_odd(n - 1)", "even::is_even(n - 1)"),
-        ("import", "is_odd(n - 1)", "is_even(n - 1)"),
+        ("import", "odd::is-odd(n - 1)", "even::is-even(n - 1)"),
+        ("import", "is-odd(n - 1)", "is-even(n - 1)"),
     ),
 )
 def test_import_cycle_infers_cross_module_mutual_returns(
@@ -2627,22 +2627,22 @@ def test_import_cycle_infers_cross_module_mutual_returns(
     checked = _check_program(
         tmp_path,
         {
-            "entry": "import even\nlet result = even::is_even(10)\nresult",
+            "entry": "import even\nlet result = even::is-even(10)\nresult",
             "even": (
-                f"{import_form} odd::*\ndef is_even(n: int) = if n == 0 => true else => {even_call}"
+                f"{import_form} odd::*\ndef is-even(n: int) = if n == 0 => true else => {even_call}"
             ),
             "odd": (
-                f"{import_form} even::*\ndef is_odd(n: int) = if n == 0 => false else => {odd_call}"
+                f"{import_form} even::*\ndef is-odd(n: int) = if n == 0 => false else => {odd_call}"
             ),
         },
     )
 
     assert (
-        checked.modules[ModuleId.from_path("even")].function_signatures["is_even"].result
+        checked.modules[ModuleId.from_path("even")].function_signatures["is-even"].result
         == BoolType()
     )
     assert (
-        checked.modules[ModuleId.from_path("odd")].function_signatures["is_odd"].result
+        checked.modules[ModuleId.from_path("odd")].function_signatures["is-odd"].result
         == BoolType()
     )
 
@@ -3951,8 +3951,8 @@ def test_only_recognized_builtin_methods_are_admitted_before_lowering(tmp_path: 
                 "entry": (
                     "record Point\n"
                     "  x: int\n"
-                    "builtin def Point::host_radius(self) -> int\n"
-                    "Point(x = 1).host_radius()"
+                    "builtin def Point::host-radius(self) -> int\n"
+                    "Point(x = 1).host-radius()"
                 )
             },
         )
@@ -3996,16 +3996,16 @@ def test_import_scc_infers_mutually_recursive_method_returns_and_registers_final
             "a": (
                 "import b\n"
                 "record A()\n"
-                "def A::from_b(self, n: int) =\n"
-                "  if n == 0 => 1 else => b::B::from_a(b::B(), n - 1)\n"
+                "def A::from-b(self, n: int) =\n"
+                "  if n == 0 => 1 else => b::B::from-a(b::B(), n - 1)\n"
             ),
             "b": (
                 "import a\n"
                 "record B()\n"
-                "def B::from_a(self, n: int) =\n"
-                "  if n == 0 => 2 else => a::A::from_b(a::A(), n - 1)\n"
+                "def B::from-a(self, n: int) =\n"
+                "  if n == 0 => 2 else => a::A::from-b(a::A(), n - 1)\n"
             ),
-            "entry": "import a\na::A::from_b(a::A(), 2)",
+            "entry": "import a\na::A::from-b(a::A(), 2)",
         },
     )
 
@@ -4015,8 +4015,8 @@ def test_import_scc_infers_mutually_recursive_method_returns_and_registers_final
     a_typedef = table.get(a_id, "A")
     b_typedef = table.get(b_id, "B")
     assert a_typedef is not None and b_typedef is not None
-    a_method = table.lookup_method(a_typedef.handle(), "from_b")
-    b_method = table.lookup_method(b_typedef.handle(), "from_a")
+    a_method = table.lookup_method(a_typedef.handle(), "from-b")
+    b_method = table.lookup_method(b_typedef.handle(), "from-a")
     assert a_method is not None and b_method is not None
     assert strip_decl_ids(a_method.signature) == FunctionType(
         params=(RecordType("A", module_id=a_id), IntType()), result=IntType()
@@ -4070,18 +4070,18 @@ def test_unannotated_methods_are_mutually_recursive_through_member_calls() -> No
     checked = _check(
         "record Counter\n"
         "  n: int\n"
-        "def Counter::is_even(self) =\n"
-        "  if self.n == 0 => true else => Counter(n = self.n - 1).is_odd()\n"
-        "def Counter::is_odd(self) =\n"
-        "  if self.n == 0 => false else => Counter(n = self.n - 1).is_even()\n"
-        "Counter(n = 4).is_even()"
+        "def Counter::is-even(self) =\n"
+        "  if self.n == 0 => true else => Counter(n = self.n - 1).is-odd()\n"
+        "def Counter::is-odd(self) =\n"
+        "  if self.n == 0 => false else => Counter(n = self.n - 1).is-even()\n"
+        "Counter(n = 4).is-even()"
     )
 
     table = checked.type_env.type_table
     counter_type = checked.type_env.get_type("Counter")
     assert counter_type is not None
-    even = table.lookup_method(counter_type, "is_even")
-    odd = table.lookup_method(counter_type, "is_odd")
+    even = table.lookup_method(counter_type, "is-even")
+    odd = table.lookup_method(counter_type, "is-odd")
     assert even is not None and odd is not None
     assert even.signature.result == BoolType()
     assert odd.signature.result == BoolType()
@@ -4121,8 +4121,8 @@ def test_named_only_param_in_graph_function(tmp_path: Path) -> None:
     from agm.agl.typecheck.program import CheckedProgram  # type: ignore[import-untyped]
 
     modules = {
-        "lib": "def add_named(x: int, *, z: int) -> int = x + z",
-        "entry": ("import lib::*\nlet z = 5\nadd_named(3, z)"),
+        "lib": "def add-named(x: int, *, z: int) -> int = x + z",
+        "entry": ("import lib::*\nlet z = 5\nadd-named(3, z)"),
     }
     cg: object = _check_program(tmp_path, modules)
     assert isinstance(cg, CheckedProgram)

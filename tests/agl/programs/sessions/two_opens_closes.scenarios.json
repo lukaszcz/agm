@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "two_explicit_opens_and_closes",
-      "params": {"explicit_close": true},
+      "params": {"explicit-close": true},
       "agents": {
         "writer": {"responses": []},
         "reviewer": {"responses": []}
@@ -17,7 +17,7 @@
     },
     {
       "name": "two_open_sessions_close_during_run_cleanup",
-      "params": {"explicit_close": false},
+      "params": {"explicit-close": false},
       "agents": {
         "writer": {"responses": []},
         "reviewer": {"responses": []}

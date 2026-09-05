@@ -98,7 +98,7 @@ def test_builtin_receiver_declaration_rejects_a_wrong_owning_stdlib_module(tmp_p
     prepared = _prepare_stdlib_module(
         tmp_path,
         "std/math",
-        "def array[E]::wrong_owner(self) -> array[E] = self\n",
+        "def array[E]::wrong-owner(self) -> array[E] = self\n",
     )
 
     assert prepared.resolved is not None, prepared.diagnostics

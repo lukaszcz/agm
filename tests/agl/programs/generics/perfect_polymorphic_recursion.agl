@@ -17,13 +17,13 @@ enum Perfect[T]
 # instantiates `render_perfect` again at `Pair[T, T]`, one level "rounder"
 # than the caller's own `T`, with a freshly-built `show` closure that unwraps
 # one more level of pairing before delegating to the caller's own `show`.
-def show_pair_of[T](show: T -> text) -> Pair[T, T] -> text =
+def show-pair-of[T](show: T -> text) -> Pair[T, T] -> text =
   fn(pr: Pair[T, T]) -> text => "(" + show(pr.first) + "," + show(pr.second) + ")"
 
-def render_perfect[T](p: Perfect[T], show: T -> text) -> text =
+def render-perfect[T](p: Perfect[T], show: T -> text) -> text =
   case p of
     | Single(value) => show(value)
-    | Succ(next) => render_perfect(next, show_pair_of(show))
+    | Succ(next) => render-perfect(next, show-pair-of(show))
 
 def shape[T](p: Perfect[T]) -> text =
   case p of
@@ -31,7 +31,7 @@ def shape[T](p: Perfect[T]) -> text =
     | Succ(next) => "deeper"
 
 program def main(a: int, b: int, c: int, d: int) -> unit =
-  let show_int: int -> text = fn(n: int) -> text => "%{n}"
+  let show-int: int -> text = fn(n: int) -> text => "%{n}"
 
   # Level 0: the base case, no growth yet.
   let level0: Perfect[int] = Single(value = a)
@@ -53,15 +53,15 @@ program def main(a: int, b: int, c: int, d: int) -> unit =
   print shape(level1)
   print shape(level2)
 
-  print render_perfect(level0, show_int)
-  print render_perfect(level1, show_int)
-  print render_perfect(level2, show_int)
+  print render-perfect(level0, show-int)
+  print render-perfect(level1, show-int)
+  print render-perfect(level2, show-int)
 
   print (level0 == level0)
   print (level0 == level1)
 
-  let level1_same: Perfect[int] = Succ(next = Single(value = Pair(first = a, second = b)))
-  print (level1 == level1_same)
+  let level1-same: Perfect[int] = Succ(next = Single(value = Pair(first = a, second = b)))
+  print (level1 == level1-same)
 
   case level2 of
     | Single(value) => print "unexpected leaf"

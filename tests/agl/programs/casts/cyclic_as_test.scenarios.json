@@ -3,7 +3,7 @@
     {
       "name": "acyclic_value_tests_true",
       "params": {
-        "close_cycle": false
+        "close-cycle": false
       },
       "expect": {
         "stdout": "true\ntrue\n"
@@ -12,7 +12,7 @@
     {
       "name": "cyclic_value_tests_false",
       "params": {
-        "close_cycle": true
+        "close-cycle": true
       },
       "expect": {
         "stdout": "false\nfalse\n"

@@ -7,12 +7,12 @@ enum Tree[T]
   | Leaf
   | Node(value: T, left: Tree[T], right: Tree[T])
 
-def sum_tree(t: Tree[int]) -> int =
+def sum-tree(t: Tree[int]) -> int =
   case t of
     | Leaf => 0
-    | Node(value, left, right) => value + sum_tree(left) + sum_tree(right)
+    | Node(value, left, right) => value + sum-tree(left) + sum-tree(right)
 
 program def main() -> unit =
   let builder: Agent = AgentCommand("builder")
   let t: Tree[int] = ask("Build an int tree.", agent = builder, on-parse-error = Retry(n = 1))
-  print sum_tree(t)
+  print sum-tree(t)

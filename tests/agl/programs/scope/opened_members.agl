@@ -14,7 +14,7 @@ end Math
 
 scope Text
   def show(value: int) -> text = "value %{value}"
-  def hidden_format() -> text = "hidden"
+  def hidden-format() -> text = "hidden"
 end Text
 
 scope Hidden

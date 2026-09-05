@@ -115,7 +115,7 @@ described in [Pattern matching](pattern-matching.md).
 
 <!-- agl-check: fragment -->
 ```agl
-let next_prompt: text = case action of
+let next-prompt: text = case action of
   | Stop => "Stop."
   | Continue(prompt) => prompt
   | Escalate(reason) => "Investigate:\n%{reason}"

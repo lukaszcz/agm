@@ -7,7 +7,7 @@ record Point
   x: int
   y: int
 
-def to_int_or(s: text, fallback: int) -> int =
+def to-int-or(s: text, fallback: int) -> int =
   if s as? int => s as int else => fallback
 
-def parse_point(raw: text) -> Point = json::parse(raw) as Point
+def parse-point(raw: text) -> Point = json::parse(raw) as Point

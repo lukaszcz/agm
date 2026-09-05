@@ -1512,9 +1512,9 @@ class TestRecordMutableFields:
             _check(
                 "builtin record ExecResult\n"
                 "  var stdout: text\n"
-                "  exit_code: int\n"
+                "  exit-code: int\n"
                 "  stderr: text\n"
-                "  timed_out: bool\n"
+                "  timed-out: bool\n"
                 "()",
                 default_stdlib=False,
             )

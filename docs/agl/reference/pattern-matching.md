@@ -246,7 +246,7 @@ enum Option[T]
   | None
   | Some(value: T)
 
-def describe_option(o: Option[int]) -> text =
+def describe-option(o: Option[int]) -> text =
   case o of
     | Option::None => "missing"
     | Option::Some(value) => "found %{value}"   # value: int, so it can be interpolated

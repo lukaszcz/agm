@@ -3,10 +3,10 @@
 
 program def main(payload: json) -> unit =
   let source: Agent = AgentCommand("source")
-  let empty_array: array[text] = []
-  let empty_map: dict[text, json] = {}
-  print empty_array
-  print empty_map
+  let empty-array: array[text] = []
+  let empty-map: dict[text, json] = {}
+  print empty-array
+  print empty-map
 
   let document: json = {
     "quoted": 1,

@@ -13,22 +13,22 @@
 
 record Node(children: array[Node], tag: int)
 
-program def main(close_cycle: bool) -> unit =
+program def main(close-cycle: bool) -> unit =
   var xs1: array[Node] = [Node(children = [], tag = 1)]
   let n1 = Node(children = xs1, tag = 1)
-  if close_cycle =>
+  if close-cycle =>
     xs1[0] := n1
 
   var xs2: array[Node] = [Node(children = [], tag = 1)]
   let n2 = Node(children = xs2, tag = 1)
-  if close_cycle =>
+  if close-cycle =>
     xs2[0] := n2
 
   print(xs1 == xs2)
 
   var xs3: array[Node] = [Node(children = [], tag = 2)]
   let n3 = Node(children = xs3, tag = 2)
-  if close_cycle =>
+  if close-cycle =>
     xs3[0] := n3
 
   print(xs1 == xs3)

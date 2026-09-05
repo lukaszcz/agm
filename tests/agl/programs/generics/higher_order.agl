@@ -15,7 +15,7 @@ def twice[A](x: A, f: A -> A) -> A = f(f(x))
 
 # A lambda inside a generic def annotating its parameter/return with the def's
 # own type variable `A`, plus a `let` annotation that references `A`.
-def via_lambda[A](x: A) -> A =
+def via-lambda[A](x: A) -> A =
   let g: A -> A = fn(y: A) -> A => y
   g(x)
 
@@ -48,8 +48,8 @@ program def main(shout: bool) -> unit =
   print(twice("a", fn(s: text) -> text => s + "!"))
 
   # The type-variable lambda, instantiated at int and at text.
-  print(via_lambda(99))
-  print(via_lambda("kept"))
+  print(via-lambda(99))
+  print(via-lambda("kept"))
 
   # A GENERIC enum variant constructor as a first-class value, passed THROUGH the
   # generic HOF and called there — `apply` builds `Wrapper(value: "hi")` at runtime.

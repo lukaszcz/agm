@@ -13,12 +13,12 @@ def add(item: Item, amount: int) -> unit =
 
 program def main(seed: int) -> unit =
   let shared = Item(amount = seed)
-  let binding_alias = shared
+  let binding-alias = shared
   let items = [shared]
   let holder = Holder(item = shared)
 
   add(shared, 1)
-  print(binding_alias.amount)
+  print(binding-alias.amount)
   print(items[0].amount)
   print(holder.item.amount)
 
@@ -28,7 +28,7 @@ program def main(seed: int) -> unit =
   print((right as Choice::Present).item.amount)
   print(shared.amount)
 
-  let original_item = (left as Choice::Present).item
+  let original-item = (left as Choice::Present).item
   case left of
     | Empty => ()
     | Present(item) as present =>
@@ -37,5 +37,5 @@ program def main(seed: int) -> unit =
         print((present as Choice::Present).item.amount)
         item.amount := seed + 4
         print(item.amount)
-        print(original_item.amount)
+        print(original-item.amount)
         print((right as Choice::Present).item.amount)

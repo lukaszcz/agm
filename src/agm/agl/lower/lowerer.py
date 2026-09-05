@@ -2197,7 +2197,7 @@ class _Lowerer:
                 return IrPrint(location=loc, value=arg_ir)
 
             case BuiltinKind.RENDER:
-                # render(expr, pretty:, quote_strings:) / render::[T](expr, ...) —
+                # render(expr, pretty:, quote-strings:) / render::[T](expr, ...) —
                 # lower the value (coerced to an explicit ``::[T]`` target when
                 # present) and any supplied boolean display options.
                 target = self._explicit_builtin_target_type(call_node)

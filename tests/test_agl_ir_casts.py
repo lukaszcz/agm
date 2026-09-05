@@ -100,10 +100,10 @@ def test_record_and_enum_render_and_json() -> None:
 record Foo
   a: int
 enum Color | Red | Blue
-let r_text = Foo(a = 1) as text
-let r_json = Foo(a = 1) as json
-let c_text = Color::Red() as text
-let c_json = Color::Red() as json
+let r-text = Foo(a = 1) as text
+let r-json = Foo(a = 1) as json
+let c-text = Color::Red() as text
+let c-json = Color::Red() as json
 ()
 """
     evaluate_ir(source)
@@ -355,15 +355,15 @@ def test_nominal_downcasts_lower_to_identity_checks() -> None:
 enum Shape | Circle(radius: int) | Square
 let shape: Shape = Circle(radius = 2)
 let circle = shape as Shape::Circle
-let is_circle = shape as? Shape::Circle
-let is_square = shape as? Shape::Square
+let is-circle = shape as? Shape::Circle
+let is-square = shape as? Shape::Square
 let upcast = Circle(radius = 3) as? Shape
 ()
 """
     program = _lower(source)
     circle = _program_bound_value(program, "circle")
-    is_circle = _program_bound_value(program, "is_circle")
-    is_square = _program_bound_value(program, "is_square")
+    is_circle = _program_bound_value(program, "is-circle")
+    is_square = _program_bound_value(program, "is-square")
     upcast = _program_bound_value(program, "upcast")
     assert isinstance(circle, IrNominalCast) and circle.test_only is False
     assert isinstance(is_circle, IrNominalCast) and is_circle.test_only is True
@@ -372,8 +372,8 @@ let upcast = Circle(radius = 3) as? Shape
     validate_ir(program, deep=True)
     values = evaluate_ir(source)
     assert values["circle"] == RecordValue(circle.nominal, "Shape::Circle", {"radius": IntValue(2)})
-    assert values["is_circle"] == BoolValue(True)
-    assert values["is_square"] == BoolValue(False)
+    assert values["is-circle"] == BoolValue(True)
+    assert values["is-square"] == BoolValue(False)
     assert values["upcast"] == BoolValue(True)
 
 

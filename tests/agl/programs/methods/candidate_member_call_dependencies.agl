@@ -10,15 +10,15 @@ record Box
 record Counter
   n: int
 
-def use_box(b: Box) = b.twice() + 1
+def use-box(b: Box) = b.twice() + 1
 
 def Box::twice(self) = self.n * 2
 
-def Counter::is_even(self) =
-  if self.n == 0 => true else => Counter(n = self.n - 1).is_odd()
+def Counter::is-even(self) =
+  if self.n == 0 => true else => Counter(n = self.n - 1).is-odd()
 
-def Counter::is_odd(self) =
-  if self.n == 0 => false else => Counter(n = self.n - 1).is_even()
+def Counter::is-odd(self) =
+  if self.n == 0 => false else => Counter(n = self.n - 1).is-even()
 
 def Box::describe(self) = helper(self.n)
 
@@ -27,8 +27,8 @@ def helper(m: int) = m + 1
 program def main(mode: text, n: int) -> unit =
   if
     | mode == "forward_reference" =>
-        print(use_box(Box(n = n)))
+        print(use-box(Box(n = n)))
     | mode == "mutual_recursion" =>
-        print(Counter(n = n).is_even())
+        print(Counter(n = n).is-even())
     | else =>
         print(Box(n = n).describe())

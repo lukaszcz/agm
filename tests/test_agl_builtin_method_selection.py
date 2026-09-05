@@ -102,8 +102,8 @@ def test_ambient_builtin_methods_are_inferred_before_consumers_without_source_im
     """Ambient method modules are inference dependencies, not user imports."""
     stdlib_root = Path(__file__).parent / "agl" / "program_modules" / "builtin_method_stdlib"
     prepared = PipelineDriver.prepare_program(
-        "def generic_first[E](values: array[E]) = values.first()\n"
-        "program def main() = print(generic_first([9]))\n",
+        "def generic-first[E](values: array[E]) = values.first()\n"
+        "program def main() = print(generic-first([9]))\n",
         roots=RootSet(roots=frozenset({stdlib_root})),
     )
 

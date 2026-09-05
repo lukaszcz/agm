@@ -1,4 +1,4 @@
-program def main(check_invalid_opens: bool) -> unit =
+program def main(check-invalid-opens: bool) -> unit =
   let command = AgentCommand("writer \%{SESSION_ID}")
   let session = Session::open(command)
   session.reset()
@@ -18,7 +18,7 @@ program def main(check_invalid_opens: bool) -> unit =
     let _ = session.stats()
   catch SessionError =>
     print "stats"
-  if check_invalid_opens =>
+  if check-invalid-opens =>
     try
       let _ = Session::open(command, name = "named")
     catch SessionError =>

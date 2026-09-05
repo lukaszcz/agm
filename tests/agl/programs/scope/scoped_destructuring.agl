@@ -33,7 +33,7 @@ scope E
     case r of
     | Range(low, high) => low + high
 
-  def unqualified_let_destructure(r: Range) -> int =
+  def unqualified-let-destructure(r: Range) -> int =
     let Range(low, high) = r
     low - high
 end E
@@ -42,18 +42,18 @@ program def main(mode: text) -> unit =
   let offset = if | mode == "verbose" => 100 | else => 0
   let reason = if | mode == "verbose" => "loud" | else => "quiet"
 
-  let A::Point(x = _ as first_x, y = _ as first_y) = A::Point(x = 1 + offset, y = 2 + offset)
-  let Bounds(low = _ as bound_low, high = _ as bound_high) = Bounds(low = 10 + offset, high = 20 + offset)
-  let C::Status::Idle(reason = _ as scoped_reason) = C::Status::Idle(reason = reason)
+  let A::Point(x = _ as first-x, y = _ as first-y) = A::Point(x = 1 + offset, y = 2 + offset)
+  let Bounds(low = _ as bound-low, high = _ as bound-high) = Bounds(low = 10 + offset, high = 20 + offset)
+  let C::Status::Idle(reason = _ as scoped-reason) = C::Status::Idle(reason = reason)
   let A::Point(x = _ as qx, y = _ as qy) = A::Point(x = 4 + offset, y = 5 + offset)
   let C::Status::Idle(reason = _ as qreason) = C::Status::Idle(reason = reason)
 
-  print("%{first_x} %{first_y}")
-  print("%{bound_low} %{bound_high}")
-  print("%{scoped_reason}")
+  print("%{first-x} %{first-y}")
+  print("%{bound-low} %{bound-high}")
+  print("%{scoped-reason}")
   print("%{D::use(offset)}")
   print("%{E::pick(E::Range(low = 1 + offset, high = 2 + offset))}")
-  print("%{E::unqualified_let_destructure(E::Range(low = 5 + offset, high = 2 + offset))}")
+  print("%{E::unqualified-let-destructure(E::Range(low = 5 + offset, high = 2 + offset))}")
   print("%{qx} %{qy}")
   print("%{qreason}")
 

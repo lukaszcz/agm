@@ -434,8 +434,8 @@ def test_owner_applied_partial_constructor_substitutes_captured_member_arguments
 enum Outcome[T, E]
   | ok(value: T)
   | err(error: E)
-let make_ok = Outcome[int, text]::ok(value = ?)
-let value = make_ok(7)
+let make-ok = Outcome[int, text]::ok(value = ?)
+let value = make-ok(7)
 ()
 """
     ir = evaluate_ir(source)

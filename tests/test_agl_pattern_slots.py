@@ -168,13 +168,13 @@ def test_a_scoped_constructor_slot_without_a_lexical_fallback_matches() -> None:
         "    | off\n"
         "  enum Packet\n"
         "    | packet(flag: Flag)\n"
-        "  def is_on(item: Packet) -> bool =\n"
+        "  def is-on(item: Packet) -> bool =\n"
         "    case item of\n"
         "      | Packet::packet(on) => Flag::on == Flag::on\n"
         "      | Packet::packet(_) => false\n"
         "end Status\n"
         "\n"
-        "print Status::is_on(Status::Packet::packet(Status::Flag::on))\n"
+        "print Status::is-on(Status::Packet::packet(Status::Flag::on))\n"
     )
 
     assert ok, diagnostics

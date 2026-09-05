@@ -35,7 +35,7 @@
       "params": {
         "rows": 3,
         "cols": 2,
-        "scale_items": [
+        "scale-items": [
           1,
           2,
           3

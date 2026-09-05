@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "environment_holes_share_template_interpolation",
+      "params": {"mode": 1},
+      "process_environment": {"VALUE": "from environment"},
+      "expect": {
+        "stdout": "value=from environment; computed=3\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "missing_environment_holes_raise_like_getenv",
+      "params": {"mode": 2},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "KeyError", "fields": {"key": "MISSING"}},
+        "calls": {}
+      }
+    }
+  ]
+}

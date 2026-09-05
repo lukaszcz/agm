@@ -32,6 +32,7 @@ _TEXT_CORPUS = (
     "%",
     "%{x}",
     r"\%{x}",
+    "${HOME}",
 )
 
 
@@ -50,6 +51,10 @@ def test_quoted_text_round_trips_through_the_template_scanner(value: str) -> Non
     fragments = [str(token) for token in tokens if token.type == "STRING_FRAGMENT"]
 
     assert fragments == [value]
+
+
+def test_quote_text_escapes_environment_interpolation() -> None:
+    assert quote_text("${HOME}") == r'"\${HOME}"'
 
 
 def test_text_literal_surface_constants_define_escape_directions() -> None:

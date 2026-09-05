@@ -1,4 +1,4 @@
-# String escapes use the JSON set; dollar sequences are literal.
+# String escapes use the JSON set; escaped environment holes are literal.
 
 program def main(n: int) -> unit =
   let s1 = "quote=\" backslash=\\ slash=\/ tab=\tend"
@@ -6,7 +6,7 @@ program def main(n: int) -> unit =
   let s3 = "newline=\nnext"
   let s4 = "return=\rdone"
   let s5 = "unicode=\u0041\u00e9"
-  let s6 = "dollar=${not_interp} and $5 and %{1 + 1}"
+  let s6 = "dollar=\${not_interp} and $5 and %{1 + 1}"
   print s1
   print s2
   print s3

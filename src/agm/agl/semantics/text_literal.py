@@ -32,7 +32,10 @@ ESCAPE_ENCODE: Final[Mapping[str, str]] = {
 def quote_text(value: str) -> str:
     """Return *value* as a double-quoted AgL text-literal surface form."""
     out: list[str] = ['"']
-    for character in value:
+    for index, character in enumerate(value):
+        if character == "$" and value.startswith("${", index):
+            out.append("\\$")
+            continue
         escaped = ESCAPE_ENCODE.get(character)
         if escaped is not None:
             out.append(escaped)

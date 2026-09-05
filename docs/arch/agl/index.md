@@ -8,7 +8,7 @@ Every AgL program flows through one pipeline, whether run whole or one REPL entr
 
 ```
 source (.agl)
-  → lexer        (INDENT/DEDENT, string interpolation, one NAME token class)
+  → lexer        (INDENT/DEDENT, string and environment interpolation, one NAME token class)
   → parser       (Lark LALR grammar)
   → AST          (frozen dataclasses — the firewall)
   → scope        (whole-program name resolution)

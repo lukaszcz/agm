@@ -3,12 +3,13 @@
 [← Index](index.md)
 
 Every string literal in AgL is a **template**: a sequence of literal text
-fragments and `%{…}` interpolation holes. A template evaluates to `text`.
+fragments, `%{…}` expression holes, and `${…}` environment holes. A template
+evaluates to `text`.
 The lexical forms — single- and triple-quoted strings, escapes, and the
 triple-quoted dedent rule — are specified in
 [Lexical structure](lexical-structure.md). This chapter specifies what
 interpolation *means*. AgL text literals have their own full lexical escape
-table, including `\n`, `\t`, `\"`, and `\%`; the `%{name}` interpolation hole
+table, including `\n`, `\t`, `\"`, `\%`, and `\${`; the `%{name}` interpolation hole
 — whether written directly in a string literal or evaluated by
 `std/text::interp` — instead uses only `\%{` to write a literal hole marker.
 
@@ -16,6 +17,7 @@ table, including `\n`, `\t`, `\"`, and `\%`; the `%{name}` interpolation hole
 
 ```ebnf
 interpolation ::= "%{" expr "}"
+                | "${" identifier "}"
 ```
 
 The expression may be anything with a **rendering** — a variable, field
@@ -24,6 +26,14 @@ value is converted to text using the **uniform rendering rule**, the same
 regardless of whether the template appears in an `ask` prompt, a `print`
 argument, an `exec` command, or any other position. A percent sign not
 followed by `{` is literal; `\%` produces a literal percent sign.
+
+An environment hole `${NAME}` is shorthand for
+`%{std/env::getenv("NAME")}`. It uses the environment snapshot supplied to
+the running program, and a missing variable raises the same exception as that
+call. `NAME` is an AgL identifier, and the `std/env` module must be available
+to the source just as it must be for the explicit form.
+
+Use `\${` to write a literal `${` in a string template.
 
 ## Runtime interpolation
 

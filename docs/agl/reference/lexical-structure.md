@@ -313,9 +313,9 @@ operator: `-3` is `-` applied to the literal `3`.
 
 ## Strings and templates
 
-All string literals are **templates**: they may contain `%{expr}`
-interpolation. Both `"` and `'` are valid delimiter characters, giving four
-forms:
+All string literals are **templates**: they may contain `%{expr}` and
+`${NAME}` interpolation. Write `\${` for a literal `${`. Both `"` and `'`
+are valid delimiter characters, giving four forms:
 
 - `"…"` / `'…'` — single-line.
 - `"""…"""` / `'''…'''` — triple-quoted, multi-line, subject to the dedent rule.

@@ -3014,6 +3014,12 @@ class TestTemplates:
         assert interpolation.expr.callee.name == "getenv"
         assert interpolation.expr.callee.qualifier is not None
         assert interpolation.expr.callee.qualifier.route_segments == ("std", "env")
+        qualifier_segment = interpolation.expr.callee.qualifier.segments[0]
+        name_offset = source.index("HOME")
+        assert (
+            qualifier_segment.span.start_offset,
+            qualifier_segment.span.end_offset,
+        ) == (name_offset, name_offset)
         argument = interpolation.expr.args[0]
         assert isinstance(argument, StringLit)
         assert argument.value == "HOME"

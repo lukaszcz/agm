@@ -543,7 +543,7 @@ class _Scanner:
                 raise LexError("Unterminated single-line string literal", span=span)
             if ch == "\\":
                 buf.append(self._decode_template_escape())
-            elif self._is_environment_interpolation():
+            elif (environment_name := self._environment_interpolation_name()) is not None:
                 yield self._make_token(
                     STRING_FRAGMENT,
                     "".join(buf),
@@ -552,7 +552,7 @@ class _Scanner:
                     frag_start_col,
                 )
                 buf = []
-                yield from self._scan_environment_interpolation()
+                yield from self._scan_environment_interpolation(environment_name)
                 frag_start_pos = self._pos
                 frag_start_line = self._line
                 frag_start_col = self._col
@@ -584,14 +584,15 @@ class _Scanner:
                 self._advance(in_string=True)
                 buf.append(ch)
 
-    def _is_environment_interpolation(self) -> bool:
-        """Whether the cursor starts a ``${NAME}`` environment-template hole."""
+    def _environment_interpolation_name(self) -> str | None:
+        """Return the environment name when the cursor starts a ``${NAME}`` hole."""
         if not self._src.startswith("${", self._pos):
-            return False
+            return None
         end = self._src.find("}", self._pos + 2)
         if end == -1:
-            return False
-        return is_identifier(self._src[self._pos + 2 : end])
+            return None
+        name = self._src[self._pos + 2 : end]
+        return name if is_identifier(name) else None
 
     def _decode_template_escape(self) -> str:
         """Decode the escape at the cursor in an ordinary string template."""
@@ -603,7 +604,7 @@ class _Scanner:
         self._advance()
         return self._decode_escape()
 
-    def _scan_environment_interpolation(self) -> Iterator[Token]:
+    def _scan_environment_interpolation(self, name: str) -> Iterator[Token]:
         """Desugar ``${NAME}`` to ``%{std/env::getenv(\"NAME\")}``.
 
         The synthetic expression uses the source span of its compact spelling.
@@ -617,9 +618,8 @@ class _Scanner:
         self._advance(in_string=True)  # $
         self._advance(in_string=True)  # {
         name_start = self._pos
-        while self._peek() != "}":
+        for _ in name:
             self._advance(in_string=True)
-        name = self._src[name_start : self._pos]
         name_end = self._pos
         self._advance(in_string=True)  # }
 
@@ -755,7 +755,7 @@ class _Scanner:
                 break
             if ch == "\\":
                 current_lit.append(self._decode_template_escape())
-            elif self._is_environment_interpolation():
+            elif (environment_name := self._environment_interpolation_name()) is not None:
                 interp_start_pos = self._pos
                 interp_start_line = self._line
                 interp_start_col = self._col
@@ -763,7 +763,7 @@ class _Scanner:
                     _LitSeg("".join(current_lit), lit_start_pos, lit_start_line, lit_start_col)
                 )
                 current_lit = []
-                interp_tokens = list(self._scan_environment_interpolation())[1:]
+                interp_tokens = list(self._scan_environment_interpolation(environment_name))[1:]
                 segments.append(
                     _InterpSeg(
                         interp_tokens,

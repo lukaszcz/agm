@@ -15,12 +15,10 @@ extern def copy(source: text, destination: text) -> unit
 extern def move(source: text, destination: text) -> unit
 extern def glob(pattern: text) -> array[text]
 
-scope FsInternals
-  extern def is_file(path: text) -> bool
-  extern def is_dir(path: text) -> bool
-end FsInternals
-
 def try-read(path: text) -> Result[text, FsError] =
   try Result::Ok(value = read(path)) catch FsError as e => Result::Err(error = e)
-def is-file(path: text) -> bool = FsInternals::is_file(path)
-def is-dir(path: text) -> bool = FsInternals::is_dir(path)
+
+@extern-name("is_file")
+extern def is-file(path: text) -> bool
+@extern-name("is_dir")
+extern def is-dir(path: text) -> bool

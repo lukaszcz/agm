@@ -148,12 +148,20 @@ program def main() -> unit = print(fs::try-read("invalid\\u0000path").is-err())
     assert capsys.readouterr().out == "true\n"
 
 
-def test_fs_internals_are_not_public(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "call",
+    ['fs::FsInternals::is_file("file.txt")', 'fs::is_file("file.txt")'],
+)
+def test_fs_names_its_predicates_only_by_their_public_spelling(
+    call: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``fs`` names its predicates only as ``is-file``/``is-dir``: neither a
+    scope-qualified path nor the Python companion spelling resolves."""
     monkeypatch.chdir(tmp_path)
     result = _run_file(
-        """import std/fs
+        f"""import std/fs
 program def main() -> unit =
-  let _ = fs::is_file("file.txt")
+  let _ = {call}
 """,
         tmp_path / "main.agl",
         roots=agl_roots(),

@@ -2,52 +2,49 @@ import std/option::Option
 import std/pair::Pair
 import std/errors::IndexError
 
-scope ArrayInternals
-  extern def first_option[E](self: array[E]) -> Option[E]
-  extern def last_option[E](self: array[E]) -> Option[E]
-  extern def pop_option[E](self: array[E]) -> Option[E]
-  extern def remove_at[E](self: array[E], index: int) -> E
-  extern def index_of[E](self: array[E], value: E) -> int
-  extern def index_of_option[E](self: array[E], value: E) -> Option[int]
-  extern def map_in_place[E](self: array[E], function: (E) -> E) -> unit
-  extern def filter_in_place[E](self: array[E], predicate: (E) -> bool) -> unit
-  extern def fold_right[E, B](self: array[E], initial: B, function: (B, E) -> B) -> B
-  extern def find_index[E](self: array[E], predicate: (E) -> bool) -> Option[int]
-  extern def reverse_in_place[E](self: array[E]) -> unit
-  extern def sort_in_place[E](self: array[E], comparator: (E, E) -> int) -> unit
-end ArrayInternals
-
 extern def array[E]::size(self) -> int
 def array[E]::is-empty(self) -> bool = self.size() == 0
 extern def array[E]::first(self) -> E
-def array[E]::first?(self) -> Option[E] = ArrayInternals::first_option(self)
+@extern-name("first_option")
+extern def array[E]::first?(self) -> Option[E]
 extern def array[E]::last(self) -> E
-def array[E]::last?(self) -> Option[E] = ArrayInternals::last_option(self)
+@extern-name("last_option")
+extern def array[E]::last?(self) -> Option[E]
 extern def array[E]::append(self, value: E) -> unit
 extern def array[E]::insert(self, index: int, value: E) -> unit
 extern def array[E]::pop(self) -> E
-def array[E]::pop?(self) -> Option[E] = ArrayInternals::pop_option(self)
-def array[E]::remove-at(self, index: int) -> E = ArrayInternals::remove_at(self, index)
+@extern-name("pop_option")
+extern def array[E]::pop?(self) -> Option[E]
+@extern-name("remove_at")
+extern def array[E]::remove-at(self, index: int) -> E
 extern def array[E]::clear(self) -> unit
 extern def array[E]::contains(self, value: E) -> bool
-def array[E]::index-of(self, value: E) -> int = ArrayInternals::index_of(self, value)
-def array[E]::index-of?(self, value: E) -> Option[int] = ArrayInternals::index_of_option(self, value)
+@extern-name("index_of")
+extern def array[E]::index-of(self, value: E) -> int
+@extern-name("index_of_option")
+extern def array[E]::index-of?(self, value: E) -> Option[int]
 extern def array[E]::count(self, predicate: (E) -> bool) -> int
 extern def array[E]::map[U](self, function: (E) -> U) -> array[U]
-def array[E]::map!(self, function: (E) -> E) -> unit = ArrayInternals::map_in_place(self, function)
+@extern-name("map_in_place")
+extern def array[E]::map!(self, function: (E) -> E) -> unit
 extern def array[E]::filter(self, predicate: (E) -> bool) -> array[E]
-def array[E]::filter!(self, predicate: (E) -> bool) -> unit = ArrayInternals::filter_in_place(self, predicate)
+@extern-name("filter_in_place")
+extern def array[E]::filter!(self, predicate: (E) -> bool) -> unit
 extern def array[E]::each(self, function: (E) -> unit) -> unit
 extern def array[E]::fold[B](self, initial: B, function: (B, E) -> B) -> B
-def array[E]::fold-right[B](self, initial: B, function: (B, E) -> B) -> B = ArrayInternals::fold_right(self, initial, function)
+@extern-name("fold_right")
+extern def array[E]::fold-right[B](self, initial: B, function: (B, E) -> B) -> B
 extern def array[E]::any(self, predicate: (E) -> bool) -> bool
 extern def array[E]::all(self, predicate: (E) -> bool) -> bool
 extern def array[E]::find(self, predicate: (E) -> bool) -> Option[E]
-def array[E]::find-index(self, predicate: (E) -> bool) -> Option[int] = ArrayInternals::find_index(self, predicate)
+@extern-name("find_index")
+extern def array[E]::find-index(self, predicate: (E) -> bool) -> Option[int]
 extern def array[E]::reverse(self) -> array[E]
-def array[E]::reverse!(self) -> unit = ArrayInternals::reverse_in_place(self)
+@extern-name("reverse_in_place")
+extern def array[E]::reverse!(self) -> unit
 extern def array[E]::sort(self, comparator: (E, E) -> int) -> array[E]
-def array[E]::sort!(self, comparator: (E, E) -> int) -> unit = ArrayInternals::sort_in_place(self, comparator)
+@extern-name("sort_in_place")
+extern def array[E]::sort!(self, comparator: (E, E) -> int) -> unit
 extern def array[E]::slice(self, start: int, end: int) -> array[E]
 extern def array[E]::take(self, count: int) -> array[E]
 extern def array[E]::drop(self, count: int) -> array[E]

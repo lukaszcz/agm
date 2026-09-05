@@ -11,13 +11,10 @@ record Match(
 exception RegexError extends Exception
   pattern: text
 
-scope RegexInternals
-  extern def find_all(pattern: text, s: text) -> array[Match]
-end RegexInternals
-
 extern def test(pattern: text, s: text) -> bool
 extern def find(pattern: text, s: text) -> Option[Match]
-def find-all(pattern: text, s: text) -> array[Match] = RegexInternals::find_all(pattern, s)
+@extern-name("find_all")
+extern def find-all(pattern: text, s: text) -> array[Match]
 extern def replace(pattern: text, s: text, replacement: text) -> text
 extern def split(pattern: text, s: text) -> array[text]
 extern def escape(s: text) -> text

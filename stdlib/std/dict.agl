@@ -2,32 +2,29 @@ import std/option::Option
 import std/pair::Pair
 import std/errors::KeyError
 
-scope DictInternals
-  extern def get_option[V](self: dict[text, V], key: text) -> Option[V]
-  extern def remove_option[V](self: dict[text, V], key: text) -> Option[V]
-  extern def merge_in_place[V](self: dict[text, V], other: dict[text, V]) -> unit
-  extern def map_values[V, U](self: dict[text, V], function: (V) -> U) -> dict[text, U]
-  extern def filter_in_place[V](self: dict[text, V], predicate: (text, V) -> bool) -> unit
-  extern def from_entries[V](values: array[Pair[text, V]]) -> dict[text, V]
-end DictInternals
-
 extern def dict[text, V]::size(self) -> int
 def dict[text, V]::is-empty(self) -> bool = self.size() == 0
 extern def dict[text, V]::get(self, key: text) -> V
-def dict[text, V]::get?(self, key: text) -> Option[V] = DictInternals::get_option(self, key)
+@extern-name("get_option")
+extern def dict[text, V]::get?(self, key: text) -> Option[V]
 extern def dict[text, V]::remove(self, key: text) -> V
 extern def dict[text, V]::set(self, key: text, value: V) -> unit
-def dict[text, V]::remove?(self, key: text) -> Option[V] = DictInternals::remove_option(self, key)
+@extern-name("remove_option")
+extern def dict[text, V]::remove?(self, key: text) -> Option[V]
 extern def dict[text, V]::contains(self, key: text) -> bool
 extern def dict[text, V]::clear(self) -> unit
 extern def dict[text, V]::keys(self) -> array[text]
 extern def dict[text, V]::values(self) -> array[V]
 extern def dict[text, V]::entries(self) -> array[Pair[text, V]]
 extern def dict[text, V]::merge(self, other: dict[text, V]) -> dict[text, V]
-def dict[text, V]::merge!(self, other: dict[text, V]) -> unit = DictInternals::merge_in_place(self, other)
-def dict[text, V]::map-values[U](self, function: (V) -> U) -> dict[text, U] = DictInternals::map_values(self, function)
+@extern-name("merge_in_place")
+extern def dict[text, V]::merge!(self, other: dict[text, V]) -> unit
+@extern-name("map_values")
+extern def dict[text, V]::map-values[U](self, function: (V) -> U) -> dict[text, U]
 extern def dict[text, V]::filter(self, predicate: (text, V) -> bool) -> dict[text, V]
-def dict[text, V]::filter!(self, predicate: (text, V) -> bool) -> unit = DictInternals::filter_in_place(self, predicate)
+@extern-name("filter_in_place")
+extern def dict[text, V]::filter!(self, predicate: (text, V) -> bool) -> unit
 extern def dict[text, V]::each(self, function: (text, V) -> unit) -> unit
 
-def from-entries[V](values: array[Pair[text, V]]) -> dict[text, V] = DictInternals::from_entries(values)
+@extern-name("from_entries")
+extern def from-entries[V](values: array[Pair[text, V]]) -> dict[text, V]

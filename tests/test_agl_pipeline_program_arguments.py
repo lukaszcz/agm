@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import pytest
 
+from agm.agl.attributes import ProgramOptionSpec
 from agm.agl.pipeline import PipelineDriver, PreparedProgram
 from agm.agl.runtime.arguments import ProgramArguments
 from agm.agl.semantics.types import BoolType, IntType, TextType
@@ -49,6 +50,39 @@ class TestDiscoverPrograms:
             ("verbose", ParamZone.NAMED_ONLY, True),
         ]
         assert isinstance(alt_params[0].type, BoolType)
+
+    def test_reports_the_option_presentation_and_documentation_of_every_program(self) -> None:
+        source = (
+            '@doc("Reports on a batch of runs.")\n'
+            "program def main(\n"
+            '  @arg-pos @opt-metavar("N") @doc("how many runs") runs: int,\n'
+            '  @opt-name("run-tag") @opt-short("t") @opt-env("RUN_TAG") tag: text = "batch",\n'
+            "  @opt-hidden quiet: bool = false,\n"
+            ") -> unit = ()\n"
+            "\n"
+            "program def alt() -> unit = ()\n"
+        )
+        runtime = PipelineDriver()
+        discovery = runtime.discover_programs(_prepared(source))
+
+        by_name = {program.name: program for program in discovery.programs}
+        assert by_name["main"].doc == "Reports on a batch of runs."
+        assert by_name["alt"].doc is None
+        assert [param.cli for param in by_name["main"].parameters] == [
+            ProgramOptionSpec(name="runs", metavar="N", doc="how many runs"),
+            ProgramOptionSpec(name="run-tag", short="t", env="RUN_TAG"),
+            ProgramOptionSpec(name="quiet", hidden=True),
+        ]
+
+    def test_a_program_without_attributes_reports_declared_names_and_no_presentation(self) -> None:
+        runtime = PipelineDriver()
+        discovery = runtime.discover_programs(
+            _prepared("program def main(count: int = 0) -> unit = ()\n")
+        )
+
+        (program,) = discovery.programs
+        assert program.doc is None
+        assert [param.cli for param in program.parameters] == [ProgramOptionSpec(name="count")]
 
     def test_reports_diagnostics_and_no_programs_on_a_load_failure(self) -> None:
         runtime = PipelineDriver()

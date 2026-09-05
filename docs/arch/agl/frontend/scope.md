@@ -24,6 +24,8 @@ The fact built from the `@arg-*` attributes is `param_zones`, the zone of every 
 
 The fact built from `@extern-name` is `extern_names`, every `extern def`'s Python companion name keyed by its node id: the attribute's argument, or the declared name verbatim. Scope applies the Python-identifier rule to that effective name, so a name Python could not define is rejected here with the attribute as the remedy, and keys companion-symbol uniqueness on it too — a module's externs share one companion, wherever in the module they are declared, so no two of them may map to the same effective name. Lowering and companion resolution read the table; no name is derived from the AST or mangled.
 
+The facts built from the `@opt-*` attributes and `@doc` are `program_options` and `docs`. `program_options` holds one `ProgramOptionSpec` per `program def` parameter, keyed by node id: the external name a host addresses it by (`@opt-name`, else the declared name) plus its short spelling, environment variable, metavar, hidden flag and help text. Scope checks the shapes a host has to spell — a short option is one ASCII letter, an option name a flag word of letters, digits and hyphens that a host can also negate — and rejects the attributes that presuppose a name (`@opt-name`, `@opt-short`, `@opt-env`, `@opt-hidden`) on a positional-only parameter. `docs` holds the `@doc` text of every declaration carrying one, parameters and fields included, keyed by that declaration's node id. Program discovery ([hosting.md](../hosting.md)) hands both to the host.
+
 ## Code Entry Points
 
 - `src/agm/agl/scope/attributes.py` — attribute recognition against the catalog and the fact builders it feeds.

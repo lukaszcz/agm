@@ -1,0 +1,23 @@
+# Option-presentation attributes on a `program def`. What these scenarios pin
+# is that the attributes parse and leave execution alone: the program still
+# runs with its declared parameter names and zones. How a host spells each
+# parameter on a command line is not exercised here.
+
+@doc("Greets an addressee once per run.")
+program def main(
+  @doc("how many runs to greet")
+  @arg-pos
+  @opt-metavar("N")
+  runs: int,
+  @doc("who to greet")
+  @opt-name("addressee")
+  @opt-short("a")
+  @opt-env("GREET_WHO")
+  who: text = "world",
+  @opt-hidden
+  suffix: text = "",
+) -> unit =
+  for index in 1 to runs do
+    print "%{index}:hello %{who}%{suffix}"
+  done
+  print runs

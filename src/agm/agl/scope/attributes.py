@@ -7,28 +7,41 @@ admitted target, the arguments match the declared schema, the attribute is not
 repeated or contradicted — and turns the surviving attributes into typed
 side-table entries.
 
-Two facts are built: a parameter's zone, from the ``@arg-*`` attribute an
-entry or its owning declaration carries, and an ``extern def``'s Python
-companion name, from ``@extern-name`` — the walk sees every extern of a
-module, so it is also where their companion names are held apart. The walk is
-the seam a further attribute meaning joins through — a new fact reads the
-attributes the walk already hands it and fills a table of its own, so it costs
-one more builder, never one more traversal.
+Four facts are built: a parameter's zone, from the ``@arg-*`` attribute an
+entry or its owning declaration carries; an ``extern def``'s Python companion
+name, from ``@extern-name`` — the walk sees every extern of a module, so it is
+also where their companion names are held apart; a ``program def`` parameter's
+command-line presentation, from the ``@opt-*`` attributes; and a declaration's
+documentation text, from ``@doc``. The walk is the seam a further attribute
+meaning joins through — a new fact reads the attributes the walk already hands
+it and fills a table of its own, so it costs one more builder, never one more
+traversal.
 """
 
 from __future__ import annotations
 
 import keyword
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from agm.agl.attributes import (
     BUILTIN_ATTRIBUTES,
+    DOC_ATTRIBUTE,
     EXTERN_NAME_ATTRIBUTE,
+    NAME_ADDRESSED_OPTION_ATTRIBUTES,
+    OPTION_ENV_ATTRIBUTE,
+    OPTION_HIDDEN_ATTRIBUTE,
+    OPTION_METAVAR_ATTRIBUTE,
+    OPTION_NAME_ATTRIBUTE,
+    OPTION_NAME_PATTERN,
+    OPTION_SHORT_ATTRIBUTE,
+    OPTION_SHORT_PATTERN,
     ZONE_ATTRIBUTES,
     AttributeArguments,
     AttributeSpec,
     AttributeTarget,
+    ProgramOptionSpec,
 )
 from agm.agl.scope.symbols import AglScopeError
 from agm.agl.syntax.nodes import (
@@ -47,6 +60,7 @@ from agm.agl.syntax.nodes import (
     VarDecl,
     VariantDef,
 )
+from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.visitor import walk
 from agm.agl.zones import ParamZone
 
@@ -63,10 +77,18 @@ class AttributeFacts:
     ``extern_names``
         The Python companion name of every ``extern def``, keyed by its
         ``FuncDef.node_id``.
+    ``program_options``
+        The command-line presentation of every ``program def`` parameter,
+        keyed by its ``Param.node_id``.
+    ``docs``
+        The ``@doc`` text of every declaration carrying one — parameters and
+        fields included — keyed by that declaration's node id.
     """
 
     param_zones: dict[int, ParamZone]
     extern_names: dict[int, str]
+    program_options: dict[int, ProgramOptionSpec]
+    docs: dict[int, str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +97,24 @@ class _TextArgument:
 
     attribute: Attribute
     text: str
+
+
+@dataclass(frozen=True, slots=True)
+class _Recognized:
+    """One declaration's validated attribute prefix, ready for a fact builder.
+
+    ``spans`` locates every attribute the declaration carries by name, so a
+    builder can report an attribute that takes no argument; ``texts`` holds
+    the already-validated argument of every attribute whose schema takes one.
+    """
+
+    spans: dict[str, SourceSpan]
+    texts: dict[str, _TextArgument]
+
+    def text_of(self, name: str) -> str | None:
+        """Return the text argument attribute *name* carries, if it is present."""
+        argument = self.texts.get(name)
+        return None if argument is None else argument.text
 
 
 #: Entry order: positional-only, then standard, then named-only.
@@ -133,7 +173,12 @@ def recognize_attributes(
     """
     recognizer = _Recognizer(declares_receiver)
     walk(program, recognizer.visit)
-    return AttributeFacts(param_zones=recognizer.param_zones, extern_names=recognizer.extern_names)
+    return AttributeFacts(
+        param_zones=recognizer.param_zones,
+        extern_names=recognizer.extern_names,
+        program_options=recognizer.program_options,
+        docs=recognizer.docs,
+    )
 
 
 class _Recognizer:
@@ -143,14 +188,16 @@ class _Recognizer:
         self._declares_receiver = declares_receiver
         self.param_zones: dict[int, ParamZone] = {}
         self.extern_names: dict[int, str] = {}
+        self.program_options: dict[int, ProgramOptionSpec] = {}
+        self.docs: dict[int, str] = {}
         self._companion_owners: dict[str, str] = {}
 
     def visit(self, node: object) -> None:
         """Recognize the attributes of *node*, if it is a defining declaration."""
         if isinstance(node, FuncDef):
-            recognized = self._check(node.attributes, _function_target(node))
+            recognized = self._check(node.attributes, _function_target(node), node.node_id)
             if node.is_extern:
-                self._extern_name(node, recognized.get(EXTERN_NAME_ATTRIBUTE))
+                self._extern_name(node, recognized.texts.get(EXTERN_NAME_ATTRIBUTE))
             self._entries(
                 node.params,
                 node.attributes,
@@ -166,35 +213,38 @@ class _Recognizer:
         elif isinstance(node, Lambda):
             self._entries(node.params, (), target=AttributeTarget.PARAMETER)
         elif isinstance(node, RecordDef):
-            self._check(node.attributes, AttributeTarget.RECORD)
+            self._check(node.attributes, AttributeTarget.RECORD, node.node_id)
             self._entries(node.fields, node.attributes, target=AttributeTarget.FIELD)
         elif isinstance(node, ExceptionDef):
-            self._check(node.attributes, AttributeTarget.EXCEPTION)
+            self._check(node.attributes, AttributeTarget.EXCEPTION, node.node_id)
             self._entries(node.fields, node.attributes, target=AttributeTarget.FIELD)
         elif isinstance(node, VariantDef):
-            self._check(node.attributes, AttributeTarget.ENUM_MEMBER)
+            self._check(node.attributes, AttributeTarget.ENUM_MEMBER, node.node_id)
             self._entries(node.fields, node.attributes, target=AttributeTarget.FIELD)
         elif isinstance(node, EnumDef):
-            self._check(node.attributes, AttributeTarget.ENUM)
+            self._check(node.attributes, AttributeTarget.ENUM, node.node_id)
         elif isinstance(node, TypeAlias):
-            self._check(node.attributes, AttributeTarget.TYPE_ALIAS)
+            self._check(node.attributes, AttributeTarget.TYPE_ALIAS, node.node_id)
         elif isinstance(node, (LetDecl, VarDecl, BuiltinVarDecl)):
-            self._check(node.attributes, AttributeTarget.BINDING)
+            self._check(node.attributes, AttributeTarget.BINDING, node.node_id)
 
     # ------------------------------------------------------------------
     # Catalog validation
     # ------------------------------------------------------------------
 
     def _check(
-        self, attributes: tuple[Attribute, ...], target: AttributeTarget
-    ) -> dict[str, _TextArgument]:
-        """Validate one declaration's whole attribute prefix.
+        self, attributes: tuple[Attribute, ...], target: AttributeTarget, node_id: int
+    ) -> _Recognized:
+        """Validate the whole attribute prefix of the declaration *node_id*.
 
-        Returns the text argument of every attribute whose schema takes one,
-        keyed by attribute name, so a fact builder reads an already-validated
-        argument instead of re-inspecting the raw node.
+        Returns every attribute's span and the text argument of those whose
+        schema takes one, keyed by attribute name, so a fact builder reads an
+        already-validated argument instead of re-inspecting the raw node.
+        Documentation text, admitted on every declaration kind, is filed here
+        rather than in a builder of its own.
         """
         seen: set[str] = set()
+        spans: dict[str, SourceSpan] = {}
         texts: dict[str, _TextArgument] = {}
         for attribute in attributes:
             spec = BUILTIN_ATTRIBUTES.get(attribute.name)
@@ -209,6 +259,7 @@ class _Recognizer:
             text = _check_arguments(attribute, spec)
             if text is not None:
                 texts[attribute.name] = _TextArgument(attribute=attribute, text=text)
+            spans[attribute.name] = attribute.span
             if attribute.name in seen and not spec.repeatable:
                 raise AglScopeError(
                     f"Attribute '@{attribute.name}' cannot be repeated.", span=attribute.span
@@ -220,7 +271,11 @@ class _Recognizer:
                         span=attribute.span,
                     )
             seen.add(attribute.name)
-        return texts
+        recognized = _Recognized(spans=spans, texts=texts)
+        documentation = recognized.text_of(DOC_ATTRIBUTE)
+        if documentation is not None:
+            self.docs[node_id] = documentation
+        return recognized
 
     # ------------------------------------------------------------------
     # Fact builder: extern companion names
@@ -288,7 +343,7 @@ class _Recognizer:
         list_default = form_default if declared_default is None else declared_default
         highest = _ZONE_ORDER[ParamZone.POSITIONAL_ONLY]
         for index, entry in enumerate(entries):
-            self._check(entry.attributes, target)
+            recognized = self._check(entry.attributes, target, entry.node_id)
             declared = _zone_attribute(entry.attributes)
             if has_receiver and index == 0:
                 if declared is not None:
@@ -310,11 +365,78 @@ class _Recognizer:
                 )
             highest = order
             self.param_zones[entry.node_id] = zone
+            if target is AttributeTarget.PROGRAM_PARAMETER:
+                self._program_option(entry, recognized, zone)
+
+    # ------------------------------------------------------------------
+    # Fact builder: program option presentation
+    # ------------------------------------------------------------------
+
+    def _program_option(self, entry: Param, recognized: _Recognized, zone: ParamZone) -> None:
+        """Record how one ``program def`` parameter presents itself to a host.
+
+        Every program parameter gets an entry: without any ``@opt-*``
+        attribute it is addressed by its declared name and carries nothing
+        else. A positional-only parameter is addressed by position alone, so
+        the attributes that only mean something for a named one are rejected
+        rather than silently ignored, and the two argument shapes a host has
+        to spell — a one-letter short option and a flag word it can also
+        negate — are checked here, where the attribute is still in view.
+        """
+        if zone is ParamZone.POSITIONAL_ONLY:
+            for name in NAME_ADDRESSED_OPTION_ATTRIBUTES:
+                span = recognized.spans.get(name)
+                if span is not None:
+                    raise AglScopeError(
+                        f"Attribute '@{name}' cannot be attached to positional-only parameter "
+                        f"{entry.name!r}, which a host addresses by position and never by name.",
+                        span=span,
+                    )
+        short = _shaped_text(
+            recognized,
+            OPTION_SHORT_ATTRIBUTE,
+            OPTION_SHORT_PATTERN,
+            "takes exactly one ASCII letter, not",
+        )
+        external = _shaped_text(
+            recognized,
+            OPTION_NAME_ATTRIBUTE,
+            OPTION_NAME_PATTERN,
+            "takes a flag word — ASCII letters, digits and hyphens, beginning with a "
+            "letter or digit — not",
+        )
+        self.program_options[entry.node_id] = ProgramOptionSpec(
+            name=entry.name if external is None else external,
+            short=short,
+            env=recognized.text_of(OPTION_ENV_ATTRIBUTE),
+            metavar=recognized.text_of(OPTION_METAVAR_ATTRIBUTE),
+            hidden=OPTION_HIDDEN_ATTRIBUTE in recognized.spans,
+            doc=recognized.text_of(DOC_ATTRIBUTE),
+        )
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _shaped_text(
+    recognized: _Recognized, name: str, pattern: re.Pattern[str], expected: str
+) -> str | None:
+    """Return the argument of attribute *name*, rejecting one *pattern* refuses.
+
+    ``None`` when the declaration carries no such attribute. *expected*
+    describes the shape the attribute admits; the diagnostic anchors on the
+    attribute itself, which is what the writer has to change.
+    """
+    argument = recognized.texts.get(name)
+    if argument is None:
+        return None
+    if pattern.fullmatch(argument.text) is None:
+        raise AglScopeError(
+            f"Attribute '@{name}' {expected} {argument.text!r}.", span=argument.attribute.span
+        )
+    return argument.text
 
 
 def _check_arguments(attribute: Attribute, spec: AttributeSpec) -> str | None:

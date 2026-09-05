@@ -709,6 +709,8 @@ class _Resolver:
             use_targets=dict(self._use_targets),
             param_zones=attribute_facts.param_zones,
             extern_names=attribute_facts.extern_names,
+            program_options=attribute_facts.program_options,
+            docs=attribute_facts.docs,
         )
 
     # ------------------------------------------------------------------

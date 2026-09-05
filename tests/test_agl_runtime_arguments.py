@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from agm.agl.attributes import ProgramOptionSpec
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.ir.contracts import ParamDecoder
 from agm.agl.ir.nodes import UseDefault
@@ -58,7 +59,12 @@ def _param_and_info(
     decoder = _decoder(typ)
     param = IrProgramParam(name=name, kind=kind, required=required, external_decoder=decoder)
     info = ProgramParamInfo(
-        name=name, kind=kind, type=typ, has_default=not required, span=_span(line)
+        name=name,
+        kind=kind,
+        type=typ,
+        has_default=not required,
+        span=_span(line),
+        cli=ProgramOptionSpec(name=name),
     )
     return param, info
 

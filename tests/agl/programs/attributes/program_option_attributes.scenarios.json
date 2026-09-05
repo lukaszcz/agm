@@ -1,0 +1,42 @@
+{
+  "scenarios": [
+    {
+      "name": "defaults_for_every_named_parameter",
+      "positional": [
+        2
+      ],
+      "params": {},
+      "expect": {
+        "stdout": "1:hello world\n2:hello world\n2\n"
+      }
+    },
+    {
+      "name": "option_attributes_do_not_change_how_the_program_runs",
+      "positional": [
+        1
+      ],
+      "params": {
+        "who": "agm",
+        "suffix": "!"
+      },
+      "expect": {
+        "stdout": "1:hello agm!\n1\n"
+      }
+    },
+    {
+      "name": "positional_only_parameter_supplied_by_name",
+      "positional": [],
+      "params": {
+        "runs": 1
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": [
+            "runs",
+            "positional-only"
+          ]
+        }
+      }
+    }
+  ]
+}

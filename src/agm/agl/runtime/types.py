@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from agm.agl.attributes import ProgramOptionSpec
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.modules.ids import ModuleId
     from agm.agl.runtime.agents import AgentFn
@@ -87,6 +88,9 @@ class ProgramParamInfo:
     ``has_default``  — ``True`` when the parameter has a default expression.
     ``span``         — the parameter's declaration span, the anchor for a
                         binding or decode diagnostic naming this parameter.
+    ``cli``          — how the parameter presents itself on a command line:
+                        its external name and whatever the ``@opt-*``
+                        attributes add to it.
     """
 
     name: str
@@ -94,6 +98,7 @@ class ProgramParamInfo:
     type: "AglType"
     has_default: bool
     span: "SourceSpan"
+    cli: "ProgramOptionSpec"
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,7 +113,8 @@ class ProgramDeclInfo:
     ``span`` is the declaration's own span, the anchor for a diagnostic that
     names no single parameter (an unknown argument name, or an excess
     positional argument). ``parameters`` is the program's own value-parameter
-    signature, in declaration order.
+    signature, in declaration order. ``doc`` is the declaration's own ``@doc``
+    text, or ``None`` when it carries none.
     """
 
     module: "ModuleId"
@@ -118,6 +124,7 @@ class ProgramDeclInfo:
     span: "SourceSpan"
     parameters: tuple[ProgramParamInfo, ...]
     is_entry: bool
+    doc: str | None
 
     @property
     def declaration_path(self) -> str:

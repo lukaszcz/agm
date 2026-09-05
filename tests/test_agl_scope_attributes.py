@@ -1,20 +1,21 @@
 """Tests for declaration-attribute recognition in the AgL scope pass.
 
 Every attribute a declaration carries is validated against the built-in
-attribute catalog while names are resolved, and the ``@arg-*`` attributes are
-turned into the resolved program's ``param_zones`` table. These tests assert
-on that table's contents and pin the phase the rejections come from; the
-rejection fixtures under ``tests/agl/rejections/scope/`` cover the same
-diagnostics as whole programs.
+attribute catalog while names are resolved, and the surviving attributes are
+turned into the resolved program's fact tables: ``param_zones`` from the
+``@arg-*`` attributes, ``program_options`` from the ``@opt-*`` ones, and
+``docs`` from ``@doc``. These tests assert on those tables' contents and pin
+the phase the rejections come from; the rejection fixtures under
+``tests/agl/rejections/scope/`` cover the same diagnostics as whole programs.
 """
 
 from __future__ import annotations
 
 import pytest
 
+from agm.agl.attributes import ProgramOptionSpec
 from agm.agl.scope import AglScopeError, ModuleResolution
 from agm.agl.syntax.nodes import (
-    Attribute,
     EnumDef,
     ExceptionDef,
     FuncDef,
@@ -22,7 +23,7 @@ from agm.agl.syntax.nodes import (
     LetDecl,
     Param,
     RecordDef,
-    StringLit,
+    TypeAlias,
     VariantDef,
 )
 from agm.agl.syntax.visitor import walk
@@ -70,15 +71,10 @@ def _lambda_zones(resolution: ModuleResolution) -> dict[str, ParamZone]:
     return {p.name: resolution.param_zones[p.node_id] for p in lambdas[0].params}
 
 
-def _doc_arguments(attributes: tuple[Attribute, ...]) -> list[str]:
-    """Return the text argument of every ``@doc`` among *attributes*."""
-    return [
-        arg.value
-        for attribute in attributes
-        if attribute.name == "doc"
-        for arg in attribute.args
-        if isinstance(arg, StringLit)
-    ]
+def _option(resolution: ModuleResolution, owner_name: str, param_name: str) -> ProgramOptionSpec:
+    """Return the option spec recognized for one program parameter."""
+    entries = {entry.name: entry for entry in _entries(resolution, owner_name)}
+    return resolution.program_options[entries[param_name].node_id]
 
 
 class TestParameterZones:
@@ -200,7 +196,7 @@ class TestAttributeDiagnostics:
 
         enums = [item for item in resolution.program.body.items if isinstance(item, EnumDef)]
         assert [enum.name for enum in enums] == ["Shape"]
-        assert _doc_arguments(enums[0].attributes) == ["shapes"]
+        assert resolution.docs[enums[0].node_id] == "shapes"
 
     def test_a_zone_attribute_on_an_enum_declaration_is_rejected(self) -> None:
         with pytest.raises(AglScopeError, match="arg-named"):
@@ -211,7 +207,7 @@ class TestAttributeDiagnostics:
 
         lets = [item for item in resolution.program.body.items if isinstance(item, LetDecl)]
         assert len(lets) == 1
-        assert _doc_arguments(lets[0].attributes) == ["the answer"]
+        assert resolution.docs[lets[0].node_id] == "the answer"
 
     def test_a_zone_attribute_on_a_binding_is_rejected(self) -> None:
         with pytest.raises(AglScopeError, match="arg-pos"):
@@ -233,4 +229,127 @@ class TestAttributeDiagnostics:
     def test_a_type_alias_admits_a_doc_attribute(self) -> None:
         resolution = resolve_entry('@doc("a count")\ntype Count = int\n')
 
+        aliases = [item for item in resolution.program.body.items if isinstance(item, TypeAlias)]
+        assert len(aliases) == 1
+        assert resolution.docs[aliases[0].node_id] == "a count"
         assert resolution.param_zones == {}
+
+
+class TestProgramOptions:
+    """The command-line presentation the ``@opt-*`` attributes describe."""
+
+    def test_a_parameter_without_attributes_is_addressed_by_its_declared_name(self) -> None:
+        resolution = resolve_entry("program def main(count: int = 0) -> unit = print count\n")
+
+        assert _option(resolution, "main", "count") == ProgramOptionSpec(name="count")
+
+    def test_every_option_attribute_reaches_the_spec(self) -> None:
+        resolution = resolve_entry(
+            "program def main(\n"
+            '  @doc("how many runs")\n'
+            '  @opt-name("total-runs")\n'
+            '  @opt-short("r")\n'
+            '  @opt-env("TOTAL_RUNS")\n'
+            '  @opt-metavar("N")\n'
+            "  @opt-hidden\n"
+            "  runs: int = 0,\n"
+            ") -> unit = print runs\n"
+        )
+
+        assert _option(resolution, "main", "runs") == ProgramOptionSpec(
+            name="total-runs",
+            short="r",
+            env="TOTAL_RUNS",
+            metavar="N",
+            hidden=True,
+            doc="how many runs",
+        )
+
+    def test_a_positional_only_parameter_admits_a_metavar_and_documentation(self) -> None:
+        resolution = resolve_entry(
+            "program def main(\n"
+            '  @arg-pos @opt-metavar("N") @doc("how many runs") runs: int,\n'
+            ") -> unit = print runs\n"
+        )
+
+        assert _option(resolution, "main", "runs") == ProgramOptionSpec(
+            name="runs", metavar="N", doc="how many runs"
+        )
+
+    @pytest.mark.parametrize(
+        "attribute",
+        ['@opt-name("total")', '@opt-short("r")', '@opt-env("RUNS")', "@opt-hidden"],
+    )
+    def test_a_name_addressed_attribute_on_a_positional_only_parameter_is_rejected(
+        self, attribute: str
+    ) -> None:
+        with pytest.raises(AglScopeError, match="positional-only"):
+            resolve_entry(
+                f"program def main(@arg-pos {attribute} runs: int) -> unit = print runs\n"
+            )
+
+    @pytest.mark.parametrize("short", ["", "rr", "1", "-", " "])
+    def test_a_short_option_that_is_not_one_letter_is_rejected(self, short: str) -> None:
+        with pytest.raises(AglScopeError, match="opt-short"):
+            resolve_entry(
+                f'program def main(@opt-short("{short}") runs: int = 0) -> unit = print runs\n'
+            )
+
+    @pytest.mark.parametrize(
+        "name",
+        ["", "--runs", "-runs", "-", "total runs", "runs=1", "a.b", "runs-", "runs--", "to--tal"],
+    )
+    def test_an_option_name_that_is_not_a_flag_word_is_rejected(self, name: str) -> None:
+        with pytest.raises(AglScopeError, match="flag word"):
+            resolve_entry(
+                f'program def main(@opt-name("{name}") runs: int = 0) -> unit = print runs\n'
+            )
+
+    @pytest.mark.parametrize("name", ["runs", "total-runs", "R", "2nd-run", "a-b-c"])
+    def test_a_flag_word_of_letters_digits_and_hyphens_is_accepted(self, name: str) -> None:
+        resolution = resolve_entry(
+            f'program def main(@opt-name("{name}") runs: int = 0) -> unit = print runs\n'
+        )
+
+        assert _option(resolution, "main", "runs").name == name
+
+    def test_an_ordinary_functions_parameter_admits_no_option_attribute(self) -> None:
+        with pytest.raises(AglScopeError, match="opt-name"):
+            resolve_entry(
+                'def f(@opt-name("value") a: int) -> int = a\n'
+                "\n"
+                "program def main() -> unit = print f(1)\n"
+            )
+
+    def test_only_program_parameters_have_option_specs(self) -> None:
+        resolution = resolve_entry(
+            "def f(a: int) -> int = a\n\nprogram def main() -> unit = print f(1)\n"
+        )
+
+        assert resolution.program_options == {}
+
+
+class TestDocumentationTexts:
+    """``@doc`` text, keyed by the declaration that carries it."""
+
+    def test_a_function_and_its_parameter_are_documented_independently(self) -> None:
+        resolution = resolve_entry(
+            '@doc("adds two numbers")\ndef add(@doc("the first") a: int, b: int) -> int = a + b\n'
+        )
+
+        functions = [item for item in resolution.program.body.items if isinstance(item, FuncDef)]
+        entries = {entry.name: entry for entry in _entries(resolution, "add")}
+        assert resolution.docs[functions[0].node_id] == "adds two numbers"
+        assert resolution.docs[entries["a"].node_id] == "the first"
+        assert entries["b"].node_id not in resolution.docs
+
+    def test_a_record_field_is_documented(self) -> None:
+        resolution = resolve_entry('record R\n  @doc("across")\n  x: int\n')
+
+        entries = {entry.name: entry for entry in _entries(resolution, "R")}
+        assert resolution.docs[entries["x"].node_id] == "across"
+
+    def test_an_undocumented_program_has_no_entry(self) -> None:
+        resolution = resolve_entry("program def main() -> unit = ()\n")
+
+        assert resolution.docs == {}

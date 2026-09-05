@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import pytest
 
+from agm.agl.attributes import ProgramOptionSpec
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.runtime.arguments import decode_param_value
@@ -56,7 +57,14 @@ def _param(
     *,
     has_default: bool = False,
 ) -> ProgramParamInfo:
-    return ProgramParamInfo(name=name, kind=kind, type=typ, has_default=has_default, span=_SPAN)
+    return ProgramParamInfo(
+        name=name,
+        kind=kind,
+        type=typ,
+        has_default=has_default,
+        span=_SPAN,
+        cli=ProgramOptionSpec(name=name),
+    )
 
 
 # ---------------------------------------------------------------------------

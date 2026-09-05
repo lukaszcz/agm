@@ -1540,6 +1540,7 @@ def _program_decl_infos(checked: "CheckedProgram") -> tuple[ProgramDeclInfo, ...
             span=item.span,
             parameters=_program_param_infos(checked_module, item),
             is_entry=module_id == checked.entry_id,
+            doc=checked_module.resolved.docs.get(item.node_id),
         )
         for module_id, checked_module, item in program_funcdefs(checked.modules)
     ]
@@ -1558,9 +1559,10 @@ def _program_param_infos(
 ) -> tuple[ProgramParamInfo, ...]:
     """Return *funcdef*'s checked parameter signature as host-facing info.
 
-    Pairs each AST ``Param`` (for its declaration span) with the checker's
-    ``ParamSpec`` (for its zone, type, and default) positionally — the two
-    describe the same parameter list, in the same declaration order.
+    Pairs each AST ``Param`` (for its declaration span and the option
+    presentation scope recognized for it) with the checker's ``ParamSpec``
+    (for its zone, type, and default) positionally — the two describe the same
+    parameter list, in the same declaration order.
     """
     signature = checked_module.type_env.get_function_signature_by_node_id(funcdef.node_id)
     assert signature is not None, (
@@ -1573,6 +1575,7 @@ def _program_param_infos(
             type=param_spec.type,
             has_default=param_spec.has_default,
             span=ast_param.span,
+            cli=checked_module.resolved.program_options[ast_param.node_id],
         )
         for ast_param, param_spec in zip(funcdef.params, signature.params, strict=True)
     )

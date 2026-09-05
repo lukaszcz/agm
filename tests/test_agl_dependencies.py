@@ -157,6 +157,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
         (
             "runtime",
             (
+                "agm.agl.attributes",
                 "agm.agl.capabilities",
                 "agm.agl.diagnostics",
                 "agm.agl.ir",

@@ -6,7 +6,10 @@ against this catalog: it says which attributes exist, which declaration kinds
 each one may sit on, what arguments it takes, whether it may repeat, and which
 other attributes it excludes. Everything here is data — the diagnostics for an
 unknown, misplaced, malformed, duplicate, or conflicting attribute belong to
-the pass that consults the catalog.
+the pass that consults the catalog. The typed shapes an attribute's meaning
+takes — :class:`ProgramOptionSpec`, the command-line presentation the
+``@opt-*`` attributes describe — live here too, so a host reads one without
+reaching into a pass.
 
 It is a top-level leaf sitting directly on ``zones``, whose ``ParamZone`` the
 ``@arg-*`` attributes name, and on nothing else, so any layer may name an
@@ -16,6 +19,7 @@ attribute without pulling a pass in with it.
 from __future__ import annotations
 
 import enum
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -24,11 +28,21 @@ from agm.agl.zones import ParamZone
 
 __all__ = [
     "BUILTIN_ATTRIBUTES",
+    "DOC_ATTRIBUTE",
     "EXTERN_NAME_ATTRIBUTE",
+    "NAME_ADDRESSED_OPTION_ATTRIBUTES",
+    "OPTION_ENV_ATTRIBUTE",
+    "OPTION_HIDDEN_ATTRIBUTE",
+    "OPTION_METAVAR_ATTRIBUTE",
+    "OPTION_NAME_ATTRIBUTE",
+    "OPTION_NAME_PATTERN",
+    "OPTION_SHORT_ATTRIBUTE",
+    "OPTION_SHORT_PATTERN",
     "ZONE_ATTRIBUTES",
     "AttributeArguments",
     "AttributeSpec",
     "AttributeTarget",
+    "ProgramOptionSpec",
 ]
 
 
@@ -117,7 +131,66 @@ ZONE_ATTRIBUTES: Mapping[str, ParamZone] = MappingProxyType(
 #: it raises to name the remedy, reach it through this constant.
 EXTERN_NAME_ATTRIBUTE = "extern-name"
 
+#: The attribute carrying human-readable prose for a declaration. Named here
+#: because the pass that recognizes attributes files its text in a table of
+#: its own, and every host surface showing documentation reads that table.
+DOC_ATTRIBUTE = "doc"
+
+#: The attributes shaping how a ``program def`` parameter appears on a host's
+#: command line.
+OPTION_NAME_ATTRIBUTE = "opt-name"
+OPTION_SHORT_ATTRIBUTE = "opt-short"
+OPTION_ENV_ATTRIBUTE = "opt-env"
+OPTION_METAVAR_ATTRIBUTE = "opt-metavar"
+OPTION_HIDDEN_ATTRIBUTE = "opt-hidden"
+
+#: The option attributes that address a parameter by name: they rename its
+#: flag, give it a short spelling, name an environment fallback, or keep that
+#: name out of help. A positional-only parameter is never addressed by name,
+#: so carrying one of these is an error; ``@opt-metavar`` and ``@doc`` still
+#: apply, since they describe the value and its meaning rather than the name
+#: it is addressed by.
+NAME_ADDRESSED_OPTION_ATTRIBUTES: tuple[str, ...] = (
+    OPTION_NAME_ATTRIBUTE,
+    OPTION_SHORT_ATTRIBUTE,
+    OPTION_ENV_ATTRIBUTE,
+    OPTION_HIDDEN_ATTRIBUTE,
+)
+
+#: The shape of an ``@opt-name`` argument: a flag word of ASCII letters,
+#: digits and hyphens that begins with a letter or digit and follows every
+#: hyphen with one, so a host can form both ``--<name>`` and the derived
+#: ``--no-<name>`` from it. Anything else — a leading, trailing or doubled
+#: hyphen, whitespace, ``=``, other punctuation, the empty text — is rejected.
+OPTION_NAME_PATTERN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*")
+
+#: The shape of an ``@opt-short`` argument: exactly one ASCII letter, which a
+#: host spells ``-<short>``.
+OPTION_SHORT_PATTERN = re.compile(r"[A-Za-z]")
+
 _PROGRAM_PARAMETER_ONLY: frozenset[AttributeTarget] = frozenset({AttributeTarget.PROGRAM_PARAMETER})
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramOptionSpec:
+    """How one ``program def`` parameter presents itself to a host.
+
+    ``name`` is the external spelling every host surface uses for the
+    parameter — its flag, the derived negative, the config key, completion —
+    and defaults to the declared name. ``short`` is a one-letter alternative
+    spelling, ``env`` an environment variable read when no value is supplied,
+    ``metavar`` the placeholder standing for the value in usage text,
+    ``hidden`` whether the parameter is kept out of help, and ``doc`` its
+    help prose. Every field but ``name`` is absent unless an attribute
+    supplies it.
+    """
+
+    name: str
+    short: str | None = None
+    env: str | None = None
+    metavar: str | None = None
+    hidden: bool = False
+    doc: str | None = None
 
 
 def _zone_spec(name: str) -> AttributeSpec:
@@ -144,13 +217,13 @@ _SPECS: tuple[AttributeSpec, ...] = (
         targets=frozenset({AttributeTarget.EXTERN}),
         arguments=AttributeArguments.ONE_TEXT,
     ),
-    _option_spec("opt-short", AttributeArguments.ONE_TEXT),
-    _option_spec("opt-name", AttributeArguments.ONE_TEXT),
-    _option_spec("opt-env", AttributeArguments.ONE_TEXT),
-    _option_spec("opt-metavar", AttributeArguments.ONE_TEXT),
-    _option_spec("opt-hidden", AttributeArguments.NONE),
+    _option_spec(OPTION_SHORT_ATTRIBUTE, AttributeArguments.ONE_TEXT),
+    _option_spec(OPTION_NAME_ATTRIBUTE, AttributeArguments.ONE_TEXT),
+    _option_spec(OPTION_ENV_ATTRIBUTE, AttributeArguments.ONE_TEXT),
+    _option_spec(OPTION_METAVAR_ATTRIBUTE, AttributeArguments.ONE_TEXT),
+    _option_spec(OPTION_HIDDEN_ATTRIBUTE, AttributeArguments.NONE),
     AttributeSpec(
-        name="doc",
+        name=DOC_ATTRIBUTE,
         targets=_EVERY_TARGET,
         arguments=AttributeArguments.ONE_TEXT,
     ),

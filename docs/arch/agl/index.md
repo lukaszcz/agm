@@ -60,7 +60,7 @@ A **program** is the entry module plus its transitive import and re-export depen
 | REPL | `src/agm/agl/repl/` |
 | Pipeline orchestrator and host leaves | `src/agm/agl/pipeline.py`, `capabilities.py`, `diagnostics.py`, `setting_overrides.py`, `type_schema.py`, `artifact_cache.py`, `self_validation.py` |
 
-Layering is enforced by `tests/test_agl_dependencies.py`: `semantics` is the foundation, `syntax` is an AST-only leaf, `typecheck` reaches only scope's output and the layers beneath it, `matchcompile` imports nothing downstream, the IR depends only on its own data and the engine-key catalog, the evaluator never imports the frontend, the runtime is eval-free, and the pipeline sits on top. `agl/zones.py`, `agl/attributes.py` (the built-in attribute catalog, which names zones and nothing else) and `agl/modules/ids.py` are the vocabulary leaves below every pass, so both scope and the IR can name a parameter's zone and a module's identity without seeing each other.
+Layering is enforced by `tests/test_agl_dependencies.py`: `semantics` is the foundation, `syntax` is an AST-only leaf, `typecheck` reaches only scope's output and the layers beneath it, `matchcompile` imports nothing downstream, the IR depends only on its own data and the engine-key catalog, the evaluator never imports the frontend, the runtime is eval-free, and the pipeline sits on top. `agl/zones.py`, `agl/attributes.py` (the built-in attribute catalog, which names zones and carries `ProgramOptionSpec`, the host-facing shape the `@opt-*` attributes describe) and `agl/modules/ids.py` are the vocabulary leaves below every pass, so both scope and the IR can name a parameter's zone and a module's identity without seeing each other.
 
 ## What To Read Next
 

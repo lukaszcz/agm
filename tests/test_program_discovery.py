@@ -25,6 +25,25 @@ class TestProgramDeclarationDiscovery:
         assert [program.name for program in programs] == ["main"]
         assert [param.name for param in programs[0].parameters] == ["name"]
 
+    def test_discovers_the_option_presentation_and_documentation(self) -> None:
+        from agm.agl.attributes import ProgramOptionSpec
+        from agm.cli_support.program_discovery import discover_program_declarations_from_source
+
+        programs = discover_program_declarations_from_source(
+            '@doc("Greets someone.")\n'
+            "program def main(\n"
+            '  @opt-name("addressee") @opt-short("a") @doc("who to greet") who: text = "world",\n'
+            "  plain: int = 0,\n"
+            ") -> unit = print who"
+        )
+
+        (program,) = programs
+        assert program.doc == "Greets someone."
+        assert [param.cli for param in program.parameters] == [
+            ProgramOptionSpec(name="addressee", short="a", doc="who to greet"),
+            ProgramOptionSpec(name="plain"),
+        ]
+
     def test_inline_source_wraps_before_discovering_programs(self) -> None:
         from agm.cli_support.program_discovery import discover_program_declarations_from_source
 
@@ -128,6 +147,7 @@ def _make_program(name: str, *, is_entry: bool = True) -> ProgramDeclInfo:
         span=SourceSpan(1, 1, 1, 2, 0, 1),
         parameters=(),
         is_entry=is_entry,
+        doc=None,
     )
 
 

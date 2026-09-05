@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeAlias as TypingTypeAlias
 
+from agm.agl.attributes import ProgramOptionSpec
 from agm.agl.diagnostics import AglError
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.types import EnumType, RecordType, TypeVarType
@@ -716,6 +717,14 @@ class ModuleResolution:
         ``FuncDef.node_id``: its ``@extern-name`` argument, or its declared
         name verbatim. Two externs of one module never share an entry value.
         Lowering and companion resolution read this table.
+    ``program_options``
+        The command-line presentation of every ``program def`` parameter,
+        keyed by ``Param.node_id``, as its ``@opt-*`` attributes describe it.
+        Every program parameter has an entry; the host builds a program's CLI
+        from these rather than from declared names.
+    ``docs``
+        The ``@doc`` text of every declaration carrying one, parameters and
+        fields included, keyed by that declaration's node id.
     """
 
     program: Program
@@ -748,6 +757,8 @@ class ModuleResolution:
     use_targets: dict[int, ResolvedUseTarget] = field(default_factory=dict)
     param_zones: dict[int, ParamZone] = field(default_factory=dict)
     extern_names: dict[int, str] = field(default_factory=dict)
+    program_options: dict[int, ProgramOptionSpec] = field(default_factory=dict)
+    docs: dict[int, str] = field(default_factory=dict)
 
     def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ScopePath | None:
         """Return scope's receiver classification for *node*, if it has one.

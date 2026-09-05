@@ -7,13 +7,50 @@ never reaches.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+import time
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
 
 from tests import _durations
+
+#: CPU seconds a measurement has to move before it means anything. ``os.times``
+#: is quantised to clock ticks (10ms on Linux) and the counters it returns are
+#: whole-process totals, so a difference taken late in a long run loses the last
+#: digits to floating-point as well. Several ticks of headroom clears both.
+_MARGIN = 0.05
+
+#: Wall-clock ceiling on the repeat loops below. A working counter passes it on
+#: the first iteration or two; the ceiling only matters if the counter never
+#: moves, and then it turns a hang into a failed assertion.
+_DEADLINE = 10.0
+
+
+def _repeat_until_measurable(measure: Callable[[], float], work: Callable[[], None]) -> float:
+    """Run ``work`` until ``measure`` reports more than ``_MARGIN``, and report it.
+
+    Asserting that a fixed amount of work registers on the CPU counter would be
+    asserting how fast this machine runs that work: the same loop measures one
+    tick or five depending on interpreter warm-up and on whether coverage
+    tracing is on. Repeating until the counter has actually moved tests the
+    accounting instead, and costs only as much work as that takes.
+    """
+    deadline = time.monotonic() + _DEADLINE
+    measured = measure()
+    while measured <= _MARGIN and time.monotonic() < deadline:
+        work()
+        measured = measure()
+    return measured
+
+
+def _own_cpu_seconds() -> float:
+    """CPU seconds burned by this process alone, charging nothing to children."""
+    times = os.times()
+    return times.user + times.system
 
 
 class _Reporter:
@@ -38,19 +75,33 @@ def _session(reporter: _Reporter | None) -> SimpleNamespace:
 
 class TestCpuSeconds:
     def test_counts_work_done_in_this_process(self) -> None:
-        # ``os.times`` is quantised to clock ticks (10ms on Linux), so the work
-        # here has to be comfortably larger than one tick to be measurable.
         before = _durations.cpu_seconds()
-        assert sum(range(3_000_000)) > 0
-        assert _durations.cpu_seconds() - before > 0.01
+
+        charged = _repeat_until_measurable(
+            lambda: _durations.cpu_seconds() - before, lambda: sum(range(1_000_000))
+        )
+
+        assert charged > _MARGIN
 
     def test_counts_work_done_by_a_reaped_child(self) -> None:
         """Most of the suite's cost is subprocesses, so they have to be charged."""
-        before = _durations.cpu_seconds()
-        subprocess.run(
-            [sys.executable, "-c", "sum(range(2_000_000))"], check=True, capture_output=True
+
+        def burn_in_a_child() -> None:
+            subprocess.run(
+                [sys.executable, "-c", "sum(range(2_000_000))"], check=True, capture_output=True
+            )
+
+        before_total = _durations.cpu_seconds()
+        before_own = _own_cpu_seconds()
+
+        # Net of what this process spent spawning them, so the number can only
+        # come from the children themselves.
+        charged_to_children = _repeat_until_measurable(
+            lambda: (_durations.cpu_seconds() - before_total) - (_own_cpu_seconds() - before_own),
+            burn_in_a_child,
         )
-        assert _durations.cpu_seconds() - before > 0.01
+
+        assert charged_to_children > _MARGIN
 
 
 class TestBudgetEnforcement:

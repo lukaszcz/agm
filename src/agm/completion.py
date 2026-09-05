@@ -239,7 +239,7 @@ def registered_command_param_completion(
     """
     try:
         from agm.cli_dispatch import load_command_index, resolve_registered_command
-        from agm.cli_support.program_options import program_option_map_or_none
+        from agm.cli_support.program_options import program_command_for
         from agm.commands.exec_program import registered_program_declaration
 
         context = current_config_context()
@@ -250,12 +250,10 @@ def registered_command_param_completion(
         declaration = registered_program_declaration(
             resolution.registration.program, resolution.registration.package, context=context
         )
-        option_map = (
-            None if declaration is None else program_option_map_or_none(declaration.parameters)
-        )
+        program_command = program_command_for(declaration)
         flags = (
             "--dry-run",
-            *(() if option_map is None else option_map.completion_items()),
+            *(() if program_command is None else program_command.completion_items()),
         )
         return [CompletionItem(flag) for flag in flags if flag.startswith(incomplete)]
     except (Exception, SystemExit):
@@ -489,15 +487,15 @@ def _program_argument_completion_items(
     which program's flags apply. Degrades silently to ``[]``.
     """
     from agm.cli_support.program_discovery import select_entry_program
-    from agm.cli_support.program_options import program_option_map_for
+    from agm.cli_support.program_options import program_command_for
 
     selection = select_entry_program(programs, requested=requested)
-    option_map = program_option_map_for(selection.selected)
-    if option_map is None:
+    program_command = program_command_for(selection.selected)
+    if program_command is None:
         return []
     return [
         CompletionItem(flag)
-        for flag in option_map.completion_items()
+        for flag in program_command.completion_items()
         if flag.startswith(incomplete)
     ]
 

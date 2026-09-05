@@ -194,9 +194,9 @@ the program's own end-of-options marker (to pass a literal `--`-prefixed
 positional argument) takes a **doubled** `--` on the command line — `agm exec
 FILE -- -- --odd-looking-value`.
 
-A `--`-prefixed token is never taken as a preceding flag's `VALUE` either:
-`--msg --x` reports a missing value for `--msg`, not the value `--x`. Give such
-a value in the inline form — `--msg=--x`.
+A value-taking flag consumes whatever token follows it, flag-shaped or not:
+`--msg --x` supplies the value `--x`. Spell the value inline — `--msg=--x` — when
+the token after the flag is meant as a flag of its own.
 
 Running `agm exec FILE --help` (or `-c ... --help`) appends a `Program arguments:`
 section after the standard help text. With exactly one entry program — or with

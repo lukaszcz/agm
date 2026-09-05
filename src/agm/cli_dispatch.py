@@ -87,12 +87,14 @@ def registered_command_help(
     the raw declaration path, so it reads like the command the reader
     actually invokes rather than the ``program def`` behind it.
     """
-    from agm.cli_support.program_options import program_option_map_for
+    from agm.cli_support.program_options import program_command_for
 
-    option_map = program_option_map_for(program)
+    program_command = program_command_for(program)
 
     usage = (
-        option_map.usage_line(f"agm {path_name}") if option_map is not None else f"agm {path_name}"
+        program_command.usage_line(f"agm {path_name}")
+        if program_command is not None
+        else f"agm {path_name}"
     )
     usage += " [--dry-run]"
 
@@ -105,8 +107,8 @@ def registered_command_help(
         "Options:",
         "  --dry-run  Statically check the program without executing it.",
     ]
-    if option_map is not None:
-        described = option_map.option_lines()
+    if program_command is not None:
+        described = program_command.option_lines()
         if described:
             lines.extend(("", "Program arguments:", *(f"  {line}" for line in described)))
     return "\n".join(lines) + "\n"

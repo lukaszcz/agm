@@ -88,10 +88,10 @@ from agm.cli_support.program_discovery import (
 )
 from agm.cli_support.program_options import (
     DuplicateOptionFlagError,
+    ProgramCommand,
     ProgramOptionError,
-    ProgramOptionMap,
     ReservedFlagError,
-    build_program_option_map,
+    build_program_command,
     native_raw_value,
 )
 from agm.config.context import ConfigContext, current_config_context
@@ -126,7 +126,7 @@ if TYPE_CHECKING:
 class RegisteredProgramUsageError(Exception):
     """Raised when CLI tokens fail to parse against a program's own value parameters.
 
-    Wraps a ``ProgramOptionMap.parse_tokens`` failure. Carries the
+    Wraps a ``ProgramCommand.parse`` failure. Carries the
     parse-failure message and the selected ``program def``'s own declaration
     (when one was selected) so the caller can render a usage message
     appropriate to how the program was invoked — a plain ``agm exec`` usage
@@ -529,23 +529,23 @@ def run(
             )
             raise SystemExit(1)
 
-    # A selected program's own value parameters project onto their own CLI
-    # option map, built from its declared signature. This is a static,
+    # A selected program's own value parameters project onto their own Click
+    # command, built from its declared signature. This is a static,
     # source-derived check independent of any supplied arguments, so a
     # colliding projection (against a reserved host flag, or against another
     # parameter's own flag) is reported unconditionally.
-    program_option_map: ProgramOptionMap | None = None
+    program_command: ProgramCommand | None = None
     if selected_program is not None:
-        option_map_result = build_program_option_map(selected_program.parameters)
-        if isinstance(option_map_result, ProgramOptionMap):
-            program_option_map = option_map_result
+        command_result = build_program_command(selected_program)
+        if isinstance(command_result, ProgramCommand):
+            program_command = command_result
         else:
-            print(f"Error: {_program_option_error_message(option_map_result)}", file=sys.stderr)
+            print(f"Error: {_program_option_error_message(command_result)}", file=sys.stderr)
             raise SystemExit(1)
 
-    if program_option_map is not None:
+    if program_command is not None:
         try:
-            cli_arguments = program_option_map.parse_tokens(args.argument_tokens)
+            cli_arguments = program_command.parse(args.argument_tokens)
         except ValueError as exc:
             raise RegisteredProgramUsageError(str(exc), selected_program) from exc
     elif args.argument_tokens:
@@ -556,39 +556,42 @@ def run(
         cli_arguments = ProgramArguments(positional=(), named={})
 
     # The selected program's own value parameters resolve config-file values
-    # from its qualified table (e.g. ``[workflow.main]``) — the same table an
-    # engine-key override reads, and the same ``QualifiedConfigKey`` shape.
-    # Precedence is CLI > config table > signature default, so config values
-    # are folded in beneath CLI values supplied by either syntax.
+    # from its qualified table (e.g. ``[workflow.main]``), keyed by their
+    # external names — the same table an engine-key override reads, and the
+    # same ``QualifiedConfigKey`` shape. Precedence is CLI token > ``@opt-env``
+    # variable > config table > signature default: a parameter Click filled
+    # from either of the first two is already in ``cli_arguments.named``, so
+    # config values are folded in only beneath those.
     program_named: dict[str, object] = dict(cli_arguments.named)
-    if entry_stem is not None and program_option_map is not None and selected_program is not None:
+    if entry_stem is not None and program_command is not None and selected_program is not None:
         program_path = selected_program.scope_path + (selected_program.name,)
-        argument_options = {
-            info.name: (
-                QualifiedConfigKey(config_entry_segments, program_path, info.name),
+        argument_options = tuple(
+            (
+                info,
                 projected,
+                QualifiedConfigKey(config_entry_segments, program_path, info.cli.name),
             )
-            for info, projected in program_option_map.options
-        }
-        argument_keys = [key for key, _projected in argument_options.values()]
+            for info, projected in program_command.options
+        )
+        argument_keys = [key for _info, _projected, key in argument_options]
         try:
             configured_arguments = resolve_qualified_values(config_view, argument_keys)
         except QualifiedConfigLookupError as exc:
             print(f"Error: invalid qualified configuration: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
         positional_names = {
-            info.name for info in program_option_map.positional[: len(cli_arguments.positional)]
+            info.name for info in program_command.positional[: len(cli_arguments.positional)]
         }
         cli_supplied_names = set(program_named) | positional_names
-        for name, (key, projected) in argument_options.items():
-            if key in configured_arguments and name not in cli_supplied_names:
-                program_named[name] = native_raw_value(projected, configured_arguments[key])
+        for info, projected, key in argument_options:
+            if key in configured_arguments and info.name not in cli_supplied_names:
+                program_named[info.name] = native_raw_value(projected, configured_arguments[key])
         _report_undeclared_config_keys(
             config_view,
             config_entry_segments,
             argument_keys,
             scope_path=program_path,
-            positional_only_names=program_option_map.positional_only_names(),
+            positional_only_names=program_command.positional_only_names(),
         )
     arguments = ProgramArguments(positional=cli_arguments.positional, named=program_named)
 

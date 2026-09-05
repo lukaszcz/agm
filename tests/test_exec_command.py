@@ -3813,6 +3813,173 @@ class TestProgramValueArguments:
         assert "Error: invalid qualified configuration" in capsys.readouterr().err
 
 
+class TestProgramOptionAttributesCLI:
+    """``@opt-*`` presentation attributes on a selected program's parameters.
+
+    The end-to-end program fixtures bind a scenario's arguments by declared
+    name, so the CLI spellings these attributes introduce — a renamed flag, a
+    short option, an environment fallback — are exercised here, where real
+    argument tokens reach ``agm exec``.
+    """
+
+    def _config_home(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, contents: str) -> None:
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(contents)
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+    def _greeter(self, tmp_path: Path) -> Path:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            "program def main(\n"
+            '  @opt-name("addressee")\n'
+            '  @opt-short("a")\n'
+            '  @opt-env("GREET_WHO")\n'
+            '  who: text = "world",\n'
+            ") -> unit = print who\n",
+        )
+        return agl_file
+
+    def test_external_name_spells_the_flag(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = self._greeter(tmp_path)
+
+        assert (
+            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--addressee", "agm"]))
+            is None
+        )
+        assert capsys.readouterr().out == "agm\n"
+
+    def test_the_declared_name_is_not_a_flag(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = self._greeter(tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--who", "agm"]))
+
+        assert exc_info.value.code == 1
+        assert "--who" in capsys.readouterr().err
+
+    def test_short_option_with_a_separate_value(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = self._greeter(tmp_path)
+
+        assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["-a", "agm"])) is None
+        assert capsys.readouterr().out == "agm\n"
+
+    def test_short_option_with_an_attached_value(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = self._greeter(tmp_path)
+
+        assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["-aagm"])) is None
+        assert capsys.readouterr().out == "agm\n"
+
+    def test_bundled_short_flags(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            "program def main(\n"
+            '  @opt-short("v")\n'
+            "  verbose: bool = false,\n"
+            '  @opt-short("q")\n'
+            "  quiet: bool = false,\n"
+            ") -> unit = print(verbose and quiet)\n",
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["-vq"])) is None
+        assert capsys.readouterr().out == "true\n"
+
+    def test_environment_supplies_an_omitted_argument(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = self._greeter(tmp_path)
+        monkeypatch.setenv("GREET_WHO", "from-env")
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == "from-env\n"
+
+    def test_a_cli_token_overrides_the_environment(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = self._greeter(tmp_path)
+        monkeypatch.setenv("GREET_WHO", "from-env")
+
+        assert (
+            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--addressee", "cli"]))
+            is None
+        )
+        assert capsys.readouterr().out == "cli\n"
+
+    def test_the_environment_overrides_the_config_table(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._config_home(tmp_path, monkeypatch, '[prog.main]\naddressee = "configured"\n')
+        agl_file = self._greeter(tmp_path)
+        monkeypatch.setenv("GREET_WHO", "from-env")
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == "from-env\n"
+
+    def test_the_config_table_is_keyed_by_the_external_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._config_home(tmp_path, monkeypatch, '[prog.main]\naddressee = "configured"\n')
+        agl_file = self._greeter(tmp_path)
+        monkeypatch.delenv("GREET_WHO", raising=False)
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == "configured\n"
+
+    def test_the_declared_name_in_the_config_table_is_an_undeclared_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._config_home(tmp_path, monkeypatch, '[prog.main]\nwho = "configured"\n')
+        agl_file = self._greeter(tmp_path)
+        monkeypatch.delenv("GREET_WHO", raising=False)
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        captured = capsys.readouterr()
+        assert captured.out == "world\n"
+        assert "who" in captured.err
+
+    def test_a_leading_dash_positional_is_spelled_after_the_end_of_options_marker(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file, "program def main(@arg-pos count: int) -> unit = print count\n"
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--", "-5"])) is None
+        assert capsys.readouterr().out == "-5\n"
+
+    def test_a_short_option_colliding_with_a_host_flag_is_a_host_diagnostic(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            'program def main(@opt-short("p") path: text = "") -> unit = print path\n',
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+        assert capsys.readouterr().err.startswith("Error:")
+
+
 class TestProgramArgumentsDynamicHelp:
     """``agm exec --help`` renders the selected program's value-parameter surface."""
 

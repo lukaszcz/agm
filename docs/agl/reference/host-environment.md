@@ -85,8 +85,11 @@ default — a default's own evaluation is distinct and happens later, at the
 entry call, as described above. Each parameter's effective value resolves as:
 
 ```
-CLI token (--name / positional)  >  qualified config table  >  declared default
+CLI token (--name / positional)  >  @opt-env variable  >  qualified config table  >  declared default
 ```
+
+A parameter carrying `@opt-env` reads its named environment variable when no
+CLI token supplies it; an unset or empty variable supplies nothing.
 
 A **positional-only** parameter has no `--flag`, so a config-table entry
 naming it can never reach the argument binder — it falls back to its declared

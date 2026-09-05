@@ -1,7 +1,6 @@
 # Partial application of record, enum-variant, exception, and generic constructors.
 
 record Point
-  @std
   x: int
   y: int
 

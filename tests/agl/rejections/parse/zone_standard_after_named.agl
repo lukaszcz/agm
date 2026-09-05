@@ -1,0 +1,1 @@
+def f(@arg-named a: int, b: int) -> int = a + b

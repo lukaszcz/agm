@@ -1,0 +1,4 @@
+@doc("u")
+use std/text
+
+program def main() -> unit = ()

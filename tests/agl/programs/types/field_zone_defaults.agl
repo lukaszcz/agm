@@ -1,5 +1,5 @@
-# Unmarked record, enum payload, and exception fields are standard;
-# an explicit * marker keeps bare-name shorthand for named-only fields.
+# Record, enum payload, and exception fields without a zone attribute are standard;
+# an explicit @arg-named attribute keeps bare-name shorthand for named-only fields.
 record Pair
   left: int
   right: int
@@ -11,8 +11,8 @@ exception Problem extends Exception
   code: int
   detail: text
 
+@arg-named
 record NamedPair
-  *
   left: int
   right: int
 

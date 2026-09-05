@@ -8,7 +8,6 @@
 scope A
   builtin
   exception ExecError extends Exception
-    *
     command: text
     exit-code: int
     stdout: text

@@ -805,7 +805,7 @@ class TypeEnvironment:
                 self._constructor_field_kinds[(RESERVED_ID, (prelude_name,), member.name)] = fields
                 self._constructor_field_kinds_by_decl_id[member.decl_id] = fields
         # Exception constructor field kinds are NOT pre-registered here: each
-        # exception's own fields honor their declared @pos/@std/@named marker
+        # exception's own fields honor their declared ``@arg-*`` attribute
         # (stored on its TypeDef as ``field_kinds``, alongside ``fields``),
         # same as a record's fields.  ``get_constructor_field_kinds_for_type``
         # derives the full flattened (base-chain-inherited + own) kinds
@@ -2641,7 +2641,7 @@ class TypeEnvironment:
         no caller-supplied module id is needed.  Exception field kinds are
         derived directly from ``type_table.exception_field_kinds``, which
         flattens the ``extends`` base chain (base kinds first, then own kinds,
-        each honoring its declaration's ``@pos``/``@std``/``@named`` marker —
+        each honoring its declaration's ``@arg-*`` attribute —
         exactly like a record's fields), rather than through the registered-kinds
         table records/enums use, since an exception's kinds are never pre-registered
         (see ``TypeEnvironment.

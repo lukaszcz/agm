@@ -1,0 +1,5 @@
+program def main() -> unit = ()
+
+@doc("s") scope A
+  let x = 1
+end A

@@ -1,12 +1,12 @@
-# Construction with explicit zone markers, positional and named fields,
+# Construction with explicit zone attributes, positional and named fields,
 # reordered named fields, shorthand, and generic construction.
+@arg-std
 record StdPair
-  @std
   fst: int
   snd: int
 
+@arg-named
 record Named
-  *
   x: int
   y: int
 
@@ -14,7 +14,7 @@ enum Result
   | Ok(value: int)
   | Err(reason: text, fatal: bool)
 
-# StdPair(@std): both fields are standard (positional or named)
+# StdPair: @arg-std makes both fields standard (positional or named)
 
 program def main(base: int) -> unit =
   let p1 = StdPair(base, base + 1)
@@ -33,7 +33,7 @@ program def main(base: int) -> unit =
   print n2.x
   print n2.y
 
-  # Unmarked enum payload: positional construction
+  # Enum payload without a zone attribute: positional construction
   let ok1: Result = Ok(base)
   let ok2: Result = Ok(value = base + 10)
   let err: Result = Err(reason = "bad", fatal = false)

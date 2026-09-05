@@ -232,7 +232,7 @@ an explicit agent or conversation. The selected value determines the invoked com
 A file workflow declares one or more `program def` entries: `agm exec` invokes the sole one after
 initialization, or selects one of several with `-p`/`--program PATH` (for example,
 `review::main`). An entry's own value parameters project onto `agm exec`'s CLI as positional
-arguments and `--name` options (a marker-less parameter list is entirely named-only). Inline `-c`
+arguments and `--name` options (a `program def`'s parameters are named-only by default). Inline `-c`
 source is wrapped in a synthetic entry when needed. Programs can span multiple `.agl` files via
 the module system (`import utils/math`). Every loaded entry and library module, except
 `std/prelude` itself, receives `import std/prelude::*` by default. An explicit import whose

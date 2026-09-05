@@ -8,10 +8,10 @@
 #   g(1, w, z = v)  — shorthand w + named z, out of declaration order
 #   g(1, w, z)      — two shorthands, out of declaration order (w before z)
 
-def g[T, U](x: int, *, z: T, w: U) -> T = z
+def g[T, U](x: int, @arg-named z: T, @arg-named w: U) -> T = z
 
 # h exercises inference of a named-only shorthand combined with a container return.
-def h[A](n: int, *, label: A) -> array[A] = [label]
+def h[A](n: int, @arg-named label: A) -> array[A] = [label]
 
 # Bind locals whose names match the param names so that bare-name shorthand works.
 

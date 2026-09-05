@@ -7714,7 +7714,7 @@ class TestPackageInstall:
             encoding="utf-8",
         )
         (package / "tools" / "main.agl").write_text(
-            'program def main(@pos, name: text, /, tag: text = "default") -> unit =\n'
+            'program def main(@arg-pos name: text, @arg-std tag: text = "default") -> unit =\n'
             '  print(name + ":" + tag)\n',
             encoding="utf-8",
         )

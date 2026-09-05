@@ -1,17 +1,14 @@
 builtin
 exception Exception
-  *
-  message: text
+  @arg-named message: text
 
 builtin
 exception ExternError extends Exception
-  *
   function: text
   python-type: text
 
 builtin
 exception MaxIterationsExceeded extends Exception
-  *
   limit: int
   condition: text
   last-condition-value: bool
@@ -19,19 +16,16 @@ exception MaxIterationsExceeded extends Exception
 
 builtin
 exception MatchError extends Exception
-  *
   scrutinee-type: text
   scrutinee: json
 
 builtin
 exception IndexError extends Exception
-  *
   index: int
   length: int
 
 builtin
 exception KeyError extends Exception
-  *
   key: text
 
 builtin
@@ -39,17 +33,14 @@ exception TypeError extends Exception()
 
 builtin
 exception ArithmeticError extends Exception
-  *
   operation: text
 
 builtin
 exception UndefinedVariableError extends Exception
-  *
   name: text
 
 builtin
 exception ImmutableBindingError extends Exception
-  *
   name: text
   operation: text
 
@@ -58,19 +49,16 @@ exception Abort extends Exception()
 
 builtin
 exception RecursionError extends Exception
-  *
   limit: int
 
 builtin
 exception CastError extends Exception
-  *
   source-type: text
   target-type: text
   raw: text
 
 builtin
 exception JsonParseError extends Exception
-  *
   raw: text
 
 builtin

@@ -142,12 +142,11 @@ either is a static error.
 
 The selected `program def`'s value parameters project onto `agm exec`'s own CLI
 surface, one flag or positional slot per parameter, in the same positional/standard/
-named-only zones a parameter list uses everywhere else in AgL: a marker-less
-parameter list is entirely named-only, so bare `x: T` parameters become `--x`
-options; `@pos, …, /` opens the positional-only zone, whose parameters fill `ARG`
-slots in declaration order and can never be supplied by name; a parameter between
-`/` and the next marker (or the end of the list) is standard and accepts either a
-positional token or its own `--x`.
+named-only zones a parameter list uses everywhere else in AgL: a parameter
+list with no zone attributes is entirely named-only, so bare `x: T` parameters
+become `--x` options; an `@arg-pos` parameter fills an `ARG` slot in declaration
+order and can never be supplied by name; an `@arg-std` parameter is standard and
+accepts either a positional token or its own `--x`.
 
 Each name-addressable parameter's declared type selects its flag form; any
 value-taking flag also accepts the inline `--x=VALUE` form as an alternative

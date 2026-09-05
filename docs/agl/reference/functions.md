@@ -11,20 +11,18 @@ from other functions. The type of a function value is written
 ## `def` — named function declarations
 
 ```ebnf
-func_def         ::= "def" func_decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
-builtin_func_def ::= "builtin" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
-extern_func_def  ::= "extern" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
+func_def         ::= attributes? "def" func_decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
+builtin_func_def ::= attributes? "builtin" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
+extern_func_def  ::= attributes? "extern" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
 func_decl_head   ::= decl_head | builtin_receiver "::" name
 decl_head     ::= [scope_path "::"] name
 builtin_receiver ::= "array" "[" name "]" | "dict" "[" "text" "," name "]"
                    | "text" | "json" | "int" | "decimal" | "bool"
 func_body     ::= expr | suite
 type_params   ::= "[" name ("," name)* "]"
-param_list    ::= param_entry ("," param_entry)* ","?
-param_entry   ::= param | param_marker
-param         ::= field_name ":" type_expr ("=" or_expr)?
+param_list    ::= param ("," param)* ","?
+param         ::= attributes? field_name ":" type_expr ("=" or_expr)?
                 | "self" [":" type_expr]       (* first parameter of a method *)
-param_marker  ::= "/" | "*" | "@" NAME    (* @pos, @std, @named *)
 ```
 
 A `def` is a static declaration at the module root or in a
@@ -163,36 +161,36 @@ boundary, and the error model.
 Parameters are listed with explicit types. Each parameter belongs to one of
 three **zones** that determine how arguments at the call site are matched:
 
-| Zone | Binding | Notation in the list |
-|------|---------|---------------------|
-| **Positional-only** | Positional argument only; cannot be passed by name | Parameters before a `/` or `@std` marker, or after an `@pos` marker; a method receiver `self` |
-| **Standard** | Positional or named | Parameters after a `/` or `@std` marker, or before `*`/`@named` |
-| **Named-only** | Named argument only (or bare-name shorthand) | Parameters after a `*` or `@named` marker |
+| Zone | Binding | Written as |
+|------|---------|------------|
+| **Positional-only** | Positional argument only; cannot be passed by name | `@arg-pos`; a method receiver `self` |
+| **Standard** | Positional or named | `@arg-std` |
+| **Named-only** | Named argument only (or bare-name shorthand) | `@arg-named` |
+
+An [attribute](grammar.md#attributes) in front of a parameter puts that
+parameter in the zone it names. The same attribute in front of the declaration
+sets the zone of every parameter that does not name one itself.
 
 For `def`/`extern def`/`builtin def`/lambda, the **default zone is standard**: a
-parameter list with no markers has all parameters in the standard zone
+parameter list with no zone attribute has all parameters in the standard zone
 (positional or named). A method receiver `self` is the exception: it is always
 positional-only. A `program def`'s parameter list defaults to the **named-only**
 zone instead: a plain `name: text` parameter is addressed only by `--name`
-([Host environment](host-environment.md#program-arguments)); an explicit
-`@pos, …, /` marker opens a positional slot. Markers switch zones at the
-boundary they appear at:
+([Host environment](host-environment.md#program-arguments)); an `@arg-pos`
+parameter opens a positional slot.
 
 <!-- agl-check: fragment -->
 ```agl
-def f(x: int, /, y: int) -> int = x + y          # x pos-only, y standard
-def g(x: int, /, y: int, *, z: int) -> int = ...  # x pos-only, y std, z named-only
-def h(x: int, @std, y: int, @named, z: int) -> int = ...  # same as g
+def f(@arg-pos x: int, y: int) -> int = x + y     # x pos-only, y standard
+def g(@arg-pos x: int, y: int, @arg-named z: int) -> int = ...  # all three zones
 def simple(x: int, y: int) -> int = x + y         # both standard (default)
+
+@arg-pos
+def h(x: int, y: int) -> int = x + y              # both positional-only
 ```
 
-`/` and `@std` are interchangeable (both mean "end of positional-only zone");
-`*` and `@named` are interchangeable (both mean "end of standard zone"). A list
-may use `/`/`*` and `@`-markers freely mixed. `@pos` opens the positional-only
-zone and has no punctuation equivalent; it must come first.
-
-At most one `/`/`@std` and one `*`/`@named` may appear, in zone order. `@pos`
-must be the first entry. Violations are static errors.
+Parameters are listed in zone order: positional-only, then standard, then
+named-only. A parameter that follows one from a later zone is a static error.
 
 **Defaults.** A parameter default is an `or_expr` (`param: type = or_expr`).
 Open forms such as `if`, `case`, `try`, loops, `raise`, and `fn` must therefore
@@ -205,7 +203,7 @@ Named-only defaults may appear in any order:
 def greet(name: text, greeting: text = "Hello") -> text =
   "%{greeting}, %{name}!"
 
-def with-named-default(x: int, *, tag: text = "ok") -> text =
+def with-named-default(x: int, @arg-named tag: text = "ok") -> text =
   "%{tag}: %{x}"   # tag is named-only; its default is unconstrained
 ```
 
@@ -277,7 +275,7 @@ program def main() -> unit =
   print(alias.value)
 ```
 
-`self` must be the first parameter, before any zone marker. It has no default
+`self` must be the first parameter. It has no default
 and cannot be supplied by name. Its annotation is optional; when written, it
 must be exactly the enclosing type with the method's receiver type parameters.
 For example, `self: Box[E]` is valid for a `Box` method whose leading type
@@ -364,10 +362,8 @@ nested in a block.
 
 ```ebnf
 lambda_expr ::= "fn" "(" param_list? ")" ("->" type_expr)? "=>" expr
-param_list  ::= param_entry ("," param_entry)* ","?
-param_entry ::= param | param_marker
-param       ::= field_name ":" type_expr ("=" or_expr)?
-param_marker ::= "/" | "*" | "@" NAME    (* @pos, @std, @named *)
+param_list  ::= param ("," param)* ","?
+param       ::= attributes? field_name ":" type_expr ("=" or_expr)?
 ```
 
 `fn` produces a function value. The return type annotation is **optional**:
@@ -598,8 +594,8 @@ arguments at the call site.
 
 ```agl
 def add(x: int, y: int) -> int = x + y
-def f(x: int, /, y: int) -> int = x + y
-def g(x: int, *, z: int) -> int = x + z
+def f(@arg-pos x: int, y: int) -> int = x + y
+def g(x: int, @arg-named z: int) -> int = x + z
 
 program def main() -> unit =
   let r = add(3, 4)
@@ -616,7 +612,7 @@ filled, it is reinterpreted as the named argument `x = x` — but only if
 position is an error:
 
 ```agl
-def h(a: int, *, key: text) -> text = "%{a}: %{key}"
+def h(a: int, @arg-named key: text) -> text = "%{a}: %{key}"
 
 program def main() -> unit =
   let key = "hello"
@@ -716,7 +712,7 @@ Named-argument holes bind to the named parameter, including named-only
 parameters:
 
 ```agl
-def shaped(x: int, *, y: int, z: int = 0) -> int = x * 100 + y * 10 + z
+def shaped(x: int, @arg-named y: int, @arg-named z: int = 0) -> int = x * 100 + y * 10 + z
 
 program def main() -> unit =
   let fill-y: (int) -> int = shaped(3, y = ?, z = 9)

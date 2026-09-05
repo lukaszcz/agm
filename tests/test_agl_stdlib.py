@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import load_graph
@@ -33,6 +34,7 @@ from agm.agl.typecheck.checker import (
 from agm.agl.typecheck.env import AglTypeError, FunctionSignature, ParamSpec
 from agm.agl.typecheck.program import check_program
 from agm.agl.zones import ParamZone
+from tests._agl_helpers import run_inline_command
 from tests.agl.module_graph import resolve_and_check_inline_entry, resolve_inline_entry
 
 _ROOTS = RootSet(frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
@@ -289,8 +291,7 @@ def test_builtin_exception_shape_must_match() -> None:
         _check(
             "builtin\n"
             "exception Exception\n"
-            "  *\n"
-            "  message: text\n"
+            "  @arg-named message: text\n"
             "builtin\n"
             "exception ExecError extends Exception\n"
             "  command: text\n"
@@ -378,6 +379,25 @@ def test_copy_and_shallow_copy_source_declared_calls_are_classified() -> None:
 
 def test_builtin_named_value_call_is_not_classified_as_builtin() -> None:
     _check("enum E\n  | print\nlet x: E = print()\nx\n")
+
+
+def test_builtin_exception_own_fields_are_standard_zone(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A builtin exception's own fields follow the standard zone, so they
+    accept positional arguments in a constructor call."""
+    result = run_inline_command(PipelineDriver(), 'print(IndexError(1, 2, message = "m").index)\n')
+
+    assert list(result.diagnostics) == [], " | ".join(d.message for d in result.diagnostics)
+    assert result.error is None
+    assert capsys.readouterr().out == "1\n"
+
+
+def test_builtin_exception_inherited_message_stays_named_only() -> None:
+    """``Exception``'s ``message`` keeps the named-only zone every builtin
+    exception inherits, so it can never be passed positionally."""
+    with pytest.raises(AglTypeError, match="named-only"):
+        _check('IndexError("m", 1, 2)\n')
 
 
 def test_source_defined_exception_extends_base_with_message() -> None:

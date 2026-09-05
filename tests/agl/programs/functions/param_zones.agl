@@ -1,23 +1,25 @@
-# Parameter zone tests: positional-only (/), standard, and named-only (*) parameters.
-# Also tests @std / @named marker syntax and the named-only shorthand at call sites.
+# Parameter zone tests: positional-only, standard, and named-only parameters.
+# Also tests the zone attributes and the named-only shorthand at call sites.
 
 # Positional-only (x) then standard (y): f(1, 2) and f(1, y=2) both valid.
-def add-po(x: int, /, y: int) -> int = x + y
+def add-po(@arg-pos x: int, y: int) -> int = x + y
 
 # Standard then named-only (z): g(1, z=2) and g(1, z) (shorthand) both valid.
-def mul-std-named(x: int, *, z: int) -> int = x * z
+def mul-std-named(x: int, @arg-named z: int) -> int = x * z
 
 # All three zones: a pos-only, b standard, c named-only.
-def triple(a: int, /, b: int, *, c: int) -> int = a + b + c
+def triple(@arg-pos a: int, b: int, @arg-named c: int) -> int = a + b + c
 
-# @std marker (equivalent to /): same as add_po but using @std.
-def add-atmarker(x: int, @std, y: int) -> int = x + y
+# A declaration-level zone attribute: the same shape as add-po, spelled on the
+# declaration rather than on each entry.
+@arg-pos
+def add-declared-zone(x: int, @arg-std y: int) -> int = x + y
 
 # Default in standard zone, named-only required.
-def with-default(x: int, y: int = 10, *, z: int) -> int = x + y + z
+def with-default(x: int, y: int = 10, @arg-named z: int) -> int = x + y + z
 
 # Generic function with pos-only and standard zones.
-def identity-po[T](x: T, /, y: T) -> array[T] =
+def identity-po[T](@arg-pos x: T, y: T) -> array[T] =
   let dummy = x
   [dummy, y]
 
@@ -37,9 +39,9 @@ program def main(a-val: int, b-val: int, z-val: int) -> unit =
   # triple: all three zones.
   print(triple(a-val, b-val, c = z-val))
 
-  # add_atmarker: same as add_po but @std syntax.
-  print(add-atmarker(a-val, b-val))
-  print(add-atmarker(a-val, y = b-val))
+  # add_declared_zone: same zones as add_po, declared on the def.
+  print(add-declared-zone(a-val, b-val))
+  print(add-declared-zone(a-val, y = b-val))
 
   # with_default: omit y (uses default 10).
   print(with-default(a-val, z = z-val))

@@ -98,14 +98,14 @@ class TestGrammarAndTransformer:
         assert fd.is_extern is True
 
     def test_extern_def_with_zones_and_defaults(self) -> None:
-        fd = first("extern def f(a: int, /, b: int, @named, c: int = 1) -> int")
+        fd = first("extern def f(@arg-pos a: int, b: int, @arg-named c: int = 1) -> int")
         assert isinstance(fd, FuncDef)
         kinds = [p.kind.value for p in fd.params]
         assert kinds == ["positional_only", "standard", "named_only"]
         assert fd.params[2].default is not None
 
-    def test_extern_def_with_named_only_star_zone(self) -> None:
-        fd = first("extern def f(a: int, *, b: int) -> int")
+    def test_extern_def_with_named_only_zone(self) -> None:
+        fd = first("extern def f(a: int, @arg-named b: int) -> int")
         assert isinstance(fd, FuncDef)
         assert [p.kind.value for p in fd.params] == ["standard", "named_only"]
 

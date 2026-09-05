@@ -1,0 +1,3 @@
+record R
+  @arg-named a: int
+  @arg-std b: int

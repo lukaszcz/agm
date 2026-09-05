@@ -135,13 +135,15 @@ def check_extern_graph(tmp_path: Path, modules: dict[str, str]) -> CheckedProgra
 
 class TestExternSignatureParity:
     def test_positional_zoned_and_named_only_params_accepted(self) -> None:
-        cp = check_extern("extern def f(a: int, /, b: int, @named, c: int = 1) -> int\nf(1, 2)")
+        cp = check_extern(
+            "extern def f(@arg-pos a: int, b: int, @arg-named c: int = 1) -> int\nf(1, 2)"
+        )
         sig = _extern_signature(cp, "f")
         assert sig.result == IntType()
         assert len(sig.params) == 3
 
-    def test_star_named_only_zone_accepted(self) -> None:
-        check_extern("extern def f(a: int, *, b: int) -> int\nf(1, b = 2)")
+    def test_named_only_zone_accepted(self) -> None:
+        check_extern("extern def f(a: int, @arg-named b: int) -> int\nf(1, b = 2)")
 
     def test_default_expression_typechecks_against_param_type(self) -> None:
         check_extern('extern def f(a: int, b: text = "x") -> int\nf(1)')
@@ -295,11 +297,11 @@ class TestExternCallTyping:
 
     def test_named_and_default_call(self) -> None:
         check_extern(
-            "extern def f(a: int, @named, b: int = 2) -> int\nlet _ = f(1)\nlet _ = f(1, b = 3)"
+            "extern def f(a: int, @arg-named b: int = 2) -> int\nlet _ = f(1)\nlet _ = f(1, b = 3)"
         )
 
     def test_zoned_positional_only_and_named_only_call(self) -> None:
-        check_extern("extern def f(a: int, /, *, b: int) -> int\nf(1, b = 2)")
+        check_extern("extern def f(@arg-pos a: int, @arg-named b: int) -> int\nf(1, b = 2)")
 
     def test_generic_inference_multiple_instantiations(self) -> None:
         source = (

@@ -1435,7 +1435,7 @@ class TestBuiltinIdentityAcrossEntries:
         declare = s.eval_entry(
             f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
             "builtin def exec(command: text) -> ExecResult\n"
-            "builtin\nexception Exception\n  *\n  message: text\n"
+            "builtin\nexception Exception\n  @arg-named message: text\n"
             "builtin exception Abort extends Exception()\n"
         )
         assert declare.ok, declare.diagnostics
@@ -2007,7 +2007,7 @@ class TestHostRaisedExceptionContractIdentity:
 
     _AGENT_CALL_ERROR = (
         "builtin\nexception AgentCallError extends Exception\n"
-        "  *\n  agent: Agent\n  cause: text\n  metadata: json\n"
+        "  agent: Agent\n  cause: text\n  metadata: json\n"
     )
 
     def test_scoped_agent_and_agent_call_error_declared_together_rejected(self) -> None:

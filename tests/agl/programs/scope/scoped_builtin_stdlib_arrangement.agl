@@ -20,8 +20,7 @@ scope Stdlib
 
   builtin
   exception Exception
-    *
-    message: text
+    @arg-named message: text
 
   builtin exception RangeError extends Exception()
 

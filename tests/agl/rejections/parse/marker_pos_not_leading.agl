@@ -1,1 +1,0 @@
-def f(x: int, @pos, y: int) -> int = x

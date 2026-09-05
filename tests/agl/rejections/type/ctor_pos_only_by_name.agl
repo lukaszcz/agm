@@ -1,5 +1,5 @@
+@arg-pos
 record R
-  @pos
   x: int
   y: int
 

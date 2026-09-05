@@ -1,0 +1,4 @@
+@doc("o")
+infixl <+> at 6
+
+program def main() -> unit = ()

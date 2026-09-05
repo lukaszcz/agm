@@ -547,7 +547,7 @@ class TestLexer:
             ("let f: (int) -> int = g", "->"),
             ("var y := 1", ":="),
             ("let m = M::[int](1)", "::"),
-            ("def f(a, @named, b: int) = a", "@"),
+            ("def f(a, @arg-named b: int) = a", "@"),
         ],
     )
     def test_operator_is_styled(self, source: str, operator: str) -> None:

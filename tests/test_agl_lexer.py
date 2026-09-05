@@ -1041,7 +1041,7 @@ class TestRawTailForms:
             "record R\n  field: int\nexec$ true",
             "record R\n  field: exec$ true",
             "record R\n  do\n    exec$ true\n  done",
-            "record R\n  x: int\n  *\n  y: int\nexec$ true",
+            "record R\n  x: int\n  @arg-named\n  y: int\nexec$ true",
             "enum E\n  | V(value: int)\nexec$ true",
         ),
     )
@@ -2957,11 +2957,6 @@ class TestDivisionRequiresSurroundingSpace:
     def test_anchored_qualifier_after_a_space_is_still_a_qualifier(self) -> None:
         assert lark_tok("f /b::c")[:2] == [("NAME", "f"), ("MODQUAL", "/b")]
 
-    def test_positional_parameter_marker_is_not_division(self) -> None:
-        # The `/` parameter marker sits between commas, touching no operand.
-        types = [t for t, _ in lark_tok("def g(a: int, /, b: int) -> int = a")]
-        assert "SLASH" in types
-
     @pytest.mark.parametrize("lexer", (tok, lark_tok), ids=("public", "lark"))
     def test_wildcard_tail_is_not_a_clinging_slash(
         self, lexer: Callable[[str], list[tuple[str, str]]]
@@ -2976,80 +2971,68 @@ class TestDivisionRequiresSurroundingSpace:
 
 
 # ---------------------------------------------------------------------------
-# AT token (@) — parameter-marker prefix for @pos / @std / @named
+# AT token (@) — the attribute prefix
 # ---------------------------------------------------------------------------
 
 
 class TestAtToken:
     """Tests for the standalone AT token (``@``).
 
-    ``@`` lexes as a single ``AT`` token.  A following identifier is emitted
-    as a separate ``NAME`` token, so ``@pos``, ``@std``, and ``@named`` each
-    produce two tokens: ``AT`` then ``NAME``.  ``pos``, ``std``, and ``named``
-    without a leading ``@`` remain ordinary ``NAME`` tokens.
+    ``@`` lexes as a single ``AT`` token and the attribute name that follows
+    as one ``NAME``, hyphens included, so ``@arg-pos`` is ``AT`` then
+    ``NAME("arg-pos")``.  The same word without a leading ``@`` stays an
+    ordinary ``NAME``.
     """
 
     def test_at_alone_is_at_token(self) -> None:
         assert tok("@") == [("AT", "@")]
 
-    def test_at_pos_is_at_name(self) -> None:
-        assert tok("@pos") == [("AT", "@"), ("NAME", "pos")]
+    @pytest.mark.parametrize("name", ("arg-pos", "arg-std", "arg-named", "doc", "extern-name"))
+    def test_an_attribute_name_is_one_name_token(self, name: str) -> None:
+        assert tok(f"@{name}") == [("AT", "@"), ("NAME", name)]
 
-    def test_at_std_is_at_name(self) -> None:
-        assert tok("@std") == [("AT", "@"), ("NAME", "std")]
-
-    def test_at_named_is_at_name(self) -> None:
-        assert tok("@named") == [("AT", "@"), ("NAME", "named")]
-
-    def test_pos_without_at_is_name(self) -> None:
-        # `pos` is not a keyword — it must remain a plain identifier everywhere.
-        assert tok("pos") == [("NAME", "pos")]
-
-    def test_std_without_at_is_name(self) -> None:
-        assert tok("std") == [("NAME", "std")]
-
-    def test_named_without_at_is_name(self) -> None:
-        assert tok("named") == [("NAME", "named")]
+    @pytest.mark.parametrize("name", ("arg-pos", "doc"))
+    def test_the_same_word_without_an_at_is_a_plain_name(self, name: str) -> None:
+        assert tok(name) == [("NAME", name)]
 
     def test_at_adjacent_to_punctuation(self) -> None:
-        # (@named, x) → LPAR AT NAME("named") COMMA NAME("x") RPAR
-        assert tok("(@named, x)") == [
+        # (@arg-named x) → LPAR AT NAME("arg-named") NAME("x") RPAR
+        assert tok("(@arg-named x)") == [
             ("LPAR", "("),
             ("AT", "@"),
-            ("NAME", "named"),
-            ("COMMA", ","),
+            ("NAME", "arg-named"),
             ("NAME", "x"),
             ("RPAR", ")"),
         ]
 
     def test_at_adjacent_to_operators(self) -> None:
-        # Spaced @std between other tokens
-        assert tok("/ @std *") == [
+        # A spaced attribute between other tokens.
+        assert tok("/ @doc *") == [
             ("SLASH", "/"),
             ("AT", "@"),
-            ("NAME", "std"),
+            ("NAME", "doc"),
             ("STAR", "*"),
         ]
 
     def test_at_breaks_preceding_identifier(self) -> None:
         # `@` is in _IDENT_STOP, so it terminates a preceding identifier scan.
-        assert tok("x@pos") == [("NAME", "x"), ("AT", "@"), ("NAME", "pos")]
+        assert tok("x@doc") == [("NAME", "x"), ("AT", "@"), ("NAME", "doc")]
 
     def test_at_with_space_before_name(self) -> None:
         # A space between @ and the name still yields exactly AT then NAME.
-        assert tok("@ pos") == [("AT", "@"), ("NAME", "pos")]
+        assert tok("@ doc") == [("AT", "@"), ("NAME", "doc")]
 
     def test_at_token_position(self) -> None:
         # Verify the AT token carries correct position information.
-        tokens = list(tokenize("@pos"))
+        tokens = list(tokenize("@arg-pos"))
         at_tok = tokens[0]
         assert at_tok.type == "AT"
         assert at_tok.line == 1
         assert at_tok.column == 1
         name_tok = tokens[1]
         assert name_tok.type == "NAME"
-        assert str(name_tok) == "pos"
-        assert name_tok.column == 2  # `pos` starts immediately after `@`
+        assert str(name_tok) == "arg-pos"
+        assert name_tok.column == 2  # `arg-pos` starts immediately after `@`
 
 
 # ---------------------------------------------------------------------------

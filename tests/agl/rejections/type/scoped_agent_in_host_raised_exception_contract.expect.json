@@ -1,1 +1,1 @@
-{"diagnostic": {"line": 18, "message_contains": ["AgentCallError", "agent", "A::Agent"]}}
+{"diagnostic": {"line": 17, "message_contains": ["AgentCallError", "agent", "A::Agent"]}}

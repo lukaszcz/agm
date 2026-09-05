@@ -5,9 +5,9 @@ def next-default() -> int =
   default-ticks := default-ticks + 1
   default-ticks
 
-def shaped(x: int, *, y: int, z: int = next-default()) -> int = x * 100 + y * 10 + z
+def shaped(x: int, @arg-named y: int, @arg-named z: int = next-default()) -> int = x * 100 + y * 10 + z
 
-def named-only(*, left: int, right: int = next-default()) -> int = left * 10 + right
+def named-only(@arg-named left: int, @arg-named right: int = next-default()) -> int = left * 10 + right
 
 program def main(mode: text, base: int) -> unit =
   if

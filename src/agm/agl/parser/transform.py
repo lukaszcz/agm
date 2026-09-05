@@ -154,20 +154,6 @@ def _prefix_scope_path(
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True, slots=True)
-class _ParamMarker:
-    """Transformer-internal sentinel for a zone-boundary marker in a param/field list.
-
-    Exists only during transformation; the AST never contains these.
-    ``zone`` is the zone the marker *opens*; ``label`` is the source spelling
-    (``"/"``, ``"*"``, ``"@pos"``, etc.) for error messages.
-    """
-
-    zone: ParamZone
-    label: str
-    span: SourceSpan
-
-
 _InfixOperator: TypeAlias = syntax.RawInfixOperator
 _InfixOperand: TypeAlias = syntax.RawInfixOperand
 _RawInfixChain: TypeAlias = syntax.RawInfixChain
@@ -251,23 +237,35 @@ class _RawJuxtMember:
     node_id: int
 
 
-# Zone ordering for marker validation (strictly increasing).
+# --- Interim zone resolution -----------------------------------------------
+# The parser still fills ``Param.kind`` from the ``@arg-*`` attributes an entry
+# or its owning declaration carries, and still rejects an out-of-order entry
+# list.  Both duties belong to the pass that recognizes attributes; everything
+# between this banner and its closing one moves there together.
+
+#: The zone each ``@arg-*`` attribute selects.
+_ZONE_BY_ATTRIBUTE: dict[str, ParamZone] = {
+    "arg-pos": ParamZone.POSITIONAL_ONLY,
+    "arg-std": ParamZone.STANDARD,
+    "arg-named": ParamZone.NAMED_ONLY,
+}
+
+#: Entry order: positional-only, then standard, then named-only.
 _ZONE_ORDER: dict[ParamZone, int] = {
     ParamZone.POSITIONAL_ONLY: 0,
     ParamZone.STANDARD: 1,
     ParamZone.NAMED_ONLY: 2,
 }
-_ZONE_BY_ORDER: dict[int, ParamZone] = {v: k for k, v in _ZONE_ORDER.items()}
 
-# Zone opened by each `@`-marker name (validated in marker_at).
-_AT_ZONE: dict[str, ParamZone] = {
-    "pos": ParamZone.POSITIONAL_ONLY,
-    "std": ParamZone.STANDARD,
-    "named": ParamZone.NAMED_ONLY,
+_ZONE_BY_ORDER: dict[int, ParamZone] = {order: zone for zone, order in _ZONE_ORDER.items()}
+
+#: How each zone is named in a diagnostic.
+_ZONE_LABEL: dict[ParamZone, str] = {
+    ParamZone.POSITIONAL_ONLY: "positional-only",
+    ParamZone.STANDARD: "standard",
+    ParamZone.NAMED_ONLY: "named-only",
 }
-
-# Interleaved sequence type produced by field_list / param_list.
-_RawEntries: TypeAlias = tuple[syntax.Param | _ParamMarker, ...]
+# --- end interim zone resolution -------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -718,12 +716,13 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def builtin_var_def(self, meta: Meta, args: _Args) -> syntax.BuiltinVarDecl:
-        """builtin_var_def: "builtin" _NEWLINE? VAR name type_ann (EQ expr)?"""
-        name_tok = _find_name_token(args)
-        type_expr = _find_type_expr(args[1:])
+        """builtin_var_def: attributes? "builtin" _NEWLINE? VAR name type_ann (EQ expr)?"""
+        rest = _without_attributes(args)
+        name_tok = _find_name_token(rest)
+        type_expr = _find_type_expr(rest[1:])
         default = cast(
             syntax.Expr,
-            next((arg for arg in args if _is_expr_node(arg)), None),
+            next((arg for arg in rest if _is_expr_node(arg)), None),
         )
         return syntax.BuiltinVarDecl(
             name=str(name_tok),
@@ -731,6 +730,7 @@ class AstBuilder(Transformer):
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
             default=default,
+            attributes=_find_attributes(args),
         )
 
     def _make_infix_decl(
@@ -791,76 +791,64 @@ class AstBuilder(Transformer):
         for a in args:
             if _is_str_tuple(a):
                 type_params_val = cast(tuple[str, ...], a)
-        fields = _find_field_tuple(args)
+        attributes = _find_attributes(args)
         return syntax.RecordDef(
             name=name,
-            fields=fields,
+            fields=_resolve_params(_find_field_tuple(args), attributes=attributes),
             type_param_slots=type_params_val,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
             scope_path=scope_path,
+            attributes=attributes,
         )
 
     # ------------------------------------------------------------------
-    # Marker transformer methods (grammar aliases → _ParamMarker sentinels)
+    # Declaration attributes
     # ------------------------------------------------------------------
 
-    def marker_slash(self, meta: Meta, args: _Args) -> _ParamMarker:
-        """SLASH → _ParamMarker(STANDARD) — the '/' pos-only→standard boundary."""
-        return _ParamMarker(
-            zone=ParamZone.STANDARD,
-            label="/",
-            span=self._span_from_meta(meta),
-        )
+    def attributes(self, meta: Meta, args: _Args) -> tuple[syntax.Attribute, ...]:
+        """attributes: attribute+ — the prefix written in front of one target."""
+        return tuple(a for a in args if isinstance(a, syntax.Attribute))
 
-    def marker_star(self, meta: Meta, args: _Args) -> _ParamMarker:
-        """STAR → _ParamMarker(NAMED_ONLY) — the '*' standard→named-only boundary."""
-        return _ParamMarker(
-            zone=ParamZone.NAMED_ONLY,
-            label="*",
-            span=self._span_from_meta(meta),
-        )
-
-    def marker_at(self, meta: Meta, args: _Args) -> _ParamMarker:
-        """AT NAME → _ParamMarker; NAME must be pos/std/named (else AglSyntaxError)."""
+    def attribute(self, meta: Meta, args: _Args) -> syntax.Attribute:
+        """attribute: AT NAME (LPAR arg_list? RPAR)? — kept exactly as written."""
         name_tok = next(a for a in args if _is_name_token(a))
-        label_name = str(name_tok)
         span = self._span_from_meta(meta)
-        zone = _AT_ZONE.get(label_name)
-        if zone is None:
-            raise AglSyntaxError(
-                f"unknown parameter marker '@{label_name}'; valid markers are @pos, @std, @named.",
-                span=span,
-            )
-        return _ParamMarker(zone=zone, label=f"@{label_name}", span=span)
+        raw_pos: list[_RawPosArg] = []
+        raw_named: list[_RawNamed] = []
+        for a in args:
+            if isinstance(a, tuple) and len(a) == 2 and isinstance(a[0], list):
+                raw_pos, raw_named = cast(_RawArgLists, a)
+        pos_args, named_args = self._finalize_call_args(raw_pos, raw_named, call_span=span)
+        return syntax.Attribute(
+            name=str(name_tok),
+            args=pos_args,
+            named_args=named_args,
+            span=span,
+            node_id=self._next_id(),
+        )
 
     # ------------------------------------------------------------------
     # record_def / field_def (continued)
     # ------------------------------------------------------------------
 
     def record_indent_body(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
-        # Grammar: param_marker? _INDENT block_entry (_NEWLINE block_entry)* _NEWLINE? _DEDENT
-        # block_entry is ?field_def | ?param_marker — collect all in order, then resolve.
-        entries: _RawEntries = tuple(a for a in args if isinstance(a, (syntax.Param, _ParamMarker)))
-        return _resolve_params(entries, default_kind=ParamZone.STANDARD)
+        # Grammar: _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT
+        return tuple(a for a in args if isinstance(a, syntax.Param))
 
     def record_paren_body(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
         # Grammar: LPAR field_list? RPAR
-        # field_list returns _RawEntries; resolve with the standard default.
-        for a in args:
-            if _is_field_tuple(a):
-                return _resolve_params(cast(_RawEntries, a), default_kind=ParamZone.STANDARD)
-        return ()
+        return next((cast(tuple[syntax.Param, ...], a) for a in args if _is_field_tuple(a)), ())
 
     record_inline_body = record_paren_body
 
     def field_def(self, meta: Meta, args: _Args) -> syntax.Param:
-        # Grammar: VAR? field_name COLON type_expr
-        # Build with a provisional STANDARD kind; the owner builder
-        # (record_indent_body, record_paren_body, variant_payload, exception bodies)
-        # reassigns the kind via _resolve_params().
-        name_tok = _find_name_token(args)
-        type_expr = _find_type_expr(args)
+        # Grammar: attributes? VAR? field_name COLON type_expr
+        # Build with a provisional STANDARD kind; the owning declaration
+        # (record_def, exception_def, variant_def) assigns the final zone.
+        rest = _without_attributes(args)
+        name_tok = _find_name_token(rest)
+        type_expr = _find_type_expr(rest)
         return syntax.Param(
             name=str(name_tok),
             type_expr=type_expr,
@@ -868,7 +856,8 @@ class AstBuilder(Transformer):
             default=None,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
-            mutable=any(isinstance(arg, Token) and arg.type == "VAR" for arg in args),
+            mutable=any(isinstance(arg, Token) and arg.type == "VAR" for arg in rest),
+            attributes=_find_attributes(args),
         )
 
     # ------------------------------------------------------------------
@@ -890,6 +879,7 @@ class AstBuilder(Transformer):
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
             scope_path=scope_path,
+            attributes=_find_attributes(args),
         )
 
     def enum_body(
@@ -903,7 +893,7 @@ class AstBuilder(Transformer):
         return tuple(a for a in args if isinstance(a, (syntax.VariantDef, syntax.VariantRef)))
 
     def variant_def(self, meta: Meta, args: _Args) -> syntax.VariantDef:
-        # Grammar: PIPE? name variant_payload?
+        # Grammar: PIPE? attributes? name variant_payload?
         name_tok = next(
             (a for a in args if _is_name_token(a)),
             None,
@@ -911,14 +901,16 @@ class AstBuilder(Transformer):
         assert name_tok is not None, "variant_def: no name token"
         fields: tuple[syntax.Param, ...] = ()
         for a in args:
-            if isinstance(a, tuple) and (len(a) == 0 or isinstance(a[0], syntax.Param)):
+            if _is_field_tuple(a):
                 fields = cast(tuple[syntax.Param, ...], a)
                 break
+        attributes = _find_attributes(args)
         return syntax.VariantDef(
             name=str(name_tok),
-            fields=fields,
+            fields=_resolve_params(fields, attributes=attributes),
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
+            attributes=attributes,
         )
 
     def member_type_args(self, meta: Meta, args: _Args) -> tuple[TypeExpr, ...]:
@@ -957,20 +949,13 @@ class AstBuilder(Transformer):
 
     def variant_payload(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
         # Grammar: LPAR field_list? RPAR
-        # field_list returns _RawEntries; payload fields default to standard.
-        for a in args:
-            if _is_field_tuple(a):
-                return _resolve_params(cast(_RawEntries, a), default_kind=ParamZone.STANDARD)
-        return ()
+        return next((cast(tuple[syntax.Param, ...], a) for a in args if _is_field_tuple(a)), ())
 
-    def field_list(self, meta: Meta, args: _Args) -> _RawEntries:
-        # Grammar: field_entry (COMMA field_entry)* COMMA?
-        # ?field_entry is transparent: Param (from field_inline/field_def) and
-        # _ParamMarker (from param_marker) arrive directly as children.
-        # Return the raw interleaving; zone resolution happens in the owning builder.
-        return tuple(a for a in args if isinstance(a, (syntax.Param, _ParamMarker)))
+    def field_list(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
+        # Grammar: field_inline (COMMA field_inline)* COMMA?
+        return tuple(a for a in args if isinstance(a, syntax.Param))
 
-    # Grammar: VAR? field_name COLON type_expr — identical shape to ``field_def``.
+    # Grammar: attributes? VAR? field_name COLON type_expr — same shape as ``field_def``.
     field_inline = field_def
 
     # ------------------------------------------------------------------
@@ -981,14 +966,15 @@ class AstBuilder(Transformer):
         # Grammar: "exception" name exception_base? exception_body
         name, scope_path = self._declaration_head(args)
         base = next((a for a in args if type(a) is str), None)
-        fields = _find_field_tuple(args)
+        attributes = _find_attributes(args)
         return syntax.ExceptionDef(
             name=name,
-            fields=fields,
+            fields=_resolve_params(_find_field_tuple(args), attributes=attributes),
             base=base,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
             scope_path=scope_path,
+            attributes=attributes,
         )
 
     def exception_base(self, meta: Meta, args: _Args) -> str:
@@ -1018,6 +1004,7 @@ class AstBuilder(Transformer):
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
             scope_path=scope_path,
+            attributes=_find_attributes(args),
         )
 
     # ------------------------------------------------------------------
@@ -1032,8 +1019,11 @@ class AstBuilder(Transformer):
             if _is_str_tuple(a):
                 type_params_val = cast(tuple[str, ...], a)
         type_params_val = self._receiver_type_params(receiver_type) + type_params_val
+        attributes = _find_attributes(args)
         default_kind = ParamZone.NAMED_ONLY if is_program else ParamZone.STANDARD
-        params, return_type, body = self._split_params_type_body(args, default_kind=default_kind)
+        params, return_type, body = self._split_params_type_body(
+            args, attributes=attributes, default_kind=default_kind
+        )
         assert body is not None, "func_def: no body"
         return syntax.FuncDef(
             name=name,
@@ -1046,6 +1036,7 @@ class AstBuilder(Transformer):
             is_program=is_program,
             scope_path=scope_path,
             receiver_type=receiver_type,
+            attributes=attributes,
         )
 
     def func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
@@ -1071,7 +1062,8 @@ class AstBuilder(Transformer):
             if _is_str_tuple(a):
                 type_params_val = cast(tuple[str, ...], a)
         type_params_val = self._receiver_type_params(receiver_type) + type_params_val
-        params, return_type, body = self._split_params_type_body(args)
+        attributes = _find_attributes(args)
+        params, return_type, body = self._split_params_type_body(args, attributes=attributes)
         assert return_type is not None, "bodyless func def: no return type"
         assert body is None, "bodyless func def: unexpected body"
         return syntax.FuncDef(
@@ -1086,6 +1078,7 @@ class AstBuilder(Transformer):
             is_extern=is_extern,
             scope_path=scope_path,
             receiver_type=receiver_type,
+            attributes=attributes,
         )
 
     def func_decl_head(self, meta: Meta, args: _Args) -> object:
@@ -1121,22 +1114,16 @@ class AstBuilder(Transformer):
         """extern_func_def: "extern" "def" name type_params? (...) -> type_expr"""
         return self._bodyless_func_def(meta, args, is_extern=True)
 
-    def param_list(self, meta: Meta, args: _Args) -> _RawEntries:
-        """param_list: param_entry (COMMA param_entry)* COMMA?
-
-        Collects the full marker/param interleaving. Returns the raw
-        interleaving, like ``field_list``; the owning builder
-        (``_split_params_type_body``) resolves zones with the default kind
-        for its form (``STANDARD`` for ``def``/lambda/builtin/extern,
-        ``NAMED_ONLY`` for ``program def``).
-        """
-        return tuple(a for a in args if isinstance(a, (syntax.Param, _ParamMarker)))
+    def param_list(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
+        """param_list: param_def (COMMA param_def)* COMMA?"""
+        return tuple(a for a in args if isinstance(a, syntax.Param))
 
     def param_def(self, meta: Meta, args: _Args) -> syntax.Param:
-        """param_def: field_name (COLON type_expr)? (EQ or_expr)?"""
-        name_tok = _find_name_token(args)
+        """param_def: attributes? field_name (COLON type_expr)? (EQ or_expr)?"""
+        rest = _without_attributes(args)
+        name_tok = _find_name_token(rest)
         name = str(name_tok)
-        type_expr, default = _extract_ann_and_optional_expr(args[1:])
+        type_expr, default = _extract_ann_and_optional_expr(rest[1:])
         if type_expr is None:
             if name != "self":
                 raise AglSyntaxError(
@@ -1150,6 +1137,7 @@ class AstBuilder(Transformer):
             default=default,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
+            attributes=_find_attributes(args),
         )
 
     def func_body(self, meta: Meta, args: _Args) -> syntax.Expr:
@@ -1203,8 +1191,9 @@ class AstBuilder(Transformer):
         type-argument-applied segment, or a chain written with an argument
         list (``A::x()``) — keeps its match meaning.
         """
-        pattern = next(a for a in args if isinstance(a, _PATTERN_NODE_TYPES))
-        ann, value = _extract_ann_and_value(args)
+        rest = _without_attributes(args)
+        pattern = next(a for a in rest if isinstance(a, _PATTERN_NODE_TYPES))
+        ann, value = _extract_ann_and_value(rest)
         span = self._span_from_meta(meta)
         scope_path: tuple[syntax.ScopeSegment, ...] = ()
         if (
@@ -1225,12 +1214,14 @@ class AstBuilder(Transformer):
             span=span,
             node_id=self._next_id(),
             scope_path=scope_path,
+            attributes=_find_attributes(args),
         )
 
     def var_decl(self, meta: Meta, args: _Args) -> syntax.VarDecl:
-        """var_decl: VAR decl_head type_ann? EQ expr"""
-        name, scope_path = self._declaration_head(args)
-        ann, value = _extract_ann_and_value(args[1:])
+        """var_decl: attributes? VAR decl_head type_ann? EQ expr"""
+        rest = _without_attributes(args)
+        name, scope_path = self._declaration_head(rest)
+        ann, value = _extract_ann_and_value(rest[1:])
         span = self._span_from_meta(meta)
         return syntax.VarDecl(
             name=name,
@@ -1239,6 +1230,7 @@ class AstBuilder(Transformer):
             span=span,
             node_id=self._next_id(),
             scope_path=scope_path,
+            attributes=_find_attributes(args),
         )
 
     def assign_stmt(self, meta: Meta, args: _Args) -> syntax.AssignStmt:
@@ -1455,27 +1447,32 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def _split_params_type_body(
-        self, args: _Args, *, default_kind: ParamZone = ParamZone.STANDARD
+        self,
+        args: _Args,
+        *,
+        attributes: tuple[syntax.Attribute, ...] = (),
+        default_kind: ParamZone = ParamZone.STANDARD,
     ) -> tuple[tuple[syntax.Param, ...], TypeExpr | None, syntax.Expr | None]:
         """Classify a func/lambda arg list into ``(params, return_type, body)``.
 
         Shared by ``func_def``/``program_func_def`` (return type required) and
         ``lambda_expr`` (return type optional); callers assert on the parts
-        they require. ``param_list`` returns the raw marker/param interleaving
-        (like ``field_list``); ``default_kind`` is the zone assigned to a
-        markerless parameter (``program_func_def`` passes ``NAMED_ONLY``,
-        every other form keeps ``STANDARD``) — explicit zone markers are
-        unaffected, since ``_resolve_params`` ignores ``default_kind`` once a
-        marker is present.
+        they require. ``attributes`` is the declaration's own prefix and
+        ``default_kind`` its form's default zone (``program_func_def`` passes
+        ``NAMED_ONLY``, every other form keeps ``STANDARD``).
         """
         params: tuple[syntax.Param, ...] = ()
         return_type: TypeExpr | None = None
         body: syntax.Expr | None = None
         for a in args:
-            if _is_str_tuple(a):
-                pass  # type_params: non-empty tuple of str — skip
+            if _is_str_tuple(a) or _is_attribute_tuple(a):
+                pass  # type_params / this declaration's attribute prefix — skip
             elif _is_field_tuple(a):
-                params = _resolve_params(cast(_RawEntries, a), default_kind=default_kind)
+                params = _resolve_params(
+                    cast(tuple[syntax.Param, ...], a),
+                    attributes=attributes,
+                    default_kind=default_kind,
+                )
             elif isinstance(a, _ALL_TYPE_EXPRS):
                 return_type = a
             elif a is not None and not isinstance(
@@ -2979,44 +2976,16 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def builtin_record_def(self, meta: Meta, args: _Args) -> syntax.RecordDef:
-        """builtin_record_def: BUILTIN record_def"""
-        rec = next(a for a in args if isinstance(a, syntax.RecordDef))
-        return syntax.RecordDef(
-            name=rec.name,
-            fields=rec.fields,
-            type_param_slots=rec.type_param_slots,
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-            is_builtin=True,
-            scope_path=rec.scope_path,
-        )
+        """builtin_record_def: attributes? BUILTIN _record_def_tail"""
+        return replace(self.record_def(meta, args), is_builtin=True)
 
     def builtin_enum_def(self, meta: Meta, args: _Args) -> syntax.EnumDef:
-        """builtin_enum_def: BUILTIN enum_def"""
-        e = next(a for a in args if isinstance(a, syntax.EnumDef))
-        return syntax.EnumDef(
-            name=e.name,
-            members=e.members,
-            type_param_slots=e.type_param_slots,
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-            is_builtin=True,
-            scope_path=e.scope_path,
-        )
+        """builtin_enum_def: attributes? BUILTIN _enum_def_tail"""
+        return replace(self.enum_def(meta, args), is_builtin=True)
 
     def builtin_exception_def(self, meta: Meta, args: _Args) -> syntax.ExceptionDef:
-        """builtin_exception_def: BUILTIN exception_def"""
-        exc = next(a for a in args if isinstance(a, syntax.ExceptionDef))
-        return syntax.ExceptionDef(
-            name=exc.name,
-            fields=exc.fields,
-            base=exc.base,
-            type_param_slots=exc.type_param_slots,
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-            is_builtin=True,
-            scope_path=exc.scope_path,
-        )
+        """builtin_exception_def: attributes? BUILTIN _exception_def_tail"""
+        return replace(self.exception_def(meta, args), is_builtin=True)
 
     # ------------------------------------------------------------------
     # Qualified refs
@@ -3460,13 +3429,32 @@ def _is_name_token(value: object) -> TypeGuard[Token]:
 def _is_field_tuple(a: object) -> bool:
     """True iff *a* is a field- or parameter-list result (``field_list``/``param_list``).
 
-    Both return a ``tuple`` of ``Param | _ParamMarker``.
-
     An empty tuple is treated as a field tuple (the ``field_list?`` absent case).
-    Markers may appear at position 0 in the raw entries returned by ``field_list``
-    before zone resolution, so ``_ParamMarker`` is accepted here too.
     """
-    return isinstance(a, tuple) and (len(a) == 0 or isinstance(a[0], (syntax.Param, _ParamMarker)))
+    return isinstance(a, tuple) and (len(a) == 0 or isinstance(a[0], syntax.Param))
+
+
+def _is_attribute_tuple(a: object) -> bool:
+    """True iff *a* is an ``attributes`` result (always at least one attribute)."""
+    return isinstance(a, tuple) and len(a) > 0 and isinstance(a[0], syntax.Attribute)
+
+
+def _find_attributes(args: _Args) -> tuple[syntax.Attribute, ...]:
+    """Return the attribute prefix among a rule's children, or none."""
+    return next(
+        (cast(tuple[syntax.Attribute, ...], a) for a in args if _is_attribute_tuple(a)),
+        (),
+    )
+
+
+def _without_attributes(args: _Args) -> _Args:
+    """Return a rule's children with its attribute prefix removed.
+
+    Callers that index into their children (``args[1:]`` to skip a leading
+    keyword or name) work on this list, so an optional attribute prefix cannot
+    shift the positions they rely on.
+    """
+    return [a for a in args if not _is_attribute_tuple(a)]
 
 
 def _find_field_tuple(args: _Args) -> tuple[syntax.Param, ...]:
@@ -3476,84 +3464,68 @@ def _find_field_tuple(args: _Args) -> tuple[syntax.Param, ...]:
     return cast(tuple[syntax.Param, ...], result)
 
 
-def _resolve_params(
-    entries: _RawEntries,
-    *,
-    default_kind: ParamZone,
-) -> tuple[syntax.Param, ...]:
-    """Resolve a marker/param interleaving to ``Param``s with concrete ``kind``s.
+def _check_bare_self_leads(entries: tuple[syntax.Param, ...]) -> None:
+    """Reject an unannotated entry that is not the list's leading ``self``.
 
-    Algorithm:
-
-    - **No marker** → every ``Param`` gets ``default_kind``.
-    - **≥1 marker** (pure positional reading; ``default_kind`` is ignored):
-      - Markers must be strictly increasing by zone (rejects duplicates and
-        out-of-order); ``@pos`` must be the first entry (no ``Param`` before it).
-      - Zone for params *before* the first marker = one zone below the first
-        marker's zone.
-      - Walk left-to-right: marker → set ``current``; param → assign ``current``.
+    Only a method's ``self`` receiver may go without a type annotation, and it
+    has to lead the parameter list.
     """
-    seen_parameter = False
-    for index, entry in enumerate(entries):
-        if not isinstance(entry, syntax.Param):
-            continue
+    for entry in entries[1:]:
         if entry.type_expr is None:
-            if seen_parameter:
-                raise AglSyntaxError(
-                    f"Parameter {entry.name!r} has no type annotation.",
-                    span=entry.span,
-                )
-            if index != 0:
-                raise AglSyntaxError(
-                    "Parameter 'self' has no type annotation; a bare 'self' must be first "
-                    "and precede any zone marker.",
-                    span=entry.span,
-                )
-        seen_parameter = True
-
-    markers = [e for e in entries if isinstance(e, _ParamMarker)]
-    if not markers:
-        # No marker: apply the per-context default to every param.
-        return tuple(replace(p, kind=default_kind) for p in entries if isinstance(p, syntax.Param))
-
-    # Validate: markers must be strictly increasing by zone.
-    last_order = -1
-    for m in markers:
-        order = _ZONE_ORDER[m.zone]
-        if order <= last_order:
             raise AglSyntaxError(
-                f"duplicate / out-of-order parameter marker {m.label!r}.",
-                span=m.span,
-            )
-        last_order = order
-
-    # Validate: @pos must be leading (no Param may precede it in entries).
-    pos_marker = next((m for m in markers if m.zone == ParamZone.POSITIONAL_ONLY), None)
-    if pos_marker is not None:
-        # Find the index of pos_marker in entries (by identity).
-        pos_idx = next(i for i, e in enumerate(entries) if e is pos_marker)
-        if any(isinstance(e, syntax.Param) for e in entries[:pos_idx]):
-            raise AglSyntaxError(
-                f"positional-only marker {pos_marker.label!r} must lead the parameter list.",
-                span=pos_marker.span,
+                f"Parameter {entry.name!r} has no type annotation; "
+                "a bare 'self' must be the first parameter.",
+                span=entry.span,
             )
 
-    # Determine zone for params that appear before the first marker.
-    first_marker = markers[0]
-    first_order = _ZONE_ORDER[first_marker.zone]
-    # initial_kind is None only when @pos is first (no params allowed before it).
-    initial_kind: ParamZone | None = None if first_order == 0 else _ZONE_BY_ORDER[first_order - 1]
 
-    current = initial_kind
-    result: list[syntax.Param] = []
-    for e in entries:
-        if isinstance(e, _ParamMarker):
-            current = e.zone
-        else:
-            assert current is not None  # guaranteed: @pos check above
-            result.append(replace(e, kind=current))
+# --- Interim zone resolution (continued) -----------------------------------
 
-    return tuple(result)
+
+def _zone_attribute(attributes: tuple[syntax.Attribute, ...]) -> ParamZone | None:
+    """Return the zone the first ``@arg-*`` attribute of *attributes* selects."""
+    for attribute in attributes:
+        zone = _ZONE_BY_ATTRIBUTE.get(attribute.name)
+        if zone is not None:
+            return zone
+    return None
+
+
+def _resolve_params(
+    entries: tuple[syntax.Param, ...],
+    *,
+    attributes: tuple[syntax.Attribute, ...] = (),
+    default_kind: ParamZone = ParamZone.STANDARD,
+) -> tuple[syntax.Param, ...]:
+    """Give every entry of a parameter or field list its concrete zone.
+
+    An entry's own ``@arg-*`` attribute wins; otherwise the owning
+    declaration's sets the list default; otherwise the form's *default_kind*
+    applies. Entries are then required to run positional-only, standard,
+    named-only.
+    """
+    _check_bare_self_leads(entries)
+    declared_list_kind = _zone_attribute(attributes)
+    list_kind = default_kind if declared_list_kind is None else declared_list_kind
+    resolved: list[syntax.Param] = []
+    highest = _ZONE_ORDER[ParamZone.POSITIONAL_ONLY]
+    for entry in entries:
+        declared = _zone_attribute(entry.attributes)
+        kind = list_kind if declared is None else declared
+        order = _ZONE_ORDER[kind]
+        if order < highest:
+            raise AglSyntaxError(
+                f"{entry.name!r} is {_ZONE_LABEL[kind]} but follows a "
+                f"{_ZONE_LABEL[_ZONE_BY_ORDER[highest]]} entry; entries are ordered "
+                "positional-only, then standard, then named-only.",
+                span=entry.span,
+            )
+        highest = order
+        resolved.append(replace(entry, kind=kind))
+    return tuple(resolved)
+
+
+# --- end interim zone resolution -------------------------------------------
 
 
 def _is_member_tuple(a: object) -> bool:
@@ -3799,13 +3771,22 @@ def _rewrite_item(
     if isinstance(item, syntax.Expr):
         return _rewrite_expr(item, table, builder)
     if isinstance(item, syntax.LetDecl):
-        return replace(item, value=_rewrite_expr(item.value, table, builder))
+        return replace(
+            item,
+            value=_rewrite_expr(item.value, table, builder),
+            attributes=_rewrite_attributes(item.attributes, table, builder),
+        )
     if isinstance(item, syntax.VarDecl):
-        return replace(item, value=_rewrite_expr(item.value, table, builder))
+        return replace(
+            item,
+            value=_rewrite_expr(item.value, table, builder),
+            attributes=_rewrite_attributes(item.attributes, table, builder),
+        )
     if isinstance(item, syntax.BuiltinVarDecl):
         return replace(
             item,
             default=(None if item.default is None else _rewrite_expr(item.default, table, builder)),
+            attributes=_rewrite_attributes(item.attributes, table, builder),
         )
     if isinstance(item, syntax.AssignStmt):
         return replace(
@@ -3818,9 +3799,14 @@ def _rewrite_item(
             item,
             params=tuple(_rewrite_param(p, table, builder) for p in item.params),
             body=None if item.body is None else _rewrite_expr(item.body, table, builder),
+            attributes=_rewrite_attributes(item.attributes, table, builder),
         )
     if isinstance(item, syntax.RecordDef):
-        return replace(item, fields=tuple(_rewrite_param(p, table, builder) for p in item.fields))
+        return replace(
+            item,
+            fields=tuple(_rewrite_param(p, table, builder) for p in item.fields),
+            attributes=_rewrite_attributes(item.attributes, table, builder),
+        )
     if isinstance(item, syntax.EnumDef):
         return replace(
             item,
@@ -3828,15 +3814,45 @@ def _rewrite_item(
                 replace(
                     member,
                     fields=tuple(_rewrite_param(p, table, builder) for p in member.fields),
+                    attributes=_rewrite_attributes(member.attributes, table, builder),
                 )
                 if isinstance(member, syntax.VariantDef)
                 else member
                 for member in item.members
             ),
+            attributes=_rewrite_attributes(item.attributes, table, builder),
         )
     if isinstance(item, syntax.ExceptionDef):
-        return replace(item, fields=tuple(_rewrite_param(p, table, builder) for p in item.fields))
+        return replace(
+            item,
+            fields=tuple(_rewrite_param(p, table, builder) for p in item.fields),
+            attributes=_rewrite_attributes(item.attributes, table, builder),
+        )
+    if isinstance(item, syntax.TypeAlias):
+        return replace(item, attributes=_rewrite_attributes(item.attributes, table, builder))
     return item
+
+
+def _rewrite_attributes(
+    attributes: tuple[syntax.Attribute, ...],
+    table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
+    builder: AstBuilder,
+) -> tuple[syntax.Attribute, ...]:
+    """Group the raw infix chains inside each attribute's arguments.
+
+    An attribute argument is an ordinary expression, so it reaches the AST as
+    a raw chain whenever it applies a declared infix operator.
+    """
+    return tuple(
+        replace(
+            attribute,
+            args=tuple(_rewrite_expr(arg, table, builder) for arg in attribute.args),
+            named_args=tuple(
+                _rewrite_named_arg(arg, table, builder) for arg in attribute.named_args
+            ),
+        )
+        for attribute in attributes
+    )
 
 
 def _rewrite_param(
@@ -3844,9 +3860,10 @@ def _rewrite_param(
     table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
     builder: AstBuilder,
 ) -> syntax.Param:
-    if param.default is None:
-        return param
-    return replace(param, default=_rewrite_expr(param.default, table, builder))
+    rewritten = replace(param, attributes=_rewrite_attributes(param.attributes, table, builder))
+    if rewritten.default is None:
+        return rewritten
+    return replace(rewritten, default=_rewrite_expr(rewritten.default, table, builder))
 
 
 def _rewrite_assign_target(

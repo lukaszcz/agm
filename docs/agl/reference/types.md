@@ -505,22 +505,24 @@ let named = Issue(
 )
 ```
 
-**Zone markers** constrain fields to positional-only or named-only zones. Markers appear
-in the parenthesized field list, as comma-separated zone entries, or in the indented block
-form (as a leading marker on the header line or on its own line between fields):
+**Zone attributes** constrain fields to positional-only or named-only zones. An
+[attribute](grammar.md#attributes) in front of a field zones that field; one in front
+of the declaration zones every field that does not carry its own:
 
 ```agl
-# Inline / parenthesized forms: marker as comma entry
+# Inline / parenthesized forms: attribute in front of a field
 record Pair[T1, T2](fst: T1, snd: T2)                # both fields standard
-record R(x: int, /, y: int)                          # x pos-only, y standard
-record NamedPair(*, fst: int, snd: int)              # both fields named-only
+record R(@arg-pos x: int, y: int)                    # x pos-only, y standard
 
-# Block form: own-line marker between fields
+@arg-named
+record NamedPair(fst: int, snd: int)                 # both fields named-only
+
+# Block form: the attribute may sit on its own line or in front of the field
 record Mixed
   id: int
-  *
+  @arg-named
   value: int
-  label: text
+  @arg-named label: text
 ```
 
 <!-- agl-check: fragment -->
@@ -531,8 +533,8 @@ let r = R(0, y = 1)            # x positional-only, y named (standard)
 # R(x = 0, y = 1) is an error — x is positional-only
 ```
 
-Definition-time rules: at most one `/`/`@std` and one `*`/`@named` per list, in zone
-order; `@pos` must lead. Violations are static errors.
+Fields are listed in zone order: positional-only, then standard, then named-only.
+A field that follows one from a later zone is a static error.
 
 Two record types with identical fields are still distinct types (nominal
 typing). Two record types from different modules are also distinct even if
@@ -618,11 +620,11 @@ let err = Outcome::Err("bad", false)
 let named-err = Outcome::Err(reason = "bad", fatal = false)
 ```
 
-Zone markers and `var` are also available on inline member fields:
+Zone attributes and `var` are also available on inline member fields:
 
 ```agl
 enum Triple
-  | Values(*, var a: int, b: int, c: int)   # all fields named-only
+  | @arg-named Values(var a: int, b: int, c: int)   # all fields named-only
 ```
 
 Construction, qualification, and ambiguity rules are covered in

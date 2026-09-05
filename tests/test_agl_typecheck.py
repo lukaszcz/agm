@@ -1917,8 +1917,7 @@ class TestScopedBuiltinTypes:
             "scope A\n"
             "  builtin\n"
             "  exception Exception\n"
-            "    *\n"
-            "    message: text\n"
+            "    @arg-named message: text\n"
             "  builtin exception Abort extends Exception()\n"
             "end A\n"
             "\n"
@@ -1935,8 +1934,8 @@ class TestScopedBuiltinTypes:
         shape check must still reject it."""
         err = reject_type(
             "scope A\n"
+            "  @arg-named\n"
             "  exception Exception\n"
-            "    *\n"
             "    message: text\n"
             "\n"
             "  scope B\n"
@@ -2131,8 +2130,7 @@ class TestBuiltinTypeModuleIdentity:
         r = accept_type(
             "builtin\n"
             "exception Exception\n"
-            "  *\n"
-            "  message: text\n"
+            "  @arg-named message: text\n"
             "builtin exception RangeError extends Exception()\n"
             "()\n",
             default_stdlib=False,
@@ -2188,7 +2186,6 @@ class TestCaughtExceptionShadowedByBuiltinRedeclaration:
             "scope A\n"
             "  builtin\n"
             "  exception ExecError extends Exception\n"
-            "    *\n"
             "    command: text\n"
             "    exit-code: int\n"
             "    stdout: text\n"
@@ -2214,7 +2211,6 @@ class TestCaughtExceptionShadowedByBuiltinRedeclaration:
             "scope A\n"
             "  builtin\n"
             "  exception ExecError extends Exception\n"
-            "    *\n"
             "    command: text\n"
             "    exit-code: int\n"
             "    stdout: text\n"
@@ -2280,11 +2276,9 @@ class TestCaughtExceptionShadowedByBuiltinRedeclaration:
         r = accept_type(
             "builtin\n"
             "exception Exception\n"
-            "  *\n"
-            "  message: text\n"
+            "  @arg-named message: text\n"
             "builtin\n"
             "exception ExecError extends Exception\n"
-            "  *\n"
             "  command: text\n"
             "  exit-code: int\n"
             "  stdout: text\n"
@@ -4698,7 +4692,7 @@ class TestPartialDeclaredCalls:
             ("def f(x: int) -> int = x\nlet g = f(?, 1)\ng", "too many"),
             ("def f(x: int) -> int = x\nlet g = f(z = ?)\ng", "unknown"),
             ("def f(x: int) -> int = x\nlet g = f(?, x = 1)\ng", "duplicate"),
-            ("def f(*, x: int) -> int = x\nlet g = f(?)\ng", "named-only"),
+            ("def f(@arg-named x: int) -> int = x\nlet g = f(?)\ng", "named-only"),
             ("def f(x: int, y: int) -> int = x\nlet g = f(?)\ng", "missing"),
         ],
     )
@@ -4769,7 +4763,6 @@ class TestPartialConstructorAndValueCalls:
     def test_record_constructor_numbered_named_holes_and_side_table(self) -> None:
         checked = accept_type(
             "record Point\n"
-            "  @std\n"
             "  x: int\n"
             "  y: text\n"
             "  z: bool\n"
@@ -4881,7 +4874,6 @@ class TestPartialConstructorAndValueCalls:
     def test_generic_constructor_infers_from_non_hole_and_explicit_type_args(self) -> None:
         checked = accept_type(
             "record Pair[T]\n"
-            "  @std\n"
             "  left: T\n"
             "  right: T\n"
             "record Box[T]\n"
@@ -5054,7 +5046,8 @@ class TestProvisionalFunctionValuesAndPartials:
 
     def test_partial_declared_call_joins_fixed_holes_and_expected_shape(self) -> None:
         checked = accept_type(
-            "def route[T](first: T, evidence: T, optional: int = 0, *, tail: T) -> T = first\n"
+            "def route[T](first: T, evidence: T, optional: int = 0, @arg-named tail: T)"
+            " -> T = first\n"
             "let fill: (int, int) -> int = route(?, 1, tail = ?)\n"
             "fill"
         )
@@ -6406,7 +6399,8 @@ class TestFieldAccess:
         checked = accept_type(
             "record Point\n"
             "  x: int\n"
-            'def Point::describe(self, *, label: text = "d") -> text = "%{self.x}%{label}"\n'
+            'def Point::describe(self, @arg-named label: text = "d")'
+            ' -> text = "%{self.x}%{label}"\n'
             "let p = Point(x = 1)\n"
             'p.describe(label = "q")'
         )
@@ -6417,7 +6411,8 @@ class TestFieldAccess:
         error = reject_type(
             "record Point\n"
             "  x: int\n"
-            'def Point::describe(self, *, label: text = "d") -> text = "%{self.x}%{label}"\n'
+            'def Point::describe(self, @arg-named label: text = "d")'
+            ' -> text = "%{self.x}%{label}"\n'
             "let p = Point(x = 1)\n"
             'p.describe("q")'
         )
@@ -6805,19 +6800,19 @@ class TestEnumMemberConstruction:
 
 # ---------------------------------------------------------------------------
 # Exception field kinds: an exception's OWN fields honor their declared
-# @pos/@std/@named marker (parity with records), inherited through the
+# zone attribute (parity with records), inherited through the
 # extends chain base-kinds-first.
 # ---------------------------------------------------------------------------
 
 
 class TestExceptionFieldKindParity:
-    def test_std_and_pos_marked_exception_fields_accept_positional_args(self) -> None:
-        # @pos and @std own fields both accept positional args, same as a
+    def test_zoned_exception_fields_accept_positional_args(self) -> None:
+        # Positional-only and standard own fields both accept positional args, same as a
         # record's fields would — an exception's own fields are not forced
         # to NAMED_ONLY.
         # The two own fields carry different types, so the slot each positional
         # argument lands in is observable: reversing them has to be rejected.
-        decl = "exception Boom extends Exception\n  @pos\n  code: text\n  @std\n  count: int\n"
+        decl = "exception Boom extends Exception\n  @arg-pos code: text\n  count: int\n"
         r = accept_type(decl + 'Boom("c", 6, message = "m")')
         constructed = r.node_types[r.resolved.program.body.items[-1].node_id]
         assert isinstance(constructed, ExceptionType)
@@ -6825,23 +6820,22 @@ class TestExceptionFieldKindParity:
 
         reject_type(decl + 'Boom(6, "c", message = "m")')
 
-    def test_pos_marked_exception_field_rejected_by_name(self) -> None:
-        # A @pos-only exception field cannot be passed by name, mirroring the
+    def test_positional_only_exception_field_rejected_by_name(self) -> None:
+        # A positional-only exception field cannot be passed by name, mirroring the
         # record rule.
         err = reject_type(
-            'exception Boom extends Exception\n  @pos\n  code: int\nBoom(code = 5, message = "m")'
+            'exception Boom extends Exception\n  @arg-pos code: int\nBoom(code = 5, message = "m")'
         )
         assert "positional-only" in str(err).lower() or "positional" in str(err).lower()
 
     def test_exception_field_kind_inherited_through_extends_chain(self) -> None:
         # A grandchild exception's constructor field kinds inherit the
-        # parent's declared @std marker (not just the built-in root's
+        # parent's declared standard zone (not just the built-in root's
         # implicit NAMED_ONLY), so positional construction still reaches a
         # field marked two levels up the extends chain.
         r = accept_type(
             "exception Base extends Exception\n"
-            "  @std\n"
-            "  code: int\n"
+            "  @arg-std code: int\n"
             "exception Boom extends Base\n"
             "  detail: text\n"
             'Boom(5, detail = "x", message = "m")'
@@ -6851,12 +6845,11 @@ class TestExceptionFieldKindParity:
         assert constructed.name == "Boom"
 
         # The inherited kind is the parent's declared one, not a default: mark
-        # the same field ``@named`` and the positional argument no longer
+        # the same field ``@arg-named`` and the positional argument no longer
         # reaches it.
         reject_type(
             "exception Base extends Exception\n"
-            "  @named\n"
-            "  code: int\n"
+            "  @arg-named code: int\n"
             "exception Boom extends Base\n"
             "  detail: text\n"
             'Boom(5, detail = "x", message = "m")'
@@ -7391,33 +7384,33 @@ class TestConstructorRefDispatch:
         assert isinstance(constructed, RecordType)
         assert constructed.name == "Payload"
 
-    def test_std_record_positional(self) -> None:
-        # Record with @std marker → positional args allowed. Distinct field
+    def test_standard_record_positional(self) -> None:
+        # Standard-zone record fields accept positional args. Distinct field
         # types make the declaration order of the two slots observable.
-        r = accept_type('record P\n  @std\n  x: text\n  y: int\nP("a", 2)')
+        r = accept_type('record P\n  x: text\n  y: int\nP("a", 2)')
         assert _constructed_record_fields(r, r.resolved.program.body.items[1].node_id) == {
             "x": TextType(),
             "y": IntType(),
         }
-        reject_type('record P\n  @std\n  x: text\n  y: int\nP(2, "a")')
+        reject_type('record P\n  x: text\n  y: int\nP(2, "a")')
 
-    def test_std_record_mixed_pos_named(self) -> None:
-        # Record with @std: positional then named allowed. The lone positional
+    def test_standard_record_mixed_pos_named(self) -> None:
+        # Standard-zone record fields: positional then named allowed. The lone positional
         # fills the first field, which its type has to match.
-        r = accept_type('record P\n  @std\n  x: text\n  y: int\nP("a", y = 2)')
+        r = accept_type('record P\n  x: text\n  y: int\nP("a", y = 2)')
         assert _constructed_record_fields(r, r.resolved.program.body.items[1].node_id) == {
             "x": TextType(),
             "y": IntType(),
         }
-        reject_type("record P\n  @std\n  x: text\n  y: int\nP(1, y = 2)")
+        reject_type("record P\n  x: text\n  y: int\nP(1, y = 2)")
 
     def test_pos_only_field_by_name_rejected(self) -> None:
         # A pos-only field cannot be passed by name.
-        err = reject_type("record R\n  @pos\n  x: int\n  y: int\nR(x = 1, y = 2)")
+        err = reject_type("record R\n  @arg-pos x: int\n  y: int\nR(x = 1, y = 2)")
         assert "positional-only" in str(err).lower() or "positional" in str(err).lower()
 
     def test_named_only_variant_nonbare_positional_rejected(self) -> None:
-        err = reject_type("enum E\n  | F(*, x: int, y: int)\nF(1, 2)")
+        err = reject_type("enum E\n  | F(@arg-named x: int, @arg-named y: int)\nF(1, 2)")
         assert "named-only" in str(err).lower() or "positional" in str(err).lower()
 
     def test_get_constructor_field_kinds_no_graph_table(self) -> None:
@@ -8614,7 +8607,7 @@ class TestHostContractBuiltinIdentity:
             "scope A\n"
             f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
             "builtin exception AgentCallError extends Exception\n"
-            "  *\n  agent: Agent\n  cause: text\n  metadata: json\n"
+            "  agent: Agent\n  cause: text\n  metadata: json\n"
             "def trigger() -> text =\n"
             "  try\n"
             '    ask("hi")\n'
@@ -8656,7 +8649,7 @@ class TestHostContractBuiltinIdentity:
         r = accept_type(
             "scope A\n"
             "  builtin exception AgentCallError extends Exception\n"
-            "    *\n    agent: Agent\n    cause: text\n    metadata: json\n"
+            "    agent: Agent\n    cause: text\n    metadata: json\n"
             "  def trigger() -> text =\n"
             "    try\n"
             '      ask("hi")\n'
@@ -8682,8 +8675,8 @@ class TestHostContractBuiltinIdentity:
         r = accept_type(
             "scope A\n"
             f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
-            "exception MyError extends Exception\n"
-            "  *\n  agent: Agent\n"
+            "@arg-named\nexception MyError extends Exception\n"
+            "  agent: Agent\n"
             "def trigger() -> text =\n"
             "  try\n"
             '    raise MyError(message = "x", agent = Agent::AgentCommand("y"))\n'
@@ -9439,20 +9432,20 @@ class TestProgramParameterValidation:
     @pytest.mark.parametrize("zone", ("named-only", "standard"))
     def test_engine_key_name_is_rejected_for_a_name_addressable_parameter(self, zone: str) -> None:
         header = (
-            "program def main(*, timeout: text) -> unit = ()"
+            "program def main(timeout: text) -> unit = ()"
             if zone == "named-only"
-            else "program def main(a: int, /, timeout: text) -> unit = ()"
+            else "program def main(@arg-pos a: int, @arg-std timeout: text) -> unit = ()"
         )
         err = reject_type(header)
         assert "engine setting name" in str(err).lower()
 
     def test_engine_key_name_is_accepted_for_a_positional_only_parameter(self) -> None:
-        checked = accept_type("program def main(timeout: text, /) -> unit = ()")
+        checked = accept_type("program def main(@arg-pos timeout: text) -> unit = ()")
         sig = checked.function_signatures["main"]
         assert [(p.name, p.kind) for p in sig.params] == [("timeout", ParamZone.POSITIONAL_ONLY)]
 
     def test_required_after_defaulted_ordering_fires_for_program_parameters(self) -> None:
-        err = reject_type("program def main(a: int = 1, b: int, /) -> unit = ()")
+        err = reject_type("program def main(@arg-pos a: int = 1, @arg-pos b: int) -> unit = ()")
         assert "'b' has no default but follows a defaulted positional parameter" in str(err)
 
 
@@ -11558,7 +11551,6 @@ class TestGenericConstructorInference:
     def test_generic_constructor_partial_uses_later_sibling_evidence(self) -> None:
         checked = accept_type(
             "record Pair[T]\n"
-            "  @std\n"
             "  left: T\n"
             "  right: T\n"
             "def use[T](factory: (T) -> Pair[T], value: T) -> Pair[T] = factory(value)\n"
@@ -11590,9 +11582,7 @@ class TestGenericConstructorInference:
         ) == checked.type_env.instantiate_nominal("Box", (IntType(),))
 
     def test_generic_constructor_conflicts_include_solver_provenance(self) -> None:
-        err = reject_type(
-            'record Pair[T]\n  @std\n  left: T\n  right: T\nPair(left = 1, right = "bad")'
-        )
+        err = reject_type('record Pair[T]\n  left: T\n  right: T\nPair(left = 1, right = "bad")')
         assert err.related
 
     def test_generic_constructor_freshens_same_spelled_declarations(self) -> None:
@@ -11732,7 +11722,7 @@ class TestGenericConstructorErrors:
         )
 
     def test_positional_arg_to_named_only_constructor_rejected(self) -> None:
-        err = reject_type("record Box[T]\n  *\n  value: T\nBox(42)")
+        err = reject_type("@arg-named\nrecord Box[T]\n  value: T\nBox(42)")
         assert "named" in str(err).lower() or "positional" in str(err).lower()
 
 
@@ -13329,11 +13319,11 @@ class TestFieldAssignmentSyntaxChecks:
             )
 
     def test_positional_literal_to_named_only_constructor_rejected(self) -> None:
-        err = reject_type("record R\n  *\n  x: int\nR(1)")
+        err = reject_type("@arg-named\nrecord R\n  x: int\nR(1)")
         assert "named" in str(err).lower() or "positional" in str(err).lower()
 
     def test_positional_expr_to_named_only_constructor_rejected(self) -> None:
-        err = reject_type("record R\n  *\n  x: int\nlet x = 1\nR(x + 1)")
+        err = reject_type("@arg-named\nrecord R\n  x: int\nlet x = 1\nR(x + 1)")
         assert "named" in str(err).lower() or "positional" in str(err).lower()
 
     def test_eq_eq_and_neq_on_structured_value_typecheck_to_bool(self) -> None:
@@ -13358,12 +13348,12 @@ class TestGenericNamedOnlyShorthandInference:
     so that named-only shorthand positional args are matched to their param by
     NAME rather than by raw positional index.
 
-    def g[T, U](x: int, *, z: T, w: U) -> T = z
+    def g[T, U](x: int, @arg-named z: T, @arg-named w: U) -> T = z
 
     All three call forms must be accepted and infer correctly.
     """
 
-    _DEF = "def g[T, U](x: int, *, z: T, w: U) -> T = z\n"
+    _DEF = "def g[T, U](x: int, @arg-named z: T, @arg-named w: U) -> T = z\n"
 
     def test_named_only_shorthands_in_order_accepted(self) -> None:
         """g(1, z, w) — in-order shorthands (already worked before fix)."""
@@ -13408,8 +13398,8 @@ class TestLambdaRequiredAfterDefaulted:
         assert r.resolved.program is not None
 
     def test_lambda_named_only_any_default_order_accepted(self) -> None:
-        """Named-only params are order-free: fn(*, x: int = 0, y: int) -> int => y is ok."""
-        r = accept_type("fn(*, x: int = 0, y: int) -> int => y")
+        """Named-only params are order-free: a defaulted one may precede a required one."""
+        r = accept_type("fn(@arg-named x: int = 0, @arg-named y: int) -> int => y")
         assert r.resolved.program is not None
 
 

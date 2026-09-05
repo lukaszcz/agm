@@ -12,7 +12,6 @@ record ExecResult
 
 builtin
 exception ExecError extends Exception
-  *
   command: text
   exit-code: int
   stdout: text

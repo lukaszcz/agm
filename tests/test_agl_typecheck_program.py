@@ -3010,7 +3010,7 @@ def test_open_imported_payload_and_record_candidates_reject_duplicate_binders_ea
 def test_cross_module_named_only_constructor_rejects_positional_args(tmp_path: Path) -> None:
     """A cross-module named-only record constructor rejects positional arguments."""
     modules = {
-        "lib": "record Point\n  *\n  x: int\n  y: int",
+        "lib": "@arg-named\nrecord Point\n  x: int\n  y: int",
         "entry": "import lib\nlib::Point(1, 2)",
     }
     with pytest.raises(AglTypeError, match="named"):
@@ -4117,11 +4117,11 @@ def test_unannotated_method_with_no_concrete_return_evidence_is_still_rejected()
 
 
 def test_named_only_param_in_graph_function(tmp_path: Path) -> None:
-    """check_program handles a function with a named-only param (*, z) correctly."""
+    """check_program handles a function with a named-only param (@arg-named z) correctly."""
     from agm.agl.typecheck.program import CheckedProgram  # type: ignore[import-untyped]
 
     modules = {
-        "lib": "def add-named(x: int, *, z: int) -> int = x + z",
+        "lib": "def add-named(x: int, @arg-named z: int) -> int = x + z",
         "entry": ("import lib::*\nlet z = 5\nadd-named(3, z)"),
     }
     cg: object = _check_program(tmp_path, modules)

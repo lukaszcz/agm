@@ -1,5 +1,4 @@
 record R
-  @std
   x: int
   y: int
 

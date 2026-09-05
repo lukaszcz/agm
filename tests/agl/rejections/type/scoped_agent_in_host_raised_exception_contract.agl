@@ -7,7 +7,6 @@ scope A
 
   builtin
   exception AgentCallError extends Exception
-    *
     agent: Agent
     cause: text
     metadata: json

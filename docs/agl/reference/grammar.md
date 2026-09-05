@@ -25,10 +25,10 @@ block         ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 item       ::= import_decl                  (* header position only; scope_item also permits it *)
              | use_decl                     (* module-root or scope-region header only *)
              | builtin_var_def              (* root or standard-library scope region *)
-             | builtin_modifier? record_def (* root only *)
-             | builtin_modifier? enum_def   (* root only *)
+             | record_def                   (* root only *)
+             | enum_def                     (* root only *)
              | type_alias                   (* root only *)
-             | builtin_modifier? exception_def (* root only *)
+             | exception_def                (* root only *)
              | export_decl                  (* header position only; scope_item also permits it *)
              | program_func_def             (* root or scope region *)
              | infix_decl                   (* root only *)
@@ -61,9 +61,7 @@ scope_item   ::= scope_region | use_decl
                | export_decl
                | record_def | enum_def | exception_def | type_alias
                | func_def | program_func_def | extern_func_def
-               | builtin_var_def
-               | builtin_modifier? record_def | builtin_modifier? enum_def
-               | builtin_modifier? exception_def | builtin_func_def
+               | builtin_var_def | builtin_func_def
                | let_decl | var_decl
 ```
 
@@ -214,52 +212,72 @@ Parentheses directly after a callee are that call's argument list, so a
 parenthesized block passed as an argument carries its own parentheses:
 `print((let x = 4; x * 2))`.
 
+## Attributes
+
+```ebnf
+attributes ::= attribute+
+attribute  ::= "@" NAME ["(" arg_list? ")"] NEWLINE?
+```
+
+An attribute prefixes a **defining declaration**: a record, an enum, an enum
+member, an exception, a type alias, a `def` in any of its `program`, `builtin`,
+and `extern` forms, a `builtin var`, a record/enum-member/exception field, a
+function or lambda parameter, and a `let` or `var` binding. Several attributes
+may be written in a row, on the declaration's own line or on the lines above
+it.
+
+An attribute's arguments are an ordinary `arg_list`, so an attribute may carry
+positional and named arguments — `@doc("Prints a greeting")`,
+`@opt-name(name = "verbose")`.
+
+Each attribute has its own meaning and its own set of declarations it may
+prefix. `@arg-pos`, `@arg-std`, and `@arg-named` place parameters and fields in
+[zones](functions.md#parameters).
+
 ## Type declarations
 
 ```ebnf
 decl_head        ::= [scope_path "::"] name
-record_def       ::= "record" decl_head type_params? "="? record_body
-record_body      ::= param_marker? NEWLINE INDENT block_entry (NEWLINE block_entry)* NEWLINE? DEDENT
+record_def       ::= attributes? builtin_modifier? "record" decl_head type_params?
+                    "="? record_body
+record_body      ::= NEWLINE INDENT field_def (NEWLINE field_def)* NEWLINE? DEDENT
                    | "(" field_list? ")"
                    | field_list
-block_entry      ::= field_def | param_marker
-field_def        ::= "var"? field_name ":" type_expr
+field_def        ::= attributes? "var"? field_name ":" type_expr
 
-enum_def         ::= "enum" decl_head type_params? "="? enum_body
+enum_def         ::= attributes? builtin_modifier? "enum" decl_head type_params?
+                    "="? enum_body
 enum_body        ::= enum_member_seq
                    | NEWLINE INDENT enum_member_seq NEWLINE? DEDENT
 enum_member_seq  ::= first_enum_member ("|" enum_member)*
 first_enum_member ::= "|"? enum_member
-enum_member      ::= name member_payload? | qualifier_chain name member_type_args?
+enum_member      ::= attributes? name member_payload? | qualifier_chain name member_type_args?
 member_type_args ::= "[" type_expr ("," type_expr)* "]"
 member_payload   ::= "(" field_list? ")"
-field_list       ::= field_entry ("," field_entry)* ","?
-field_entry      ::= field_inline | param_marker
-field_inline     ::= "var"? field_name ":" type_expr
+field_list       ::= field_inline ("," field_inline)* ","?
+field_inline     ::= attributes? "var"? field_name ":" type_expr
 
-exception_def    ::= "exception" decl_head exception_base? exception_body
+exception_def    ::= attributes? builtin_modifier? "exception" decl_head
+                    exception_base? exception_body
 exception_base   ::= "extends" name
-exception_body   ::= param_marker? NEWLINE INDENT block_entry (NEWLINE block_entry)* NEWLINE? DEDENT
+exception_body   ::= NEWLINE INDENT field_def (NEWLINE field_def)* NEWLINE? DEDENT
                    | "(" field_list? ")"
                    | field_list
 
-type_alias       ::= "type" decl_head type_params? "=" type_expr
+type_alias       ::= attributes? "type" decl_head type_params? "=" type_expr
 
 type_params      ::= "[" type_param ("," type_param)* "]"
 type_param       ::= name | "_"
 
-param_marker     ::= "/" | "*" | "@" NAME    (* NAME must be pos, std, or named *)
-
-program_func_def ::= "program" NEWLINE? "def" decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
+program_func_def ::= attributes? "program" NEWLINE? "def" decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
 
 ```
 
-A `param_marker` splits a parameter or field list into **zones**: `/` (≡ `@std`)
-ends the positional-only zone and begins standard; `*` (≡ `@named`) ends the
-standard zone and begins named-only; `@pos` opens the positional-only zone and
-must be the first entry. In the indented block form, a marker may appear as the
-optional leading entry on the header line and/or on its own line between field
-definitions.
+A zone attribute in front of a field puts that field in the zone it names; one
+in front of the declaration zones every field that carries none of its own. In
+the indented block form, the attribute may sit on the field's line or on the
+line above it. Fields are listed in zone order — positional-only, then
+standard, then named-only.
 
 A `type_params` list declares the declaration's type parameters; each named
 entry is an ordinary name in scope as a type throughout the declaration's body.
@@ -268,7 +286,7 @@ entry is an ordinary name in scope as a type throughout the declaration's body.
 
 An enum member written as a bare `name` declares a record in the enum's scope;
 its optional field list is that record's field list, including optional `var`
-field markers. A `var` marker is valid for records and enum-member records,
+field markers. `var` is valid for records and enum-member records,
 but not exception fields. A qualified member is a
 reference to an existing record, so it has no field list. Qualification is the
 declare/reference discriminator: `Entry(x: int)` declares `Enum::Entry`, while
@@ -313,16 +331,15 @@ concrete type arguments (`Box[int]`, `Outcome[int, text]`). The built-in
 ## Function declarations
 
 ```ebnf
-func_def         ::= "def" func_decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
-builtin_func_def ::= "builtin" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
-extern_func_def  ::= "extern" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
+func_def         ::= attributes? "def" func_decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
+builtin_func_def ::= attributes? "builtin" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
+extern_func_def  ::= attributes? "extern" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
 func_decl_head   ::= decl_head | builtin_receiver "::" name
 builtin_receiver ::= "array" "[" name "]" | "dict" "[" "text" "," name "]"
                    | "text" | "json" | "int" | "decimal" | "bool"
 func_body        ::= expr | suite
-param_list      ::= param_entry ("," param_entry)* ","?
-param_entry     ::= param | param_marker
-param           ::= field_name [":" type_expr] ("=" or_expr)?
+param_list      ::= param ("," param)* ","?
+param           ::= attributes? field_name [":" type_expr] ("=" or_expr)?
 ```
 
 A parameter annotation may be omitted only for `self` as the first parameter of
@@ -335,9 +352,9 @@ multi-item block or use a suite when the body needs binders or a sequence; for
 suite bodies, the `=` before the newline is optional. The return type
 annotation is optional for ordinary `def` declarations and required for
 `builtin def` and `extern def` —
-neither has a body. Zone markers (`/`, `*`,
-`@pos`, `@std`, `@named`) may appear as `param_entry` items between parameters;
-see [Functions](functions.md) for full zone semantics. No required
+neither has a body. A zone attribute in front of a parameter, or in front of
+the declaration, places parameters in zones; see [Functions](functions.md) for
+full zone semantics. No required
 positional-fillable (pos-only/standard) parameter may follow a defaulted one
 in the same zone. An optional `type_params` list after the function name makes
 the `def` generic (e.g. `def id[T](x: T) -> T`); see [Generics](generics.md).
@@ -373,9 +390,9 @@ priorities.
 ## Bindings and mutation
 
 ```ebnf
-let_decl       ::= "let" pattern type_ann? "=" expr
-var_decl       ::= "var" decl_head type_ann? "=" expr
-builtin_var_def ::= "builtin" NEWLINE? "var" name type_ann ["=" expr]  (* standard library only *)
+let_decl       ::= attributes? "let" pattern type_ann? "=" expr
+var_decl       ::= attributes? "var" decl_head type_ann? "=" expr
+builtin_var_def ::= attributes? "builtin" NEWLINE? "var" name type_ann ["=" expr]  (* standard library only *)
 assign_stmt ::= assign_target ":=" expr
 assign_target ::= qualifier_chain? name
                 | postfix "[" expr "]"

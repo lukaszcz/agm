@@ -27,14 +27,12 @@ record AgentRequest
 
 builtin
 exception AgentCallError extends Exception
-  *
   agent: Agent
   cause: text
   metadata: json
 
 builtin
 exception AgentParseError extends Exception
-  *
   agent: Agent
   target-type: text
   expected-schema: json

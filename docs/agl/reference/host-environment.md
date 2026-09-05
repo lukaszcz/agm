@@ -73,8 +73,8 @@ A positional-only or standard parameter accepts a positional CLI token; a
 standard or named-only parameter accepts `--name value`, `--name=value`, or,
 for `bool` and `Option[T]`, the negated form `--no-name`. A `program def`'s
 parameter list defaults to the **named-only** zone, so a plain `name: text`
-parameter is addressed only by `--name`; an explicit `@pos, …, /` marker opens
-a positional slot. A doubled `--` ends option parsing, so a later
+parameter is addressed only by `--name`; an `@arg-pos` parameter opens a
+positional slot. A doubled `--` ends option parsing, so a later
 `--`-prefixed token is collected positionally instead of being read as a flag.
 Supplying the same parameter twice (by any combination of position and name)
 is a usage error, as is a flag naming no declared parameter.

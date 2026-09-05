@@ -99,7 +99,7 @@ from agm.util.text import normalize_newlines
 # interpolates at runtime cannot drift apart.  The scan itself is greedy:
 # an identifier starts with a letter or ``_`` and continues until one of those
 # structural delimiters.  ``=`` and ``@`` are stop characters so that ``a=b``
-# lexes as NAME EQ NAME (required for no-space named arguments) and ``@std``
+# lexes as NAME EQ NAME (required for no-space named arguments) and ``@arg-pos``
 # lexes as AT NAME; the string quotes and ``+``/``*`` are not, so ``foo"bar``
 # and ``a+b`` scan as single identifiers.
 

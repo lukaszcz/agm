@@ -25,8 +25,8 @@ def _prepared(source: str) -> PreparedProgram:
 class TestDiscoverPrograms:
     def test_reports_typed_parameters_for_every_program(self) -> None:
         source = (
-            'program def main(@pos, count: int, /, label: text = "x") -> unit = ()\n\n'
-            "program def alt(*, verbose: bool = false) -> unit = ()\n"
+            'program def main(@arg-pos count: int, @arg-std label: text = "x") -> unit = ()\n\n'
+            "program def alt(verbose: bool = false) -> unit = ()\n"
         )
         runtime = PipelineDriver()
         discovery = runtime.discover_programs(_prepared(source))
@@ -65,8 +65,8 @@ class TestPreflightArgumentsAndRun:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         source = (
-            "program def main(@pos, count: int, /, label: text,\n"
-            "  *, verbose: bool = false) -> unit =\n"
+            "program def main(@arg-pos count: int, @arg-std label: text,\n"
+            "  verbose: bool = false) -> unit =\n"
             "  print count\n"
             "  print label\n"
             "  print verbose\n"
@@ -99,7 +99,7 @@ class TestPreflightArgumentsAndRun:
     def test_omitted_argument_resolves_to_its_own_default_expression(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        source = "program def main(*, verbose: bool = false) -> unit =\n  print verbose\n"
+        source = "program def main(verbose: bool = false) -> unit =\n  print verbose\n"
         runtime = PipelineDriver()
         prepared = _prepared(source)
         discovery = runtime.discover_programs(prepared)
@@ -187,7 +187,7 @@ class TestRunFacadeDerivesArgumentsFromTheProgramSignature:
     def test_a_defaulted_parameter_program_runs_with_no_arguments_supplied(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        result = PipelineDriver().run("program def main(*, value: int = 1) -> unit = print value\n")
+        result = PipelineDriver().run("program def main(value: int = 1) -> unit = print value\n")
         assert result.ok
         assert capsys.readouterr().out == "1\n"
 
@@ -214,7 +214,7 @@ class TestRaisingDefault:
             "exception Boom extends Exception\n"
             "  code: int\n\n"
             'def blow-up() -> int = raise Boom(message = "boom!", code = 7)\n\n'
-            "program def main(*, value: int = blow-up()) -> unit = print value\n"
+            "program def main(value: int = blow-up()) -> unit = print value\n"
         )
         runtime = PipelineDriver()
         prepared = _prepared(source)

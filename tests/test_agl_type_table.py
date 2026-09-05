@@ -4082,7 +4082,7 @@ class TestDeclarationIdentity:
         """A field-less declaration written as a program's very first item owns
         the lowest AST node id there is, and still carries a real declaration
         identity rather than the "no declaration identity" value."""
-        checked = _check("record R\n  *\nlet r = R()\n()")
+        checked = _check("record R()\nlet r = R()\n()")
         record_def = next(
             item
             for item in checked.resolved.program.body.items

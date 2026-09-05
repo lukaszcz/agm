@@ -1,8 +1,8 @@
-# A ``program def``'s own value parameters: @pos opens the positional-only
-# zone (count), / closes it into the standard zone (label), which accepts
-# either a positional or a named argument, and * opens the named-only zone
-# (loud), which accepts only a named argument. Parameters flow through a
-# helper def, an enum, a record, a for loop, and a match.
+# A ``program def``'s own value parameters: @arg-pos puts count in the
+# positional-only zone, @arg-std puts label in the standard zone, which
+# accepts either a positional or a named argument, and loud keeps the form's
+# named-only default, which accepts only a named argument. Parameters flow
+# through a helper def, an enum, a record, a for loop, and a match.
 
 enum Volume
   | Soft
@@ -17,7 +17,7 @@ def shout(label: text, times: int) -> text =
   done
   line
 
-program def main(@pos, count: int, /, label: text, *, loud: bool = false) -> unit =
+program def main(@arg-pos count: int, @arg-std label: text, loud: bool = false) -> unit =
   let volume: Volume = if loud => Loud(times = count) else => Soft
   let announcement = case volume of
     | Loud(times) => Announcement(message = shout(label, times), volume = volume)

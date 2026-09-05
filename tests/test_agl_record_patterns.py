@@ -68,7 +68,7 @@ def test_record_patterns_bind_positional_named_named_only_nested_and_as_in_case_
     checked = accept(
         "record Inner\n"
         "  value: int\n"
-        "record Outer(a: int, /, inner: Inner, *, label: text)\n"
+        "record Outer(@arg-pos a: int, inner: Inner, @arg-named label: text)\n"
         'let outer: Outer = Outer(1, Inner(value = 2), label = "ok")\n'
         "let Outer(a, inner = Inner(value = _ as value) as whole, label = label) = outer\n"
         "case outer of\n"
@@ -431,7 +431,7 @@ def test_record_and_enum_constructor_spelling_collision_is_scrutinee_directed() 
         "record Box[T]\n  value: T\ntype IntBox = Box[int]\n"
         'let box: Box[text] = Box(value = "x")\n'
         'case box of | IntBox(value) => value | _ => ""',
-        'record R(x: int, /, *, label: text)\nlet r = R(1, label = "x")\n'
+        'record R(@arg-pos x: int, @arg-named label: text)\nlet r = R(1, label = "x")\n'
         "case r of | R(x = _, label = _) => 0 | _ => 1",
         "exception Boom\n  value: int\nlet b = Boom(value = 1)\n"
         "case b of | Boom(value) => value | _ => 0",

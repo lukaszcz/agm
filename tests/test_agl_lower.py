@@ -697,7 +697,7 @@ class TestProgramSignatures:
         assert prog.program_signatures == {symbol: ()}
 
     def test_program_parameters_carry_kind_required_and_decoders(self) -> None:
-        source = 'program def main(a: int, /, b: text = "x", *, c: int) -> unit = ()\n'
+        source = 'program def main(@arg-pos a: int, @arg-std b: text = "x", c: int) -> unit = ()\n'
         prog = _lower(source)
 
         symbol = next(iter(prog.program_functions))

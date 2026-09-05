@@ -1,5 +1,5 @@
+@arg-named
 record R
-  *
   x: int
 
 program def main() -> unit =

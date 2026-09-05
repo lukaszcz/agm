@@ -1,0 +1,4 @@
+@doc("e")
+export std/text
+
+program def main() -> unit = ()

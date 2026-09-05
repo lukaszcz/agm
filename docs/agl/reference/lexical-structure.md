@@ -187,9 +187,6 @@ let s = a/ b         # error: reads as a path, but the segments are split
 let t = a /b         # error: same
 ```
 
-The positional-parameter marker `/` ([Functions](functions.md)) touches no
-operand and is unaffected.
-
 A type-owning chain segment may carry type arguments, as in
 `Option[int]::Some`; type arguments on a plain scope segment are a static
 error. The type-argument form `callee::[T]` and typed-call form
@@ -216,7 +213,8 @@ Every other character is an identifier-continuation character.  In particular
 the operator characters `-`, `?`, `!`, `$`, `<`, `>` may appear *inside*
 an identifier, so names like `ask-prompt`, `ask?`, `exec$`, and `do-it-now!`
 scan as a single token.  Note that `=` and `@` **are** delimiters, so `a=b`
-scans as three tokens and `@std` as two.
+scans as three tokens and `@arg-pos` as two — the attribute name that follows
+`@` is one identifier, hyphens included.
 
 Operator names are a second lexical class of identifier: the grammar terminal
 `OP_NAME`. They start with an operator character and continue while the next
@@ -387,28 +385,23 @@ An adjacent `[` after an expression-ending token starts indexing. Whitespace
 keeps the bracket as an array literal, so `xs[0]` indexes while `f [0]` is the
 single-argument call sugar `f([0])`.
 
-## Zone markers
+## Attributes
 
-`@` is a token used exclusively in **zone markers** inside parameter and field lists.
-The three markers are:
+`@` introduces an **attribute** on a declaration — `@name`, or `@name(args)`
+with ordinary call arguments. `@` is a delimiter, so the name after it is a
+separate identifier token and the attribute name may be hyphenated.
 
-| Marker | Equivalent | Zone opened |
-|--------|-----------|------------|
-| `@pos` | (none) | Positional-only (must be first in the list) |
-| `@std` | `/` | Standard (positional-or-named) |
-| `@named` | `*` | Named-only |
-
-`pos`, `std`, and `named` are **ordinary identifiers** everywhere except
-immediately after `@` inside a parameter or field list. An unrecognized name
-after `@` (e.g. `@foo`) is a static error.
-
-<!-- agl-check: fragment -->
 ```agl
-def f(x: int, @std, y: int) -> int = x + y   # @std same as /
-def g(a: int, /, b: int, @named, c: int) -> int = ...  # mixing / and @named
+@arg-pos
+def f(x: int, y: int) -> int = x + y
+
+def g(a: int, @arg-named key: text) -> text = "%{a}: %{key}"
 ```
 
-See [Functions](functions.md) and [Types](types.md) for the full zone semantics.
+The attribute name is an ordinary identifier everywhere else. See
+[Attributes](grammar.md#attributes) for where attributes may appear and
+[Functions](functions.md) and [Types](types.md) for the zone semantics
+`@arg-pos`, `@arg-std`, and `@arg-named` carry.
 
 ## Operator precedence
 

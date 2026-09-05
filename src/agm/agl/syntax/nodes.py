@@ -427,8 +427,8 @@ class Param:
 
     ``kind`` records which zone this parameter belongs to (positional-only,
     standard, or named-only). The transformer assigns a concrete zone to every
-    parameter at parse time -- no downstream pass ever sees a marker token --
-    and shared argument binding enforces it for calls and patterns.
+    parameter at parse time -- no downstream pass ever inspects the ``@arg-*``
+    attribute -- and shared argument binding enforces it for calls and patterns.
     ``default`` is ``None`` for field params (records/variants/exceptions);
     only ``def``/``builtin def``/lambda params may carry a default expression.
     ``type_expr`` is ``None`` when the source omitted the annotation, which the

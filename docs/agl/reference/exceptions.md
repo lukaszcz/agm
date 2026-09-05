@@ -33,10 +33,9 @@ exception DeployError extends Exception
 An exception extends exactly one base exception type. Constructor fields include
 the inherited fields first, followed by fields declared on the subtype.
 `trace-id` is not reserved: a user-declared exception may use it as one of its
-own fields. Exception fields do not accept the `var` marker and cannot be
-reassigned. `builtin exception` is the standard-library form for host-recognized
-exception types; the name, base, and fields must match the recognized shape
-exactly.
+own fields. Exception fields do not accept `var` and cannot be reassigned.
+`builtin exception` is the standard-library form for host-recognized exception
+types; the name, base, and fields must match the recognized shape exactly.
 
 ### Methods
 
@@ -196,10 +195,10 @@ raise Abort(message = "Cannot continue without repository access.")
 ```
 
 An exception's own fields are **standard by default** and may be supplied
-positionally or by name. Zone markers (`/`, `*`, `@pos`, `@std`, `@named`)
-constrain an exception's own fields. The inherited `message` field is
-named-only, so it is supplied by name when constructing an exception with
-fields:
+positionally or by name. The `@arg-pos`, `@arg-std`, and `@arg-named`
+[attributes](grammar.md#attributes) constrain an exception's own fields. The
+inherited `message` field is named-only, so it is supplied by name when
+constructing an exception with fields:
 
 ```agl
 exception DeployError extends Exception

@@ -1,4 +1,0 @@
-record Point
-  x: int
-
-def Point::bad(@pos, self) -> int = 1

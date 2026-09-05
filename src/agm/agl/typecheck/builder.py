@@ -713,7 +713,7 @@ class _TypeBuilder:
         module_id = self._module_id
         scope_path = tuple(segment.name for segment in stmt.scope_path)
         bare_name = _bare_name(stmt.name)
-        # Own field kinds honor each field's declared @pos/@std/@named marker —
+        # Own field kinds honor each field's declared ``@arg-*`` attribute —
         # exactly like a record's fields — in declaration order, parallel to
         # ``fields`` above.  Stored as ``ParamZone.value`` strings (see
         # ``TypeDef.field_kinds``: ``semantics`` may not import ``syntax``).

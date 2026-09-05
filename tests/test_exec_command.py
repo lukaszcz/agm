@@ -311,7 +311,7 @@ class TestExecCommandArgParsing:
         the program declares: no program signature can make it a help request, so
         it reaches the program unchanged."""
         agl_file = tmp_path / "test.agl"
-        write_file_program(agl_file, "program def main(@pos, msg: text, /) -> unit = print msg\n")
+        write_file_program(agl_file, "program def main(@arg-pos msg: text) -> unit = print msg\n")
 
         result = invoke(runner, ["exec", str(agl_file), "--", "--", "-h"])
 
@@ -3413,7 +3413,7 @@ class TestProgramValueArguments:
 
     A ``program def``'s value parameters default to the named-only zone, so
     a plain ``name: text`` parameter is addressed only by ``--name``; an
-    explicit ``@pos, ..., /`` zone marker opens a positional slot.
+    explicit ``@arg-pos`` attribute opens a positional slot.
     """
 
     def test_positional_and_named_option_arguments(
@@ -3422,7 +3422,7 @@ class TestProgramValueArguments:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            'program def main(@pos, name: text, /, tag: text = "default") -> unit =\n'
+            'program def main(@arg-pos name: text, @arg-std tag: text = "default") -> unit =\n'
             '  print(name + ":" + tag)\n',
         )
 
@@ -3438,7 +3438,7 @@ class TestProgramValueArguments:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            'program def main(@pos, name: text, /, tag: text = "default") -> unit =\n'
+            'program def main(@arg-pos name: text, @arg-std tag: text = "default") -> unit =\n'
             '  print(name + ":" + tag)\n',
         )
 
@@ -3579,7 +3579,8 @@ class TestProgramValueArguments:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            'program def main(@pos, id: text, /, tag: text) -> unit = print(id + ":" + tag)\n',
+            "program def main(@arg-pos id: text, @arg-std tag: text) -> unit =\n"
+            '  print(id + ":" + tag)\n',
         )
 
         assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["one", "cli"])) is None
@@ -3682,7 +3683,7 @@ class TestProgramValueArguments:
         is collected positionally instead of being rejected as an unknown flag.
         """
         agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "program def main(@pos, name: text, /) -> unit = print name\n")
+        write_file_program(agl_file, "program def main(@arg-pos name: text) -> unit = print name\n")
 
         assert (
             exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--", "--odd"])) is None
@@ -3708,14 +3709,13 @@ class TestProgramValueArguments:
     def test_standard_zone_parameter_supplied_positionally_and_by_name_is_a_duplicate(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """A ``STANDARD``-zone parameter (past ``/``, before any ``@named``) accepts a
-
-        positional token or ``--name``, never both.
+        """A ``STANDARD``-zone parameter accepts a positional token or ``--name``,
+        never both.
         """
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            'program def main(@pos, id: text, /, tag: text = "default") -> unit =\n'
+            'program def main(@arg-pos id: text, @arg-std tag: text = "default") -> unit =\n'
             '  print(id + ":" + tag)\n',
         )
 
@@ -3751,7 +3751,7 @@ class TestProgramValueArguments:
         )
         agl_file = tmp_path / "prog.agl"
         write_file_program(
-            agl_file, 'program def main(@pos, name: text = "default", /) -> unit = print name\n'
+            agl_file, 'program def main(@arg-pos name: text = "default") -> unit = print name\n'
         )
 
         assert exec_command.run(_exec_args_no_log(agl_file)) is None

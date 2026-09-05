@@ -189,11 +189,11 @@ def test_cross_module_and_builtin_fields_use_field_directed_classification(tmp_p
 
 def test_named_only_pattern_shorthand_uses_the_same_field_rule() -> None:
     _check(
-        "enum Packet\n  | packet(*, value: int)\n"
+        "enum Packet\n  | packet(@arg-named value: int)\n"
         "let item = packet(value = 1)\ncase item of | packet(value) => value"
     )
     _reject_type(
         "enum Flag\n  | on\n"
-        "enum Packet\n  | packet(*, on: Flag)\n"
+        "enum Packet\n  | packet(@arg-named on: Flag)\n"
         "let item = packet(on = on())\ncase item of | packet(on) => 1"
     )

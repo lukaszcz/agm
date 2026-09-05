@@ -9,7 +9,7 @@ enum Opt[T]
 
 enum Box2
   | Dot
-  | Rect(*, w: int, h: int)
+  | Rect(@arg-named w: int, @arg-named h: int)
 
 # Positional sub-pattern: 'x' binds the standard 'value' field positionally.
 

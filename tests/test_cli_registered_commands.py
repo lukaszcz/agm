@@ -320,7 +320,7 @@ def test_registered_command_help_usage_line_reflects_the_program_signature() -> 
     from agm.cli_support.program_discovery import discover_program_declarations_from_source
 
     (program,) = discover_program_declarations_from_source(
-        'program def main(@pos, name: text, /, tag: text = "default") -> unit = ()'
+        'program def main(@arg-pos name: text, @arg-std tag: text = "default") -> unit = ()'
     )
 
     text = dispatch.registered_command_help(
@@ -376,7 +376,9 @@ def test_registered_command_program_option_error_renders_shared_usage_help(
         'description = "Greet someone" }\n',
         encoding="utf-8",
     )
-    module.write_text("program def main(@pos, name: text) -> unit = print name\n", encoding="utf-8")
+    module.write_text(
+        "program def main(@arg-pos name: text) -> unit = print name\n", encoding="utf-8"
+    )
     write_record(package_root)
     write_activation_index(
         ActivationIndex({"tools": ActivePackage(semver.Version.parse("1.0.0"))}), home=home

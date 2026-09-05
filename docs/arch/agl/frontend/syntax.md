@@ -14,6 +14,7 @@ The AST records source structure faithfully so later passes never reconstruct sp
 - Qualified expressions, types, patterns, and `is` tests share one qualifier-chain node with per-segment spans and type arguments.
 - Declarations and scope-region items carry canonical scope paths; enum members record whether they were declared inline or reference an existing record; `var` field markers, parameter zones, complete `let` patterns, and assignment-target shapes (name, index, field) are all retained.
 - A function header may carry an applied builtin receiver (`array[E]::map`) beside its `self` parameter; scope classifies it once the full declaration path is known.
+- Declaration nodes carry an optional attribute prefix — a name plus ordinary call arguments — held verbatim. The AST makes no claim about which attributes exist or what they mean; recognition happens against the catalog in `agl/attributes.py`, a dependency-free leaf the AST itself never imports.
 
 An inline-source host (`agm exec -c`, the REPL) wraps statement-oriented source with a pure syntactic wrapper in `parser/wrap.py` before the static passes run.
 
@@ -22,4 +23,5 @@ An inline-source host (`agm exec -c`, the REPL) wraps statement-oriented source 
 - `src/agm/agl/keywords.py`, `src/agm/agl/lexer/` — keyword inventories and indentation-aware lexing.
 - `src/agm/agl/grammar/agl.lark`, `src/agm/agl/parser/` — grammar, parsing, AST construction, inline-source wrapping.
 - `src/agm/agl/syntax/` — AST nodes, spans, advisories, the constant-expression predicate, and resource-call classification.
+- `src/agm/agl/attributes.py` — the built-in attribute catalog: targets, argument shapes, repetition, and conflicts.
 - Tests: `tests/test_agl_lexer.py`, `test_agl_parser.py`, `test_agl_ast.py`, `test_agl_wrap.py`.

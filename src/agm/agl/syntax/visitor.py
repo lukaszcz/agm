@@ -32,6 +32,7 @@ from agm.agl.syntax.nodes import (
     ArrayLit,
     AsPattern,
     AssignStmt,
+    Attribute,
     BinaryOp,
     Block,
     BoolLit,
@@ -158,6 +159,9 @@ class Visitor:
 
     def visit_Program(self, node: Program) -> None: ...
 
+    # Declaration attributes
+    def visit_Attribute(self, node: Attribute) -> None: ...
+
     # Type nodes
     def visit_TextT(self, node: TextT) -> None: ...
     def visit_JsonT(self, node: JsonT) -> None: ...
@@ -272,6 +276,8 @@ class Visitor:
 _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
     {
         Program,
+        # declaration attributes
+        Attribute,
         # type nodes
         TextT,
         JsonT,
@@ -379,6 +385,12 @@ def _is_known_node(node: object) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _walk_attributes(attributes: tuple[Attribute, ...], callback: Callable[[object], None]) -> None:
+    """Walk a declaration's attribute prefix before the declaration's own children."""
+    for attribute in attributes:
+        walk(attribute, callback)
+
+
 def walk(node: object, callback: Callable[[object], None]) -> None:
     """Pre-order traversal: call ``callback`` with *node*, then recurse.
 
@@ -394,6 +406,13 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
 
     if isinstance(node, Program):
         walk(node.body, callback)
+
+    # --- Declaration attributes ---
+    elif isinstance(node, Attribute):
+        for attribute_arg in node.args:
+            walk(attribute_arg, callback)
+        for attribute_named in node.named_args:
+            walk(attribute_named, callback)
 
     # --- Type nodes ---
     elif isinstance(node, (TextT, JsonT, BoolT, IntT, DecimalT)):
@@ -463,12 +482,14 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
 
     # --- Declaration nodes ---
     elif isinstance(node, RecordDef):
+        _walk_attributes(node.attributes, callback)
         for scope_segment in node.scope_path:
             walk(scope_segment, callback)
         for f in node.fields:
             walk(f, callback)
 
     elif isinstance(node, VariantDef):
+        _walk_attributes(node.attributes, callback)
         for f in node.fields:
             walk(f, callback)
 
@@ -478,23 +499,27 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
             walk(type_arg, callback)
 
     elif isinstance(node, EnumDef):
+        _walk_attributes(node.attributes, callback)
         for scope_segment in node.scope_path:
             walk(scope_segment, callback)
         for member in node.members:
             walk(member, callback)
 
     elif isinstance(node, ExceptionDef):
+        _walk_attributes(node.attributes, callback)
         for scope_segment in node.scope_path:
             walk(scope_segment, callback)
         for f in node.fields:
             walk(f, callback)
 
     elif isinstance(node, TypeAlias):
+        _walk_attributes(node.attributes, callback)
         for scope_segment in node.scope_path:
             walk(scope_segment, callback)
         walk(node.type_expr, callback)
 
     elif isinstance(node, FuncDef):
+        _walk_attributes(node.attributes, callback)
         for scope_segment in node.scope_path:
             walk(scope_segment, callback)
         for param in node.params:
@@ -505,6 +530,7 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
             walk(node.body, callback)
 
     elif isinstance(node, BuiltinVarDecl):
+        _walk_attributes(node.attributes, callback)
         walk(node.type_ann, callback)
         if node.default is not None:
             walk(node.default, callback)
@@ -519,12 +545,14 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
 
     # --- Binder nodes ---
     elif isinstance(node, LetDecl):
+        _walk_attributes(node.attributes, callback)
         walk(node.pattern, callback)
         if node.type_ann is not None:
             walk(node.type_ann, callback)
         walk(node.value, callback)
 
     elif isinstance(node, VarDecl):
+        _walk_attributes(node.attributes, callback)
         if node.type_ann is not None:
             walk(node.type_ann, callback)
         walk(node.value, callback)
@@ -628,6 +656,7 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
             walk(update, callback)
 
     elif isinstance(node, Param):
+        _walk_attributes(node.attributes, callback)
         if node.type_expr is not None:
             walk(node.type_expr, callback)
         if node.default is not None:

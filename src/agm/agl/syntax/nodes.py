@@ -434,7 +434,8 @@ class Param:
     ``type_expr`` is ``None`` when the source omitted the annotation, which the
     builder permits only for a method's first ``self`` parameter. ``mutable`` marks
     a record, enum-variant, or exception field; function and lambda parameters
-    always leave it ``False``.
+    always leave it ``False``. ``attributes`` holds the attribute prefix the
+    source wrote in front of the parameter or field, verbatim.
     """
 
     name: str
@@ -444,6 +445,7 @@ class Param:
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     mutable: bool = False
+    attributes: tuple[Attribute, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -491,6 +493,7 @@ class FuncDef(GenericDeclaration):
     is_synthetic: bool = False
     scope_path: tuple[ScopeSegment, ...] = ()
     receiver_type: TypeExpr | None = None
+    attributes: tuple[Attribute, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1087,6 +1090,7 @@ class LetDecl:
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     scope_path: tuple[ScopeSegment, ...] = ()
+    attributes: tuple[Attribute, ...] = ()
 
 
 def simple_let_pattern_name(pattern: Pattern) -> str | None:
@@ -1111,6 +1115,7 @@ class VarDecl:
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     scope_path: tuple[ScopeSegment, ...] = ()
+    attributes: tuple[Attribute, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1170,6 +1175,22 @@ Binder = LetDecl | VarDecl | AssignStmt
 
 
 @dataclass(frozen=True, slots=True)
+class Attribute:
+    """``@name`` or ``@name(args)`` in front of a defining declaration.
+
+    The AST keeps an attribute exactly as written: its name and the ordinary
+    call arguments it was given. Which attributes exist, where they may sit,
+    and what they mean are decided later, against the attribute catalog.
+    """
+
+    name: str
+    args: tuple[Expr, ...]
+    named_args: tuple[NamedArg, ...]
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
 class RecordDef(GenericDeclaration):
     """``record Name(fields)`` declaration."""
 
@@ -1180,6 +1201,7 @@ class RecordDef(GenericDeclaration):
     type_param_slots: tuple[str, ...] = ()
     is_builtin: bool = False
     scope_path: tuple[ScopeSegment, ...] = ()
+    attributes: tuple[Attribute, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1190,6 +1212,7 @@ class VariantDef:
     fields: tuple[Param, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    attributes: tuple[Attribute, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1213,6 +1236,7 @@ class EnumDef(GenericDeclaration):
     type_param_slots: tuple[str, ...] = ()
     is_builtin: bool = False
     scope_path: tuple[ScopeSegment, ...] = ()
+    attributes: tuple[Attribute, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1227,6 +1251,7 @@ class ExceptionDef(GenericDeclaration):
     type_param_slots: tuple[str, ...] = ()
     is_builtin: bool = False
     scope_path: tuple[ScopeSegment, ...] = ()
+    attributes: tuple[Attribute, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1239,6 +1264,7 @@ class TypeAlias(GenericDeclaration):
     node_id: int = dc_field(compare=False)
     type_param_slots: tuple[str, ...] = ()
     scope_path: tuple[ScopeSegment, ...] = ()
+    attributes: tuple[Attribute, ...] = ()
 
 
 def scoped_public_name(scope_path: tuple[ScopeSegment, ...], name: str) -> str:
@@ -1294,6 +1320,7 @@ class BuiltinVarDecl:
     node_id: int = dc_field(compare=False)
     default: Expr | None = None
     scope_path: tuple[ScopeSegment, ...] = ()
+    attributes: tuple[Attribute, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

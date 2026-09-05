@@ -26,30 +26,37 @@ def _agl_imports(package: str) -> list[tuple[Path, str]]:
     return imports
 
 
+def _imported_modules(path: Path, node: ast.Import | ast.ImportFrom) -> tuple[str, ...]:
+    """Return the absolute module names one import node in ``path`` names.
+
+    A relative import resolves against the importing module's own package, so
+    ``from . import zones`` cannot hide a dependency from a contract that reads
+    module names.
+    """
+    if isinstance(node, ast.Import):
+        return tuple(alias.name for alias in node.names)
+    if not node.level:
+        return () if node.module is None else (node.module,)
+    module_parts = path.relative_to(SRC_ROOT).with_suffix("").parts
+    package_parts = module_parts if path.name == "__init__.py" else module_parts[:-1]
+    keep = len(package_parts) - (node.level - 1)
+    imported_parts = () if node.module is None else tuple(node.module.split("."))
+    return (".".join((*package_parts[:keep], *imported_parts)),)
+
+
+def _is_agm(module: str) -> bool:
+    return module == "agm" or module.startswith("agm.")
+
+
 def _agm_imports(package: str) -> list[tuple[Path, str]]:
-    """Return every absolute import under the shared ``agm`` namespace."""
+    """Return every import under the shared ``agm`` namespace, relatives included."""
     imports: list[tuple[Path, str]] = []
     for path in sorted((AGL_ROOT / package).rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom):
-                if node.level:
-                    module_parts = path.relative_to(SRC_ROOT).with_suffix("").parts
-                    package_parts = (
-                        module_parts if path.name == "__init__.py" else module_parts[:-1]
-                    )
-                    keep = len(package_parts) - (node.level - 1)
-                    imported_parts = () if node.module is None else tuple(node.module.split("."))
-                    module = ".".join((*package_parts[:keep], *imported_parts))
-                else:
-                    module = node.module
-                if module == "agm" or (module is not None and module.startswith("agm.")):
-                    imports.append((path, module))
-            elif isinstance(node, ast.Import):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
                 imports.extend(
-                    (path, alias.name)
-                    for alias in node.names
-                    if alias.name == "agm" or alias.name.startswith("agm.")
+                    (path, module) for module in _imported_modules(path, node) if _is_agm(module)
                 )
     return imports
 
@@ -93,6 +100,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
         (
             "scope",
             (
+                "agm.agl.attributes",
                 "agm.agl.diagnostics",
                 "agm.agl.artifact_cache",
                 "agm.agl.modules",
@@ -178,6 +186,48 @@ def test_execution_package_dependency_contract(package: str, allowed: tuple[str,
     ]
 
     assert violations == []
+
+
+def _agm_imports_of_file(path: Path) -> list[str]:
+    """Return every ``agm`` module one file imports, relatives resolved."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return [
+        module
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        for module in _imported_modules(path, node)
+        if _is_agm(module)
+    ]
+
+
+def test_vocabulary_leaves_depend_on_nothing() -> None:
+    """Keep the shared vocabulary modules importable from every layer."""
+    leaves = ("attributes.py", "zones.py")
+    violations = [
+        f"{leaf} imports {module}"
+        for leaf in leaves
+        for module in _agm_imports_of_file(AGL_ROOT / leaf)
+    ]
+
+    assert violations == []
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("from . import zones", "agm.agl"),
+        ("from .syntax import Attribute", "agm.agl.syntax"),
+        ("from ..config import engine_keys", "agm.config"),
+    ],
+)
+def test_a_relative_import_in_a_leaf_would_be_caught(source: str, expected: str) -> None:
+    """A leaf cannot hide a dependency behind a relative import."""
+    node = ast.parse(f"{source}\n").body[0]
+    assert isinstance(node, ast.ImportFrom)
+    resolved = _imported_modules(AGL_ROOT / "attributes.py", node)
+
+    assert resolved == (expected,)
+    assert _is_agm(expected)
 
 
 def test_ir_all_agm_dependencies_are_explicit() -> None:

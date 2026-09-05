@@ -37,6 +37,7 @@ from agm.agl.syntax import (
     AsPattern,
     AssignStmt,
     AssignTarget,
+    Attribute,
     BinaryOp,
     Binder,
     BinOp,
@@ -44,6 +45,7 @@ from agm.agl.syntax import (
     BoolLit,
     BoolT,
     Break,
+    BuiltinVarDecl,
     Call,
     Case,
     CaseBranch,
@@ -1049,6 +1051,7 @@ class TestBinders:
             "span",
             "node_id",
             "scope_path",
+            "attributes",
         )
 
     def test_let_decl_with_pattern_and_type_is_frozen_and_structurally_equal(self) -> None:
@@ -2790,3 +2793,181 @@ class TestModuleSystemNodes:
         pat = ConstructorPattern(name="Foo", positional=(), named=(), span=self._sp(), node_id=0)
         assert t.qualifier is None
         assert pat.qualifier is None
+
+
+# ---------------------------------------------------------------------------
+# Declaration attributes
+# ---------------------------------------------------------------------------
+
+
+class TestDeclarationAttributes:
+    """Every defining declaration carries a raw attribute prefix."""
+
+    def _sp(self) -> SourceSpan:
+        return span()
+
+    def _attribute(self, name: str = "doc") -> Attribute:
+        return Attribute(
+            name=name,
+            args=(StringLit(value="why", span=self._sp(), node_id=nid()),),
+            named_args=(),
+            span=self._sp(),
+            node_id=nid(),
+        )
+
+    def _declarations(self, attributes: tuple[Attribute, ...] | None = None) -> dict[str, object]:
+        """Build one of every attributed node.
+
+        With no ``attributes`` argument the nodes are constructed without the
+        keyword at all, so the dataclass defaults are what the caller sees.
+        """
+        sp = self._sp()
+        body = IntLit(value=1, span=sp, node_id=nid())
+        type_expr = IntT(span=sp, node_id=nid())
+        prefix = {} if attributes is None else {"attributes": attributes}
+        field = Param(
+            name="x",
+            type_expr=type_expr,
+            kind=ParamZone.STANDARD,
+            default=None,
+            span=sp,
+            node_id=nid(),
+        )
+        return {
+            "Param": Param(
+                name="x",
+                type_expr=type_expr,
+                kind=ParamZone.STANDARD,
+                default=None,
+                span=sp,
+                node_id=nid(),
+                **prefix,
+            ),
+            "FuncDef": FuncDef(
+                name="f",
+                params=(),
+                return_type=None,
+                body=body,
+                span=sp,
+                node_id=nid(),
+                **prefix,
+            ),
+            "RecordDef": RecordDef(name="R", fields=(field,), span=sp, node_id=nid(), **prefix),
+            "VariantDef": VariantDef(name="M", fields=(field,), span=sp, node_id=nid(), **prefix),
+            "EnumDef": EnumDef(name="E", members=(), span=sp, node_id=nid(), **prefix),
+            "ExceptionDef": ExceptionDef(
+                name="X",
+                fields=(field,),
+                base=None,
+                span=sp,
+                node_id=nid(),
+                **prefix,
+            ),
+            "TypeAlias": TypeAlias(name="T", type_expr=type_expr, span=sp, node_id=nid(), **prefix),
+            "LetDecl": LetDecl(
+                pattern=VarPattern(name="x", span=sp, node_id=nid()),
+                type_ann=None,
+                value=body,
+                span=sp,
+                node_id=nid(),
+                **prefix,
+            ),
+            "VarDecl": VarDecl(
+                name="x",
+                type_ann=None,
+                value=body,
+                span=sp,
+                node_id=nid(),
+                **prefix,
+            ),
+            "BuiltinVarDecl": BuiltinVarDecl(
+                name="x", type_ann=type_expr, span=sp, node_id=nid(), **prefix
+            ),
+        }
+
+    def test_every_defining_declaration_defaults_to_no_attributes(self) -> None:
+        for name, node in self._declarations().items():
+            assert node.attributes == (), name
+
+    def test_every_defining_declaration_keeps_the_attributes_it_was_given(self) -> None:
+        attributes = (self._attribute(),)
+        for name, node in self._declarations(attributes).items():
+            assert node.attributes == attributes, name
+
+    def test_attribute_holds_its_name_and_raw_arguments(self) -> None:
+        value = StringLit(value="python-name", span=self._sp(), node_id=nid())
+        named = NamedArg(name="short", value=value, span=self._sp(), node_id=nid())
+        attribute = Attribute(
+            name="extern-name",
+            args=(value,),
+            named_args=(named,),
+            span=self._sp(),
+            node_id=nid(),
+        )
+        assert attribute.name == "extern-name"
+        assert attribute.args == (value,)
+        assert attribute.named_args == (named,)
+
+    def test_attribute_equality_ignores_span_and_node_id(self) -> None:
+        first = Attribute(name="arg-pos", args=(), named_args=(), span=span(1, 0, 1, 8), node_id=1)
+        second = Attribute(
+            name="arg-pos", args=(), named_args=(), span=span(9, 0, 9, 8), node_id=99
+        )
+        assert first == second
+
+    def test_attribute_is_immutable(self) -> None:
+        attribute = self._attribute()
+        with pytest.raises(FrozenInstanceError):
+            setattr(attribute, "name", "other")
+
+    def test_walk_visits_attribute_arguments_of_every_declaration(self) -> None:
+        from agm.agl.syntax.visitor import walk
+
+        for name, node in self._declarations((self._attribute(),)).items():
+            visited: list[object] = []
+            walk(node, visited.append)
+            assert any(isinstance(seen, Attribute) for seen in visited), name
+            assert any(isinstance(seen, StringLit) and seen.value == "why" for seen in visited), (
+                name
+            )
+
+    def test_walk_visits_attribute_named_arguments(self) -> None:
+        from agm.agl.syntax.visitor import walk
+
+        value = StringLit(value="named", span=self._sp(), node_id=nid())
+        attribute = Attribute(
+            name="doc",
+            args=(),
+            named_args=(NamedArg(name="text", value=value, span=self._sp(), node_id=nid()),),
+            span=self._sp(),
+            node_id=nid(),
+        )
+        visited: list[object] = []
+        walk(attribute, visited.append)
+        assert visited[0] is attribute
+        assert value in visited
+
+    def test_visitor_dispatches_attribute_nodes(self) -> None:
+        from agm.agl.syntax.visitor import Visitor, walk
+
+        class Collector(Visitor):
+            def __init__(self) -> None:
+                self.names: list[str] = []
+
+            def visit_Attribute(self, node: Attribute) -> None:
+                self.names.append(node.name)
+
+        collector = Collector()
+        walk(
+            FuncDef(
+                name="f",
+                params=(),
+                return_type=None,
+                body=IntLit(value=1, span=self._sp(), node_id=nid()),
+                span=self._sp(),
+                node_id=nid(),
+                attributes=(self._attribute("arg-named"),),
+            ),
+            collector.dispatch,
+        )
+        assert collector.names == ["arg-named"]

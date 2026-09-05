@@ -18,6 +18,7 @@ from agm.agl.syntax.nodes import (
     AsPattern,
     AssignStmt,
     AssignTarget,
+    Attribute,
     BinaryOp,
     Binder,
     BinOp,
@@ -155,6 +156,7 @@ __all__ = [
     # program
     "Program",
     # declarations
+    "Attribute",
     "FuncDef",
     "RecordDef",
     "RecordUpdate",

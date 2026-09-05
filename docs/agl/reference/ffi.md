@@ -24,9 +24,35 @@ def to_slug(title):
 
 An extern declaration has the same parameters, type parameters, defaults, and
 first-class behavior as an ordinary `def`, but has no body and requires a
-return annotation. Its final declared member name must be a non-keyword Python
-identifier. Arguments are passed positionally in declaration order after AgL
-has applied its own defaults and named-argument rules.
+return annotation. Arguments are passed positionally in declaration order after
+AgL has applied its own defaults and named-argument rules.
+
+The companion callable is found by name. By default that is the extern's final
+declared member name, used verbatim, which therefore has to be a valid Python
+identifier that is not a Python keyword. `@extern-name` supplies the companion
+name instead, freeing the AgL name from Python's spelling — the usual case for
+a kebab-case or `?`-suffixed name:
+
+<!-- agl-check: fragment -->
+```agl
+@extern-name("first_option")
+extern def first?(xs: array[int]) -> Option[int]
+```
+
+```python
+# Companion
+from agl import nominals
+
+Option = nominals.std.option.Option
+
+
+def first_option(xs):
+    return Option.Some(value=xs[0]) if len(xs) else getattr(Option, "None")()
+```
+
+The supplied name is itself subject to the same rule. Every extern of a module
+shares that module's one companion, wherever it is declared, so no two of them
+may resolve to the same companion name.
 
 An extern is allowed only in a file-backed module. A module with externs needs
 a `.py` sibling, imported once before evaluation begins. Missing companions,

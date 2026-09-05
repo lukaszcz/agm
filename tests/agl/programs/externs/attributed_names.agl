@@ -1,0 +1,20 @@
+# `@extern-name` supplies the Python companion name, so an extern may carry an
+# AgL name Python could not define; an unattributed extern uses its own name.
+@extern-name("first_option")
+extern def first?(xs: array[int]) -> Option[int]
+
+extern def total(xs: array[int]) -> int
+
+scope Words
+
+  @extern-name("words_join")
+  extern def join(parts: array[text], separator: text) -> text
+end Words
+
+program def main(separator: text) -> unit =
+  let numbers = [4, 5, 6]
+  print(first?(numbers).unwrap-or(0))
+  let empty: array[int] = []
+  print(first?(empty).unwrap-or(-1))
+  print(total(numbers))
+  print(Words::join(["a", "b"], separator))

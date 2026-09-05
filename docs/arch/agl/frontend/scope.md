@@ -22,6 +22,8 @@ The parser keeps every `@attribute` verbatim; scope is where one acquires meanin
 
 The fact built from the `@arg-*` attributes is `param_zones`, the zone of every parameter and field keyed by its node id: an entry's own attribute wins over its declaration's default, which wins over the form's default (standard, but named-only for a `program def`). A `self` receiver is positional-only and admits no zone attribute, and an entry list written out of zone order is an error here rather than in the parser. Typecheck builds every parameter and constructor-field list from this table; the AST itself carries no zone.
 
+The fact built from `@extern-name` is `extern_names`, every `extern def`'s Python companion name keyed by its node id: the attribute's argument, or the declared name verbatim. Scope applies the Python-identifier rule to that effective name, so a name Python could not define is rejected here with the attribute as the remedy, and keys companion-symbol uniqueness on it too — a module's externs share one companion, wherever in the module they are declared, so no two of them may map to the same effective name. Lowering and companion resolution read the table; no name is derived from the AST or mangled.
+
 ## Code Entry Points
 
 - `src/agm/agl/scope/attributes.py` — attribute recognition against the catalog and the fact builders it feeds.

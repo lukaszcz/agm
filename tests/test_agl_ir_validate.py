@@ -1777,7 +1777,7 @@ class TestProgramEntryMaps:
             function_symbol=SYM0,
             module_id=MOD_A,
             params=(),
-            impl=ExternFunctionBody(name="main"),
+            impl=ExternFunctionBody(name="main", companion_name="main"),
         )
         prog = _make_program(
             functions={FN0: extern},

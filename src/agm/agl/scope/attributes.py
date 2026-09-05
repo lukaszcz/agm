@@ -7,20 +7,24 @@ admitted target, the arguments match the declared schema, the attribute is not
 repeated or contradicted — and turns the surviving attributes into typed
 side-table entries.
 
-One fact is built: a parameter's zone, from the ``@arg-*`` attribute an entry
-or its owning declaration carries. The walk is the seam a further attribute
-meaning joins through — a new fact reads the attributes the walk already
-hands it and fills a table of its own, so it costs one more builder, never one
-more traversal.
+Two facts are built: a parameter's zone, from the ``@arg-*`` attribute an
+entry or its owning declaration carries, and an ``extern def``'s Python
+companion name, from ``@extern-name`` — the walk sees every extern of a
+module, so it is also where their companion names are held apart. The walk is
+the seam a further attribute meaning joins through — a new fact reads the
+attributes the walk already hands it and fills a table of its own, so it costs
+one more builder, never one more traversal.
 """
 
 from __future__ import annotations
 
+import keyword
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from agm.agl.attributes import (
     BUILTIN_ATTRIBUTES,
+    EXTERN_NAME_ATTRIBUTE,
     ZONE_ATTRIBUTES,
     AttributeArguments,
     AttributeSpec,
@@ -56,9 +60,21 @@ class AttributeFacts:
     ``param_zones``
         The zone of every function, lambda, record, exception, and enum-member
         entry, keyed by its ``Param.node_id``.
+    ``extern_names``
+        The Python companion name of every ``extern def``, keyed by its
+        ``FuncDef.node_id``.
     """
 
     param_zones: dict[int, ParamZone]
+    extern_names: dict[int, str]
+
+
+@dataclass(frozen=True, slots=True)
+class _TextArgument:
+    """One validated single-text attribute argument, with its own span."""
+
+    attribute: Attribute
+    text: str
 
 
 #: Entry order: positional-only, then standard, then named-only.
@@ -117,7 +133,7 @@ def recognize_attributes(
     """
     recognizer = _Recognizer(declares_receiver)
     walk(program, recognizer.visit)
-    return AttributeFacts(param_zones=recognizer.param_zones)
+    return AttributeFacts(param_zones=recognizer.param_zones, extern_names=recognizer.extern_names)
 
 
 class _Recognizer:
@@ -126,11 +142,15 @@ class _Recognizer:
     def __init__(self, declares_receiver: Callable[[FuncDef], bool]) -> None:
         self._declares_receiver = declares_receiver
         self.param_zones: dict[int, ParamZone] = {}
+        self.extern_names: dict[int, str] = {}
+        self._companion_owners: dict[str, str] = {}
 
     def visit(self, node: object) -> None:
         """Recognize the attributes of *node*, if it is a defining declaration."""
         if isinstance(node, FuncDef):
-            self._check(node.attributes, _function_target(node))
+            recognized = self._check(node.attributes, _function_target(node))
+            if node.is_extern:
+                self._extern_name(node, recognized.get(EXTERN_NAME_ATTRIBUTE))
             self._entries(
                 node.params,
                 node.attributes,
@@ -165,9 +185,17 @@ class _Recognizer:
     # Catalog validation
     # ------------------------------------------------------------------
 
-    def _check(self, attributes: tuple[Attribute, ...], target: AttributeTarget) -> None:
-        """Validate one declaration's whole attribute prefix."""
+    def _check(
+        self, attributes: tuple[Attribute, ...], target: AttributeTarget
+    ) -> dict[str, _TextArgument]:
+        """Validate one declaration's whole attribute prefix.
+
+        Returns the text argument of every attribute whose schema takes one,
+        keyed by attribute name, so a fact builder reads an already-validated
+        argument instead of re-inspecting the raw node.
+        """
         seen: set[str] = set()
+        texts: dict[str, _TextArgument] = {}
         for attribute in attributes:
             spec = BUILTIN_ATTRIBUTES.get(attribute.name)
             if spec is None:
@@ -178,7 +206,9 @@ class _Recognizer:
                     f"{_TARGET_LABEL[target]}.",
                     span=attribute.span,
                 )
-            _check_arguments(attribute, spec)
+            text = _check_arguments(attribute, spec)
+            if text is not None:
+                texts[attribute.name] = _TextArgument(attribute=attribute, text=text)
             if attribute.name in seen and not spec.repeatable:
                 raise AglScopeError(
                     f"Attribute '@{attribute.name}' cannot be repeated.", span=attribute.span
@@ -190,6 +220,48 @@ class _Recognizer:
                         span=attribute.span,
                     )
             seen.add(attribute.name)
+        return texts
+
+    # ------------------------------------------------------------------
+    # Fact builder: extern companion names
+    # ------------------------------------------------------------------
+
+    def _extern_name(self, node: FuncDef, supplied: _TextArgument | None) -> None:
+        """Record the Python companion name one ``extern def`` resolves to.
+
+        *supplied* is the recognized ``@extern-name`` argument, if the
+        declaration carries one; without it the declared member name is the
+        companion name verbatim. The companion module has to define a Python
+        function spelled exactly this way, so the effective name must be a
+        valid identifier that is not a hard Python keyword — soft keywords
+        (``match``, ``type``, …) are legal Python ``def`` names and pass — and
+        a module's externs, wherever they are declared, must each claim a
+        different one of its companion's functions.
+        """
+        name = node.name if supplied is None else supplied.text
+        span = node.span if supplied is None else supplied.attribute.span
+        if not name.isidentifier() or keyword.iskeyword(name):
+            remedy = (
+                ""
+                if supplied is not None
+                else f" Supply one with '@{EXTERN_NAME_ATTRIBUTE}(\"python_name\")'."
+            )
+            raise AglScopeError(
+                f"Extern companion name '{name}' must be a valid Python identifier and not a "
+                "Python keyword, because the companion module must define a Python function "
+                f"with exactly this name.{remedy}",
+                span=span,
+            )
+        owner = self._companion_owners.get(name)
+        if owner is not None:
+            raise AglScopeError(
+                f"Extern declarations '{owner}' and '{node.name}' both map to companion "
+                f"function '{name}'; a module's externs need distinct companion names, "
+                f"supplied with '@{EXTERN_NAME_ATTRIBUTE}'.",
+                span=span,
+            )
+        self._companion_owners[name] = node.name
+        self.extern_names[node.node_id] = name
 
     # ------------------------------------------------------------------
     # Fact builder: parameter zones
@@ -245,8 +317,12 @@ class _Recognizer:
 # ---------------------------------------------------------------------------
 
 
-def _check_arguments(attribute: Attribute, spec: AttributeSpec) -> None:
-    """Reject arguments a built-in attribute's literal schema does not admit."""
+def _check_arguments(attribute: Attribute, spec: AttributeSpec) -> str | None:
+    """Reject arguments a built-in attribute's literal schema does not admit.
+
+    Returns the text an attribute taking one argument carries, and ``None``
+    for an attribute whose schema takes none.
+    """
     if attribute.named_args:
         raise AglScopeError(
             f"Attribute '@{attribute.name}' takes no named argument.", span=attribute.span
@@ -256,17 +332,19 @@ def _check_arguments(attribute: Attribute, spec: AttributeSpec) -> None:
             raise AglScopeError(
                 f"Attribute '@{attribute.name}' takes no arguments.", span=attribute.span
             )
-        return
+        return None
     if len(attribute.args) != 1:
         raise AglScopeError(
             f"Attribute '@{attribute.name}' takes exactly one text argument.",
             span=attribute.span,
         )
-    if not isinstance(attribute.args[0], StringLit):
+    argument = attribute.args[0]
+    if not isinstance(argument, StringLit):
         raise AglScopeError(
             f"Attribute '@{attribute.name}' requires a plain text literal argument.",
             span=attribute.span,
         )
+    return argument.value
 
 
 def _zone_attribute(attributes: tuple[Attribute, ...]) -> ParamZone | None:

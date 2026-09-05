@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "dash_separator",
+      "params": {
+        "separator": "-"
+      },
+      "expect": {
+        "stdout": "4\n-1\n15\na-b\n"
+      }
+    },
+    {
+      "name": "space_separator",
+      "params": {
+        "separator": " "
+      },
+      "expect": {
+        "stdout": "4\n-1\n15\na b\n"
+      }
+    }
+  ]
+}

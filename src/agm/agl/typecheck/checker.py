@@ -44,7 +44,6 @@ The checker raises ``AglTypeError`` on the first error (first-error abort).
 
 from __future__ import annotations
 
-import keyword
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -642,24 +641,6 @@ def _is_index_like(node: object) -> TypeGuard[_IndexLike]:
     return isinstance(node, (IndexAccess, IndexTarget))
 
 
-def _validate_extern_name(name: str, span: SourceSpan) -> None:
-    """Reject an extern name that is not a valid, non-reserved Python identifier.
-
-    The companion Python module must define a function with exactly this name,
-    so the name must be usable as a Python ``def`` name: a valid identifier
-    and not a hard Python keyword.  Python *soft* keywords
-    (``match``, ``type``, …) remain acceptable since they are valid ``def``
-    names in Python itself.
-    """
-    if not name.isidentifier() or keyword.iskeyword(name):
-        raise AglTypeError(
-            f"extern function name '{name}' must be a valid Python identifier "
-            "and not a Python keyword, because the companion module must "
-            "define a Python function with exactly this name.",
-            span=span,
-        )
-
-
 # ---------------------------------------------------------------------------
 # Main checker
 # ---------------------------------------------------------------------------
@@ -899,7 +880,6 @@ class _Checker:
                 span=node.span,
             )
         if node.is_extern:
-            _validate_extern_name(node.name, node.span)
             if node.return_type is None:
                 raise AglTypeError(
                     f"Extern function '{node.name}' must declare a return type.",

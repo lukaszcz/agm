@@ -144,13 +144,14 @@ class EffectHandlers:
         """Handle a call to an ``extern def``: resolve and invoke.
 
         The companion callable was already imported at program load
-        (``pipeline._wire_extern_registry``); this only looks it up by name.
-        ``ExternRegistry.invoke`` is the single chokepoint that turns every
-        runtime failure crossing the boundary — a raising callable, an
-        argument-conversion failure, or a return-contract violation — into
-        ``AglRaise(ExternError)``, mirroring the ``exec`` model.
+        (``pipeline._wire_extern_registry``); this only looks it up by its
+        companion name. ``ExternRegistry.invoke`` is the single chokepoint
+        that turns every runtime failure crossing the boundary — a raising
+        callable, an argument-conversion failure, or a return-contract
+        violation — into ``AglRaise(ExternError)``, mirroring the ``exec``
+        model; that failure names the extern as AgL declares it.
         """
-        fn = self._ctx._extern_registry.resolve(module_id, extern.name)
+        fn = self._ctx._extern_registry.resolve(module_id, extern.companion_name)
         with self._ctx._extern_call_window():
             return self._ctx._extern_registry.invoke(
                 extern.name,

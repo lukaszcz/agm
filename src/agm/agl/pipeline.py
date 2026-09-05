@@ -1920,11 +1920,12 @@ def _extern_declarations(
     checked: "CheckedProgram",
     module_ids: "set[ModuleId] | None" = None,
 ) -> list[tuple["ModuleId", str]]:
-    """Return ``(module_id, member_name)`` for every declared extern.
+    """Return ``(module_id, companion_name)`` for every declared extern.
 
-    Scoped externs resolve their unqualified member name in the declaring
-    module's companion. The scope pass rejects duplicate scoped symbols, so
-    this list remains one-to-one with companion callables.
+    An extern resolves in its declaring module's companion under the name
+    scope recorded for it — its ``@extern-name`` argument, or its declared
+    member name. Scope rejects two externs of one module claiming the same
+    companion name, so this list stays one-to-one with companion callables.
     """
     from agm.agl.syntax.nodes import FuncDef, ScopeRegion
 
@@ -1938,7 +1939,7 @@ def _extern_declarations(
         return declarations
 
     declarations = [
-        (mid, funcdef.name)
+        (mid, mod.resolved.extern_names[funcdef.node_id])
         for mid, mod in checked.modules.items()
         if module_ids is None or mid in module_ids
         for funcdef in collect(mod.resolved.program.body.items)

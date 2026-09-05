@@ -179,6 +179,15 @@ def test_companion_exceptions_still_become_extern_errors(tmp_path: Path) -> None
     companion = "def fail(): raise RuntimeError('boom')\n"
     exc = evaluate_ir_raises_with_externs(source, companion, tmp_path)
     assert exc.fields["python-type"] == TextValue("RuntimeError")
+    assert exc.fields["function"] == TextValue("fail")
+
+
+def test_an_extern_error_names_the_extern_as_declared(tmp_path: Path) -> None:
+    source = '@extern-name("py_fail")\nextern def fail-it!() -> int\nlet _ = fail-it!()\n()\n'
+    companion = "def py_fail(): raise RuntimeError('boom')\n"
+    exc = evaluate_ir_raises_with_externs(source, companion, tmp_path)
+    assert exc.fields["python-type"] == TextValue("RuntimeError")
+    assert exc.fields["function"] == TextValue("fail-it!")
 
 
 def test_extern_defaults_work_for_direct_calls(tmp_path: Path) -> None:
@@ -230,7 +239,7 @@ def test_indirect_extern_default_and_missing_argument_guards(tmp_path: Path) -> 
             IrFunctionParam(SymbolId(4), default=None),
             IrFunctionParam(SymbolId(5), default=IrConstInt(location, 1)),
         ),
-        impl=ExternFunctionBody(name="increment"),
+        impl=ExternFunctionBody(name="increment", companion_name="increment"),
     )
 
     def program(arguments: tuple[int, ...]) -> ExecutableProgram:
@@ -308,3 +317,39 @@ def test_dry_run_does_not_import_a_broken_companion(tmp_path: Path) -> None:
     result = driver.run_prepared(prepared, check_only=True)
     assert result.ok is True
     assert [cs.callee for cs in result.call_sites] == ["f"]
+
+
+def test_an_attributed_extern_calls_the_companion_it_names(tmp_path: Path) -> None:
+    source = (
+        '@extern-name("first_option")\n'
+        "extern def first?(xs: array[int]) -> Option[int]\n"
+        '@extern-name("py_shout")\n'
+        "extern def shout-it(value: text) -> text\n"
+        "extern def plain(value: int) -> int\n"
+        "let empty: array[int] = []\n"
+        "let a = first?([7, 8]).unwrap-or(0)\n"
+        "let b = first?(empty).unwrap-or(0)\n"
+        'let c = shout-it("hi")\n'
+        "let d = plain(2)\n"
+        "()\n"
+    )
+    companion = (
+        "from agl import nominals\n"
+        "\n"
+        "Option = nominals.std.option.Option\n"
+        "\n"
+        "def first_option(xs):\n"
+        "    return Option.Some(value=xs[0]) if len(xs) else getattr(Option, 'None')()\n"
+        "\n"
+        "def py_shout(value):\n"
+        "    return value.upper()\n"
+        "\n"
+        "def plain(value):\n"
+        "    return value + 1\n"
+    )
+    result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+
+    assert result["a"] == IntValue(7)
+    assert result["b"] == IntValue(0)
+    assert result["c"] == TextValue("HI")
+    assert result["d"] == IntValue(3)

@@ -65,8 +65,6 @@ _CAPS = HostCapabilities(
     },
 )
 
-_TYPE_REJECTIONS_DIR = Path(__file__).resolve().parent / "agl" / "rejections" / "type"
-
 # ``check_extern``/``resolve_program_ast`` build a hand-crafted single-module
 # graph that never imports ``std/prelude`` (see
 # ``tests.agl.module_graph.resolve_and_check_program_ast``), so a bare
@@ -166,29 +164,6 @@ class TestExternSignatureParity:
         # an extern def does not choke looking for one.
         cp = check_extern("extern def f(x: int) -> int\n0")
         assert _extern_signature(cp, "f").result == IntType()
-
-
-# ---------------------------------------------------------------------------
-# Name rules
-# ---------------------------------------------------------------------------
-
-
-class TestExternNameRules:
-    @pytest.mark.parametrize("name", ["do-it!", "valid?", "my-func"])
-    def test_non_python_identifier_rejected(self, name: str) -> None:
-        err = reject_extern(f"extern def {name}(x: int) -> int\n0")
-        assert "identifier" in str(err).lower()
-
-    @pytest.mark.parametrize("name", ["class", "import", "lambda", "global"])
-    def test_python_keyword_name_rejected(self, name: str) -> None:
-        err = reject_extern(f"extern def {name}(x: int) -> int\n0")
-        assert "keyword" in str(err).lower()
-
-    def test_python_soft_keyword_name_accepted(self) -> None:
-        check_extern("extern def match(x: int) -> int\nmatch(1)")
-
-    def test_dunder_style_name_accepted(self) -> None:
-        check_extern("extern def __init__(x: int) -> int\n__init__(1)")
 
 
 # ---------------------------------------------------------------------------
@@ -756,32 +731,6 @@ class TestExternCallSiteRecording:
         sites = [s for s in checked.modules[lib_mod_id].call_sites if s.callee == "f"]
         assert len(sites) == 1
         assert sites[0].codec_name == "extern"
-
-
-# ---------------------------------------------------------------------------
-# Rejection fixtures under tests/agl/rejections/type/
-# ---------------------------------------------------------------------------
-
-
-class TestExternRejectionFixtures:
-    """Verify the extern-specific rejection fixtures at the typecheck layer.
-
-    ``tests/test_agl_e2e.py`` globs every ``tests/agl/rejections/**/*.agl``
-    file and resolves it with no backing file (inline mode), so an
-    ``extern def`` in one of those fixtures is always caught by the
-    file-backing placement rule before the typecheck-layer rule the fixture
-    is meant to demonstrate; that generic run only asserts a rejection
-    occurs, without pinning down which rule fired.  These tests give the
-    fixtures a real file-backed origin so the intended typecheck-layer
-    failure is actually exercised.
-    """
-
-    def _read(self, name: str) -> str:
-        return (_TYPE_REJECTIONS_DIR / f"{name}.agl").read_text(encoding="utf-8")
-
-    def test_bad_python_name_fixture(self) -> None:
-        err = reject_extern(self._read("extern_bad_python_name"))
-        assert "identifier" in str(err).lower()
 
 
 class TestExternDefensiveGuards:

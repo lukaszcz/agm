@@ -187,14 +187,18 @@ class IrFunctionBody:
 class ExternFunctionBody:
     """``extern def`` implementation: crosses into a companion Python module.
 
-    ``name``     — the extern's final declared member name; ``runtime.externs.ExternRegistry``
-                   resolves it in the owning module's companion, then the boundary walkers
-                   pass encoded arguments positionally.
+    ``name``            — the extern's final declared member name; it names the extern
+                          wherever a diagnostic or a raised ``ExternError`` refers to it.
+    ``companion_name``  — the Python function the companion module defines;
+                          ``runtime.externs.ExternRegistry`` resolves it in the owning
+                          module's companion, then the boundary walkers pass encoded
+                          arguments positionally.
     The boundary dispatches on runtime values, so an extern retains no type
     schema after lowering.
     """
 
     name: str
+    companion_name: str
 
 
 FunctionImpl = IrFunctionBody | ExternFunctionBody

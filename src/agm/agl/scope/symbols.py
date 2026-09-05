@@ -711,6 +711,11 @@ class ModuleResolution:
         the declaration's ``@arg-*`` attributes resolved it. Typecheck builds
         every ``ParamSpec`` and constructor field list from this table; the
         AST itself carries no zone.
+    ``extern_names``
+        The Python companion name of every ``extern def``, keyed by
+        ``FuncDef.node_id``: its ``@extern-name`` argument, or its declared
+        name verbatim. Two externs of one module never share an entry value.
+        Lowering and companion resolution read this table.
     """
 
     program: Program
@@ -742,6 +747,7 @@ class ModuleResolution:
     method_declarations: dict[DeclarationKey, ScopePath] = field(default_factory=dict)
     use_targets: dict[int, ResolvedUseTarget] = field(default_factory=dict)
     param_zones: dict[int, ParamZone] = field(default_factory=dict)
+    extern_names: dict[int, str] = field(default_factory=dict)
 
     def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ScopePath | None:
         """Return scope's receiver classification for *node*, if it has one.

@@ -7,6 +7,10 @@ Covers everything from source text to a resolved AST for `extern def`:
 - scope: extern participates in the top-level function pre-pass exactly like
   an ordinary `def` (mutual recursion, export maps, reserved-name guard,
   root-only placement).
+- companion names: `@extern-name` supplies the Python companion name and the
+  declared name is used verbatim without it; the effective name must be a
+  non-keyword Python identifier, and no two externs of one module may map to
+  the same companion name.
 - placement: `extern def` requires a file-backed module (`origin_path`).
 
 NO typecheck, lowering, or runtime behavior is exercised here — externs are
@@ -23,13 +27,15 @@ from agm.agl.lexer import tokenize
 from agm.agl.modules.loader import build_repl_graph, load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import AglSyntaxError, parse_program, parse_program_seeded
-from agm.agl.scope import AglScopeError
+from agm.agl.scope import AglScopeError, ModuleResolution
 from agm.agl.scope.program import resolve_program
 from agm.agl.syntax.nodes import FuncDef
+from agm.agl.syntax.visitor import walk
 from tests.agl.ir_harness import make_graph_from_files, write_companion_file
 from tests.agl.module_graph import resolve_program_ast
 
 _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+_SCOPE_REJECTIONS_DIR = Path(__file__).resolve().parent / "agl" / "rejections" / "scope"
 
 
 def first(source: str) -> object:
@@ -107,6 +113,19 @@ class TestGrammarAndTransformer:
         ]
         assert fd.params[2].default is not None
 
+    def test_extern_name_attribute_on_the_line_above(self) -> None:
+        fd = first('@extern-name("first_option")\nextern def first?(xs: array[int]) -> int')
+        assert isinstance(fd, FuncDef)
+        assert fd.is_extern is True
+        assert fd.name == "first?"
+        assert [attribute.name for attribute in fd.attributes] == ["extern-name"]
+
+    def test_extern_name_attribute_on_the_same_line(self) -> None:
+        fd = first('@extern-name("helper") extern def do-it!(x: int) -> int')
+        assert isinstance(fd, FuncDef)
+        assert fd.is_extern is True
+        assert [attribute.name for attribute in fd.attributes] == ["extern-name"]
+
     def test_extern_modifier_on_its_own_line(self) -> None:
         fd = first("extern\ndef f(x: int) -> int")
         assert isinstance(fd, FuncDef)
@@ -178,6 +197,165 @@ class TestScope:
         )
         resolved = resolve_program(graph)
         assert all(name != "secret" for (_mid, name) in resolved.all_public_funcs)
+
+
+# ---------------------------------------------------------------------------
+# Companion names
+# ---------------------------------------------------------------------------
+
+
+class TestCompanionName:
+    """``@extern-name`` and the Python-identifier rule scope applies to it."""
+
+    _PATH = Path("/virtual/mod.agl")
+
+    def _companion_names(self, source: str) -> dict[str, str]:
+        """Return every extern's declared name mapped to its companion name."""
+        resolved = parse_and_resolve(source, origin_path=self._PATH)
+        assert isinstance(resolved, ModuleResolution)
+        externs: list[FuncDef] = []
+
+        def visit(node: object) -> None:
+            if isinstance(node, FuncDef) and node.is_extern:
+                externs.append(node)
+
+        walk(resolved.program, visit)
+        return {fd.name: resolved.extern_names[fd.node_id] for fd in externs}
+
+    def test_an_unattributed_extern_uses_its_declared_name(self) -> None:
+        assert self._companion_names("extern def helper(x: int) -> int") == {"helper": "helper"}
+
+    def test_the_attribute_supplies_the_companion_name(self) -> None:
+        names = self._companion_names(
+            '@extern-name("first_option")\nextern def first?(x: int) -> int'
+        )
+        assert names == {"first?": "first_option"}
+
+    def test_the_companion_name_is_found_past_an_unrelated_attribute(self) -> None:
+        names = self._companion_names(
+            '@doc("the first element")\n@extern-name("first_option")\n'
+            "extern def first?(x: int) -> int"
+        )
+        assert names == {"first?": "first_option"}
+
+    @pytest.mark.parametrize("name", ["do-it!", "valid?", "my-func"])
+    def test_a_non_python_identifier_needs_the_attribute(self, name: str) -> None:
+        err = reject_scope(f"extern def {name}(x: int) -> int", origin_path=self._PATH)
+        assert "identifier" in str(err).lower()
+        assert "extern-name" in str(err)
+
+    @pytest.mark.parametrize("name", ["class", "import", "lambda", "global"])
+    def test_a_python_keyword_needs_the_attribute(self, name: str) -> None:
+        err = reject_scope(f"extern def {name}(x: int) -> int", origin_path=self._PATH)
+        assert "keyword" in str(err).lower()
+        assert "extern-name" in str(err)
+
+    def test_the_attribute_rescues_a_name_python_cannot_define(self) -> None:
+        names = self._companion_names(
+            '@extern-name("do_it")\nextern def do-it!(x: int) -> int',
+        )
+        assert names == {"do-it!": "do_it"}
+
+    def test_the_supplied_name_is_itself_checked(self) -> None:
+        err = reject_scope(
+            '@extern-name("do-it")\nextern def helper(x: int) -> int', origin_path=self._PATH
+        )
+        assert "identifier" in str(err).lower()
+
+    def test_a_python_soft_keyword_name_is_accepted(self) -> None:
+        assert self._companion_names("extern def match(x: int) -> int") == {"match": "match"}
+
+    def test_a_dunder_style_name_is_accepted(self) -> None:
+        assert self._companion_names("extern def __init__(x: int) -> int") == {
+            "__init__": "__init__"
+        }
+
+    def test_the_attribute_is_rejected_on_an_ordinary_def(self) -> None:
+        err = reject_scope('@extern-name("helper")\ndef helper() -> int = 1')
+        assert "extern-name" in str(err)
+
+    def test_scoped_externs_may_share_a_declared_name(self) -> None:
+        source = (
+            "scope A\n"
+            '  @extern-name("a_size")\n'
+            "  extern def size(x: int) -> int\n"
+            "end A\n"
+            "\n"
+            "scope B\n"
+            '  @extern-name("b_size")\n'
+            "  extern def size(x: int) -> int\n"
+            "end B\n"
+        )
+        resolved = parse_and_resolve(source, origin_path=self._PATH)
+        assert isinstance(resolved, ModuleResolution)
+        assert sorted(resolved.extern_names.values()) == ["a_size", "b_size"]
+
+    def test_bad_python_name_rejection_fixture(self) -> None:
+        # ``tests/test_agl_e2e.py`` resolves every rejection fixture inline, so
+        # an ``extern def`` in one is caught by the file-backing rule before the
+        # rule the fixture demonstrates. Giving it a file-backed origin here
+        # exercises the intended failure.
+        source = (_SCOPE_REJECTIONS_DIR / "extern_bad_python_name.agl").read_text(encoding="utf-8")
+        err = reject_scope(source, origin_path=self._PATH)
+        assert "identifier" in str(err).lower()
+
+    def test_scoped_externs_sharing_a_companion_name_are_rejected(self) -> None:
+        source = (
+            "scope A\n"
+            '  @extern-name("shared")\n'
+            "  extern def first(x: int) -> int\n"
+            "end A\n"
+            "\n"
+            "scope B\n"
+            '  @extern-name("shared")\n'
+            "  extern def second(x: int) -> int\n"
+            "end B\n"
+        )
+        err = reject_scope(source, origin_path=self._PATH)
+        assert "shared" in str(err)
+        assert "first" in str(err)
+        assert "second" in str(err)
+
+    def test_root_externs_sharing_a_companion_name_are_rejected(self) -> None:
+        source = (
+            '@extern-name("shared")\n'
+            "extern def alpha(x: int) -> int\n"
+            '@extern-name("shared")\n'
+            "extern def beta(x: int) -> int\n"
+        )
+        err = reject_scope(source, origin_path=self._PATH)
+        assert "shared" in str(err)
+        assert "alpha" in str(err)
+        assert "beta" in str(err)
+
+    def test_a_root_and_a_scoped_extern_may_not_share_a_companion_name(self) -> None:
+        source = (
+            "extern def shared(x: int) -> int\n"
+            "\n"
+            "scope A\n"
+            '  @extern-name("shared")\n'
+            "  extern def helper(x: int) -> int\n"
+            "end A\n"
+        )
+        err = reject_scope(source, origin_path=self._PATH)
+        assert "shared" in str(err)
+        assert "helper" in str(err)
+
+    @pytest.mark.parametrize("argument", ["", "1"], ids=("empty", "non-text"))
+    def test_a_malformed_attribute_is_reported_before_a_collision(self, argument: str) -> None:
+        source = (
+            "scope A\n"
+            f"  @extern-name({argument})\n"
+            "  extern def f(x: int) -> int\n"
+            "end A\n"
+            "\n"
+            "scope B\n"
+            "  extern def f(x: int) -> int\n"
+            "end B\n"
+        )
+        err = reject_scope(source, origin_path=self._PATH)
+        assert "extern-name" in str(err)
+        assert "companion" not in str(err)
 
 
 # ---------------------------------------------------------------------------

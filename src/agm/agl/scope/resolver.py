@@ -501,9 +501,6 @@ class _Resolver:
             for path in self._repl_session_scope_nodes
             if path
         }
-        # Scoped externs are implemented by their member names in one module
-        # companion, so distinct scope paths cannot share a Python symbol.
-        self._scoped_extern_symbols: dict[str, FuncDef] = {}
         self._scope_paths: set[ScopePath] = {(), *self._repl_session_scope_nodes}
         self._ordered_binding_paths: set[ScopePath] = set()
         self._scope_node_ids: dict[ScopePath, int] = {
@@ -650,8 +647,12 @@ class _Resolver:
         self._classify_method_declarations()
         self._validate_function_names()
         self._validate_non_method_type_params()
-        self._validate_extern_backing()
+        # Attribute recognition is per-declaration and independent of where a
+        # module lives, so it precedes the extern placement rule: a malformed
+        # attribute or a companion-name clash is reported as written even in an
+        # inline source, which cannot host an extern at all.
         attribute_facts = recognize_attributes(program, declares_receiver=self._declares_receiver)
+        self._validate_extern_backing()
 
         # Pre-pass 2: collect top-level def names for mutual recursion.
         self._collect_func_decls(program)
@@ -707,6 +708,7 @@ class _Resolver:
             method_declarations=dict(self._method_declarations),
             use_targets=dict(self._use_targets),
             param_zones=attribute_facts.param_zones,
+            extern_names=attribute_facts.extern_names,
         )
 
     # ------------------------------------------------------------------
@@ -809,19 +811,7 @@ class _Resolver:
             is_builtin=isinstance(item, FuncDef) and item.is_builtin,
         )
         self._declaration_items[key] = item
-        if isinstance(item, FuncDef):
-            if item.is_extern and path:
-                prior = self._scoped_extern_symbols.get(item.name)
-                if prior is not None:
-                    raise AglScopeError(
-                        f"Scoped extern declarations map to companion symbol '{item.name}'; "
-                        "declare it in only one scope.",
-                        span=item.span,
-                    )
-                self._scoped_extern_symbols[item.name] = item
-            self._validate_type_params(item)
-        else:
-            self._validate_type_params(item)
+        self._validate_type_params(item)
         if not is_type:
             return
 

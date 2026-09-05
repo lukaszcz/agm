@@ -4,7 +4,7 @@ An `extern def` declares a function implemented in a Python *companion* file tha
 
 ## Loading
 
-Companions are imported after the static passes succeed and before evaluation starts, so a broken companion is a load-time diagnostic and `--dry-run` never imports one. The cache is keyed by canonical path and file identity, and no bytecode cache is written because a companion may live in an immutable store tree. A companion's module globals are registry-scoped and shared; its `runtime.state` accessor reaches a per-interpreter bag activated around each call, so concurrent interpreters sharing a registry never see each other's state. A host capability flag gates the FFI the way another gates shell `exec` ([hosting.md](../hosting.md)).
+Companions are imported after the static passes succeed and before evaluation starts, so a broken companion is a load-time diagnostic and `--dry-run` never imports one. The cache is keyed by canonical path and file identity, and no bytecode cache is written because a companion may live in an immutable store tree. A companion's module globals are registry-scoped and shared; its `runtime.state` accessor reaches a per-interpreter bag activated around each call, so concurrent interpreters sharing a registry never see each other's state. A host capability flag gates the FFI the way another gates shell `exec` ([hosting.md](../hosting.md)). The name a companion callable is looked up under is scope's `extern_names` fact ([frontend/scope.md](../frontend/scope.md)).
 
 ## Value Boundary
 

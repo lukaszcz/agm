@@ -24,6 +24,7 @@ from agm.agl.zones import ParamZone
 
 __all__ = [
     "BUILTIN_ATTRIBUTES",
+    "EXTERN_NAME_ATTRIBUTE",
     "ZONE_ATTRIBUTES",
     "AttributeArguments",
     "AttributeSpec",
@@ -111,6 +112,11 @@ ZONE_ATTRIBUTES: Mapping[str, ParamZone] = MappingProxyType(
     }
 )
 
+#: The attribute naming an extern's Python companion function. Named here so
+#: the pass computing an extern's effective companion name, and the diagnostics
+#: it raises to name the remedy, reach it through this constant.
+EXTERN_NAME_ATTRIBUTE = "extern-name"
+
 _PROGRAM_PARAMETER_ONLY: frozenset[AttributeTarget] = frozenset({AttributeTarget.PROGRAM_PARAMETER})
 
 
@@ -134,7 +140,7 @@ def _option_spec(name: str, arguments: AttributeArguments) -> AttributeSpec:
 _SPECS: tuple[AttributeSpec, ...] = (
     *(_zone_spec(name) for name in ZONE_ATTRIBUTES),
     AttributeSpec(
-        name="extern-name",
+        name=EXTERN_NAME_ATTRIBUTE,
         targets=frozenset({AttributeTarget.EXTERN}),
         arguments=AttributeArguments.ONE_TEXT,
     ),

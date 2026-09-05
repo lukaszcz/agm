@@ -15,7 +15,7 @@ The package domain defines portable, versioned AgL module collections. A package
 
 ## Registered Commands
 
-A manifest `[commands]` table maps a single- or multi-word CLI path to a package-owned `program def`. Activation rejects command conflicts unless the later installation passes `--shadow`. Each invocation derives its effective command registry from the selected package manifests — so project `[packages]` pins affect dispatch, help, and completion — and CLI dispatch resolves the longest registered path and runs it through the same execution host as `agm exec` after verifying manifest and module ownership, binding the referenced program's own CLI arguments and qualified config table the same way ([cli.md](cli.md)).
+A manifest `[commands]` table maps a single- or multi-word CLI path to a package-owned `program def`. Activation rejects command conflicts unless the later installation passes `--shadow`. Each invocation derives its effective command registry from the selected package manifests — so project `[packages]` pins affect dispatch, help, and completion — and CLI dispatch resolves the longest registered path and runs it through the same execution host as `agm exec` after verifying manifest and module ownership, binding the referenced program's own CLI arguments and qualified config table the same way ([cli.md](cli.md)). A registered command's help is the referenced program's own command help, spelled for the path the reader invokes and listing `--dry-run` beside the program's options; the manifest `description`, written for the command, is preferred over the program's own `@doc`.
 
 ## Façade
 

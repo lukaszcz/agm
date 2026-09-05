@@ -779,6 +779,19 @@ class TestRenderHelp:
         assert "<addressee>" in usage
         assert "who" not in usage
 
+    def test_a_declared_metavar_names_the_positional_slot(self) -> None:
+        command = _command(
+            _param("file", TextType(), ParamZone.POSITIONAL_ONLY, metavar="PATH"),
+            _param("tag", TextType(), ParamZone.STANDARD, has_default=True, metavar="LABEL"),
+        )
+
+        usage = command.render_help("main").splitlines()[0]
+
+        assert "<PATH>" in usage
+        assert "[LABEL]" in usage
+        assert "file" not in usage
+        assert "tag" not in usage
+
     def test_the_program_doc_is_the_description(self) -> None:
         command = _command(_param("tag", TextType()), doc="Tags one artifact.")
 

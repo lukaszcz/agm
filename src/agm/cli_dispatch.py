@@ -208,7 +208,6 @@ class RegisteredProgramCommand(TyperCommand):
                     end="",
                 )
                 return
-        from agm.cli_support.program_options import program_command_for
         from agm.commands.exec_program import RegisteredProgramUsageError, run_registered
 
         try:

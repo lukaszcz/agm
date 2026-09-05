@@ -129,8 +129,9 @@ line. `@doc` ([Attributes](grammar.md#attributes)) belongs with them.
 
 A positional-only parameter is never addressed by name, so `@opt-name`,
 `@opt-short`, `@opt-env`, and `@opt-hidden` on one are static errors.
-`@opt-metavar` and `@doc` still apply to it: they describe the value and its
-meaning rather than the name it is addressed by.
+`@opt-metavar` applies to it, naming the slot it fills in usage text. `@doc`
+may prefix it as it may prefix any declaration, but a host lists prose only
+for the parameters it addresses by name.
 
 ```agl
 @doc("Publish one artifact.")

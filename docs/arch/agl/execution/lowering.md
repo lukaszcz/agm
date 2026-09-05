@@ -11,6 +11,7 @@ Notable lowering shapes:
 - **Methods.** A checker-selected ordinary method call lowers to a direct receiver-first call; a host-backed builtin method reuses its builtin route with the receiver as operand; `Session` operations lower to dedicated session nodes; a free `ask` lowers to the lazy default session.
 - **Match sites.** Case and destructuring `let` traverse the same decision DAG: singleton decisions project only the demanded fields, alternatives become `IrCase` keyed by member-record identity, and `IrField` is the single nominal projection. A bare-name or `_` `let` is one bind instruction.
 - **Mutation.** `IrAssign` stores a `var` cell; `IrIndexSet` mutates a container reached by reference; `IrFieldSet` writes a `var` field of a precisely typed record.
+- **Externs.** An `extern def` lowers to a body carrying two names: the declared one, which every diagnostic and raised `ExternError` uses, and the Python companion name taken from scope's `extern_names` fact ([../frontend/scope.md](../frontend/scope.md)). Nothing is derived or mangled here.
 - **Resources.** `resource`/`resource-dir` resolve while linking against the declaring module's filesystem anchor into absolute paths; a missing or escaping target stops linking.
 - **Bindings.** Scoped `let`/`var` publish under their full path spelling in run results and REPL echo; functions are never published as bindings.
 

@@ -145,10 +145,10 @@ HELP_FLAGS = ("--help", "-h")
 def contains_help_flag(tokens: "Sequence[str]") -> bool:
     """Return whether *tokens* spell a help flag at all, in either spelling.
 
-    The cheap precondition a host applies before discovering a program: a
-    token stream with no help flag in it is one Click can never read as a
-    help request, whatever the program declares, so the static pipeline that
-    would decide the question is skipped entirely.
+    A cheap pre-filter a host applies before discovering a program, matching
+    only the common spelling: a hit is worth building the program's command
+    for. A help flag bundled into a short group, as in ``-vh``, is missed
+    here and recognized later by the program command itself while parsing.
     """
     return any(token in HELP_FLAGS for token in tokens)
 
@@ -654,8 +654,8 @@ class _ProgramClickCommand(click.Command):
 
     Every positional token lands in one catch-all argument whose internal
     name says nothing to a reader, so the usage line is spelled from the
-    program's own positional parameters instead: ``<name>`` for a required
-    slot and ``[name]`` for one with a default, in declaration order.
+    program's own positional parameters instead, in declaration order; see
+    :func:`_usage_slots` for how one slot is spelled.
     """
 
     def __init__(
@@ -699,11 +699,17 @@ def _build_click_command(
 
 
 def _usage_slots(positional: "tuple[ProgramParamInfo, ...]") -> tuple[str, ...]:
-    """Return one usage slot per positional-capable parameter, in declaration order."""
-    return tuple(
-        f"[{param.cli.name}]" if param.has_default else f"<{param.cli.name}>"
-        for param in positional
-    )
+    """Return one usage slot per positional-capable parameter, in declaration order.
+
+    A slot is named by the parameter's own ``@opt-metavar`` when it declares
+    one and by its external name otherwise, so a positional parameter — never
+    addressed by a flag — still gets the placeholder its declaration asks for.
+    """
+    slots: list[str] = []
+    for param in positional:
+        slot = param.cli.metavar or param.cli.name
+        slots.append(f"[{slot}]" if param.has_default else f"<{slot}>")
+    return tuple(slots)
 
 
 @dataclass(frozen=True, slots=True)

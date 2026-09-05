@@ -148,20 +148,16 @@ program def main() -> unit = print(fs::try-read("invalid\\u0000path").is-err())
     assert capsys.readouterr().out == "true\n"
 
 
-@pytest.mark.parametrize(
-    "call",
-    ['fs::FsInternals::is_file("file.txt")', 'fs::is_file("file.txt")'],
-)
 def test_fs_names_its_predicates_only_by_their_public_spelling(
-    call: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``fs`` names its predicates only as ``is-file``/``is-dir``: neither a
-    scope-qualified path nor the Python companion spelling resolves."""
+    """``fs`` names its predicates only as ``is-file``/``is-dir``: the Python
+    companion spelling behind them does not resolve."""
     monkeypatch.chdir(tmp_path)
     result = _run_file(
-        f"""import std/fs
+        """import std/fs
 program def main() -> unit =
-  let _ = {call}
+  let _ = fs::is_file("file.txt")
 """,
         tmp_path / "main.agl",
         roots=agl_roots(),

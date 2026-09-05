@@ -82,7 +82,7 @@ not a decode diagnostic.
 from __future__ import annotations
 
 import enum
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
@@ -394,6 +394,25 @@ def _file_index(tokens: "Sequence[str]") -> int | None:
     return None
 
 
+def _file_index_from_program(
+    tokens: "Sequence[str]", program_command_for_file: "Callable[[str], ProgramCommand | None]"
+) -> int | None:
+    """Find a FILE candidate whose selected program supplies its option arity.
+
+    A pre-FILE program flag cannot be classified from spelling alone: it may
+    be a flag, take a separate value, or take an attached short value. The
+    source it selects provides that information. Candidates are considered
+    from right to left because the FILE follows the program tokens in this
+    otherwise ambiguous form. A resolver returning ``None`` means the token
+    does not select one usable program, so it cannot settle the ambiguity.
+    """
+    for index in range(len(tokens) - 1, -1, -1):
+        token = tokens[index]
+        if not _is_option_token(token) and program_command_for_file(token) is not None:
+            return index
+    return None
+
+
 def retain_end_of_options(args: "Sequence[str]") -> list[str]:
     """Return *args* with ``agm exec``'s own end-of-options marker doubled.
 
@@ -413,7 +432,11 @@ def retain_end_of_options(args: "Sequence[str]") -> list[str]:
     return [*tokens[:index], END_OF_OPTIONS, *tokens[index:]]
 
 
-def split_exec_tail(tail: "Sequence[str]") -> ExecTail:
+def split_exec_tail(
+    tail: "Sequence[str]",
+    *,
+    program_command_for_file: "Callable[[str], ProgramCommand | None] | None" = None,
+) -> ExecTail:
     """Derive ``agm exec``'s FILE argument and the program's own tokens from *tail*.
 
     The single place a tail token is classified. *tail* is what Click leaves
@@ -423,11 +446,25 @@ def split_exec_tail(tail: "Sequence[str]") -> ExecTail:
     FILE however it is spelled — this is how a file named like an option is
     named — and the marker itself is the one the host consumes. Everything
     else keeps its written order, so the program's command reads exactly the
-    tokens the reader wrote for it.
+    tokens the reader wrote for it. When *program_command_for_file* is given,
+    a tail that contains program flags before FILE is resolved against the
+    selected program's known option arities; ordinary invocation and shell
+    completion need no such discovery and retain the inexpensive scan.
     """
     tokens = list(tail)
     marker = tokens.index(END_OF_OPTIONS) if END_OF_OPTIONS in tokens else None
-    index = _file_index(tokens if marker is None else tokens[:marker])
+    before_marker = tokens if marker is None else tokens[:marker]
+    index = _file_index(before_marker)
+    needs_program_arity = index is None or any(
+        _is_option_token(token) and not _is_host_option(token) for token in before_marker[:index]
+    )
+    if marker is None and needs_program_arity and program_command_for_file is not None:
+        # Preserve the inexpensive spelling-only answer when it actually
+        # names a usable program. Otherwise its unknown arity may have put
+        # the FILE one token too early or too late, so let the target's
+        # program signature settle it.
+        if index is None or program_command_for_file(before_marker[index]) is None:
+            index = _file_index_from_program(before_marker, program_command_for_file)
     if index is None and marker is not None and marker + 1 < len(tokens):
         index = marker + 1
     consumed = {marker, index}
@@ -707,6 +744,8 @@ def _usage_slots(positional: "tuple[ProgramParamInfo, ...]") -> tuple[str, ...]:
     """
     slots: list[str] = []
     for param in positional:
+        if param.cli.hidden:
+            continue
         slot = param.cli.metavar or param.cli.name
         slots.append(f"[{slot}]" if param.has_default else f"<{slot}>")
     return tuple(slots)
@@ -774,21 +813,33 @@ class ProgramCommand:
         except click.UsageError as exc:
             raise ValueError(exc.format_message()) from exc
         values = cast(dict[str, object], ctx.params)
+        positional = cast(tuple[str, ...], values[_POSITIONAL_DEST])
+        positional_names = {
+            param.name for index, param in enumerate(self.positional) if index < len(positional)
+        }
 
         named: dict[str, object] = {}
         for index, (param, projected) in enumerate(self.options):
             flag = projected.flags[0]
             positive = cast(tuple[object, ...], values[_positive_dest(index)])
+            # A STANDARD parameter can be filled by either its positional
+            # slot or its name. A positional CLI token outranks an envvar
+            # fallback just as a named CLI token does, but a named CLI token
+            # remains a duplicate for the shared binder to reject.
+            positional_overrides_environment = (
+                param.name in positional_names
+                and self._from_environment(ctx, _positive_dest(index))
+            )
             if projected.value_form is ValueForm.BOOL:
                 # Both polarities fill one Click parameter, so this single
                 # check covers same- and mixed-polarity repetition alike.
                 _reject_repetition(positive, flag, projected.negative_flags[0])
-                if positive:
+                if positive and not positional_overrides_environment:
                     named[param.name] = cast(bool, positive[0])
                 continue
             _reject_repetition(positive, flag)
             if projected.value_form is not ValueForm.OPTION:
-                if positive:
+                if positive and not positional_overrides_environment:
                     named[param.name] = _positive_raw(projected, flag, cast(str, positive[0]))
                 continue
             negative_flag = projected.negative_flags[0]
@@ -805,9 +856,8 @@ class ProgramCommand:
                 raise ValueError(f"Options {flag!r} and {negative_flag!r} cannot both be supplied")
             if negative:
                 named[param.name] = option_none_raw()
-            elif positive:
+            elif positive and not positional_overrides_environment:
                 named[param.name] = _positive_raw(projected, flag, cast(str, positive[0]))
-        positional = cast(tuple[str, ...], values[_POSITIONAL_DEST])
         return ProgramArguments(positional=positional, named=named)
 
     @staticmethod
@@ -819,6 +869,11 @@ class ProgramCommand:
         an ordinary parsed value.
         """
         return ctx.get_parameter_source(dest) is ParameterSource.COMMANDLINE
+
+    @staticmethod
+    def _from_environment(ctx: click.Context, dest: str) -> bool:
+        """Return whether *dest* was filled by its environment fallback."""
+        return ctx.get_parameter_source(dest) is ParameterSource.ENVIRONMENT
 
     def render_help(
         self,

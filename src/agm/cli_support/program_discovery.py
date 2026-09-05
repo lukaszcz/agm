@@ -28,6 +28,7 @@ from agm.agl.runtime.request import AgentResponse
 if TYPE_CHECKING:
     from agm.agl.runtime.types import ProgramDeclInfo
     from agm.cli_support.exec_target import PackageProgramReference
+    from agm.cli_support.program_options import ProgramCommand
 
 _ProgramT = TypeVar("_ProgramT")
 
@@ -36,6 +37,7 @@ __all__ = [
     "select_declared_program",
     "discover_program_declarations_from_installed_reference",
     "discover_program_declarations_from_source",
+    "discover_program_command_for_target",
     "discover_programs_for_target",
     "select_entry_program",
     "unmatched_program_message",
@@ -197,6 +199,32 @@ def discover_programs_for_target(
     except (Exception, SystemExit):
         return (), None
     return (), None
+
+
+def discover_program_command_for_target(
+    *,
+    file: str,
+    requested_program: str | None,
+    module_paths: "list[str] | None",
+    no_stdlib: bool,
+) -> "ProgramCommand | None":
+    """Return the selected program's command for a potential FILE token.
+
+    The tail parser calls this only when pre-FILE program options make a
+    spelling-only FILE scan ambiguous. It follows the same advisory discovery
+    and selection path as help and completion, returning ``None`` when the
+    token does not name one usable, selected program.
+    """
+    from agm.cli_support.program_options import program_command_for
+
+    programs, referenced_program = discover_programs_for_target(
+        file=file,
+        command=None,
+        module_paths=module_paths,
+        no_stdlib=no_stdlib,
+    )
+    requested = requested_program if requested_program is not None else referenced_program
+    return program_command_for(select_entry_program(programs, requested=requested).selected)
 
 
 def unmatched_program_message(

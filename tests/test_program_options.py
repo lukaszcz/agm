@@ -40,6 +40,7 @@ from agm.cli_support.program_options import (
     exec_program_name,
     program_help_requested,
     project_option,
+    split_exec_tail,
 )
 from tests._agl_helpers import next_decl_id
 
@@ -669,6 +670,16 @@ class TestParseEnvironment:
         args = _command(_param("who", TextType(), env="GREET_WHO")).parse(["--who", "agm"])
         assert args.named == {"who": "agm"}
 
+    def test_a_positional_standard_argument_overrides_the_environment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GREET_WHO", "world")
+        args = _command(_param("who", TextType(), ParamZone.STANDARD, env="GREET_WHO")).parse(
+            ["agm"]
+        )
+        assert args.positional == ("agm",)
+        assert args.named == {}
+
     def test_env_supplies_a_bool_flag(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("VERBOSE", "true")
         args = _command(_param("verbose", BoolType(), env="VERBOSE")).parse([])
@@ -778,6 +789,17 @@ class TestRenderHelp:
 
         assert "<addressee>" in usage
         assert "who" not in usage
+
+    def test_a_hidden_standard_parameter_is_omitted_from_usage(self) -> None:
+        command = _command(
+            _param("secret", TextType(), ParamZone.STANDARD, hidden=True),
+            _param("name", TextType(), ParamZone.STANDARD),
+        )
+
+        usage = command.render_help("main").splitlines()[0]
+
+        assert "secret" not in usage
+        assert "<name>" in usage
 
     def test_a_declared_metavar_names_the_positional_slot(self) -> None:
         command = _command(
@@ -1078,6 +1100,25 @@ class TestSplitExecTail:
         assert self._split("-h", "-n", "x", "prog.agl") == ExecTail(
             file="prog.agl", tokens=("-h", "-n", "x")
         )
+
+    @pytest.mark.parametrize(
+        ("tail", "param"),
+        (
+            (("--verbose", "prog.agl"), _param("verbose", BoolType())),
+            (("-nvalue", "prog.agl"), _param("name", TextType(), short="n")),
+            (("--name", "--x", "prog.agl"), _param("name", TextType())),
+        ),
+    )
+    def test_an_ambiguous_pre_file_option_uses_the_programs_own_arity(
+        self, tail: tuple[str, ...], param: ProgramParamInfo
+    ) -> None:
+        command = _command(param)
+        selected = split_exec_tail(
+            tail,
+            program_command_for_file=lambda file: command if file == "prog.agl" else None,
+        )
+
+        assert selected == ExecTail(file="prog.agl", tokens=tail[:-1])
 
     def test_an_inline_value_leaves_the_next_token_as_the_file(self) -> None:
         assert self._split("--name=x", "prog.agl") == ExecTail(

@@ -538,7 +538,10 @@ class ExecCommand(TyperCommand):
         base = super().shell_complete(ctx, incomplete)
         if not incomplete.startswith("-"):
             return base
-        from agm.cli_support.program_discovery import discover_programs_for_target
+        from agm.cli_support.program_discovery import (
+            discover_program_command_for_target,
+            discover_programs_for_target,
+        )
         from agm.cli_support.program_options import split_exec_tail
 
         params = cast(dict[str, object], ctx.params)
@@ -549,7 +552,19 @@ class ExecCommand(TyperCommand):
         # The FILE selector comes from the same derivation execution uses, so
         # completion offers a program's own flags for exactly the invocations
         # that would run it.
-        file = split_exec_tail(_string_list(params.get("tail"))).file
+        file = split_exec_tail(
+            _string_list(params.get("tail")),
+            program_command_for_file=(
+                None
+                if isinstance(raw_command, str)
+                else lambda file: discover_program_command_for_target(
+                    file=file,
+                    requested_program=requested_program,
+                    module_paths=module_paths,
+                    no_stdlib=bool(params.get("no_stdlib")),
+                )
+            ),
+        ).file
         try:
             programs, referenced_program = discover_programs_for_target(
                 file=file,

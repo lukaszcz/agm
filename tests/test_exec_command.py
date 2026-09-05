@@ -118,6 +118,33 @@ class TestExecArgsParsing:
         args = recorded_runs[0]
         assert getattr(args, "argument_tokens") == ["--k", "v"]
 
+    @pytest.mark.parametrize(
+        ("source", "program_tokens"),
+        (
+            ("program def main(verbose: bool = false) -> unit = ()\n", ["--verbose"]),
+            ('program def main(@opt-short("n") name: text = "") -> unit = ()\n', ["-nagm"]),
+            ('program def main(name: text = "") -> unit = ()\n', ["--name", "--x"]),
+        ),
+    )
+    def test_exec_program_options_before_file_use_declared_arity(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        recorded_runs: list[object],
+        source: str,
+        program_tokens: list[str],
+    ) -> None:
+        agl_file = tmp_path / "test.agl"
+        write_file_program(agl_file, source)
+
+        result = invoke(runner, ["exec", *program_tokens, str(agl_file)])
+
+        assert result.exit_code == 0
+        assert len(recorded_runs) == 1
+        args = recorded_runs[0]
+        assert getattr(args, "file") == str(agl_file)
+        assert getattr(args, "argument_tokens") == program_tokens
+
     def test_exec_multiple_argument_tokens(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:

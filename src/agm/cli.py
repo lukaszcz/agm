@@ -1192,9 +1192,22 @@ def exec_cmd(
     # tail — the FILE argument, the program's own option tokens, and the help
     # flags — arrives here as one catch-all.  ``split_exec_tail`` is the single
     # place that says which token is the FILE and which the program reads.
+    from agm.cli_support.program_discovery import discover_program_command_for_target
     from agm.cli_support.program_options import split_exec_tail
 
-    selected = split_exec_tail(tail or ())
+    selected = split_exec_tail(
+        tail or (),
+        program_command_for_file=(
+            None
+            if command is not None
+            else lambda file: discover_program_command_for_target(
+                file=file,
+                requested_program=program,
+                module_paths=module_paths,
+                no_stdlib=no_stdlib,
+            )
+        ),
+    )
     file = selected.file
     argument_tokens = list(selected.tokens)
     if _exec_print_help(

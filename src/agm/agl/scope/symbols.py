@@ -100,7 +100,7 @@ class BuiltinKind(enum.Enum):
         ``copy(value)`` — deep copy, preserving sharing; yields the same type
         as its argument.
     ``SHALLOW_COPY``
-        ``shallow_copy(value)`` — one-level copy; yields the same type as its
+        ``shallow-copy(value)`` — one-level copy; yields the same type as its
         argument.
     """
 

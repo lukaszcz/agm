@@ -53,7 +53,7 @@ rules:
     # Spellings that legitimately contain an operator character, re-faced after
     # the repair.  Each consumes the delimiter that has to follow it, so a
     # longer name merely starting with one of them stays plain (`ask-request-x').
-    - identifier: "\\b(ask-request|resource-dir)($|[\\]\\[(){}:,.|;/@=\\s])"
+    - identifier: "\\b(ask-request|resource-dir|shallow-copy)($|[\\]\\[(){}:,.|;/@=\\s])"
     - statement: "\\bas\\?($|[\\]\\[(){}:,.|;/@=\\s])"
 
     # `?' and `?N' partial-application placeholders.  A placeholder is a whole

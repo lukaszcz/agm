@@ -320,20 +320,20 @@ def test_cross_module_mutual_recursion(tmp_path: Path) -> None:
     """Even/odd mutual recursion across two cyclic-import modules."""
     even_source = """
 import odd
-def is_even(n: int) -> bool =
+def is-even(n: int) -> bool =
     if n == 0 => true
-    | else => odd::is_odd(n - 1)
+    | else => odd::is-odd(n - 1)
 """
     odd_source = """
 import even
-def is_odd(n: int) -> bool =
+def is-odd(n: int) -> bool =
     if n == 0 => false
-    | else => even::is_even(n - 1)
+    | else => even::is-even(n - 1)
 """
     entry_source = """
 import even
-let r1 = even::is_even(4)
-let r2 = even::is_even(3)
+let r1 = even::is-even(4)
+let r2 = even::is-even(3)
 ()
 """
     r = evaluate_ir_graph(entry_source, {"even": even_source, "odd": odd_source}, tmp_path)
@@ -372,14 +372,14 @@ import shapes::*
 let p = shapes::Point(x = 1, y = 2)
 let c: shapes::Color = shapes::Color::Red
 let px = p.x
-let is_red = case c of
+let is-red = case c of
     | Red => true
     | _ => false
 ()
 """
     r = evaluate_ir_graph(entry_source, {"shapes": shapes_source}, tmp_path)
     assert r["px"] == IntValue(1)
-    assert r["is_red"] == BoolValue(True)
+    assert r["is-red"] == BoolValue(True)
     p = r["p"]
     assert isinstance(p, RecordValue)
     assert p.fields["x"] == IntValue(1)
@@ -395,14 +395,14 @@ def test_same_named_types_in_two_modules(tmp_path: Path) -> None:
 record Pair
   a: int
   b: int
-def get_first(p: Pair) -> int =
+def get-first(p: Pair) -> int =
     p.a
 """
     mod_b_source = """
 record Pair
   x: text
   y: text
-def get_first(p: Pair) -> text =
+def get-first(p: Pair) -> text =
     p.x
 """
     entry_source = """
@@ -410,24 +410,24 @@ import mod_a
 import mod_b
 let p1 = mod_a::Pair(a = 1, b = 2)
 let p2 = mod_b::Pair(x = "hello", y = "world")
-let first_value = mod_a::get_first(p1)
-let second_value = mod_b::get_first(p2)
+let first-value = mod_a::get-first(p1)
+let second-value = mod_b::get-first(p2)
 ()
 """
     r = evaluate_ir_graph(entry_source, {"mod_a": mod_a_source, "mod_b": mod_b_source}, tmp_path)
-    assert r["first_value"] == IntValue(1)
-    assert r["second_value"] == TextValue("hello")
+    assert r["first-value"] == IntValue(1)
+    assert r["second-value"] == TextValue("hello")
 
 
 def test_runtime_failure_inside_library_function(tmp_path: Path) -> None:
     """ArithmeticError raised inside a library function propagates to entry."""
     mathlib_source = """
-def safe_div(a: int, b: int) -> decimal =
+def safe-div(a: int, b: int) -> decimal =
     a / b
 """
     entry_source = """
 import mathlib
-let result = mathlib::safe_div(10, 0)
+let result = mathlib::safe-div(10, 0)
 ()
 """
     exc = evaluate_ir_graph_raises(entry_source, {"mathlib": mathlib_source}, tmp_path)
@@ -447,13 +447,13 @@ enum Status
     entry_source = """
 import status::*
 let s: Status = Running
-let is_running = case s of
+let is-running = case s of
     | Running => true
     | Done => false
 ()
 """
     r = evaluate_ir_graph(entry_source, {"status": status_source}, tmp_path)
-    assert r["is_running"] == BoolValue(True)
+    assert r["is-running"] == BoolValue(True)
     s = r["s"]
     assert isinstance(s, RecordValue)
     assert s.display_name.rsplit("::", maxsplit=1)[-1] == "Running"

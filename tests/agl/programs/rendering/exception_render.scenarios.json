@@ -3,7 +3,7 @@
     {
       "name": "bad_input_triggers_cast_error",
       "params": {
-        "bad_input": "abc"
+        "bad-input": "abc"
       },
       "expect": {
         "stdout_contains": [
@@ -19,14 +19,14 @@
         ],
         "stdout_not_contains": [
           "parsed:",
-          "trace_id"
+          "trace-id"
         ]
       }
     },
     {
       "name": "valid_input_no_cast_error",
       "params": {
-        "bad_input": "42"
+        "bad-input": "42"
       },
       "expect": {
         "stdout_contains": [
@@ -38,7 +38,7 @@
         "stdout_not_contains": [
           "CastError",
           "caught:",
-          "trace_id"
+          "trace-id"
         ]
       }
     }

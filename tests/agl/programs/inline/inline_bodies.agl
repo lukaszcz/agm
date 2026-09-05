@@ -27,8 +27,8 @@ program def main(k: int) -> unit =
   print label
 
   # A parenthesized block may consist solely of a trailing binder and is unit-valued.
-  let binder_only = (let captured = k)
-  print binder_only
+  let binder-only = (let captured = k)
+  print binder-only
 
   # `return` inline in a branch body; `raise` inline in the other arm.
   print classify(k)

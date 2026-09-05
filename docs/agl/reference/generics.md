@@ -74,7 +74,7 @@ enum Outcome[A, B]
 def Box::get[E](self) -> E = self.value
 def Box::map[E, U](self, f: E -> U) -> Box[U] = Box(value = f(self.value))
 def Box::size[_](self) -> int = 1
-def Outcome::is_ok[_, _](self) -> bool = self is Ok
+def Outcome::is-ok[_, _](self) -> bool = self is Ok
 
 program def main() -> unit =
   let box = Box(value = 7)
@@ -83,7 +83,7 @@ program def main() -> unit =
   let _ = print(box.get())
   let _ = print(box.size())
   let _ = print(mapped.value)
-  let _ = print(outcome.is_ok())
+  let _ = print(outcome.is-ok())
 ```
 
 The receiver fixes the leading method type parameters. In the example,
@@ -137,8 +137,8 @@ program def main() -> unit =
 import containers::*
 
 def unwrap(box: Box[int]) -> int = box.value
-let open_box: Box[int] = Box(value = 1)
-let qualified_box: containers::Box[int] = containers::Box(value = 2)
+let open-box: Box[int] = Box(value = 1)
+let qualified-box: containers::Box[int] = containers::Box(value = 2)
 ```
 
 ## Inference and the explicit `::[…]` override
@@ -195,8 +195,8 @@ calling it:
 
 <!-- agl-check: fragment -->
 ```agl
-let int_id = id::[int]
-print(int_id(9))
+let int-id = id::[int]
+print(int-id(9))
 ```
 
 Once its bare name has resolved unambiguously in scope, a fieldless member can
@@ -218,15 +218,15 @@ explicitly:
 ```agl
 def id[T](x: T) -> T = x
 def singleton[T](x: T) -> array[T] = [x]
-def map_one[A, B](f: (A) -> B, xs: array[A]) -> array[B] = [f(xs[0])]
+def map-one[A, B](f: (A) -> B, xs: array[A]) -> array[B] = [f(xs[0])]
 
 program def main() -> unit =
-  let keep_ints: (array[int]) -> array[int] = map_one(id, ?)
-  let _ = print(keep_ints([5])[0])
-  let make_single: (int) -> array[int] = singleton(?)
-  let _ = print(make_single(7)[0])
-  let make_text = singleton::[text](?)
-  let _ = print(make_text("hi")[0])
+  let keep-ints: (array[int]) -> array[int] = map-one(id, ?)
+  let _ = print(keep-ints([5])[0])
+  let make-single: (int) -> array[int] = singleton(?)
+  let _ = print(make-single(7)[0])
+  let make-text = singleton::[text](?)
+  let _ = print(make-text("hi")[0])
 ```
 
 ## Constructor references and generic constructor values
@@ -490,7 +490,7 @@ let bad: Perfect[int] = source.ask("Give me a value.")
 # static error: type 'Perfect[int]' cannot be used as an agent output type:
 # its recursive instantiations never close, so it has no finite JSON schema.
 
-let also_bad = some_json as Perfect[int]
+let also-bad = some-json as Perfect[int]
 # the same error, naming "a cast target" instead
 ```
 
@@ -520,14 +520,14 @@ it through the referenced record's own declaration path instead (for example,
 enum Option[T]
   | None
   | Some(value: T)
-def describe_option(o: Option[int]) -> text =
+def describe-option(o: Option[int]) -> text =
   case o of
     | Option::None => "missing"
     | Option::Some(value) => "found %{value}"
 
 program def main() -> unit =
   let d: Option[int] = Option::Some(value = 11)
-  let line = describe_option(d)
+  let line = describe-option(d)
   let _ = print line
 ```
 

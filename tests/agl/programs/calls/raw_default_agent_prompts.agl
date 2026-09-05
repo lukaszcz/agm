@@ -21,7 +21,7 @@ program def main(document: text) -> unit =
     print "raw %{error.agent} %{error.attempts} %{error.target-type}"
 
   try
-    let call_form: Review = ask::[Review]("Call-form review for %{document}.")
-    print call_form.approved
+    let call-form: Review = ask::[Review]("Call-form review for %{document}.")
+    print call-form.approved
   catch AgentParseError as error =>
     print "call %{error.agent} %{error.attempts} %{error.target-type}"

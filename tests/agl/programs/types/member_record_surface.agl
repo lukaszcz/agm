@@ -22,17 +22,17 @@ def Referenced::show[T](self) -> text = "ref %{self.value}"
 def refresh(value: Referenced[text]) -> Referenced[text] = value with value = value.value + "!"
 
 record Holder(node: Tree::Node[int], nodes: array[Tree::Node[int]], ref: Referenced[text])
-def replace_in_slot(node: Tree::Node[int]) -> Tree::Node[int] = node.replace(8)
+def replace-in-slot(node: Tree::Node[int]) -> Tree::Node[int] = node.replace(8)
 
 program def main() -> unit =
   let node = Node(value = 3)
   let pair = node.pair("right")
-  let changed = replace_in_slot(node)
+  let changed = replace-in-slot(node)
   let holder = Holder(node = changed, nodes = [changed], ref = Referenced(value = "saved"))
   let wrapped: Wrapped[text] = holder.ref
   let leaf = Leaf
-  let int_tree: Tree[int] = leaf
-  let text_tree: Tree[text] = leaf
+  let int-tree: Tree[int] = leaf
+  let text-tree: Tree[text] = leaf
   let widened: Tree[int] = changed
   let selected = case widened of
     | Leaf => 0
@@ -46,8 +46,8 @@ program def main() -> unit =
   print(refresh(holder.ref).show())
   print widened.describe()
   print selected
-  print int_tree
-  print text_tree
+  print int-tree
+  print text-tree
   print decoded.value
   print encoded
   print(wrapped as text)

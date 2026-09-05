@@ -1862,11 +1862,11 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
         module_id=RESERVED_ID,
         fields=(
             ("target-type", TextType()),
-            ("codec_name", TextType()),
+            ("codec-name", TextType()),
             ("strict-json", JsonType()),
             ("format-instructions", TextType()),
             ("json-schema", JsonType()),
-            ("structured_exec", BoolType()),
+            ("structured-exec", BoolType()),
         ),
     ),
     "OutputContractOption": _OUTPUT_CONTRACT_OPTION_DEF,

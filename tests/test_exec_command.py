@@ -395,7 +395,7 @@ class TestExecCommandInline:
 
     def test_inline_command_static_error_exits_1(self, capsys: pytest.CaptureFixture[str]) -> None:
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(self._command_args("let x = undefined_name"))
+            exec_command.run(self._command_args("let x = undefined-name"))
         assert exc_info.value.code == 1
         assert capsys.readouterr().err
 
@@ -724,7 +724,7 @@ class TestExecCommandBehavior:
     ) -> None:
         """A .agl file with a static error exits 1 and prints diagnostics to stderr."""
         agl_file = tmp_path / "test.agl"
-        write_file_program(agl_file, "let x = undefined_name\n")
+        write_file_program(agl_file, "let x = undefined-name\n")
         from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
@@ -743,7 +743,7 @@ class TestExecCommandBehavior:
 
     def test_static_discovery_failure_does_not_truncate_trace(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
-        write_file_program(agl_file, "let x = undefined_name\n")
+        write_file_program(agl_file, "let x = undefined-name\n")
         log_path = tmp_path / "trace.jsonl"
         log_path.write_text("existing trace\n", encoding="utf-8")
 
@@ -987,14 +987,14 @@ class TestExecCommandWarnings:
     ) -> None:
         # Real source: an undefined name is a static (error-severity) diagnostic.
         agl_file = tmp_path / "test.agl"
-        write_file_program(agl_file, "let x = undefined_name\n")
+        write_file_program(agl_file, "let x = undefined-name\n")
 
         monkeypatch.chdir(tmp_path)
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args(agl_file))
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
-        assert "undefined_name" in captured.err
+        assert "undefined-name" in captured.err
         assert captured.err.startswith("test.agl:2:11-24: error:")
 
     def test_inline_error_diagnostic_has_command_label(
@@ -1003,7 +1003,7 @@ class TestExecCommandWarnings:
         """Inline -c errors carry the ``<command>:`` source label (from SourceId)."""
         args = ExecArgs(
             file=None,
-            command="let x = undefined_name\n",
+            command="let x = undefined-name\n",
             argument_tokens=[],
             strict_json=None,
             max_iters=None,
@@ -1015,7 +1015,7 @@ class TestExecCommandWarnings:
             exec_command.run(args)
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
-        assert "undefined_name" in captured.err
+        assert "undefined-name" in captured.err
         assert "1:9-22: error:" in captured.err
         # The graph loader stamps inline source with SourceId(label="<command>"),
         # so <command>: appears as the source label in the diagnostic output.
@@ -1415,7 +1415,7 @@ class TestExecCommandExitCodes:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "let x = undefined_name\n")
+        write_file_program(agl_file, "let x = undefined-name\n")
 
         args = ExecArgs(
             file=str(agl_file),
@@ -1463,7 +1463,7 @@ class TestExecCommandExitCodes:
 
     def test_static_error_exits_1_not_2(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
-        write_file_program(agl_file, "let x = undefined_name\n")
+        write_file_program(agl_file, "let x = undefined-name\n")
         from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
@@ -1795,7 +1795,7 @@ class TestDryRunInventory:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "let x = undefined_name\n")
+        write_file_program(agl_file, "let x = undefined-name\n")
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args(agl_file))
@@ -2874,7 +2874,7 @@ class TestExecModuleRoots:
     ) -> None:
         """Error in imported module shows that module's file path in diagnostic."""
         lib_dir = tmp_path
-        (lib_dir / "broken.agl").write_text("def f() -> int = undeclared_name\n")
+        (lib_dir / "broken.agl").write_text("def f() -> int = undeclared-name\n")
         entry = lib_dir / "entry.agl"
         write_file_program(entry, "import broken::*\nlet r = f()\nr\n")
 

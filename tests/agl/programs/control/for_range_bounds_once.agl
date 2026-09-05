@@ -2,24 +2,24 @@
 # Mutating the vars they reference from inside the body does not change iteration count.
 # Exercises: single-evaluation of bounds and step at loop entry, ascending and descending.
 
-program def main(down_start: int = 10, down_stop: int = 5, down_step: int = 2) -> unit =
-  var end_val: int = 5
-  var step_val: int = 1
+program def main(down-start: int = 10, down-stop: int = 5, down-step: int = 2) -> unit =
+  var end-val: int = 5
+  var step-val: int = 1
   var count: int = 0
 
-  for i in 1 to end_val step step_val do
+  for i in 1 to end-val step step-val do
     count := count + 1
-    end_val := end_val + 100
-    step_val := step_val + 100
+    end-val := end-val + 100
+    step-val := step-val + 100
   done
   print count
-  print end_val
+  print end-val
 
-  var stop_var: int = down_stop
-  var step_var: int = down_step
+  var stop-var: int = down-stop
+  var step-var: int = down-step
   var count2: int = 0
-  for i in down_start downto stop_var step step_var do
+  for i in down-start downto stop-var step step-var do
     count2 := count2 + 1
-    step_var := step_var + 100
+    step-var := step-var + 100
   done
   print count2

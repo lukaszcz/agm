@@ -2,14 +2,14 @@
 # and outer range containing an inner collection for.
 # Exercises: range-in-range, collection-for with inner range, range-for with inner collection-for.
 
-program def main(rows: int, cols: int, scale_items: array[int] = [10, 20]) -> unit =
-  var grid_sum: int = 0
+program def main(rows: int, cols: int, scale-items: array[int] = [10, 20]) -> unit =
+  var grid-sum: int = 0
   for r in 1 to rows do
     for c in 1 to cols do
-      grid_sum := grid_sum + r + c
+      grid-sum := grid-sum + r + c
     done
   done
-  print grid_sum
+  print grid-sum
 
   var items: array[int] = [1, 2, 3]
   var mixed: int = 0
@@ -22,7 +22,7 @@ program def main(rows: int, cols: int, scale_items: array[int] = [10, 20]) -> un
 
   var cross: int = 0
   for i in 1 to rows do
-    for x in scale_items do
+    for x in scale-items do
       cross := cross + i * x
     done
   done

@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "claude_forked_session_diverges_after_a_shared_prefix",
-      "params": {"backend": 0, "fork_before_asks": false},
+      "params": {"backend": 0, "fork-before-asks": false},
       "agents": {"ask": {"responses": ["shared", "parent", "child"]}},
       "expect": {
         "calls": {"ask": 0},
@@ -17,7 +17,7 @@
     },
     {
       "name": "pi_cli_forked_session_diverges_after_a_shared_prefix",
-      "params": {"backend": 1, "fork_before_asks": false},
+      "params": {"backend": 1, "fork-before-asks": false},
       "agents": {"pi": {"responses": ["shared", "parent", "child"]}},
       "expect": {
         "calls": {"pi": 0},
@@ -32,7 +32,7 @@
     },
     {
       "name": "pi_rpc_forked_session_diverges_after_a_shared_prefix",
-      "params": {"backend": 2, "fork_before_asks": false},
+      "params": {"backend": 2, "fork-before-asks": false},
       "agents": {"pi": {"responses": ["shared", "parent", "child"]}},
       "expect": {
         "calls": {"pi": 0},
@@ -47,7 +47,7 @@
     },
     {
       "name": "claude_allows_a_native_fork_before_any_prompt",
-      "params": {"backend": 0, "fork_before_asks": true},
+      "params": {"backend": 0, "fork-before-asks": true},
       "agents": {"ask": {"responses": ["child", "parent"]}},
       "expect": {
         "calls": {"ask": 0},
@@ -58,7 +58,7 @@
     },
     {
       "name": "pi_cli_allows_a_native_fork_before_any_prompt",
-      "params": {"backend": 1, "fork_before_asks": true},
+      "params": {"backend": 1, "fork-before-asks": true},
       "agents": {"pi": {"responses": ["child", "parent"]}},
       "expect": {
         "calls": {"pi": 0},
@@ -69,7 +69,7 @@
     },
     {
       "name": "pi_rpc_allows_a_native_fork_before_any_prompt",
-      "params": {"backend": 2, "fork_before_asks": true},
+      "params": {"backend": 2, "fork-before-asks": true},
       "agents": {"pi": {"responses": ["child", "parent"]}},
       "expect": {
         "calls": {"pi": 0},

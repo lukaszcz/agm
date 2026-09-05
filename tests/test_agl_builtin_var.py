@@ -351,7 +351,7 @@ class TestScopedBuiltinVar:
             "import std/config\n"
             "std/config::max-iters := 3\n"
             "std/config::Region::max-iters := 4\n"
-            "let root_setting = std/config::max-iters\n"
+            "let root-setting = std/config::max-iters\n"
             "let scoped = std/config::Region::max-iters\n"
             "()",
             "builtin var max-iters: int\n"
@@ -362,7 +362,7 @@ class TestScopedBuiltinVar:
             tmp_path,
         )
         assert result.ok, f"expected success but got: {result.error!r}"
-        assert result.bindings["root_setting"] == IntValue(3)
+        assert result.bindings["root-setting"] == IntValue(3)
         assert result.bindings["scoped"] == IntValue(4)
 
 

@@ -8,9 +8,9 @@ record Point
   x: int
   y: int
 
-def Person::address_line(self) -> text = self.name + ": " + self.address
+def Person::address-line(self) -> text = self.name + ": " + self.address
 
-def Person::with_address(self, address: text) -> Person =
+def Person::with-address(self, address: text) -> Person =
   Person(name = self.name, address = address)
 
 def Point::total(self) -> int = self.x + self.y
@@ -24,15 +24,15 @@ program def main(mode: text, x: int) -> unit =
 
   if
     | mode == "builder" =>
-        let dot = person.with_address("East Road")
-        let qualified = Person::with_address(person, "East Road")
-        print(dot.address_line())
-        print(qualified.address_line())
+        let dot = person.with-address("East Road")
+        let qualified = Person::with-address(person, "East Road")
+        print(dot.address-line())
+        print(qualified.address-line())
     | mode == "point" =>
         let dot = point.shifted(3)
         let qualified = Point::shifted(point, 3)
         print(dot.total())
         print(qualified.total())
     | else =>
-        print(person.address_line())
-        print(Person::address_line(person))
+        print(person.address-line())
+        print(Person::address-line(person))

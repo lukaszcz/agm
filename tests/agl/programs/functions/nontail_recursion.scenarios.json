@@ -4,7 +4,7 @@
       "name": "non_tail_recursion_error_is_catchable",
       "params": {
         "depth": 100000,
-        "catch_it": true
+        "catch-it": true
       },
       "runtime": {
         "default_call_depth_limit": 400
@@ -17,7 +17,7 @@
       "name": "non_tail_recursion_error_when_uncaught",
       "params": {
         "depth": 100000,
-        "catch_it": false
+        "catch-it": false
       },
       "runtime": {
         "default_call_depth_limit": 400

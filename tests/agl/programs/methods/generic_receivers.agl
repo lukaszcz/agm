@@ -19,12 +19,12 @@ def Outcome::summary[A, B](self) -> text =
     | ok(value) => "ok %{value}"
     | err(error) => "err %{error}"
 
-def Outcome::is_ok[_, _](self) -> bool =
+def Outcome::is-ok[_, _](self) -> bool =
   case self of
     | ok(value) => true
     | err(error) => false
 
-def Outcome::replace_error[A, B, E](self, replacement: E) -> Outcome[A, E] =
+def Outcome::replace-error[A, B, E](self, replacement: E) -> Outcome[A, E] =
   case self of
     | ok(value) => ok(value = value)
     | err(error) => err(error = replacement)
@@ -43,6 +43,6 @@ program def main(mode: text, base: int) -> unit =
         print(explicit.value)
     | else =>
         let chosen: Outcome[int, text] = if base > 0 => ok(value = base) else => err(error = "missing")
-        let replaced = chosen.replace_error(404)
+        let replaced = chosen.replace-error(404)
         print(replaced.summary())
-        print(replaced.is_ok())
+        print(replaced.is-ok())

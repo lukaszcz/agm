@@ -6,9 +6,9 @@
 
 # text → int: may raise CastError when the text is not an exact JSON integer
 
-program def main(int_str: text, bool_str: text, dec_str: text) -> unit =
+program def main(int-str: text, bool-str: text, dec-str: text) -> unit =
   try
-    let n = int_str as int
+    let n = int-str as int
     print "int: %{n}"
     print "doubled: %{n * 2}"
   catch CastError as e =>
@@ -19,14 +19,14 @@ program def main(int_str: text, bool_str: text, dec_str: text) -> unit =
 
   # text → bool: only "true" or "false" (strict JSON)
   try
-    let b = bool_str as bool
+    let b = bool-str as bool
     print "bool: %{b as text}"
   catch CastError as e =>
     print "bool cast failed: %{e.raw}"
 
   # text → decimal
   try
-    let d = dec_str as decimal
+    let d = dec-str as decimal
     print "decimal: %{d as text}"
   catch CastError as e =>
     print "decimal cast failed: %{e.raw}"

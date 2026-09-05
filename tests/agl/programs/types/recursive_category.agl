@@ -7,25 +7,25 @@ record Category
   name: text
   subcategories: array[Category]
 
-def count_categories(c: Category) -> int =
+def count-categories(c: Category) -> int =
   var total: int = 1
   for child in c.subcategories do
-    total := total + count_categories(child)
+    total := total + count-categories(child)
   total
 
-def render_category(c: Category) -> text =
+def render-category(c: Category) -> text =
   var result: text = c.name
   for child in c.subcategories do
-    result := result + " > " + render_category(child)
+    result := result + " > " + render-category(child)
   result
 
-program def main(root_name: text, child_name: text, include_grandchild: bool) -> unit =
-  let grandchildren: array[Category] = if include_grandchild => [Category(name = "leaf", subcategories = [])] else => []
-  let child = Category(name = child_name, subcategories = grandchildren)
-  let root = Category(name = root_name, subcategories = [child])
-  let empty_root = Category(name = "empty", subcategories = [])
+program def main(root-name: text, child-name: text, include-grandchild: bool) -> unit =
+  let grandchildren: array[Category] = if include-grandchild => [Category(name = "leaf", subcategories = [])] else => []
+  let child = Category(name = child-name, subcategories = grandchildren)
+  let root = Category(name = root-name, subcategories = [child])
+  let empty-root = Category(name = "empty", subcategories = [])
 
-  print count_categories(root)
-  print render_category(root)
-  print count_categories(empty_root)
-  print render_category(empty_root)
+  print count-categories(root)
+  print render-category(root)
+  print count-categories(empty-root)
+  print render-category(empty-root)

@@ -4,21 +4,21 @@
 import library::*
 def unbox(box: Box[int]) -> int = box.value
 
-def describe_option(option: library::Option[int]) -> text =
+def describe-option(option: library::Option[int]) -> text =
   case option of
     | none() => "none"
     | some(value) => "some %{value}"
 
 program def main(seed: int) -> unit =
-  let open_box: Box[int] = Box(value = seed)
-  let qualified_box: library::Box[int] = library::Box(value = 7)
-  let nested: library::Box[Box[int]] = library::Box(value = open_box)
+  let open-box: Box[int] = Box(value = seed)
+  let qualified-box: library::Box[int] = library::Box(value = 7)
+  let nested: library::Box[Box[int]] = library::Box(value = open-box)
 
-  print(unbox(open_box))
-  print(qualified_box.value)
+  print(unbox(open-box))
+  print(qualified-box.value)
   print(nested.value.value)
 
-  let some_value = library::Option[int]::some(value = seed + 5)
-  let none_value = library::Option[int]::none()
-  print(describe_option(some_value))
-  print(describe_option(none_value))
+  let some-value = library::Option[int]::some(value = seed + 5)
+  let none-value = library::Option[int]::none()
+  print(describe-option(some-value))
+  print(describe-option(none-value))

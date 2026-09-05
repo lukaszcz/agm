@@ -16,5 +16,5 @@ program def main(raw: text) -> unit =
   catch JsonParseError as e =>
     print "parse error"
     print e.raw
-    let has_msg = e.message != ""
-    print "has_message: %{has_msg as text}"
+    let has-msg = e.message != ""
+    print "has_message: %{has-msg as text}"

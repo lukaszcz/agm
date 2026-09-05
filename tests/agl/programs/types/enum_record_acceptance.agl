@@ -9,24 +9,24 @@ enum Tree[T] =
   | Leaf
   | Node(value: T, children: array[Tree[T]])
 
-def r_value(value: RR) -> int =
+def r-value(value: RR) -> int =
   case value of
     | R1(x, y) => x + y
     | R2(x) => x
-    | R3(r) => r_value(r)
+    | R3(r) => r-value(r)
 
 program def main() -> unit =
   let shared = R1(x = 1, y = 2)
   let rr: RR = shared
-  let rr_prime: RRPrime = shared
+  let rr-prime: RRPrime = shared
   let nested: RR = R3(r = rr)
   let tree: Tree[int] = Tree[int]::Node(value = 3, children = [Tree[int]::Leaf])
-  let nested_value = r_value(nested)
-  let tree_value = case tree of
+  let nested-value = r-value(nested)
+  let tree-value = case tree of
     | Leaf => 0
     | Node(value) => value
-  print nested_value
-  print tree_value
-  print (rr_prime is R1)
+  print nested-value
+  print tree-value
+  print (rr-prime is R1)
   print nested
   print tree

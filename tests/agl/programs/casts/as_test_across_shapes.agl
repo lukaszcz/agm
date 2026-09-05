@@ -13,14 +13,14 @@ enum Tree
   | leaf
   | branch(next: Tree)
 
-program def main(close_cycle: bool) -> unit =
+program def main(close-cycle: bool) -> unit =
   let scalar = Scalar(value = 1)
   let tree = leaf
-  let boxed_int: Box[int] = Box(value = 1)
-  let boxed_array: Box[array[int]] = Box(value = [1])
+  let boxed-int: Box[int] = Box(value = 1)
+  let boxed-array: Box[array[int]] = Box(value = [1])
   var nodes: array[Node] = [Node(children = [])]
   let node = Node(children = nodes)
-  if close_cycle =>
+  if close-cycle =>
     nodes[0] := node
 
   print(1 as? text)
@@ -29,9 +29,9 @@ program def main(close_cycle: bool) -> unit =
   print(scalar as? json)
   print(tree as? text)
   print(tree as? json)
-  print(boxed_int as? text)
-  print(boxed_int as? json)
-  print(boxed_array as? text)
-  print(boxed_array as? json)
+  print(boxed-int as? text)
+  print(boxed-int as? json)
+  print(boxed-array as? text)
+  print(boxed-array as? json)
   print(node as? text)
   print(node as? json)

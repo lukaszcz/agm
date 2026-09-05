@@ -22,28 +22,28 @@ exception Boom extends Exception
 program def main(mode: text, base: int) -> unit =
   if
     | mode == "record" =>
-        let make_point = Point(?, base)
-        let point = make_point(3)
-        let make_box: (text) -> Box[text] = Box(value = ?)
-        let boxed = make_box("hi")
+        let make-point = Point(?, base)
+        let point = make-point(3)
+        let make-box: (text) -> Box[text] = Box(value = ?)
+        let boxed = make-box("hi")
         print(point.x)
         print(point.y)
         print(boxed.value)
     | mode == "enum" =>
-        let make_some: (int) -> Option[int] = Option::some(?)
-        let value = make_some(base)
+        let make-some: (int) -> Option[int] = Option::some(?)
+        let value = make-some(base)
         case value of
           | Option::none => print("none")
           | Option::some(_ as n) => print(n)
-        let make_failed = Status::failed(reason = ?)
-        let status: Status = make_failed("bad")
+        let make-failed = Status::failed(reason = ?)
+        let status: Status = make-failed("bad")
         case status of
           | ok(_ as n) => print(n)
           | failed(reason) => print(reason)
     | else =>
-        let make_boom = Boom(message = ?, code = base)
+        let make-boom = Boom(message = ?, code = base)
         try
-          raise make_boom("kapow")
+          raise make-boom("kapow")
         catch Boom as e =>
           print(e.message)
           print(e.code)

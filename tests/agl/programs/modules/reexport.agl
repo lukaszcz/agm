@@ -33,6 +33,6 @@ program def main() -> unit =
   print(chain::answer() as text)
 
   # types.public re-exports the Point type and make_point.
-  let p = make_point(7, 3)
+  let p = make-point(7, 3)
   print(p.x as text)
   print(p.y as text)

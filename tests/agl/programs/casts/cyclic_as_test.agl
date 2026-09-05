@@ -7,10 +7,10 @@
 
 record Node(children: array[Node])
 
-program def main(close_cycle: bool) -> unit =
+program def main(close-cycle: bool) -> unit =
   var xs: array[Node] = [Node(children = [])]
   let n = Node(children = xs)
-  if close_cycle =>
+  if close-cycle =>
     xs[0] := n
 
   print(n as? text)

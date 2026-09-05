@@ -5,19 +5,19 @@ record Task
   title: text
   effort: int
 
-def parse_int_or_zero(s: text) -> int =
+def parse-int-or-zero(s: text) -> int =
   if s as? int => s as int else => 0
 
 # A helper that doubles a numeric text value
-def double_text_int(s: text) -> text =
-  let n = parse_int_or_zero(s)
+def double-text-int(s: text) -> text =
+  let n = parse-int-or-zero(s)
   (n * 2) as text
 
 program def main(a: text, b: text) -> unit =
   let planner: Agent = AgentCommand("planner")
   # A helper that converts a text to int, returning 0 on failure
-  print(parse_int_or_zero(a))
-  print(double_text_int(b))
+  print(parse-int-or-zero(a))
+  print(double-text-int(b))
 
   # Agent supplies a JSON text; cast it to a record
   try

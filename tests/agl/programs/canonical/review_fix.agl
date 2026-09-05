@@ -55,8 +55,8 @@ program def main(spec: text) -> unit =
               | Changed(output) =>
                   artifact := output
               | Blocked(reason) =>
-                  let blocker_report = ask("Explain blocker:\n%{reason}", agent = critic)
-                  raise Abort(message = blocker_report)
+                  let blocker-report = ask("Explain blocker:\n%{reason}", agent = critic)
+                  raise Abort(message = blocker-report)
 
     until review is Pass
 

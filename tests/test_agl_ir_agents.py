@@ -294,8 +294,8 @@ n
 def test_strict_json_mode() -> None:
     """strict_json: true — bare JSON without fences, no repair."""
     source = """\
-let strict_agent = AgentCommand("strict_agent")
-let b: bool = ask("True or false?", agent = strict_agent, strict-json = true)
+let strict-agent = AgentCommand("strict_agent")
+let b: bool = ask("True or false?", agent = strict-agent, strict-json = true)
 b
 """
     ir = evaluate_ir_with_agents(
@@ -335,8 +335,8 @@ def test_ask_inside_function() -> None:
     """A root function uses an agent supplied by an immutable root binding."""
     source = """\
 let namer: Agent = AgentCommand("namer")
-def get_name(prompt: text) -> text = ask(prompt, agent = namer)
-let name: text = get_name("What is the name?")
+def get-name(prompt: text) -> text = ask(prompt, agent = namer)
+let name: text = get-name("What is the name?")
 name
 """
     ir = evaluate_ir_with_agents(
@@ -400,8 +400,8 @@ n
 def test_strict_json_invalid_raises() -> None:
     """strict_json=true with fenced JSON: strict mode does not strip fences."""
     source = """\
-let strict_agent = AgentCommand("strict_agent")
-let n: int = ask("Give int.", agent = strict_agent, strict-json = true)
+let strict-agent = AgentCommand("strict_agent")
+let n: int = ask("Give int.", agent = strict-agent, strict-json = true)
 n
 """
     # Fenced JSON fails in strict mode (strict does not strip fences).
@@ -442,15 +442,15 @@ def test_ask_request_builds_record() -> None:
     source = """\
 let dummy = AgentCommand("dummy")
 let req = ask-request("My prompt.", agent = dummy)
-let prompt_text: text = req.prompt
-prompt_text
+let prompt-text: text = req.prompt
+prompt-text
 """
     # ask-request does not call the agent — no scripted responses needed.
     ir = evaluate_ir_with_agents(
         source,
         scripts={"dummy": []},
     )
-    assert ir["prompt_text"] == TextValue("My prompt.")
+    assert ir["prompt-text"] == TextValue("My prompt.")
 
     req = ir["req"]
     assert isinstance(req, RecordValue)
@@ -797,14 +797,14 @@ def test_ask_request_builds_a_text_request_record() -> None:
     source = """\
 let worker = AgentCommand("worker")
 let req = ask-request("Give me a number.", agent = worker)
-let prompt_text: text = req.prompt
-prompt_text
+let prompt-text: text = req.prompt
+prompt-text
 """
     ir = evaluate_ir_with_agents(
         source,
         scripts={"worker": []},
     )
-    assert ir["prompt_text"] == TextValue("Give me a number.")
+    assert ir["prompt-text"] == TextValue("Give me a number.")
 
 
 # ---------------------------------------------------------------------------
@@ -1687,8 +1687,8 @@ def test_ir_ask_request_text_contract() -> None:
     source = """\
 let a = AgentCommand("a")
 let req = ask-request("Do it.", agent = a)
-let prompt_text: text = req.prompt
-prompt_text
+let prompt-text: text = req.prompt
+prompt-text
 """
     from tests.agl.ir_harness import evaluate_ir_with_agents
 
@@ -1696,7 +1696,7 @@ prompt_text
         source,
         scripts={"a": []},
     )
-    assert ir["prompt_text"] == TextValue("Do it.")
+    assert ir["prompt-text"] == TextValue("Do it.")
 
 
 def test_lower_on_parse_error_abort_gives_one_attempt() -> None:

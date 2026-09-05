@@ -3,15 +3,15 @@
 # call-depth limit, exactly like tail recursion. It must never escape as a
 # host-level crash.
 
-def sum_to(n: int) =
-  if n == 0 => 0 else => n + sum_to(n - 1)
+def sum-to(n: int) =
+  if n == 0 => 0 else => n + sum-to(n - 1)
 
-def run_it(d: int, protect: bool) =
+def run-it(d: int, protect: bool) =
   if protect =>
-    try sum_to(d)
+    try sum-to(d)
     catch RecursionError as e => e.limit
   else =>
-    sum_to(d)
+    sum-to(d)
 
-program def main(depth: int, catch_it: bool) -> unit =
-  print(run_it(depth, catch_it))
+program def main(depth: int, catch-it: bool) -> unit =
+  print(run-it(depth, catch-it))

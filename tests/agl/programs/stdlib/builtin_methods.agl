@@ -2,9 +2,9 @@
 # though this entry imports none of their owning modules.
 
 def apply[A, B](value: A, f: A -> B) -> B = f(value)
-def array_first[E](values: array[E]) -> E = values.first()
-def inferred_array_first[E](values: array[E]) = values.first()
-def dict_value[V](values: dict[text, V]) -> V = values.value()
+def array-first[E](values: array[E]) -> E = values.first()
+def inferred-array-first[E](values: array[E]) = values.first()
+def dict-value[V](values: dict[text, V]) -> V = values.value()
 
 program def main(mode: int) =
   if mode == 1 =>
@@ -30,7 +30,7 @@ program def main(mode: int) =
     let append = "pipe".append
     print(surround("[", "]"))
     print(apply("!", append))
-    print(array_first([8]))
-    print(inferred_array_first([9]))
+    print(array-first([8]))
+    print(inferred-array-first([9]))
     print([9].first())
-    print(dict_value({"value": "generic"}))
+    print(dict-value({"value": "generic"}))

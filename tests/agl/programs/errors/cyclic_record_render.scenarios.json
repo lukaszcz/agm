@@ -2,12 +2,12 @@
   "scenarios": [
     {
       "name": "record_closed_cycle_is_catchable",
-      "params": {"close_cycle": true},
+      "params": {"close-cycle": true},
       "expect": {"stdout": "print caught\njson caught\n"}
     },
     {
       "name": "acyclic_record_still_renders_and_encodes",
-      "params": {"close_cycle": false},
+      "params": {"close-cycle": false},
       "expect": {"stdout": "Link::Cell(next = Link::End)\njson completed\n"}
     }
   ]

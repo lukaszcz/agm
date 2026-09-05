@@ -32,7 +32,7 @@ exception DeployError extends Exception
 
 An exception extends exactly one base exception type. Constructor fields include
 the inherited fields first, followed by fields declared on the subtype.
-`trace_id` is not reserved: a user-declared exception may use it as one of its
+`trace-id` is not reserved: a user-declared exception may use it as one of its
 own fields. Exception fields do not accept the `var` marker and cannot be
 reassigned. `builtin exception` is the standard-library form for host-recognized
 exception types; the name, base, and fields must match the recognized shape
@@ -51,12 +51,12 @@ exception DetailedProblem extends Problem
   detail: text
 
 def Problem::label(self) -> text = "problem %{self.code}"
-def DetailedProblem::detail_label(self) -> text = self.label() + ": %{self.detail}"
+def DetailedProblem::detail-label(self) -> text = self.label() + ": %{self.detail}"
 
 program def main() -> unit =
   let problem = DetailedProblem(message = "failed", code = 7, detail = "network")
   let _ = print(problem.label())
-  let _ = print(problem.detail_label())
+  let _ = print(problem.detail-label())
 ```
 
 A method name is declared only once in an exception hierarchy. A subtype cannot
@@ -77,7 +77,7 @@ self-reference without a base case:
 
 ```agl
 exception ValidationError extends Exception
-  field_name: text
+  field-name: text
   causes: array[ValidationError]   # legal: guarded by array[...]
 ```
 

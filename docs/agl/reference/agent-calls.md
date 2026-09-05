@@ -118,19 +118,19 @@ forms are also available outside a raw-tail line-final position.
 `Agent` is a built-in enum whose values describe the backend to invoke:
 
 ```agl
-def review_with(agent: Agent, artifact: text) -> text =
+def review-with(agent: Agent, artifact: text) -> text =
   agent.ask("Review this artifact:\n%{artifact}")
 
 program def main() -> unit =
   let reviewer: Agent = AgentClaude("sonnet", "medium")
-  let second_opinion = AgentCodex("o3", "high")
+  let second-opinion = AgentCodex("o3", "high")
   let scripted = AgentCommand("claude -p")
   let hosted = AgentPi("openai", "gpt-5", "low")
-  let candidates: array[Agent] = [reviewer, second_opinion, scripted, hosted]
-  let first_pass: text = review_with(reviewer, "the release notes")
-  let second_pass: text = review_with(second_opinion, first_pass)
+  let candidates: array[Agent] = [reviewer, second-opinion, scripted, hosted]
+  let first-pass: text = review-with(reviewer, "the release notes")
+  let second-pass: text = review-with(second-opinion, first-pass)
   let _ = print("%{candidates.size()} agents available")
-  let _ = print(second_pass)
+  let _ = print(second-pass)
 ```
 
 Each member record selects its backend invocation. `AgentCommand` accepts a

@@ -7,20 +7,20 @@ import std/json
 # int / bool / decimal → text
 
 program def main(n: int, flag: bool, ratio: decimal) -> unit =
-  let n_text   = n     as text
-  let b_text   = flag  as text
-  let d_text   = ratio as text
-  print n_text
-  print b_text
-  print d_text
+  let n-text   = n     as text
+  let b-text   = flag  as text
+  let d-text   = ratio as text
+  print n-text
+  print b-text
+  print d-text
 
   # int / bool / decimal → json
-  let n_json   = n     as json
-  let b_json   = flag  as json
-  let d_json   = ratio as json
-  print n_json
-  print b_json
-  print d_json
+  let n-json   = n     as json
+  let b-json   = flag  as json
+  let d-json   = ratio as json
+  print n-json
+  print b-json
+  print d-json
 
   # text → json embeds the text as a JSON string (total, no parse)
   let embedded = "42" as json

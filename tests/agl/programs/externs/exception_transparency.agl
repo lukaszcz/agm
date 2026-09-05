@@ -7,19 +7,19 @@ extern def invoke(f: () -> int) -> int
 extern def catch_and_reraise(f: () -> int) -> int
 extern def raise_from_companion() -> int
 
-def fail_from_callback() -> int =
+def fail-from-callback() -> int =
   raise Problem(message = "callback", detail = "original")
 
 program def main(mode: text) -> unit =
   if mode == "callback" =>
     try
-      let _ = invoke(fail_from_callback)
+      let _ = invoke(fail-from-callback)
     catch Problem as error =>
       print "%{error.message}:%{error.detail}"
 
   if mode == "reraise" =>
     try
-      let _ = catch_and_reraise(fail_from_callback)
+      let _ = catch_and_reraise(fail-from-callback)
     catch Problem as error =>
       print "%{error.message}:%{error.detail}"
 

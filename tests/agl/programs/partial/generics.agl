@@ -4,7 +4,7 @@ def id[T](x: T) -> T = x
 
 def singleton[T](x: T) -> array[T] = [x]
 
-def map_one[A, B](f: (A) -> B, xs: array[A]) -> array[B] = [f(xs[0])]
+def map-one[A, B](f: (A) -> B, xs: array[A]) -> array[B] = [f(xs[0])]
 
 def apply[A, B](x: A, f: (A) -> B) -> B = f(x)
 
@@ -19,20 +19,20 @@ program def main(mode: text, n: int) -> unit =
         let keep: (text) -> text = tag(n, ?)
         print(keep("kept"))
     | mode == "map" =>
-        let map_id: (array[int]) -> array[int] = map_one(id, ?)
-        let mapped = map_id([n])
+        let map-id: (array[int]) -> array[int] = map-one(id, ?)
+        let mapped = map-id([n])
         print(mapped[0])
-        let map_render = map_one(fn(x: int) -> text => "v=%{x}", ?)
-        let rendered = map_render([3])
+        let map-render = map-one(fn(x: int) -> text => "v=%{x}", ?)
+        let rendered = map-render([3])
         print(rendered[0])
     | mode == "expected" =>
-        let make_single: (int) -> array[int] = singleton(?)
-        let result = make_single(n)
+        let make-single: (int) -> array[int] = singleton(?)
+        let result = make-single(n)
         print(result[0])
-        let int_id: (int) -> int = id(?)
-        print(int_id(n + 1))
+        let int-id: (int) -> int = id(?)
+        print(int-id(n + 1))
     | else =>
-        let apply_text: (text) -> text = apply(?, id)
-        print(apply_text("kept"))
-        let typed_map = map_one::[int, int](id::[int], ?)
-        print(typed_map([n + 2])[0])
+        let apply-text: (text) -> text = apply(?, id)
+        print(apply-text("kept"))
+        let typed-map = map-one::[int, int](id::[int], ?)
+        print(typed-map([n + 2])[0])

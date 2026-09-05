@@ -57,9 +57,9 @@ var current = 1
 
 def add(a: int, b: int) -> int = a + b
 
-let add_current = add(?, current)
+let add-current = add(?, current)
 current := 100
-let result = add_current(2)
+let result = add-current(2)
 ()
 """
     result = evaluate_ir(source)
@@ -70,7 +70,7 @@ let result = add_current(2)
 def test_partial_call_evaluates_callee_then_non_holes_in_written_order_at_creation() -> None:
     source = """
 var log = ""
-var after_create = ""
+var after-create = ""
 var first = 0
 var second = 0
 
@@ -80,20 +80,20 @@ def mark(label: text, value: int) -> int =
 
 def digits(a: int, b: int, c: int) -> int = a * 100 + b * 10 + c
 
-def make_callee() -> (int, int, int) -> int =
+def make-callee() -> (int, int, int) -> int =
   log := log + "callee"
   digits
 
 program def main() -> unit =
-  let h = make_callee()(mark("a", 1), ?, mark("c", 3))
-  after_create := log
+  let h = make-callee()(mark("a", 1), ?, mark("c", 3))
+  after-create := log
   first := h(2)
   second := h(4)
 """
     executable = lower_inline_ir(source)
     (main_symbol,) = executable.program_functions
     result = IrInterpreter(executable).run(program_symbol=main_symbol)
-    assert result["after_create"] == TextValue("calleeac")
+    assert result["after-create"] == TextValue("calleeac")
     assert result["log"] == TextValue("calleeac")
     assert result["first"] == IntValue(123)
     assert result["second"] == IntValue(143)
@@ -101,11 +101,11 @@ program def main() -> unit =
 
 def test_partial_creation_time_exception_propagates_before_closure_invocation() -> None:
     source = """
-def fail_arg() -> int = raise Abort(message = "create")
+def fail-arg() -> int = raise Abort(message = "create")
 def add(a: int, b: int) -> int = a + b
 
 let message = try
-  let h = add(?, fail_arg())
+  let h = add(?, fail-arg())
   let value = h(1)
   "no error"
 catch Abort as e =>
@@ -118,8 +118,8 @@ message
 
 def test_partial_invocation_time_exception_propagates_from_underlying_call() -> None:
     source = """
-def fail_call(x: int) -> int = raise Abort(message = "invoke")
-let h = fail_call(?)
+def fail-call(x: int) -> int = raise Abort(message = "invoke")
+let h = fail-call(?)
 let message = try
   let value = h(1)
   "no error"
@@ -133,8 +133,8 @@ message
 
 def test_partial_call_coerces_captured_arguments_when_invoked() -> None:
     source = """
-def add_dec(a: decimal, b: decimal) -> decimal = a + b
-let h = add_dec(?, 1)
+def add-dec(a: decimal, b: decimal) -> decimal = a + b
+let h = add-dec(?, 1)
 let result = h(2.5)
 ()
 """

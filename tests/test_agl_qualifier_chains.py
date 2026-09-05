@@ -320,7 +320,7 @@ def test_scoped_enum_members_and_nested_type_members_run_through_the_full_pipeli
         "enum Option[T] | none | some(value: T)\n"
         "\n"
         "scope Option\n"
-        "  def is_empty(value: Option[int]) -> bool = value is Option[int]::none\n"
+        "  def is-empty(value: Option[int]) -> bool = value is Option[int]::none\n"
         "end Option\n"
         "\n"
         "scope A\n"
@@ -331,7 +331,7 @@ def test_scoped_enum_members_and_nested_type_members_run_through_the_full_pipeli
         "case option of\n"
         "  | Option[int]::some(value) => print value\n"
         "  | Option[int]::none => print 0\n"
-        "print(Option::is_empty(Option[int]::none))\n"
+        "print(Option::is-empty(Option[int]::none))\n"
         "let nested: A::T[int] = A::T[int]::value\n"
         "print(nested is A::T[int]::value)"
     )
@@ -459,9 +459,9 @@ def test_use_resolves_aliases_suffixes_anchored_routes_and_nested_scopes(tmp_pat
                 "use Alias::Nested::*\n"
                 "use /pkg/tools as P\n"
                 "def selected() -> int = probe()\n"
-                "def retained_path() -> int = Nested::child()\n"
+                "def retained-path() -> int = Nested::child()\n"
                 "def nested() -> int = child()\n"
-                "def renamed_route() -> int = P::ping()\n"
+                "def renamed-route() -> int = P::ping()\n"
             ),
             "pkg/tools": (
                 "def ping() -> int = 1\n\nscope Nested\n  def child() -> int = 2\nend Nested\n"
@@ -682,10 +682,10 @@ def test_use_selection_hiding_and_renames_are_additive() -> None:
                 "  end Nested\n"
                 "end Local\n"
                 "\n"
-                "def all_members() -> int = Nested::member()\n"
-                "def selected_member() -> int = renamed()\n"
-                "def single_member() -> int = shown()\n"
-                "def aliased_scope() -> int = L::shown()\n"
+                "def all-members() -> int = Nested::member()\n"
+                "def selected-member() -> int = renamed()\n"
+                "def single-member() -> int = shown()\n"
+                "def aliased-scope() -> int = L::shown()\n"
             )
         }
     )

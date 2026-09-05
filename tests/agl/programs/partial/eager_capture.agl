@@ -14,19 +14,19 @@ program def main(mode: text, base: int) -> unit =
 
   if
     | mode == "non_hole" =>
-        let add_tick = add(?, tick())
+        let add-tick = add(?, tick())
         print(counter)
-        print(add_tick(10))
-        print(add_tick(20))
+        print(add-tick(10))
+        print(add-tick(20))
         print(counter)
     | mode == "var_value" =>
-        let add_current = add(?, current)
+        let add-current = add(?, current)
         current := 99
-        print(add_current(1))
+        print(add-current(1))
         print(current)
     | else =>
-        let captured_order = digits(tick(), ?)
+        let captured-order = digits(tick(), ?)
         print(counter)
-        print(captured_order(base))
-        print(captured_order(base + 1))
+        print(captured-order(base))
+        print(captured-order(base + 1))
         print(counter)

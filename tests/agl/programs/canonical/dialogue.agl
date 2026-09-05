@@ -7,7 +7,7 @@ program def main(problem: text) -> unit =
   let researcher: Agent = AgentCommand("researcher")
   let critic: Agent = AgentCommand("critic")
   var proposal: Turn = ask("Propose a solution for %{problem}.", agent = researcher, on-parse-error = Retry(n = 2))
-  var final_answer: text = ""
+  var final-answer: text = ""
 
   do[6]
     case proposal of
@@ -21,7 +21,7 @@ program def main(problem: text) -> unit =
 
   case proposal of
     | Done(answer) =>
-        final_answer := answer
+        final-answer := answer
     | _ => ()
 
-  print final_answer
+  print final-answer

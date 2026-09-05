@@ -67,7 +67,7 @@ command payload:
 program def main() -> unit =
   let directory = "."
   let listing: text = exec$ printf '%s\n' %{directory}
-  let home_listing: text = exec$
+  let home-listing: text = exec$
     for file in "$HOME"/*; do
       printf '%s\n' "$file"
     done

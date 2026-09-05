@@ -4,7 +4,7 @@
 # alias observes the change, including a generic function reading through it.
 record Box(items: array[int])
 
-def first_of[T](xs: array[T]) -> T = xs[0]
+def first-of[T](xs: array[T]) -> T = xs[0]
 
 def bump(xs: array[int]) -> unit =
   var writer = xs
@@ -21,11 +21,11 @@ program def main(seed: int) -> unit =
   print(l2)
   print(l3)
   print(box.items)
-  print(first_of(l))
+  print(first-of(l))
 
   bump(l)
   print(l)
   print(l2)
   print(l3)
   print(box.items)
-  print(first_of(l))
+  print(first-of(l))

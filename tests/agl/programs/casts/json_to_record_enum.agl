@@ -12,9 +12,9 @@ enum Priority
 
 # json → record parsing and cast
 
-program def main(config_json: text, priority_json: text) -> unit =
+program def main(config-json: text, priority-json: text) -> unit =
   try
-    let j = json::parse(config_json)
+    let j = json::parse(config-json)
     let cfg = j as Config
     print cfg.name
     print cfg.timeout
@@ -26,8 +26,8 @@ program def main(config_json: text, priority_json: text) -> unit =
 
   # json → enum parsing and cast
   try
-    let p_json = json::parse(priority_json)
-    let p = p_json as Priority
+    let p-json = json::parse(priority-json)
+    let p = p-json as Priority
     if p is Low =>
       print "priority: low"
     else =>

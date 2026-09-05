@@ -1759,9 +1759,9 @@ class TestBuiltinCallClassification:
         r = parse_and_resolve(
             "record P()\n"
             f"def P::{method_name}(self) -> P = self\n"
-            f"let builtin_value = {builtin_call}\n"
-            f"let user_value = P::{method_name}(P())\n"
-            "user_value"
+            f"let builtin-value = {builtin_call}\n"
+            f"let user-value = P::{method_name}(P())\n"
+            "user-value"
         )
         method = r.program.body.items[1]
         builtin_let = r.program.body.items[2]
@@ -2073,7 +2073,7 @@ class TestMethodReceiverClassification:
     @pytest.mark.parametrize(
         "source",
         (
-            "builtin def Point::builtin_host(self) -> int",
+            "builtin def Point::builtin-host(self) -> int",
             "extern def Point::extern_host(self) -> int",
         ),
         ids=("builtin", "extern"),
@@ -2086,7 +2086,7 @@ class TestMethodReceiverClassification:
         if "extern" in source:
             origin_path.with_suffix(".py").write_text("")
         resolved = parse_and_resolve(f"record Point()\n{source}\n()", origin_path=origin_path)
-        name = "builtin_host" if "builtin" in source else "extern_host"
+        name = "builtin-host" if "builtin" in source else "extern_host"
 
         assert resolved.method_declarations == {
             (ENTRY_ID, ("Point",), name): ("Point",),

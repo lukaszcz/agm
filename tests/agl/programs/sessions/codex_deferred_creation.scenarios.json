@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "unsupported_operations_fail_the_same_before_and_after_the_first_ask",
-      "params": {"reset_before_ask": false},
+      "params": {"reset-before-ask": false},
       "agents": {"ask": {"responses": ["created"]}},
       "expect": {
         "stdout": "set-name\ncompact\nfork\nset-name\nstats\ncompact\nfork\nset-name\nstats\ncompact-message\nfork-message\nset-name-message\nstats-message\n",
@@ -24,7 +24,7 @@
     },
     {
       "name": "reset_before_the_first_ask_never_requires_a_codex_thread",
-      "params": {"reset_before_ask": true},
+      "params": {"reset-before-ask": true},
       "agents": {"ask": {"responses": ["created"]}},
       "expect": {
         "stdout": "set-name\ncompact\nfork\nset-name\nstats\ncompact\nfork\nset-name\nstats\ncompact-message\nfork-message\nset-name-message\nstats-message\n",

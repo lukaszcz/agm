@@ -19,8 +19,8 @@ program def main() -> unit =
 
   # Both owner-applied and legacy direct spellings construct precise member records.
   let z: Option[int] = Option[int]::none
-  let legacy_none: Option[int] = none::[int]
-  let legacy_ok: Outcome[int, text] = ok::[int, text](value = 3)
+  let legacy-none: Option[int] = none::[int]
+  let legacy-ok: Outcome[int, text] = ok::[int, text](value = 3)
 
   # The qualified forms work the same way.
   let qmk: int -> Option[int] = Option[int]::some
@@ -29,7 +29,7 @@ program def main() -> unit =
 
   print(v is Option::some)
   print(z is Option::none)
-  print(legacy_none is Option::none)
-  print(legacy_ok is Outcome::ok)
+  print(legacy-none is Option::none)
+  print(legacy-ok is Outcome::ok)
   print(qv is Option::some)
   print(qz is Option::none)

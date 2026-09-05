@@ -7,7 +7,7 @@ enum Packet
   | packet(count: int, flag: Flag, label: text)
 
 enum NamedPacket
-  | named_packet(on: Flag)
+  | named-packet(on: Flag)
 
 program def main() -> unit =
   var on: int = 0
@@ -18,7 +18,7 @@ program def main() -> unit =
       print "%{on}:%{count}:%{shown}"
     | packet(_, _, _) => print "other"
 
-  let named = named_packet(on = Flag::on)
+  let named = named-packet(on = Flag::on)
   case named of
-    | named_packet(on()) => print "constructor"
-    | named_packet(_ as captured) => print "capture"
+    | named-packet(on()) => print "constructor"
+    | named-packet(_ as captured) => print "capture"

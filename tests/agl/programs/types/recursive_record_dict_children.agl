@@ -7,25 +7,25 @@ record Tree
   name: text
   children: dict[text, Tree]
 
-def count_nodes(t: Tree) -> int =
+def count-nodes(t: Tree) -> int =
   var total: int = 1
   for key in t.children do
-    total := total + count_nodes(t.children[key])
+    total := total + count-nodes(t.children[key])
   total
 
-def render_tree(t: Tree) -> text =
+def render-tree(t: Tree) -> text =
   var result: text = t.name
   for key in t.children do
-    result := result + " > " + render_tree(t.children[key])
+    result := result + " > " + render-tree(t.children[key])
   result
 
-program def main(root_name: text, child_name: text, include_grandchild: bool) -> unit =
-  let grandchildren: dict[text, Tree] = if include_grandchild => {"leaf": Tree(name = "leaf", children = {})} else => {}
-  let child = Tree(name = child_name, children = grandchildren)
-  let root = Tree(name = root_name, children = {"child": child, "second": Tree(name = "second", children = {})})
-  let empty_root = Tree(name = "empty", children = {})
+program def main(root-name: text, child-name: text, include-grandchild: bool) -> unit =
+  let grandchildren: dict[text, Tree] = if include-grandchild => {"leaf": Tree(name = "leaf", children = {})} else => {}
+  let child = Tree(name = child-name, children = grandchildren)
+  let root = Tree(name = root-name, children = {"child": child, "second": Tree(name = "second", children = {})})
+  let empty-root = Tree(name = "empty", children = {})
 
-  print count_nodes(root)
-  print render_tree(root)
-  print count_nodes(empty_root)
-  print render_tree(empty_root)
+  print count-nodes(root)
+  print render-tree(root)
+  print count-nodes(empty-root)
+  print render-tree(empty-root)

@@ -16,16 +16,16 @@ enum Box2
 program def main(n: int) -> unit =
   let src: Agent = AgentCommand("src")
   let opt: Opt[int] = ask("Give opt.", agent = src)
-  let from_pos = case opt of
+  let from-pos = case opt of
     | Some(_ as x) => x
     | None => 0
-  print from_pos
+  print from-pos
 
   # Named sub-pattern: 'value = v' binds the 'value' field by name.
-  let from_named = case opt of
+  let from-named = case opt of
     | Some(value = _ as v) => v * 2
     | None => -1
-  print from_named
+  print from-named
 
   # Named-only shorthand: 'w' and 'h' bind the explicitly named-only fields.
   let box: Box2 = ask("Give box.", agent = src)

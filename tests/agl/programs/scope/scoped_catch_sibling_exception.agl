@@ -14,30 +14,30 @@ scope A
   exception Boom extends Exception
     detail: text
 
-  def catch_sibling() -> text =
+  def catch-sibling() -> text =
     try
       raise A::Boom(message = "m", detail = "sibling")
     catch Boom as e =>
       e.detail
 
-  def catch_root() -> text =
+  def catch-root() -> text =
     try
       raise Outage(message = "m", detail = "root")
     catch Outage as e =>
       e.detail
 
-  def raise_scoped() -> text =
+  def raise-scoped() -> text =
     raise A::Boom(message = "m", detail = "scoped")
 end A
 
 program def main(mode: text) -> unit =
   if
     | mode == "sibling" =>
-      print A::catch_sibling()
+      print A::catch-sibling()
     | mode == "root_in_scope" =>
-      print A::catch_root()
+      print A::catch-root()
     | else =>
       try
-        print A::raise_scoped()
+        print A::raise-scoped()
       catch Boom as e =>
         print "wrongly caught: %{e.detail}"

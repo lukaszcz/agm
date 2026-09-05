@@ -8,8 +8,8 @@ import consumer
 program def main(mode: text, id: int) -> unit =
   if
     | mode == "direct" =>
-        print(origin::make_parcel(id).label())
+        print(origin::make-parcel(id).label())
     | mode == "transitive" =>
-        print(consumer::describe_forwarded(id))
+        print(consumer::describe-forwarded(id))
     | else =>
-        print(facade::make_parcel(id).label())
+        print(facade::make-parcel(id).label())

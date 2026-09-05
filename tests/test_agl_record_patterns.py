@@ -107,9 +107,9 @@ def test_generic_record_alias_pattern_uses_concrete_field_type_and_selected_cons
         "type Phantom[T] = Box[int]\n"
         "let box: Alias[int] = Box(value = 1)\n"
         "let Alias(value = _ as value) = box\n"
-        "let ::Alias(value = _ as self_value) = box\n"
-        "let Phantom(value = _ as phantom_value) = box\n"
-        "value + self_value + phantom_value\n"
+        "let ::Alias(value = _ as self-value) = box\n"
+        "let Phantom(value = _ as phantom-value) = box\n"
+        "value + self-value + phantom-value\n"
     )
 
     let = checked.resolved.program.body.items[4]
@@ -133,11 +133,11 @@ def test_generic_record_patterns_publish_owner_without_type_arguments() -> None:
     checked = accept(
         "record Box[T]\n"
         "  value: T\n"
-        "let int_box: Box[int] = Box(value = 1)\n"
-        "let Box(value = _) = int_box\n"
-        'let text_box: Box[text] = Box(value = "x")\n'
-        "let Box(value = _) = text_box\n"
-        "int_box\n"
+        "let int-box: Box[int] = Box(value = 1)\n"
+        "let Box(value = _) = int-box\n"
+        'let text-box: Box[text] = Box(value = "x")\n'
+        "let Box(value = _) = text-box\n"
+        "int-box\n"
     )
     pattern_lets = [
         item
@@ -256,14 +256,14 @@ def test_record_patterns_support_imported_and_qualified_alias_spellings(tmp_path
                 "let local = Local(value = 1)\n"
                 "let ::Local(value) = local\n"
                 "let direct: lib::Alias[int] = lib::Box(value = 2)\n"
-                "let lib::Alias(value = _ as direct_value) = direct\n"
+                "let lib::Alias(value = _ as direct-value) = direct\n"
                 "let renamed: L::Alias[int] = L::Box(value = 3)\n"
-                "let L::Alias(value = _ as renamed_value) = renamed\n"
+                "let L::Alias(value = _ as renamed-value) = renamed\n"
                 "let opened: Alias[int] = Box(value = 4)\n"
-                "let Alias(value = _ as opened_value) = opened\n"
+                "let Alias(value = _ as opened-value) = opened\n"
                 "let generic: lib::Box[int] = lib::Box(value = 5)\n"
-                "let lib::Box(value = _ as generic_value) = generic\n"
-                "direct_value + renamed_value + opened_value + generic_value\n"
+                "let lib::Box(value = _ as generic-value) = generic\n"
+                "direct-value + renamed-value + opened-value + generic-value\n"
             ),
         },
     )
@@ -291,9 +291,9 @@ def test_local_record_owner_qualifier_selects_only_the_local_same_named_record(
             "record R\n  value: int\n"
             "type Alias = R\n"
             "enum Signal\n  | yes(value: int)\n"
-            "def select_local(r: R) -> int = case r of | R::R(value) => value\n"
-            "def select_alias(r: Alias) -> int = case r of | Alias::Alias(value) => value\n"
-            "def select_enum(s: Signal) -> int = case s of | Signal::yes(value) => value\n"
+            "def select-local(r: R) -> int = case r of | R::R(value) => value\n"
+            "def select-alias(r: Alias) -> int = case r of | Alias::Alias(value) => value\n"
+            "def select-enum(s: Signal) -> int = case s of | Signal::yes(value) => value\n"
         ),
     }
 
@@ -306,7 +306,7 @@ def test_local_record_owner_qualifier_selects_only_the_local_same_named_record(
             "entry": (
                 "import lib::*\n"
                 "record R\n  value: int\n"
-                "def select_imported(r: lib::R) -> int = "
+                "def select-imported(r: lib::R) -> int = "
                 "case r of | R::R(value) => value\n"
             ),
         },
@@ -530,12 +530,12 @@ def test_bare_pattern_in_a_region_is_shadowed_by_its_own_scoped_variant() -> Non
         "scope A\n"
         "  enum E\n"
         "    | Point(label: text)\n"
-        "  def from_root(p: Point) -> int =\n"
+        "  def from-root(p: Point) -> int =\n"
         "    case p of\n"
         "    | Point(x) => x\n"
         "end A\n"
         "\n"
-        "A::from_root(Point(x = 1))\n"
+        "A::from-root(Point(x = 1))\n"
     )
 
 

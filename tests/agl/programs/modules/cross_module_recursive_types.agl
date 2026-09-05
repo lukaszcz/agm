@@ -3,21 +3,21 @@
 import tree_a::*
 import tree_b::*
 
-def sum_a(n: NodeA) -> int =
+def sum-a(n: NodeA) -> int =
   case n of
     | LeafA() => 0
-    | BranchA(value, child) => value + sum_b(child)
+    | BranchA(value, child) => value + sum-b(child)
 
-def sum_b(n: NodeB) -> int =
+def sum-b(n: NodeB) -> int =
   var total: int = 0
   for c in n.children do
-    total := total + sum_a(c)
+    total := total + sum-a(c)
   total
 
 program def main(v: int, tag: text) -> unit =
   let leaf = LeafA()
-  let child_group = NodeB(tag = tag, children = [leaf])
-  let branch = BranchA(value = v, child = child_group)
+  let child-group = NodeB(tag = tag, children = [leaf])
+  let branch = BranchA(value = v, child = child-group)
 
-  print sum_a(branch)
-  print child_group.tag
+  print sum-a(branch)
+  print child-group.tag

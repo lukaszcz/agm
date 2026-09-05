@@ -6,26 +6,26 @@ enum Tree[T]
   | Leaf
   | Node(value: T, left: Tree[T], right: Tree[T])
 
-def count_nodes[T](t: Tree[T]) -> int =
+def count-nodes[T](t: Tree[T]) -> int =
   case t of
     | Leaf => 0
-    | Node(value, left, right) => 1 + count_nodes(left) + count_nodes(right)
+    | Node(value, left, right) => 1 + count-nodes(left) + count-nodes(right)
 
-def sum_ints(t: Tree[int]) -> int =
+def sum-ints(t: Tree[int]) -> int =
   case t of
     | Leaf => 0
-    | Node(value, left, right) => value + sum_ints(left) + sum_ints(right)
+    | Node(value, left, right) => value + sum-ints(left) + sum-ints(right)
 
-def concat_texts(t: Tree[text]) -> text =
+def concat-texts(t: Tree[text]) -> text =
   case t of
     | Leaf => ""
-    | Node(value, left, right) => concat_texts(left) + value + concat_texts(right)
+    | Node(value, left, right) => concat-texts(left) + value + concat-texts(right)
 
-def sum_nested_arrays(t: Tree[array[int]]) -> int =
+def sum-nested-arrays(t: Tree[array[int]]) -> int =
   case t of
     | Leaf => 0
     | Node(value, left, right) =>
-        var total: int = sum_nested_arrays(left) + sum_nested_arrays(right)
+        var total: int = sum-nested-arrays(left) + sum-nested-arrays(right)
         for x in value do
           total := total + x
         total
@@ -33,41 +33,41 @@ def sum_nested_arrays(t: Tree[array[int]]) -> int =
 # Tree[int]: build, fold, equality.
 
 program def main(a: int, b: int, c: int) -> unit =
-  let int_tree: Tree[int] = Node(
+  let int-tree: Tree[int] = Node(
     value = a,
     left = Node(value = b, left = Leaf, right = Leaf),
     right = Node(value = c, left = Leaf, right = Leaf),
   )
-  let same_int_tree: Tree[int] = Node(
+  let same-int-tree: Tree[int] = Node(
     value = a,
     left = Node(value = b, left = Leaf, right = Leaf),
     right = Node(value = c, left = Leaf, right = Leaf),
   )
-  let different_int_tree: Tree[int] = Node(value = a, left = Leaf, right = Leaf)
+  let different-int-tree: Tree[int] = Node(value = a, left = Leaf, right = Leaf)
 
-  print count_nodes(int_tree)
-  print sum_ints(int_tree)
-  print (int_tree == same_int_tree)
-  print (int_tree == different_int_tree)
+  print count-nodes(int-tree)
+  print sum-ints(int-tree)
+  print (int-tree == same-int-tree)
+  print (int-tree == different-int-tree)
 
   # Tree[text]: the SAME generic declaration, a different instantiation.
-  let text_tree: Tree[text] = Node(
+  let text-tree: Tree[text] = Node(
     value = "b",
     left = Node(value = "a", left = Leaf, right = Leaf),
     right = Node(value = "c", left = Leaf, right = Leaf),
   )
-  print count_nodes(text_tree)
-  print concat_texts(text_tree)
+  print count-nodes(text-tree)
+  print concat-texts(text-tree)
 
   # Tree[array[int]]: a container-of-container instantiation.
-  let array_tree: Tree[array[int]] = Node(
+  let array-tree: Tree[array[int]] = Node(
     value = [a, b],
     left = Leaf,
     right = Node(value = [c], left = Leaf, right = Leaf),
   )
-  print count_nodes(array_tree)
-  print sum_nested_arrays(array_tree)
+  print count-nodes(array-tree)
+  print sum-nested-arrays(array-tree)
 
-  case int_tree of
+  case int-tree of
     | Leaf => print "empty"
     | Node(value, left, right) => print "root %{value}"

@@ -1,5 +1,5 @@
 # Each selected backend reports its native session operations and capability failures.
-def selected_agent(backend: int) -> Agent =
+def selected-agent(backend: int) -> Agent =
   if
     | backend == 0 => AgentClaude("model", "high")
     | backend == 1 => AgentCodex("model", "high")
@@ -8,7 +8,7 @@ def selected_agent(backend: int) -> Agent =
     | else => AgentCommand("command \%{SESSION_ID}")
 
 program def main(backend: int) -> unit =
-  let agent = selected_agent(backend)
+  let agent = selected-agent(backend)
   let session: Session = if
     | backend == 2 => Session::open(agent, transport = Some(SessionTransport::Cli), name = "initial")
     | backend == 0 or backend == 3 => Session::open(agent, name = "initial")

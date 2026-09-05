@@ -3,12 +3,12 @@
 
 # Check if the text is a valid int before using it
 
-program def main(user_input: text, d: decimal) -> unit =
-  if user_input as? int =>
-    let n = user_input as int
+program def main(user-input: text, d: decimal) -> unit =
+  if user-input as? int =>
+    let n = user-input as int
     print "got int: %{n}"
     print "squared: %{(n * n) as text}"
-  else => print "not an int: %{user_input}"
+  else => print "not an int: %{user-input}"
 
   if d as? int =>
     let i = d as int

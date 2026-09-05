@@ -7,8 +7,8 @@ program def main() -> unit =
   let pi: Agent = AgentPi(provider = "openai", model = "gpt", thinking = "low")
 
   print command
-  let same_claude: Agent = AgentClaude("sonnet", "medium")
-  print (claude == same_claude)
+  let same-claude: Agent = AgentClaude("sonnet", "medium")
+  print (claude == same-claude)
   print(render(codex))
   case pi of
     | AgentPi(provider, model, thinking) => print "%{provider}/%{model}/%{thinking}"

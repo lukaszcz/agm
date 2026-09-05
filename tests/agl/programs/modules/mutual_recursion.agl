@@ -10,10 +10,10 @@ import parity::*
 # Mutually recursive predicates defined across a cyclic import (even ↔ odd).
 
 program def main(n: int) -> unit =
-  print(is_even(n) as text)
-  print(is_odd(n) as text)
+  print(is-even(n) as text)
+  print(is-odd(n) as text)
 
   # `parity::classify` runs the cycle and yields an imported enum value.
   case parity::classify(n) of
-    | even_p() => print "even: %{n}"
-    | odd_p() => print "odd: %{n}"
+    | even-p() => print "even: %{n}"
+    | odd-p() => print "odd: %{n}"

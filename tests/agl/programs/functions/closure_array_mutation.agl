@@ -12,16 +12,16 @@ record Closures
   mutate: () -> unit
   view: () -> array[int]
 
-def make_closures(first: int, second: int) -> Closures =
+def make-closures(first: int, second: int) -> Closures =
   var shared = [first, second]
-  let viewer_source = shared
+  let viewer-source = shared
   Closures(
     mutate = fn() => do shared[0] := shared[0] + 10 until true,
-    view = fn() => viewer_source,
+    view = fn() => viewer-source,
   )
 
 program def main(first: int, second: int) -> unit =
-  let closures = make_closures(first, second)
+  let closures = make-closures(first, second)
 
   print closures.view()
   closures.mutate()

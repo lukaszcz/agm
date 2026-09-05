@@ -615,7 +615,7 @@ enum Outcome
 let ok = Outcome::Ok(42)
 let ok2 = Outcome::Ok(value = 42)
 let err = Outcome::Err("bad", false)
-let named_err = Outcome::Err(reason = "bad", fatal = false)
+let named-err = Outcome::Err(reason = "bad", fatal = false)
 ```
 
 Zone markers and `var` are also available on inline member fields:
@@ -1028,7 +1028,7 @@ succeed, without handling an exception:
 
 <!-- agl-check: fragment -->
 ```agl
-let parses_as_int: bool = some_json as? int
+let parses-as-int: bool = some-json as? int
 ```
 
 ### Strict parsing in text and json casts

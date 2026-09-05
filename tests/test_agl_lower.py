@@ -131,19 +131,6 @@ from tests.agl.ir_harness import _compiled_checked, compile_checked_module, lowe
 from tests.agl.module_graph import resolve_and_check_inline_entry
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
-_MIXED_ROOT_AND_SCOPED_DECLARATIONS = (
-    "def root() -> int = 0\n"
-    "agent root_agent\n"
-    "\n"
-    "scope Group\n"
-    "  def block_function() -> int = 0\n"
-    "  agent block_agent\n"
-    "end Group\n"
-    "\n"
-    "def Group::shorthand_function() -> int = 0\n"
-    "agent Group::shorthand_agent\n"
-    "()"
-)
 
 # ---------------------------------------------------------------------------
 # Pipeline helper
@@ -453,7 +440,7 @@ def test_direct_lowerer_helper_passes_complete_compiled_match_site_mapping() -> 
 def test_capture_scan_captures_enclosing_field_assignment_receiver() -> None:
     source = (
         "record Box(var value: int)\n"
-        "def make_update() -> unit =\n"
+        "def make-update() -> unit =\n"
         "  let box = Box(value = 1)\n"
         "  let update = fn() -> unit => if true => box.value := 2 else => ()\n"
         "  ()"
@@ -561,8 +548,8 @@ def test_lowering_erases_flexible_state_from_generic_direct_nested_and_partial_c
         "def app[T](func: T -> T, value: T) -> T = func(value)\n"
         "let direct = id(1)\n"
         "let nested = app(id, app(id, 2))\n"
-        "let make_box: (int) -> Box[int] = Box(value = ?)\n"
-        "let boxed = make_box(nested)\n"
+        "let make-box: (int) -> Box[int] = Box(value = ?)\n"
+        "let boxed = make-box(nested)\n"
         "boxed"
     )
 
@@ -1832,12 +1819,12 @@ class TestLowerFunctions:
     def test_try_with_bound_exception_in_function_body(self) -> None:
         """Function body with try-catch-as (bound handler) exercises clause.binding path."""
         source = (
-            "def safe_add(a: int, b: int) -> int =\n"
+            "def safe-add(a: int, b: int) -> int =\n"
             "  try\n"
             "    a + b\n"
             "  catch ArithmeticError as e =>\n"
             "    0\n"
-            "let result = safe_add(3, 4)\n()"
+            "let result = safe-add(3, 4)\n()"
         )
         prog = _lower(source)
         assert len(prog.functions) == 1
@@ -1872,7 +1859,7 @@ class TestLowerFunctions:
 
     def test_indirect_call_via_let_binding_lowers_to_indirect_call(self) -> None:
         """Calling a let-bound function reference lowers to IrIndirectCall."""
-        source = "def f(x: int) -> int = x + 1\nlet fn_ref = f\nlet result = fn_ref(5)\n()"
+        source = "def f(x: int) -> int = x + 1\nlet fn-ref = f\nlet result = fn-ref(5)\n()"
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
         # Every immutable let captures its RHS in the compiled site's private root.
@@ -2057,7 +2044,7 @@ class TestLambdaLowering:
         closure capture, so IrMakeClosure.captures is empty even when the lambda
         body references a name from an enclosing module initializer.
         """
-        source = "let offset = 10\nlet add_off = fn(x: int) -> int => x + offset\n()"
+        source = "let offset = 10\nlet add-off = fn(x: int) -> int => x + offset\n()"
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
         # offset is first, add_off is second
@@ -2080,7 +2067,7 @@ class TestLambdaLowering:
 
     def test_lambda_body_result_coerced(self) -> None:
         """Lambda body is lowered with lower_coerced so int-to-decimal coercion is baked in."""
-        source = "let to_dec = fn(x: int) -> decimal => x\n()"
+        source = "let to-dec = fn(x: int) -> decimal => x\n()"
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
         bind = _let_root_capture(inits[0])
@@ -2378,7 +2365,7 @@ class TestLowerGraph:
             "  x: int\n"
             "  y: int\n"
             "\n"
-            "def make_point(a: int, b: int) -> LibPoint =\n"
+            "def make-point(a: int, b: int) -> LibPoint =\n"
             "    LibPoint(x = a, y = b)\n"
         )
         entry_source = (
@@ -2387,7 +2374,7 @@ class TestLowerGraph:
             "  width: int\n"
             "\n"
             "program def main() -> unit =\n"
-            "  let result = lib::make_point(1, 2)\n"
+            "  let result = lib::make-point(1, 2)\n"
             "  let box = EntryBox(width = 10)\n"
         )
 
@@ -2609,10 +2596,10 @@ class TestHostOpLowering:
         assert isinstance(ir_print, IrPrint)
 
     def test_render_lowers_to_ir_render_value(self) -> None:
-        """render(x, pretty:, quote_strings:) lowers to IrRenderValue."""
+        """render(x, pretty:, quote-strings:) lowers to IrRenderValue."""
         from agm.agl.ir.nodes import IrRenderValue
 
-        source = 'let s = render("x", pretty = false, quote_strings = false)\n()'
+        source = 'let s = render("x", pretty = false, quote-strings = false)\n()'
         prog = _lower(source)
         entry = prog.modules[list(prog.modules.keys())[-1]]
         ir_bind = _let_root_capture(entry.initializers[0])
@@ -2655,7 +2642,7 @@ class TestHostOpLowering:
         from agm.agl.ir.nodes import IrCoerce, IrRenderValue
         from agm.agl.ir.operations import ToJson
 
-        source = 'let s = render::[json]("hi", quote_strings = false)\n()'
+        source = 'let s = render::[json]("hi", quote-strings = false)\n()'
         prog = _lower(source)
         entry = prog.modules[list(prog.modules.keys())[-1]]
         ir_bind = _let_root_capture(entry.initializers[0])
@@ -2866,12 +2853,12 @@ class TestLambdaCapturePositive:
         (snapshot-value semantics, not cell-sharing).  Asserts captures is
         non-empty and the single entry has by_cell=False matching the symbol.
         """
-        source = "def make_fn(n: int) -> unit =\n  let _g = fn(x: int) -> int => n + x\n  ()\n()\n"
+        source = "def make-fn(n: int) -> unit =\n  let _g = fn(x: int) -> int => n + x\n  ()\n()\n"
         prog = _lower(source)
         make_fn_desc = next(
             d
             for d in prog.functions.values()
-            if prog.symbols[d.function_symbol].public_name == "make_fn"
+            if prog.symbols[d.function_symbol].public_name == "make-fn"
         )
         body = _function_body(make_fn_desc)
         assert isinstance(body, IrBlock)
@@ -2883,7 +2870,7 @@ class TestLambdaCapturePositive:
                 if isinstance(captured_value, IrMakeClosure):
                     lambda_closure = captured_value
                     break
-        assert lambda_closure is not None, "Expected IrMakeClosure in make_fn body"
+        assert lambda_closure is not None, "Expected IrMakeClosure in make-fn body"
         # The lambda captures n (param) — captures must be non-empty
         captures = lambda_closure.captures
         assert len(captures) == 1, f"Expected 1 capture, got {captures!r}"
@@ -2901,7 +2888,7 @@ class TestLambdaCapturePositive:
         non-empty and the single entry has by_cell=True matching the symbol.
         """
         source = (
-            "def make_fn() -> unit =\n"
+            "def make-fn() -> unit =\n"
             "  var count: int = 0\n"
             "  let _g = fn() -> int => count\n"
             "  ()\n"
@@ -2911,7 +2898,7 @@ class TestLambdaCapturePositive:
         make_fn_desc = next(
             d
             for d in prog.functions.values()
-            if prog.symbols[d.function_symbol].public_name == "make_fn"
+            if prog.symbols[d.function_symbol].public_name == "make-fn"
         )
         body = _function_body(make_fn_desc)
         assert isinstance(body, IrBlock)
@@ -2922,7 +2909,7 @@ class TestLambdaCapturePositive:
                 if isinstance(captured_value, IrMakeClosure):
                     lambda_closure = captured_value
                     break
-        assert lambda_closure is not None, "Expected IrMakeClosure in make_fn body"
+        assert lambda_closure is not None, "Expected IrMakeClosure in make-fn body"
         captures = lambda_closure.captures
         assert len(captures) == 1, f"Expected 1 capture, got {captures!r}"
         cap = captures[0]
@@ -2939,7 +2926,7 @@ class TestLambdaCapturePositive:
         A wrong by_cell in the lowerer causes this test to fail.
         """
         source = (
-            "def make_fn(n: int) -> unit =\n"
+            "def make-fn(n: int) -> unit =\n"
             "  var count: int = 0\n"
             "  let _g = fn() -> int => n + count\n"
             "  ()\n"
@@ -2949,7 +2936,7 @@ class TestLambdaCapturePositive:
         make_fn_desc = next(
             d
             for d in prog.functions.values()
-            if prog.symbols[d.function_symbol].public_name == "make_fn"
+            if prog.symbols[d.function_symbol].public_name == "make-fn"
         )
         body = _function_body(make_fn_desc)
         assert isinstance(body, IrBlock)
@@ -2960,7 +2947,7 @@ class TestLambdaCapturePositive:
                 if isinstance(captured_value, IrMakeClosure):
                     lambda_closure = captured_value
                     break
-        assert lambda_closure is not None, "Expected IrMakeClosure in make_fn body"
+        assert lambda_closure is not None, "Expected IrMakeClosure in make-fn body"
         captures = lambda_closure.captures
         # Both n (param) and count (var) must be captured — non-empty
         assert len(captures) == 2, f"Expected 2 captures (n + count), got {captures!r}"
@@ -3299,12 +3286,12 @@ class TestIrMakeExceptionLowering:
     """
 
     def _get_raise_in_fn(self, source: str) -> IrRaise:
-        """Lower source and return the IrRaise from the 'stop_fn' function body."""
+        """Lower source and return the IrRaise from the 'stop-fn' function body."""
         prog = _lower(source)
         stop_desc = next(
             d
             for d in prog.functions.values()
-            if prog.symbols[d.function_symbol].public_name == "stop_fn"
+            if prog.symbols[d.function_symbol].public_name == "stop-fn"
         )
         body = _function_body(stop_desc)
         # Indented function body is wrapped in an IrBlock; unwrap if needed.
@@ -3318,7 +3305,7 @@ class TestIrMakeExceptionLowering:
 
     def test_exception_construction_emits_ir_make_exception(self) -> None:
         """raise Abort(message = ...) → IrRaise(exc=IrMakeException(display_name='Abort'))."""
-        source = 'def stop_fn() -> unit =\n  raise Abort(message = "stop")\nstop_fn()\n'
+        source = 'def stop-fn() -> unit =\n  raise Abort(message = "stop")\nstop-fn()\n'
         raise_node = self._get_raise_in_fn(source)
         exc = raise_node.exc
         assert isinstance(exc, IrMakeException)
@@ -3326,7 +3313,7 @@ class TestIrMakeExceptionLowering:
 
     def test_provided_field_is_ir_expr(self) -> None:
         """An explicitly provided message field lowers to IrConstText."""
-        source = 'def stop_fn() -> unit =\n  raise Abort(message = "stop")\nstop_fn()\n'
+        source = 'def stop-fn() -> unit =\n  raise Abort(message = "stop")\nstop-fn()\n'
         raise_node = self._get_raise_in_fn(source)
         exc = raise_node.exc
         assert isinstance(exc, IrMakeException)
@@ -4006,17 +3993,17 @@ class TestRangeForDesugar:
         ``IrMakeClosure.captures`` must contain entries for both outer parameters.
         """
         source = (
-            "def make_fn(end_val: int, step_val: int) -> unit =\n"
-            "  let _g = fn() -> unit => for i in 1 to end_val step step_val do () done\n"
+            "def make-fn(end-val: int, step-val: int) -> unit =\n"
+            "  let _g = fn() -> unit => for i in 1 to end-val step step-val do () done\n"
             "  ()\n"
-            "make_fn(5, 1)\n"
+            "make-fn(5, 1)\n"
         )
         prog = _lower(source)
         # Find the FunctionDescriptor for ``make_fn``.
         make_fn_desc = next(
             d
             for d in prog.functions.values()
-            if prog.symbols[d.function_symbol].public_name == "make_fn"
+            if prog.symbols[d.function_symbol].public_name == "make-fn"
         )
         body = _function_body(make_fn_desc)
         assert isinstance(body, IrBlock)
@@ -4028,7 +4015,7 @@ class TestRangeForDesugar:
                 if isinstance(captured_value, IrMakeClosure):
                     g_closure = captured_value
                     break
-        assert g_closure is not None, "Expected IrMakeClosure for _g in make_fn body"
+        assert g_closure is not None, "Expected IrMakeClosure for _g in make-fn body"
         # _scan_captures must have walked for_range_to / for_range_step and found
         # end_val and step_val as free variables captured from make_fn's params.
         captures = g_closure.captures

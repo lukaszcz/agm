@@ -4,7 +4,7 @@
       "name": "overlap_keeps_first_source_row",
       "params": {
         "integer": 1,
-        "decimal_number": 1.0
+        "decimal-number": 1.0
       },
       "agents": {
         "picker": [
@@ -22,7 +22,7 @@
       "name": "qba_falls_through_to_second_source_row",
       "params": {
         "integer": 2,
-        "decimal_number": 2.5
+        "decimal-number": 2.5
       },
       "agents": {
         "picker": [
@@ -40,7 +40,7 @@
       "name": "default_row_binds_both_payloads",
       "params": {
         "integer": -1,
-        "decimal_number": -1.5
+        "decimal-number": -1.5
       },
       "agents": {
         "picker": [

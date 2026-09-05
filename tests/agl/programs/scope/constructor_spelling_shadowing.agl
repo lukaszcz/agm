@@ -8,13 +8,13 @@ enum Color
 record Box
   shade: Color
 
-def shade_of(c: Color, root_red: int, root_blue: int) -> int
+def shade-of(c: Color, root-red: int, root-blue: int) -> int
   case c of
-    | Red => root_red
-    | Blue => root_blue
+    | Red => root-red
+    | Blue => root-blue
 
-def shadowed(Red: int, root_red: int) -> int
-  Red + root_red
+def shadowed(Red: int, root-red: int) -> int
+  Red + root-red
 
 def Retry(tint: int) -> int
   tint + 100
@@ -33,6 +33,6 @@ program def main(pick: text, tint: int) -> unit =
   print Red
   print Blue
   print Red
-  print shade_of(chosen, Red, Blue)
+  print shade-of(chosen, Red, Blue)
   print shadowed(1, Red)
   print Retry(tint)

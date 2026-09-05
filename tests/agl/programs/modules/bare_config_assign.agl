@@ -17,7 +17,7 @@ program def main(budget: int) -> unit =
   print max-iters
 
   # `strict-json` is a differently-typed setting reached through the same import.
-  strict-json := wants_strict(budget)
+  strict-json := wants-strict(budget)
   print strict-json
 
   # The bare write raised the cap that bounds this otherwise unbounded loop.

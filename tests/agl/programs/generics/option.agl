@@ -10,7 +10,7 @@ enum Option[T]
   | none
   | some(value: T)
 
-def describe_option(o: Option[int]) -> text =
+def describe-option(o: Option[int]) -> text =
   case o of
     | Option::none => "missing"
     | Option::some(value) => "found %{value}"
@@ -21,21 +21,21 @@ program def main() -> unit =
   let picker: Agent = AgentCommand("picker")
   # Qualified patterns on a generic enum; `value` is correctly typed `int`.
   let a: Option[int] = some(value = 3)
-  print(describe_option(a))
+  print(describe-option(a))
 
   # Nullary inference from the expected type.
   let b: Option[int] = none
-  print(describe_option(b))
+  print(describe-option(b))
 
   # Explicit type-argument override on a type-qualified generic constructor.
   let c = Option[int]::some(value = 8)
-  print(describe_option(c))
+  print(describe-option(c))
 
   # Qualified constructor expressions select the owning enum.
   let d: Option[int] = Option::some(value = 11)
-  print(describe_option(d))
+  print(describe-option(d))
   let e: Option[int] = Option::none
-  print(describe_option(e))
+  print(describe-option(e))
 
   # Qualified `is` / `is not` tests on a generic enum variant.
   let probe: Option[int] = some(value = 99)

@@ -9148,7 +9148,7 @@ class TestExecCommand:
         work.mkdir()
         program = work / "bad.agl"
         # ``let`` binding to an undefined name is a static scope error.
-        write_file_program(program, "let x = undefined_name\nx\n", encoding="utf-8")
+        write_file_program(program, "let x = undefined-name\nx\n", encoding="utf-8")
 
         result = run_agm(["exec", str(program)], env=env, cwd=str(work), check=False)
 
@@ -9348,7 +9348,7 @@ class TestCheckCommand:
         work = tmp_path / "work"
         work.mkdir()
         program = work / "bad.agl"
-        write_file_program(program, "let x = undefined_name\nx\n", encoding="utf-8")
+        write_file_program(program, "let x = undefined-name\nx\n", encoding="utf-8")
 
         result = run_agm(["check", str(program)], env=env, cwd=str(work), check=False)
 
@@ -9365,7 +9365,7 @@ class TestCheckCommand:
         clean = work / "clean.agl"
         clean.write_text("def value() -> int = 1\n", encoding="utf-8")
         bad = work / "bad.agl"
-        bad.write_text("def bad() -> int = undeclared_name\n", encoding="utf-8")
+        bad.write_text("def bad() -> int = undeclared-name\n", encoding="utf-8")
 
         result = run_agm(["check", str(clean), str(bad)], env=env, cwd=str(work), check=False)
 

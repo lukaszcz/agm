@@ -7,8 +7,8 @@ program def main(file: text, label: text) -> unit =
   let interpolated: text = exec$ printf '%s' $VAR "${var}" $(echo shell) $1 %{file}-%{1 + 2}
   print interpolated
 
-  let curl_status: text = exec$ curl -w '\%{http_code}' %{file}
-  print curl_status
+  let curl-status: text = exec$ curl -w '\%{http_code}' %{file}
+  print curl-status
 
   let script = exec$
     for item in one two; do
@@ -21,9 +21,9 @@ program def main(file: text, label: text) -> unit =
   print script.stdout
 
   let metadata = exec$::[json] cat data.json
-  let metadata_fields: dict[text, json] = metadata as dict[text, json]
-  let metadata_name: text = metadata_fields["name"] as text
-  print metadata_name
+  let metadata-fields: dict[text, json] = metadata as dict[text, json]
+  let metadata-name: text = metadata-fields["name"] as text
+  print metadata-name
 
   let contextual: text = exec$ printf '<%s>' "%{label}"
   print contextual

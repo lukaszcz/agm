@@ -7,14 +7,14 @@ record Category
   name: text
   subcategories: array[Category]
 
-def count_categories(c: Category) -> int =
+def count-categories(c: Category) -> int =
   var total: int = 1
   for sub in c.subcategories do
-    total := total + count_categories(sub)
+    total := total + count-categories(sub)
   total
 
 program def main() -> unit =
-  let tree_source: Agent = AgentCommand("tree_source")
-  let c: Category = ask("Fetch the category tree.", agent = tree_source)
+  let tree-source: Agent = AgentCommand("tree_source")
+  let c: Category = ask("Fetch the category tree.", agent = tree-source)
   print c.name
-  print count_categories(c)
+  print count-categories(c)

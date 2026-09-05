@@ -2,7 +2,7 @@
 
 def add(a: int, b: int) -> int = a + b
 
-def apply_int(x: int, f: (int) -> int) -> int = f(x)
+def apply-int(x: int, f: (int) -> int) -> int = f(x)
 
 def combine(f: (int) -> int, value: int) -> int = f(value) + value
 
@@ -12,8 +12,8 @@ def choose(flag: bool, yes: (int) -> int, no: (int) -> int, value: int) -> int =
 program def main(mode: text, base: int) -> unit =
   if
     | mode == "direct" =>
-        print(apply_int(base, add(?, 3)))
-        print(apply_int(base, add(3, ?)))
+        print(apply-int(base, add(?, 3)))
+        print(apply-int(base, add(3, ?)))
     | mode == "nested" =>
         let nested = combine(add(?, 1), ?)
         print(nested(base))

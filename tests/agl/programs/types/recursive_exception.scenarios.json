@@ -3,7 +3,7 @@
     {
       "name": "no_causes",
       "params": {
-        "field_name": "top",
+        "field-name": "top",
         "depth": 0
       },
       "expect": {
@@ -13,7 +13,7 @@
     {
       "name": "one_cause",
       "params": {
-        "field_name": "top",
+        "field-name": "top",
         "depth": 1
       },
       "expect": {
@@ -23,7 +23,7 @@
     {
       "name": "nested_causes",
       "params": {
-        "field_name": "root_field",
+        "field-name": "root_field",
         "depth": 3
       },
       "expect": {

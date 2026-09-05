@@ -3,10 +3,10 @@
 
 program def main(d: dict[text, int]) -> unit =
   var count: int = 0
-  var key_sum: int = 0
+  var key-sum: int = 0
   for k in d do
     count := count + 1
-    key_sum := key_sum + d[k]
+    key-sum := key-sum + d[k]
   done
   print count
-  print key_sum
+  print key-sum

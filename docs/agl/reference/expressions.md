@@ -192,7 +192,7 @@ enum Outcome
 let ok = Outcome::Ok(42)
 let ok2 = Outcome::Ok(value = 42)
 let err = Outcome::Err("bad", false)
-let named_err = Outcome::Err(reason = "bad", fatal = false)
+let named-err = Outcome::Err(reason = "bad", fatal = false)
 ```
 
 ### Unqualified member ambiguity
@@ -313,7 +313,7 @@ enum Status
 
 let marker = Marker
 let ready = Ready
-let qualified_ready = Status::Ready
+let qualified-ready = Status::Ready
 ```
 
 Calls remain direct constructor calls, so `Marker()` and `Status::Ready()`
@@ -333,7 +333,7 @@ from `::[…]`:
 
 ```agl
 record Token[T]()
-let from_context: Token[int] = Token
+let from-context: Token[int] = Token
 let explicit = Token::[int]
 ```
 
@@ -468,7 +468,7 @@ Indexing is a postfix operator and may be chained with calls and field access:
 ```agl
 let cell = matrix[0][1]
 let name = rows[0].name
-let item = make_items()[0]
+let item = make-items()[0]
 ```
 
 Whitespace matters. `xs[0]` is indexing because the `[` is adjacent to `xs`.
@@ -541,7 +541,7 @@ application with placeholder arguments, see [Functions](functions.md). For
 
 `print` is a built-in function that accepts one argument of any type, writes
 its rendered value (followed by a newline) to the host's standard output, and
-returns `void`. It renders with `pretty = false` and `quote_strings = false`:
+returns `void`. It renders with `pretty = false` and `quote-strings = false`:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -566,17 +566,17 @@ same renderer as interpolation, `print`, casts to `text`, and REPL echo.
 
 <!-- agl-check: fragment -->
 ```agl
-render(value: T, pretty: bool = true, quote_strings: bool = true) -> text
+render(value: T, pretty: bool = true, quote-strings: bool = true) -> text
 ```
 
 `pretty` selects single-line versus multi-line indented rendering for
-structured values and JSON. `quote_strings` controls only a top-level `text`
+structured values and JSON. `quote-strings` controls only a top-level `text`
 argument; when it is `false`, rendering text is identity.
 
 ```agl
 program def main() -> unit =
   let _ = render("hi")
-  let _ = render("hi", quote_strings = false)
+  let _ = render("hi", quote-strings = false)
   let _ = render([1, 2])
   let _ = render([1, 2], pretty = false)
 ```
@@ -586,8 +586,8 @@ cycle. `render` cannot be bound as a function value (`let f = render` is a
 static error, because built-ins are only valid in call position). An explicit type
 argument (`render::[decimal](5)`) is accepted, requires the argument to be
 assignable to it, and renders the argument coerced to that type — so
-`render::[json]("hi", quote_strings = false)` renders the quoted json form
-`"hi"`: `quote_strings` controls only a top-level `text` argument, and the
+`render::[json]("hi", quote-strings = false)` renders the quoted json form
+`"hi"`: `quote-strings` controls only a top-level `text` argument, and the
 coerced argument has type `json`.
 
 ## JSON parsing
@@ -614,8 +614,8 @@ perform filesystem effects.
 
 <!-- agl-check: fragment -->
 ```agl
-let prompt_path = resource("prompts/review.md")
-let package_root = resource-dir()
+let prompt-path = resource("prompts/review.md")
+let package-root = resource-dir()
 ```
 
 ## `copy` and `shallow-copy`
@@ -704,22 +704,22 @@ Examples:
 
 <!-- agl-check: fragment -->
 ```agl
-let n: int = raw_value as int          # raises CastError if not an int
-let is_int: bool = raw_value as? int
+let n: int = raw-value as int          # raises CastError if not an int
+let is-int: bool = raw-value as? int
 
-if is_int =>
-  let n = raw_value as int
+if is-int =>
+  let n = raw-value as int
   print n
 else => print "not an int"
 
-let s: text = some_int as text         # total — always succeeds
-let j: json = my_record.count as json  # total — int is JSON-shaped
+let s: text = some-int as text         # total — always succeeds
+let j: json = my-record.count as json  # total — int is JSON-shaped
 
 # left-associativity chains
-let t: text = some_int as json as text   # (some_int as json) as text
+let t: text = some-int as json as text   # (some-int as json) as text
 
 # convertibility test without exception handling
-if count_json as? int => print(count_json as int)
+if count-json as? int => print(count-json as int)
 else => print "not an int"
 ```
 

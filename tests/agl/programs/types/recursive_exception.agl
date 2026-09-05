@@ -4,21 +4,21 @@
 # the exception is raised and caught, and the caught fields (including the
 # nested cause's own field) are asserted.
 exception ValidationError extends Exception
-  field_name: text
+  field-name: text
   causes: array[ValidationError]
 
-def make_causes(d: int) -> array[ValidationError] =
+def make-causes(d: int) -> array[ValidationError] =
   if d <= 0 => []
-  else => [ValidationError(message = "nested failure", field_name = "cause_%{d}", causes = make_causes(d - 1))]
+  else => [ValidationError(message = "nested failure", field-name = "cause_%{d}", causes = make-causes(d - 1))]
 
-program def main(field_name: text, depth: int) -> unit =
+program def main(field-name: text, depth: int) -> unit =
   try
-    raise ValidationError(message = "invalid", field_name = field_name, causes = make_causes(depth))
+    raise ValidationError(message = "invalid", field-name = field-name, causes = make-causes(depth))
   catch ValidationError as e =>
-    print e.field_name
+    print e.field-name
     var count: int = 0
     for c in e.causes do
       count := count + 1
     print count
     if count > 0 =>
-      print e.causes[0].field_name
+      print e.causes[0].field-name

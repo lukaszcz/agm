@@ -12,7 +12,7 @@ record Issue
   extra: json
   author: Author
 
-program def main(min_severity: int) -> unit =
+program def main(min-severity: int) -> unit =
   let tracker: Agent = AgentCommand("tracker")
   let issue = Issue(
     title = "Missing tests",
@@ -33,7 +33,7 @@ program def main(min_severity: int) -> unit =
   print fetched.title
   print fetched.severity
 
-  if fetched.severity >= min_severity =>
+  if fetched.severity >= min-severity =>
     print "escalate"
   else =>
     print "ignore"

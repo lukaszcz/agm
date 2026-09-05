@@ -3,7 +3,7 @@
     {
       "name": "severe_issue_escalates",
       "params": {
-        "min_severity": 4
+        "min-severity": 4
       },
       "agents": {
         "tracker": [
@@ -20,7 +20,7 @@
     {
       "name": "mild_issue_ignored",
       "params": {
-        "min_severity": 4
+        "min-severity": 4
       },
       "agents": {
         "tracker": [
@@ -37,7 +37,7 @@
     {
       "name": "lenient_default_extracts_chatty_reply",
       "params": {
-        "min_severity": 2
+        "min-severity": 2
       },
       "agents": {
         "tracker": [
@@ -54,7 +54,7 @@
     {
       "name": "missing_field_aborts_by_default",
       "params": {
-        "min_severity": 2
+        "min-severity": 2
       },
       "agents": {
         "tracker": [

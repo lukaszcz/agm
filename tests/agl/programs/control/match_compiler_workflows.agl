@@ -12,7 +12,7 @@ let picker: Agent = AgentCommand("picker")
 
 def pick() -> Pair = picker.ask("Pick a pair.")
 
-program def main(integer: int, decimal_number: decimal) -> unit =
+program def main(integer: int, decimal-number: decimal) -> unit =
   case pick() of
     | pair(right = zero) => print "right-zero first"
     | pair(left = zero) => print "left-zero second"
@@ -24,6 +24,6 @@ program def main(integer: int, decimal_number: decimal) -> unit =
     | 1.0 => print "int numeric equal"
     | _ => print "int numeric remainder"
 
-  case decimal_number of
+  case decimal-number of
     | 1 => print "decimal numeric equal"
     | _ => print "decimal numeric remainder"

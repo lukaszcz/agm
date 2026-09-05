@@ -13,7 +13,7 @@ def Signal::describe(self) -> text =
     | number(value) => "number %{value}"
     | stopped(reason) => "stopped %{reason}"
 
-def Signal::is_terminal(self) -> bool =
+def Signal::is-terminal(self) -> bool =
   case self of
     | idle => false
     | number(value) => false
@@ -26,4 +26,4 @@ program def main(mode: text, value: int) -> unit =
       | else => stopped(reason = "halt")
 
   print(signal.describe())
-  print(signal.is_terminal())
+  print(signal.is-terminal())

@@ -4,14 +4,14 @@
 
 def increment(value: int) -> int = value + 1
 def double(value: int) -> int = value * 2
-def append_mark(value: text) -> text = value + "!"
+def append-mark(value: text) -> text = value + "!"
 def recover(_: text) -> Result[int, text] = Result::Ok(value = 7)
 def succeed() -> int = 9
 def fail() -> int = raise Abort(message = "failed")
 
-def error_code(error: text) -> int = (if error == "lost" => 4 else => 0)
+def error-code(error: text) -> int = (if error == "lost" => 4 else => 0)
 
-def project_result(result: Result[int, text]) -> int = result.unwrap-or(0)
+def project-result(result: Result[int, text]) -> int = result.unwrap-or(0)
 
 program def main(mode: int) -> unit =
   case mode of
@@ -32,21 +32,21 @@ program def main(mode: int) -> unit =
         print((increment >> double)(2))
         print((increment << double)(2))
         print(increment <| 2 |> double)
-        print(pair.map-first(double).map-second(append_mark))
-        print(pair.map-second(append_mark).map-first(double).swap())
+        print(pair.map-first(double).map-second(append-mark))
+        print(pair.map-second(append-mark).map-first(double).swap())
 
         let left: Either[int, text] = Either::Left(value = 2)
         let right: Either[int, text] = Either::Right(value = "ok")
         print(
           left
           |> (fn(value: Either[int, text]) =>
-            value.map-left(double).map-right(append_mark).left()
+            value.map-left(double).map-right(append-mark).left()
           )
         )
         print(
           right
           |> (fn(value: Either[int, text]) =>
-            value.map-left(double).map-right(append_mark).right()
+            value.map-left(double).map-right(append-mark).right()
           )
         )
         print(left.is-left())
@@ -67,7 +67,7 @@ program def main(mode: int) -> unit =
           |> (fn(value: Result[int, text]) =>
             value.and-then(fn(item: int) => Result::Ok(value = item + 1))
           )
-          |> project_result
+          |> project-result
         )
         print(none.to-result(error = "missing").err())
 
@@ -76,7 +76,7 @@ program def main(mode: int) -> unit =
         print(
           result
           |> (fn(value: Result[int, text]) => value.map(double))
-          |> (fn(value: Result[int, text]) => value.map-err(append_mark))
+          |> (fn(value: Result[int, text]) => value.map-err(append-mark))
           |> (fn(value: Result[int, text]) =>
             value.and-then(fn(item: int) => Result::Ok(value = item + 1))
           )
@@ -108,10 +108,10 @@ program def main(mode: int) -> unit =
         let fallback: Result[int, text] = Result::Ok(value = 6)
         print(result.or(Result::Err(error = "other")).unwrap-or(0))
         print(lost.or(fallback).unwrap-or(0))
-        print(result.unwrap-or-else(error_code))
-        print(lost.unwrap-or-else(error_code))
-        print(lost.or-else(fn(error: text) => Result::Err(error = error_code(error))).err())
-        print(project_result <| Result::Ok(value = 8))
+        print(result.unwrap-or-else(error-code))
+        print(lost.unwrap-or-else(error-code))
+        print(lost.or-else(fn(error: text) => Result::Err(error = error-code(error))).err())
+        print(project-result <| Result::Ok(value = 8))
 
         print(attempt(succeed).map(increment).ok())
         print(attempt(fail).err().map(fn(error: Exception) => error.message))

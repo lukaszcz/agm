@@ -6,12 +6,12 @@
 
 program def main(a: int, b: int) -> unit =
   let xs: array[int] = [a, b]
-  let xs_json: json = xs as json
-  print xs_json
+  let xs-json: json = xs as json
+  print xs-json
 
   let d: dict[text, int] = {"x": a, "y": b}
-  let d_json: json = d as json
-  print d_json
+  let d-json: json = d as json
+  print d-json
 
   # int -> decimal still coerces implicitly
   let ratio: decimal = a

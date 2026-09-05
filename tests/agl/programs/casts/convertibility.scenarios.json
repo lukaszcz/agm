@@ -3,7 +3,7 @@
     {
       "name": "int_branch_taken_integral_decimal",
       "params": {
-        "user_input": "99",
+        "user-input": "99",
         "d": 4.0
       },
       "expect": {
@@ -13,7 +13,7 @@
     {
       "name": "else_branch_taken_fractional_decimal",
       "params": {
-        "user_input": "hello",
+        "user-input": "hello",
         "d": 2.5
       },
       "expect": {
@@ -23,7 +23,7 @@
     {
       "name": "zero_int_and_zero_decimal",
       "params": {
-        "user_input": "0",
+        "user-input": "0",
         "d": 0.0
       },
       "expect": {
@@ -33,7 +33,7 @@
     {
       "name": "valid_int_but_fractional_decimal",
       "params": {
-        "user_input": "5",
+        "user-input": "5",
         "d": 1.5
       },
       "expect": {

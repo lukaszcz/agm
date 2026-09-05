@@ -374,7 +374,7 @@ class TestImportedModuleErrors:
         lib_dir = tmp_path / "lib"
         lib_dir.mkdir()
         bad_mod = lib_dir / "badscope.agl"
-        bad_mod.write_text("def f() -> int = undefined_name\n")
+        bad_mod.write_text("def f() -> int = undefined-name\n")
 
         source = "import badscope::*\nlet r = f()\nr\n"
         result = _run_program(source, roots_dirs=[lib_dir])
@@ -463,13 +463,13 @@ class TestAgentValueCrossModule:
         lib_dir = tmp_path / "lib"
         lib_dir.mkdir()
         (lib_dir / "helper.agl").write_text(
-            "def ask_with_agent(prompt: text, a: Agent) -> text = a.ask(prompt)\n"
+            "def ask-with-agent(prompt: text, a: Agent) -> text = a.ask(prompt)\n"
         )
 
         source = (
             "import helper::*\n"
             'let mybot = AgentCommand("mybot")\n'
-            'let result = ask_with_agent("test question", mybot)\n'
+            'let result = ask-with-agent("test question", mybot)\n'
             "print result\n"
         )
 
@@ -490,13 +490,13 @@ class TestAgentValueCrossModule:
     def test_agent_value_in_entry_with_lib_module(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Agent from lib fixture: ask_with_agent works cross-module."""
+        """Agent from lib fixture: ask-with-agent works cross-module."""
         lib_dir = MULTI_FILE_DIR
 
         source = (
             "import utils/agent_helper::*\n"
             'let mybot = AgentCommand("mybot")\n'
-            'let r = ask_with_agent("ping", mybot)\n'
+            'let r = ask-with-agent("ping", mybot)\n'
             "print r\n"
         )
 
@@ -934,7 +934,7 @@ class TestScopedModuleSelections:
         self._write_geo(tmp_path)
 
         result = _run_program(
-            "import geo::{Point::public_secret}\nprint geo::Point::public_secret()\n",
+            "import geo::{Point::public-secret}\nprint geo::Point::public-secret()\n",
             roots_dirs=[tmp_path],
         )
 
@@ -1041,13 +1041,13 @@ class TestCrossModuleScopedPaths:
             "def Point::distance() -> int = 7\n"
             "def Point::bearing() -> int = 3\n"
             "def Point::secret() -> int = 99\n"
-            "def Point::public_secret() -> int = secret()\n"
+            "def Point::public-secret() -> int = secret()\n"
         )
 
         result = _run_program(
             "import geo::* hiding Point::bearing\n"
             "print Point::distance()\n"
-            "print Point::public_secret()\n",
+            "print Point::public-secret()\n",
             roots_dirs=[tmp_path],
         )
         assert result.ok is True
@@ -1170,14 +1170,14 @@ class TestScopeUses:
             "  enum Flag | Ready\n"
             "end B\n"
             "\n"
-            "def root_value() -> A::Flag = Ready\n"
+            "def root-value() -> A::Flag = Ready\n"
             "\n"
             "scope A\n"
             "  enum Flag | Ready\n"
             "end A\n"
             "\n"
             "print B::value()\n"
-            "print root_value()\n",
+            "print root-value()\n",
             roots_dirs=[tmp_path],
         )
 
@@ -1458,7 +1458,7 @@ class TestExternMultiFile:
     ) -> None:
         # `use_secret` calls the extern `secret` internally, so the importer
         # reaches the extern through an ordinary AgL wrapper.
-        source = "import utils/ext_math::*\nlet r = use_secret(21)\nprint r\n"
+        source = "import utils/ext_math::*\nlet r = use-secret(21)\nprint r\n"
         result = _run_program(source, roots_dirs=[MULTI_FILE_DIR])
         assert result.ok is True
         assert "122" in capsys.readouterr().out

@@ -115,8 +115,8 @@ class TestRegisterAgent:
         rt = PipelineDriver(agent_dispatcher=my_agent)
         result = run_inline_command(
             rt,
-            'let my_agent = AgentCommand("my_agent")\n'
-            'let answer = my_agent.ask("meaningful prompt")\nprint answer',
+            'let my-agent = AgentCommand("my_agent")\n'
+            'let answer = my-agent.ask("meaningful prompt")\nprint answer',
         )
 
         assert result.ok
@@ -142,28 +142,28 @@ class TestRunBehavior:
 
     def test_static_error_not_ok(self) -> None:
         rt = PipelineDriver()
-        result = run_inline_command(rt, "let x = undefined_name")
+        result = run_inline_command(rt, "let x = undefined-name")
         assert result.ok is False
         assert result.error is None
         assert len(result.diagnostics) >= 1
 
     def test_static_error_diagnostic_has_message(self) -> None:
         rt = PipelineDriver()
-        result = run_inline_command(rt, "let x = undefined_name")
+        result = run_inline_command(rt, "let x = undefined-name")
         diag = result.diagnostics[0]
         assert isinstance(diag.message, str)
         assert diag.message
 
     def test_static_error_diagnostic_has_line(self) -> None:
         rt = PipelineDriver()
-        result = run_inline_command(rt, "let x = undefined_name")
+        result = run_inline_command(rt, "let x = undefined-name")
         diag = result.diagnostics[0]
         assert isinstance(diag.line, int)
         assert diag.line >= 1
 
     def test_run_result_error_none_for_static_failure(self) -> None:
         rt = PipelineDriver()
-        result = run_inline_command(rt, "let x = undefined_name")
+        result = run_inline_command(rt, "let x = undefined-name")
         # pre-execution failure: error is None (no AgL exception was raised)
         assert result.error is None
 
@@ -212,7 +212,7 @@ class TestFallbackAgent:
         rt = PipelineDriver()
         # An undeclared named agent is a static scope binding error: it is
         # rejected before execution regardless of host backing.
-        result = run_inline_command(rt, 'let x = mysterious_agent "hi"')
+        result = run_inline_command(rt, 'let x = mysterious-agent "hi"')
         assert result.ok is False
         assert result.error is None
 
@@ -220,7 +220,7 @@ class TestFallbackAgent:
         rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
         result = run_inline_command(
             rt,
-            ('let any_agent_name = AgentCommand("any-agent-name")\nany_agent_name.ask("hi")'),
+            ('let any-agent-name = AgentCommand("any-agent-name")\nany-agent-name.ask("hi")'),
         )
         assert result.ok is True
 
@@ -792,7 +792,7 @@ class TestDryRunCheckOnly:
 
     def test_check_only_static_error_still_fails(self) -> None:
         rt = PipelineDriver()
-        result = run_inline_command(rt, "let x = undefined_name", check_only=True)
+        result = run_inline_command(rt, "let x = undefined-name", check_only=True)
         assert result.ok is False
 
     def test_check_only_never_invokes_agent(self) -> None:
@@ -2187,7 +2187,7 @@ class TestRuntimeErrorPaths:
     ) -> None:
         result = run_inline_command(
             PipelineDriver(),
-            'print(render("hello", quote_strings = false))\n'
+            'print(render("hello", quote-strings = false))\n'
             "print(render([1, 2], pretty = false))\n"
             'print(render({"a": 1} as json, pretty = false))\n',
         )
@@ -2476,7 +2476,7 @@ class TestLegacyAgentRegistry:
     def test_command_value_uses_the_default_dispatcher(self) -> None:
         rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
         result = run_inline_command(
-            rt, 'let any_name = AgentCommand("any-name")\nany_name.ask("hi")'
+            rt, 'let any-name = AgentCommand("any-name")\nany-name.ask("hi")'
         )
         assert result.ok
 
@@ -3066,7 +3066,7 @@ class TestRunPreparedProgram:
         """When the load phase captured a scope error, run_prepared reports it."""
 
         roots = agl_roots()
-        prepared = prepare_inline_command("let x = undefined_name", entry_path=None, roots=roots)
+        prepared = prepare_inline_command("let x = undefined-name", entry_path=None, roots=roots)
         rt = PipelineDriver()
         result = rt.run_prepared(prepared)
         assert result.ok is False

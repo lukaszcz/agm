@@ -35,7 +35,7 @@ def test_session_methods_typecheck_with_declared_result_types() -> None:
         'session.compact(instructions = "retain decisions")\n'
         "session.reset()\n"
         "let forked: Session = session.fork()\n"
-        "let session_stats: SessionStats = session.stats()\n"
+        "let session-stats: SessionStats = session.stats()\n"
         'session.set-name("review")\n'
         "session.close()\n"
         "forked"
@@ -56,7 +56,7 @@ def test_session_methods_typecheck_with_declared_result_types() -> None:
 def test_session_ask_infers_targets_like_agent_ask() -> None:
     checked = _check(
         "let session = Session::default()\n"
-        'let text_response = session.ask("summarize")\n'
+        'let text-response = session.ask("summarize")\n'
         'let count: int = session.ask("count")\n'
         'let accepted = session.ask::[bool]("approve")\n'
         "accepted"

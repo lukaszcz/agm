@@ -6,17 +6,17 @@ enum Tree
   | Leaf
   | Node(value: int, left: Tree, right: Tree)
 
-def sum_tree(t: Tree) -> int =
+def sum-tree(t: Tree) -> int =
   case t of
     | Leaf() => 0
-    | Node(value, left, right) => value + sum_tree(left) + sum_tree(right)
+    | Node(value, left, right) => value + sum-tree(left) + sum-tree(right)
 
-def tree_depth(t: Tree) -> int =
+def tree-depth(t: Tree) -> int =
   case t of
     | Leaf() => 0
     | Node(value, left, right) =>
-        let l = tree_depth(left)
-        let r = tree_depth(right)
+        let l = tree-depth(left)
+        let r = tree-depth(right)
         1 + (if l >= r => l else => r)
 
 program def main(a: int, b: int, c: int) -> unit =
@@ -25,16 +25,16 @@ program def main(a: int, b: int, c: int) -> unit =
     left = Node(value = b, left = Leaf(), right = Leaf()),
     right = Node(value = c, left = Leaf(), right = Leaf()),
   )
-  let same_shape: Tree = Node(
+  let same-shape: Tree = Node(
     value = a,
     left = Node(value = b, left = Leaf(), right = Leaf()),
     right = Node(value = c, left = Leaf(), right = Leaf()),
   )
   let different: Tree = Node(value = a, left = Leaf(), right = Leaf())
 
-  print sum_tree(tree)
-  print tree_depth(tree)
-  print (tree == same_shape)
+  print sum-tree(tree)
+  print tree-depth(tree)
+  print (tree == same-shape)
   print (tree == different)
 
   case tree of

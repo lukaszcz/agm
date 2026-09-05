@@ -17,8 +17,8 @@ program def main(first: int, second: int) -> unit =
 
   var shared = [first]
   var pair = [shared, shared]
-  let copied_pair = copy(pair)
+  let copied-pair = copy(pair)
 
-  copied_pair[0][0] := 42
+  copied-pair[0][0] := 42
   print(pair)
-  print(copied_pair)
+  print(copied-pair)

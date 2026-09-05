@@ -14,15 +14,15 @@ enum Option[T]
   | some(value: T)
 
 def app[T](f: T -> T, x: T) -> T = f(x)
-def app_reversed[T](x: T, f: T -> T) -> T = f(x)
+def app-reversed[T](x: T, f: T -> T) -> T = f(x)
 def id[T](x: T) -> T = x
 
 def compose[A, B, C](x: A, first: A -> B, second: B -> C) -> C = second(first(x))
 def pair[A, B](first: A -> A, second: B -> B, a: A, b: B) -> Duo[A, B] =
   Duo(first = first(a), second = second(b))
-def apply_to[A, B](x: A, f: A -> B) -> B = f(x)
+def apply-to[A, B](x: A, f: A -> B) -> B = f(x)
 def relay[T](value: T, f: T -> T) -> T = f(value)
-def same_arrays[T](left: array[T], right: array[T]) -> array[T] = right
+def same-arrays[T](left: array[T], right: array[T]) -> array[T] = right
 def choose[T](left: T, right: T) -> T = right
 
 def stringify(n: int) -> text = "n=%{n}"
@@ -32,7 +32,7 @@ program def main(mode: text) -> unit =
     | mode == "argument_order" =>
         # Generic evidence appears before the concrete argument, then after it.
         print(app(id, 0))
-        print(app_reversed(0, id))
+        print(app-reversed(0, id))
     | mode == "nested_and_fresh" =>
         # `compose` has three quantified variables. The two `id` occurrences in
         # `pair` must be independently fresh.
@@ -43,8 +43,8 @@ program def main(mode: text) -> unit =
         print(values.second)
     | mode == "constructors" =>
         # Generic record, payload, and nullary constructors flow through HOFs.
-        let boxed = apply_to(7, Box)
-        let present: Option[int] = apply_to(8, some)
+        let boxed = apply-to(7, Box)
+        let present: Option[int] = apply-to(8, some)
         let missing: Option[int] = relay(none, id)
         print(boxed.value)
         print(present is Option::some)
@@ -52,13 +52,13 @@ program def main(mode: text) -> unit =
     | mode == "partial" =>
         # The first partial is solved by the sibling argument; the second by its
         # expected result type.
-        let from_sibling = apply_to(10, id(?))
-        let from_result: int -> int = id(?)
-        print(from_sibling)
-        print(from_result(11))
+        let from-sibling = apply-to(10, id(?))
+        let from-result: int -> int = id(?)
+        print(from-sibling)
+        print(from-result(11))
     | mode == "empty_literal" =>
         # The later array argument determines the empty literal's element type.
-        let values = same_arrays([], [12])
+        let values = same-arrays([], [12])
         print(values[0])
     | mode == "ask_target" =>
         # The mocked `ask` target is determined by `choose`'s sibling argument.

@@ -7,26 +7,26 @@ enum Tree
   | Leaf
   | Node(value: int, left: Tree, right: Tree)
 
-def sum_tree(t: Tree) -> int =
+def sum-tree(t: Tree) -> int =
   case t of
     | Leaf() => 0
-    | Node(value, left, right) => value + sum_tree(left) + sum_tree(right)
+    | Node(value, left, right) => value + sum-tree(left) + sum-tree(right)
 
-program def main(tree_text: text, forest_text: text) -> unit =
-  if tree_text as? Tree =>
-    let t = tree_text as Tree
-    print "sum: %{sum_tree(t)}"
+program def main(tree-text: text, forest-text: text) -> unit =
+  if tree-text as? Tree =>
+    let t = tree-text as Tree
+    print "sum: %{sum-tree(t)}"
   else =>
     try
-      let t = tree_text as Tree
+      let t = tree-text as Tree
       print "unreachable"
     catch CastError as e =>
       print "cast failed: %{e.source-type} -> %{e.target-type}"
 
-  if forest_text as? array[Tree] =>
-    let forest = forest_text as array[Tree]
+  if forest-text as? array[Tree] =>
+    let forest = forest-text as array[Tree]
     var total: int = 0
     for t in forest do
-      total := total + sum_tree(t)
+      total := total + sum-tree(t)
     print "forest total: %{total}"
   else => print "forest invalid"

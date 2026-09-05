@@ -264,7 +264,7 @@ class TestCheckCommand:
     def test_error_inside_imported_module_reports_that_modules_path(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        (tmp_path / "broken.agl").write_text("def f() -> int = undeclared_name\n")
+        (tmp_path / "broken.agl").write_text("def f() -> int = undeclared-name\n")
         entry = tmp_path / "entry.agl"
         entry.write_text("import broken::*\ndef g() -> int = f()\n")
 
@@ -283,7 +283,7 @@ class TestCheckCommand:
         bad_syntax = tmp_path / "bad_syntax.agl"
         bad_syntax.write_text("def broken( -> int = 1\n")
         bad_scope = tmp_path / "bad_scope.agl"
-        bad_scope.write_text("def bad() -> int = undeclared_name\n")
+        bad_scope.write_text("def bad() -> int = undeclared-name\n")
 
         with pytest.raises(SystemExit) as exc_info:
             check_command.run(CheckArgs(files=[str(clean), str(bad_syntax), str(bad_scope)]))

@@ -2711,20 +2711,20 @@ class TestRecursiveTypesAcrossEntries:
     def test_catch_clause_matches_the_declaration_in_scope_where_it_is_written(self) -> None:
         s = open_session()
         assert s.eval_entry("exception E extends Exception()").ok
-        assert s.eval_entry('let old_exc = E(message = "old")').ok
+        assert s.eval_entry('let old-exc = E(message = "old")').ok
         assert s.eval_entry(
-            'def catch_only_old() -> text = try raise old_exc catch E as e => "caught-old"'
+            'def catch-only-old() -> text = try raise old-exc catch E as e => "caught-old"'
         ).ok
         assert s.eval_entry("exception E extends Exception()").ok
-        assert s.eval_entry('let new_exc = E(message = "new")').ok
+        assert s.eval_entry('let new-exc = E(message = "new")').ok
 
         # A ``catch E`` written after the redeclaration binds the new E: it
         # catches a freshly raised new-E value but not the retained old one.
-        catches_new = s.eval_entry('try raise new_exc catch E as e => "caught-new-clause"')
-        does_not_catch_old = s.eval_entry('try raise old_exc catch E as e => "caught-new-clause"')
+        catches_new = s.eval_entry('try raise new-exc catch E as e => "caught-new-clause"')
+        does_not_catch_old = s.eval_entry('try raise old-exc catch E as e => "caught-new-clause"')
         # A ``catch E`` compiled before the redeclaration keeps matching only
         # the old E, unaffected by the redeclaration that came afterward.
-        still_catches_old = s.eval_entry("catch_only_old()")
+        still_catches_old = s.eval_entry("catch-only-old()")
 
         assert catches_new.ok, catches_new.diagnostics
         assert catches_new.value == TextValue("caught-new-clause")
@@ -3260,28 +3260,28 @@ class TestFailureEffects:
         session = open_session()
 
         failed = session.eval_entry(
-            'def needs_value() -> int = value\nlet value: int = raise Abort(message = "stop")'
+            'def needs-value() -> int = value\nlet value: int = raise Abort(message = "stop")'
         )
 
         assert not failed.ok
-        assert "needs_value" not in failed.installed
-        assert not session.eval_entry("needs_value()").ok
+        assert "needs-value" not in failed.installed
+        assert not session.eval_entry("needs-value()").ok
 
     def test_runtime_failure_excludes_function_with_unpromoted_nominal_dependency(self) -> None:
         session = open_session()
 
         failed = session.eval_entry(
             "type Delayed = Later\n"
-            "def needs_type(value: dict[text, Delayed]) -> dict[text, Delayed] = value\n"
+            "def needs-type(value: dict[text, Delayed]) -> dict[text, Delayed] = value\n"
             'let stop: int = raise Abort(message = "stop")\n'
             "record Later\n"
             "  value: int"
         )
 
         assert not failed.ok
-        assert "needs_type" not in failed.installed
+        assert "needs-type" not in failed.installed
         assert "Delayed" not in session.type_names()
-        assert not session.eval_entry("needs_type").ok
+        assert not session.eval_entry("needs-type").ok
         assert not session.eval_entry("Later(value = 1)").ok
 
     def test_runtime_failure_promotes_generic_function_independent_of_same_named_nominal(
@@ -5522,7 +5522,7 @@ class TestImports:
         r1 = s.eval_entry("record R\n  x: int")
         assert r1.ok, r1.diagnostics
 
-        r2 = s.eval_entry("import dummy\ndef get_x(r: R) -> int = r.x\nget_x(R(x = 2))")
+        r2 = s.eval_entry("import dummy\ndef get-x(r: R) -> int = r.x\nget-x(R(x = 2))")
 
         assert r2.ok, r2.diagnostics
         assert _int(r2.value) == 2
@@ -5679,8 +5679,8 @@ class TestImports:
         from agm.agl.ir.nodes import IrExpr
         from agm.agl.modules.ids import ModuleId
 
-        (tmp_path / "a.agl").write_text("import b\ndef a_val() -> int = 1\n")
-        (tmp_path / "b.agl").write_text("import a\nlet x = 1\nlet y = 2\ndef b_val() -> int = 2\n")
+        (tmp_path / "a.agl").write_text("import b\ndef a-val() -> int = 1\n")
+        (tmp_path / "b.agl").write_text("import a\nlet x = 1\nlet y = 2\ndef b-val() -> int = 2\n")
         s = self._make_session_with_root(tmp_path)
 
         a_id = ModuleId(("a",))
@@ -5698,7 +5698,7 @@ class TestImports:
 
         monkeypatch.setattr(IrInterpreter, "_eval_and_record_initializer", flaky)
 
-        interrupted = s.eval_entry("import a::*\na_val()")
+        interrupted = s.eval_entry("import a::*\na-val()")
         assert not interrupted.ok
         # ``a`` completed its own (empty) initializer list, but must not be
         # retained on its own: it depends on ``b``, which never completed.
@@ -5710,7 +5710,7 @@ class TestImports:
         # fully successful entry keeps its import context), so a later entry
         # referencing the unqualified name reports it as undefined rather
         # than resolving to a half-linked module.
-        later = s.eval_entry("a_val()")
+        later = s.eval_entry("a-val()")
         assert not later.ok
         assert later.diagnostics
 
@@ -5731,8 +5731,8 @@ class TestImports:
         from agm.agl.ir.nodes import IrExpr
         from agm.agl.modules.ids import ModuleId
 
-        (tmp_path / "a.agl").write_text("import b\ndef a_val() -> int = 1\n")
-        (tmp_path / "b.agl").write_text("import a\nlet x = 1\nlet y = 2\ndef b_val() -> int = 2\n")
+        (tmp_path / "a.agl").write_text("import b\ndef a-val() -> int = 1\n")
+        (tmp_path / "b.agl").write_text("import a\nlet x = 1\nlet y = 2\ndef b-val() -> int = 2\n")
         s = self._make_session_with_root(tmp_path)
 
         b_id = ModuleId(("b",))
@@ -5748,7 +5748,7 @@ class TestImports:
             original(interp, module_id, node)
 
         monkeypatch.setattr(IrInterpreter, "_eval_and_record_initializer", flaky)
-        interrupted = s.eval_entry("import a::*\na_val()")
+        interrupted = s.eval_entry("import a::*\na-val()")
         assert not interrupted.ok
         monkeypatch.setattr(IrInterpreter, "_eval_and_record_initializer", original)
 
@@ -6300,7 +6300,7 @@ class TestUnpromotedNominalDeclarationEffects:
         failed = s.eval_entry("let z: decimal = 1 / 0\nenum Tree\n  | Node(value: int)")
         assert not failed.ok
 
-        retained_type = s.eval_entry("def leaf_value(value: Tree::Leaf) -> int = value.value")
+        retained_type = s.eval_entry("def leaf-value(value: Tree::Leaf) -> int = value.value")
         retained = s.eval_entry("Tree::Leaf(value = 1)")
         unpromoted = s.eval_entry("Tree::Node(value = 1)")
 

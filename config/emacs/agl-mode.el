@@ -551,9 +551,12 @@ function only ever adjusts the start of the region."
 ;; plain regexp, so matches respect AgL identifier boundaries instead of
 ;; `\\b'.  Font-lock's default OVERRIDE (nil) never replaces a face
 ;; already assigned by the syntactic (string/comment) pass, so these
-;; rules never light up text inside a template or raw-tail payload; the
-;; one deliberate exception is `agl--match-interpolation-delims', which
-;; explicitly overrides string face for `%{' / `}' delimiters.
+;; rules never light up text inside a template or raw-tail payload.  Two
+;; rules deliberately set OVERRIDE: `agl--match-interpolation-delims',
+;; which overrides string face for `%{' / `}' delimiters, and
+;; `agl--match-attribute', which overrides an earlier rule's face so a
+;; whole `@name' reads as one attribute and therefore rejects
+;; string/comment candidates in its own matcher.
 ;; ---------------------------------------------------------------------------
 
 (defconst agl--keyword-face-names
@@ -607,17 +610,28 @@ so `::' and `:=' are fixed spellings rather than operator-name runs.  A
 `:' always terminates an identifier, so neither can occur inside a name
 and both are matched without an identifier-boundary check.")
 
-(defconst agl--merged-operator-chars '(?/ ?@)
+(defconst agl--merged-operator-chars '(?/)
   "Operator characters the lexer merges into a longer token when unspaced.
 
 `/' joins the segments of a module path (`std/text', `foo/bar::Point'),
-and `@' opens a zone marker (`@pos'), each of which the lexer scans as
-one token rather than as an operator beside a name.  A lone `/' or `@'
-is therefore faced only where an identifier does not abut it; every
-other operator character is faced by position alone.")
+which the lexer scans as one token rather than as an operator beside a
+name.  A lone `/' is therefore faced only where an identifier does not
+abut it; every other operator character is faced by position alone.
 
-(defconst agl--zone-marker-re "@\\(?:pos\\|std\\|named\\)"
-  "Regexp matching one zone marker (`@pos', `@std', `@named').")
+`@' is not here because it never reaches this test: it is one of
+`agl--operator-name-excluded-chars', so `agl--operator-name-char-p'
+rejects it and `@' is never faced as an operator at all.  It is faced
+only as an attribute prefix (`agl--attribute-re').")
+
+(defconst agl--attribute-re (concat "@" agl--name-re)
+  "Regexp matching one declaration attribute's `@name' prefix.
+
+An attribute is written `@name' or `@name(args)' in front of a defining
+declaration, a parameter, or a field.  Only the prefix is faced: the
+argument list is ordinary AgL and keeps its own faces.  Which names the
+language defines is a static-analysis question, so any name faces here
+-- and, because its rule faces with OVERRIDE, it does so even when an
+earlier rule already claimed the name (`@copy', `@type').")
 
 ;; `font-lock-escape-face', `font-lock-number-face', and
 ;; `font-lock-operator-face' were all added in Emacs 29.1.
@@ -883,9 +897,9 @@ run of operator characters (`agl--operator-run-end') that begins a token
 multi-character spelling one match, and the token-start test is what
 keeps the `+' of the single identifier `a+b' unfaced.
 
-A run that is only `/' or `@' is faced solely when no identifier abuts
-it: unspaced, the lexer merges those into a module path or a zone marker
-rather than emitting an operator -- see `agl--merged-operator-chars'."
+A run that is only `/' is faced solely when no identifier abuts it:
+unspaced, the lexer merges it into a module path rather than emitting an
+operator -- see `agl--merged-operator-chars'."
   (let ((found nil))
     (while (and (not found) (< (point) limit))
       (let ((pos (point)))
@@ -910,13 +924,36 @@ rather than emitting an operator -- see `agl--merged-operator-chars'."
           (skip-chars-forward "[:alnum:] \t\n_" limit)))))
     found))
 
-(defun agl--match-zone-marker (limit)
-  "`font-lock-keywords' MATCHER for `@pos'/`@std'/`@named', up to LIMIT."
-  (agl--search-ident-forward agl--zone-marker-re limit))
+(defun agl--match-attribute (limit)
+  "`font-lock-keywords' MATCHER for an attribute's `@name', up to LIMIT.
+
+The rule this drives faces with OVERRIDE so that the whole `@name' takes
+the attribute face even where an earlier rule already faced the name
+\(`@copy' as a builtin, `@type' as a keyword).  An override also outranks
+the syntactic pass, which must not happen, so a candidate inside a
+string, template, raw-tail payload or comment is rejected here instead.
+The test is one character past the `@' for the reason spelled out in
+`agl--decl-head-candidate-rejected-p'; `@name' is always at least two
+characters, so that position is still inside the same region."
+  (agl--search-ident-forward
+   agl--attribute-re limit
+   (lambda (start) (not (agl--in-string-or-comment-p (1+ start))))))
 
 (defun agl--in-string-p (pos)
   "Return non-nil if POS is inside a string/template per `syntax-ppss'."
   (nth 3 (syntax-ppss pos)))
+
+(defun agl--in-string-or-comment-p (pos)
+  "Return non-nil if POS is inside a string/template or comment.
+
+Per `syntax-ppss': `nth 3' flags a string/template (including a
+raw-tail payload, which carries generic-string-fence syntax), `nth 4' a
+comment.  Used to reject a decl-head candidate that is only text -- a
+commented-out declaration, or one embedded in a template or raw-tail
+payload -- from `agl--match-attribute', `agl-imenu-create-index' and
+`agl--toplevel-line-p'."
+  (let ((state (syntax-ppss pos)))
+    (or (nth 3 state) (nth 4 state))))
 
 (defun agl--string-region-end (pos)
   "Return the end of the string/template region enclosing POS.
@@ -1159,7 +1196,7 @@ success."
    ;; the number face, which font-lock's default OVERRIDE never replaces.
    (cons #'agl--match-operator 'agl--operator-face)
    (cons #'agl--match-number 'agl--number-face)
-   (cons #'agl--match-zone-marker ''font-lock-keyword-face))
+   (list #'agl--match-attribute '(0 'font-lock-preprocessor-face t)))
   "Font-lock keyword rules for `agl-mode'.
 
 See the section commentary above this constant for the governing
@@ -1181,17 +1218,6 @@ Programs imenu category, while a bare `def'/`extern def' is Functions."
       (and (>= (- end 7) (point-min))
            (string= "program" (buffer-substring-no-properties (- end 7) end))
            (agl--ident-boundary-before-p (- end 7))))))
-
-(defun agl--in-string-or-comment-p (pos)
-  "Return non-nil if POS is inside a string/template or comment.
-
-Per `syntax-ppss': `nth 3' flags a string/template (including a
-raw-tail payload, which carries generic-string-fence syntax), `nth 4' a
-comment.  Used to reject a decl-head candidate that is only text -- a
-commented-out declaration, or one embedded in a template or raw-tail
-payload -- from `agl-imenu-create-index' and `agl--toplevel-line-p'."
-  (let ((state (syntax-ppss pos)))
-    (or (nth 3 state) (nth 4 state))))
 
 (defun agl--decl-head-candidate-rejected-p (kw-start)
   "Return non-nil if a decl-head candidate starting at KW-START is only text.

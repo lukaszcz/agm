@@ -400,6 +400,76 @@ class TestLexer:
         assert ("", "   ") in fragments
         assert "".join(text for _style, text in fragments) == "1   "
 
+    def test_attribute_on_its_own_line_is_styled(self) -> None:
+        # A declaration attribute may sit on the line above its target; the
+        # `@` and the attribute name colour as one attribute.
+        getter = AglPromptLexer().lex_document(Document("@arg-named\ndef f(x: int) -> int = x"))
+        first = getter(0)
+        assert ("class:agl.attribute", "@") in first
+        assert ("class:agl.attribute", "arg-named") in first
+        assert "".join(text for _style, text in first) == "@arg-named"
+
+    def test_attribute_with_arguments_is_styled(self) -> None:
+        # Same-line placement, with an argument list: the arguments keep their
+        # own colours while the `@name` prefix colours as an attribute.
+        line = '@doc("greets") def greet(x: text) -> text = x'
+        fragments = AglPromptLexer().lex_document(Document(line))(0)
+        assert ("class:agl.attribute", "@") in fragments
+        assert ("class:agl.attribute", "doc") in fragments
+        assert "class:agl.string" in {style for style, _text in fragments}
+        assert "".join(text for _style, text in fragments) == line
+
+    def test_attribute_on_a_parameter_is_styled(self) -> None:
+        line = "def f(@arg-pos x: int) -> int = x"
+        fragments = AglPromptLexer().lex_document(Document(line))(0)
+        assert ("class:agl.attribute", "arg-pos") in fragments
+        assert "".join(text for _style, text in fragments) == line
+
+    def test_attributed_enum_member_still_colours_as_a_constructor(self) -> None:
+        # An attribute prefix is transparent to the declaration walk, so the
+        # member name after it is still recognised as a constructor.
+        getter = AglPromptLexer().lex_document(
+            Document('enum Outcome\n  | @doc("fine") Ok(value: int)')
+        )
+        member = getter(1)
+        assert ("class:agl.attribute", "doc") in member
+        assert self._style_of(member, "Ok") == "class:agl.constructor"
+
+    def test_half_typed_attribute_argument_list_is_styled(self) -> None:
+        # An unclosed argument list is normal mid-entry: it must still colour
+        # and reconstruct the line exactly.
+        line = '@doc("greets"'
+        fragments = AglPromptLexer().lex_document(Document(line))(0)
+        assert ("class:agl.attribute", "doc") in fragments
+        assert "".join(text for _style, text in fragments) == line
+
+    def test_attribute_argument_list_may_nest_calls(self) -> None:
+        # The prefix spans the whole argument list, nested calls included, so
+        # the member name after a nested `)` is still read as a constructor.
+        getter = AglPromptLexer().lex_document(
+            Document('enum E\n  | @doc(join("a", "b")) Ok(v: int)')
+        )
+        member = getter(1)
+        assert ("class:agl.attribute", "doc") in member
+        assert self._style_of(member, "Ok") == "class:agl.constructor"
+
+    def test_unclosed_attribute_arguments_do_not_swallow_the_entry(self) -> None:
+        # A half-typed argument list covers only the `@name` prefix, so the
+        # declarations after it still colour as themselves.
+        getter = AglPromptLexer().lex_document(Document('@doc("x"\nenum E\n  | A()\n  | B()'))
+        assert self._style_of(getter(1), "E") == "class:agl.type"
+        assert self._style_of(getter(2), "A") == "class:agl.constructor"
+        assert self._style_of(getter(3), "B") == "class:agl.constructor"
+
+    @pytest.mark.parametrize("line", ["@", "@ 1"])
+    def test_at_sign_without_a_name_is_not_an_attribute(self, line: str) -> None:
+        # Without a name after it there is no attribute yet — at the end of a
+        # half-typed entry or before anything that is not a name — so the `@`
+        # keeps its plain operator colour.
+        fragments = AglPromptLexer().lex_document(Document(line))(0)
+        assert ("class:agl.operator", "@") in fragments
+        assert "".join(text for _style, text in fragments) == line
+
     @staticmethod
     def _style_of(fragments: object, word: str) -> str | None:
         """Return the style of the first fragment whose text equals *word*."""
@@ -547,7 +617,6 @@ class TestLexer:
             ("let f: (int) -> int = g", "->"),
             ("var y := 1", ":="),
             ("let m = M::[int](1)", "::"),
-            ("def f(a, @arg-named b: int) = a", "@"),
         ],
     )
     def test_operator_is_styled(self, source: str, operator: str) -> None:

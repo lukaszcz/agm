@@ -240,3 +240,19 @@ func TestRawTailPayloadIsVerbatim(t *testing.T) {
 	// The code before the opener is unaffected.
 	assertFace(t, "let a = exec$ ls", "let", "statement")
 }
+
+// A declaration attribute is a `@name' prefix, optionally followed by an
+// argument list. `@' is a true delimiter (IDENT_STOP in src/agm/util/ident.py),
+// so the prefix always starts at the `@' and its name runs to the next
+// delimiter -- the argument list is ordinary AgL and keeps its own faces.
+func TestAttributesAreFaced(t *testing.T) {
+	assertFace(t, "@arg-named\ndef f(x: int) -> int = x", "@arg-named", "preproc")
+	assertFace(t, `@doc("greets") def greet(x: text) -> text = x`, "@doc", "preproc")
+	assertFace(t, "record Point\n  @arg-named x: int", "@arg-named", "preproc")
+	assertFace(t, "enum Outcome\n  | @arg-pos Ok(value: int)", "@arg-pos", "preproc")
+	// The argument list is code, not part of the attribute name.
+	assertFace(t, `@doc("greets") def greet(x: text) -> text = x`, `"greets"`, "constant.string")
+	assertFace(t, "@opt-short(name = 'v')\nlet verbose = true", "@opt-short", "preproc")
+	// An `@' with no name after it is not an attribute.
+	assertFace(t, "let x = a @ b", "@", "symbol.operator")
+}

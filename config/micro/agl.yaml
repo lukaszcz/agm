@@ -81,6 +81,14 @@ rules:
     - symbol.operator: "(::|:=)"
     - symbol.operator: "(^|\\s)[!$%&*+\\-/<=>?\\\\^|~]{2,}"
 
+    # Declaration attributes: a `@name' prefix, optionally followed by an
+    # argument list.  `@' is a true delimiter, so the prefix always starts at
+    # the `@' and its name runs to the next delimiter -- no boundary repair is
+    # needed.  The rule comes after the delimiter repaints above so that the
+    # `@' it owns is not repainted back to an operator; the argument list is
+    # ordinary AgL and keeps the faces the rules above gave it.
+    - preproc: "@[\\p{L}_][^\\]\\[(){}:,.|;/@=\\s]*"
+
     # Raw-tail payloads. The tail of an `exec$'/`ask$' line is verbatim text,
     # not AgL, so the whole tail is a region: a keyword or an apostrophe inside
     # a shell command is content, not code.  Micro paints a region's start

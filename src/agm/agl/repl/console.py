@@ -395,6 +395,57 @@ def _next_significant_types(tokens: "list[Token]") -> list[str | None]:
     return result
 
 
+def _attribute_styles(tokens: "list[Token]") -> tuple[dict[int, str], set[int]]:
+    """Colour every ``@name`` attribute prefix and report the tokens it spans.
+
+    An attribute is ``@name`` or ``@name(args)``, written in front of a defining
+    declaration, a parameter, or a field.  Recognition here is purely lexical:
+    the grammar is ``AT NAME`` and AgL is whitespace-insensitive, so an ``AT``
+    directly followed by a ``NAME`` colours wherever the pair occurs — including
+    positions a parse would reject, which is the cheaper and more faithful half
+    of the trade for a syntax highlighter.
+
+    Returns ``(forced, covered)``: *forced* colours the ``@`` and the attribute
+    name, while *covered* holds every token index the prefix spans — argument
+    list included — so the declaration walk in :func:`_decl_site_styles` sees
+    straight through an attribute to the token before it.  The arguments
+    themselves are ordinary AgL and keep the colours the general classifier
+    gives them.
+
+    A ``@`` with no name after it is not an attribute yet.  An argument list
+    left unclosed mid-entry has no span to skip, so only the ``@name`` prefix is
+    covered and the rest of the entry still reads as itself.
+    """
+    forced: dict[int, str] = {}
+    covered: set[int] = set()
+    significant = [index for index, token in enumerate(tokens) if token.type not in _LAYOUT_TOKENS]
+    position = 0
+    while position < len(significant):
+        at_index = significant[position]
+        if tokens[at_index].type != "AT" or position + 1 >= len(significant):
+            position += 1
+            continue
+        name_index = significant[position + 1]
+        if tokens[name_index].type != "NAME":
+            position += 1
+            continue
+        forced[at_index] = "class:agl.attribute"
+        forced[name_index] = "class:agl.attribute"
+        covered.update((at_index, name_index))
+        position += 2
+        if position < len(significant) and tokens[significant[position]].type == "LPAR":
+            depth = 0
+            scan = position
+            while scan < len(significant):
+                depth += {"LPAR": 1, "RPAR": -1}.get(tokens[significant[scan]].type, 0)
+                scan += 1
+                if depth == 0:
+                    covered.update(significant[position:scan])
+                    position = scan
+                    break
+    return forced, covered
+
+
 def _decl_site_styles(
     text: str, tokens: "list[Token]"
 ) -> tuple[dict[int, str], set[str], set[str]]:
@@ -411,8 +462,12 @@ def _decl_site_styles(
     constructor.  The flat enum variant list carries no keywords, so any keyword
     closes the context — ensuring the ``|`` of a later ``case``/``if`` is never
     mistaken for a variant.
+
+    Declaration attributes (:func:`_attribute_styles`) are coloured here and are
+    otherwise transparent, so an attributed enum member still reads as the name
+    directly after its ``|``.
     """
-    forced: dict[int, str] = {}
+    forced, attribute_tokens = _attribute_styles(tokens)
     types: set[str] = set()
     constructors: set[str] = set()
     expect: str | None = None
@@ -427,7 +482,7 @@ def _decl_site_styles(
 
     for index, token in enumerate(tokens):
         ttype = token.type
-        if ttype in _LAYOUT_TOKENS:
+        if ttype in _LAYOUT_TOKENS or index in attribute_tokens:
             continue
         is_name = ttype in ("NAME", "OP_NAME")
 

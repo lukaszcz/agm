@@ -435,23 +435,69 @@
   (agl-flt--with-buffer "def |>[A, B](x: A, f: fn(A) -> B) -> B = f(x)\n"
     (should (agl-flt--wholly-faced-p "|>" 'font-lock-function-name-face))))
 
-;; --- Zone markers `@pos'/`@std'/`@named' ---
+;; --- Declaration attributes `@name' / `@name(args)' ---
 
-(ert-deftest agl-flt-zone-marker-pos-is-keyword-face ()
-  (agl-flt--with-buffer "def f(@pos, x: int) -> int = x\n"
-    (should (eq (agl-flt--face-of "@pos") 'font-lock-keyword-face))))
+(ert-deftest agl-flt-attribute-without-arguments-is-attribute-face ()
+  (agl-flt--with-buffer "@arg-named\ndef f(x: int) -> int = x\n"
+    (should (agl-flt--wholly-faced-p "@arg-named" 'font-lock-preprocessor-face))))
 
-(ert-deftest agl-flt-zone-marker-std-is-keyword-face ()
-  (agl-flt--with-buffer "def f(x: int, @std, y: int) -> int = x + y\n"
-    (should (eq (agl-flt--face-of "@std") 'font-lock-keyword-face))))
+(ert-deftest agl-flt-attribute-with-arguments-is-attribute-face ()
+  ;; The face covers `@' and the name; the arguments keep their own faces.
+  (agl-flt--with-buffer "@extern-name(\"to_slug\")\nextern def to-slug(t: text) -> text\n"
+    (should (agl-flt--wholly-faced-p "@extern-name" 'font-lock-preprocessor-face))
+    (should (eq (agl-flt--face-of "\"to_slug\"") 'font-lock-string-face))))
 
-(ert-deftest agl-flt-zone-marker-named-is-keyword-face ()
-  (agl-flt--with-buffer "def f(x: int, @named, y: int) -> int = x + y\n"
-    (should (eq (agl-flt--face-of "@named") 'font-lock-keyword-face))))
+(ert-deftest agl-flt-attribute-on-its-target-line-is-attribute-face ()
+  ;; An attribute may sit on the same line as what it decorates, and the
+  ;; decorated declaration is faced as usual through it.
+  (agl-flt--with-buffer "@doc(\"says hello\") def greet(x: text) -> text = x\n"
+    (should (agl-flt--wholly-faced-p "@doc" 'font-lock-preprocessor-face))
+    (should (eq (agl-flt--face-of "greet") 'font-lock-function-name-face))))
 
-(ert-deftest agl-flt-unknown-at-name-is-not-a-zone-marker ()
-  (agl-flt--with-buffer "def f(x: int, @nope, y: int) -> int = x\n"
-    (should-not (eq (agl-flt--face-of "@nope") 'font-lock-builtin-face))))
+(ert-deftest agl-flt-attribute-on-a-parameter-is-attribute-face ()
+  (agl-flt--with-buffer "def f(@arg-pos x: int) -> int = x\n"
+    (should (agl-flt--wholly-faced-p "@arg-pos" 'font-lock-preprocessor-face))))
+
+(ert-deftest agl-flt-attribute-on-a-record-field-is-attribute-face ()
+  (agl-flt--with-buffer "record Point\n  @arg-named x: int\n"
+    (should (agl-flt--wholly-faced-p "@arg-named" 'font-lock-preprocessor-face))
+    (should (eq (agl-flt--face-of "int") 'font-lock-type-face))))
+
+(ert-deftest agl-flt-attribute-on-an-enum-member-is-attribute-face ()
+  (agl-flt--with-buffer "enum Outcome\n  | @doc(\"fine\") Ok(value: int)\n"
+    (should (agl-flt--wholly-faced-p "@doc" 'font-lock-preprocessor-face))))
+
+(ert-deftest agl-flt-attribute-face-is-generic-over-the-name ()
+  ;; Attribute recognition is lexical: any kebab-case name faces, and which
+  ;; names exist is a static-analysis question, not a highlighting one.
+  (agl-flt--with-buffer "@some-other-attribute\ndef f(x: int) -> int = x\n"
+    (should (agl-flt--wholly-faced-p "@some-other-attribute" 'font-lock-preprocessor-face))))
+
+(ert-deftest agl-flt-attribute-name-owned-by-another-rule-is-attribute-face ()
+  ;; `copy' is a contextual builtin and `type'/`let' are keywords, so an
+  ;; earlier rule already faced the name; the attribute rule overrides it so
+  ;; that the whole `@name' reads as one attribute.
+  (agl-flt--with-buffer "@copy\ndef f(x: int) -> int = x\n"
+    (should (agl-flt--wholly-faced-p "@copy" 'font-lock-preprocessor-face)))
+  (agl-flt--with-buffer "@type\ndef f(x: int) -> int = x\n"
+    (should (agl-flt--wholly-faced-p "@type" 'font-lock-preprocessor-face)))
+  (agl-flt--with-buffer "@let\ndef f(x: int) -> int = x\n"
+    (should (agl-flt--wholly-faced-p "@let" 'font-lock-preprocessor-face))))
+
+(ert-deftest agl-flt-attribute-inside-a-string-is-string-face ()
+  ;; The attribute rule overrides earlier faces, but never the syntactic
+  ;; pass: text that is only text stays string-faced.
+  (agl-flt--with-buffer "let s = \"@doc(x)\"\n"
+    (should (agl-flt--wholly-faced-p "@doc" 'font-lock-string-face))))
+
+(ert-deftest agl-flt-attribute-inside-a-comment-is-comment-face ()
+  (agl-flt--with-buffer "# @doc(\"x\")\ndef k() -> int = 1\n"
+    (should (agl-flt--wholly-faced-p "@doc" 'font-lock-comment-face))))
+
+(ert-deftest agl-flt-lone-at-is-not-an-attribute ()
+  ;; An `@' with no name after it is not an attribute prefix.
+  (agl-flt--with-buffer "@123\ndef k() -> int = 1\n"
+    (should-not (eq (agl-flt--face-of "@") 'font-lock-preprocessor-face))))
 
 ;; --- A keyword immediately after a delimiter or operator is still faced ---
 

@@ -1,0 +1,32 @@
+# Per-parameter zone attributes on a `program def`, beside a second attribute
+# on the same declaration. An attribute sits on the line above its target or in
+# front of it, and the form's named-only default covers every parameter naming
+# no zone of its own.
+
+@doc("The outcome of one run.")
+enum Verdict
+  | Pass
+  | Fail(@arg-named reason: text)
+
+@doc("Renders one verdict.")
+@arg-pos
+def render-verdict(index: int, @arg-std verdict: Verdict) -> text =
+  case verdict of
+    | Pass => "%{index}:pass"
+    | Fail(reason) => "%{index}:%{reason}"
+
+@doc("Reports on a batch of runs.")
+program def main(
+  @doc("how many runs to report")
+  @arg-pos runs: int,
+  @arg-std tag: text = "batch",
+  @doc("mark the last run as failed") failing: bool = false,
+) -> unit =
+  print tag
+  var reported: int = 0
+  for index in 1 to runs do
+    let verdict: Verdict = if failing and index == runs => Fail(reason = "failed") else => Pass
+    print render-verdict(index, verdict = verdict)
+    reported := reported + 1
+  done
+  print reported

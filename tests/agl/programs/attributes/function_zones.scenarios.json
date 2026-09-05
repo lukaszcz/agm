@@ -1,0 +1,49 @@
+{
+  "scenarios": [
+    {
+      "name": "positive_values",
+      "params": {
+        "base": 3,
+        "weight": 4
+      },
+      "expect": {
+        "stdout": "12\n12\n15\n16\n1\n1\nm=4\nn=3\n[\n  3,\n  4\n]\n[\n  3,\n  4\n]\n12\n6\n"
+      }
+    },
+    {
+      "name": "zero_base",
+      "params": {
+        "base": 0,
+        "weight": 5
+      },
+      "expect": {
+        "stdout": "0\n0\n3\n5\n5\n5\nm=5\nzero=5\n[\n  0,\n  5\n]\n[\n  0,\n  5\n]\n0\n0\n"
+      }
+    },
+    {
+      "name": "negative_base",
+      "params": {
+        "base": -2,
+        "weight": 3
+      },
+      "expect": {
+        "stdout": "-6\n-6\n-3\n-3\n5\n5\nm=3\nn=-2\n[\n  -2,\n  3\n]\n[\n  -2,\n  3\n]\n-6\n-4\n"
+      }
+    },
+    {
+      "name": "named_only_entry_params_supplied_positionally",
+      "positional": [
+        3,
+        4
+      ],
+      "params": {},
+      "expect": {
+        "host_error": {
+          "message_contains": [
+            "supplied by name"
+          ]
+        }
+      }
+    }
+  ]
+}

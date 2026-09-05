@@ -1,0 +1,55 @@
+{
+  "scenarios": [
+    {
+      "name": "every_standard_parameter_positional",
+      "positional": ["ann", 2, "hi"],
+      "params": {},
+      "expect": {
+        "stdout": "ann ann\nhi\n4\n"
+      }
+    },
+    {
+      "name": "standard_parameters_by_name",
+      "positional": ["bo"],
+      "params": {
+        "count": 3,
+        "note": "checked",
+        "loud": true
+      },
+      "expect": {
+        "stdout": "bo bo bo!\nchecked\n6\n"
+      }
+    },
+    {
+      "name": "defaulted_note_omitted",
+      "positional": ["cy", 1],
+      "params": {},
+      "expect": {
+        "stdout": "cy\n-\n2\n"
+      }
+    },
+    {
+      "name": "positional_only_supplied_by_name",
+      "positional": [],
+      "params": {
+        "name": "dee",
+        "count": 1
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": ["name"]
+        }
+      }
+    },
+    {
+      "name": "named_only_supplied_positionally",
+      "positional": ["eve", 1, "note", true],
+      "params": {},
+      "expect": {
+        "host_error": {
+          "message_contains": ["supplied by name"]
+        }
+      }
+    }
+  ]
+}

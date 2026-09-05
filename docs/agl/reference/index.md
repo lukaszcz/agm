@@ -71,7 +71,7 @@ program def main(spec: text) -> unit =
 
 | Chapter | Contents |
 | ------- | -------- |
-| [Lexical structure](lexical-structure.md) | Source text, comments, indentation and layout, keywords, tokens, operator precedence |
+| [Lexical structure](lexical-structure.md) | Source text, comments, indentation and layout, keywords, tokens, declaration attributes, operator precedence |
 | [Program structure](program-structure.md) | Programs, blocks, items, binders, inline forms |
 | [Modules](modules.md) | File-based module system: module identity, import forms, qualified access, visibility, cyclic imports, REPL imports, the standard-library module inventory |
 | [Packages](packages.md) | Package module trees and identity, package-qualified paths, import visibility, programs as commands, params and qualified configuration keys, resources and companions |

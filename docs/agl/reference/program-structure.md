@@ -57,6 +57,11 @@ The following are **root-only unless noted**: a static error if nested inside
 an ordinary block or, for forms without a scope-region exception, a named scope
 region.
 
+Every declaration that defines a name — the type, function, and binding forms
+below, along with their parameters and fields — may carry an
+[attribute](grammar.md#attributes) prefix. `import`, `use`, `export`, and
+`infix` declarations may not.
+
 - **Type declarations** (`record`, `enum`, `exception`, `type`) — valid at the
   module root and in named scope regions. They may refer to types declared
   later in the program. `record`,
@@ -82,7 +87,8 @@ region.
   method), remains callable like any other function, and is addressed by its
   declaration path (`main`, `review::main`). Its value parameters are the
   program's own external inputs: the host supplies them from CLI options and
-  qualified config, falling back to their declared defaults; see
+  qualified config, falling back to their declared defaults. They are named-only
+  unless a zone attribute places one elsewhere; see
   [Host environment](host-environment.md#program-arguments). A standard or
   named-only parameter, being name-addressable, cannot spell an engine
   setting's name ([Host environment](host-environment.md#engine-settings)),

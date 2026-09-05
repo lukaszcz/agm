@@ -1,0 +1,6 @@
+enum E
+  | @arg-pos V(a: int, b: int)
+
+program def main() -> unit =
+  let e: E = V(a = 1, b = 2)
+  print e

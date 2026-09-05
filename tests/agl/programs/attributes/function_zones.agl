@@ -1,0 +1,59 @@
+# Parameter zones chosen by attributes on functions: an attribute in front of a
+# parameter zones that parameter, the same attribute in front of the
+# declaration zones every parameter carrying none of its own, and a method
+# receiver stays positional-only under a declaration-level zone.
+
+# All three zones, spelled entry by entry.
+def score(@arg-pos base: int, weight: int, @arg-named bonus: int = 0) -> int =
+  base * weight + bonus
+
+# Declaration-level positional-only default, overridden on one entry.
+@arg-pos
+def span(low: int, @arg-std high: int) -> int = high - low
+
+# Declaration-level named-only default: every argument is supplied by name.
+@arg-named
+def label(prefix: text, value: int) -> text = "%{prefix}=%{value}"
+
+# A generic function under a declaration-level default with one override.
+@arg-pos
+def pair-of[T](first: T, @arg-std second: T) -> array[T] = [first, second]
+
+record Meter
+  reading: int
+
+# The receiver is positional-only even though the declaration zones the rest
+# named-only.
+@arg-named
+def Meter::scaled(self, factor: int) -> int = self.reading * factor
+
+program def main(base: int, weight: int) -> unit =
+  # Positional-only base, standard weight positionally and then by name.
+  print score(base, weight)
+  print score(base, weight = weight)
+
+  # The named-only bonus, by name and through the bare-name shorthand.
+  print score(base, weight, bonus = 3)
+  let bonus = weight
+  print score(base, weight, bonus)
+
+  # span: low is positional-only, high accepts either form.
+  print span(base, weight)
+  print span(base, high = weight)
+
+  # label: both entries are named-only, so a bare-name shorthand is matched by
+  # its own name and may stand out of declaration order.
+  let prefix = "n"
+  let value = base
+  print label(prefix = "m", value = weight)
+  let summary = if base == 0 => label(value = weight, prefix = "zero") else => label(value, prefix)
+  print summary
+
+  # A generic call under the same declaration-level default.
+  print render(pair-of(base, weight))
+  print render(pair-of::[int](base, second = weight))
+
+  # The receiver travels positionally; the rest of the list is named-only.
+  let meter = Meter(reading = base)
+  print meter.scaled(factor = weight)
+  print Meter::scaled(meter, factor = 2)

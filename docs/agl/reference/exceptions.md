@@ -196,9 +196,10 @@ raise Abort(message = "Cannot continue without repository access.")
 
 An exception's own fields are **standard by default** and may be supplied
 positionally or by name. The `@arg-pos`, `@arg-std`, and `@arg-named`
-[attributes](grammar.md#attributes) constrain an exception's own fields. The
-inherited `message` field is named-only, so it is supplied by name when
-constructing an exception with fields:
+[attributes](grammar.md#attributes) constrain them: in front of a field the
+attribute zones that field, and in front of the declaration it zones every
+field carrying none of its own. The inherited `message` field is named-only, so
+it is supplied by name when constructing an exception with fields:
 
 ```agl
 exception DeployError extends Exception
@@ -209,9 +210,10 @@ program def main() -> unit =
   let _ = raise DeployError("api", 1, message = "deployment failed")
 ```
 
-Any concrete built-in exception type is constructible with named arguments
-for its fields. The same construction rule applies to user-declared exception
-types. `Abort` is the conventional type for user-initiated failures.
+Any concrete built-in exception type is constructible the same way: its own
+fields are standard, so they may be supplied positionally or by name, while the
+inherited `message` is named-only. `Abort` is the conventional type for
+user-initiated failures.
 
 Exception values support the
 [record update](expressions.md#record-update) operator. Field names are

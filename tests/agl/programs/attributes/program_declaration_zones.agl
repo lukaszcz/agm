@@ -1,0 +1,20 @@
+# A declaration-level zone attribute on a `program def` replaces the form's
+# named-only default for every parameter carrying none of its own: here every
+# parameter but `name` and `loud` becomes standard, so the host accepts it
+# either positionally or by name.
+
+record Greeting(word: text, times: int)
+
+def render-greeting(@arg-pos greeting: Greeting, @arg-named loud: bool) -> text =
+  var line = greeting.word
+  for tick in 2 to greeting.times do
+    line := "%{line} %{greeting.word}"
+  done
+  if loud => "%{line}!" else => line
+
+@arg-std
+program def main(@arg-pos name: text, count: int, note: text = "-", @arg-named loud: bool = false) -> unit =
+  let greeting = Greeting(word = name, times = count)
+  print render-greeting(greeting, loud = loud)
+  print note
+  print(count * 2)

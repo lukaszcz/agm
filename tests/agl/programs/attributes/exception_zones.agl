@@ -1,0 +1,57 @@
+# Zone attributes on exception fields. A declaration-level attribute zones
+# every own field carrying none of its own, the inherited `message` field is
+# named-only, and a built-in exception's fields are standard, so they may be
+# supplied positionally.
+
+@arg-pos
+exception DeployError extends Exception
+  service: text
+  @arg-std attempt: int
+  @arg-named fatal: bool
+
+exception ParseFailure extends Exception
+  line: int
+  detail: text
+
+program def main(mode: text, index: int) -> unit =
+  let items = [10, 20, 30]
+
+  # service is positional-only, attempt standard, and both `fatal` and the
+  # inherited `message` are named-only, so their bare-name shorthands are
+  # matched by name and may stand out of declaration order.
+  let fatal = mode == "fatal"
+  let message = "deploy failed"
+  try
+    raise DeployError("api", index, message, fatal)
+  catch DeployError as e =>
+    print "%{e.service}/%{e.attempt} fatal=%{e.fatal}: %{e.message}"
+
+  # The standard field supplied by name instead.
+  try
+    raise DeployError("web", attempt = index + 1, fatal = false, message = "retry")
+  catch DeployError as e =>
+    print "%{e.service}/%{e.attempt}"
+
+  # Own fields with no attribute anywhere are standard: either form works.
+  let positional = ParseFailure(index, "positional", message = "parse failed")
+  let named = ParseFailure(line = index + 1, detail = "named", message = "parse failed")
+  print "%{positional.line}:%{positional.detail}"
+  print "%{named.line}:%{named.detail}"
+
+  # A built-in exception constructed with positional fields.
+  try
+    raise IndexError(index, items.size(), message = "index out of range")
+  catch IndexError as e =>
+    print "raised %{e.index}/%{e.length}"
+
+  # The same built-in raised by the host, read through the same fields.
+  try
+    print items[index]
+  catch IndexError as e =>
+    print "host %{e.index}/%{e.length}"
+
+  # An exception built positionally and left uncaught.
+  if mode == "abort" =>
+    raise ParseFailure(index, "unhandled", message = "no handler")
+  else =>
+    ()

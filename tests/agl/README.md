@@ -20,6 +20,7 @@ Layout:
 
 | Directory | What it exercises |
 |-----------|-------------------|
+| `attributes/` | Declaration attributes: `@arg-*` zones on functions, lambdas, records, exceptions, enum members, and `program def` |
 | `basics/` | `let`/`var`/`:=`, params, agent calls, print rendering |
 | `calls/` | `ask` parse policies (`Retry`/`Abort`), format options |
 | `canonical/` | Multi-agent review/fix workflows |

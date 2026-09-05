@@ -1,0 +1,39 @@
+# Zone attributes on lambda parameters. A lambda's parameter list carries the
+# same per-entry attributes as a `def`'s, with the standard zone as its
+# default, and the lambdas flow through higher-order declared functions whose
+# own parameters are zoned by attributes.
+
+# A higher-order function whose function parameter is positional-only and
+# whose seed is named-only.
+def apply-twice(@arg-pos function: (int) -> int, @arg-named seed: int) -> int =
+  function(function(seed))
+
+# Declaration-level positional-only default over both function parameters.
+@arg-pos
+def compose(outer: (int) -> int, inner: (int) -> int) -> (int) -> int =
+  fn(@arg-std value: int) -> int => outer(inner(value))
+
+@arg-named
+def summarize(values: array[int], keep: (int) -> bool) -> int =
+  values.filter(keep).fold(0, fn(@arg-pos total: int, @arg-pos value: int) -> int => total + value)
+
+program def main(seed: int, step: int) -> unit =
+  let bump = fn(@arg-pos value: int) -> int => value + step
+  print bump(seed)
+
+  let scale = fn(@arg-std value: int) -> int => value * step
+  print scale(seed)
+
+  print apply-twice(bump, seed = seed)
+  print apply-twice(scale, seed = seed)
+
+  let bumped-scale = compose(bump, scale)
+  print bumped-scale(seed)
+
+  # A lambda passed straight into a named-only parameter list, and a lambda
+  # chosen by a branch, bound first and passed by shorthand.
+  print summarize(values = [seed, step, seed + step], keep = fn(value: int) -> bool => value > 0)
+  let differs = fn(@arg-std value: int) -> bool => value != step
+  let exceeds = fn(@arg-std value: int) -> bool => value > seed
+  let keep = if step > seed => differs else => exceeds
+  print summarize(keep, values = [seed, step, seed + step])

@@ -1,0 +1,55 @@
+{
+  "scenarios": [
+    {
+      "name": "base_two_named_report",
+      "params": {
+        "base": 2
+      },
+      "agents": {
+        "planner": [
+          "{\"label\": \"builds\", \"count\": 7}"
+        ]
+      },
+      "expect": {
+        "stdout": "4\n4\n12\n4\n24\n9\n4\n12\n3\nboxed:2\nbuilds=7\n",
+        "calls": {
+          "planner": 1
+        }
+      }
+    },
+    {
+      "name": "base_zero_empty_report",
+      "params": {
+        "base": 0
+      },
+      "agents": {
+        "planner": [
+          "{\"label\": \"none\", \"count\": 0}"
+        ]
+      },
+      "expect": {
+        "stdout": "4\n2\n2\n2\n8\n5\n4\n2\n1\nempty:0\nnone=0\n",
+        "calls": {
+          "planner": 1
+        }
+      }
+    },
+    {
+      "name": "base_five_large_report",
+      "params": {
+        "base": 5
+      },
+      "agents": {
+        "planner": [
+          "{\"label\": \"reviews\", \"count\": 41}"
+        ]
+      },
+      "expect": {
+        "stdout": "4\n7\n42\n7\n63\n15\n4\n42\n6\nboxed:5\nreviews=41\n",
+        "calls": {
+          "planner": 1
+        }
+      }
+    }
+  ]
+}

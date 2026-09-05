@@ -1,0 +1,70 @@
+{
+  "scenarios": [
+    {
+      "name": "positional_runs_default_tag",
+      "positional": [
+        2
+      ],
+      "params": {},
+      "expect": {
+        "stdout": "batch\n1:pass\n2:pass\n2\n"
+      }
+    },
+    {
+      "name": "standard_tag_positionally_with_failure",
+      "positional": [
+        3,
+        "nightly"
+      ],
+      "params": {
+        "failing": true
+      },
+      "expect": {
+        "stdout": "nightly\n1:pass\n2:pass\n3:failed\n3\n"
+      }
+    },
+    {
+      "name": "standard_tag_by_name_no_runs",
+      "positional": [
+        0
+      ],
+      "params": {
+        "tag": "empty"
+      },
+      "expect": {
+        "stdout": "empty\n0\n"
+      }
+    },
+    {
+      "name": "named_only_flag_supplied_positionally",
+      "positional": [
+        1,
+        "nightly",
+        true
+      ],
+      "params": {},
+      "expect": {
+        "host_error": {
+          "message_contains": [
+            "supplied by name"
+          ]
+        }
+      }
+    },
+    {
+      "name": "positional_only_runs_supplied_by_name",
+      "positional": [],
+      "params": {
+        "runs": 2
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": [
+            "runs",
+            "positional-only"
+          ]
+        }
+      }
+    }
+  ]
+}

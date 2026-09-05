@@ -1,0 +1,8 @@
+{
+  "diagnostic": {
+    "line": 7,
+    "message_contains": [
+      "positional-only"
+    ]
+  }
+}

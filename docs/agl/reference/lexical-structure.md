@@ -388,20 +388,37 @@ single-argument call sugar `f([0])`.
 ## Attributes
 
 `@` introduces an **attribute** on a declaration — `@name`, or `@name(args)`
-with ordinary call arguments. `@` is a delimiter, so the name after it is a
-separate identifier token and the attribute name may be hyphenated.
+with an ordinary call argument list. `@` is a delimiter, so the name after it
+is a separate identifier token and the attribute name may be hyphenated. The
+same spelling is an ordinary identifier everywhere else.
+
+An attribute prefixes what it belongs to, and several attributes may be written
+in a row. A declaration, a field, and a parameter each take their attributes on
+the line above or in front of them on the same line. An enum member takes its
+attributes after the member's `|`, on the member's own line.
 
 ```agl
 @arg-pos
 def f(x: int, y: int) -> int = x + y
 
+@doc("Formats one entry.")
 def g(a: int, @arg-named key: text) -> text = "%{a}: %{key}"
+
+record Entry
+  @arg-named
+  label: text
+  @arg-named count: int
+
+enum Shape
+  | @doc("a rectangle") @arg-pos Rect(width: int, height: int)
+  | Empty
 ```
 
-The attribute name is an ordinary identifier everywhere else. See
-[Attributes](grammar.md#attributes) for where attributes may appear and
-[Functions](functions.md) and [Types](types.md) for the zone semantics
-`@arg-pos`, `@arg-std`, and `@arg-named` carry.
+See [Attributes](grammar.md#attributes) for the declarations an attribute may
+prefix, the arguments it admits, and the errors an unknown, misplaced, repeated,
+or contradicted attribute raises; [Functions](functions.md#parameters) and
+[Types](types.md#record-types) describe the zone semantics `@arg-pos`,
+`@arg-std`, and `@arg-named` carry.
 
 ## Operator precedence
 

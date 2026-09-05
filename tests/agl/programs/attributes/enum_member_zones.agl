@@ -1,0 +1,47 @@
+# Zone attributes on enum members: an attribute in front of a member zones its
+# whole field list, an attribute in front of a member field zones that field,
+# and the zones drive construction and constructor patterns alike.
+
+enum Shape
+  | @arg-pos Rect(width: int, @arg-named label: text)
+  | @arg-named Circle(radius: int, color: text)
+  | Square(side: int)
+  | Empty
+
+def describe(@arg-pos shape: Shape) -> text =
+  case shape of
+    | Rect(width, label) => "rect %{width} %{label}"
+    | Circle(color, radius) => "circle %{radius} %{color}"
+    | Square(side) => "square %{side}"
+    | Empty => "empty"
+
+program def main(size: int) -> unit =
+  let drafter: Agent = AgentCommand("drafter")
+
+  # width is positional-only, label named-only.
+  let rect: Shape = Rect(size, label = "wide")
+  print describe(rect)
+
+  # A named-only member's fields, by name and through the bare-name shorthand,
+  # which is matched by its own name and may stand out of declaration order.
+  let circle: Shape = Circle(radius = size + 1, color = "red")
+  let radius = size + 2
+  let color = "blue"
+  let shorthand: Shape = Circle(color, radius)
+  print describe(circle)
+  print describe(shorthand)
+
+  # A member with no attribute of its own: standard fields, either form.
+  print describe(Square(size + 3))
+  print describe(Square(side = size + 4))
+  print describe(Empty)
+
+  # An as-pattern renames the binder of the positional-only field.
+  let width = case rect of
+    | Rect(_ as w) => w
+    | _ => 0
+  print width
+
+  # An enum value parsed from an agent response.
+  let drafted: Shape = drafter.ask("Draft a shape.")
+  print describe(drafted)

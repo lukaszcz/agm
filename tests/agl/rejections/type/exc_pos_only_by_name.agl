@@ -1,0 +1,7 @@
+@arg-pos
+exception DeployError extends Exception
+  service: text
+  attempt: int
+
+program def main() -> unit =
+  raise DeployError(service = "api", attempt = 1, message = "boom")

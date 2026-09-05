@@ -222,16 +222,21 @@ attribute  ::= "@" NAME ["(" arg_list? ")"] NEWLINE?
 An attribute prefixes a **defining declaration**: a record, an enum, an enum
 member, an exception, a type alias, a `def` in any of its `program`, `builtin`,
 and `extern` forms, a `builtin var`, a record/enum-member/exception field, a
-function or lambda parameter, and a `let` or `var` binding. Several attributes
-may be written in a row, on the declaration's own line or on the lines above
-it.
+function or lambda parameter, and a `let` or `var` binding. `import`, `use`,
+`export`, and `infix` declarations and scope regions define no name of their
+own and take no attribute.
+[Lexical structure](lexical-structure.md#attributes) gives the placements an
+attribute may take.
 
-An attribute's arguments are an ordinary `arg_list`, so an attribute may carry
-positional and named arguments — `@doc("Prints a greeting")`,
-`@opt-name(name = "verbose")`.
+An attribute's arguments are an ordinary `arg_list`, so both positional and
+named arguments are admitted syntactically. Every built-in attribute takes only
+literal constants, positionally — `@doc("Prints a greeting")` — so a computed
+or named argument to one is a static error.
 
 Each attribute has its own meaning and its own set of declarations it may
-prefix. `@arg-pos`, `@arg-std`, and `@arg-named` place parameters and fields in
+prefix; an unknown attribute name, a misplaced, repeated, or contradicted
+attribute, and an argument list its meaning does not admit are static errors.
+`@arg-pos`, `@arg-std`, and `@arg-named` place parameters and fields in
 [zones](functions.md#parameters).
 
 ## Type declarations
@@ -509,8 +514,8 @@ try_expr          ::= "try" try_body catch_clause+
 try_body          ::= suite | (marked_item ";")* try_tail
 try_tail          ::= or_expr | inline_assign | try_letvar_decl | raise_expr
                     | return_expr | if_expr | case_expr | loop
-try_letvar_decl   ::= "let" pattern type_ann? "=" try_value
-                    | "var" decl_head type_ann? "=" try_value
+try_letvar_decl   ::= attributes? "let" pattern type_ann? "=" try_value
+                    | attributes? "var" decl_head type_ann? "=" try_value
 try_value         ::= or_expr | raise_expr | return_expr | if_expr | case_expr | loop
 catch_clause      ::= "catch" catch_pattern "=>" branch_body
 catch_pattern     ::= name ("as" name)?

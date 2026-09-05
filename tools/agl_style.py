@@ -15,8 +15,8 @@ purely about vertical layout -- nothing reflows a line's contents:
 ``scope-blank``
     A blank line precedes a ``scope`` header.
 
-The last two attach to a leading comment block rather than splitting it from
-the declaration it documents.
+The last two attach to the comment block and the attributes written above a
+declaration rather than splitting them from the declaration they belong to.
 
 AgL appears in three places, and all three are checked:
 
@@ -158,6 +158,10 @@ def _is_comment(line: str) -> bool:
     return line.lstrip().startswith("#")
 
 
+def _is_attribute(line: str) -> bool:
+    return line.lstrip().startswith("@")
+
+
 def _shift(lines: list[str], span: range, amount: int) -> None:
     """Shift every non-blank line in *span* by *amount* columns, in place."""
     if amount == 0:
@@ -218,18 +222,26 @@ def _header_lines(regions: Iterable[Region]) -> Iterator[int]:
         yield from _header_lines(region.children)
 
 
-def _comment_block_start(lines: list[str], index: int) -> int:
-    """The first line of the comment block documenting *index*, or *index* itself."""
+def _prefix_block_start(lines: list[str], index: int) -> int:
+    """The first line of the prefix documenting *index*, or *index* itself.
+
+    A declaration's own lines run back over the comment block above it and over
+    the attributes written on the lines between: a blank line belongs before
+    that whole prefix, never inside it.
+    """
     start = index
     indent = _indent_of(lines[index])
-    while start > 0 and _is_comment(lines[start - 1]) and _indent_of(lines[start - 1]) == indent:
+    while start > 0 and _indent_of(lines[start - 1]) == indent:
+        previous = lines[start - 1]
+        if not (_is_comment(previous) or _is_attribute(previous)):
+            break
         start -= 1
     return start
 
 
 def _blank_before(lines: list[str], index: int) -> int | None:
     """Where a blank line is owed before *index*, or None when one is not."""
-    target = _comment_block_start(lines, index)
+    target = _prefix_block_start(lines, index)
     if target == 0 or _is_blank(lines[target - 1]):
         return None
     return target

@@ -175,6 +175,13 @@ through the same chain, so a scoped constructor is written with its exact path
 - **Bare-name shorthand** (`x` in a position where positional slots are exhausted)
   means `x = x`. It is valid only when `x` names a named-only field.
 
+A field's zone is the one named by its own `@arg-pos`, `@arg-std`, or
+`@arg-named` [attribute](grammar.md#attributes), or by the attribute on its
+declaration, or the standard default ([Types](types.md#record-types)). The same
+zones therefore shape destructuring and construction: a positional-only field
+is reached only by position, and a named-only field only by a named
+sub-pattern or the shorthand.
+
 After a sub-pattern has been assigned to a field, a bare name is interpreted
 by that field: the name of the matched field binds that field, while a nullary
 constructor of the field's enum type matches that constructor. Any other bare
@@ -230,6 +237,9 @@ Static rules:
 6. A positional sub-pattern must precede all named sub-patterns. A positional
    expression that lands on a named-only field (with no positional slots available)
    is a static error unless it is a bare name (which is reinterpreted as `name = name`).
+7. Naming a positional-only field in a named sub-pattern is a static error;
+   rename its binder with an as-pattern in the field's positional slot instead
+   (`Rect(_ as w)`).
 
 ### Patterns on generic nominal types
 

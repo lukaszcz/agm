@@ -1,0 +1,75 @@
+# Zone attributes on record fields drive both construction and constructor
+# patterns: an attribute in front of a field zones that field, the same
+# attribute in front of the declaration zones every field carrying none of its
+# own, and a named-only field is matched by its own name in a call and in a
+# pattern alike.
+
+# Declaration-level positional-only default with one standard override.
+@arg-pos
+record Span
+  start: int
+  @arg-std stop: int
+
+# Every field named-only, so construction and patterns use names or the
+# bare-name shorthand, which may stand out of declaration order.
+@arg-named
+record Rect
+  width: int
+  height: int
+  name: text
+
+# No attribute anywhere: both fields are standard.
+record Tally(label: text, count: int)
+
+# A generic record with one field per zone.
+record Boxed[T](@arg-pos value: T, @arg-named tag: text)
+
+program def main(base: int) -> unit =
+  let planner: Agent = AgentCommand("planner")
+
+  let span = Span(base, base + 4)
+  let half-named = Span(base, stop = base + 2)
+  print(span.stop - span.start)
+  print half-named.stop
+
+  let width = base + 1
+  let height = base + 2
+  let name = "rect"
+  let rect = Rect(width = width, height = height, name = name)
+  let shorthand-rect = Rect(name, height, width)
+  print(rect.width * rect.height)
+  print shorthand-rect.height
+
+  # `with` addresses fields by name whatever zone they are in.
+  let wider = rect with width = rect.width + 3
+  print(wider.width * wider.height)
+
+  let tally = Tally("runs", base)
+  let named-tally = Tally(label = "named", count = base + 5)
+  print(tally.count + named-tally.count)
+
+  # Positional sub-patterns fill the positional-capable fields.
+  let length = case span of
+    | Span(start, stop) => stop - start
+  print length
+
+  # The named-only fields bind through the bare-name shorthand, matched by
+  # name rather than by position, and a named sub-pattern renames a binder.
+  let area = case rect of
+    | Rect(name, height, width) => width * height
+  print area
+  let renamed = case rect of
+    | Rect(width = _ as w) => w
+  print renamed
+
+  # A generic record mixing a positional-only and a named-only field, built by
+  # whichever branch the parameter selects.
+  let boxed = if base > 0 => Boxed(base, tag = "boxed") else => Boxed(0, tag = "empty")
+  let described = case boxed of
+    | Boxed(value, tag) => "%{tag}:%{value}"
+  print described
+
+  # A record parsed from an agent response: the wire shape is field-keyed
+  # whatever zones the fields are in.
+  let reported: Tally = planner.ask("Report a tally.")
+  print "%{reported.label}=%{reported.count}"

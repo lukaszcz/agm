@@ -1,0 +1,34 @@
+{
+  "scenarios": [
+    {
+      "name": "positive_seed",
+      "params": {
+        "seed": 4,
+        "step": 3
+      },
+      "expect": {
+        "stdout": "7\n12\n10\n36\n15\n14\n7\n"
+      }
+    },
+    {
+      "name": "zero_seed",
+      "params": {
+        "seed": 0,
+        "step": 2
+      },
+      "expect": {
+        "stdout": "2\n0\n4\n0\n2\n4\n0\n"
+      }
+    },
+    {
+      "name": "negative_seed",
+      "params": {
+        "seed": -3,
+        "step": 5
+      },
+      "expect": {
+        "stdout": "2\n-15\n7\n-75\n-10\n7\n-1\n"
+      }
+    }
+  ]
+}

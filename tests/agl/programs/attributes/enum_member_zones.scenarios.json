@@ -1,0 +1,55 @@
+{
+  "scenarios": [
+    {
+      "name": "size_two_drafts_rect",
+      "params": {
+        "size": 2
+      },
+      "agents": {
+        "drafter": [
+          "{\"$case\": \"Rect\", \"width\": 9, \"label\": \"drafted\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "rect 2 wide\ncircle 3 red\ncircle 4 blue\nsquare 5\nsquare 6\nempty\n2\nrect 9 drafted\n",
+        "calls": {
+          "drafter": 1
+        }
+      }
+    },
+    {
+      "name": "size_zero_drafts_circle",
+      "params": {
+        "size": 0
+      },
+      "agents": {
+        "drafter": [
+          "{\"$case\": \"Circle\", \"radius\": 7, \"color\": \"green\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "rect 0 wide\ncircle 1 red\ncircle 2 blue\nsquare 3\nsquare 4\nempty\n0\ncircle 7 green\n",
+        "calls": {
+          "drafter": 1
+        }
+      }
+    },
+    {
+      "name": "size_five_drafts_empty",
+      "params": {
+        "size": 5
+      },
+      "agents": {
+        "drafter": [
+          "{\"$case\": \"Empty\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "rect 5 wide\ncircle 6 red\ncircle 7 blue\nsquare 8\nsquare 9\nempty\n5\nempty\n",
+        "calls": {
+          "drafter": 1
+        }
+      }
+    }
+  ]
+}

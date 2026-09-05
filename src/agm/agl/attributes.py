@@ -8,9 +8,9 @@ other attributes it excludes. Everything here is data — the diagnostics for an
 unknown, misplaced, malformed, duplicate, or conflicting attribute belong to
 the pass that consults the catalog.
 
-It lives in its own dependency-free top-level leaf, alongside ``zones`` and
-``modules.ids``, so any layer may name an attribute without pulling a pass in
-with it.
+It is a top-level leaf sitting directly on ``zones``, whose ``ParamZone`` the
+``@arg-*`` attributes name, and on nothing else, so any layer may name an
+attribute without pulling a pass in with it.
 """
 
 from __future__ import annotations
@@ -20,8 +20,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
+from agm.agl.zones import ParamZone
+
 __all__ = [
     "BUILTIN_ATTRIBUTES",
+    "ZONE_ATTRIBUTES",
     "AttributeArguments",
     "AttributeSpec",
     "AttributeTarget",
@@ -97,8 +100,16 @@ _ZONED_TARGETS: frozenset[AttributeTarget] = frozenset(
     }
 )
 
-#: The three zone attributes; each excludes the other two.
-_ZONE_ATTRIBUTE_NAMES: tuple[str, ...] = ("arg-pos", "arg-std", "arg-named")
+#: The zone each ``@arg-*`` attribute selects. This is the one place the zone
+#: attributes are named: the catalog derives their mutual conflicts from these
+#: keys, and recognition reads the zone an attribute stands for from here.
+ZONE_ATTRIBUTES: Mapping[str, ParamZone] = MappingProxyType(
+    {
+        "arg-pos": ParamZone.POSITIONAL_ONLY,
+        "arg-std": ParamZone.STANDARD,
+        "arg-named": ParamZone.NAMED_ONLY,
+    }
+)
 
 _PROGRAM_PARAMETER_ONLY: frozenset[AttributeTarget] = frozenset({AttributeTarget.PROGRAM_PARAMETER})
 
@@ -108,7 +119,7 @@ def _zone_spec(name: str) -> AttributeSpec:
         name=name,
         targets=_ZONED_TARGETS,
         arguments=AttributeArguments.NONE,
-        conflicts=tuple(other for other in _ZONE_ATTRIBUTE_NAMES if other != name),
+        conflicts=tuple(other for other in ZONE_ATTRIBUTES if other != name),
     )
 
 
@@ -121,7 +132,7 @@ def _option_spec(name: str, arguments: AttributeArguments) -> AttributeSpec:
 
 
 _SPECS: tuple[AttributeSpec, ...] = (
-    *(_zone_spec(name) for name in _ZONE_ATTRIBUTE_NAMES),
+    *(_zone_spec(name) for name in ZONE_ATTRIBUTES),
     AttributeSpec(
         name="extern-name",
         targets=frozenset({AttributeTarget.EXTERN}),

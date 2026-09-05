@@ -46,7 +46,6 @@ from agm.agl.syntax.nodes import (
     LetDecl,
     NameTarget,
     Param,
-    ParamZone,
     PatternField,
     Program,
     RecordDef,
@@ -2996,7 +2995,6 @@ class TestDirectASTConstruction:
         param = Param(
             name="x",
             type_expr=int_t,
-            kind=ParamZone.STANDARD,
             default=None,
             span=sp,
             node_id=_nid(),
@@ -3021,7 +3019,6 @@ class TestDirectASTConstruction:
         param = Param(
             name="p",
             type_expr=int_t,
-            kind=ParamZone.STANDARD,
             default=None,
             span=sp,
             node_id=_nid(),
@@ -3046,7 +3043,6 @@ class TestDirectASTConstruction:
         param = Param(
             name="x",
             type_expr=int_t,
-            kind=ParamZone.STANDARD,
             default=None,
             span=sp,
             node_id=_nid(),
@@ -3072,7 +3068,6 @@ class TestDirectASTConstruction:
         param = Param(
             name="x",
             type_expr=int_t,
-            kind=ParamZone.STANDARD,
             default=None,
             span=sp,
             node_id=_nid(),
@@ -3155,7 +3150,6 @@ class TestLambdaDuplicateParam:
         p1 = Param(
             name="x",
             type_expr=int_t,
-            kind=ParamZone.STANDARD,
             default=None,
             span=sp,
             node_id=_nid(),
@@ -3163,7 +3157,6 @@ class TestLambdaDuplicateParam:
         p2 = Param(
             name="x",
             type_expr=int_t,
-            kind=ParamZone.STANDARD,
             default=None,
             span=_sp(2),
             node_id=_nid(),
@@ -3189,14 +3182,12 @@ class TestLambdaDuplicateParam:
 def _make_record(name: str, *, type_param_slots: tuple[str, ...] = (), line: int = 1) -> RecordDef:
     from agm.agl.syntax.nodes import Param
     from agm.agl.syntax.types import IntT as IntTNode
-    from agm.agl.zones import ParamZone
 
     sp = _sp(line)
     field_t = IntTNode(span=sp, node_id=_nid())
     fd = Param(
         name="value",
         type_expr=field_t,
-        kind=ParamZone.NAMED_ONLY,
         default=None,
         span=sp,
         node_id=_nid(),

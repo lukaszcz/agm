@@ -1,0 +1,3 @@
+def helper(@arg-pos @arg-named value: int) -> int = value
+
+program def main() -> unit = print helper(1)

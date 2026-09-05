@@ -65,7 +65,6 @@ from agm.agl.syntax.nodes import (
     EnumDef,
     ExceptionDef,
     LetDecl,
-    ParamZone,
     RecordDef,
     VarDecl,
     VariantDef,
@@ -73,6 +72,7 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.typecheck import AglTypeError, CheckedModule
 from agm.agl.typecheck.program import check_program
+from agm.agl.zones import ParamZone
 from tests._agl_helpers import enum_typedef, register_typedef, strip_decl_ids
 from tests.agl.ir_harness import evaluate_ir_output, make_graph_from_files
 from tests.agl.module_graph import resolve_and_check_inline_entry

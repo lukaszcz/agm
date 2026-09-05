@@ -2,15 +2,16 @@
 
 ``ParamZone`` names which zone (positional-only, standard, named-only) a
 parameter belongs to. It is the same fact from the source text down to the
-CLI: the transformer assigns it from the ``@arg-*`` attributes an entry or its
-declaration carries, shared argument binding enforces it for calls and patterns,
-and the host projects a ``program def``'s parameters onto CLI arguments through
-it.
+CLI: scope resolves it from the ``@arg-*`` attributes an entry or its
+declaration carries and publishes it on the resolved program, shared argument
+binding enforces it for calls and patterns, and the host projects a
+``program def``'s parameters onto CLI arguments through it.
 
-It lives in its own dependency-free top-level leaf, alongside
-``modules.ids``, so both ends of that span can name it: ``syntax`` (the AST)
-and ``ir`` (the execution data model) are deliberately isolated from each
-other, and a module either of them may import has to sit below both.
+It lives in its own dependency-free top-level leaf, alongside ``modules.ids``
+and below ``attributes``, so both ends of that span can name it: ``scope``
+(which resolves the zone) and ``ir`` (the execution data model) are
+deliberately isolated from each other, and a module either of them may import
+has to sit below both.
 """
 
 from __future__ import annotations

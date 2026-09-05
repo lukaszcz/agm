@@ -1,0 +1,6 @@
+record Point
+  x: int
+
+def Point::shifted(@arg-std self, by: int) -> int = self.x + by
+
+program def main() -> unit = print Point(x = 1).shifted(2)

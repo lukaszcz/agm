@@ -43,6 +43,7 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import AppliedT, NameT
+from agm.agl.zones import ParamZone
 
 ScopePath = tuple[str, ...]
 BareAtom = str | ScopePath
@@ -705,6 +706,11 @@ class ModuleResolution:
         scope path of its nominal receiver owner. This is scope's definitive
         receiver classification; later passes consume it without re-deriving
         whether a function is a method.
+    ``param_zones``
+        The zone of every parameter and field, keyed by ``Param.node_id``, as
+        the declaration's ``@arg-*`` attributes resolved it. Typecheck builds
+        every ``ParamSpec`` and constructor field list from this table; the
+        AST itself carries no zone.
     """
 
     program: Program
@@ -735,6 +741,7 @@ class ModuleResolution:
     match_site_pattern_slots: dict[int, tuple[int, ...]] = field(default_factory=dict)
     method_declarations: dict[DeclarationKey, ScopePath] = field(default_factory=dict)
     use_targets: dict[int, ResolvedUseTarget] = field(default_factory=dict)
+    param_zones: dict[int, ParamZone] = field(default_factory=dict)
 
     def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ScopePath | None:
         """Return scope's receiver classification for *node*, if it has one.

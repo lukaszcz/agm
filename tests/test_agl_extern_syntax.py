@@ -97,17 +97,15 @@ class TestGrammarAndTransformer:
         assert fd.type_params == ("T",)
         assert fd.is_extern is True
 
-    def test_extern_def_with_zones_and_defaults(self) -> None:
+    def test_extern_def_with_zone_attributes_and_defaults(self) -> None:
         fd = first("extern def f(@arg-pos a: int, b: int, @arg-named c: int = 1) -> int")
         assert isinstance(fd, FuncDef)
-        kinds = [p.kind.value for p in fd.params]
-        assert kinds == ["positional_only", "standard", "named_only"]
+        assert [tuple(attribute.name for attribute in p.attributes) for p in fd.params] == [
+            ("arg-pos",),
+            (),
+            ("arg-named",),
+        ]
         assert fd.params[2].default is not None
-
-    def test_extern_def_with_named_only_zone(self) -> None:
-        fd = first("extern def f(a: int, @arg-named b: int) -> int")
-        assert isinstance(fd, FuncDef)
-        assert [p.kind.value for p in fd.params] == ["standard", "named_only"]
 
     def test_extern_modifier_on_its_own_line(self) -> None:
         fd = first("extern\ndef f(x: int) -> int")

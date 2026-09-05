@@ -16,8 +16,15 @@ An import contributes a module's full public qualified surface minus what its `h
 
 Scope classifies what typecheck will type: a built-in call is recognized by resolving its callee to a `builtin def` declaration, never by spelling; a `self`-receiver `def` in a nominal scope or on an applied builtin receiver is a method; `builtin var` bindings are host-backed values, of which only root `std/config` bindings are engine settings. Index and field assignment receivers resolve as ordinary reads; typecheck owns container, field, and mutability rules.
 
+## Attribute Recognition
+
+The parser keeps every `@attribute` verbatim; scope is where one acquires meaning. A single walk over the declarations checks each attribute against the catalog in `agl/attributes.py` — the name exists, the declaration is an admitted target, the arguments match the declared schema, the attribute is neither repeated nor contradicted — and hands the surviving attributes to small per-attribute fact builders that write typed side-table entries. Recognizing a further attribute adds a fact builder, never another traversal.
+
+The fact built from the `@arg-*` attributes is `param_zones`, the zone of every parameter and field keyed by its node id: an entry's own attribute wins over its declaration's default, which wins over the form's default (standard, but named-only for a `program def`). A `self` receiver is positional-only and admits no zone attribute, and an entry list written out of zone order is an error here rather than in the parser. Typecheck builds every parameter and constructor-field list from this table; the AST itself carries no zone.
+
 ## Code Entry Points
 
+- `src/agm/agl/scope/attributes.py` — attribute recognition against the catalog and the fact builders it feeds.
 - `src/agm/agl/scope/resolver.py` — declaration collection, `use` selection, regional bare contributions.
 - `src/agm/agl/scope/imports.py` — import contribution environments and qualified resolution.
 - `src/agm/agl/scope/program.py` — export maps, re-exports, cross-module resolution.

@@ -1,0 +1,4 @@
+@extern-name("helper")
+def helper() -> int = 1
+
+program def main() -> unit = print helper()

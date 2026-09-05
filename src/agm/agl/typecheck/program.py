@@ -523,7 +523,10 @@ def _build_program_type_table(
         # The builder is transient: it only collects headers into ``env``
         # (which bootstraps ``program_type_table`` below).  Body resolution
         # uses the cross-module builders built later, not this one.
-        _collect_shells_only(_TypeBuilder(env, module_id=mid), rmod.resolved.program)
+        _collect_shells_only(
+            _TypeBuilder(env, module_id=mid, param_zones=rmod.resolved.param_zones),
+            rmod.resolved.program,
+        )
         per_module_envs[mid] = env
 
     # Collect record/enum handles into the shared program type table.
@@ -626,7 +629,7 @@ def _build_program_type_table(
         # Build a _TypeBuilder that uses the cross-module env and has the
         # headers and alias targets registered (for build_record/build_enum/
         # build_exception to work).
-        builder = _TypeBuilder(cross_env, module_id=mid)
+        builder = _TypeBuilder(cross_env, module_id=mid, param_zones=rmod.resolved.param_zones)
         _collect_shells_only(builder, rmod.resolved.program)
         cross_builders[mid] = builder
 
@@ -772,6 +775,7 @@ def _build_program_func_sig_table(
                     env,
                     item,
                     result_type=item.return_type,
+                    param_zones=rmod.resolved.param_zones,
                     receiver_owner=receiver_owner,
                 )
             result[item.node_id] = FunctionSignatureRecord(

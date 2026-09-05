@@ -125,7 +125,6 @@ from agm.agl.syntax.types import (
     UnitT,
 )
 from agm.agl.syntax.visitor import walk
-from agm.agl.zones import ParamZone
 from agm.core.process import ProcessCaptureResult
 from tests._agl_helpers import run_inline_command
 
@@ -747,14 +746,11 @@ class TestDeclarations:
         assert isinstance(rec, RecordDef)
         assert tuple(field.mutable for field in rec.fields) == expected_mutability
 
-    def test_mutable_record_fields_preserve_constructor_zones(self) -> None:
-        rec = first(parse("record R(@arg-pos var x: int, y: int, @arg-named var z: int)"))
+    def test_mutable_record_fields_keep_their_attribute_prefix(self) -> None:
+        rec = first(parse('record R(@doc("a") var x: int, y: int, @doc("c") var z: int)'))
         assert isinstance(rec, RecordDef)
-        assert tuple(field.kind for field in rec.fields) == (
-            ParamZone.POSITIONAL_ONLY,
-            ParamZone.STANDARD,
-            ParamZone.NAMED_ONLY,
-        )
+        assert tuple(field.mutable for field in rec.fields) == (True, False, True)
+        assert [attribute_names(field) for field in rec.fields] == [["doc"], [], ["doc"]]
 
     def test_enum_payload_fields_accept_mutable_marker(self) -> None:
         en = first(parse("enum Result | Value(var value: int, label: text)"))
@@ -1294,51 +1290,6 @@ class TestBuiltinResolution:
 
 
 # ---------------------------------------------------------------------------
-# ParamZone — per-context default kind assignment
-# ---------------------------------------------------------------------------
-
-
-class TestParamZone:
-    """Transformer assigns the correct default ParamZone to each Param."""
-
-    def test_def_param_is_standard(self) -> None:
-        fd = first(parse("def f(x: int) -> int = x"))
-        assert isinstance(fd, FuncDef)
-        assert fd.params[0].kind == ParamZone.STANDARD
-        assert fd.params[0].mutable is False
-
-    def test_lambda_param_is_standard(self) -> None:
-        prog = parse("let g = fn(x: int) => x")
-        ld = first(prog)
-        assert isinstance(ld, LetDecl)
-        lam = ld.value
-        assert isinstance(lam, Lambda)
-        assert lam.params[0].kind == ParamZone.STANDARD
-
-    def test_unmarked_record_fields_are_standard(self) -> None:
-        rec = first(parse("record Point(x: int, y: int)"))
-        assert isinstance(rec, RecordDef)
-        assert all(f.kind == ParamZone.STANDARD for f in rec.fields)
-
-    def test_unmarked_indented_record_fields_are_standard(self) -> None:
-        rec = first(parse("record Issue\n  title: text\n  severity: int"))
-        assert isinstance(rec, RecordDef)
-        assert all(f.kind == ParamZone.STANDARD for f in rec.fields)
-
-    def test_unmarked_exception_fields_are_standard(self) -> None:
-        exc = first(parse("exception MyErr(code: int, msg: text)"))
-        assert isinstance(exc, ExceptionDef)
-        assert all(f.kind == ParamZone.STANDARD for f in exc.fields)
-
-    def test_unmarked_enum_payload_fields_are_standard_regardless_of_arity(self) -> None:
-        en = first(parse("enum Result\n  | Ok(value: int, tag: text)\n  | Err(msg: text)"))
-        assert isinstance(en, EnumDef)
-        assert all(
-            field.kind == ParamZone.STANDARD for member in en.members for field in member.fields
-        )
-
-
-# ---------------------------------------------------------------------------
 # Declaration attributes
 # ---------------------------------------------------------------------------
 
@@ -1392,6 +1343,11 @@ class TestAttributes:
         assert attribute_names(rec) == ["doc"]
         assert [attribute_names(field) for field in rec.fields] == [["doc"], []]
 
+    def test_field_attribute_in_an_inline_record_body(self) -> None:
+        rec = first(parse('record R @doc("f") a: int, b: int'))
+        assert isinstance(rec, RecordDef)
+        assert [attribute_names(field) for field in rec.fields] == [["doc"], []]
+
     def test_field_attribute_on_its_own_line_in_an_indented_body(self) -> None:
         rec = first(parse('record R\n  @doc("f")\n  a: int\n  b: int'))
         assert isinstance(rec, RecordDef)
@@ -1409,6 +1365,11 @@ class TestAttributes:
         assert attribute_names(exc) == ["doc"]
         assert [attribute_names(field) for field in exc.fields] == [["doc"]]
 
+    def test_enum_member_payload_field_attribute(self) -> None:
+        en = first(parse('enum Opt\n  | None\n  | Some(@doc("v") value: int, tag: text)'))
+        assert isinstance(en, EnumDef)
+        assert [attribute_names(field) for field in en.members[1].fields] == [["doc"], []]
+
     def test_type_alias_attribute(self) -> None:
         alias = first(parse('@doc("t")\ntype Count = int'))
         assert isinstance(alias, TypeAlias)
@@ -1416,6 +1377,11 @@ class TestAttributes:
 
     def test_parameter_attribute(self) -> None:
         fd = first(parse('def f(@doc("p") a: int, b: int) -> int = a'))
+        assert isinstance(fd, FuncDef)
+        assert [attribute_names(param) for param in fd.params] == [["doc"], []]
+
+    def test_program_parameter_attribute(self) -> None:
+        fd = first(parse('program def main(@doc("p") a: int, b: int) -> unit = ()'))
         assert isinstance(fd, FuncDef)
         assert [attribute_names(param) for param in fd.params] == [["doc"], []]
 
@@ -1530,169 +1496,6 @@ class TestAttributes:
 
 
 # ---------------------------------------------------------------------------
-# Zone attributes — @arg-pos / @arg-std / @arg-named
-# ---------------------------------------------------------------------------
-
-
-class TestZoneAttributes:
-    """``@arg-*`` places an entry, or a whole entry list, in a parameter zone."""
-
-    # --- def / lambda param_list ---
-
-    def test_positional_only_entry_then_standard(self) -> None:
-        fd = first(parse("def f(@arg-pos x: int, y: int) -> int = x"))
-        assert isinstance(fd, FuncDef)
-        assert [p.kind for p in fd.params] == [ParamZone.POSITIONAL_ONLY, ParamZone.STANDARD]
-
-    def test_all_three_zones_in_one_parameter_list(self) -> None:
-        fd = first(parse("def g(@arg-pos x: int, y: int, @arg-named z: int) -> int = x"))
-        assert isinstance(fd, FuncDef)
-        assert [p.kind for p in fd.params] == [
-            ParamZone.POSITIONAL_ONLY,
-            ParamZone.STANDARD,
-            ParamZone.NAMED_ONLY,
-        ]
-
-    def test_every_entry_can_name_its_own_zone(self) -> None:
-        fd = first(parse("def f(@arg-pos x: int, @arg-pos y: int) -> int = x"))
-        assert isinstance(fd, FuncDef)
-        assert [p.kind for p in fd.params] == [
-            ParamZone.POSITIONAL_ONLY,
-            ParamZone.POSITIONAL_ONLY,
-        ]
-
-    def test_a_declaration_attribute_zones_the_whole_list(self) -> None:
-        fd = first(parse("@arg-pos\ndef f(x: int, y: int) -> int = x"))
-        assert isinstance(fd, FuncDef)
-        assert [p.kind for p in fd.params] == [
-            ParamZone.POSITIONAL_ONLY,
-            ParamZone.POSITIONAL_ONLY,
-        ]
-
-    def test_an_entry_attribute_overrides_the_declaration_attribute(self) -> None:
-        fd = first(parse("@arg-pos\ndef f(x: int, @arg-std y: int) -> int = x"))
-        assert isinstance(fd, FuncDef)
-        assert [p.kind for p in fd.params] == [ParamZone.POSITIONAL_ONLY, ParamZone.STANDARD]
-
-    def test_named_only_entries(self) -> None:
-        fd = first(parse("def f(@arg-named x: int, @arg-named y: int) -> int = x"))
-        assert isinstance(fd, FuncDef)
-        assert [p.kind for p in fd.params] == [ParamZone.NAMED_ONLY, ParamZone.NAMED_ONLY]
-
-    def test_lambda_parameters(self) -> None:
-        ld = first(parse("let g = fn(@arg-pos x: int, y: int) => x"))
-        assert isinstance(ld, LetDecl)
-        lam = ld.value
-        assert isinstance(lam, Lambda)
-        assert [p.kind for p in lam.params] == [ParamZone.POSITIONAL_ONLY, ParamZone.STANDARD]
-
-    # --- record bodies ---
-
-    def test_record_paren_body(self) -> None:
-        rec = first(parse("record R(@arg-pos x: int, y: int)"))
-        assert isinstance(rec, RecordDef)
-        assert [f.kind for f in rec.fields] == [ParamZone.POSITIONAL_ONLY, ParamZone.STANDARD]
-
-    def test_record_fields_default_to_standard(self) -> None:
-        rec = first(parse("record Pair(fst: int, snd: int)"))
-        assert isinstance(rec, RecordDef)
-        assert [f.kind for f in rec.fields] == [ParamZone.STANDARD, ParamZone.STANDARD]
-
-    def test_record_inline_body(self) -> None:
-        rec = first(parse("record R @arg-pos x: int, y: int"))
-        assert isinstance(rec, RecordDef)
-        assert [f.kind for f in rec.fields] == [ParamZone.POSITIONAL_ONLY, ParamZone.STANDARD]
-
-    def test_record_indent_body_with_an_own_line_attribute(self) -> None:
-        rec = first(parse("record R\n  x: int\n  @arg-named\n  y: int"))
-        assert isinstance(rec, RecordDef)
-        assert [f.kind for f in rec.fields] == [ParamZone.STANDARD, ParamZone.NAMED_ONLY]
-
-    def test_record_declaration_attribute_zones_every_field(self) -> None:
-        rec = first(parse("@arg-named\nrecord R\n  fst: int\n  snd: int"))
-        assert isinstance(rec, RecordDef)
-        assert [f.kind for f in rec.fields] == [ParamZone.NAMED_ONLY, ParamZone.NAMED_ONLY]
-
-    # --- exception bodies ---
-
-    def test_exception_paren_body(self) -> None:
-        exc = first(parse("exception E(@arg-pos code: int, msg: text)"))
-        assert isinstance(exc, ExceptionDef)
-        assert [f.kind for f in exc.fields] == [ParamZone.POSITIONAL_ONLY, ParamZone.STANDARD]
-
-    def test_exception_indent_body_with_an_own_line_attribute(self) -> None:
-        exc = first(parse("exception E\n  code: int\n  @arg-named\n  msg: text"))
-        assert isinstance(exc, ExceptionDef)
-        assert [f.kind for f in exc.fields] == [ParamZone.STANDARD, ParamZone.NAMED_ONLY]
-
-    # --- enum member payloads ---
-
-    def test_member_payload_entry_attribute(self) -> None:
-        en = first(parse("enum R\n  | A(@arg-pos x: int, y: int)\n  | B"))
-        assert isinstance(en, EnumDef)
-        assert [f.kind for f in en.members[0].fields] == [
-            ParamZone.POSITIONAL_ONLY,
-            ParamZone.STANDARD,
-        ]
-
-    def test_member_declaration_attribute_zones_its_payload(self) -> None:
-        en = first(parse("enum Opt\n  | None\n  | @arg-named Some(value: int)"))
-        assert isinstance(en, EnumDef)
-        assert [f.kind for f in en.members[1].fields] == [ParamZone.NAMED_ONLY]
-
-    # --- ordering ---
-
-    @pytest.mark.parametrize(
-        "source",
-        (
-            "def f(@arg-named a: int, b: int) -> int = a",
-            "def f(a: int, @arg-pos b: int) -> int = a",
-            "record R(@arg-named a: int, @arg-std b: int)",
-        ),
-        ids=("standard-after-named-only", "positional-only-after-standard", "record-fields"),
-    )
-    def test_entries_out_of_zone_order_are_rejected(self, source: str) -> None:
-        with pytest.raises(AglSyntaxError, match="ordered"):
-            parse(source)
-
-
-# ---------------------------------------------------------------------------
-# ParamZone — program def's named-only default zone
-# ---------------------------------------------------------------------------
-
-
-class TestProgramParamZone:
-    """An unattributed ``program def`` parameter list defaults to named-only."""
-
-    def test_program_def_plain_params_are_named_only(self) -> None:
-        fd = first(parse('program def main(a: int, b: text = "x") -> unit = ()'))
-        assert isinstance(fd, FuncDef)
-        assert [p.kind for p in fd.params] == [ParamZone.NAMED_ONLY, ParamZone.NAMED_ONLY]
-
-    def test_def_plain_params_stay_standard(self) -> None:
-        fd = first(parse("def f(a: int, b: text) -> int = 1"))
-        assert isinstance(fd, FuncDef)
-        assert [p.kind for p in fd.params] == [ParamZone.STANDARD, ParamZone.STANDARD]
-
-    def test_program_def_declaration_attribute_zones_every_parameter(self) -> None:
-        fd = first(parse("@arg-pos\nprogram def main(a: int, b: int) -> unit = ()"))
-        assert isinstance(fd, FuncDef)
-        assert [p.kind for p in fd.params] == [
-            ParamZone.POSITIONAL_ONLY,
-            ParamZone.POSITIONAL_ONLY,
-        ]
-
-    def test_program_def_entry_attributes_override_the_named_only_default(self) -> None:
-        fd = first(parse("program def main(@arg-pos a: int, @arg-std b: int, c: int) -> unit = ()"))
-        assert isinstance(fd, FuncDef)
-        assert [p.kind for p in fd.params] == [
-            ParamZone.POSITIONAL_ONLY,
-            ParamZone.STANDARD,
-            ParamZone.NAMED_ONLY,
-        ]
-
-
-# ---------------------------------------------------------------------------
 # Function declarations (def)
 # ---------------------------------------------------------------------------
 
@@ -1719,13 +1522,11 @@ class TestFuncDef:
         fd = first(parse("def Point::x(self) -> int = 1"))
         assert isinstance(fd, FuncDef)
         assert fd.params[0].type_expr is None
-        assert fd.params[0].kind is ParamZone.STANDARD
 
     def test_annotated_self_remains_an_ordinary_parameter(self) -> None:
         fd = first(parse("def Point::x(self: Point) -> int = 1"))
         assert isinstance(fd, FuncDef)
         assert isinstance(fd.params[0].type_expr, NameT)
-        assert fd.params[0].kind is ParamZone.STANDARD
 
     def test_bare_self_has_the_same_ast_in_declaration_and_region_forms(self) -> None:
         direct = first(parse("def Point::x(self) -> int = 1"))

@@ -123,11 +123,6 @@ from agm.agl.syntax import (
 )
 
 # ---------------------------------------------------------------------------
-# Import everything through the package public API
-# ---------------------------------------------------------------------------
-from agm.agl.zones import ParamZone
-
-# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -550,9 +545,7 @@ class TestParamNode:
 
     def test_param_required(self) -> None:
         t = IntT(span=self._s(), node_id=2)
-        p = Param(
-            name="x", type_expr=t, kind=ParamZone.STANDARD, default=None, span=self._s(), node_id=1
-        )
+        p = Param(name="x", type_expr=t, default=None, span=self._s(), node_id=1)
         assert p.name == "x"
         assert p.type_expr is t
         assert p.default is None
@@ -564,7 +557,6 @@ class TestParamNode:
         p = Param(
             name="n",
             type_expr=t,
-            kind=ParamZone.STANDARD,
             default=default,
             span=self._s(),
             node_id=1,
@@ -577,7 +569,6 @@ class TestParamNode:
         a = Param(
             name="x",
             type_expr=t1,
-            kind=ParamZone.STANDARD,
             default=None,
             span=span(1, 0, 1, 5),
             node_id=1,
@@ -585,7 +576,6 @@ class TestParamNode:
         b = Param(
             name="x",
             type_expr=t2,
-            kind=ParamZone.STANDARD,
             default=None,
             span=span(9, 0, 9, 5),
             node_id=99,
@@ -594,9 +584,7 @@ class TestParamNode:
 
     def test_param_frozen(self) -> None:
         t = IntT(span=span(), node_id=2)
-        p = Param(
-            name="x", type_expr=t, kind=ParamZone.STANDARD, default=None, span=span(), node_id=1
-        )
+        p = Param(name="x", type_expr=t, default=None, span=span(), node_id=1)
         with pytest.raises((FrozenInstanceError, AttributeError)):
             setattr(p, "name", "y")
 
@@ -625,7 +613,6 @@ class TestFuncDefNode:
         p = Param(
             name="n",
             type_expr=IntT(span=self._s(), node_id=3),
-            kind=ParamZone.STANDARD,
             default=None,
             span=self._s(),
             node_id=2,
@@ -680,7 +667,6 @@ class TestLambdaNode:
         p = Param(
             name="x",
             type_expr=IntT(span=self._s(), node_id=2),
-            kind=ParamZone.STANDARD,
             default=None,
             span=self._s(),
             node_id=3,
@@ -694,7 +680,6 @@ class TestLambdaNode:
         p = Param(
             name="x",
             type_expr=IntT(span=self._s(), node_id=2),
-            kind=ParamZone.STANDARD,
             default=None,
             span=self._s(),
             node_id=3,
@@ -1168,21 +1153,19 @@ class TestDeclarations:
         f = Param(
             name="title",
             type_expr=t,
-            kind=ParamZone.NAMED_ONLY,
             default=None,
             span=self._s(),
             node_id=1,
         )
         assert f.name == "title"
         assert f.type_expr is t
-        assert f.kind == ParamZone.NAMED_ONLY
+        assert (f.mutable, f.attributes) == (False, ())
 
     def test_record_def(self) -> None:
         t = IntT(span=self._s(), node_id=3)
         f = Param(
             name="x",
             type_expr=t,
-            kind=ParamZone.NAMED_ONLY,
             default=None,
             span=self._s(),
             node_id=2,
@@ -1196,7 +1179,6 @@ class TestDeclarations:
         f = Param(
             name="val",
             type_expr=t,
-            kind=ParamZone.STANDARD,
             default=None,
             span=self._s(),
             node_id=2,
@@ -1239,7 +1221,6 @@ class TestDeclarations:
         f = Param(
             name="msg",
             type_expr=t,
-            kind=ParamZone.NAMED_ONLY,
             default=None,
             span=self._s(),
             node_id=2,
@@ -1261,7 +1242,6 @@ class TestDeclarations:
         f = Param(
             name="code",
             type_expr=t,
-            kind=ParamZone.NAMED_ONLY,
             default=None,
             span=self._s(),
             node_id=2,
@@ -1283,9 +1263,7 @@ class TestDeclarations:
 
         s = self._s()
         t = IntT(span=s, node_id=3)
-        field = Param(
-            name="code", type_expr=t, kind=ParamZone.NAMED_ONLY, default=None, span=s, node_id=2
-        )
+        field = Param(name="code", type_expr=t, default=None, span=s, node_id=2)
         exc = ExceptionDef(name="MyErr", fields=(field,), base=None, span=s, node_id=1)
 
         visited: list[object] = []
@@ -1428,23 +1406,12 @@ class TestVisitorWalk:
         applied_t = AppliedT(name="Pair", args=(int_t, text_t), span=s, node_id=112)
 
         # Declarations exercise the current type and declaration nodes.
-        _no = ParamZone.NAMED_ONLY
-        field_int = Param(name="x", type_expr=int_t, kind=_no, default=None, span=s, node_id=200)
-        field_bool = Param(
-            name="flag", type_expr=bool_t, kind=_no, default=None, span=s, node_id=201
-        )
-        field_json = Param(
-            name="data", type_expr=json_t, kind=_no, default=None, span=s, node_id=202
-        )
-        field_decimal = Param(
-            name="price", type_expr=decimal_t, kind=_no, default=None, span=s, node_id=203
-        )
-        field_name = Param(
-            name="ref", type_expr=name_t, kind=_no, default=None, span=s, node_id=204
-        )
-        field_dict = Param(
-            name="meta", type_expr=dict_t, kind=_no, default=None, span=s, node_id=205
-        )
+        field_int = Param(name="x", type_expr=int_t, default=None, span=s, node_id=200)
+        field_bool = Param(name="flag", type_expr=bool_t, default=None, span=s, node_id=201)
+        field_json = Param(name="data", type_expr=json_t, default=None, span=s, node_id=202)
+        field_decimal = Param(name="price", type_expr=decimal_t, default=None, span=s, node_id=203)
+        field_name = Param(name="ref", type_expr=name_t, default=None, span=s, node_id=204)
+        field_dict = Param(name="meta", type_expr=dict_t, default=None, span=s, node_id=205)
         record_def = RecordDef(
             name="Point",
             fields=(field_int, field_bool, field_json, field_decimal, field_name, field_dict),
@@ -1452,9 +1419,7 @@ class TestVisitorWalk:
             node_id=210,
         )
 
-        variant_field = Param(
-            name="val", type_expr=text_t, kind=ParamZone.STANDARD, default=None, span=s, node_id=211
-        )
+        variant_field = Param(name="val", type_expr=text_t, default=None, span=s, node_id=211)
         variant_def = VariantDef(name="Some", fields=(variant_field,), span=s, node_id=212)
         variant_ref = VariantRef(
             chain=QualifierChain(
@@ -1473,7 +1438,6 @@ class TestVisitorWalk:
         exc_field = Param(
             name="msg",
             type_expr=text_t,
-            kind=ParamZone.NAMED_ONLY,
             default=None,
             span=s,
             node_id=2140,
@@ -1485,12 +1449,10 @@ class TestVisitorWalk:
             span=s,
             node_id=2141,
         )
-        _std = ParamZone.STANDARD
-        p_unit = Param(name="u", type_expr=unit_t, kind=_std, default=None, span=s, node_id=218)
+        p_unit = Param(name="u", type_expr=unit_t, default=None, span=s, node_id=218)
         p_receiver = Param(
             name="self",
             type_expr=None,
-            kind=_std,
             default=None,
             span=s,
             node_id=220,
@@ -1498,7 +1460,6 @@ class TestVisitorWalk:
         p_func = Param(
             name="f",
             type_expr=func_t,
-            kind=_std,
             default=IntLit(value=0, span=s, node_id=220),
             span=s,
             node_id=221,
@@ -1559,7 +1520,6 @@ class TestVisitorWalk:
         lam_param = Param(
             name="x",
             type_expr=int_t,
-            kind=ParamZone.STANDARD,
             default=None,
             span=s,
             node_id=412,
@@ -1915,9 +1875,7 @@ class TestVisitorWalk:
 
         s = self._s()
         p_type = IntT(span=s, node_id=3)
-        p = Param(
-            name="x", type_expr=p_type, kind=ParamZone.STANDARD, default=None, span=s, node_id=2
-        )
+        p = Param(name="x", type_expr=p_type, default=None, span=s, node_id=2)
         ret = TextT(span=s, node_id=4)
         body = VarRef(name="x", span=s, node_id=5)
         fd = FuncDef(name="f", params=(p,), return_type=ret, body=body, span=s, node_id=1)
@@ -1952,9 +1910,7 @@ class TestVisitorWalk:
 
         s = self._s()
         p_type = IntT(span=s, node_id=3)
-        p = Param(
-            name="x", type_expr=p_type, kind=ParamZone.STANDARD, default=None, span=s, node_id=2
-        )
+        p = Param(name="x", type_expr=p_type, default=None, span=s, node_id=2)
         ret = BoolT(span=s, node_id=4)
         body = BoolLit(value=True, span=s, node_id=5)
         lam = Lambda(params=(p,), return_type=ret, body=body, span=s, node_id=1)
@@ -2216,9 +2172,7 @@ class TestVisitorWalk:
         s = self._s()
         p_type = IntT(span=s, node_id=2)
         default = IntLit(value=0, span=s, node_id=3)
-        p = Param(
-            name="x", type_expr=p_type, kind=ParamZone.STANDARD, default=default, span=s, node_id=1
-        )
+        p = Param(name="x", type_expr=p_type, default=default, span=s, node_id=1)
 
         visited: list[object] = []
         walk(p, visited.append)
@@ -2233,9 +2187,7 @@ class TestVisitorWalk:
 
         s = self._s()
         p_type = IntT(span=s, node_id=2)
-        p = Param(
-            name="x", type_expr=p_type, kind=ParamZone.STANDARD, default=None, span=s, node_id=1
-        )
+        p = Param(name="x", type_expr=p_type, default=None, span=s, node_id=1)
 
         visited: list[object] = []
         walk(p, visited.append)
@@ -2828,7 +2780,6 @@ class TestDeclarationAttributes:
         field = Param(
             name="x",
             type_expr=type_expr,
-            kind=ParamZone.STANDARD,
             default=None,
             span=sp,
             node_id=nid(),
@@ -2837,7 +2788,6 @@ class TestDeclarationAttributes:
             "Param": Param(
                 name="x",
                 type_expr=type_expr,
-                kind=ParamZone.STANDARD,
                 default=None,
                 span=sp,
                 node_id=nid(),

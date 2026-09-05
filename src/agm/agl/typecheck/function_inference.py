@@ -433,6 +433,7 @@ def _infer_function_component(
                 module.env,
                 node,
                 result_type=result,
+                param_zones=module.resolved.param_zones,
                 receiver_owner=receiver_owner,
             )
         register_method_header(module.env, node, signature, receiver, module.module_id)
@@ -593,11 +594,16 @@ def _close_generic_candidate_edges(
             ) from exc
 
 
-def validate_required_after_defaulted(params: Sequence[Param]) -> None:
+def validate_required_after_defaulted(
+    params: Sequence[Param], param_zones: Mapping[int, ParamZone]
+) -> None:
     """Reject a required positional-fillable parameter after a defaulted one."""
     seen_pos_default = False
     for param in params:
-        is_pos_fillable = param.kind in (ParamZone.POSITIONAL_ONLY, ParamZone.STANDARD)
+        is_pos_fillable = param_zones[param.node_id] in (
+            ParamZone.POSITIONAL_ONLY,
+            ParamZone.STANDARD,
+        )
         if not is_pos_fillable:
             continue
         if param.default is not None:
@@ -764,6 +770,7 @@ def resolve_function_header(
     node: FuncDef,
     *,
     result_type: TypeExpr | Type,
+    param_zones: Mapping[int, ParamZone],
     receiver_owner: tuple[str, ...] | None = None,
 ) -> tuple[FunctionSignature, FunctionType, ResolvedReceiver | None]:
     """Resolve one function's parameter scheme and declared or supplied result.
@@ -771,7 +778,7 @@ def resolve_function_header(
     A classified method's resolved owner is returned alongside its signature so
     :func:`register_method_header` reuses it instead of resolving it again.
     """
-    validate_required_after_defaulted(node.params)
+    validate_required_after_defaulted(node.params, param_zones)
     source_type_params = node.type_params
     type_vars = frozenset(source_type_params)
     signature_type_params = source_type_params
@@ -800,7 +807,7 @@ def resolve_function_header(
                 ParamSpec(
                     name=param.name,
                     type=receiver,
-                    kind=ParamZone.POSITIONAL_ONLY,
+                    kind=param_zones[param.node_id],
                     has_default=False,
                 )
             )
@@ -812,7 +819,7 @@ def resolve_function_header(
             ParamSpec(
                 name=param.name,
                 type=env.resolve_type_expr(param.type_expr, span=param.span, type_vars=type_vars),
-                kind=param.kind,
+                kind=param_zones[param.node_id],
                 has_default=param.default is not None,
             )
         )

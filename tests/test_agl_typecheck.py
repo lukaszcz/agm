@@ -76,7 +76,6 @@ from agm.agl.syntax.nodes import (
     LetDecl,
     NamedArg,
     Param,
-    ParamZone,
     Placeholder,
     Program,
     Raise,
@@ -103,6 +102,7 @@ from agm.agl.syntax.types import (
     TypeExpr,
     UnitT,
 )
+from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import (
     AglTypeError,
     ArrayType,
@@ -136,6 +136,7 @@ from agm.agl.typecheck.env import (
 )
 from agm.agl.typecheck.function_inference import resolve_function_header
 from agm.agl.typecheck.program import CheckedProgram
+from agm.agl.zones import ParamZone
 from tests._agl_helpers import all_node_ids, enum_typedef, register_typedef, strip_decl_ids
 from tests.agl import module_graph
 from tests.agl.module_graph import (
@@ -326,6 +327,22 @@ def mk_span(line: int = 1, col: int = 1) -> SourceSpan:
         start_offset=0,
         end_offset=1,
     )
+
+
+def _standard_zones(program: Program) -> dict[int, ParamZone]:
+    """Zone table putting every entry of *program* in the standard zone.
+
+    Tests that hand a raw parsed program to the type builder need the table
+    the scope pass would normally have produced.
+    """
+    zones: dict[int, ParamZone] = {}
+
+    def visit(node: object) -> None:
+        if isinstance(node, Param):
+            zones[node.node_id] = ParamZone.STANDARD
+
+    walk(program, visit)
+    return zones
 
 
 _mk_node_id_counter = 100_000
@@ -8072,7 +8089,7 @@ class TestTypeDeclarations:
     def test_type_builder_duplicate_type_name_guard_raises(self) -> None:
         program = parse_program("record A\n  x: int\nrecord A\n  y: int\nA(x = 1)")
         with pytest.raises(AglTypeError) as exc_info:
-            _TypeBuilder(TypeEnvironment()).collect(program)
+            _TypeBuilder(TypeEnvironment(), param_zones=_standard_zones(program)).collect(program)
         assert "already declared" in str(exc_info.value).lower()
 
     def test_record_bare_self_field_is_uninhabitable(self) -> None:
@@ -9474,6 +9491,7 @@ class TestDefensiveGuards:
             builtin_calls=bc,
             root_scope=root,
             declared_functions=declared_functions or {},
+            param_zones=_standard_zones(program),
         )
 
     def test_empty_block_yields_unit(self) -> None:
@@ -9648,7 +9666,6 @@ class TestDefensiveGuards:
         param = Param(
             name="x",
             type_expr=param_t,
-            kind=ParamZone.STANDARD,
             default=None,
             span=sp,
             node_id=p_nid,
@@ -10003,10 +10020,14 @@ def _method_header(
     function = next(item for item in resolved.program.body.items if isinstance(item, FuncDef))
     owner = resolved.method_declarations[(ENTRY_ID, ("Point",), function.name)]
     env = TypeEnvironment()
-    _TypeBuilder(env).collect(resolved.program)
+    _TypeBuilder(env, param_zones=resolved.param_zones).collect(resolved.program)
     with env.type_scope(owner):
         signature, _type, _receiver = resolve_function_header(
-            env, function, result_type=function.return_type, receiver_owner=owner
+            env,
+            function,
+            result_type=function.return_type,
+            param_zones=resolved.param_zones,
+            receiver_owner=owner,
         )
     return function, signature.params
 

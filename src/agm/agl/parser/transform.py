@@ -52,7 +52,6 @@ from agm.agl.syntax.types import (
     UnitT,
     render_type_expr,
 )
-from agm.agl.zones import ParamZone
 from agm.raw_tail_catalog import RAW_TAIL_BUILTINS
 
 # Types used internally
@@ -235,37 +234,6 @@ class _RawJuxtMember:
     suffixes: tuple[_JuxtSuffix, ...]
     raw_name: Token
     node_id: int
-
-
-# --- Interim zone resolution -----------------------------------------------
-# The parser still fills ``Param.kind`` from the ``@arg-*`` attributes an entry
-# or its owning declaration carries, and still rejects an out-of-order entry
-# list.  Both duties belong to the pass that recognizes attributes; everything
-# between this banner and its closing one moves there together.
-
-#: The zone each ``@arg-*`` attribute selects.
-_ZONE_BY_ATTRIBUTE: dict[str, ParamZone] = {
-    "arg-pos": ParamZone.POSITIONAL_ONLY,
-    "arg-std": ParamZone.STANDARD,
-    "arg-named": ParamZone.NAMED_ONLY,
-}
-
-#: Entry order: positional-only, then standard, then named-only.
-_ZONE_ORDER: dict[ParamZone, int] = {
-    ParamZone.POSITIONAL_ONLY: 0,
-    ParamZone.STANDARD: 1,
-    ParamZone.NAMED_ONLY: 2,
-}
-
-_ZONE_BY_ORDER: dict[int, ParamZone] = {order: zone for zone, order in _ZONE_ORDER.items()}
-
-#: How each zone is named in a diagnostic.
-_ZONE_LABEL: dict[ParamZone, str] = {
-    ParamZone.POSITIONAL_ONLY: "positional-only",
-    ParamZone.STANDARD: "standard",
-    ParamZone.NAMED_ONLY: "named-only",
-}
-# --- end interim zone resolution -------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -794,7 +762,7 @@ class AstBuilder(Transformer):
         attributes = _find_attributes(args)
         return syntax.RecordDef(
             name=name,
-            fields=_resolve_params(_find_field_tuple(args), attributes=attributes),
+            fields=_find_field_tuple(args),
             type_param_slots=type_params_val,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
@@ -844,15 +812,12 @@ class AstBuilder(Transformer):
 
     def field_def(self, meta: Meta, args: _Args) -> syntax.Param:
         # Grammar: attributes? VAR? field_name COLON type_expr
-        # Build with a provisional STANDARD kind; the owning declaration
-        # (record_def, exception_def, variant_def) assigns the final zone.
         rest = _without_attributes(args)
         name_tok = _find_name_token(rest)
         type_expr = _find_type_expr(rest)
         return syntax.Param(
             name=str(name_tok),
             type_expr=type_expr,
-            kind=ParamZone.STANDARD,
             default=None,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
@@ -907,7 +872,7 @@ class AstBuilder(Transformer):
         attributes = _find_attributes(args)
         return syntax.VariantDef(
             name=str(name_tok),
-            fields=_resolve_params(fields, attributes=attributes),
+            fields=fields,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
             attributes=attributes,
@@ -969,7 +934,7 @@ class AstBuilder(Transformer):
         attributes = _find_attributes(args)
         return syntax.ExceptionDef(
             name=name,
-            fields=_resolve_params(_find_field_tuple(args), attributes=attributes),
+            fields=_find_field_tuple(args),
             base=base,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
@@ -1020,10 +985,7 @@ class AstBuilder(Transformer):
                 type_params_val = cast(tuple[str, ...], a)
         type_params_val = self._receiver_type_params(receiver_type) + type_params_val
         attributes = _find_attributes(args)
-        default_kind = ParamZone.NAMED_ONLY if is_program else ParamZone.STANDARD
-        params, return_type, body = self._split_params_type_body(
-            args, attributes=attributes, default_kind=default_kind
-        )
+        params, return_type, body = self._split_params_type_body(args)
         assert body is not None, "func_def: no body"
         return syntax.FuncDef(
             name=name,
@@ -1063,7 +1025,7 @@ class AstBuilder(Transformer):
                 type_params_val = cast(tuple[str, ...], a)
         type_params_val = self._receiver_type_params(receiver_type) + type_params_val
         attributes = _find_attributes(args)
-        params, return_type, body = self._split_params_type_body(args, attributes=attributes)
+        params, return_type, body = self._split_params_type_body(args)
         assert return_type is not None, "bodyless func def: no return type"
         assert body is None, "bodyless func def: unexpected body"
         return syntax.FuncDef(
@@ -1133,7 +1095,6 @@ class AstBuilder(Transformer):
         return syntax.Param(
             name=name,
             type_expr=type_expr,
-            kind=ParamZone.STANDARD,
             default=default,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
@@ -1447,19 +1408,13 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def _split_params_type_body(
-        self,
-        args: _Args,
-        *,
-        attributes: tuple[syntax.Attribute, ...] = (),
-        default_kind: ParamZone = ParamZone.STANDARD,
+        self, args: _Args
     ) -> tuple[tuple[syntax.Param, ...], TypeExpr | None, syntax.Expr | None]:
         """Classify a func/lambda arg list into ``(params, return_type, body)``.
 
         Shared by ``func_def``/``program_func_def`` (return type required) and
         ``lambda_expr`` (return type optional); callers assert on the parts
-        they require. ``attributes`` is the declaration's own prefix and
-        ``default_kind`` its form's default zone (``program_func_def`` passes
-        ``NAMED_ONLY``, every other form keeps ``STANDARD``).
+        they require.
         """
         params: tuple[syntax.Param, ...] = ()
         return_type: TypeExpr | None = None
@@ -1468,11 +1423,8 @@ class AstBuilder(Transformer):
             if _is_str_tuple(a) or _is_attribute_tuple(a):
                 pass  # type_params / this declaration's attribute prefix — skip
             elif _is_field_tuple(a):
-                params = _resolve_params(
-                    cast(tuple[syntax.Param, ...], a),
-                    attributes=attributes,
-                    default_kind=default_kind,
-                )
+                params = cast(tuple[syntax.Param, ...], a)
+                _check_bare_self_leads(params)
             elif isinstance(a, _ALL_TYPE_EXPRS):
                 return_type = a
             elif a is not None and not isinstance(
@@ -3477,55 +3429,6 @@ def _check_bare_self_leads(entries: tuple[syntax.Param, ...]) -> None:
                 "a bare 'self' must be the first parameter.",
                 span=entry.span,
             )
-
-
-# --- Interim zone resolution (continued) -----------------------------------
-
-
-def _zone_attribute(attributes: tuple[syntax.Attribute, ...]) -> ParamZone | None:
-    """Return the zone the first ``@arg-*`` attribute of *attributes* selects."""
-    for attribute in attributes:
-        zone = _ZONE_BY_ATTRIBUTE.get(attribute.name)
-        if zone is not None:
-            return zone
-    return None
-
-
-def _resolve_params(
-    entries: tuple[syntax.Param, ...],
-    *,
-    attributes: tuple[syntax.Attribute, ...] = (),
-    default_kind: ParamZone = ParamZone.STANDARD,
-) -> tuple[syntax.Param, ...]:
-    """Give every entry of a parameter or field list its concrete zone.
-
-    An entry's own ``@arg-*`` attribute wins; otherwise the owning
-    declaration's sets the list default; otherwise the form's *default_kind*
-    applies. Entries are then required to run positional-only, standard,
-    named-only.
-    """
-    _check_bare_self_leads(entries)
-    declared_list_kind = _zone_attribute(attributes)
-    list_kind = default_kind if declared_list_kind is None else declared_list_kind
-    resolved: list[syntax.Param] = []
-    highest = _ZONE_ORDER[ParamZone.POSITIONAL_ONLY]
-    for entry in entries:
-        declared = _zone_attribute(entry.attributes)
-        kind = list_kind if declared is None else declared
-        order = _ZONE_ORDER[kind]
-        if order < highest:
-            raise AglSyntaxError(
-                f"{entry.name!r} is {_ZONE_LABEL[kind]} but follows a "
-                f"{_ZONE_LABEL[_ZONE_BY_ORDER[highest]]} entry; entries are ordered "
-                "positional-only, then standard, then named-only.",
-                span=entry.span,
-            )
-        highest = order
-        resolved.append(replace(entry, kind=kind))
-    return tuple(resolved)
-
-
-# --- end interim zone resolution -------------------------------------------
 
 
 def _is_member_tuple(a: object) -> bool:

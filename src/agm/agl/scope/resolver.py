@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING, TypeVar, cast
 
 from agm.agl.diagnostics import static_root_message
 from agm.agl.modules.ids import RESERVED_ID, ModuleId, spell_declaration
+from agm.agl.scope.attributes import recognize_attributes
 from agm.agl.scope.imports import (
     EMPTY_IMPORT_ENV,
     BareRoute,
@@ -650,6 +651,7 @@ class _Resolver:
         self._validate_function_names()
         self._validate_non_method_type_params()
         self._validate_extern_backing()
+        attribute_facts = recognize_attributes(program, declares_receiver=self._declares_receiver)
 
         # Pre-pass 2: collect top-level def names for mutual recursion.
         self._collect_func_decls(program)
@@ -704,6 +706,7 @@ class _Resolver:
             match_site_pattern_slots=dict(self._match_site_pattern_slots_by_node),
             method_declarations=dict(self._method_declarations),
             use_targets=dict(self._use_targets),
+            param_zones=attribute_facts.param_zones,
         )
 
     # ------------------------------------------------------------------
@@ -1125,6 +1128,14 @@ class _Resolver:
                     f"type parameter {index} of '{decl.name}' needs a name.",
                     span=decl.span,
                 )
+
+    def _declares_receiver(self, node: FuncDef) -> bool:
+        """Return whether *node* was classified as a method of a nominal owner."""
+        return (
+            self._module_id,
+            tuple(segment.name for segment in node.scope_path),
+            node.name,
+        ) in self._method_declarations
 
     def _validate_extern_backing(self) -> None:
         """Reject extern declarations only after their module-wide collection."""

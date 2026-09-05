@@ -94,6 +94,7 @@ from agm.agl.typecheck.env import (
     GenericTypeDef,
     TypeEnvironment,
 )
+from agm.agl.zones import ParamZone
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -169,9 +170,17 @@ class _TypeBuilder:
     See the module docstring for the two-phase, order-free build strategy.
     """
 
-    def __init__(self, env: TypeEnvironment, module_id: ModuleId = ENTRY_ID) -> None:
+    def __init__(
+        self,
+        env: TypeEnvironment,
+        module_id: ModuleId = ENTRY_ID,
+        *,
+        param_zones: Mapping[int, ParamZone],
+    ) -> None:
         self._env = env
         self._module_id = module_id
+        # Scope's resolved zone for every field of the module being built.
+        self._param_zones = param_zones
         # Track user-declared names → declaration span (excludes built-ins).
         self._declared: dict[str, SourceSpan] = {}
         # Index of record/enum/exception definitions, for phase-2 body
@@ -530,7 +539,7 @@ class _TypeBuilder:
         # Register field kinds for this record constructor, under the same
         # owning identity as the TypeDef just above (its declaring module,
         # like every other declaration — including a builtin one).
-        field_kinds = tuple((fd.name, fd.kind) for fd in stmt.fields)
+        field_kinds = tuple((fd.name, self._param_zones[fd.node_id]) for fd in stmt.fields)
         self._env.register_constructor_field_kinds(
             bare_name,
             field_kinds,
@@ -670,7 +679,7 @@ class _TypeBuilder:
                 continue
             self._env.register_constructor_field_kinds(
                 member.name,
-                tuple((fd.name, fd.kind) for fd in member.fields),
+                tuple((fd.name, self._param_zones[fd.node_id]) for fd in member.fields),
                 scope_path=(*scope_path, bare_name),
                 module_id=module_id,
                 decl_id=_member_identity(stmt, member, module_id),
@@ -728,7 +737,7 @@ class _TypeBuilder:
             fields=tuple(fields.items()),
             abstract=stmt.base is None,
             base=None if base_type is None else base_type.decl_id,
-            field_kinds=tuple(fd.kind.value for fd in stmt.fields),
+            field_kinds=tuple(self._param_zones[fd.node_id].value for fd in stmt.fields),
             is_builtin=stmt.is_builtin,
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
         )
@@ -868,7 +877,9 @@ class _TypeBuilder:
         self._env.register_constructor_signature(sig)
         # Register field kinds for the generic record constructor, under the
         # same owning identity as the TypeDef just above.
-        generic_record_field_kinds = tuple((fd.name, fd.kind) for fd in stmt.fields)
+        generic_record_field_kinds = tuple(
+            (fd.name, self._param_zones[fd.node_id]) for fd in stmt.fields
+        )
         self._env.register_constructor_field_kinds(
             bare_name,
             generic_record_field_kinds,

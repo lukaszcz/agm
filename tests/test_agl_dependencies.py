@@ -107,6 +107,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
                 "agm.agl.scope",
                 "agm.agl.semantics",
                 "agm.agl.syntax",
+                "agm.agl.zones",
             ),
         ),
         (
@@ -141,7 +142,6 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
             (
                 "agm.agl.modules.ids",
                 "agm.agl.syntax",
-                "agm.agl.zones",
             ),
         ),
         (
@@ -200,13 +200,24 @@ def _agm_imports_of_file(path: Path) -> list[str]:
     ]
 
 
-def test_vocabulary_leaves_depend_on_nothing() -> None:
-    """Keep the shared vocabulary modules importable from every layer."""
-    leaves = ("attributes.py", "zones.py")
+@pytest.mark.parametrize(
+    ("leaf", "allowed"),
+    [
+        ("zones.py", ()),
+        ("attributes.py", ("agm.agl.zones",)),
+    ],
+)
+def test_vocabulary_leaves_sit_below_every_pass(leaf: str, allowed: tuple[str, ...]) -> None:
+    """Keep the shared vocabulary modules importable from every layer.
+
+    ``zones`` is the bottom leaf and imports nothing under ``agm``;
+    ``attributes`` names the zones its ``@arg-*`` entries select and so may
+    import that one module, and nothing else.
+    """
     violations = [
         f"{leaf} imports {module}"
-        for leaf in leaves
         for module in _agm_imports_of_file(AGL_ROOT / leaf)
+        if module not in allowed
     ]
 
     assert violations == []

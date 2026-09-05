@@ -1,0 +1,2 @@
+program def main(@arg-named greeting: text, @arg-std count: int) -> unit =
+  print greeting

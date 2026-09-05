@@ -1,0 +1,3 @@
+enum Shape =
+  | Circle(@arg-named radius: int, @arg-std center: int)
+  | Square(side: int)

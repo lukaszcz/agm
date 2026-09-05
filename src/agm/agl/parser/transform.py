@@ -3746,6 +3746,8 @@ def _rewrite_attributes(
     An attribute argument is an ordinary expression, so it reaches the AST as
     a raw chain whenever it applies a declared infix operator.
     """
+    if not attributes:
+        return attributes
     return tuple(
         replace(
             attribute,
@@ -3763,10 +3765,11 @@ def _rewrite_param(
     table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
     builder: AstBuilder,
 ) -> syntax.Param:
-    rewritten = replace(param, attributes=_rewrite_attributes(param.attributes, table, builder))
-    if rewritten.default is None:
-        return rewritten
-    return replace(rewritten, default=_rewrite_expr(rewritten.default, table, builder))
+    return replace(
+        param,
+        attributes=_rewrite_attributes(param.attributes, table, builder),
+        default=None if param.default is None else _rewrite_expr(param.default, table, builder),
+    )
 
 
 def _rewrite_assign_target(

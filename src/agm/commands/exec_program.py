@@ -85,10 +85,12 @@ from agm.cli_support.program_discovery import (
     discover_program_declarations_from_installed_reference,
     select_declared_program,
     select_entry_program,
+    unmatched_program_message,
 )
 from agm.cli_support.program_options import (
     DuplicateOptionFlagError,
     ProgramCommand,
+    ProgramHelpRequested,
     ProgramOptionError,
     ReservedFlagError,
     build_program_command,
@@ -517,9 +519,7 @@ def run(
     selected_program = selection.selected
     if selected_program is None:
         if selection.requested_unmatched:
-            candidates = ", ".join(program.declaration_path for program in entry_programs)
-            suffix = f" Candidates: {candidates}" if candidates else ""
-            print(f"Error: no program matches '{args.program}'.{suffix}", file=sys.stderr)
+            print(unmatched_program_message(args.program, entry_programs), file=sys.stderr)
             raise SystemExit(1)
         if len(entry_programs) > 1:
             candidates = ", ".join(program.declaration_path for program in entry_programs)
@@ -546,6 +546,11 @@ def run(
     if program_command is not None:
         try:
             cli_arguments = program_command.parse(args.argument_tokens)
+        except ProgramHelpRequested as exc:
+            # The command owns ``-h``/``--help``; the caller renders the help
+            # its own invocation calls for, so it is given the declaration
+            # behind the command as well.
+            raise ProgramHelpRequested(exc.command, selected_program) from exc
         except ValueError as exc:
             raise RegisteredProgramUsageError(str(exc), selected_program) from exc
     elif args.argument_tokens:

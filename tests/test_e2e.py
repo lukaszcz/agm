@@ -7671,7 +7671,7 @@ class TestPackageInstall:
         assert installed.returncode == 0
         assert "publish" in help_result.stdout
         assert "Publish a subject" in help_result.stdout
-        assert "Program arguments:" in command_help.stdout
+        assert "agm publish" in command_help.stdout
         assert "--subject" in command_help.stdout
         assert inspected.stdout == "trailing\n"
 
@@ -7702,7 +7702,7 @@ class TestPackageInstall:
         """A registered command's own ``program def`` value parameters bind
         exactly like ``agm exec``'s: positional and option arguments, CLI
         overriding the program's qualified config table, and ``--help``/``-h``
-        rendering a "Program arguments" section from the signature.
+        rendering the command's own help from the signature.
         """
         home = tmp_path / "agm-home"
         env["AGM_HOME"] = str(home)
@@ -7730,11 +7730,11 @@ class TestPackageInstall:
         overridden = run_agm(["greet", "alice", "--tag", "cli"], env=env, cwd=tmp_path)
 
         assert installed.returncode == 0
-        assert "Program arguments" in command_help.stdout
+        assert "<name>" in command_help.stdout
         assert "--tag" in command_help.stdout
         assert "Greet someone" in command_help.stdout
         assert short_help.returncode == 0
-        assert "Program arguments" in short_help.stdout
+        assert "--tag" in short_help.stdout
         assert configured.stdout == "alice:configured\n"
         assert overridden.stdout == "alice:cli\n"
 

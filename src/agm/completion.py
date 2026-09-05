@@ -253,7 +253,7 @@ def registered_command_param_completion(
         program_command = program_command_for(declaration)
         flags = (
             "--dry-run",
-            *(() if program_command is None else program_command.completion_items()),
+            *(() if program_command is None else program_command.option_spellings()),
         )
         return [CompletionItem(flag) for flag in flags if flag.startswith(incomplete)]
     except (Exception, SystemExit):
@@ -495,9 +495,23 @@ def _program_argument_completion_items(
         return []
     return [
         CompletionItem(flag)
-        for flag in program_command.completion_items()
+        for flag in program_command.option_spellings()
         if flag.startswith(incomplete)
     ]
+
+
+def _string_list(value: object) -> list[str]:
+    """Return *value* as a list of strings, or empty when it is not one.
+
+    Completion reads parameters out of a resiliently parsed context, where a
+    value may be missing or of any shape, so every list-valued parameter is
+    narrowed the same way.
+    """
+    if isinstance(value, (list, tuple)):
+        values = cast(list[object] | tuple[object, ...], value)
+        if all(isinstance(item, str) for item in values):
+            return [cast(str, item) for item in values]
+    return []
 
 
 class ExecCommand(TyperCommand):
@@ -509,26 +523,36 @@ class ExecCommand(TyperCommand):
     Degrades to base completion on any error (unreadable file, parse failure, etc.).
     """
 
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        """Parse *args*, keeping the host's end-of-options marker in the tail.
+
+        Click removes the marker as it parses, so it is doubled first: see
+        ``program_options.retain_end_of_options``, whose counterpart
+        ``split_exec_tail`` consumes the survivor.
+        """
+        from agm.cli_support.program_options import retain_end_of_options
+
+        return super().parse_args(ctx, retain_end_of_options(args))
+
     def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem]:
         base = super().shell_complete(ctx, incomplete)
         if not incomplete.startswith("-"):
             return base
         from agm.cli_support.program_discovery import discover_programs_for_target
+        from agm.cli_support.program_options import split_exec_tail
 
         params = cast(dict[str, object], ctx.params)
         raw_command = params.get("command")
-        raw_file = params.get("file")
         raw_program = params.get("program")
         requested_program = raw_program if isinstance(raw_program, str) else None
-        raw_module_paths = params.get("module_paths")
-        module_paths: list[str] = []
-        if isinstance(raw_module_paths, (list, tuple)):
-            paths = cast(list[object] | tuple[object, ...], raw_module_paths)
-            if all(isinstance(path, str) for path in paths):
-                module_paths = [cast(str, path) for path in paths]
+        module_paths = _string_list(params.get("module_paths"))
+        # The FILE selector comes from the same derivation execution uses, so
+        # completion offers a program's own flags for exactly the invocations
+        # that would run it.
+        file = split_exec_tail(_string_list(params.get("tail"))).file
         try:
             programs, referenced_program = discover_programs_for_target(
-                file=raw_file if isinstance(raw_file, str) else None,
+                file=file,
                 command=raw_command if isinstance(raw_command, str) else None,
                 module_paths=module_paths,
                 no_stdlib=bool(params.get("no_stdlib")),

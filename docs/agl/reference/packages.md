@@ -88,9 +88,14 @@ program def main() -> unit =
   let _ = print("review loop")
 ```
 
-A registered command runs its program exactly as `agm exec` would: the selected
-`program def`'s own value parameters become flags, and configuration is read by
-qualified key.
+A registered command runs its program exactly as a directly executed program
+does: the selected `program def`'s own value parameters become flags, and
+configuration is read by qualified key. Its parameters carry the same
+[presentation attributes](host-environment.md#presentation-attributes) as any
+other program's, so the flags, one-letter spellings, environment fallbacks, and
+`@doc` prose a program declares are what its registered command presents. A
+manifest may also describe the command it registers; that description is what
+the host shows for the command, in place of the program's own `@doc` prose.
 
 ## Program parameters and configuration keys
 

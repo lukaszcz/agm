@@ -30,11 +30,15 @@ from agm.agl.type_schema import build_param_decoder
 from agm.agl.zones import ParamZone
 from agm.cli_support.program_options import (
     DuplicateOptionFlagError,
+    ExecTail,
     ProgramCommand,
+    ProgramHelpRequested,
     ReservedFlagError,
     ValueForm,
     build_program_command,
     engine_key_flags,
+    exec_program_name,
+    program_help_requested,
     project_option,
 )
 from tests._agl_helpers import next_decl_id
@@ -749,93 +753,175 @@ class TestDecodeSeam:
 
 
 # ---------------------------------------------------------------------------
-# usage_line / render_help_section / completion_items
+# help rendering, help recognition, and completion spellings
 # ---------------------------------------------------------------------------
 
 
-class TestUsageLine:
-    def test_required_positional_uses_angle_brackets(self) -> None:
-        command = _command(_param("file", TextType(), ParamZone.POSITIONAL_ONLY))
-        assert command.usage_line("main") == "main <file>"
+class TestRenderHelp:
+    def test_usage_line_names_the_invocation_and_its_positional_slots(self) -> None:
+        command = _command(
+            _param("file", TextType(), ParamZone.POSITIONAL_ONLY),
+            _param("tag", TextType(), ParamZone.STANDARD, has_default=True),
+        )
 
-    def test_defaulted_positional_uses_square_brackets(self) -> None:
-        command = _command(_param("file", TextType(), ParamZone.POSITIONAL_ONLY, has_default=True))
-        assert command.usage_line("main") == "main [file]"
+        usage = command.render_help("agm exec prog.agl").splitlines()[0]
 
-    def test_options_are_summarized_when_present(self) -> None:
-        assert _command(_param("name", TextType())).usage_line("main") == "main [OPTIONS]"
-
-    def test_no_positional_or_options_is_just_the_program_name(self) -> None:
-        assert _command().usage_line("main") == "main"
+        assert usage.startswith("Usage: agm exec prog.agl")
+        assert "<file>" in usage
+        assert "[tag]" in usage
+        assert "_positional" not in usage.lower()
 
     def test_a_renamed_standard_parameter_shows_its_external_name(self) -> None:
         command = _command(_param("who", TextType(), ParamZone.STANDARD, external="addressee"))
-        assert command.usage_line("main") == "main <addressee> [OPTIONS]"
+
+        usage = command.render_help("main").splitlines()[0]
+
+        assert "<addressee>" in usage
+        assert "who" not in usage
+
+    def test_the_program_doc_is_the_description(self) -> None:
+        command = _command(_param("tag", TextType()), doc="Tags one artifact.")
+
+        assert "Tags one artifact." in command.render_help("main")
+
+    def test_a_supplied_description_overrides_the_program_doc(self) -> None:
+        command = _command(_param("tag", TextType()), doc="Tags one artifact.")
+
+        text = command.render_help("main", description="Publish a subject")
+
+        assert "Publish a subject" in text
+        assert "Tags one artifact." not in text
+
+    def test_each_parameter_doc_is_rendered_beside_its_flag(self) -> None:
+        command = _command(_param("tag", TextType(), doc="The tag to apply."))
+
+        text = command.render_help("main")
+
+        assert "--tag" in text
+        assert "The tag to apply." in text
+
+    def test_a_declared_metavar_stands_for_the_value(self) -> None:
+        command = _command(_param("tag", TextType(), metavar="LABEL"))
+
+        assert "LABEL" in command.render_help("main")
+
+    def test_a_hidden_parameter_is_absent_from_help(self) -> None:
+        command = _command(
+            _param("tag", TextType()), _param("secret", TextType(), hidden=True, doc="Internal.")
+        )
+
+        text = command.render_help("main")
+
+        assert "--tag" in text
+        assert "--secret" not in text
+        assert "Internal." not in text
+
+    def test_a_short_spelling_is_listed_with_its_long_flag(self) -> None:
+        text = _command(_param("tag", TextType(), short="t")).render_help("main")
+
+        assert "-t" in text
+        assert "--tag" in text
+
+    def test_both_polarities_of_a_bool_parameter_are_listed(self) -> None:
+        text = _command(_param("verbose", BoolType())).render_help("main")
+
+        assert "--verbose" in text
+        assert "--no-verbose" in text
+
+    def test_the_help_flags_themselves_are_listed(self) -> None:
+        text = _command(_param("tag", TextType())).render_help("main")
+
+        assert "--help" in text
+        assert "-h" in text
+
+    def test_extra_options_are_listed_beside_the_program_flags(self) -> None:
+        text = _command(_param("tag", TextType())).render_help(
+            "main", extra_options=(click.Option(["--dry-run"], is_flag=True, help="Check only."),)
+        )
+
+        assert "--tag" in text
+        assert "--dry-run" in text
+        assert "Check only." in text
+
+    def test_a_parameterless_program_renders_usage_and_options_only(self) -> None:
+        text = _command().render_help("main")
+
+        assert text.splitlines()[0].startswith("Usage: main")
+        assert "--help" in text
 
 
-class TestOptionLines:
-    def test_no_options_describes_nothing(self) -> None:
-        assert _command(_param("file", TextType(), ParamZone.POSITIONAL_ONLY)).option_lines() == ()
+class TestRenderProgramHelp:
+    def test_a_built_command_renders_its_own_help(self) -> None:
+        from agm.cli_support.program_options import render_program_help
 
-    def test_one_line_per_name_addressable_parameter(self) -> None:
-        described = _command(
-            _param("name", TextType()), _param("verbose", BoolType())
-        ).option_lines()
-        assert len(described) == 2
-        assert described[0].startswith("--name")
-        assert described[1].startswith("--verbose")
+        text = render_program_help(_command(_param("tag", TextType())), program_name="main")
 
-    def test_lines_are_unindented_and_carry_no_header(self) -> None:
-        described = _command(_param("name", TextType())).option_lines()
-        assert "Options:" not in described
-        assert described[0] == described[0].lstrip()
+        assert "--tag" in text
 
-    def test_render_help_section_indents_the_same_lines_under_a_header(self) -> None:
-        command = _command(_param("name", TextType()), _param("verbose", BoolType()))
-        section = command.render_help_section().splitlines()
-        assert section[0] == "Options:"
-        assert section[1:] == [f"  {line}" for line in command.option_lines()]
+    def test_without_a_command_the_surface_is_still_rendered(self) -> None:
+        from agm.cli_support.program_options import render_program_help
 
-    def test_a_renamed_parameter_is_described_by_its_external_flag(self) -> None:
-        described = _command(_param("who", TextType(), external="addressee")).option_lines()
-        assert described[0].startswith("--addressee")
+        text = render_program_help(
+            None,
+            program_name="agm tools lint",
+            description="Lint package inputs",
+            extra_options=(click.Option(["--dry-run"], is_flag=True),),
+        )
+
+        assert text.splitlines()[0].startswith("Usage: agm tools lint")
+        assert "Lint package inputs" in text
+        assert "--dry-run" in text
 
 
-class TestRenderHelpSection:
-    def test_no_options_renders_nothing(self) -> None:
-        command = _command(_param("file", TextType(), ParamZone.POSITIONAL_ONLY))
-        assert command.render_help_section() == ""
+class TestProgramHelpRequested:
+    """Click owns ``-h``/``--help``, including where a token is a value."""
 
-    def test_starts_with_the_options_header(self) -> None:
-        assert _command(_param("name", TextType())).render_help_section().startswith("Options:\n")
+    def _command_with_shorts(self) -> ProgramCommand:
+        return _command(
+            _param("verbose", BoolType(), short="v"),
+            _param("addressee", TextType(), short="a"),
+        )
 
-    def test_required_option_is_marked_required(self) -> None:
-        section = _command(_param("name", TextType(), has_default=False)).render_help_section()
-        assert "--name" in section
-        assert "(required)" in section
+    def test_a_bare_short_flag_asks_for_help(self) -> None:
+        assert program_help_requested(["-h"], self._command_with_shorts()) is True
 
-    def test_defaulted_option_is_marked_optional(self) -> None:
-        section = _command(_param("name", TextType(), has_default=True)).render_help_section()
-        assert "(required)" not in section
-        assert "optional" in section
-        assert "default" in section
+    def test_a_long_flag_asks_for_help(self) -> None:
+        assert program_help_requested(["--help"], self._command_with_shorts()) is True
 
-    def test_bool_option_shows_both_flag_polarities_and_no_value_placeholder(self) -> None:
-        section = _command(_param("verbose", BoolType())).render_help_section()
-        assert "--verbose" in section
-        assert "--no-verbose" in section
-        assert "VALUE" not in section
+    def test_a_short_flag_bundled_with_a_bool_short_asks_for_help(self) -> None:
+        assert program_help_requested(["-vh"], self._command_with_shorts()) is True
 
-    def test_option_shape_shows_both_polarities_and_a_value_placeholder(self) -> None:
-        section = _command(_param("region", _option_type(TextType()))).render_help_section()
-        assert "--region" in section
-        assert "--no-region" in section
-        assert "VALUE" in section
+    def test_a_value_taking_bundle_consumes_the_following_short_flag(self) -> None:
+        """``-va -h`` binds ``-h`` as ``-a``'s value, exactly as Click parses it."""
+        assert program_help_requested(["-va", "-h"], self._command_with_shorts()) is False
 
-    def test_plain_value_shape_shows_no_negative_and_a_value_placeholder(self) -> None:
-        section = _command(_param("name", TextType())).render_help_section()
-        assert "--name VALUE" in section
-        assert "--no-name" not in section
+    def test_a_value_taking_flags_own_value_is_not_a_help_request(self) -> None:
+        assert program_help_requested(["--addressee", "-h"], self._command_with_shorts()) is False
+
+    def test_a_token_past_the_end_of_options_marker_is_positional(self) -> None:
+        assert program_help_requested(["--", "-h"], self._command_with_shorts()) is False
+
+    def test_a_usage_error_before_the_flag_is_not_a_help_request(self) -> None:
+        assert program_help_requested(["--nope", "-h"], self._command_with_shorts()) is False
+
+    def test_without_a_command_a_bare_flag_still_asks_for_help(self) -> None:
+        assert program_help_requested(["-h"], None) is True
+
+    def test_without_a_command_an_unknown_option_is_still_tolerated(self) -> None:
+        assert program_help_requested(["--tag", "x", "--help"], None) is True
+
+    def test_without_a_command_the_end_of_options_marker_still_applies(self) -> None:
+        assert program_help_requested(["--", "-h"], None) is False
+
+
+class TestParseHelpRequest:
+    def test_parsing_a_help_token_raises_the_help_request(self) -> None:
+        command = _command(_param("tag", TextType()))
+
+        with pytest.raises(ProgramHelpRequested) as exc_info:
+            command.parse(["-h"])
+
+        assert exc_info.value.command is command
 
 
 class TestPositionalOnlyNames:
@@ -847,40 +933,69 @@ class TestPositionalOnlyNames:
         assert command.positional_only_names() == frozenset({"first"})
 
 
-class TestCompletionItems:
-    def test_includes_positive_and_negative_flags(self) -> None:
-        assert _command(_param("verbose", BoolType())).completion_items() == (
-            "--verbose",
-            "--no-verbose",
-        )
+class TestDefaultMetavar:
+    """A value-taking option's placeholder names how its token is read."""
 
-    def test_positional_only_params_contribute_no_items(self) -> None:
+    def test_a_text_parameter_reads_its_token_verbatim(self) -> None:
+        help_text = _command(_param("tag", TextType())).render_help("prog")
+
+        assert "--tag TEXT" in help_text
+
+    def test_a_json_form_parameter_announces_its_token_as_json(self) -> None:
+        help_text = _command(_param("count", IntType())).render_help("prog")
+
+        assert "--count JSON" in help_text
+
+    def test_an_option_parameter_follows_its_inner_type(self) -> None:
+        help_text = _command(
+            _param("tag", _option_type(TextType())), _param("count", _option_type(IntType()))
+        ).render_help("prog")
+
+        assert "--tag TEXT" in help_text
+        assert "--count JSON" in help_text
+
+    def test_an_explicit_metavar_replaces_the_default(self) -> None:
+        help_text = _command(_param("count", IntType(), metavar="N")).render_help("prog")
+
+        assert "--count N" in help_text
+
+
+class TestOptionSpellings:
+    def test_both_polarities_of_a_bool_parameter_are_completable(self) -> None:
+        spellings = _command(_param("verbose", BoolType())).option_spellings()
+
+        assert "--verbose" in spellings
+        assert "--no-verbose" in spellings
+
+    def test_a_short_spelling_is_completable(self) -> None:
+        assert "-t" in _command(_param("tag", TextType(), short="t")).option_spellings()
+
+    def test_a_hidden_parameter_contributes_no_spelling(self) -> None:
+        spellings = _command(
+            _param("tag", TextType()), _param("secret", TextType(), hidden=True)
+        ).option_spellings()
+
+        assert "--tag" in spellings
+        assert "--secret" not in spellings
+
+    def test_a_positional_only_parameter_contributes_no_spelling(self) -> None:
         command = _command(_param("file", TextType(), ParamZone.POSITIONAL_ONLY))
-        assert command.completion_items() == ()
+        spellings = command.option_spellings()
 
-    def test_text_option_contributes_only_its_positive_flag(self) -> None:
-        assert _command(_param("name", TextType())).completion_items() == ("--name",)
+        assert not any(spelling.startswith("--file") for spelling in spellings)
+        assert "_positionals" not in spellings
 
     def test_a_renamed_parameter_is_completed_by_its_external_flag(self) -> None:
-        command = _command(_param("who", TextType(), external="addressee"))
-        assert command.completion_items() == ("--addressee",)
+        spellings = _command(_param("who", TextType(), external="addressee")).option_spellings()
 
+        assert "--addressee" in spellings
+        assert "--who" not in spellings
 
-class TestValueTakingFlags:
-    def test_bool_option_contributes_no_value_taking_flag(self) -> None:
-        assert _command(_param("verbose", BoolType())).value_taking_flags() == frozenset()
+    def test_the_help_flags_are_completable(self) -> None:
+        spellings = _command(_param("tag", TextType())).option_spellings()
 
-    def test_positional_only_params_contribute_no_value_taking_flag(self) -> None:
-        command = _command(_param("file", TextType(), ParamZone.POSITIONAL_ONLY))
-        assert command.value_taking_flags() == frozenset()
-
-    def test_text_and_option_shapes_contribute_their_positive_flag_only(self) -> None:
-        command = _command(_param("name", TextType()), _param("region", _option_type(TextType())))
-        assert command.value_taking_flags() == frozenset({"--name", "--region"})
-
-    def test_a_short_spelling_of_a_value_taking_option_is_included(self) -> None:
-        command = _command(_param("name", TextType(), short="n"))
-        assert command.value_taking_flags() == frozenset({"--name", "-n"})
+        assert "--help" in spellings
+        assert "-h" in spellings
 
 
 class TestProgramCommandFor:
@@ -890,7 +1005,7 @@ class TestProgramCommandFor:
         command = program_command_for(_program(_param("name", TextType())))
 
         assert isinstance(command, ProgramCommand)
-        assert command.completion_items() == ("--name",)
+        assert "--name" in command.option_spellings()
 
     def test_degrades_to_none_on_a_reservation_collision(self) -> None:
         from agm.cli_support.program_options import program_command_for
@@ -903,48 +1018,98 @@ class TestProgramCommandFor:
         assert program_command_for(None) is None
 
 
-class TestProgramValueTakingFlags:
-    def test_no_program_has_no_value_taking_flags(self) -> None:
-        from agm.cli_support.program_options import program_value_taking_flags
+class TestExecProgramName:
+    def test_a_file_invocation_names_its_source(self) -> None:
+        assert exec_program_name(file="prog.agl", program=None) == "agm exec prog.agl"
 
-        assert program_value_taking_flags(None) == frozenset()
-
-    def test_a_programs_value_taking_flags_are_reported(self) -> None:
-        from agm.cli_support.program_options import program_value_taking_flags
-
-        assert program_value_taking_flags(_program(_param("name", TextType()))) == frozenset(
-            {"--name"}
-        )
-
-
-class TestShortHelpRequested:
-    def test_bare_short_flag_is_a_help_request(self) -> None:
-        from agm.cli_support.program_options import short_help_requested
-
-        assert short_help_requested(["-h"], value_flags=frozenset()) is True
-
-    def test_short_flag_consumed_as_a_preceding_value_flags_value_is_not_a_help_request(
-        self,
-    ) -> None:
-        from agm.cli_support.program_options import short_help_requested
-
-        assert short_help_requested(["--name", "-h"], value_flags=frozenset({"--name"})) is False
-
-    def test_short_flag_as_the_first_positional_is_a_help_request(self) -> None:
-        from agm.cli_support.program_options import short_help_requested
-
-        assert short_help_requested(["-h", "extra"], value_flags=frozenset()) is True
-
-    def test_short_flag_after_end_of_options_marker_is_not_a_help_request(self) -> None:
-        from agm.cli_support.program_options import short_help_requested
-
-        assert short_help_requested(["--", "-h"], value_flags=frozenset()) is False
-
-    def test_a_flag_never_serves_as_another_flags_value(self) -> None:
-        """``--a --b -h`` binds ``-h`` to ``--b``."""
-        from agm.cli_support.program_options import short_help_requested
-
+    def test_a_selected_program_is_part_of_the_invocation(self) -> None:
         assert (
-            short_help_requested(["--a", "--b", "-h"], value_flags=frozenset({"--a", "--b"}))
-            is False
+            exec_program_name(file="prog.agl", program="review::main")
+            == "agm exec prog.agl -p review::main"
         )
+
+    def test_an_inline_source_is_named_by_its_option(self) -> None:
+        assert exec_program_name(file=None, program=None) == "agm exec -c COMMAND"
+
+
+# ---------------------------------------------------------------------------
+# split_exec_tail / retain_end_of_options
+# ---------------------------------------------------------------------------
+
+
+class TestSplitExecTail:
+    """``agm exec``'s FILE argument, derived from the tail Click leaves."""
+
+    def _split(self, *tail: str) -> ExecTail:
+        from agm.cli_support.program_options import split_exec_tail
+
+        return split_exec_tail(tail)
+
+    def test_a_lone_token_is_the_file(self) -> None:
+        assert self._split("prog.agl") == ExecTail(file="prog.agl", tokens=())
+
+    def test_tokens_after_the_file_belong_to_the_program(self) -> None:
+        assert self._split("prog.agl", "--name", "x") == ExecTail(
+            file="prog.agl", tokens=("--name", "x")
+        )
+
+    def test_a_host_help_flag_before_the_file_is_not_the_file(self) -> None:
+        assert self._split("-h", "prog.agl") == ExecTail(file="prog.agl", tokens=("-h",))
+
+    def test_a_program_option_before_the_file_takes_its_value_with_it(self) -> None:
+        assert self._split("-h", "--name", "x", "prog.agl") == ExecTail(
+            file="prog.agl", tokens=("-h", "--name", "x")
+        )
+
+    def test_a_short_program_option_before_the_file_takes_its_value_with_it(self) -> None:
+        assert self._split("-h", "-n", "x", "prog.agl") == ExecTail(
+            file="prog.agl", tokens=("-h", "-n", "x")
+        )
+
+    def test_an_inline_value_leaves_the_next_token_as_the_file(self) -> None:
+        assert self._split("--name=x", "prog.agl") == ExecTail(
+            file="prog.agl", tokens=("--name=x",)
+        )
+
+    def test_a_host_option_spelled_inline_is_still_the_hosts(self) -> None:
+        assert self._split("--program=main", "prog.agl") == ExecTail(
+            file="prog.agl", tokens=("--program=main",)
+        )
+
+    def test_no_file_at_all(self) -> None:
+        assert self._split("--help") == ExecTail(file=None, tokens=("--help",))
+
+    def test_a_lone_dash_is_a_value_not_an_option(self) -> None:
+        assert self._split("-") == ExecTail(file="-", tokens=())
+
+    def test_the_token_after_the_marker_is_the_file_however_it_is_spelled(self) -> None:
+        assert self._split("--", "--weird.agl", "-h") == ExecTail(
+            file="--weird.agl", tokens=("-h",)
+        )
+
+    def test_a_marker_after_the_file_is_the_one_the_host_consumes(self) -> None:
+        assert self._split("prog.agl", "--", "--", "-x") == ExecTail(
+            file="prog.agl", tokens=("--", "-x")
+        )
+
+    def test_a_trailing_marker_names_no_file(self) -> None:
+        assert self._split("-h", "--") == ExecTail(file=None, tokens=("-h",))
+
+
+class TestRetainEndOfOptions:
+    """The marker Click removes is doubled so the split can still see it."""
+
+    def test_a_marker_is_doubled_in_place(self) -> None:
+        from agm.cli_support.program_options import retain_end_of_options
+
+        assert retain_end_of_options(["-p", "main", "--", "x"]) == ["-p", "main", "--", "--", "x"]
+
+    def test_only_the_first_marker_is_doubled(self) -> None:
+        from agm.cli_support.program_options import retain_end_of_options
+
+        assert retain_end_of_options(["--", "--", "x"]) == ["--", "--", "--", "x"]
+
+    def test_a_tail_without_a_marker_is_unchanged(self) -> None:
+        from agm.cli_support.program_options import retain_end_of_options
+
+        assert retain_end_of_options(["prog.agl", "-h"]) == ["prog.agl", "-h"]

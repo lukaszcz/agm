@@ -239,6 +239,20 @@ attribute, and an argument list its meaning does not admit are static errors.
 `@arg-pos`, `@arg-std`, and `@arg-named` place parameters and fields in
 [zones](functions.md#parameters).
 
+`@doc(text)` carries one text literal of human-readable prose about the
+declaration it prefixes. It is the one attribute every defining declaration
+admits, and it never changes a declaration's meaning: the prose describes the
+declaration, and nothing in the program can read it. A host surfaces it where
+it shows a declaration to a person — the prose on a `program def` describes
+that program, and the prose on one of its value parameters describes that
+parameter ([Host environment](host-environment.md#program-arguments)).
+
+`@extern-name` names an `extern def`'s companion function
+([Python FFI](ffi.md#declarations-and-companions)). `@opt-name`, `@opt-short`,
+`@opt-env`, `@opt-metavar`, and `@opt-hidden` shape how a `program def`'s value
+parameter is addressed and presented externally
+([Host environment](host-environment.md#program-arguments)).
+
 ## Type declarations
 
 ```ebnf

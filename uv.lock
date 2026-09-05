@@ -34,7 +34,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "click", specifier = ">=8.0" },
+    { name = "click", specifier = ">=8.2" },
     { name = "immutables", specifier = ">=0.21" },
     { name = "json-repair", specifier = ">=0.30" },
     { name = "jsonschema", specifier = ">=4.0" },

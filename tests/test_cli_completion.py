@@ -1798,7 +1798,38 @@ class TestProgramArgumentCompletionItems:
             for item in completion._program_argument_completion_items(programs, "two", "--")
         ]
 
-        assert values == ["--beta"]
+        assert "--beta" in values
+        assert "--alpha" not in values
+
+    def test_short_spellings_are_offered(self) -> None:
+        programs = self._programs(
+            'program def main(@opt-short("t") tag: text = "a") -> unit = print tag\n'
+        )
+
+        values = [
+            item.value
+            for item in completion._program_argument_completion_items(programs, None, "-")
+        ]
+
+        assert "-t" in values
+        assert "--tag" in values
+
+    def test_a_hidden_parameter_is_never_offered(self) -> None:
+        programs = self._programs(
+            "program def main(\n"
+            '    tag: text = "a",\n'
+            '    @opt-hidden @opt-short("s") secret: text = "",\n'
+            ") -> unit = print tag\n"
+        )
+
+        values = [
+            item.value
+            for item in completion._program_argument_completion_items(programs, None, "-")
+        ]
+
+        assert "--tag" in values
+        assert "--secret" not in values
+        assert "-s" not in values
 
     def test_reservation_collision_degrades_to_empty(self) -> None:
         programs = self._programs("program def main(help: text) -> unit = ()\n")

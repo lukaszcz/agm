@@ -177,9 +177,9 @@ or not the CLI ever supplies it, since program arguments and engine settings sha
 one flag and config namespace. A parameter whose projected flag would otherwise
 collide with a reserved flag is instead a host-level check with no static
 counterpart: it fails the program when actually selected for execution, but
-`--help` and shell completion degrade silently, showing no `Program arguments:`
-section or completions for that program rather than erroring. The reserved set is
-the host's own declared options (`--help`/`-h`, `--program`/`-p`, `--command`/`-c`,
+`--help` and shell completion degrade silently, falling back to `agm exec`'s
+own help and offering no completions for that program rather than erroring. The
+reserved set is the host's own declared options (`--help`/`-h`, `--program`/`-p`, `--command`/`-c`,
 `--module-path`/`-I`, `--max-call-depth`, `--no-stdlib`, `--dry-run`, `--agent`)
 **union every engine-setting flag in both polarities** — `--default-agent`,
 `--strict-json`/`--no-strict-json`, `--max-iters`, `--timeout`/`--no-timeout`,
@@ -189,28 +189,42 @@ also includes another parameter's own projected flag, such as a `cache: bool`
 parameter's negative flag colliding with a `no-cache: bool` parameter's positive
 one.
 
-Click itself consumes a bare `--` before this parser sees any tokens, so reaching
-the program's own end-of-options marker (to pass a literal `--`-prefixed
-positional argument) takes a **doubled** `--` on the command line — `agm exec
-FILE -- -- --odd-looking-value`.
+That degradation also changes how an unrecognized flag beside a help flag is
+answered: `agm exec FILE --nope -h` is a usage error (exit 1) when the program's
+options build, because the program's own parser rejects `--nope` before reaching
+the help flag, but prints `agm exec`'s own help (exit 0) when they collide and
+no program parser exists to reject it.
+
+`agm exec`'s own parser consumes a bare `--` before the program's parser sees
+any tokens, so reaching the program's own end-of-options marker (to pass a
+literal `--`-prefixed positional argument) takes a **doubled** `--` on the
+command line — `agm exec FILE -- -- --odd-looking-value`. That first marker also
+selects a flag-shaped source: `agm exec -- --odd-name.agl` runs the file
+`--odd-name.agl` rather than reading it as an option.
 
 A value-taking flag consumes whatever token follows it, flag-shaped or not:
 `--msg --x` supplies the value `--x`. Spell the value inline — `--msg=--x` — when
 the token after the flag is meant as a flag of its own.
 
-Running `agm exec FILE --help` (or `-c ... --help`) appends a `Program arguments:`
-section after the standard help text. With exactly one entry program — or with
-several and one selected via `-p` — the section shows that program's usage line
-and its full option list; with several entry programs and none selected, it lists
-only each entry program's own usage line, so the reader can pick one with `-p`.
+The selected program's own command owns `-h` and `--help`. With exactly one
+entry program — or with several and one selected via `-p` — `agm exec FILE -h`,
+`agm exec -h FILE`, and `agm exec FILE -p NAME --help` all print that program's
+own help: its usage line, its `@doc` prose as the description, and one entry per
+visible parameter with that parameter's flags, value placeholder, and `@doc`
+prose. A `-h` in a position where a value is expected (`--msg -h`, `-va -h`) is
+that value, and the program runs. With several entry programs and none selected,
+`agm exec`'s own help is printed followed by the declaration paths to choose
+from with `-p`; an unreadable source or a parameter that cannot be projected
+degrades to `agm exec`'s own help too.
+
 Inline `-c` source with no `program def` of its own is wrapped in a synthetic,
 parameterless `program def main`, so it accepts no `ARG`/`--NAME` tokens at all;
 declare an explicit `program def` in the inline text to give it parameters. Even
 then, an inline `-c` program cannot receive positional arguments at all: a bare
 token after `-c COMMAND` is parsed as the mutually exclusive `FILE` selector, not
 as `ARG` (`agm exec -c '…' hello` fails with `error: argument FILE not allowed
-with -c/--command`), even though `-c … --help` still advertises a positional
-usage line for a program with positional-capable parameters. Named `--x`/`--x
+with -c/--command`), even though `-c … --help` still shows a positional
+usage slot for a program with positional-capable parameters. Named `--x`/`--x
 VALUE` options work normally; declare only standard or named-only parameters in
 inline `-c` source to make every value reachable.
 
@@ -224,6 +238,34 @@ reported as missing, if required). An `Option[T]` parameter's config table has
 no spelling for `None`: a present key can only ever supply the wrapped `Some`
 value, or the key can be left out entirely to fall through to the signature
 default — request `None` explicitly with the CLI's `--no-x` flag instead.
+
+#### Attributes on a parameter
+
+Attributes on a `program def`'s own value parameters shape the CLI surface
+they project onto. See [Program arguments](../agl/reference/host-environment.md#program-arguments)
+in the AgL reference for the language-side definitions.
+
+| Attribute | Effect on the CLI |
+|---|---|
+| `@doc("prose")` | On the `program def`, the help's description; on a parameter, that option's help entry |
+| `@opt-name("flag-word")` | Renames the flag, its `--no-` negation, its config key, and its completion |
+| `@opt-short("t")` | Adds `-t` beside the long flag |
+| `@opt-env("VAR")` | Reads `VAR` when no CLI token supplies the parameter |
+| `@opt-metavar("PATH")` | Replaces the value placeholder in usage and help |
+| `@opt-hidden` | Omits the parameter from `--help` and from shell completion |
+
+A short flag takes its value as `-t VALUE` or attached as `-tVALUE`, and
+one-letter flags group: `-abc` is `-a -b -c`, and only the group's last letter
+may take a value — so in `-va -h`, `-h` is the value `-a` asked for, not a help
+request. Short spellings are offered by shell completion alongside the long
+ones; a `@opt-hidden` parameter is offered by neither.
+
+An `@opt-env` variable is consulted only when no CLI token supplies the
+parameter, and **an empty variable counts as unset**: `VAR= agm exec FILE`
+falls through to the config table and then the declared default exactly as an
+unset `VAR` does. An environment fallback therefore cannot deliver an empty
+`text` value — write `""` as the parameter's declared default, or pass
+`--x=""` on the command line.
 
 ### Agents
 

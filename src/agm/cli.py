@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
@@ -993,74 +994,92 @@ def new(
     )
 
 
-def _exec_selected_help_program(
-    material: "tuple[tuple[ProgramDeclInfo, ...], str | None]", *, program: str | None
-) -> "ProgramDeclInfo | None":
-    """Resolve which discovered program an exec invocation addresses.
+def _print_program_candidates(entry_programs: "tuple[ProgramDeclInfo, ...]") -> None:
+    """List the entry programs a reader can select with ``-p``.
 
-    *material* is one ``program_discovery.discover_programs_for_target`` result. An explicit
-    ``-p``/``--program`` wins; otherwise an installed reference's own
-    declaration path selects the program it named.
+    Printed instead of one program's own help when the source declares
+    several and none was selected: no single command stands for the
+    invocation, so the reader is shown what to select.
     """
-    from agm.cli_support.program_discovery import select_entry_program
-
-    programs, referenced_program = material
-    selection = select_entry_program(
-        programs, requested=program if program is not None else referenced_program
-    )
-    return selection.selected
+    if len(entry_programs) < 2:
+        return
+    print()
+    print("Declared programs (select one with -p to see its own options):")
+    for candidate in entry_programs:
+        print(f"  {candidate.declaration_path}")
 
 
 def _exec_print_help(
     *,
+    tokens: "Sequence[str]",
     file: str | None,
     command: str | None,
     program: str | None = None,
     module_paths: list[str] | None = None,
     no_stdlib: bool = False,
-    material: "tuple[tuple[ProgramDeclInfo, ...], str | None] | None" = None,
-) -> None:
-    """Print exec help, optionally with a ``Program arguments:`` section, then exit 0.
+) -> bool:
+    """Print the help *tokens* request, if they request any; report whether they did.
 
-    When FILE or -c is provided and the source can be prepared + typechecked,
-    appends the ``Program arguments:`` section (one per declared ``program
-    def``, its own value parameters). Degrades silently on any error (syntax
-    errors, unreadable files, etc.).
-
-    *material* is a ``program_discovery.discover_programs_for_target`` result the caller
-    already holds — bare-``-h`` disambiguation discovers the same programs
-    from the same inputs before it can know the token was a help request, so
-    reusing its result spares this surface a second full static pipeline.
+    The selected program's own command owns ``-h``/``--help``, so Click reads
+    the tokens and decides: a ``-h`` supplied as a value-taking option's own
+    value is that value, not a help request, and this invocation runs
+    normally. When it is a help request, the program's own command help is
+    what a reader gets — its usage line, its ``@doc``, and one entry per
+    visible parameter. Without a program to build a command from (no source
+    selector, a source that does not compile, several entry programs and none
+    selected, or a colliding flag projection) ``agm exec``'s own help is
+    printed instead, followed by the selectable programs when several were
+    discovered.
     """
     from agm.cli_support.program_discovery import (
         discover_programs_for_target,
         select_entry_program,
+        unmatched_program_message,
     )
-    from agm.cli_support.program_options import render_program_arguments_help
+    from agm.cli_support.program_options import (
+        contains_help_flag,
+        exec_program_name,
+        program_command_for,
+        program_help_requested,
+        render_program_help,
+    )
 
-    print_help_for_command_path(["exec"])
-
-    if material is None:
-        material = discover_programs_for_target(
-            file=file, command=command, module_paths=module_paths, no_stdlib=no_stdlib
-        )
-    programs, referenced_program = material
-    if programs:
-        selection = select_entry_program(
-            programs, requested=program if program is not None else referenced_program
-        )
-        print(
-            render_program_arguments_help(selection.entry_programs, selected=selection.selected),
-            end="",
-        )
-
-    raise SystemExit(0)
+    if not contains_help_flag(tokens):
+        return False
+    if file is None and command is None:
+        print_help_for_command_path(["exec"])
+        return True
+    programs, referenced_program = discover_programs_for_target(
+        file=file, command=command, module_paths=module_paths, no_stdlib=no_stdlib
+    )
+    requested = program if program is not None else referenced_program
+    selection = select_entry_program(programs, requested=requested)
+    program_command = program_command_for(selection.selected)
+    if not program_help_requested(tokens, program_command):
+        return False
+    if program_command is None:
+        if selection.requested_unmatched:
+            # The reader named a program that does not exist. Help and
+            # execution agree on that: there is no command to describe, so the
+            # request fails exactly as running it would.
+            print(unmatched_program_message(requested, selection.entry_programs), file=sys.stderr)
+            raise SystemExit(1)
+        print_help_for_command_path(["exec"])
+        _print_program_candidates(selection.entry_programs)
+        return True
+    print(
+        render_program_help(
+            program_command,
+            program_name=exec_program_name(file=file, program=program),
+        ),
+        end="",
+    )
+    return True
 
 
 @app.command(name="exec", context_settings=_RUN_CONTEXT_SETTINGS, cls=completion.ExecCommand)
 def exec_cmd(
-    ctx: typer.Context,
-    file: str | None = typer.Argument(
+    tail: list[str] | None = typer.Argument(
         None,
         metavar="FILE",
         autocompletion=completion.complete_agl_file,
@@ -1169,80 +1188,26 @@ def exec_cmd(
     _dry_run: bool = _dry_run_option(),
 ) -> None:
     # ``_RUN_CONTEXT_SETTINGS`` disables Click's built-in ``--help`` interception
-    # (``help_option_names: []``) so that per-param ``--name`` tokens can pass
-    # through to ``ctx.args``.  As a side-effect, Click may assign ``--help``/
-    # ``-h`` to the optional FILE positional when they appear without a preceding
-    # FILE argument.  We handle all help-trigger variants explicitly here:
-    # - ``agm exec --help``  → Click assigns ``--help`` to ``file``
-    # - ``agm exec -h``      → Click assigns ``-h`` to ``file``
-    # - ``agm exec FILE --help`` → FILE is correct; ``--help`` lands in ctx.args
-    # ``--help`` always triggers; a bare ``-h`` is disambiguated from a value
-    # legitimately spelled ``-h`` for a preceding value-taking param/program
-    # flag, since text/JSON-form arguments can hold that exact string.
-    # Under ``ignore_unknown_options``, Click may bind an inline program
-    # option to FILE. Normalize that shape before using the source to decide
-    # whether a following ``-h`` is help or that option's value.
-    if command is not None and file is not None and file.startswith("--"):
-        ctx.args.insert(0, file)
-        file = None
+    # (``help_option_names: []``) and lets unknown options through, so the whole
+    # tail — the FILE argument, the program's own option tokens, and the help
+    # flags — arrives here as one catch-all.  ``split_exec_tail`` is the single
+    # place that says which token is the FILE and which the program reads.
+    from agm.cli_support.program_options import split_exec_tail
 
-    help_requested = file == "--help" or "--help" in ctx.args
-    # When the help flag was misassigned to ``file``, recover a following FILE
-    # from the pass-through tokens so its parameters can still be shown.
-    effective_file = file
-    if file in ("--help", "-h"):
-        effective_file = next((token for token in ctx.args if token not in ("--help", "-h")), None)
-    help_material: "tuple[tuple[ProgramDeclInfo, ...], str | None] | None" = None
-    if not help_requested and (file == "-h" or "-h" in ctx.args):
-        from agm.cli_support.program_discovery import discover_programs_for_target
-        from agm.cli_support.program_options import program_value_taking_flags, short_help_requested
-
-        tokens = (file, *ctx.args) if file == "-h" else tuple(ctx.args)
-        # A larger value-flag set can only consume more ``-h`` tokens, never
-        # fewer, so the empty set is the cheap upper bound: when even it finds
-        # no unconsumed ``-h`` (one after a ``--`` marker, say), no program
-        # signature could turn the token into help, and the static pipeline
-        # that would derive that signature is skipped entirely.
-        if short_help_requested(tokens, value_flags=frozenset()):
-            help_material = discover_programs_for_target(
-                file=effective_file,
-                command=command,
-                module_paths=module_paths,
-                no_stdlib=no_stdlib,
-            )
-            help_requested = short_help_requested(
-                tokens,
-                value_flags=program_value_taking_flags(
-                    _exec_selected_help_program(help_material, program=program)
-                ),
-            )
-    if help_requested:
-        _exec_print_help(
-            file=effective_file,
-            command=command,
-            program=program,
-            module_paths=module_paths,
-            no_stdlib=no_stdlib,
-            material=help_material,
-        )
+    selected = split_exec_tail(tail or ())
+    file = selected.file
+    argument_tokens = list(selected.tokens)
+    if _exec_print_help(
+        tokens=argument_tokens,
+        file=file,
+        command=command,
+        program=program,
+        module_paths=module_paths,
+        no_stdlib=no_stdlib,
+    ):
+        raise SystemExit(0)
     del _dry_run
-    # Under ``ignore_unknown_options``, Click binds the first unrecognised token to the
-    # positional FILE argument.  When a program ``--param`` option is placed BEFORE the
-    # FILE argument, Click assigns that option token to ``file`` instead of a real path.
-    # Detect this mis-binding early and replace the cryptic "cannot read --name" OS error
-    # with a clear, actionable usage error.  ``--help``/``-h`` are already handled above;
-    # only the program-param case (``--`` prefix, command absent) reaches here.
-    if file is not None and file.startswith("--") and command is None:
-        exit_with_usage_error(
-            ["exec"],
-            "error: program parameter options must come after the FILE argument"
-            f" (got option '{file}' where a FILE was expected)",
-        )
-    argument_tokens = list(ctx.args)
     if command is not None and file is not None:
-        # A program option Click mis-bound to FILE was already moved back into
-        # ``ctx.args`` above, so a FILE still standing here names a real path,
-        # and a path alongside -c/--command is a usage error.
         exit_with_usage_error(["exec"], "error: argument FILE not allowed with -c/--command")
     if command is None and file is None:
         exit_with_usage_error(["exec"], "error: one of the arguments FILE -c/--command is required")

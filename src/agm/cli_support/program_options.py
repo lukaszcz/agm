@@ -19,12 +19,23 @@ declaration: one ``click.Command`` carrying a catch-all positional argument
 and one option per name-addressable parameter, plus a reservation check
 against the host's flag inventory and against every other parameter's own
 spellings. Click owns every token convention — short options, bundling,
-attached values, ``--x=V``, the ``--`` end-of-options marker — while zone
-pairing, missing required arguments and excess positionals stay with the
-shared binder in ``agm.agl.runtime.arguments``, the one place they are
-diagnosed. A parameter supplied more than once is diagnosed here instead: the
-binder takes a name-keyed mapping and so is entitled to assume its caller
-already rejected repetition.
+attached values, ``--x=V``, the ``--`` end-of-options marker, and
+``-h``/``--help`` — while zone pairing, missing required arguments and excess
+positionals stay with the shared binder in ``agm.agl.runtime.arguments``, the
+one place they are diagnosed. A parameter supplied more than once is
+diagnosed here instead: the binder takes a name-keyed mapping and so is
+entitled to assume its caller already rejected repetition.
+
+The command also owns its own help. :func:`program_help_requested` asks Click
+whether a token stream requests it — so a ``-h`` bundled into a short group is
+a help request while one standing where a value-taking option expects its
+value is that value — and :func:`render_program_help` renders it: the usage
+line of the invocation the reader typed, the program's ``@doc`` as the
+description (or whatever description its host prefers), one entry per visible
+option with its own ``@doc`` and metavar, and no entry at all for a hidden
+one. :meth:`ProgramCommand.parse` raises :class:`ProgramHelpRequested` for a
+help request its caller has not already recognized, so the tokens are read
+once, by Click, however the invocation reaches this module.
 
 A parameter's *external* name (its declared name, or whatever ``@opt-name``
 renames it to) governs every host surface: the flag, its derived negative,
@@ -36,6 +47,11 @@ the declared name, so the shared binder only ever sees declared names.
 declares itself (``--help``, ``-p``, ``--program``, ``--agent``, …) union
 every engine-key flag. A program parameter can never be projected onto one
 of these — :func:`build_program_command` reports the collision instead.
+
+The same inventory decides which tail token is ``agm exec``'s FILE argument
+and which belong to the program: :func:`split_exec_tail` is the one place
+that split is derived, and :func:`retain_end_of_options` is what keeps the
+end-of-options marker visible to it across Click's own parse.
 
 Nested ``Option`` handling
 ---------------------------
@@ -86,22 +102,28 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DuplicateOptionFlagError",
+    "END_OF_OPTIONS",
+    "ExecTail",
     "ProgramCommand",
+    "ProgramHelpRequested",
     "ProgramOptionError",
     "ProjectedOption",
     "RESERVED_FLAGS",
     "ReservedFlagError",
     "ValueForm",
     "build_program_command",
+    "contains_help_flag",
     "engine_key_flags",
+    "exec_program_name",
     "native_raw_value",
     "option_none_raw",
     "option_some_raw",
     "program_command_for",
-    "program_value_taking_flags",
+    "program_help_requested",
     "project_option",
-    "render_program_arguments_help",
-    "short_help_requested",
+    "render_program_help",
+    "retain_end_of_options",
+    "split_exec_tail",
 ]
 
 # Zones whose parameter fills a positional CLI slot.
@@ -114,6 +136,70 @@ _NAME_ADDRESSABLE_ZONES = (ParamZone.STANDARD, ParamZone.NAMED_ONLY)
 # values by parameter name, so this and the per-option names below are internal
 # identifiers only — a parameter's user-visible spelling lives in its flags.
 _POSITIONAL_DEST = "_positionals"
+
+
+# The flags a program command reserves for its own help, in both spellings.
+HELP_FLAGS = ("--help", "-h")
+
+
+def contains_help_flag(tokens: "Sequence[str]") -> bool:
+    """Return whether *tokens* spell a help flag at all, in either spelling.
+
+    The cheap precondition a host applies before discovering a program: a
+    token stream with no help flag in it is one Click can never read as a
+    help request, whatever the program declares, so the static pipeline that
+    would decide the question is skipped entirely.
+    """
+    return any(token in HELP_FLAGS for token in tokens)
+
+
+class _HelpSignal(Exception):
+    """One program command's help option, read while parsing its tokens.
+
+    Raised by the help callback, which knows only that the flag was read.
+    The command being parsed re-raises it as :class:`ProgramHelpRequested`,
+    attaching itself, so every instance that escapes this module carries the
+    command a handler needs to render.
+    """
+
+
+class ProgramHelpRequested(_HelpSignal):
+    """Raised when a token stream asks a program command for its help.
+
+    ``command`` is the command whose help was asked for, and ``program`` the
+    selected declaration it was built from — attached by the host that holds
+    it, so a caller can render the help its own invocation calls for (an
+    ``agm exec`` usage line, or a registered command's) without discovering
+    the program a second time.
+    """
+
+    def __init__(
+        self,
+        command: "ProgramCommand",
+        program: "ProgramDeclInfo | None" = None,
+    ) -> None:
+        super().__init__("program help requested")
+        self.command = command
+        self.program = program
+
+
+def _help_callback(ctx: click.Context, param: click.Parameter, value: object) -> None:
+    """Signal a help request instead of printing, leaving rendering to the caller."""
+    del param
+    if value and not ctx.resilient_parsing:
+        raise _HelpSignal("program help requested")
+
+
+def _help_option() -> click.Option:
+    """Return the ``-h``/``--help`` option every program command carries."""
+    return click.Option(
+        [*HELP_FLAGS],
+        is_flag=True,
+        is_eager=True,
+        expose_value=False,
+        callback=_help_callback,
+        help="Show this message and exit.",
+    )
 
 
 def _positive_dest(index: int) -> str:
@@ -248,6 +334,107 @@ _BUILTIN_EXEC_FLAGS: frozenset[str] = frozenset(
 # polarities). Collision checking is verbatim — no underscore/hyphen
 # normalisation.
 RESERVED_FLAGS: frozenset[str] = _BUILTIN_EXEC_FLAGS | engine_key_flags()
+
+# The end-of-options marker. ``agm exec`` consumes one of them, which is why
+# passing a literal ``--`` on to the program takes a doubled marker.
+END_OF_OPTIONS = "--"
+
+
+@dataclass(frozen=True, slots=True)
+class ExecTail:
+    """``agm exec``'s source selector and the tokens the program itself reads.
+
+    ``file`` is the FILE argument — a path or an installed reference — or
+    ``None`` when the invocation names none (``-c/--command``, or nothing at
+    all). ``tokens`` is every remaining tail token in written order, for the
+    selected program's own command to read.
+    """
+
+    file: str | None
+    tokens: tuple[str, ...]
+
+
+def _is_option_token(token: str) -> bool:
+    """Return whether *token* is written as an option rather than as a value.
+
+    A lone ``-`` is a value, exactly as Click reads it.
+    """
+    return len(token) > 1 and token.startswith("-")
+
+
+def _is_host_option(token: str) -> bool:
+    """Return whether *token* spells one of ``agm exec``'s own options.
+
+    The host's inventory is :data:`_BUILTIN_EXEC_FLAGS`, and a long option's
+    ``--x=V`` form spells the same option as ``--x``.
+    """
+    return token.partition("=")[0] in _BUILTIN_EXEC_FLAGS
+
+
+def _file_index(tokens: "Sequence[str]") -> int | None:
+    """Return the position of the FILE token in *tokens*, or ``None`` for no FILE.
+
+    Only the host's own options may precede the FILE, and Click has already
+    consumed the ones it declares, so what is left before the FILE is a help
+    flag (which ``agm exec`` declares but does not let Click intercept) or a
+    program option written out of position. A program option's arity is
+    unknown until the program is known — which is what the FILE selects — so
+    a value token directly after one is read as that option's value rather
+    than as the FILE, unless the option already carries its value inline.
+    """
+    claims_next = False
+    for index, token in enumerate(tokens):
+        if _is_option_token(token):
+            claims_next = not _is_host_option(token) and "=" not in token
+            continue
+        if claims_next:
+            claims_next = False
+            continue
+        return index
+    return None
+
+
+def retain_end_of_options(args: "Sequence[str]") -> list[str]:
+    """Return *args* with ``agm exec``'s own end-of-options marker doubled.
+
+    Click's parser removes the first bare ``--`` as it reads the host's own
+    options, so the tail it hands over no longer shows where host option
+    scanning ended. Doubling the marker keeps both readings: Click removes
+    the copy it would have removed anyway — stopping option parsing at
+    exactly the same token — and the survivor marks the boundary for
+    :func:`split_exec_tail`, which consumes it in turn. Exactly one marker is
+    consumed either way, so the program still receives the tokens the
+    doubled-``--`` convention promises it.
+    """
+    tokens = list(args)
+    if END_OF_OPTIONS not in tokens:
+        return tokens
+    index = tokens.index(END_OF_OPTIONS)
+    return [*tokens[:index], END_OF_OPTIONS, *tokens[index:]]
+
+
+def split_exec_tail(tail: "Sequence[str]") -> ExecTail:
+    """Derive ``agm exec``'s FILE argument and the program's own tokens from *tail*.
+
+    The single place a tail token is classified. *tail* is what Click leaves
+    after parsing the host's own options: the FILE, the program's tokens, the
+    help flags, and the end-of-options marker :func:`retain_end_of_options`
+    kept. The marker ends host option scanning, so the token after it is the
+    FILE however it is spelled — this is how a file named like an option is
+    named — and the marker itself is the one the host consumes. Everything
+    else keeps its written order, so the program's command reads exactly the
+    tokens the reader wrote for it.
+    """
+    tokens = list(tail)
+    marker = tokens.index(END_OF_OPTIONS) if END_OF_OPTIONS in tokens else None
+    index = _file_index(tokens if marker is None else tokens[:marker])
+    if index is None and marker is not None and marker + 1 < len(tokens):
+        index = marker + 1
+    consumed = {marker, index}
+    return ExecTail(
+        file=None if index is None else tokens[index],
+        tokens=tuple(token for position, token in enumerate(tokens) if position not in consumed),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -398,6 +585,19 @@ class _ProgramOption(click.Option):
         return None if raw is None else [raw]
 
 
+def _default_metavar(projected: ProjectedOption) -> str:
+    """Return the placeholder standing for a value-taking option's own VALUE.
+
+    It names how the token is read rather than the declared type: a ``text``
+    parameter takes its token verbatim, and every other type parses its token
+    as one strict JSON value. An ``Option[T]`` follows ``T``.
+    """
+    form = projected.value_form
+    if form is ValueForm.OPTION:
+        return "TEXT" if isinstance(projected.option_inner, TextType) else "JSON"
+    return "TEXT" if form is ValueForm.TEXT else "JSON"
+
+
 def _click_params(
     index: int, param: "ProgramParamInfo", projected: ProjectedOption
 ) -> list[click.Parameter]:
@@ -431,7 +631,7 @@ def _click_params(
         [_positive_dest(index), f"--{spec.name}", *shorts],
         default=None,
         multiple=True,
-        metavar=spec.metavar,
+        metavar=spec.metavar or _default_metavar(projected),
         envvar=spec.env,
         help=spec.doc,
         hidden=spec.hidden,
@@ -449,6 +649,63 @@ def _click_params(
     return [positive, negative]
 
 
+class _ProgramClickCommand(click.Command):
+    """A program's Click command, whose usage line names its positional slots.
+
+    Every positional token lands in one catch-all argument whose internal
+    name says nothing to a reader, so the usage line is spelled from the
+    program's own positional parameters instead: ``<name>`` for a required
+    slot and ``[name]`` for one with a default, in declaration order.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        params: list[click.Parameter],
+        description: str | None,
+        usage_slots: tuple[str, ...],
+    ) -> None:
+        super().__init__(name=name, params=params, help=description, add_help_option=False)
+        self.usage_slots = usage_slots
+
+    def collect_usage_pieces(self, ctx: click.Context) -> list[str]:
+        """Return the usage pieces after the command name."""
+        del ctx
+        options = [] if self.options_metavar is None else [self.options_metavar]
+        return [*options, *self.usage_slots]
+
+
+def _build_click_command(
+    name: str,
+    *,
+    params: Sequence[click.Parameter],
+    description: str | None,
+    usage_slots: tuple[str, ...],
+    extra_options: Sequence[click.Parameter] = (),
+) -> _ProgramClickCommand:
+    """Assemble one program command: its own parameters, then *extra_options*, then help.
+
+    The single constructor for both the command that parses a program's
+    tokens and the one that renders its help under a host's own invocation
+    name, so the two can never advertise different options.
+    """
+    return _ProgramClickCommand(
+        name,
+        params=[*params, *extra_options, _help_option()],
+        description=description,
+        usage_slots=usage_slots,
+    )
+
+
+def _usage_slots(positional: "tuple[ProgramParamInfo, ...]") -> tuple[str, ...]:
+    """Return one usage slot per positional-capable parameter, in declaration order."""
+    return tuple(
+        f"[{param.cli.name}]" if param.has_default else f"<{param.cli.name}>"
+        for param in positional
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ProgramCommand:
     """One program's whole CLI surface: a ``click.Command`` and what it stands for.
@@ -463,11 +720,18 @@ class ProgramCommand:
     ``options`` also carries the external↔declared correspondence: each entry
     holds the parameter's declared name and the external name its flags were
     spelled from (``ProgramParamInfo.cli.name``).
+
+    ``params`` are the Click parameters ``command`` parses with, kept so the
+    help rendering (:meth:`render_help`) can present the same surface under a
+    host's own invocation name, and ``usage_slots`` the positional slots its
+    usage line names.
     """
 
     command: click.Command
     positional: tuple["ProgramParamInfo", ...]
     options: tuple[tuple["ProgramParamInfo", ProjectedOption], ...]
+    params: tuple[click.Parameter, ...]
+    usage_slots: tuple[str, ...]
 
     def parse(self, tokens: Sequence[str]) -> ProgramArguments:
         """Parse *tokens* into raw positional/named host values, keyed by declared name.
@@ -487,6 +751,10 @@ class ProgramCommand:
         can tell "supplied" from "defaulted" and fall back to its own
         configuration layer.
 
+        :raises ProgramHelpRequested: when the tokens ask for this command's
+            help, so a caller that has not already recognized the request —
+            a ``-h`` bundled into a short group, say — renders it rather than
+            running the program.
         :raises ValueError: for any Click usage error (unknown option,
             missing value, a value given to a flag), for a parameter supplied
             more than once, for an ``Option[T]`` parameter given both
@@ -495,6 +763,8 @@ class ProgramCommand:
         """
         try:
             ctx = self.command.make_context(self.command.name, list(tokens))
+        except _HelpSignal as exc:
+            raise ProgramHelpRequested(self) from exc
         except click.UsageError as exc:
             raise ValueError(exc.format_message()) from exc
         values = cast(dict[str, object], ctx.params)
@@ -544,47 +814,50 @@ class ProgramCommand:
         """
         return ctx.get_parameter_source(dest) is ParameterSource.COMMANDLINE
 
-    def usage_line(self, program_name: str) -> str:
-        """Render one usage line: the program name, its positional slots, then options."""
-        parts = [program_name]
-        for param in self.positional:
-            name = param.cli.name
-            parts.append(f"[{name}]" if param.has_default else f"<{name}>")
-        if self.options:
-            parts.append("[OPTIONS]")
-        return " ".join(parts)
+    def render_help(
+        self,
+        program_name: str,
+        *,
+        description: str | None = None,
+        extra_options: Sequence[click.Parameter] = (),
+    ) -> str:
+        """Render this command's help as the invocation *program_name* spells it.
 
-    def render_help_section(self) -> str:
-        """Render an ``Options:`` section, one line per name-addressable parameter.
-
-        Each line shows the parameter's flag(s) — both polarities joined
-        together when it has a negative form (``bool``/``Option``) — its
-        ``VALUE`` placeholder when it takes one (every form but ``bool``),
-        its type, and whether it is required or has a default; no
-        per-parameter help text is rendered.
+        The usage line names *program_name* and the program's own positional
+        slots; the description is the program's ``@doc`` unless *description*
+        supplies one of the host's own (a package manifest's, say); and the
+        options are this program's visible flags with their own ``@doc`` and
+        metavars, followed by *extra_options* — flags the host adds around the
+        program, such as ``--dry-run`` — and the help flags themselves.
         """
-        described = self.option_lines()
-        if not described:
-            return ""
-        return "\n".join(("Options:", *(f"  {line}" for line in described))) + "\n"
+        command = _build_click_command(
+            program_name,
+            params=self.params,
+            description=self.command.help if description is None else description,
+            usage_slots=self.usage_slots,
+            extra_options=extra_options,
+        )
+        return _format_help(command, program_name)
 
-    def option_lines(self) -> tuple[str, ...]:
-        """Return one description line per name-addressable parameter, unindented.
+    def option_spellings(self) -> tuple[str, ...]:
+        """Return every completable option spelling this command accepts.
 
-        The body of :meth:`render_help_section` without its ``Options:``
-        header, for a caller that supplies a header of its own — a
-        registered command lists its parameters directly under its own
-        section, where a nested ``Options:`` would only repeat the heading
-        above it.
+        Each visible parameter's long flag, its derived negative and its
+        ``@opt-short`` spelling, then the help flags the command owns. A
+        hidden parameter contributes none, so completion offers exactly what
+        the help lists.
         """
-        described: list[str] = []
+        spellings: list[str] = []
         for param, projected in self.options:
-            flag_str = "/".join((*projected.flags, *projected.negative_flags))
-            if projected.takes_value:
-                flag_str = f"{flag_str} VALUE"
-            status = "(optional, has default)" if param.has_default else "(required)"
-            described.append(f"{flag_str}  {param.type!r}  {status}")
-        return tuple(described)
+            if param.cli.hidden:
+                continue
+            spellings.extend(projected.flags)
+            spellings.extend(projected.negative_flags)
+            short = _short_flag(param)
+            if short is not None:
+                spellings.append(short)
+        spellings.extend(HELP_FLAGS)
+        return tuple(spellings)
 
     def positional_only_names(self) -> frozenset[str]:
         """Return the external names of this program's positional-only parameters.
@@ -598,33 +871,6 @@ class ProgramCommand:
         return frozenset(
             param.cli.name for param in self.positional if param.kind is ParamZone.POSITIONAL_ONLY
         )
-
-    def completion_items(self) -> tuple[str, ...]:
-        """Return every completable CLI token: each option's flags and negative forms."""
-        items: list[str] = []
-        for _param, projected in self.options:
-            items.extend(projected.flags)
-            items.extend(projected.negative_flags)
-        return tuple(items)
-
-    def value_taking_flags(self) -> frozenset[str]:
-        """Return every spelling of an option that consumes a following ``VALUE`` token.
-
-        Both the long flag and any ``@opt-short`` spelling. Used to
-        disambiguate a bare ``-h`` token from a plausible ``VALUE`` supplied
-        to a preceding value-taking flag (a ``text``/JSON-form argument can
-        legitimately be the literal string ``-h``) — the *value_flags*
-        :func:`short_help_requested` checks against.
-        """
-        flags: set[str] = set()
-        for param, projected in self.options:
-            if not projected.takes_value:
-                continue
-            flags.update(projected.flags)
-            short = _short_flag(param)
-            if short is not None:
-                flags.add(short)
-        return frozenset(flags)
 
 
 def _check_reservation(
@@ -670,10 +916,9 @@ def build_program_command(
     :class:`DuplicateOptionFlagError` for the caller to render on the first
     collision found, in declaration order.
 
-    Help is not rendered from the returned command: it carries the
-    program's own ``@doc`` prose and each parameter's, so a host can, but
-    ``add_help_option`` stays off — ``--help``/``-h`` belong to ``agm exec``
-    itself, which must see them before program tokens are parsed.
+    The returned command owns ``-h``/``--help`` as well: it carries the
+    program's own ``@doc`` prose and each parameter's, and its help is the
+    help a reader of this program sees.
     """
     signature = program.parameters
     positional = tuple(p for p in signature if p.kind in _POSITIONAL_ZONES)
@@ -688,13 +933,20 @@ def build_program_command(
     params: list[click.Parameter] = [click.Argument([_POSITIONAL_DEST], nargs=-1)]
     for index, (param, projected) in enumerate(options):
         params.extend(_click_params(index, param, projected))
-    command = click.Command(
-        name=program.declaration_path,
+    usage_slots = _usage_slots(positional)
+    command = _build_click_command(
+        program.declaration_path,
         params=params,
-        help=program.doc,
-        add_help_option=False,
+        description=program.doc,
+        usage_slots=usage_slots,
     )
-    return ProgramCommand(command=command, positional=positional, options=options)
+    return ProgramCommand(
+        command=command,
+        positional=positional,
+        options=options,
+        params=tuple(params),
+        usage_slots=usage_slots,
+    )
 
 
 def program_command_for(program: "ProgramDeclInfo | None") -> "ProgramCommand | None":
@@ -711,79 +963,87 @@ def program_command_for(program: "ProgramDeclInfo | None") -> "ProgramCommand | 
     return result if isinstance(result, ProgramCommand) else None
 
 
-def program_value_taking_flags(program: "ProgramDeclInfo | None") -> frozenset[str]:
-    """Return *program*'s value-taking flags, or none when it has no usable command.
+def _fallback_command() -> click.Command:
+    """Return a command that owns ``-h``/``--help`` and treats every other token as positional.
 
-    The :func:`short_help_requested` *value_flags* argument, derived in one
-    place so every caller that disambiguates a bare ``-h`` against a selected
-    program does it identically.
+    The stand-in for a program whose command could not be built — its source
+    does not compile, no single program is selected, or its flags collide —
+    so a help request is still recognized by Click's own parsing rather than
+    by a token scan of the host's own.
     """
-    command = program_command_for(program)
-    return frozenset() if command is None else command.value_taking_flags()
+    context_settings: dict[str, bool] = {"ignore_unknown_options": True}
+    return click.Command(
+        name="",
+        params=[click.Argument([_POSITIONAL_DEST], nargs=-1), _help_option()],
+        add_help_option=False,
+        context_settings=context_settings,
+    )
 
 
-def render_program_arguments_help(
-    entry_programs: "tuple[ProgramDeclInfo, ...]",
-    *,
-    selected: "ProgramDeclInfo | None",
-) -> str:
-    """Render the ``Program arguments:`` section of ``agm exec --help``.
+def program_help_requested(
+    tokens: "Sequence[str]", program_command: "ProgramCommand | None"
+) -> bool:
+    """Return whether *tokens* ask *program_command* for its help.
 
-    *entry_programs* and *selected* come from
-    ``cli_support.program_discovery.select_entry_program``, the one place a
-    requested program name is matched against the entry module's own
-    declarations, so this renderer only formats a selection already made —
-    it never re-derives one. When *selected* names one program, its usage
-    line and full ``Options:`` section are rendered; otherwise (several entry
-    programs and none selected, including a requested name matching none of
-    them) every entry program's usage line alone is listed, so the reader can
-    pick one with ``-p``.
+    Click decides, so every convention it owns applies: a ``-h`` bundled into
+    a short group is a help request, one standing where a value-taking option
+    expects its value is that value, and one past the end-of-options marker is
+    a positional argument. A token stream Click rejects outright (an unknown
+    option before the help flag) is no help request either — the host runs it
+    and reports the usage error.
     """
-    if not entry_programs:
-        return ""
-    candidates = (selected,) if selected is not None else entry_programs
-    lines: list[str] = ["Program arguments:"]
-    for candidate in candidates:
-        command = program_command_for(candidate)
-        if command is None:
-            continue
-        lines.append(f"  Usage: {command.usage_line(candidate.declaration_path)}")
-        if selected is not None:
-            help_section = command.render_help_section()
-            if help_section:
-                lines.extend(f"  {line}" for line in help_section.splitlines())
-    if len(lines) == 1:
-        return ""
-    return "\n".join(lines) + "\n"
-
-
-def short_help_requested(tokens: Sequence[str], *, value_flags: frozenset[str]) -> bool:
-    """Return whether an unconsumed ``-h`` occurs in *tokens*.
-
-    *value_flags* names every spelling of a flag that consumes a following
-    ``VALUE`` token — a selected program's own
-    (:meth:`ProgramCommand.value_taking_flags`) — so a value legitimately
-    spelled ``-h`` for one of them is recognized as consumed, not as a
-    short-help request.
-
-    A bare ``--`` ends option parsing, so every token from there on is
-    positional and a program can legitimately receive ``-h`` as one of its
-    own arguments after it.
-    """
-    consume_value = False
-    options_ended = False
-    for token in tokens:
-        if not options_ended and token == "--":
-            options_ended = True
-            continue
-        if options_ended:
-            continue
-        if consume_value and not token.startswith("--"):
-            consume_value = False
-            continue
-        consume_value = False
-        if token == "-h":
-            return True
-        if token in value_flags:
-            consume_value = True
+    command = _fallback_command() if program_command is None else program_command.command
+    try:
+        command.make_context(command.name, list(tokens))
+    except _HelpSignal:
+        return True
+    except click.ClickException:
+        return False
     return False
+
+
+def _format_help(command: click.Command, program_name: str) -> str:
+    """Render *command*'s help as it reads under the invocation *program_name*."""
+    return command.get_help(click.Context(command, info_name=program_name)) + "\n"
+
+
+def render_program_help(
+    program_command: "ProgramCommand | None",
+    *,
+    program_name: str,
+    description: str | None = None,
+    extra_options: "Sequence[click.Parameter]" = (),
+) -> str:
+    """Render the help of the command *program_name* invokes.
+
+    Without a usable *program_command* — an undiscoverable program, or one
+    whose flags collide — the same surface is rendered without any program
+    flags, so a host that can still describe the command (its own options and
+    a description of its own) presents one help layout, not two.
+    """
+    if program_command is not None:
+        return program_command.render_help(
+            program_name, description=description, extra_options=extra_options
+        )
+    command = _build_click_command(
+        program_name,
+        params=(),
+        description=description,
+        usage_slots=(),
+        extra_options=extra_options,
+    )
+    return _format_help(command, program_name)
+
+
+def exec_program_name(*, file: str | None, program: str | None) -> str:
+    """Return the ``agm exec`` invocation a selected program's usage line is spelled with.
+
+    Names the source the reader gave — a path or an installed reference, or
+    the ``-c`` option for inline text, whose program text would not read as a
+    usage line — and the ``-p`` selection when one was made, so the usage
+    line stands for the command that was actually run.
+    """
+    parts = ["agm", "exec", "-c COMMAND" if file is None else file]
+    if program is not None:
+        parts.extend(("-p", program))
+    return " ".join(parts)

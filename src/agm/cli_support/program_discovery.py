@@ -9,8 +9,8 @@ as their own standalone pipeline pass.
 against the entry module's own ``program def`` declarations, shared by
 ``commands.exec_program.run`` (which turns an unresolved selection into a host
 diagnostic) and ``cli._exec_print_help`` (which degrades an unresolved
-selection to a usage-line listing), so the two surfaces can never disagree
-about which program a given name selects. :func:`select_declared_program`
+selection to the host command's own help), so the two surfaces can never
+disagree about which program a given name selects. :func:`select_declared_program`
 holds the selection rule itself, for the one caller that must apply it before
 declarations exist.
 """
@@ -38,6 +38,7 @@ __all__ = [
     "discover_program_declarations_from_source",
     "discover_programs_for_target",
     "select_entry_program",
+    "unmatched_program_message",
 ]
 
 
@@ -128,8 +129,8 @@ def discover_programs_for_target(
 ) -> "tuple[tuple[ProgramDeclInfo, ...], str | None]":
     """Resolve an ``agm exec`` source selector and discover its ``program def`` declarations.
 
-    The single advisory discovery path behind both ``agm exec --help``'s
-    ``Program arguments:`` section and ``agm exec``'s shell completion: it
+    The single advisory discovery path behind both ``agm exec``'s help
+    rendering and its shell completion: it
     resolves the same target the execution path would
     (``exec_target.resolve_exec_target``), assembles the same module roots
     (``exec_roots.effective_exec_roots``), and runs
@@ -196,6 +197,21 @@ def discover_programs_for_target(
     except (Exception, SystemExit):
         return (), None
     return (), None
+
+
+def unmatched_program_message(
+    requested: str | None, entry_programs: "tuple[ProgramDeclInfo, ...]"
+) -> str:
+    """Return the diagnostic for a program name that selects no entry program.
+
+    Shared by execution (``commands.exec_program.run``) and the help surface
+    (``cli._exec_print_help``), so a name matching nothing is reported the
+    same way — and fails the same way — whether the invocation asked to run
+    the program or to describe it.
+    """
+    candidates = ", ".join(program.declaration_path for program in entry_programs)
+    suffix = f" Candidates: {candidates}" if candidates else ""
+    return f"Error: no program matches '{requested}'.{suffix}"
 
 
 @dataclass(frozen=True, slots=True)

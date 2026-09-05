@@ -29,7 +29,6 @@ from typer.main import get_command
 import agm.cli as cli
 import agm.commands.exec as exec_command
 from agm.cli_support.args import ExecArgs
-from agm.cli_support.program_options import render_program_arguments_help
 from agm.commands import exec_program as exec_engine
 from tests._agl_helpers import write_file_program
 
@@ -331,12 +330,12 @@ class TestExecCommandArgParsing:
         assert getattr(recorded_runs[0], "file") is None
         assert getattr(recorded_runs[0], "argument_tokens") == ["--name", "-h"]
 
-    def test_exec_param_before_file_is_usage_error(
+    def test_exec_param_without_a_file_is_usage_error(
         self, runner: CliRunner, recorded_runs: list[object]
     ) -> None:
+        """A program option and its value name no source, so the invocation has none."""
         result = invoke(runner, ["exec", "--msg", "hello"])
         assert result.exit_code != 0
-        assert "program parameter options must come after the FILE argument" in result.output
         assert recorded_runs == []
 
     def test_exec_inline_param_token_from_file_slot(
@@ -500,37 +499,39 @@ class TestInlineSourceDiagnostics:
 
 
 class TestExecDynamicHelp:
-    """CLI-parsing- and degradation-level ``--help`` behavior.
+    """CLI-parsing- and degradation-level help behavior.
 
-    Discovery of a selected program's own value-parameter surface (the
-    ``Program arguments:`` section content) is covered by
+    Rendering of a selected program's own command help is covered by
     ``TestProgramArgumentsDynamicHelp``; these tests exercise the surrounding
-    CLI plumbing (inline sources, the file/option heuristic, graceful
+    CLI plumbing (inline sources, source-selector ordering, graceful
     degradation) instead.
     """
 
     def test_exec_help_for_inline_command_includes_discovered_arguments(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        with pytest.raises(SystemExit) as exc_info:
-            cli._exec_print_help(
-                file=None,
-                command="program def main(count: int = 1) -> unit = print(count + 1)",
-            )
+        assert cli._exec_print_help(
+            tokens=["--help"],
+            file=None,
+            command="program def main(count: int = 1) -> unit = print(count + 1)",
+        )
 
-        assert exc_info.value.code == 0
         assert "--count" in capsys.readouterr().out
 
-    def test_exec_help_ignores_qualified_option_bound_as_inline_file(
-        self, capsys: pytest.CaptureFixture[str]
+    def test_exec_help_for_an_inline_source_lists_its_arguments_through_the_cli(
+        self, runner: CliRunner
     ) -> None:
-        with pytest.raises(SystemExit):
-            cli._exec_print_help(
-                file="--foo/bar::x",
-                command="program def main(count: int = 1) -> unit = print count",
-            )
+        result = invoke(
+            runner,
+            [
+                "exec",
+                "-c",
+                "program def main(count: int = 1) -> unit = print count",
+                "--help",
+            ],
+        )
 
-        assert "--count" in capsys.readouterr().out
+        assert "--count" in result.output
 
     def test_exec_help_discovers_program_arguments_through_cli_module_roots(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -545,8 +546,9 @@ class TestExecDynamicHelp:
             "program def main(region: text = settings::default-region()) -> unit = ()\n",
         )
 
-        with pytest.raises(SystemExit):
-            cli._exec_print_help(file=str(entry), command=None, module_paths=[str(module_root)])
+        assert cli._exec_print_help(
+            tokens=["--help"], file=str(entry), command=None, module_paths=[str(module_root)]
+        )
 
         assert "--region" in capsys.readouterr().out
 
@@ -560,22 +562,18 @@ class TestExecDynamicHelp:
             lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("unavailable roots")),
         )
 
-        with pytest.raises(SystemExit) as exc_info:
-            cli._exec_print_help(file=str(agl_file), command=None)
+        assert cli._exec_print_help(tokens=["--help"], file=str(agl_file), command=None)
 
-        assert exc_info.value.code == 0
-        assert "Program arguments:" not in capsys.readouterr().out
+        assert "--msg" not in capsys.readouterr().out
 
     def test_exec_help_for_unreadable_file_degrades(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        with pytest.raises(SystemExit) as exc_info:
-            cli._exec_print_help(file=str(tmp_path / "missing.agl"), command=None)
+        assert cli._exec_print_help(
+            tokens=["--help"], file=str(tmp_path / "missing.agl"), command=None
+        )
 
-        assert exc_info.value.code == 0
-        out = capsys.readouterr().out
-        assert "agm exec" in out
-        assert "Program arguments:" not in out
+        assert "agm exec" in capsys.readouterr().out
 
     def test_exec_help_for_installed_reference_uses_its_selected_program(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -596,8 +594,7 @@ class TestExecDynamicHelp:
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
 
-        with pytest.raises(SystemExit):
-            cli._exec_print_help(file="tools/main::second", command=None)
+        assert cli._exec_print_help(tokens=["--help"], file="tools/main::second", command=None)
 
         assert "--region" in capsys.readouterr().out
 
@@ -3981,7 +3978,7 @@ class TestProgramOptionAttributesCLI:
 
 
 class TestProgramArgumentsDynamicHelp:
-    """``agm exec --help`` renders the selected program's value-parameter surface."""
+    """A help request on ``agm exec`` renders the selected program's own command help."""
 
     def test_help_for_a_sole_program_shows_its_usage_and_options(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -3991,15 +3988,64 @@ class TestProgramArgumentsDynamicHelp:
             agl_file, 'program def main(tag: text = "default") -> unit = print tag\n'
         )
 
-        with pytest.raises(SystemExit) as exc_info:
-            cli._exec_print_help(file=str(agl_file), command=None)
+        assert cli._exec_print_help(tokens=["--help"], file=str(agl_file), command=None)
 
-        assert exc_info.value.code == 0
         out = capsys.readouterr().out
-        assert "Program arguments:" in out
+        assert f"agm exec {agl_file}" in out
         assert "--tag" in out
 
-    def test_help_for_several_programs_without_selection_lists_usage_only(
+    def test_help_renders_the_doc_attribute_as_the_description_and_option_help(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            '@doc("Greet a person.")\n'
+            'program def main(@doc("Who to greet.") name: text = "you") -> unit = print name\n',
+        )
+
+        assert cli._exec_print_help(tokens=["--help"], file=str(agl_file), command=None)
+
+        out = capsys.readouterr().out
+        assert "Greet a person." in out
+        assert "Who to greet." in out
+
+    def test_help_omits_a_hidden_parameter(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            "program def main(\n"
+            '    tag: text = "a",\n'
+            '    @opt-hidden @doc("internal") debug-mode: bool = false,\n'
+            ") -> unit = print tag\n",
+        )
+
+        assert cli._exec_print_help(tokens=["--help"], file=str(agl_file), command=None)
+
+        out = capsys.readouterr().out
+        assert "--tag" in out
+        assert "--debug-mode" not in out
+        assert "internal" not in out
+
+    def test_help_spells_a_short_flag_and_a_metavar(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            'program def main(@opt-short("t") @opt-metavar("TAG") tag: text = "a") -> unit ='
+            " print tag\n",
+        )
+
+        assert cli._exec_print_help(tokens=["--help"], file=str(agl_file), command=None)
+
+        out = capsys.readouterr().out
+        assert "-t" in out
+        assert "TAG" in out
+
+    def test_help_for_several_programs_without_selection_lists_the_candidates(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         agl_file = tmp_path / "several.agl"
@@ -4013,14 +4059,11 @@ class TestProgramArgumentsDynamicHelp:
             "end review\n",
         )
 
-        with pytest.raises(SystemExit) as exc_info:
-            cli._exec_print_help(file=str(agl_file), command=None)
+        assert cli._exec_print_help(tokens=["--help"], file=str(agl_file), command=None)
 
-        assert exc_info.value.code == 0
         out = capsys.readouterr().out
-        assert "Program arguments:" in out
-        assert "Usage: first" in out
-        assert "Usage: review::main" in out
+        assert "first" in out
+        assert "review::main" in out
         assert "--tag" not in out
         assert "--count" not in out
 
@@ -4038,48 +4081,41 @@ class TestProgramArgumentsDynamicHelp:
             "end review\n",
         )
 
-        with pytest.raises(SystemExit) as exc_info:
-            cli._exec_print_help(file=str(agl_file), command=None, program="review::main")
+        assert cli._exec_print_help(
+            tokens=["--help"], file=str(agl_file), command=None, program="review::main"
+        )
 
-        assert exc_info.value.code == 0
         out = capsys.readouterr().out
         assert "--count" in out
         assert "--tag" not in out
 
-    def test_help_for_a_program_without_value_parameters_shows_usage_without_options(
+    def test_help_for_a_program_without_value_parameters_shows_only_the_help_option(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, 'program def main() -> unit = print "hi"\n')
 
-        with pytest.raises(SystemExit) as exc_info:
-            cli._exec_print_help(file=str(agl_file), command=None)
+        assert cli._exec_print_help(tokens=["--help"], file=str(agl_file), command=None)
 
-        assert exc_info.value.code == 0
         out = capsys.readouterr().out
-        section = out[out.index("Program arguments:") :]
-        assert "Usage: main" in section
-        assert "Options:" not in section
+        assert f"agm exec {agl_file}" in out
+        assert "--help" in out
 
-    def test_help_for_a_program_with_a_colliding_parameter_omits_the_section(
+    def test_help_for_a_program_with_a_colliding_parameter_degrades(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """A parameter that cannot be projected degrades the help section, not a crash.
+        """A parameter that cannot be projected degrades the help, not a crash.
 
         ``run()`` reports this collision as a host diagnostic when the program
-        is actually selected; the static help path renders no section instead.
+        is actually selected; the help path falls back to the host command's
+        own help instead.
         """
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, "program def main(dry-run: bool = false) -> unit = ()\n")
 
-        with pytest.raises(SystemExit) as exc_info:
-            cli._exec_print_help(file=str(agl_file), command=None)
+        assert cli._exec_print_help(tokens=["--help"], file=str(agl_file), command=None)
 
-        assert exc_info.value.code == 0
-        assert "Program arguments:" not in capsys.readouterr().out
-
-    def test_render_program_arguments_help_of_no_programs_is_empty(self) -> None:
-        assert render_program_arguments_help((), selected=None) == ""
+        assert str(agl_file) not in capsys.readouterr().out
 
     def test_help_omits_an_imported_modules_own_program(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -4087,10 +4123,9 @@ class TestProgramArgumentsDynamicHelp:
         """Only the entry module's own ``program def`` is a runnable candidate.
 
         An imported module's own ``program def`` is discoverable but never
-        selectable by the entry file, so the help section must render just
-        the entry's sole program — usage AND its ``--tag`` option — never the
-        imported module's own usage line, and never degrade to usage-only as
-        if several entry-level programs were in play.
+        selectable by the entry file, so the entry's sole program is the one
+        selected, and its own ``--tag`` option is rendered rather than a
+        candidate list as if several entry-level programs were in play.
         """
         (tmp_path / "helper.agl").write_text('program def helper-main() -> unit = print "helper"\n')
         agl_file = tmp_path / "prog.agl"
@@ -4099,32 +4134,242 @@ class TestProgramArgumentsDynamicHelp:
             'import helper\nprogram def main(tag: text = "default") -> unit = print tag\n',
         )
 
-        with pytest.raises(SystemExit) as exc_info:
-            cli._exec_print_help(file=str(agl_file), command=None)
+        assert cli._exec_print_help(tokens=["--help"], file=str(agl_file), command=None)
 
-        assert exc_info.value.code == 0
         out = capsys.readouterr().out
-        assert "Usage: main" in out
         assert "--tag" in out
         assert "helper-main" not in out
 
-    def test_help_with_an_unmatched_program_selection_does_not_render_the_sole_program(
+    def test_help_with_an_unmatched_program_selection_fails_as_running_it_would(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """``-p`` naming no program must not fall back to the sole program's own options."""
+        """``-p`` naming no program is that error, not a fallback to the sole program."""
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file, 'program def main(tag: text = "default") -> unit = print tag\n'
         )
 
         with pytest.raises(SystemExit) as exc_info:
-            cli._exec_print_help(file=str(agl_file), command=None, program="wrong")
+            cli._exec_print_help(
+                tokens=["--help"], file=str(agl_file), command=None, program="wrong"
+            )
 
-        assert exc_info.value.code == 0
-        out = capsys.readouterr().out
-        section = out[out.index("Program arguments:") :]
-        assert "Usage: main" in section
-        assert "Options:" not in section
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "--tag" not in captured.out
+        assert "wrong" in captured.err
+        assert "main" in captured.err
+
+    def test_a_help_flag_in_a_value_position_is_that_options_value(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``-h`` where a value is expected belongs to the option that wants it."""
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, 'program def main(tag: text = "a") -> unit = print tag\n')
+
+        assert not cli._exec_print_help(tokens=["--tag", "-h"], file=str(agl_file), command=None)
+
+        assert (
+            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--tag", "-h"])) is None
+        )
+        assert capsys.readouterr().out == "-h\n"
+
+    def test_a_help_flag_bundled_behind_a_value_taking_short_is_its_value(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``-va -h`` gives ``-h`` to ``-a``, exactly as the parser's own rules do."""
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            "program def main(\n"
+            '    @opt-short("v") verbose: bool = false,\n'
+            '    @opt-short("a") alias: text = "",\n'
+            ") -> unit = print alias\n",
+        )
+
+        assert not cli._exec_print_help(tokens=["-va", "-h"], file=str(agl_file), command=None)
+
+        assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["-va", "-h"])) is None
+        assert capsys.readouterr().out == "-h\n"
+
+    def test_a_help_flag_bundled_with_a_boolean_short_asks_for_help(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A bundle the host cannot read as a help request still reaches the help.
+
+        Only the program's own parser knows that ``-vh`` ends in its help
+        flag, so the request surfaces while parsing and renders there.
+        """
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            'program def main(@opt-short("v") verbose: bool = false) -> unit = print verbose\n',
+        )
+
+        assert not cli._exec_print_help(tokens=["-vh"], file=str(agl_file), command=None)
+        assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["-vh"])) is None
+
+        assert "--verbose" in capsys.readouterr().out
+
+
+class TestExecHelpInvocations:
+    """Every ``agm exec`` spelling of a help request reaches the program's own help."""
+
+    @pytest.fixture()
+    def documented_program(self, tmp_path: Path) -> Path:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            '@doc("Greet someone.")\n'
+            'program def main(@doc("Who to greet.") @opt-short("n") name: text = "you")'
+            " -> unit = print name\n",
+        )
+        return agl_file
+
+    def test_a_short_help_flag_after_the_file(
+        self, runner: CliRunner, documented_program: Path
+    ) -> None:
+        result = invoke(runner, ["exec", str(documented_program), "-h"])
+
+        assert "Greet someone." in result.output
+        assert "--name" in result.output
+
+    def test_a_short_help_flag_before_the_file(
+        self, runner: CliRunner, documented_program: Path
+    ) -> None:
+        result = invoke(runner, ["exec", "-h", str(documented_program)])
+
+        assert "Greet someone." in result.output
+        assert "--name" in result.output
+
+    def test_a_long_help_flag_after_a_program_selection(
+        self, runner: CliRunner, documented_program: Path
+    ) -> None:
+        result = invoke(runner, ["exec", str(documented_program), "--program", "main", "--help"])
+
+        assert "Greet someone." in result.output
+        assert "--name" in result.output
+
+    def test_a_help_flag_a_parameter_asked_for_is_that_parameters_value(
+        self, runner: CliRunner, documented_program: Path
+    ) -> None:
+        result = invoke(runner, ["exec", str(documented_program), "-n", "-h"])
+
+        assert result.output == "-h\n"
+
+    def test_a_short_help_flag_before_a_program_selection_and_the_file(
+        self, runner: CliRunner, documented_program: Path
+    ) -> None:
+        result = invoke(runner, ["exec", "-h", "-p", "main", str(documented_program)])
+
+        assert "Greet someone." in result.output
+        assert "--name" in result.output
+
+    def test_a_short_help_flag_before_a_program_option_and_the_file(
+        self, runner: CliRunner, documented_program: Path
+    ) -> None:
+        """A program option written before the FILE takes its own value with it,
+        so the token after it is that value and the FILE is still found."""
+        result = invoke(runner, ["exec", "-h", "--name", "x", str(documented_program)])
+
+        assert "Greet someone." in result.output
+        assert "--name" in result.output
+
+    def test_a_short_help_flag_before_a_short_program_option_and_the_file(
+        self, runner: CliRunner, documented_program: Path
+    ) -> None:
+        result = invoke(runner, ["exec", "-h", "-n", "x", str(documented_program)])
+
+        assert "Greet someone." in result.output
+        assert "--name" in result.output
+
+    def test_a_help_flag_for_a_file_named_like_a_help_flag(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``./-h`` names a file, not a flag, so its own program help is printed."""
+        write_file_program(
+            tmp_path / "-h",
+            '@doc("Odd name.")\nprogram def main(name: text = "you") -> unit = print name\n',
+        )
+        monkeypatch.chdir(tmp_path)
+
+        result = invoke(runner, ["exec", "-h", "./-h"])
+
+        assert "Odd name." in result.output
+        assert "--name" in result.output
+
+    def test_a_program_selection_without_a_file_is_a_usage_error(
+        self, runner: CliRunner, recorded_runs: list[object]
+    ) -> None:
+        result = invoke(runner, ["exec", "--program", "main"])
+
+        assert result.exit_code != 0
+        assert recorded_runs == []
+
+    def test_a_help_flag_with_an_unmatched_program_selection_reports_it(
+        self, runner: CliRunner, documented_program: Path
+    ) -> None:
+        """Asking for the help of a program that does not exist fails like running it."""
+        run = invoke(runner, ["exec", str(documented_program), "-p", "wrong"])
+        helped = invoke(runner, ["exec", str(documented_program), "-p", "wrong", "-h"])
+
+        assert run.exit_code == 1
+        assert helped.exit_code == 1
+        assert helped.output == run.output
+
+
+class TestExecFileSelectorTokens:
+    """Which tail token ``agm exec`` reads as its FILE argument."""
+
+    def test_a_file_named_like_a_flag_runs(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        write_file_program(tmp_path / "-h", 'program def main() -> unit = print "ran"\n')
+        monkeypatch.chdir(tmp_path)
+
+        result = invoke(runner, ["exec", "./-h"])
+
+        assert result.exit_code == 0
+        assert "ran" in result.output
+
+    def test_an_end_of_options_marker_makes_the_next_token_the_file(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Past the marker a FILE is named however it is spelled, option-shaped
+        names included."""
+        write_file_program(tmp_path / "--weird.agl", 'program def main() -> unit = print "ran"\n')
+        monkeypatch.chdir(tmp_path)
+
+        result = invoke(runner, ["exec", "--", "--weird.agl"])
+
+        assert result.exit_code == 0
+        assert "ran" in result.output
+
+    def test_an_end_of_options_marker_reaches_a_programs_help(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        write_file_program(
+            tmp_path / "--weird.agl",
+            '@doc("Odd name.")\nprogram def main(name: text = "you") -> unit = print name\n',
+        )
+        monkeypatch.chdir(tmp_path)
+
+        result = invoke(runner, ["exec", "-h", "--", "--weird.agl"])
+
+        assert "Odd name." in result.output
+        assert "--name" in result.output
+
+    def test_the_host_consumes_one_end_of_options_marker(
+        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    ) -> None:
+        """A doubled marker is what passes a literal ``--`` to the program."""
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, "program def main() -> unit = ()\n")
+
+        result = invoke(runner, ["exec", str(agl_file), "--", "--", "-x"])
+
+        assert result.exit_code == 0
+        assert getattr(recorded_runs[0], "argument_tokens") == ["--", "-x"]
 
 
 class TestNegatedConstantDefaults:

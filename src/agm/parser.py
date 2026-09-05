@@ -566,11 +566,19 @@ _HELP_TEXTS: dict[str, str] = {
         surface: a positional-zone parameter fills a positional slot, and a
         name-addressable one becomes its own `--<name>` option (bool as
         `--name/--no-name`; `Option[T]` as `--name VALUE`/`--no-name`; text
-        verbatim; every other type as a JSON string). An omitted argument
-        resolves from the program's own qualified config table (which
-        reaches name-addressable parameters only), then its signature
-        default; a required parameter with neither errors. Run
-        `agm exec FILE --help` to show the discovered arguments.
+        verbatim; every other type as a JSON string). An `@opt-name`,
+        `@opt-short`, `@opt-metavar`, or `@opt-hidden` attribute on a
+        parameter shapes that option's spelling and presentation, and `@doc`
+        supplies the prose describing the program and each of its options.
+        An omitted argument resolves from an `@opt-env` variable (an empty
+        variable counts as unset), then the program's own qualified config
+        table (which reaches name-addressable parameters only), then its
+        signature default; a required parameter with none of these errors.
+
+        The selected program owns -h/--help: `agm exec FILE -h` prints that
+        program's own usage, description, and options rather than this text.
+        With several declared programs and none selected with -p, this text
+        is printed followed by the paths to choose from.
 
         Trace logging is OFF by default.  Enable it with --log, --log-file, or
         [exec] log = true in config.toml.  A source ``std/config::KEY := VALUE``

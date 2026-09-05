@@ -142,6 +142,18 @@ name-addressable parameter takes a `--name VALUE` (or `--name`/`--no-name` for `
 [Program arguments](exec.md#program-arguments) for the full projection and precedence rules,
 including the qualified configuration/engine-setting tables registered commands read the same way
 `agm exec` does.
+
+`agm COMMAND -h` (or `--help`) prints that command's own help: a usage line naming the command
+path and the referenced program's positional slots, one entry per visible parameter, and
+`--dry-run`. The description is the registration's own `description` when the manifest supplies
+one, and the referenced `program def`'s `@doc` prose otherwise. A `-h` in a position where a value
+is expected belongs to the parameter that asked for it, and the command runs.
+
+A registered command inherits `agm exec`'s doubled-`--` rule (see
+[Program arguments](exec.md#program-arguments)): AGM's own parser consumes a bare `--` before the
+program's parser sees any token, so reaching the program's own end-of-options marker takes
+`agm COMMAND -- -- --odd-looking-value`.
+
 The global `--dry-run` flag can appear before or after a registered command path; it runs the static
 pipeline and program-argument validation without executing the program. They appear in `agm help` and
 shell completion while active. An editable command re-reads its live

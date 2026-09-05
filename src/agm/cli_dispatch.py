@@ -17,6 +17,7 @@ from agm.core import dry_run
 
 if TYPE_CHECKING:
     from agm.agl.runtime.types import ProgramDeclInfo
+    from agm.cli_support.program_options import ProgramCommand
     from agm.packages.activation import ActivationIndex, CommandRegistration
 
 
@@ -67,51 +68,67 @@ def _path_length(item: tuple[str, CommandRegistration]) -> int:
     return len(item[0].split())
 
 
+DRY_RUN_HELP = "Statically check the program without executing it."
+
+
+def _dry_run_option() -> TyperOption:
+    """Return the eager ``--dry-run`` flag a dispatched command parses."""
+    return TyperOption(
+        param_decls=["--dry-run"],
+        default=False,
+        is_flag=True,
+        is_eager=True,
+        expose_value=False,
+        callback=set_dry_run,
+        help=DRY_RUN_HELP,
+    )
+
+
+def _dry_run_help_option() -> click.Option:
+    """Return the ``--dry-run`` entry a registered command's help lists.
+
+    The parsed flag is eager and carries a callback that help rendering must
+    not run, so the listed entry is a plain option — derived from the parsed
+    declaration, spellings and help alike, so the two cannot drift apart.
+    """
+    parsed = _dry_run_option()
+    return click.Option([*parsed.opts, *parsed.secondary_opts], is_flag=True, help=parsed.help)
+
+
 def registered_command_help(
     path_name: str,
     registration: CommandRegistration,
     *,
     program: "ProgramDeclInfo | None",
+    command: "ProgramCommand | None",
 ) -> str:
     """Render help for one package-registered command.
 
     *program* is the caller's own discovery result for the referenced
     ``program def`` — a declaration, or ``None`` when discovery was attempted
     and found nothing (an unresolvable reference, a package mismatch, or a
-    source that no longer compiles). It is required rather than defaulted so
-    that a ``None`` here can never be mistaken for "not looked up yet" and
-    trigger a second full compile of a program the caller already failed to
-    discover.
+    source that no longer compiles) — and *command* is that program's own
+    built command, or ``None`` for the same reasons plus a colliding flag
+    projection. Both are required rather than defaulted so that a ``None``
+    here can never be mistaken for "not looked up yet" and trigger a second
+    full compile, or a second build, of what the caller already holds.
 
-    The usage line names *program*'s own positional slots and options, not
-    the raw declaration path, so it reads like the command the reader
-    actually invokes rather than the ``program def`` behind it.
+    The help is the referenced program's own command help, spelled for the
+    command the reader invokes rather than the ``program def`` behind it: its
+    usage line names ``agm <path>`` and the program's positional slots, its
+    options are the program's own plus ``--dry-run``, and its description is
+    the manifest's, which a package author writes for this command, in
+    preference to the program's own ``@doc``.
     """
-    from agm.cli_support.program_options import program_command_for
+    from agm.cli_support.program_options import render_program_help
 
-    program_command = program_command_for(program)
-
-    usage = (
-        program_command.usage_line(f"agm {path_name}")
-        if program_command is not None
-        else f"agm {path_name}"
+    description = registration.description or (None if program is None else program.doc)
+    return render_program_help(
+        command,
+        program_name=f"agm {path_name}",
+        description=description or "Run the registered AgL program.",
+        extra_options=(_dry_run_help_option(),),
     )
-    usage += " [--dry-run]"
-
-    description = registration.description or "Run the registered AgL program."
-    lines = [
-        usage,
-        "",
-        description,
-        "",
-        "Options:",
-        "  --dry-run  Statically check the program without executing it.",
-    ]
-    if program_command is not None:
-        described = program_command.option_lines()
-        if described:
-            lines.extend(("", "Program arguments:", *(f"  {line}" for line in described)))
-    return "\n".join(lines) + "\n"
 
 
 def print_registered_command_help(command_path: Sequence[str]) -> bool:
@@ -125,10 +142,16 @@ def print_registered_command_help(command_path: Sequence[str]) -> bool:
     registration = index.commands.get(path_name)
     if registration is None:
         return False
+    from agm.cli_support.program_options import program_command_for
     from agm.commands.exec_program import registered_program_declaration
 
     program = registered_program_declaration(registration.program, registration.package)
-    print(registered_command_help(path_name, registration, program=program), end="")
+    print(
+        registered_command_help(
+            path_name, registration, program=program, command=program_command_for(program)
+        ),
+        end="",
+    )
     return True
 
 
@@ -154,17 +177,7 @@ class RegisteredProgramCommand(TyperCommand):
             "help_option_names": [],
         }
         super().__init__(name="registered-program", context_settings=context_settings)
-        self.params.append(
-            TyperOption(
-                param_decls=["--dry-run"],
-                default=False,
-                is_flag=True,
-                is_eager=True,
-                expose_value=False,
-                callback=set_dry_run,
-                help="Statically check the program without executing it.",
-            )
-        )
+        self.params.append(_dry_run_option())
         self._path_name = path_name
         self._registration = registration
 
@@ -177,32 +190,25 @@ class RegisteredProgramCommand(TyperCommand):
         )
 
     def invoke(self, ctx: click.Context) -> None:
-        program: "ProgramDeclInfo | None" = None
-        discovered = False
-        help_requested = "--help" in ctx.args
-        if not help_requested and "-h" in ctx.args:
+        from agm.cli_support.program_options import (
+            ProgramHelpRequested,
+            contains_help_flag,
+            program_command_for,
+            program_help_requested,
+        )
+
+        if contains_help_flag(ctx.args):
             # This is the first point at which an unknown command has been proven
             # to be registered, so AgL remains unloaded for all builtin commands.
-            from agm.cli_support.program_options import (
-                program_value_taking_flags,
-                short_help_requested,
-            )
-
             program = self._discover_program()
-            discovered = True
-            help_requested = short_help_requested(
-                ctx.args, value_flags=program_value_taking_flags(program)
-            )
-        if help_requested:
-            print(
-                registered_command_help(
-                    self._path_name,
-                    self._registration,
-                    program=program if discovered else self._discover_program(),
-                ),
-                end="",
-            )
-            return
+            command = program_command_for(program)
+            if program_help_requested(ctx.args, command):
+                print(
+                    self._help(program=program, command=command),
+                    end="",
+                )
+                return
+        from agm.cli_support.program_options import program_command_for
         from agm.commands.exec_program import RegisteredProgramUsageError, run_registered
 
         try:
@@ -212,15 +218,27 @@ class RegisteredProgramCommand(TyperCommand):
                 package=self._registration.package,
                 command_path=self._path_name,
             )
+        except ProgramHelpRequested as exc:
+            # A help request Click recognized only while parsing the program's
+            # own command — a flag bundled into a short group of its own. The
+            # request carries the very command it was parsing, so the help is
+            # rendered from that rather than from a second build.
+            print(self._help(program=exc.program, command=exc.command), end="")
         except RegisteredProgramUsageError as exc:
             print(f"error: {exc.message}", file=sys.stderr)
             print(file=sys.stderr)
             print(
-                registered_command_help(self._path_name, self._registration, program=exc.program),
+                self._help(program=exc.program, command=program_command_for(exc.program)),
                 end="",
                 file=sys.stderr,
             )
             raise SystemExit(1) from exc
+
+    def _help(self, *, program: "ProgramDeclInfo | None", command: "ProgramCommand | None") -> str:
+        """Render this registered command's help for an already-discovered program."""
+        return registered_command_help(
+            self._path_name, self._registration, program=program, command=command
+        )
 
 
 class RegisteredCommandGroup(TyperGroup):
@@ -230,10 +248,16 @@ class RegisteredCommandGroup(TyperGroup):
         """Extend root completion with the next registered-command path segment."""
         from agm.completion import registered_command_completion
 
+        # Click splits a group's tail into ``_protected_args`` (the first word,
+        # the one a subcommand name would come from) and ``args`` (the rest),
+        # and exposes no undeprecated accessor for the pair: ``protected_args``
+        # warns and is slated for removal, while ``args`` alone drops the very
+        # word that starts a registered command path. Click's own
+        # ``shell_completion`` reads the same attribute for the same reason.
         command_path = [*ctx._protected_args, *ctx.args]
         registered_segments, is_registered = registered_command_completion(command_path, incomplete)
         if command_path and is_registered:
-            if incomplete.startswith("--"):
+            if incomplete.startswith("-"):
                 from agm.completion import registered_command_param_completion
 
                 return registered_command_param_completion(command_path, incomplete)

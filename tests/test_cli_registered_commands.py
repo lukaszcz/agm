@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 import semver
@@ -11,6 +12,7 @@ from click.testing import CliRunner, Result
 from typer.main import get_command
 
 import agm.cli as cli
+import agm.cli_dispatch as dispatch
 from agm.cli_support.args import ExecArgs
 from agm.config.context import ConfigContext
 from agm.packages.activation import (
@@ -25,6 +27,20 @@ from agm.packages.model import PackageInfo
 from agm.packages.record import write_record
 from tests._package_helpers import write_installed_package
 
+if TYPE_CHECKING:
+    from agm.agl.runtime.types import ProgramDeclInfo
+
+
+def registered_help(
+    path_name: str, registration: CommandRegistration, *, program: "ProgramDeclInfo | None"
+) -> str:
+    """Render one registered command's help from an already-discovered program."""
+    from agm.cli_support.program_options import program_command_for
+
+    return dispatch.registered_command_help(
+        path_name, registration, program=program, command=program_command_for(program)
+    )
+
 
 def invoke(runner: CliRunner, argv: list[str], *, env: dict[str, str] | None = None) -> Result:
     return runner.invoke(
@@ -35,8 +51,6 @@ def invoke(runner: CliRunner, argv: list[str], *, env: dict[str, str] | None = N
 def test_unexpected_command_resolution_errors_are_not_treated_as_registered_fallbacks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import agm.cli_dispatch as dispatch
-
     monkeypatch.setattr(
         dispatch.TyperGroup,
         "resolve_command",
@@ -87,7 +101,6 @@ def test_command_index_loader_reads_the_active_index(tmp_path: Path) -> None:
 def test_command_index_loader_uses_project_selected_package_commands(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import agm.cli_dispatch as dispatch
     import agm.packages.activation as activation
 
     home = tmp_path / "home"
@@ -117,7 +130,6 @@ def test_command_index_loader_uses_project_selected_package_commands(
 def test_registered_command_dispatches_trailing_arguments(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import agm.cli_dispatch as dispatch
     import agm.commands.exec_program as exec_program
 
     context = ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
@@ -145,7 +157,6 @@ def test_registered_command_dispatches_trailing_arguments(
 def test_registered_command_treats_only_standalone_dry_run_as_global(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import agm.cli_dispatch as dispatch
     import agm.commands.exec_program as exec_program
     from agm.core import dry_run
 
@@ -175,7 +186,6 @@ def test_registered_command_treats_only_standalone_dry_run_as_global(
 def test_registered_command_help_does_not_dispatch_program(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import agm.cli_dispatch as dispatch
     import agm.commands.exec_program as exec_program
     from agm.cli_support.program_discovery import discover_program_declarations_from_source
 
@@ -220,7 +230,6 @@ def test_registered_command_help_recognizes_program_value_argument_flags(
     value parameters: a bare ``-h`` is short help, but ``-h`` supplied as a
     value-taking flag's own VALUE is not.
     """
-    import agm.cli_dispatch as dispatch
     import agm.commands.exec_program as exec_program
     from agm.cli_support.program_discovery import discover_program_declarations_from_source
 
@@ -241,7 +250,7 @@ def test_registered_command_help_recognizes_program_value_argument_flags(
     value_short = invoke(CliRunner(), ["tools", "lint", "--tag", "-h"])
 
     assert bare_short.exit_code == 0
-    assert "Program arguments:" in bare_short.output
+    assert "agm tools lint" in bare_short.output
     assert "--tag" in bare_short.output
     assert value_short.exit_code == 0
     assert calls == [("tools/lint::main", ["--tag", "-h"])]
@@ -250,7 +259,6 @@ def test_registered_command_help_recognizes_program_value_argument_flags(
 def test_help_command_renders_registered_command_help(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import agm.cli_dispatch as dispatch
 
     context = ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
     index = ActivationIndex(
@@ -269,14 +277,13 @@ def test_help_command_renders_registered_command_help(
 
 
 def test_registered_command_help_degrades_when_program_discovery_fails() -> None:
-    import agm.cli_dispatch as dispatch
 
-    text = dispatch.registered_command_help(
+    text = registered_help(
         "tools lint", CommandRegistration("tools", "tools/lint::main"), program=None
     )
 
     assert "Run the registered AgL program." in text
-    assert "Program arguments:" not in text
+    assert "--level" not in text
 
     from agm.cli_support.program_discovery import discover_program_declarations_from_source
 
@@ -284,31 +291,66 @@ def test_registered_command_help_degrades_when_program_discovery_fails() -> None
         "program def main(level: text) -> unit = ()"
     )
 
-    text = dispatch.registered_command_help(
+    text = registered_help(
         "tools lint", CommandRegistration("tools", "tools/lint::main"), program=program
     )
 
-    assert "Program arguments:\n  --level" in text
+    assert "--level" in text
 
 
 def test_registered_command_help_omits_program_arguments_on_a_reservation_collision() -> None:
-    """A value parameter that collides with a reserved flag (e.g. ``help``) renders
-    no ``Program arguments:`` section at all, rather than an empty one:
-    ``program_command_for`` degrades the whole command to ``None`` on a
-    collision.
+    """A value parameter colliding with a reserved flag (e.g. ``help``) renders
+    no parameter entries at all: ``program_command_for`` degrades the whole
+    command to ``None`` on a collision.
     """
-    import agm.cli_dispatch as dispatch
     from agm.cli_support.program_discovery import discover_program_declarations_from_source
 
     (program,) = discover_program_declarations_from_source(
         "program def main(help: text) -> unit = print help"
     )
 
-    text = dispatch.registered_command_help(
+    text = registered_help(
         "tools lint", CommandRegistration("tools", "tools/lint::main"), program=program
     )
 
-    assert "Program arguments:" not in text
+    assert "help TEXT" not in text
+
+
+def test_registered_command_help_prefers_the_manifest_description_over_the_program_doc() -> None:
+    """A package author's command description outranks the program's own ``@doc``."""
+    from agm.cli_support.program_discovery import discover_program_declarations_from_source
+
+    (program,) = discover_program_declarations_from_source(
+        '@doc("Program prose.")\nprogram def main() -> unit = ()'
+    )
+
+    described = registered_help(
+        "tools lint",
+        CommandRegistration("tools", "tools/lint::main", "Manifest prose."),
+        program=program,
+    )
+    undescribed = registered_help(
+        "tools lint", CommandRegistration("tools", "tools/lint::main"), program=program
+    )
+
+    assert "Manifest prose." in described
+    assert "Program prose." not in described
+    assert "Program prose." in undescribed
+
+
+def test_registered_command_help_omits_a_hidden_parameter() -> None:
+    from agm.cli_support.program_discovery import discover_program_declarations_from_source
+
+    (program,) = discover_program_declarations_from_source(
+        'program def main(level: text = "a", @opt-hidden debug-mode: bool = false) -> unit = ()'
+    )
+
+    text = registered_help(
+        "tools lint", CommandRegistration("tools", "tools/lint::main"), program=program
+    )
+
+    assert "--level" in text
+    assert "--debug-mode" not in text
 
 
 def test_registered_command_help_usage_line_reflects_the_program_signature() -> None:
@@ -316,21 +358,20 @@ def test_registered_command_help_usage_line_reflects_the_program_signature() -> 
     own positional slots and options, not the raw ``program def`` declaration
     path.
     """
-    import agm.cli_dispatch as dispatch
     from agm.cli_support.program_discovery import discover_program_declarations_from_source
 
     (program,) = discover_program_declarations_from_source(
         'program def main(@arg-pos name: text, @arg-std tag: text = "default") -> unit = ()'
     )
 
-    text = dispatch.registered_command_help(
+    text = registered_help(
         "tools greet",
         CommandRegistration("tools", "tools/greet::main"),
         program=program,
     )
 
     first_line = text.splitlines()[0]
-    assert first_line.startswith("agm tools greet ")
+    assert "agm tools greet" in first_line
     assert "<name>" in first_line
     assert "[OPTIONS]" in first_line
     assert "main" not in first_line
@@ -340,21 +381,21 @@ def test_registered_command_help_renders_no_contentless_sections_for_a_parameter
     None
 ):
     """A registered command backed by a parameterless ``program def`` renders a
-    plain usage line with no empty ``Program arguments:`` section.
+    plain usage line and no positional slots.
     """
-    import agm.cli_dispatch as dispatch
     from agm.cli_support.program_discovery import discover_program_declarations_from_source
 
     (program,) = discover_program_declarations_from_source("program def main() -> unit = ()")
 
-    text = dispatch.registered_command_help(
+    text = registered_help(
         "tools greet",
         CommandRegistration("tools", "tools/greet::main"),
         program=program,
     )
 
-    assert text.splitlines()[0] == "agm tools greet [--dry-run]"
-    assert "Program arguments:" not in text
+    first_line = text.splitlines()[0]
+    assert "agm tools greet" in first_line
+    assert "<" not in first_line
 
 
 def test_registered_command_program_option_error_renders_shared_usage_help(
@@ -364,7 +405,6 @@ def test_registered_command_program_option_error_renders_shared_usage_help(
     renders through the same ``registered_command_help`` rendering, including
     the program's own usage line.
     """
-    import agm.cli_dispatch as dispatch
 
     home = tmp_path / "home"
     package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
@@ -399,8 +439,55 @@ def test_registered_command_program_option_error_renders_shared_usage_help(
     assert result.exit_code == 1
     err = result.output
     assert "--nope" in err
-    assert "agm tools greet <name> [--dry-run]" in err
+    assert "agm tools greet" in err
+    assert "<name>" in err
     assert "Greet someone" in err
+
+
+def test_registered_command_help_flag_bundled_into_a_short_group_renders_help(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A help flag only the program's own parser can see still renders its help.
+
+    ``-vh`` is a short group whose last letter is the help flag; the dispatch
+    layer cannot read it, so the request surfaces while the program's own
+    command parses and renders there.
+    """
+
+    home = tmp_path / "home"
+    package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
+    module = package_root / "tools" / "greet.agl"
+    module.parent.mkdir(parents=True)
+    (package_root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
+        '[commands]\n"tools greet" = { program = "tools/greet::main", '
+        'description = "Greet someone" }\n',
+        encoding="utf-8",
+    )
+    module.write_text(
+        'program def main(@opt-short("v") verbose: bool = false) -> unit = print verbose\n',
+        encoding="utf-8",
+    )
+    write_record(package_root)
+    write_activation_index(
+        ActivationIndex({"tools": ActivePackage(semver.Version.parse("1.0.0"))}), home=home
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(
+        dispatch,
+        "load_command_index",
+        lambda **_: ActivationIndex(
+            commands={
+                "tools greet": CommandRegistration("tools", "tools/greet::main", "Greet someone")
+            }
+        ),
+    )
+
+    result = invoke(CliRunner(), ["tools", "greet", "-vh"])
+
+    assert result.exit_code == 0
+    assert "Greet someone" in result.output
+    assert "--verbose" in result.output
 
 
 def test_registered_command_binds_a_negated_bool_value_argument(
@@ -410,7 +497,6 @@ def test_registered_command_binds_a_negated_bool_value_argument(
     ``false`` to the referenced program's own bool value parameter, not
     merely offered by completion.
     """
-    import agm.cli_dispatch as dispatch
 
     home = tmp_path / "home"
     package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
@@ -443,11 +529,49 @@ def test_registered_command_binds_a_negated_bool_value_argument(
     assert result.stdout == "false\n"
 
 
+def test_registered_command_reaches_the_programs_end_of_options_marker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A registered command inherits ``agm exec``'s doubled-``--`` rule.
+
+    AGM's own parser consumes one bare ``--``, so a flag-shaped positional
+    value reaches the program only behind a second marker.
+    """
+
+    home = tmp_path / "home"
+    package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
+    module = package_root / "tools" / "run.agl"
+    module.parent.mkdir(parents=True)
+    (package_root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
+        '[commands]\n"tools run" = { program = "tools/run::main" }\n',
+        encoding="utf-8",
+    )
+    module.write_text(
+        'program def main(@arg-pos who: text = "x") -> unit = print who\n', encoding="utf-8"
+    )
+    write_record(package_root)
+    write_activation_index(
+        ActivationIndex({"tools": ActivePackage(semver.Version.parse("1.0.0"))}), home=home
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(
+        dispatch,
+        "load_command_index",
+        lambda **_: ActivationIndex(
+            commands={"tools run": CommandRegistration("tools", "tools/run::main")}
+        ),
+    )
+
+    result = invoke(CliRunner(), ["tools", "run", "--", "--", "--odd"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "--odd\n"
+
+
 def test_registered_command_help_returns_false_when_index_is_unavailable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import agm.cli_dispatch as dispatch
-
     monkeypatch.setattr(
         dispatch,
         "current_config_context",
@@ -465,7 +589,6 @@ def test_registered_command_help_returns_false_when_index_is_unavailable(
 def test_unknown_command_without_registered_entry_keeps_click_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import agm.cli_dispatch as dispatch
 
     monkeypatch.setattr(
         dispatch,
@@ -481,7 +604,6 @@ def test_unknown_command_without_registered_entry_keeps_click_error(
 
 
 def test_builtin_commands_do_not_load_the_package_index(monkeypatch: pytest.MonkeyPatch) -> None:
-    import agm.cli_dispatch as dispatch
 
     monkeypatch.setattr(
         dispatch,
@@ -528,7 +650,6 @@ version = "1.0.0"
 def test_help_overview_degrades_when_the_command_index_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import agm.cli_dispatch as dispatch
 
     monkeypatch.setattr(
         dispatch,
@@ -786,7 +907,6 @@ def test_registered_command_argument_error_renders_shared_usage_help(
     """A CLI argument-parse failure on a dispatched registered command renders
     through the same ``registered_command_help`` the ``--help``/``-h`` paths
     use, instead of a bespoke duplicate rendering."""
-    import agm.cli_dispatch as dispatch
 
     home = tmp_path / "home"
     package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
@@ -821,7 +941,7 @@ def test_registered_command_argument_error_renders_shared_usage_help(
     assert result.exit_code == 1
     err = result.output
     assert "--unknown" in err
-    assert "agm tools lint [OPTIONS] [--dry-run]" in err
+    assert "agm tools lint" in err
     assert "Lint package inputs" in err
     assert "Options:" in err
     assert "--level" in err
@@ -830,7 +950,6 @@ def test_registered_command_argument_error_renders_shared_usage_help(
 def test_registered_command_argument_error_handles_no_description_or_parameters(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import agm.cli_dispatch as dispatch
 
     home = tmp_path / "home"
     package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
@@ -859,9 +978,8 @@ def test_registered_command_argument_error_handles_no_description_or_parameters(
 
     assert result.exit_code == 1
     err = result.output
-    assert "agm tools lint [--dry-run]" in err
+    assert "agm tools lint" in err
     assert "Run the registered AgL program." in err
-    assert "Program parameters:" not in err
 
 
 def test_plain_exec_argument_error_still_renders_the_base_exec_usage(
@@ -1095,7 +1213,6 @@ def test_registered_dispatch_rejects_a_program_owned_by_another_package(
 def test_malformed_activation_index_fallback_is_a_clean_cli_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import agm.cli_dispatch as dispatch
 
     monkeypatch.setattr(
         dispatch,

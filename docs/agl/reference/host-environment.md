@@ -71,7 +71,10 @@ host invocation error.
 
 A positional-only or standard parameter accepts a positional CLI token; a
 standard or named-only parameter accepts `--name value`, `--name=value`, or,
-for `bool` and `Option[T]`, the negated form `--no-name`. A `program def`'s
+for `bool` and `Option[T]`, the negated form `--no-name`. A parameter given a
+one-letter spelling by `@opt-short` also accepts `-n value` and `-nvalue`, and
+groups with other one-letter flags — `-abc` — where only the last letter of a
+group may take a value. A `program def`'s
 parameter list defaults to the **named-only** zone, so a plain `name: text`
 parameter is addressed only by `--name`; an `@arg-pos` parameter opens a
 positional slot. A doubled `--` ends option parsing, so a later
@@ -87,9 +90,6 @@ entry call, as described above. Each parameter's effective value resolves as:
 ```
 CLI token (--name / positional)  >  @opt-env variable  >  qualified config table  >  declared default
 ```
-
-A parameter carrying `@opt-env` reads its named environment variable when no
-CLI token supplies it; an unset or empty variable supplies nothing.
 
 A **positional-only** parameter has no `--flag`, so a config-table entry
 naming it can never reach the argument binder — it falls back to its declared
@@ -110,6 +110,53 @@ functions are not valid program-argument types, whether or not the host ever
 supplies a value for the parameter. A [recursive](types.md#recursive-types)
 record or enum parameter decodes normally, subject to the same finite-schema
 restriction as an agent output type or cast target — see [Generics](generics.md#the-finite-schema-boundary).
+
+### Presentation attributes
+
+Five attributes shape how one value parameter of a `program def` is addressed
+and presented on the host's command line. Each takes a single text literal,
+except `@opt-hidden`, which takes none, and each may prefix only a `program
+def`'s own value parameter — nowhere else does a parameter face a command
+line. `@doc` ([Attributes](grammar.md#attributes)) belongs with them.
+
+| Attribute | Effect |
+| --------- | ------ |
+| `@opt-name("flag-word")` | Replaces the declared name as the parameter's external spelling — its flag, the derived `--no-` negation, its config-table key, and its completion. The argument is one flag word of ASCII letters, digits, and single interior hyphens. |
+| `@opt-short("c")` | Adds a one-letter alternative spelling `-c` alongside the long flag. |
+| `@opt-env("VAR")` | Names an environment variable read when no CLI token supplies the parameter. |
+| `@opt-metavar("PLACEHOLDER")` | Replaces the placeholder standing for the value in usage and help text. |
+| `@opt-hidden` | Keeps the parameter out of help and completion; it still binds normally when supplied. |
+
+A positional-only parameter is never addressed by name, so `@opt-name`,
+`@opt-short`, `@opt-env`, and `@opt-hidden` on one are static errors.
+`@opt-metavar` and `@doc` still apply to it: they describe the value and its
+meaning rather than the name it is addressed by.
+
+```agl
+@doc("Publish one artifact.")
+program def main(
+  @doc("Artifact to publish.") @opt-metavar("PATH") @arg-pos artifact: text,
+  @doc("Where to publish it.") @opt-short("t") @opt-env("PUBLISH_TARGET") target: text = "staging",
+  @opt-hidden trace-id: text = "",
+) -> unit =
+  print "%{artifact} -> %{target}"
+```
+
+A parameter carrying `@opt-env` reads its named environment variable when no
+CLI token supplies it. A variable that is unset, and a variable set to the
+empty text, are indistinguishable here: both supply nothing, and resolution
+falls through to the config table and then the declared default. An
+environment fallback therefore cannot deliver an empty `text`; write the empty
+value as the declared default, or supply it explicitly on the command line.
+
+### Help
+
+A host is expected to describe the selected program on request. What it shows
+is drawn entirely from the program's own declaration: the `program def`'s
+`@doc` prose describes it, each positional slot is named after its parameter,
+and each name-addressed parameter is listed with its long flag, its
+`@opt-short` spelling if it has one, its value placeholder, and its own `@doc`
+prose.
 
 ## Host-configurable settings
 

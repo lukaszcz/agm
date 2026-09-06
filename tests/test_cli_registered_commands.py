@@ -891,7 +891,7 @@ def test_plain_exec_argument_error_still_renders_the_base_exec_usage(
     assert "usage: agm exec" in error
 
 
-@pytest.mark.parametrize("reference", ["not-a-reference", "bad-name/main::main"])
+@pytest.mark.parametrize("reference", ["not-a-reference", "1bad/main::main"])
 def test_exec_rejects_malformed_installed_references(reference: str) -> None:
     import agm.commands.exec_program as exec_program
 

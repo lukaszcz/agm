@@ -95,12 +95,16 @@ class TestModuleIdFromPathValidation:
         with pytest.raises(ValueError):
             ModuleId.from_path("1foo")
 
-    def test_segment_with_hyphen_raises(self) -> None:
-        with pytest.raises(ValueError):
-            ModuleId.from_path("foo-bar")
+    def test_segment_with_hyphen_is_accepted(self) -> None:
+        """Kebab-case names are ordinary AgL spelling, module paths included."""
+        assert ModuleId.from_path("foo-bar").segments == ("foo-bar",)
 
-    def test_builtin_method_registry_path_is_the_one_hyphenated_exception(self) -> None:
+    def test_builtin_method_registry_path_needs_no_exception(self) -> None:
         assert ModuleId.from_path("std/builtin-methods") == STD_BUILTIN_METHODS_ID
+
+    def test_segment_starting_with_hyphen_raises(self) -> None:
+        with pytest.raises(ValueError):
+            ModuleId.from_path("-foo")
 
     def test_segment_with_space_raises(self) -> None:
         with pytest.raises(ValueError):

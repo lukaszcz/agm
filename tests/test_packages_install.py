@@ -2309,7 +2309,7 @@ def test_dry_run_archive_install_rejects_an_invalid_module_path_without_writing(
     tmp_path: Path,
 ) -> None:
     source = _package(tmp_path / "source", "alpha", "1.0.0")
-    (source / "alpha" / "invalid-name.agl").write_text(
+    (source / "alpha" / "1invalid.agl").write_text(
         "program def invalid() -> unit = ()\n", encoding="utf-8"
     )
     archive = tmp_path / "alpha.agmpkg"

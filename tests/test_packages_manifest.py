@@ -65,7 +65,7 @@ charlie = { version = "3", url = "https://example.test/charlie.agmpkg", hash = "
         assert manifest.commands["review-loop"].program == "review_tools/review::main"
         assert manifest.commands["review-loop lint"].description == "Lint review configurations"
 
-    @pytest.mark.parametrize("name", ("review_tools", "Review2", "_internal"))
+    @pytest.mark.parametrize("name", ("review_tools", "review-tools", "Review2", "_internal"))
     def test_accepts_module_segment_package_names(self, tmp_path: Path, name: str) -> None:
         manifest = load_manifest(
             _write_manifest(tmp_path, f'[package]\nname = "{name}"\nversion = "1.2.3"\n')
@@ -73,7 +73,7 @@ charlie = { version = "3", url = "https://example.test/charlie.agmpkg", hash = "
 
         assert manifest.name == name
 
-    @pytest.mark.parametrize("name", ("review-tools", "1review", "review/tools"))
+    @pytest.mark.parametrize("name", ("-review", "1review", "review/tools"))
     def test_rejects_invalid_package_names(self, tmp_path: Path, name: str) -> None:
         path = _write_manifest(tmp_path, f'[package]\nname = "{name}"\nversion = "1.2.3"\n')
 

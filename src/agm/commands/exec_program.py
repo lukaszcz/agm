@@ -163,7 +163,7 @@ def _package_entry_segments(entry_path: Path | None, roots: RootSet) -> tuple[st
 
 
 def _registered_command_paths(
-    entry_path: Path | None,
+    entry_path: Path,
     roots: RootSet,
     module_segments: tuple[str, ...],
     program_path: tuple[str, ...],
@@ -176,8 +176,6 @@ def _registered_command_paths(
     path. The owning package's manifest is the authority dispatch itself
     checks, so a program no package owns has no command table.
     """
-    if entry_path is None:
-        return ()
     package = owning_package(entry_path, roots.packages)
     if package is None:
         return ()
@@ -394,7 +392,7 @@ def run(
     )
     engine_program_table: dict[str, object] = {}
     command_paths: tuple[tuple[str, ...], ...] = ()
-    if entry_stem is not None and selected_parsed_program is not None:
+    if entry_path is not None and selected_parsed_program is not None:
         program_path = tuple(segment.name for segment in selected_parsed_program.scope_path) + (
             selected_parsed_program.name,
         )
@@ -587,7 +585,7 @@ def run(
     # Precedence is CLI > config table > signature default, so config values
     # are folded in beneath CLI values supplied by either syntax.
     program_named: dict[str, object] = dict(cli_arguments.named)
-    if entry_stem is not None and program_option_map is not None and selected_program is not None:
+    if entry_path is not None and program_option_map is not None and selected_program is not None:
         program_path = selected_program.scope_path + (selected_program.name,)
         argument_options = {
             info.name: (

@@ -234,10 +234,20 @@ class TestQualifiedConfigKeys:
 
     def test_command_path_table_does_not_duplicate_a_module_route_spelling(self) -> None:
         """A command path that coincides with a module route stays one table."""
-        key = QualifiedConfigKey(("tools", "run"), ("main",), "level", command_paths=(("run", "main"),))
+        paths = route_table_paths(("tools", "judge"), ("main",), (("judge", "main"),))
 
-        assert resolve_qualified_values(_config({"run": {"main": {"level": "high"}}}), (key,)) == {
-            key: "high"
+        assert paths.count(("judge", "main")) == 1
+        assert resolve_qualified_values(
+            _config({"judge": {"main": {"level": "high"}}}),
+            (
+                QualifiedConfigKey(
+                    ("tools", "judge"), ("main",), "level", command_paths=(("judge", "main"),)
+                ),
+            ),
+        ) == {
+            QualifiedConfigKey(
+                ("tools", "judge"), ("main",), "level", command_paths=(("judge", "main"),)
+            ): "high"
         }
 
     def test_configured_leaf_tables_report_command_path_leaves(self) -> None:

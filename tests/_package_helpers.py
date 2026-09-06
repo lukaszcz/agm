@@ -63,8 +63,7 @@ def write_installed_package(
     module = package_root / name / "main.agl"
     module.parent.mkdir(parents=True)
     registrations = "".join(
-        f'"{path}" = {{ program = "{program}" }}\n'
-        for path, program in (commands or {}).items()
+        f'"{path}" = {{ program = "{program}" }}\n' for path, program in (commands or {}).items()
     )
     command_table = f"\n[commands]\n{registrations}" if registrations else ""
     (package_root / "package.toml").write_text(

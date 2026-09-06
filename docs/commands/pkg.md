@@ -1,185 +1,191 @@
 # Packages
 
+A package is a portable, versioned collection of AgL modules that can register its own `agm`
+commands. See also the [AgL package reference](../agl/reference/packages.md) for what a package
+means to AgL source.
+
 | Command | Description |
 |---|---|
-| `agm pkg init [DIR] [--name NAME] [--version VERSION]` | Initialize a package directory |
+| `agm pkg init [DIR] [--name NAME] [--version VERSION]` | Scaffold a new package |
 | `agm pkg check [DIR]` | Validate a package directory |
-| `agm pkg create [DIR] [-o FILE]` | Validate and create a portable package archive |
-| `agm pkg install SRC [--editable] [--shadow]` | Install or activate a package directory or archive |
+| `agm pkg create [DIR] [-o FILE]` | Validate and write a `<name>-<version>.agmpkg` archive |
+| `agm pkg install SRC [--editable] [--shadow]` | Install and activate a directory or archive |
 | `agm pkg uninstall NAME` | Remove an active package |
-| `agm pkg list` | List immutable installed versions and active editable packages |
-| `agm pkg info NAME` | Show active package details and dependency status |
+| `agm pkg list` | List installed versions and active editable packages |
+| `agm pkg info NAME` | Show an active package's metadata and dependency status |
 
-A package directory contains `package.toml` and a module tree whose directory matches
-`[package] name`. Package and dependency names must each be one AgL identifier segment and cannot
-be reserved AgL keywords. The manifest requires a complete semantic `version`; optional
-`[dependencies]` entries state version floors and may provide a local `path` or a URL with
-its SHA-256 hash. Ordinary package dependencies have no upper bound. A `std` dependency instead
-requires that minimum within one compatible AGM release line: the same minor line for `0.x`, or
-the same major line for `1.x` and later. `[commands]` maps a one- or multi-word command path to a
-package-owned `MODULE::PROGRAM` reference, where `PROGRAM` is a `program def` declaration with no
-type parameters and an explicit `-> unit` result; its value parameters, if any, project onto the
-registered command's own CLI surface exactly as for `agm exec` (see
-[Program arguments](exec.md#program-arguments)). For example:
+`DIR` defaults to the current directory. Every command honors the global `--dry-run` flag.
+
+## Quick start: a package with a command
+
+```sh
+agm pkg init review-tools          # writes package.toml + review-tools/main.agl
+```
+
+Write a program and register it in `package.toml`:
+
+```agl
+program def review(target: text, strict: bool = false) -> unit =
+  let _ = print("reviewing %{target}")
+```
+
+```toml
+[commands]
+review = { program = "review-tools/main::review", description = "Review a change" }
+```
+
+Then validate, install, and run it:
+
+```sh
+agm pkg check review-tools
+agm pkg install --editable review-tools   # source edits take effect immediately
+agm review --target src --strict
+agm review --help
+```
+
+## Layout
+
+```
+review-tools/
+  package.toml        # manifest
+  review-tools/       # module tree, named after the package: imports as review-tools/...
+    main.agl
+    main.py           # optional extern companion beside its module
+  prompts/            # resources: anything outside the module tree
+```
+
+The package name is one AgL identifier segment and not a reserved keyword. Package modules may
+import only their own tree, packages declared in `[dependencies]`, and `std`.
+
+## Manifest
+
+`package.toml` has three tables: `[package]` (required), `[dependencies]`, and `[commands]`.
+
+### `[package]`
 
 ```toml
 [package]
-name = "review_tools"
-version = "1.0.0"
+name = "review-tools"          # required: one AgL identifier segment, not a keyword
+version = "1.0.0"              # required: complete semantic version
 description = "Review workflows"
 license = "MIT"
 authors = ["Ada <ada@example.test>"]
 repository = "https://example.test/review-tools"
 keywords = ["review", "workflow"]
-
-[dependencies]
-std = "0.1.1"
-helpers = { version = "1.2.0", path = "../helpers" }
-
-[dependencies.remote]
-version = "2.0.0"
-url = "https://example.test/remote.agmpkg"
-hash = "sha256=0000000000000000000000000000000000000000000000000000000000000000"
-
-[commands]
-review = { program = "review_tools/main::review", description = "Review a change" }
-"review batch" = { program = "review_tools/main::batch" }
 ```
 
-A dependency `path` is relative to the package and cannot be combined with `url`. A URL
-requires a 64-hex-digit SHA-256 hash prefixed with `sha256=`, `sha256:`, or `sha256-`. Archive
-creation excludes hidden paths, VCS and cache directories, `.agmpkg` files, and files ignored by
-root or nested `.gitignore` files. Portable archives are limited to 10,000 entries, 16 MiB of ZIP
-metadata, 256 path components per entry, 64 MiB expanded per entry, and 512 MiB expanded in total;
-ZIP64 archives are not supported.
+Only `name` and `version` are required. A package identity is the complete version, build
+metadata included: `1.0.0+linux` and `1.0.0+macos` are distinct packages.
 
-`agm pkg init` initializes a package in `DIR`, which defaults to the current directory and is
-created when missing. It writes a `package.toml` manifest and a starter `main.agl` module in the
-package's module tree, so the result passes `agm pkg check` and can be archived immediately. The
-package name defaults to the directory's own name and the version to `0.1.0`; `--name` and
-`--version` override them. The generated manifest carries commented `[dependencies]` guidance and
-declares no dependencies. Initialization refuses a directory that already holds a `package.toml`,
-and never overwrites an existing starter module. With `--dry-run`, AGM reports the files it would
-write without creating them.
+### `[dependencies]`
 
-`agm pkg check` validates the `package.toml` manifest, module-tree naming discipline, program
-references used by manifest command registrations, and literal resource targets reached through
-imports, uses, or resolved dependency re-exports (rejecting scoped resource re-export cycles that
-keep expanding their paths). It also checks
-dependencies without modifying packages: a `std` requirement is checked for release-line
-compatibility with the running AGM version; a matching stored version is used first for other
-packages, then a declared local `path`; a URL with its required hash is a deferred satisfiable
-source and is not fetched.
-`DIR` defaults to the current directory.
+```toml
+[dependencies]
+std = "0.1"                                          # minimum version; "0.1" means 0.1.0
+helpers = { version = "1.2.0", path = "../helpers" }  # local checkout, relative to the package
+remote = { version = "2.0.0", url = "https://example.test/remote.agmpkg", hash = "sha256=<64 hex>" }
+```
 
-`agm pkg create` validates the selected portable archive contents, including literal resource
-targets, then checks the *distribution* dependencies, including its `std` requirement against the
-running AGM version, before writing a deterministic
-`<name>-<version>.agmpkg` archive. A resource excluded by archive filtering causes creation to fail
-rather than producing a broken package.
-`DIR` defaults to the current directory; without `-o`, the archive is written beside `DIR`. The
-archived manifest removes local `path` dependency sources while leaving the development manifest
-unchanged, so a package that relies only on a local path must have a matching stored version (or a
-URL source) before it can be archived.
+- A value is a minimum version with no upper bound; build metadata is ignored when matching.
+- `path` and `url` are optional development and download sources; they cannot be combined. A
+  `url` requires a SHA-256 `hash` with a `sha256=`, `sha256:`, or `sha256-` prefix.
+- `std` is an AGM compatibility contract: the running AGM must be at least the declared version
+  and in the same release line (same minor for `0.x`, same major from `1.x`).
+- Only direct dependencies are importable; a dependency's own dependencies are not.
 
-`agm pkg install` accepts either a package directory or a `.agmpkg` archive and stores its verified
-distribution — the normalized manifest and the same files archive creation selects, so a directory
-install omits hidden, VCS, cache, and ignored files and local `path` dependency sources just as
-archive creation does — in `<AGM-home>/packages/<name>/<version>/`, where the runtime home is
-`$AGM_HOME`, otherwise a populated `<install-prefix>/.agm`, otherwise `$HOME/.agm`. It writes
-and verifies the package's SHA-256 `RECORD`,
-and makes that version globally active only after the complete resulting selection validates.
-Activation updates are atomically published, so a failed install leaves newly copied trees inactive.
-With `--dry-run`, AGM reports the planned archive creation or archive installation and validates its
-archive module/command discipline and any resulting selection resolvable from local sources and the
-store, without creating archive, package-store, or activation-index files. It never fetches URL
-dependencies, so an installation that needs one fails in dry-run mode.
-Versions are retained side by side. A package identity includes the complete canonical version,
-including build metadata, so versions such as `1.0.0+linux` and `1.0.0+macos` are distinct store
-entries and activation selections. Ordinary package dependencies use semantic-version precedence
-for minimum-version resolution, where build metadata does not affect whether a version satisfies a
-range: a satisfying stored version is selected first, otherwise a declared local `path` source is
-installed. URL
-dependencies are fetched with a required SHA-256 hash, then the downloaded archive's normalized
-manifest and `RECORD` are verified before atomic extraction and activation. Downloads have a 128 MiB
-size limit and a 30-second inactivity timeout, including blocked connection and body reads; each
-nonempty chunk resets the timeout, and partial temporary archives are removed on failure.
+### `[commands]`
 
-## Package version pins
+```toml
+[commands]
+review = { program = "review-tools/main::review", description = "Review a change" }
+"review batch" = { program = "review-tools/main::batch" }   # multi-word command path
+```
 
-Use `[packages]` in a layered `config.toml` to select an installed package version for the current
-invocation:
+- A key is a one- or multi-word command path. It cannot start with a built-in command or root
+  alias (`wsp`, `wt`).
+- `program` is `MODULE::PROGRAM`: a `program def` in this package with no type parameters and a
+  unit result (written or inferred). Its value parameters become the command's arguments.
+- `description` is optional and shown in `agm help`.
+
+## Registered commands
+
+An active package's commands run as `agm COMMAND ...`; the longest matching path wins. They appear
+in `agm help` and shell completion and support `--help`.
+
+- **Arguments.** The program's value parameters project onto the command's CLI exactly as for
+  `agm exec`: positional-capable parameters fill trailing words in order, name-addressable ones
+  take `--name VALUE` (`--name`/`--no-name` for `bool`). See
+  [Program arguments](exec.md#program-arguments).
+- **Configuration.** Omitted arguments and engine settings come from the program's qualified table,
+  e.g. `[review-tools.main.review]` for `review-tools/main::review`; see
+  [Configuration](exec.md#configuration).
+- **`--dry-run`**, before or after the command path, runs the static pipeline and argument
+  validation without executing.
+- **Conflicts.** Two active packages cannot own the same command path; install the later one with
+  `--shadow` to make it the owner. Shadowing is recorded per store tree, so a rebuilt activation
+  index preserves it.
+- **Editable packages** re-read their manifest on dispatch, so command edits apply without
+  reinstalling. A package activated without `--shadow` cannot acquire a conflicting command later.
+
+## Commands
+
+**`init`** creates `DIR` when missing and writes `package.toml` (name from the directory, version
+`0.1.0`, no dependencies, commented dependency guidance) plus a starter `main.agl` unless one
+exists. It refuses a directory that already holds a manifest.
+
+**`check`** validates the manifest, module-tree naming, `[commands]` program references, literal
+`resource` targets, import visibility, and dependency satisfiability without modifying anything.
+The `std` floor is checked against the running AGM; other dependencies resolve from the store,
+then a `path`; a `url` counts as satisfiable and is not fetched.
+
+**`create`** runs the same validation on the *distribution*, then writes a deterministic archive
+beside `DIR` (or at `-o FILE`). The distribution excludes hidden paths, VCS and cache directories,
+`.agmpkg` files, and anything matched by `.gitignore` files; a resource excluded this way fails
+creation. The archived manifest drops `path` sources, so every path-only dependency needs a stored
+version or `url` first.
+
+**`install`** takes a directory or archive, resolves the dependency closure, validates, and stores
+the distribution in `<AGM-home>/packages/<name>/<version>/` with a SHA-256 `RECORD`. Activation is
+published atomically only after the resulting selection validates; a failed install leaves nothing
+active. Dependencies resolve from the store first, then a declared `path` (installed alongside),
+then a `url` (fetched and hash-verified; never in `--dry-run`). Versions are kept side by side;
+`1.0.0+linux` and `1.0.0+macos` are distinct identities. `--editable` activates the source directory
+in place: no copy, no `RECORD`, edits visible immediately.
+
+**`uninstall`** verifies the `RECORD`, validates the remaining selection, deactivates, and removes
+the recorded files (plus cache and VCS residue). An editable package is only deactivated. Command
+ownership displaced by the removed package is restored.
+
+**`list`** shows every stored version as `active` or `installed`, active editable packages, and
+each package's commands, annotating commands that shadow another package.
+
+**`info`** shows metadata, command registrations, and whether each direct dependency is active,
+unsatisfied, or missing, including the inferred `std` upper bound.
+
+## Version pins
+
+Select a stored version per project instead of the globally active one:
 
 ```toml
 [packages]
-review_tools = "1.2.3"
-platform_tools = "1.0.0+linux"
+review-tools = "1.2.3"
+platform-tools = "1.0.0+linux"
 ```
 
-Each value must be a quoted, complete semantic version (`MAJOR.MINOR.PATCH`, with optional
-prerelease and build metadata). A pin selects the exact package identity: `1.0.0+linux` does not
-match `1.0.0+macos`, even though build metadata is ignored when checking a dependency's minimum
-version.
+Pins live in any layered `config.toml` (install prefix, AGM home, project `config/config.toml`,
+then `.agm/config.toml`), merge by name with later layers winning, and select an exact identity that
+must already be a valid stored version. A pin affects module roots, command dispatch, help, and
+completion for the invocation only; it never installs or fetches, and `list`/`info` ignore it. A
+development checkout of the same name discovered from the execution root still takes precedence.
 
-Pins follow the normal general-config precedence: installation-prefix config, AGM-home config,
-shared project `config/config.toml`, then the invocation directory's `.agm/config.toml`. The
-`[packages]` tables merge by package name, with a later project or workspace value overriding the
-same earlier pin. AGM discovers the current project from the invocation directory or `PROJ_DIR`, so
-leaving that project restores the less-specific selection. A pin overlays the globally active
-version only for package-aware operations; it does not install, fetch, or globally activate that
-version, and does not change `agm pkg list` or `agm pkg info`.
+## The `std` package
 
-The exact pinned version must already be an immutable, valid `RECORD`-verified entry in the selected
-AGM home's package store; a global editable activation is not a substitute. Invalid pin syntax, a
-missing or corrupt store entry, a manifest identity mismatch, or unsatisfied dependencies fail when
-AGM resolves package roots or registered commands. AGM does not fall back to the globally active
-version or fetch a dependency. For module-root selection, a discovered development package with the
-same name takes precedence over the stored selection.
+The standard library is a managed package at the running AGM's version, refreshed only by
+`just install`; it cannot be installed or uninstalled. A refresh across a release line deactivates
+packages requiring the old line and their dependents, keeping their store trees.
 
-Pins determine the effective package module roots used by `agm exec`, `agm repl`, and installed
-program references. They also rebuild the invocation's registered-command
-registry from the selected manifests, so command dispatch, `agm help`, registered-command `--help`,
-and shell completion all reflect the pinned versions. Built-in commands remain reserved and take
-precedence over package registrations.
+## Limits
 
-`--editable` activates the source directory directly, so its edits are visible immediately and
-no immutable copy or `RECORD` is created. Manifest `[commands]` registrations are merged into the
-activation index. Invoke a registered single- or multi-word command directly as `agm COMMAND ...`;
-the longest matching path wins and trailing words are passed to its AgL program. The referenced
-`program def`'s own value parameters project onto the command exactly as for `agm exec`: a
-positional-capable parameter fills the next trailing word in declaration order, and a
-name-addressable parameter takes a `--name VALUE` (or `--name`/`--no-name` for `bool`) token; see
-[Program arguments](exec.md#program-arguments) for the full projection and precedence rules,
-including the qualified configuration/engine-setting tables registered commands read the same way
-`agm exec` does.
-The global `--dry-run` flag can appear before or after a registered command path; it runs the static
-pipeline and program-argument validation without executing the program. They appear in `agm help` and
-shell completion while active. An editable command re-reads its live
-manifest when dispatched, so nonconflicting command edits take effect without reinstalling. Live
-command additions are rechecked against the activation's recorded `--shadow` intent; an editable
-package activated without `--shadow` cannot acquire a conflict. A command path cannot begin with an
-AGM built-in command or root alias (`wsp` or `wt`). A conflicting registration refuses installation
-unless `--shadow` is supplied;
-the replacing package becomes the active command owner, and successful shadow installs identify the
-displaced command owners. Command precedence is persisted in a sidecar beside each immutable store
-tree, never in the `RECORD`-covered payload, so rebuilding a lost activation index preserves it.
-
-The built-in `std` package is installed and activated with AGM itself at the same version as the
-running binary. Its managed store tree is refreshed only from AGM's shipped `stdlib/` directory
-by `just install`; editable and archive installs are rejected, and `agm pkg uninstall std` always
-refuses. When an AGM upgrade crosses a compatibility line, that refresh deactivates packages requiring
-the previous line and packages that depend on them, while retaining their immutable store trees. A
-package's `std` requirement is an AGM compatibility contract: the running AGM must be
-at least the declared version and remain in its compatible release line. Installation therefore
-refuses both newer requirements and older requirements from an incompatible line.
-
-`agm pkg uninstall` verifies the active immutable package's `RECORD`, validates the remaining
-activation selection, then clears activation before removing every recorded file, along with any
-tool-cache or VCS content the store tree acquired after installation. Remaining
-active manifests are reconciled so their command owners are restored. It refuses any store path
-whose resolved ancestors leave the canonical store root. For an editable package it only clears
-activation. `agm pkg list` shows every immutable installed version as `active` or `installed`,
-plus active editable packages and commands only beneath their active owner, annotating commands
-that shadow another active package; `agm pkg info` shows package design metadata, command registrations, and whether each direct requirement is active,
-unsatisfied, or missing. It displays the inferred exclusive upper bound for `std`, which is reported
-against the running AGM version rather than the active package store.
+- Archives: 10,000 entries, 16 MiB ZIP metadata, 256 path components, 64 MiB per entry, 512 MiB
+  total; no ZIP64.
+- Downloads: 128 MiB, 30-second inactivity timeout, partial files removed on failure.

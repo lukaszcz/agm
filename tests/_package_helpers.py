@@ -12,6 +12,7 @@ tests keep testing the rule rather than one release's literals.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 import semver
@@ -47,8 +48,12 @@ def write_installed_package(
     name: str,
     *,
     source: str = "program def main(level: text) -> unit = ()\n",
+    commands: Mapping[str, str] | None = None,
 ) -> Path:
     """Install and activate a one-module package named *name* under *home*.
+
+    *commands* registers manifest command paths against program references, so
+    a test can exercise a package that owns CLI commands.
 
     Returns the path of the package's ``main.agl`` module, so a test can edit
     or remove the entry file it will later resolve.
@@ -57,8 +62,12 @@ def write_installed_package(
     package_root = home / ".agm" / "packages" / name / "1.0.0"
     module = package_root / name / "main.agl"
     module.parent.mkdir(parents=True)
+    registrations = "".join(
+        f'"{path}" = {{ program = "{program}" }}\n' for path, program in (commands or {}).items()
+    )
+    command_table = f"\n[commands]\n{registrations}" if registrations else ""
     (package_root / "package.toml").write_text(
-        f'[package]\nname = "{name}"\nversion = "1.0.0"\n', encoding="utf-8"
+        f'[package]\nname = "{name}"\nversion = "1.0.0"\n{command_table}', encoding="utf-8"
     )
     module.write_text(source, encoding="utf-8")
     write_record(package_root)

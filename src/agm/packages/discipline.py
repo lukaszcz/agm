@@ -66,7 +66,7 @@ def validate_package_distribution(
 def validate_package_structure(package: PackageInfo) -> dict[ModuleId, Path]:
     """Run the manifest and module-tree checks that read no module source."""
 
-    _validate_package_name(package.manifest.name)
+    validate_unreserved_package_name(package.manifest.name)
     _validate_command_paths(package.manifest)
     return _module_files(package)
 
@@ -133,7 +133,7 @@ def validate_archive_package(
 ) -> None:
     """Validate archived module content against its resolved dependencies."""
 
-    _validate_package_name(manifest.name)
+    validate_unreserved_package_name(manifest.name)
     _validate_command_paths(manifest)
     dependencies = tuple(dependency_packages)
     paths = tuple(archive_paths)
@@ -253,7 +253,9 @@ def _resource_calls(resolution: ModuleResolution) -> list[tuple[Call, BuiltinKin
     return calls
 
 
-def _validate_package_name(name: str) -> None:
+def validate_unreserved_package_name(name: str) -> None:
+    """Reject a package name that AGM's own built-in command surface reserves."""
+
     if name in RESERVED_COMMAND_NAMES:
         raise DisciplineError(f"package name {name!r} is reserved by AGM")
 
@@ -330,8 +332,9 @@ def _validate_program_reference(
     function = candidates.get(declaration)
     if function is None:
         raise DisciplineError(f"program reference {reference!r} names no program declaration")
-    if function.type_param_slots or not isinstance(function.return_type, UnitT):
+    if function.type_param_slots or (
+        function.return_type is not None and not isinstance(function.return_type, UnitT)
+    ):
         raise DisciplineError(
-            f"registered program {reference!r} must declare no type parameters "
-            "and an explicit unit result"
+            f"registered program {reference!r} must declare no type parameters and a unit result"
         )

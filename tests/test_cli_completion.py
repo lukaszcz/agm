@@ -422,6 +422,7 @@ def test_complete_help_path_suggests_subcommands() -> None:
         "check",
         "create",
         "info",
+        "init",
         "install",
         "list",
         "uninstall",

@@ -7348,6 +7348,38 @@ def _write_store_test_package(root: Path, name: str, version: str) -> Path:
     return root
 
 
+class TestPackageInit:
+    def test_initializes_a_package_that_checks_and_archives(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        package = tmp_path / "demo"
+        package.mkdir()
+        archive = tmp_path / "demo.agmpkg"
+
+        initialized = run_agm(["pkg", "init"], env=env, cwd=package)
+        checked = run_agm(["pkg", "check"], env=env, cwd=package)
+        created = run_agm(["pkg", "create", "-o", str(archive)], env=env, cwd=package)
+
+        assert initialized.returncode == 0
+        assert checked.returncode == 0
+        assert created.returncode == 0
+        assert (package / "package.toml").is_file()
+        assert (package / "demo" / "main.agl").is_file()
+        assert archive.is_file()
+
+    def test_refuses_a_directory_that_is_already_a_package(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        package = _write_store_test_package(tmp_path / "alpha", "alpha", "1.0.0")
+
+        result = run_agm(["pkg", "init"], env=env, cwd=package, check=False)
+
+        assert result.returncode == 1
+        assert result.stderr
+        assert "Traceback" not in result.stderr
+        assert 'version = "1.0.0"' in (package / "package.toml").read_text(encoding="utf-8")
+
+
 class TestPackageCheck:
     def test_checks_explicit_and_current_package_directory(
         self, tmp_path: Path, env: dict[str, str]

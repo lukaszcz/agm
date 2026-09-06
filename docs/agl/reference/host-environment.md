@@ -215,6 +215,14 @@ overrides and its own value parameters. A longer suffix, including an exact
 quoted module route, disambiguates same-leaf modules. Inline `-c` value
 parameters are CLI-only.
 
+A program a package registers as a CLI command is addressed by that command
+path too: `agm dev review`, registered for `review-tools/review::main`, reads
+`[dev.review]`, whose segments are the whole table path. It is one more
+spelling of the same address, so it applies however the program is run — as
+the command, by installed reference, or by file path — and setting one leaf
+through two spellings in the same config layer is an error, exactly as two
+module suffixes are.
+
 ### Positional effect
 
 The host applies each effective initial setting before execution. Thus a declared `log` or `log-file` default configures the trace service when

@@ -578,7 +578,6 @@ class ReplSession:
         return (
             roots.roots,
             roots.stdlib_roots,
-            roots.loose_roots,
             packages,
             capabilities.supports_shell_exec,
             capabilities.supports_extern,

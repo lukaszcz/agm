@@ -20,5 +20,5 @@ An AgL closure crosses as a callable proxy that is valid only on its owning inte
 
 - `src/agm/agl/runtime/externs.py` — registry, companion loading, dispatch, state activation.
 - `src/agm/agl/runtime/boundary.py` — encoding/decoding, class synthesis, views, proxies, the exception carrier.
-- `stdlib/std/*.py` — the standard library's companions.
+- `stdlib/src/*.py` — the standard library's companions.
 - Tests: `tests/test_agl_extern_*.py`.

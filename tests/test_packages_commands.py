@@ -32,6 +32,7 @@ from agm.packages.activation import (
 )
 from agm.packages.archive import ArchiveError
 from agm.packages.install import PackageInstallError, PackageInstallPlan, install_directory
+from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.manifest import CommandSpec, DependencySpec, PackageManifest
 from agm.packages.model import PackageInfo
 from agm.packages.record import write_record
@@ -46,7 +47,7 @@ def _context(tmp_path: Path) -> ConfigContext:
 def _package(tmp_path: Path, name: str = "alpha") -> PackageInfo:
     root = tmp_path / name
     root.mkdir()
-    (root / name).mkdir()
+    (root / MODULE_TREE_DIRNAME).mkdir()
     manifest = PackageManifest(name=name, version=semver.Version.parse("1.0.0"))
     (root / "package.toml").write_text(
         f'[package]\nname = "{manifest.name}"\nversion = "{manifest.version}"\n',
@@ -132,7 +133,7 @@ def test_create_rejects_an_older_incompatible_std_before_archive_publication(
         f'[dependencies]\nstd = "{older_incompatible_std_requirement()}"\n',
         encoding="utf-8",
     )
-    (package.root / "alpha" / "main.agl").write_text(
+    (package.root / MODULE_TREE_DIRNAME / "main.agl").write_text(
         "program def main() -> unit = ()\n", encoding="utf-8"
     )
     destination = tmp_path / "alpha.agmpkg"
@@ -201,13 +202,15 @@ def test_dry_run_shadow_install_reports_the_planned_displacement_without_changin
 
     def command_package(name: str) -> Path:
         root = tmp_path / name
-        (root / name).mkdir(parents=True)
+        (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
         (root / "package.toml").write_text(
             f'[package]\nname = "{name}"\nversion = "1.0.0"\n\n'
             f'[commands]\nlaunch = {{ program = "{name}/main::main" }}\n',
             encoding="utf-8",
         )
-        (root / name / "main.agl").write_text("program def main() -> unit = ()\n", encoding="utf-8")
+        (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+            "program def main() -> unit = ()\n", encoding="utf-8"
+        )
         return root
 
     install_directory(command_package("alpha"), home=context.home)

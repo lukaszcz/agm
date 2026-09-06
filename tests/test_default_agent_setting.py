@@ -8,16 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver, RunResult
 from agm.agl.semantics.values import RecordValue, TextValue, Value
 from agm.cli_support.args import ExecArgs
 from agm.commands import exec as exec_command
 from agm.commands import exec_program as exec_engine
 from agm.config.context import ConfigContext
-from tests._agl_helpers import agent_value, run_inline_command
-
-_STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
+from tests._agl_helpers import agent_value, agl_roots, run_inline_command
 
 
 def _file_program(body: str) -> str:
@@ -40,7 +37,7 @@ def _run(
     result = run_inline_command(
         PipelineDriver(),
         source,
-        roots=RootSet(roots=frozenset({_STDLIB})),
+        roots=agl_roots(),
         builtin_host_settings=seed,
         host_settings_policy=host_settings_policy,
     )

@@ -161,12 +161,12 @@ _MODULES: dict[str, str] = {
 @pytest.fixture(name="split_stdlib")
 def _split_stdlib(tmp_path: Path) -> RootSet:
     """Write a standard library whose built-ins live outside ``std/prelude``."""
-    std_dir = tmp_path / "split_stdlib" / "std"
+    std_dir = tmp_path / "split_stdlib" / "src"
     std_dir.mkdir(parents=True)
     for name, source in _MODULES.items():
         (std_dir / name).write_text(source, encoding="utf-8")
     root = std_dir.parent
-    return RootSet(roots=frozenset({root}), stdlib_roots=frozenset({root}))
+    return RootSet(roots=frozenset(), stdlib_roots=frozenset({root}))
 
 
 def _run(source: str, roots: RootSet, **options: object) -> RunResult:

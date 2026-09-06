@@ -38,6 +38,7 @@ from agm.agl.repl import ReplSession
 from agm.agl.runtime.sessions import SessionSnapshot
 from agm.agl.semantics.values import RecordValue
 from agm.cli_support.args import ReplArgs
+from agm.packages.layout import MODULE_TREE_DIRNAME
 
 
 class RecordedArgs(Protocol):
@@ -542,19 +543,19 @@ class TestReplRun:
 
         _isolated_home(monkeypatch, tmp_path / "home")
         bravo = tmp_path / "bravo"
-        (bravo / "bravo").mkdir(parents=True)
+        (bravo / MODULE_TREE_DIRNAME).mkdir(parents=True)
         (bravo / "package.toml").write_text('[package]\nname = "bravo"\nversion = "1.0.0"\n')
-        (bravo / "bravo" / "shared.agl").write_text("def answer() -> int = 42\n")
+        (bravo / MODULE_TREE_DIRNAME / "shared.agl").write_text("def answer() -> int = 42\n")
 
         alpha = tmp_path / "alpha"
         alpha.mkdir()
-        (alpha / "alpha").mkdir()
+        (alpha / MODULE_TREE_DIRNAME).mkdir()
         (alpha / "package.toml").write_text(
             '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
             "[dependencies]\n"
             'bravo = { version = "1", path = "../bravo" }\n'
         )
-        (alpha / "alpha" / "main.agl").write_text(
+        (alpha / MODULE_TREE_DIRNAME / "main.agl").write_text(
             "import bravo/shared\ndef value() -> int = bravo/shared::answer()\n"
         )
         monkeypatch.chdir(alpha)

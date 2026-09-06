@@ -47,7 +47,8 @@ from agm.agl.semantics.values import (
     TextValue,
     UnitValue,
 )
-from tests._agl_helpers import agent_value, strip_decl_ids
+from agm.packages.layout import MODULE_TREE_DIRNAME
+from tests._agl_helpers import REPO_STDLIB_ROOT, agent_value, strip_decl_ids
 from tests._process_helpers import FakeShell
 
 # ---------------------------------------------------------------------------
@@ -5553,7 +5554,10 @@ class TestImports:
         s = open_session()
         from agm.agl.modules.roots import RootSet
 
-        s._roots = RootSet(roots=frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
+        s._roots = RootSet(
+            roots=frozenset(),
+            stdlib_roots=frozenset({Path(__file__).resolve().parents[1] / "stdlib"}),
+        )
         r = s.eval_entry("import something\n1")
         assert not r.ok
         assert r.diagnostics
@@ -5588,9 +5592,9 @@ class TestImports:
         """A failed setting bootstrap leaves no linked declarations but consumes node ids."""
         from agm.agl.lower import LinkImage
 
-        std_dir = tmp_path / "std"
+        std_dir = tmp_path / MODULE_TREE_DIRNAME
         std_dir.mkdir()
-        source_std_dir = Path(__file__).resolve().parents[1] / "stdlib" / "std"
+        source_std_dir = REPO_STDLIB_ROOT / MODULE_TREE_DIRNAME
         for source in source_std_dir.iterdir():
             if source.is_file():
                 copyfile(source, std_dir / source.name)
@@ -7411,7 +7415,7 @@ class TestSessionOpen:
         # This second fresh session can reuse the unchanged bootstrap image.
         assert ReplSession(stdlib_root=stdlib).open() == ()
 
-        config = stdlib / "std" / "config.agl"
+        config = stdlib / MODULE_TREE_DIRNAME / "config.agl"
         original_config = config.read_text(encoding="utf-8")
         config.write_text(original_config + '\nlet broken: int = "text"\n')
         diagnostics = ReplSession(stdlib_root=stdlib).open()
@@ -7431,7 +7435,7 @@ class TestSessionOpen:
         copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
 
         assert ReplSession(stdlib_root=stdlib).open() == ()
-        (stdlib / "std" / "array.py").unlink()
+        (stdlib / MODULE_TREE_DIRNAME / "array.py").unlink()
 
         diagnostics = ReplSession(stdlib_root=stdlib).open()
 
@@ -7444,7 +7448,7 @@ class TestSessionOpen:
         copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
 
         assert ReplSession(stdlib_root=stdlib).open() == ()
-        (stdlib / "std" / "config.agl").write_bytes(b"\xff")
+        (stdlib / MODULE_TREE_DIRNAME / "config.agl").write_bytes(b"\xff")
 
         diagnostics = ReplSession(stdlib_root=stdlib).open()
         assert diagnostics
@@ -7457,8 +7461,8 @@ class TestSessionOpen:
 
         stdlib = tmp_path / "stdlib"
         copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
-        config = stdlib / "std" / "config.agl"
-        replacement = stdlib / "std" / "replacement.agl"
+        config = stdlib / MODULE_TREE_DIRNAME / "config.agl"
+        replacement = stdlib / MODULE_TREE_DIRNAME / "replacement.agl"
         replacement.write_text(config.read_text(encoding="utf-8"), encoding="utf-8")
 
         assert ReplSession(stdlib_root=stdlib).open() == ()
@@ -7478,7 +7482,7 @@ class TestSessionOpen:
 
         stdlib = tmp_path / "stdlib"
         copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
-        config = stdlib / "std" / "config.agl"
+        config = stdlib / MODULE_TREE_DIRNAME / "config.agl"
         config.write_text(
             config.read_text(encoding="utf-8").replace("\n", "\r\n"), encoding="utf-8"
         )
@@ -7522,7 +7526,7 @@ class TestSessionOpen:
         from agm.agl.modules.ids import ModuleId
 
         stdlib = tmp_path / "stdlib"
-        std = stdlib / "std"
+        std = stdlib / MODULE_TREE_DIRNAME
         extra = std / "extra"
         workspace = tmp_path / "workspace"
         extra.mkdir(parents=True)
@@ -7573,7 +7577,7 @@ class TestSessionOpen:
         second_root = tmp_path / "second"
         copytree(source_stdlib, first_root)
         copytree(source_stdlib, second_root)
-        config = second_root / "std" / "config.agl"
+        config = second_root / MODULE_TREE_DIRNAME / "config.agl"
         config.write_text(
             config.read_text(encoding="utf-8").replace(
                 'AgentClaude("sonnet", "medium")', 'AgentCommand("second-root")'
@@ -7862,7 +7866,7 @@ class TestSessionOpen:
         ``agm.core.fs.read_text`` -- was previously left uncaught, an
         unhandled ``UnicodeDecodeError`` breaking the "Never raises" contract.
         """
-        std_dir = tmp_path / "std"
+        std_dir = tmp_path / MODULE_TREE_DIRNAME
         std_dir.mkdir()
         (std_dir / "prelude.agl").write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
         s = ReplSession(stdlib_root=tmp_path)
@@ -7915,9 +7919,9 @@ class TestDeferredStdlibResolution:
 
         agm_home = tmp_path / "relocated-agm"
         stdlib_root = agm_home / "packages" / "std" / AGM_VERSION
-        std_dir = stdlib_root / "std"
+        std_dir = stdlib_root / MODULE_TREE_DIRNAME
         std_dir.mkdir(parents=True)
-        real_stdlib = Path(__file__).resolve().parents[1] / "stdlib" / "std"
+        real_stdlib = REPO_STDLIB_ROOT / MODULE_TREE_DIRNAME
         for source in real_stdlib.iterdir():
             if source.is_file():
                 (std_dir / source.name).write_bytes(source.read_bytes())
@@ -7938,4 +7942,4 @@ class TestDeferredStdlibResolution:
         assert s.open() == ()
 
         assert s._roots is not None
-        assert stdlib_root.resolve() in s._roots.roots
+        assert stdlib_root.resolve() in s._roots.stdlib_roots

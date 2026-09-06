@@ -21,6 +21,7 @@ from agm.agl.syntax.visitor import walk
 from agm.command_catalog import RESERVED_COMMAND_NAMES, invalid_command_path
 from agm.core import fs
 from agm.packages.distribution import MANIFEST_NAME, distribution_files
+from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.manifest import PackageManifest, distribution_manifest
 from agm.packages.model import PackageInfo, is_std_package_name
 from agm.stdlib_locator import shipped_stdlib_root
@@ -93,7 +94,7 @@ def _resolve_package_modules(
     )
     mounted_packages = (package, *dependency_packages)
     roots = RootSet(
-        roots=frozenset({stdlib_root, *(mounted.root for mounted in mounted_packages)}),
+        roots=frozenset(),
         packages=mounted_packages,
         stdlib_roots=frozenset({stdlib_root}),
     )
@@ -137,18 +138,17 @@ def validate_archive_package(
     _validate_command_paths(manifest)
     dependencies = tuple(dependency_packages)
     paths = tuple(archive_paths)
-    module_root = manifest.name + "/"
+    module_root = MODULE_TREE_DIRNAME + "/"
     if not any(path.startswith(module_root) for path in paths):
-        raise DisciplineError(f"package {manifest.name!r} requires module tree {manifest.name!r}")
+        raise DisciplineError(
+            f"package {manifest.name!r} requires module tree {MODULE_TREE_DIRNAME!r}"
+        )
     modules: dict[ModuleId, str] = {}
     for path in paths:
         if not path.startswith(module_root) or not path.endswith(".agl"):
             continue
-        try:
-            module_id = ModuleId.from_path(PurePosixPath(path).with_suffix("").as_posix())
-        except ValueError as exc:
-            raise DisciplineError(f"invalid module path {path.removesuffix('.agl')!r}") from exc
-        modules[module_id] = path
+        relative = PurePosixPath(path.removeprefix(module_root)).with_suffix("").as_posix()
+        modules[_package_module_id(manifest.name, relative)] = path
     available_dependencies = {dependency.manifest.name for dependency in dependencies}
     if all(
         is_std_package_name(name) or name in available_dependencies
@@ -178,7 +178,7 @@ def _validate_archive_content(
             package = PackageInfo(Path(temporary), manifest)
             materialized: dict[ModuleId, Path] = {}
             for module_id, archive_path in modules.items():
-                module_path = package.root / module_id.relpath()
+                module_path = package.module_path(module_id.segments)
                 module_path.parent.mkdir(parents=True, exist_ok=True)
                 module_path.write_text(read_module(archive_path), encoding="utf-8")
                 companion_path = str(PurePosixPath(archive_path).with_suffix(".py"))
@@ -268,23 +268,28 @@ def _module_files(package: PackageInfo) -> dict[ModuleId, Path]:
         )
     if not fs.is_dir(module_root):
         raise DisciplineError(
-            f"package {package.manifest.name!r} requires module tree {module_root.name!r}"
+            f"package {package.manifest.name!r} requires module tree {MODULE_TREE_DIRNAME!r}"
         )
 
     modules: dict[ModuleId, Path] = {}
     for path in sorted(fs.rglob(module_root, "*.agl")):
         if not fs.is_file(path):
             continue
-        relative = path.relative_to(package.root).with_suffix("")
+        relative = path.relative_to(module_root).with_suffix("").as_posix()
         target = path.resolve()
         if not target.is_relative_to(module_root):
-            raise DisciplineError(f"package module {relative.as_posix()!r} escapes its module tree")
-        try:
-            module_id = ModuleId.from_path(relative.as_posix())
-        except ValueError as exc:
-            raise DisciplineError(f"invalid module path {relative.as_posix()!r}") from exc
-        modules[module_id] = target
+            raise DisciplineError(f"package module {relative!r} escapes its module tree")
+        modules[_package_module_id(package.manifest.name, relative)] = target
     return modules
+
+
+def _package_module_id(name: str, relative: str) -> ModuleId:
+    """Build the module id a package gives one of its module-tree relative paths."""
+
+    try:
+        return ModuleId.from_path(f"{name}/{relative}")
+    except ValueError as exc:
+        raise DisciplineError(f"invalid module path {relative!r}") from exc
 
 
 def _validate_command_paths(manifest: PackageManifest) -> None:

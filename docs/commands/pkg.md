@@ -20,11 +20,11 @@ means to AgL source.
 
 ```sh
 agm pkg init review-tools
-# creates review-tools/package.toml and review-tools/review-tools/main.agl
+# creates review-tools/package.toml and review-tools/src/main.agl
 ```
 
-Replace the starter program in `review-tools/review-tools/main.agl` (any module in the
-`review-tools/review-tools/` module tree works) and register it in `review-tools/package.toml`:
+Replace the starter program in `review-tools/src/main.agl` (any module in the
+`review-tools/src/` module tree works) and register it in `review-tools/package.toml`:
 
 ```agl
 program def review(target: text, strict: bool = false) -> unit =
@@ -50,7 +50,7 @@ agm pr-review --help
 ```
 review-tools/
   package.toml        # manifest
-  review-tools/       # module tree, named after the package: imports as review-tools/...
+  src/                # module tree: modules import as review-tools/...
     main.agl
     main.py           # optional extern companion beside its module
   prompts/            # resources: anything outside the module tree
@@ -105,7 +105,7 @@ pr-review = { program = "review-tools/main::review", description = "Review a cha
 
 - A key is a one- or multi-word command path. It cannot start with a built-in command or root
   alias (`wsp`, `wt`).
-- `program` names the `program def` to run as `<module>::<program>`, e.g., `review-tools/main::review` is the program `review` in module  `review-tools/main`. The program must belong to this package, take no type parameters, and return unit. Its arguments become the command's arguments.
+- `program` names the `program def` to run as `<module>::<program>`, e.g., `review-tools/main::review` is the program `review` in module `review-tools/main`, the file `review-tools/src/main.agl`. The program must belong to this package, take no type parameters, and return unit. Its arguments become the command's arguments.
 - `description` is optional and shown in `agm help`.
 
 ## Registered commands
@@ -133,10 +133,10 @@ in `agm help` and shell completion and support `--help`.
 ## Commands
 
 **`init`** creates `DIR` when missing and writes `package.toml` (name from the directory, version
-`0.1.0`, no dependencies, commented dependency guidance) plus a starter `main.agl` unless one
+`0.1.0`, no dependencies, commented dependency guidance) plus a starter `src/main.agl` unless one
 exists. It refuses a directory that already holds a manifest.
 
-**`check`** validates the manifest, module-tree naming, `[commands]` program references, literal
+**`check`** validates the manifest, the `src/` module tree, `[commands]` program references, literal
 `resource` targets, import visibility, and dependency satisfiability without modifying anything.
 The `std` floor is checked against the running AGM; other dependencies resolve from the store,
 then a `path`; a `url` counts as satisfiable and is not fetched.

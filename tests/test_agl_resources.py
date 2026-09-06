@@ -18,11 +18,10 @@ from agm.agl.repl import ReplSession
 from agm.agl.semantics.values import IntValue, TextValue
 from agm.agl.syntax.resources import ResourceError, resolve_resource
 from agm.packages.discipline import DisciplineError, validate_package
+from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.manifest import PackageManifest
 from agm.packages.model import PackageInfo
-from tests._agl_helpers import agl_roots
-
-_STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
+from tests._agl_helpers import REPO_STDLIB_ROOT, agl_roots
 
 
 def _run_file(source: str, path: Path, *, roots: RootSet) -> object:
@@ -73,7 +72,7 @@ def test_resource_and_resource_dir_anchor_package_modules_to_the_package_root(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "review-tools"
-    module = root / "review-tools" / "main.agl"
+    module = root / MODULE_TREE_DIRNAME / "main.agl"
     module.parent.mkdir(parents=True)
     prompt = root / "prompts" / "review.md"
     prompt.parent.mkdir()
@@ -89,9 +88,9 @@ program def main() -> unit =
         source,
         module,
         roots=RootSet(
-            roots=frozenset({_STDLIB, root}),
+            roots=frozenset(),
             packages=(package,),
-            stdlib_roots=frozenset({_STDLIB}),
+            stdlib_roots=frozenset({REPO_STDLIB_ROOT}),
         ),
     )
 
@@ -219,7 +218,7 @@ def test_ir_resource_requires_an_absolute_path() -> None:
 
 def test_package_validation_rejects_a_missing_resource(tmp_path: Path) -> None:
     root = tmp_path / "package"
-    module = root / "package" / "main.agl"
+    module = root / MODULE_TREE_DIRNAME / "main.agl"
     module.parent.mkdir(parents=True)
     module.write_text(
         """program def main() -> unit =
@@ -237,7 +236,7 @@ def test_package_validation_rejects_missing_resource_reached_through_a_reexport(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "package"
-    module_root = root / "package"
+    module_root = root / MODULE_TREE_DIRNAME
     module_root.mkdir(parents=True)
     (module_root / "resources.agl").write_text(
         "export std/prelude::{resource as asset}\n", encoding="utf-8"
@@ -259,7 +258,7 @@ def test_package_validation_rejects_missing_resource_exposed_by_import_tail_scop
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "package"
-    module_root = root / "package"
+    module_root = root / MODULE_TREE_DIRNAME
     module_root.mkdir(parents=True)
     (module_root / "resources.agl").write_text(
         "scope Assets\n  export std/prelude::{resource as asset}\nend Assets\n",
@@ -281,7 +280,7 @@ def test_package_validation_rejects_missing_resource_through_an_ancestor_scoped_
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "package"
-    module_root = root / "package"
+    module_root = root / MODULE_TREE_DIRNAME
     module_root.mkdir(parents=True)
     (module_root / "main.agl").write_text(
         "scope Assets\n"
@@ -305,7 +304,7 @@ def test_scoped_function_blocks_scoped_resource_alias_during_nested_lookup(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "package"
-    module_root = root / "package"
+    module_root = root / MODULE_TREE_DIRNAME
     module_root.mkdir(parents=True)
     (module_root / "main.agl").write_text(
         "import std/prelude::{resource as asset}\n"
@@ -331,7 +330,7 @@ def test_package_validation_rejects_missing_resource_through_a_scoped_import_rou
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "package"
-    module_root = root / "package"
+    module_root = root / MODULE_TREE_DIRNAME
     module_root.mkdir(parents=True)
     (module_root / "main.agl").write_text(
         "scope Assets\n"
@@ -351,7 +350,7 @@ def test_package_validation_rejects_missing_resource_through_a_scoped_import_rou
 
 def test_package_validation_uses_the_resolved_resource_declaration(tmp_path: Path) -> None:
     root = tmp_path / "package"
-    module_root = root / "package"
+    module_root = root / MODULE_TREE_DIRNAME
     module_root.mkdir(parents=True)
     (module_root / "main.agl").write_text(
         """import std/prelude::{resource as asset}
@@ -380,7 +379,7 @@ def test_package_validation_follows_an_unaliased_qualified_resource_import(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "package"
-    module_root = root / "package"
+    module_root = root / MODULE_TREE_DIRNAME
     module_root.mkdir(parents=True)
     (module_root / "main.agl").write_text(
         """import std/prelude
@@ -400,7 +399,7 @@ def test_package_validation_follows_qualified_resource_wildcard_imports(
     tmp_path: Path, qualifier: str
 ) -> None:
     root = tmp_path / "package"
-    module_root = root / "package"
+    module_root = root / MODULE_TREE_DIRNAME
     module_root.mkdir(parents=True)
     (module_root / "main.agl").write_text(
         f"""import std/*
@@ -417,7 +416,7 @@ program def main() -> unit = ()
 
 def test_package_validation_follows_a_resource_exported_by_a_wildcard(tmp_path: Path) -> None:
     root = tmp_path / "package"
-    module_root = root / "package"
+    module_root = root / MODULE_TREE_DIRNAME
     module_root.mkdir(parents=True)
     (module_root / "resources.agl").write_text("export std/*\n", encoding="utf-8")
     (module_root / "main.agl").write_text(
@@ -435,7 +434,7 @@ program def main() -> unit = ()
 
 def test_package_validation_accepts_a_reexport_that_hides_resource_builtins(tmp_path: Path) -> None:
     root = tmp_path / "package"
-    module_root = root / "package"
+    module_root = root / MODULE_TREE_DIRNAME
     module_root.mkdir(parents=True)
     (module_root / "resources.agl").write_text(
         "export std/prelude hiding resource\n", encoding="utf-8"
@@ -459,7 +458,7 @@ def test_package_validation_rejects_invalid_modules_and_resource_calls(
     tmp_path: Path, source: str
 ) -> None:
     root = tmp_path / "package"
-    module = root / "package" / "main.agl"
+    module = root / MODULE_TREE_DIRNAME / "main.agl"
     module.parent.mkdir(parents=True)
     module.write_text(source, encoding="utf-8")
     package = PackageInfo(root, PackageManifest("package", semver.Version.parse("1.0.0")))
@@ -470,7 +469,7 @@ def test_package_validation_rejects_invalid_modules_and_resource_calls(
 
 def test_package_validation_accepts_resource_dir(tmp_path: Path) -> None:
     root = tmp_path / "package"
-    module = root / "package" / "main.agl"
+    module = root / MODULE_TREE_DIRNAME / "main.agl"
     module.parent.mkdir(parents=True)
     prompt = root / "prompts" / "review.md"
     prompt.parent.mkdir()

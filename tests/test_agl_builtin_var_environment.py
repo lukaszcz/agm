@@ -10,15 +10,13 @@ from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver
 from agm.agl.repl import ReplSession
 from agm.agl.semantics.values import DictValue, IntValue, RecordValue, TextValue
-from tests._agl_helpers import run_inline_command
+from tests._agl_helpers import agl_roots, run_inline_command
 
 _STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
 
 
 def _run(source: str, **kwargs: object):
-    return run_inline_command(
-        PipelineDriver(), source, roots=RootSet(roots=frozenset({_STDLIB})), **kwargs
-    )
+    return run_inline_command(PipelineDriver(), source, roots=agl_roots(), **kwargs)
 
 
 def _environment_value(result: object, binding: str) -> RecordValue:
@@ -83,8 +81,8 @@ def test_pipeline_run_accepts_module_keyed_host_seeds(tmp_path: Path) -> None:
 
 
 def test_repl_accepts_scoped_module_qualified_host_seeds(tmp_path: Path) -> None:
-    (tmp_path / "std").mkdir()
-    (tmp_path / "std" / "state.agl").write_text(
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "state.agl").write_text(
         "scope First\n  builtin var value: int\nend First\n"
         "\n"
         "scope Second\n  builtin var value: int\nend Second\n",
@@ -110,8 +108,8 @@ def test_repl_accepts_scoped_module_qualified_host_seeds(tmp_path: Path) -> None
 
 
 def test_repl_accepts_root_engine_seeds_in_the_structured_api(tmp_path: Path) -> None:
-    (tmp_path / "std").mkdir()
-    (tmp_path / "std" / "config.agl").write_text("builtin var max-iters: int\n", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "config.agl").write_text("builtin var max-iters: int\n", encoding="utf-8")
     session = ReplSession(
         stdlib_root=tmp_path,
         default_stdlib=False,
@@ -141,8 +139,8 @@ def test_unseeded_non_engine_builtin_var_is_a_diagnostic_not_a_key_error(tmp_pat
 
 
 def test_repl_unseeded_non_engine_builtin_var_is_a_diagnostic(tmp_path: Path) -> None:
-    (tmp_path / "std").mkdir()
-    (tmp_path / "std" / "state.agl").write_text("builtin var value: int\n", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "state.agl").write_text("builtin var value: int\n", encoding="utf-8")
     session = ReplSession(stdlib_root=tmp_path, default_stdlib=False)
 
     result = session.eval_entry("import std/state\nstd/state::value")
@@ -171,14 +169,14 @@ def test_std_env_and_core_work_without_the_optional_method_registry(tmp_path: Pa
     """A custom stdlib may omit the loader's optional method registry."""
     stdlib = tmp_path / "stdlib"
     copytree(_STDLIB, stdlib)
-    (stdlib / "std" / "builtin-methods.agl").unlink()
+    (stdlib / "src" / "builtin-methods.agl").unlink()
 
     result = run_inline_command(
         PipelineDriver(),
         "import std/env::*\n"
         'let extended = environ.extended({"added": "value"})\n'
         'extended.get("added")',
-        roots=RootSet(roots=frozenset({stdlib})),
+        roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({stdlib})),
         process_environment={"preserved": "original"},
     )
 

@@ -10,6 +10,7 @@ from agm.core import dry_run, fs
 from agm.core.toml import dumps_toml, empty_toml_doc, set_toml_table_value
 from agm.packages.discipline import DisciplineError, validate_unreserved_package_name
 from agm.packages.distribution import MANIFEST_NAME
+from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.manifest import ManifestError, load_manifest_text
 
 STARTER_MODULE_NAME = "main.agl"
@@ -42,7 +43,7 @@ def run(args: PkgInitArgs) -> None:
         manifest_path = root / MANIFEST_NAME
         if fs.exists(manifest_path):
             raise ManifestError(f"{manifest_path} already exists")
-        module_path = root / manifest.name / STARTER_MODULE_NAME
+        module_path = root / MODULE_TREE_DIRNAME / STARTER_MODULE_NAME
         created = (manifest_path,) if fs.exists(module_path) else (manifest_path, module_path)
         if dry_run.enabled():
             for path in created:

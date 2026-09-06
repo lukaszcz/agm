@@ -34,7 +34,7 @@ class _MathCompanion(Protocol):
 
 def _math_companion() -> _MathCompanion:
     registry = ExternRegistry()
-    module: ModuleType = registry.load_companion(_MATH_MODULE, _STDLIB_ROOT / "std" / "math.py")
+    module: ModuleType = registry.load_companion(_MATH_MODULE, _STDLIB_ROOT / "src" / "math.py")
     return cast(_MathCompanion, module)
 
 

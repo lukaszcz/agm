@@ -13,7 +13,7 @@ Tests assert observable behavior, never exact help, warning, or error text. Real
 ## Gates and Invariants
 
 - **Package layering** — `tests/test_agl_dependencies.py` asserts the AgL import contract described in [agl/index.md](agl/index.md).
-- **Coverage** — 100% line and branch coverage of `src/` and of `stdlib/std/` (the standard library's Python companions ship in the wheel), measured through `sys.monitoring`, which is why the project runs on Python 3.14.
+- **Coverage** — 100% line and branch coverage of `src/` and of `stdlib/src/` (the standard library's Python companions ship in the wheel), measured through `sys.monitoring`, which is why the project runs on Python 3.14.
 - **Command coverage** — `tests/_command_coverage.py` walks the live Typer registry and records which leaf commands the e2e suite actually ran through the real binary, merging across xdist workers; it judges only whole-suite runs.
 - **Documented examples compile** — every ```` ```agl ```` fence under `docs/agl/reference/` runs through the static pipeline (`tests/test_agl_doc_snippets.py`); an `agl-check` marker declares a deliberately incomplete or rejected block.
 - **AgL layout style** — `tools/agl_style.py` is both formatter and checker for every `.agl` file, doc fence, and embedded snippet; `just agl-style` runs inside `just lint`.

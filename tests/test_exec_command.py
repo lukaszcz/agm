@@ -31,6 +31,7 @@ import agm.commands.exec as exec_command
 from agm.cli_support.args import ExecArgs
 from agm.cli_support.program_options import render_program_arguments_help
 from agm.commands import exec_program as exec_engine
+from agm.packages.layout import MODULE_TREE_DIRNAME
 from tests._agl_helpers import write_file_program
 
 
@@ -3987,7 +3988,7 @@ class TestNegatedConstantDefaults:
         repo_stdlib = Path(__file__).resolve().parent.parent / "stdlib"
         lib_root = tmp_path / "lib"
         shutil.copytree(repo_stdlib, lib_root)
-        config = lib_root / "std" / "config.agl"
+        config = lib_root / MODULE_TREE_DIRNAME / "config.agl"
         config.write_text(
             config.read_text(encoding="utf-8").replace(
                 "builtin var strict-json: bool = false",
@@ -4350,9 +4351,9 @@ class TestExecDevelopmentPackages:
         )
 
         alpha = tmp_path / "alpha"
-        (alpha / "alpha").mkdir(parents=True)
+        (alpha / MODULE_TREE_DIRNAME).mkdir(parents=True)
         (alpha / "package.toml").write_text('[package]\nname = "alpha"\nversion = "1.0.0"\n')
-        entry = alpha / "alpha" / "main.agl"
+        entry = alpha / MODULE_TREE_DIRNAME / "main.agl"
         entry.write_text('program def main(message: text = "default") -> unit = print message\n')
 
         assert exec_command.run(_exec_args_no_log(entry)) is None
@@ -4362,12 +4363,12 @@ class TestExecDevelopmentPackages:
         self, tmp_path: Path
     ) -> None:
         alpha = tmp_path / "alpha"
-        nested = alpha / "alpha" / "alpha"
+        nested = alpha / MODULE_TREE_DIRNAME / "alpha"
         nested.mkdir(parents=True)
         (alpha / "package.toml").write_text('[package]\nname = "alpha"\nversion = "1.0.0"\n')
-        (alpha / "alpha" / "settings.agl").write_text("def answer() -> int = 42\n")
+        (alpha / MODULE_TREE_DIRNAME / "settings.agl").write_text("def answer() -> int = 42\n")
         (nested / "settings.agl").write_text("def wrong() -> int = 0\n")
-        entry = alpha / "alpha" / "main.agl"
+        entry = alpha / MODULE_TREE_DIRNAME / "main.agl"
         entry.write_text(
             "import alpha/settings\n"
             "program def main() -> unit =\n"
@@ -4378,9 +4379,9 @@ class TestExecDevelopmentPackages:
 
     def test_direct_exec_reports_an_invalid_development_manifest(self, tmp_path: Path) -> None:
         alpha = tmp_path / "alpha"
-        (alpha / "alpha").mkdir(parents=True)
+        (alpha / MODULE_TREE_DIRNAME).mkdir(parents=True)
         (alpha / "package.toml").write_text('[package]\nname = "alpha"\n')
-        entry = alpha / "alpha" / "main.agl"
+        entry = alpha / MODULE_TREE_DIRNAME / "main.agl"
         entry.write_text("program def main() -> unit = ()\n")
 
         with pytest.raises(SystemExit) as exc_info:
@@ -4392,18 +4393,18 @@ class TestExecDevelopmentPackages:
         self, tmp_path: Path
     ) -> None:
         bravo = tmp_path / "bravo"
-        (bravo / "bravo").mkdir(parents=True)
+        (bravo / MODULE_TREE_DIRNAME).mkdir(parents=True)
         (bravo / "package.toml").write_text('[package]\nname = "bravo"\nversion = "1.0.0"\n')
-        (bravo / "bravo" / "shared.agl").write_text("def answer() -> int = 42\n")
+        (bravo / MODULE_TREE_DIRNAME / "shared.agl").write_text("def answer() -> int = 42\n")
 
         alpha = tmp_path / "alpha"
-        (alpha / "alpha").mkdir(parents=True)
+        (alpha / MODULE_TREE_DIRNAME).mkdir(parents=True)
         (alpha / "package.toml").write_text(
             '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
             "[dependencies]\n"
             'bravo = { version = "1", path = "../bravo" }\n'
         )
-        entry = alpha / "alpha" / "main.agl"
+        entry = alpha / MODULE_TREE_DIRNAME / "main.agl"
         entry.write_text(
             "import bravo/shared\nprogram def main() -> unit =\n  let _ = bravo/shared::answer()\n"
         )
@@ -4442,11 +4443,11 @@ class TestExecStandardLibraryEntries:
             '["std/probe".main]\nmessage = "package-qualified"\n'
         )
         store_root = home / ".agm" / "packages" / "std" / AGM_VERSION
-        (store_root / "std").mkdir(parents=True)
+        (store_root / MODULE_TREE_DIRNAME).mkdir(parents=True)
         (store_root / "package.toml").write_text(
             f'[package]\nname = "std"\nversion = "{AGM_VERSION}"\n'
         )
-        entry = store_root / "std" / "probe.agl"
+        entry = store_root / MODULE_TREE_DIRNAME / "probe.agl"
         write_file_program(
             entry,
             "builtin def print[T](value: T) -> unit\n"
@@ -4470,12 +4471,12 @@ class TestExecStandardLibraryEntries:
         (home / ".agm").mkdir(parents=True)
         self._config_context(monkeypatch, home, tmp_path)
         checkout = tmp_path / "checkout"
-        (checkout / "std").mkdir(parents=True)
+        (checkout / MODULE_TREE_DIRNAME).mkdir(parents=True)
         (checkout / "package.toml").write_text('[package]\nname = "std"\nversion = "9.9.9"\n')
         loose = tmp_path / "loose"
         loose.mkdir()
         (loose / "helper.agl").write_text("def answer() -> int = 42\n")
-        entry = checkout / "std" / "probe.agl"
+        entry = checkout / MODULE_TREE_DIRNAME / "probe.agl"
         write_file_program(
             entry, "import helper\n\nprogram def main() -> unit =\n  let _ = helper::answer()\n"
         )
@@ -4493,11 +4494,11 @@ class TestExecStandardLibraryEntries:
         (home / ".agm").mkdir(parents=True)
         self._config_context(monkeypatch, home, tmp_path)
         checkout = tmp_path / "checkout"
-        (checkout / "std").mkdir(parents=True)
+        (checkout / MODULE_TREE_DIRNAME).mkdir(parents=True)
         loose = tmp_path / "loose"
         loose.mkdir()
         (loose / "helper.agl").write_text("def answer() -> int = 42\n")
-        entry = checkout / "std" / "probe.agl"
+        entry = checkout / MODULE_TREE_DIRNAME / "probe.agl"
         write_file_program(
             entry, "import helper\n\nprogram def main() -> unit =\n  let _ = helper::answer()\n"
         )

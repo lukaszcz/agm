@@ -450,7 +450,7 @@ class TestResolveStdlibRoot:
 
 def _write_std_checkout(root: Path, version: str) -> Path:
     """Create a development ``std`` package checkout at *root*."""
-    (root / "std").mkdir(parents=True)
+    (root / "src").mkdir(parents=True)
     (root / "package.toml").write_text(
         f'[package]\nname = "std"\nversion = "{version}"\n', encoding="utf-8"
     )
@@ -467,7 +467,7 @@ class TestResolveStdlibRootFromAnchor:
         home.mkdir()
         checkout = _write_std_checkout(tmp_path / "checkout", AGM_VERSION)
 
-        selected = resolve_stdlib_root(home=home, env={}, anchor=checkout / "std" / "agent.agl")
+        selected = resolve_stdlib_root(home=home, env={}, anchor=checkout / "src" / "agent.agl")
 
         assert selected == checkout.resolve()
 
@@ -479,7 +479,7 @@ class TestResolveStdlibRootFromAnchor:
         _activate_stdlib(home, "0.0.1")
         checkout = _write_std_checkout(tmp_path / "checkout", "9.9.9")
 
-        selected = resolve_stdlib_root(home=home, env={}, anchor=checkout / "std" / "agent.agl")
+        selected = resolve_stdlib_root(home=home, env={}, anchor=checkout / "src" / "agent.agl")
 
         assert selected == checkout.resolve()
 
@@ -494,7 +494,7 @@ class TestResolveStdlibRootFromAnchor:
         )
 
         with pytest.raises(StdlibVersionMismatchError):
-            resolve_stdlib_root(home=home, env={}, anchor=store_stdlib / "std" / "prelude.agl")
+            resolve_stdlib_root(home=home, env={}, anchor=store_stdlib / "src" / "prelude.agl")
 
     def test_agm_stdlib_override_outranks_a_development_std_checkout(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
@@ -506,7 +506,7 @@ class TestResolveStdlibRootFromAnchor:
         selected = resolve_stdlib_root(
             home=home,
             env={"AGM_STDLIB": str(override)},
-            anchor=checkout / "std" / "agent.agl",
+            anchor=checkout / "src" / "agent.agl",
         )
 
         assert selected == override
@@ -517,12 +517,12 @@ class TestResolveStdlibRootFromAnchor:
         home = tmp_path / "home"
         store_stdlib = _activate_stdlib(home, AGM_VERSION)
         alpha = tmp_path / "alpha"
-        (alpha / "alpha").mkdir(parents=True)
+        (alpha / "src").mkdir(parents=True)
         (alpha / "package.toml").write_text(
             '[package]\nname = "alpha"\nversion = "1.0.0"\n', encoding="utf-8"
         )
 
-        selected = resolve_stdlib_root(home=home, env={}, anchor=alpha / "alpha" / "main.agl")
+        selected = resolve_stdlib_root(home=home, env={}, anchor=alpha / "src" / "main.agl")
 
         assert selected == store_stdlib.resolve()
 
@@ -545,9 +545,9 @@ class TestResolveStdlibRootFromAnchor:
         home = tmp_path / "home"
         store_stdlib = _activate_stdlib(home, AGM_VERSION)
         unrelated = _write_std_checkout(tmp_path / "work", "9.9.9")
-        (unrelated / "src").mkdir()
+        (unrelated / "notes").mkdir()
 
-        beside = resolve_stdlib_root(home=home, env={}, anchor=unrelated / "src" / "main.agl")
+        beside = resolve_stdlib_root(home=home, env={}, anchor=unrelated / "notes" / "main.agl")
         at_the_root = resolve_stdlib_root(home=home, env={}, anchor=unrelated)
 
         assert beside == store_stdlib.resolve()

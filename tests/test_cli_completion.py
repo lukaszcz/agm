@@ -14,6 +14,7 @@ from click.shell_completion import ShellComplete
 
 import agm.completion as completion
 import agm.vcs.git as git_helpers
+from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.record import write_record
 
 
@@ -40,8 +41,8 @@ def test_complete_registered_commands_reads_active_index(
     home = tmp_path / "home"
     package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
     package_root.mkdir(parents=True)
-    (package_root / "tools").mkdir()
-    (package_root / "tools" / "lint.agl").write_text(
+    (package_root / MODULE_TREE_DIRNAME).mkdir()
+    (package_root / MODULE_TREE_DIRNAME / "lint.agl").write_text(
         "program def main(level: text) -> unit = ()\n", encoding="utf-8"
     )
     (package_root / "package.toml").write_text(
@@ -103,7 +104,7 @@ def test_installed_exec_reference_offers_program_value_argument_completion(
 
     home = tmp_path / "home"
     package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
-    module = package_root / "tools" / "review.agl"
+    module = package_root / MODULE_TREE_DIRNAME / "review.agl"
     module.parent.mkdir(parents=True)
     (package_root / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
@@ -146,7 +147,7 @@ def test_installed_exec_reference_uses_its_selected_program_for_completion(
 
     home = tmp_path / "home"
     package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
-    module = package_root / "tools" / "review.agl"
+    module = package_root / MODULE_TREE_DIRNAME / "review.agl"
     module.parent.mkdir(parents=True)
     (package_root / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
@@ -259,8 +260,8 @@ def test_registered_command_param_completion_offers_program_value_argument_flags
     home = tmp_path / "home"
     package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
     package_root.mkdir(parents=True)
-    (package_root / "tools").mkdir()
-    (package_root / "tools" / "lint.agl").write_text(
+    (package_root / MODULE_TREE_DIRNAME).mkdir()
+    (package_root / MODULE_TREE_DIRNAME / "lint.agl").write_text(
         "program def main(tag: text, verbose: bool = false) -> unit = ()\n", encoding="utf-8"
     )
     (package_root / "package.toml").write_text(

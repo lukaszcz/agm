@@ -6,93 +6,69 @@ import os
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from agm.agl.modules.ids import ModuleId
-
-if TYPE_CHECKING:
-    from agm.packages.model import PackageInfo
+from agm.packages.layout import MODULE_TREE_DIRNAME
+from agm.packages.model import STD_PACKAGE_NAME, PackageInfo, owning_package
 
 
 @dataclass(frozen=True, slots=True)
 class RootSet:
-    """An unordered, de-duplicated, canonical set of module-search roots.
+    """The module-search surface of one invocation: loose roots plus mounts.
 
-    All paths stored in :attr:`roots` are absolute and canonical
-    (``Path.resolve()`` applied).  The set is unordered by design — an AgL
-    module id must resolve to *at most one* file across all roots (ambiguity
-    is an error).
+    A *loose* root in :attr:`roots` resolves any id as ``<root>/<id>.agl``.  A
+    *mount* binds one top-level id segment to a module-tree directory, so
+    ``<name>/<rest>`` resolves as ``<tree>/<rest>.agl`` and nothing else under
+    the mounted package's root is a module unless the same directory is also
+    supplied as a loose root.  Each package in :attr:`packages` mounts its
+    declared name, and each standard-library root in :attr:`stdlib_roots`
+    mounts ``std``; a library root that is also mounted as a package
+    contributes the same tree once.
 
-    Package-only roots are scoped to their declared top-level module segment.
-    :attr:`loose_roots` records ordinary roots that overlap package roots, so
-    their unrestricted semantics win. Use :meth:`sorted_roots` for deterministic
-    output in diagnostics and :meth:`sorted_roots_for` for resolution.
+    All paths stored here are absolute and canonical (``Path.resolve()``
+    applied).  The set is unordered by design — an AgL module id must resolve
+    to *at most one* file across every loose root and mount (ambiguity is an
+    error).  Use :meth:`sorted_roots` for deterministic output in diagnostics
+    and :meth:`module_tree_roots` for the mounts a resolution consults.
 
-    The per-root package lookups used by :meth:`sorted_roots_for` and
-    :meth:`admits_path` are derived from :attr:`packages` once here in
-    ``__post_init__``, since a module id is resolved against the same
-    :class:`RootSet` many times (once per import edge, and once per matched
-    file during wildcard expansion).
+    The mount table is derived once here in ``__post_init__``, since a module
+    id is resolved against the same :class:`RootSet` many times (once per
+    import edge, and once per matched file during wildcard expansion).
     """
 
     roots: frozenset[Path]
     packages: tuple[PackageInfo, ...] = ()
     stdlib_roots: frozenset[Path] = frozenset()
-    loose_roots: frozenset[Path] = frozenset()
     _sorted_roots: tuple[Path, ...] = field(init=False, repr=False, compare=False)
-    _package_names_by_root: dict[Path, frozenset[str]] = field(
-        init=False, repr=False, compare=False
-    )
-    _module_roots_by_root: dict[Path, tuple[Path, ...]] = field(
-        init=False, repr=False, compare=False
-    )
+    _module_trees: dict[str, tuple[Path, ...]] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        sorted_roots: tuple[Path, ...] = tuple(sorted(self.roots))
-        package_names_by_root: dict[Path, set[str]] = {}
-        module_roots_by_root: dict[Path, list[Path]] = {}
+        trees: dict[str, set[Path]] = {}
         for package in self.packages:
-            package_names_by_root.setdefault(package.root, set()).add(package.manifest.name)
-            module_roots_by_root.setdefault(package.root, []).append(package.module_root)
-        frozen_package_names_by_root: dict[Path, frozenset[str]] = {
-            root: frozenset(names) for root, names in package_names_by_root.items()
-        }
-        tupled_module_roots_by_root: dict[Path, tuple[Path, ...]] = {
-            root: tuple(module_roots) for root, module_roots in module_roots_by_root.items()
+            trees.setdefault(package.manifest.name, set()).add(package.module_root)
+        for stdlib_root in self.stdlib_roots:
+            trees.setdefault(STD_PACKAGE_NAME, set()).add(
+                (stdlib_root / MODULE_TREE_DIRNAME).resolve()
+            )
+        sorted_roots: tuple[Path, ...] = tuple(sorted(self.roots))
+        module_trees: dict[str, tuple[Path, ...]] = {
+            name: tuple(sorted(paths)) for name, paths in trees.items()
         }
         object.__setattr__(self, "_sorted_roots", sorted_roots)
-        object.__setattr__(self, "_package_names_by_root", frozen_package_names_by_root)
-        object.__setattr__(self, "_module_roots_by_root", tupled_module_roots_by_root)
+        object.__setattr__(self, "_module_trees", module_trees)
 
     def sorted_roots(self) -> tuple[Path, ...]:
-        """Return roots sorted lexicographically for deterministic diagnostics."""
+        """Return the loose roots sorted lexicographically for deterministic diagnostics."""
         return self._sorted_roots
 
-    def sorted_roots_for(self, prefix: tuple[str, ...]) -> tuple[Path, ...]:
-        """Return roots whose mount scope admits a module *prefix*.
+    def module_tree_roots(self, name: str) -> tuple[Path, ...]:
+        """Return the module-tree directories mounted for a top-level id segment.
 
-        Ordinary roots are loose. A root supplied only by a package mount
-        admits that package's declared top-level module segment; explicitly
-        supplying the same path as an ordinary root keeps it loose.
+        Sorted and deduplicated by canonical path, so a library root mounted
+        both as the standard library and as its own ``std`` package is searched
+        once.
         """
-        package_names_by_root = self._package_names_by_root
-        first_segment = prefix[0]
-        return tuple(
-            root
-            for root in self._sorted_roots
-            if root in self.loose_roots
-            or root not in package_names_by_root
-            or first_segment in package_names_by_root[root]
-        )
-
-    def admits_path(self, root: Path, path: Path) -> bool:
-        """Return whether *path* is exposed by *root*'s mount policy."""
-        if root in self.loose_roots:
-            return True
-        mounted_module_roots = self._module_roots_by_root.get(root)
-        if not mounted_module_roots:
-            return True
-        return any(path.is_relative_to(module_root) for module_root in mounted_module_roots)
+        return self._module_trees.get(name, ())
 
     def package_module_id_for(self, path: Path) -> ModuleId | None:
         """Return the module id a mounted package gives *path*, if one owns it.
@@ -105,16 +81,10 @@ class RootSet:
         package owns — a loose root is where the user happened to invoke the
         tool, not a declaration that its files are modules.
         """
-        # Locally imported: ``agm.packages.discipline`` imports this module, so
-        # the ownership rule is borrowed rather than mirrored or imported back
-        # at module scope.
-        from agm.packages.model import owning_package
-
         package = owning_package(path, self.packages)
         if package is None:
             return None
-        relative = path.resolve().relative_to(package.root).with_suffix("")
-        return ModuleId(segments=relative.parts)
+        return ModuleId(segments=package.module_id_segments(path))
 
     def is_standard_library_path(self, path: Path) -> bool:
         """Return whether *path* belongs to a host-selected standard-library root.
@@ -150,9 +120,10 @@ def assemble_roots(
         The cwd (for ``exec -c``) or a loose entry file's directory. ``None``
         keeps a package-owned entry's directory from becoming a loose root.
     stdlib_root:
-        The selected standard-library module root (normally the active
+        The selected standard-library package root (normally the active
         ``<AGM home>/packages/std/<AGM version>`` tree), or ``None`` if the
-        caller does not want to add one.
+        caller does not want to add one.  It mounts ``std`` rather than
+        becoming a loose root, so only its module tree is importable.
     lib_root:
         The global library root (e.g. ``~/.agm/lib``), or ``None`` if not
         configured.  Applied as-is; caller supplies the default if desired.
@@ -167,46 +138,35 @@ def assemble_roots(
     cwd:
         Current working directory; used to resolve relative CLI paths.
     package_roots:
-        Mounted packages, regardless of whether their roots come from a
-        development directory or a future package store. A ``std`` package
-        belongs here only when *stdlib_root* already selected that very tree,
-        so the standard library keeps exactly one mounted root while still
-        owning the files under it. Package mounts expose only the package's
-        declared module tree unless the same path is also supplied as an
-        ordinary root.
+        Packages to mount, regardless of whether their roots come from a
+        development directory or a package store.  A mount exposes only the
+        package's module tree; the root itself becomes a loose root only when
+        some other source supplies the same path.  A ``std`` package belongs
+        here only when *stdlib_root* already selected that very tree, so the
+        standard library keeps exactly one mount while still owning the files
+        under it.
 
-    All roots are user-expanded, made absolute, and canonicalized before
-    de-duplication.  Non-existent roots are dropped silently (resolution
-    errors are reported later by the resolver, which lists the searched set).
+    Loose roots are user-expanded, made absolute, and canonicalized before
+    de-duplication.  Non-existent roots and packages are dropped silently
+    (resolution errors are reported later by the resolver, which lists the
+    searched set).
     """
     canonical_roots: set[Path] = set()
-    loose_roots: set[Path] = set()
 
-    def _add(path: Path) -> Path | None:
+    def _add(path: Path) -> None:
         canonical_path = _canonicalize(path)
         if canonical_path.exists():
             canonical_roots.add(canonical_path)
-            loose_roots.add(canonical_path)
-            return canonical_path
-        return None
 
     # 1. Invocation root
     if invocation_root is not None:
         _add(invocation_root)
 
-    # 2. Standard library root. Keep its distinct identity so package
-    # visibility can admit host-provided modules without admitting loose roots.
-    stdlib_roots: set[Path] = set()
-    if stdlib_root is not None:
-        canonical_stdlib_root = _add(stdlib_root)
-        if canonical_stdlib_root is not None:
-            stdlib_roots.add(canonical_stdlib_root)
-
-    # 3. Global library root
+    # 2. Global library root
     if lib_root is not None:
         _add(lib_root)
 
-    # 4. Configured roots — relative paths resolve against their origin dir
+    # 3. Configured roots — relative paths resolve against their origin dir
     for raw, origin_dir in configured:
         raw_path = Path(os.path.expanduser(raw))
         if raw_path.is_absolute():
@@ -214,7 +174,7 @@ def assemble_roots(
         else:
             _add(origin_dir / raw_path)
 
-    # 5. CLI roots — relative paths resolve against cwd
+    # 4. CLI roots — relative paths resolve against cwd
     for raw in cli:
         raw_path = Path(os.path.expanduser(raw))
         if raw_path.is_absolute():
@@ -222,18 +182,22 @@ def assemble_roots(
         else:
             _add(cwd / raw_path)
 
-    # 6. Package roots. Keep the package metadata only when its root is
-    # mounted, so ownership policy and resolver see the same selection.
-    mounted_packages: list[PackageInfo] = []
-    for package in package_roots:
-        package_root = _canonicalize(package.root)
-        if package_root.exists():
-            canonical_roots.add(package_root)
-            mounted_packages.append(package)
+    # 5. Standard-library root. Keep its distinct identity so package
+    # visibility can admit host-provided modules without admitting loose roots.
+    stdlib_roots: set[Path] = set()
+    if stdlib_root is not None:
+        canonical_stdlib_root = _canonicalize(stdlib_root)
+        if canonical_stdlib_root.exists():
+            stdlib_roots.add(canonical_stdlib_root)
+
+    # 6. Package mounts. Keep the package metadata only when its root exists,
+    # so ownership policy and resolver see the same selection.
+    mounted_packages = tuple(
+        package for package in package_roots if _canonicalize(package.root).exists()
+    )
 
     return RootSet(
         roots=frozenset(canonical_roots),
-        packages=tuple(mounted_packages),
+        packages=mounted_packages,
         stdlib_roots=frozenset(stdlib_roots),
-        loose_roots=frozenset(loose_roots),
     )

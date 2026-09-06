@@ -71,7 +71,7 @@ def _regex_companion() -> tuple[_RegexCompanion, ModuleType]:
             **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
         }
     )
-    module = registry.load_companion(_REGEX_MODULE, _STDLIB_ROOT / "std" / "regex.py")
+    module = registry.load_companion(_REGEX_MODULE, _STDLIB_ROOT / "src" / "regex.py")
     return cast(_RegexCompanion, module), module
 
 

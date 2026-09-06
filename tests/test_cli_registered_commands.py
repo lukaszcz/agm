@@ -368,7 +368,7 @@ def test_registered_command_program_option_error_renders_shared_usage_help(
 
     home = tmp_path / "home"
     package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
-    module = package_root / "tools" / "greet.agl"
+    module = package_root / "src" / "greet.agl"
     module.parent.mkdir(parents=True)
     (package_root / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
@@ -412,7 +412,7 @@ def test_registered_command_binds_a_negated_bool_value_argument(
 
     home = tmp_path / "home"
     package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
-    module = package_root / "tools" / "run.agl"
+    module = package_root / "src" / "run.agl"
     module.parent.mkdir(parents=True)
     (package_root / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
@@ -548,7 +548,7 @@ def test_exec_installed_reference_preserves_all_file_options(
     import agm.commands.exec_program as exec_program
 
     root = tmp_path / "tools"
-    module = root / "tools" / "review.agl"
+    module = root / "src" / "review.agl"
     module.parent.mkdir(parents=True)
     module.write_text("program def main() -> unit = ()\n", encoding="utf-8")
     package = PackageInfo(root, PackageManifest("tools", semver.Version.parse("1.0.0")))
@@ -622,7 +622,7 @@ def test_immutable_execution_uses_the_pinned_dependency_not_a_vendored_path_sour
     logical_store.symlink_to(relocated_store, target_is_directory=True)
 
     def write_shared(root: Path, version: str, label: str) -> None:
-        module = root / "shared" / "value.agl"
+        module = root / "src" / "value.agl"
         module.parent.mkdir(parents=True)
         (root / "package.toml").write_text(
             f'[package]\nname = "shared"\nversion = "{version}"\n', encoding="utf-8"
@@ -637,7 +637,7 @@ def test_immutable_execution_uses_the_pinned_dependency_not_a_vendored_path_sour
     write_record(active_shared)
 
     tools = relocated_store / "tools" / "1.0.0"
-    module = tools / "tools" / "main.agl"
+    module = tools / "src" / "main.agl"
     module.parent.mkdir(parents=True)
     (tools / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
@@ -675,7 +675,7 @@ def test_immutable_execution_uses_the_pinned_dependency_not_a_vendored_path_sour
 def test_exec_runs_an_installed_reference(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     home = tmp_path / "home"
     package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
-    module = package_root / "tools" / "review.agl"
+    module = package_root / "src" / "review.agl"
     module.parent.mkdir(parents=True)
     (package_root / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
@@ -701,7 +701,7 @@ def test_exec_help_for_an_installed_reference_includes_program_arguments(
 ) -> None:
     home = tmp_path / "home"
     package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
-    module = package_root / "tools" / "review.agl"
+    module = package_root / "src" / "review.agl"
     module.parent.mkdir(parents=True)
     (package_root / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
@@ -727,7 +727,7 @@ def test_exec_program_option_overrides_an_installed_reference(
 ) -> None:
     home = tmp_path / "home"
     package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
-    module = package_root / "tools" / "review.agl"
+    module = package_root / "src" / "review.agl"
     module.parent.mkdir(parents=True)
     (package_root / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
@@ -788,7 +788,7 @@ def test_registered_command_argument_error_renders_shared_usage_help(
 
     home = tmp_path / "home"
     package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
-    module = package_root / "tools" / "lint.agl"
+    module = package_root / "src" / "lint.agl"
     module.parent.mkdir(parents=True)
     (package_root / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
@@ -832,7 +832,7 @@ def test_registered_command_argument_error_handles_no_description_or_parameters(
 
     home = tmp_path / "home"
     package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
-    module = package_root / "tools" / "lint.agl"
+    module = package_root / "src" / "lint.agl"
     module.parent.mkdir(parents=True)
     (package_root / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
@@ -940,7 +940,7 @@ def test_registered_dispatch_rejects_a_stale_cached_program(
     import agm.commands.exec_program as exec_program
 
     root = tmp_path / "tools"
-    module = root / "tools" / "review.agl"
+    module = root / "src" / "review.agl"
     module.parent.mkdir(parents=True)
     module.write_text("program def main() -> unit = ()\n", encoding="utf-8")
     package = PackageInfo(
@@ -973,7 +973,7 @@ def test_editable_registered_dispatch_uses_the_live_manifest(
     import agm.commands.exec_program as exec_program
 
     root = tmp_path / "tools"
-    updated = root / "tools" / "updated.agl"
+    updated = root / "src" / "updated.agl"
     updated.parent.mkdir(parents=True)
     updated.write_text("program def main() -> unit = ()\n", encoding="utf-8")
     package = PackageInfo(
@@ -1060,8 +1060,8 @@ def test_registered_dispatch_rejects_a_program_owned_by_another_package(
 
     tools_root = tmp_path / "tools"
     bravo_root = tmp_path / "bravo"
-    tools_module = tools_root / "tools" / "review.agl"
-    bravo_module = bravo_root / "bravo" / "review.agl"
+    tools_module = tools_root / "src" / "review.agl"
+    bravo_module = bravo_root / "src" / "review.agl"
     tools_module.parent.mkdir(parents=True)
     bravo_module.parent.mkdir(parents=True)
     bravo_module.write_text("program def main() -> unit = ()\n", encoding="utf-8")
@@ -1214,8 +1214,8 @@ def test_registered_program_declaration_prefers_the_entry_module_over_an_import(
 
     home = tmp_path / "home"
     package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
-    entry = package_root / "tools" / "main.agl"
-    helper = package_root / "tools" / "helper.agl"
+    entry = package_root / "src" / "main.agl"
+    helper = package_root / "src" / "helper.agl"
     entry.parent.mkdir(parents=True)
     (package_root / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"

@@ -23,6 +23,7 @@ from agm.agl.modules.loader import LoadedModule, ModuleGraph, build_repl_graph, 
 from agm.agl.modules.roots import RootSet, assemble_roots
 from agm.agl.syntax.nodes import ImportDecl
 from agm.agl.syntax.spans import SourceId
+from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.manifest import load_manifest
 from agm.packages.model import PackageInfo
 from tests._agl_helpers import agl_roots, agl_std_package_roots
@@ -66,8 +67,15 @@ def _package(tmp_path: Path, name: str, *, dependencies: tuple[str, ...] = ()) -
         f'[package]\nname = "{name}"\nversion = "1.0.0"\n'
         + (f"\n[dependencies]\n{dependency_table}" if dependencies else "")
     )
-    (root / name).mkdir()
+    (root / MODULE_TREE_DIRNAME).mkdir()
     return PackageInfo(root, load_manifest(root / "package.toml"))
+
+
+def _write_package_module(package: PackageInfo, module_path: str, source: str = _MINIMAL) -> Path:
+    """Write a module of *package*, addressed by the module id its package declares."""
+    path = package.module_path(ModuleId.from_path(module_path).segments)
+    _write_agl(path, source)
+    return path
 
 
 def _package_roots(
@@ -179,7 +187,7 @@ class TestGraphBuild:
         assert graph.modules[ENTRY_ID].imports[0].tail == ()
         assert (
             graph.modules[STD_PRELUDE_ID].path
-            == (_REPO_STDLIB_ROOT / "std" / "prelude.agl").resolve()
+            == (_REPO_STDLIB_ROOT / MODULE_TREE_DIRNAME / "prelude.agl").resolve()
         )
         assert {registry_id, array_id, text_id}.issubset(graph.ambient_modules)
         assert graph.adjacency[ENTRY_ID] == (STD_PRELUDE_ID,)
@@ -549,8 +557,8 @@ class TestGraphBuild:
         from agm.agl.syntax.nodes import Call, VarRef
 
         operators = _package(tmp_path, "operators")
-        _write_module(operators.root, "operators/ops", "infixl %% at 5\n")
-        _write_module(operators.root, "operators/public", "export operators/ops\n")
+        _write_package_module(operators, "operators/ops", "infixl %% at 5\n")
+        _write_package_module(operators, "operators/public", "export operators/ops\n")
 
         graph = load_graph(
             "import operators/public::*\n1 %% 2",
@@ -793,7 +801,7 @@ class TestPackageRootsAndVisibility:
         self, tmp_path: Path
     ) -> None:
         package = _package(tmp_path, "demo")
-        _write_module(package.root, "demo/main")
+        _write_package_module(package, "demo/main")
         loose = tmp_path / "loose"
         loose.mkdir()
         _write_module(loose, "demo/main")
@@ -805,9 +813,9 @@ class TestPackageRootsAndVisibility:
     def test_package_module_can_import_itself_and_declared_dependency(self, tmp_path: Path) -> None:
         alpha = _package(tmp_path, "alpha", dependencies=("bravo",))
         bravo = _package(tmp_path, "bravo")
-        _write_module(alpha.root, "alpha/main", "import alpha/local\nimport bravo/shared")
-        _write_module(alpha.root, "alpha/local")
-        _write_module(bravo.root, "bravo/shared")
+        _write_package_module(alpha, "alpha/main", "import alpha/local\nimport bravo/shared")
+        _write_package_module(alpha, "alpha/local")
+        _write_package_module(bravo, "bravo/shared")
 
         graph = load_graph(
             "import alpha/main",
@@ -824,8 +832,8 @@ class TestPackageRootsAndVisibility:
     ) -> None:
         alpha = _package(tmp_path, "alpha", dependencies=("bravo",))
         bravo = _package(tmp_path, "bravo")
-        _write_module(alpha.root, "alpha/main", "import std/config\nimport bravo/shared")
-        _write_module(bravo.root, "bravo/shared")
+        _write_package_module(alpha, "alpha/main", "import std/config\nimport bravo/shared")
+        _write_package_module(bravo, "bravo/shared")
 
         graph = load_graph(
             "import alpha/main",
@@ -840,8 +848,8 @@ class TestPackageRootsAndVisibility:
         self, tmp_path: Path
     ) -> None:
         alpha = _package(tmp_path, "alpha")
-        _write_module(alpha.root, "alpha/main", "import helper")
-        _write_module(alpha.root, "alpha/helper")
+        _write_package_module(alpha, "alpha/main", "import helper")
+        _write_package_module(alpha, "alpha/helper")
 
         with pytest.raises(PackageImportVisibilityError) as exc_info:
             load_graph(
@@ -856,8 +864,8 @@ class TestPackageRootsAndVisibility:
     def test_package_module_rejects_undeclared_cross_package_import(self, tmp_path: Path) -> None:
         alpha = _package(tmp_path, "alpha")
         bravo = _package(tmp_path, "bravo")
-        _write_module(alpha.root, "alpha/main", "import bravo/shared")
-        _write_module(bravo.root, "bravo/shared")
+        _write_package_module(alpha, "alpha/main", "import bravo/shared")
+        _write_package_module(bravo, "bravo/shared")
 
         with pytest.raises(PackageImportVisibilityError) as exc_info:
             load_graph(
@@ -871,7 +879,7 @@ class TestPackageRootsAndVisibility:
 
     def test_package_module_rejects_undeclared_loose_import(self, tmp_path: Path) -> None:
         alpha = _package(tmp_path, "alpha")
-        _write_module(alpha.root, "alpha/main", "import loose")
+        _write_package_module(alpha, "alpha/main", "import loose")
         loose = tmp_path / "loose"
         loose.mkdir()
         _write_module(loose, "loose")
@@ -891,8 +899,8 @@ class TestPackageRootsAndVisibility:
     ) -> None:
         alpha = _package(tmp_path, "alpha", dependencies=("bravo",))
         bravo = _package(tmp_path, "bravo")
-        _write_module(alpha.root, "alpha/main", "import shared")
-        _write_module(bravo.root, "bravo/shared")
+        _write_package_module(alpha, "alpha/main", "import shared")
+        _write_package_module(bravo, "bravo/shared")
 
         with pytest.raises(PackageImportVisibilityError) as exc_info:
             load_graph(
@@ -908,7 +916,7 @@ class TestPackageRootsAndVisibility:
         self, tmp_path: Path
     ) -> None:
         alpha = _package(tmp_path, "alpha", dependencies=("bravo",))
-        _write_module(alpha.root, "alpha/main", "import bravo/shared")
+        _write_package_module(alpha, "alpha/main", "import bravo/shared")
         loose = tmp_path / "loose"
         loose.mkdir()
         _write_module(loose, "bravo/shared")
@@ -926,8 +934,8 @@ class TestPackageRootsAndVisibility:
     def test_ad_hoc_modules_can_import_any_mounted_package(self, tmp_path: Path) -> None:
         alpha = _package(tmp_path, "alpha")
         bravo = _package(tmp_path, "bravo")
-        _write_module(alpha.root, "alpha/main")
-        _write_module(bravo.root, "bravo/shared")
+        _write_package_module(alpha, "alpha/main")
+        _write_package_module(bravo, "bravo/shared")
 
         graph = load_graph(
             "import alpha/main\nimport bravo/shared",
@@ -978,8 +986,8 @@ class TestPackageOwnedEntryIdentity:
     ) -> None:
         """The entry keeps its package identity, so a module may import it back."""
         duo = _package(tmp_path, "duo")
-        entry = _write_module(duo.root, "duo/a", "import duo/b\ndef fa() -> int = duo/b::fb()\n")
-        _write_module(duo.root, "duo/b", "import duo/a\ndef fb() -> int = 2\n")
+        entry = _write_package_module(duo, "duo/a", "import duo/b\ndef fa() -> int = duo/b::fb()\n")
+        _write_package_module(duo, "duo/b", "import duo/a\ndef fb() -> int = 2\n")
 
         graph = load_graph(
             entry.read_text(),
@@ -1032,7 +1040,7 @@ class TestPackageOwnedEntryIdentity:
     ) -> None:
         """``std/prelude`` checked directly would otherwise import itself."""
         std = _package(tmp_path, "std")
-        prelude = _write_module(std.root, "std/prelude", _MINIMAL)
+        prelude = _write_package_module(std, "std/prelude", _MINIMAL)
 
         graph = load_graph(
             _MINIMAL,
@@ -1046,8 +1054,8 @@ class TestPackageOwnedEntryIdentity:
 
     def test_standard_library_entry_still_receives_the_prelude(self, tmp_path: Path) -> None:
         std = _package(tmp_path, "std")
-        _write_module(std.root, "std/prelude", _MINIMAL)
-        entry = _write_module(std.root, "std/other", _MINIMAL)
+        _write_package_module(std, "std/prelude", _MINIMAL)
+        entry = _write_package_module(std, "std/other", _MINIMAL)
 
         graph = load_graph(
             _MINIMAL,
@@ -1069,13 +1077,13 @@ class TestPackageOwnedEntryIdentity:
         second_parent.mkdir()
         first = _package(first_parent, "duo")
         second = _package(second_parent, "duo")
-        entry = _write_module(first.root, "duo/a")
-        _write_module(second.root, "duo/a")
+        entry = _write_package_module(first, "duo/a")
+        _write_package_module(second, "duo/a")
 
         graph = load_graph(
             _MINIMAL,
             entry_path=entry,
-            roots=_package_roots(tmp_path, first, loose_roots=(second.root,)),
+            roots=_package_roots(tmp_path, first, second),
             default_stdlib=False,
         )
 
@@ -1084,7 +1092,7 @@ class TestPackageOwnedEntryIdentity:
     def test_an_unspellable_entry_id_falls_back_to_the_sentinel(self, tmp_path: Path) -> None:
         """A file name no module path can spell names no module."""
         duo = _package(tmp_path, "duo")
-        entry = duo.root / "duo" / "1mod.agl"
+        entry = duo.module_root / "1mod.agl"
         _write_agl(entry, _MINIMAL)
 
         graph = load_graph(
@@ -1096,15 +1104,23 @@ class TestPackageOwnedEntryIdentity:
 
         assert graph.entry_id == ENTRY_ID
 
-    def test_an_entry_id_no_root_resolves_falls_back_to_the_sentinel(self, tmp_path: Path) -> None:
-        """A package whose root is not searched names nothing the graph can reach."""
+    def test_an_entry_id_resolving_to_no_file_falls_back_to_the_sentinel(
+        self, tmp_path: Path
+    ) -> None:
+        """An id the roots resolve nowhere is not an identity worth keeping.
+
+        The entry lies inside a mounted package, so its file name derives a
+        module id -- but the file itself was never written and the source came
+        in as text, so resolving that id finds nothing and the entry takes the
+        sentinel instead.
+        """
         duo = _package(tmp_path, "duo")
-        entry = _write_module(duo.root, "duo/a")
+        entry = duo.module_root / "a.agl"
 
         graph = load_graph(
             _MINIMAL,
             entry_path=entry,
-            roots=RootSet(roots=frozenset(), packages=(duo,)),
+            roots=_package_roots(tmp_path, duo),
             default_stdlib=False,
         )
 
@@ -1121,7 +1137,7 @@ class TestEntryIsNeverAmbient:
 
     @pytest.mark.parametrize("module", ["math", "prelude", "builtin-methods"])
     def test_a_standard_library_entry_is_not_ambient(self, module: str) -> None:
-        entry = _REPO_STDLIB_ROOT / "std" / f"{module}.agl"
+        entry = _REPO_STDLIB_ROOT / MODULE_TREE_DIRNAME / f"{module}.agl"
 
         graph = load_graph(entry.read_text(), entry_path=entry, roots=agl_std_package_roots())
 
@@ -1136,7 +1152,7 @@ class TestEntryIsNeverAmbient:
         """
         from agm.agl.artifact_cache import retained_module_sources
 
-        entry = _REPO_STDLIB_ROOT / "std" / "builtin-methods.agl"
+        entry = _REPO_STDLIB_ROOT / MODULE_TREE_DIRNAME / "builtin-methods.agl"
         graph = load_graph(entry.read_text(), entry_path=entry, roots=agl_std_package_roots())
         entry_module = graph.modules[graph.entry_id]
 

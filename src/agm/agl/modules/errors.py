@@ -17,9 +17,9 @@ from agm.agl.syntax.spans import SourceSpan
 class ModuleNotFound(AglError):
     """A module id could not be found in any searched root.
 
-    ``module_id`` is the id that was not found.  ``searched_roots`` lists every
-    root that was searched (sorted, for deterministic diagnostics — the same
-    order returned by :meth:`~agm.agl.modules.roots.RootSet.sorted_roots`).
+    ``module_id`` is the id that was not found.  ``searched_roots`` lists the
+    loose roots searched, followed by the module trees mounted for the id's
+    leading segment, each group sorted for deterministic diagnostics.
     ``span`` is the :class:`~agm.agl.syntax.spans.SourceSpan` of the
     ``import`` declaration that triggered the lookup, when available.
     """

@@ -958,9 +958,10 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     ("pkg", "init"): textwrap.dedent("""\
         agm pkg init [DIR] [--name NAME] [--version VERSION]
 
-        Initialize a package in DIR, writing a package.toml manifest and a starter module in the
-        package's module tree. DIR defaults to the current directory and is created when missing.
-        The package name defaults to the directory name and the version to 0.1.0.
+        Initialize a package in DIR, writing a package.toml manifest and a starter module at
+        src/main.agl in the package's module tree. DIR defaults to the current directory and
+        is created when missing. The package name defaults to the directory name and the
+        version to 0.1.0.
 
         Options:
           --name NAME      Name the package NAME instead of the directory name.

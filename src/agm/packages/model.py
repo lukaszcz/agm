@@ -9,6 +9,7 @@ from typing import Protocol
 
 import semver
 
+from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.manifest import DependencySpec, PackageManifest
 from agm.version import AGM_VERSION
 
@@ -76,7 +77,32 @@ class PackageInfo:
     def module_root(self) -> Path:
         """Return the package's module-tree directory."""
 
-        return (self.root / self.manifest.name).resolve()
+        return (self.root / MODULE_TREE_DIRNAME).resolve()
+
+    def module_path(self, segments: Sequence[str]) -> Path:
+        """Return the file this package's module tree gives a module id.
+
+        A module id names the package in its leading segment and the file
+        beneath the module tree in the rest, so a bare package name names no
+        module. Raises :class:`ValueError` for segments this package does not
+        name a module for.
+        """
+
+        if len(segments) < 2 or segments[0] != self.manifest.name:
+            raise ValueError(
+                f"{'/'.join(segments)!r} is not a module of package {self.manifest.name!r}"
+            )
+        return self.module_root.joinpath(*segments[1:-1], f"{segments[-1]}.agl")
+
+    def module_id_segments(self, path: Path) -> tuple[str, ...]:
+        """Return the module-id segments this package gives a file in its module tree.
+
+        The inverse of :meth:`module_path`. Raises :class:`ValueError` for a
+        path outside the module tree.
+        """
+
+        relative = path.resolve().relative_to(self.module_root).with_suffix("")
+        return (self.manifest.name, *relative.parts)
 
 
 class VersionSelection(Protocol):

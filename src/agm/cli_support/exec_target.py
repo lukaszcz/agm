@@ -98,7 +98,12 @@ def resolve_installed_reference(
         return ExecTargetError(
             f"installed program reference {reference!r} does not name an active package."
         )
-    entry_path = package.root / module_id.relpath()
+    try:
+        entry_path = package.module_path(module_id.segments)
+    except ValueError:
+        return ExecTargetError(
+            f"installed program reference {reference!r} names no module of package {name!r}."
+        )
     return PackageProgramReference(
         package=package,
         packages=packages,

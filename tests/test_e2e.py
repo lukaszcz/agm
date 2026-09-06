@@ -7340,11 +7340,11 @@ def _archive_server(directory: Path) -> Iterator[str]:
 
 def _write_store_test_package(root: Path, name: str, version: str) -> Path:
     root.mkdir()
-    (root / name).mkdir()
+    (root / "src").mkdir()
     (root / "package.toml").write_text(
         f'[package]\nname = "{name}"\nversion = "{version}"\n', encoding="utf-8"
     )
-    (root / name / "main.agl").write_text("program def main() -> unit = ()\n", encoding="utf-8")
+    (root / "src" / "main.agl").write_text("program def main() -> unit = ()\n", encoding="utf-8")
     return root
 
 
@@ -7364,7 +7364,7 @@ class TestPackageInit:
         assert checked.returncode == 0
         assert created.returncode == 0
         assert (package / "package.toml").is_file()
-        assert (package / "demo" / "main.agl").is_file()
+        assert (package / "src" / "main.agl").is_file()
         assert archive.is_file()
 
     def test_refuses_a_directory_that_is_already_a_package(
@@ -7475,7 +7475,7 @@ class TestPackageCheck:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         package = _write_store_test_package(tmp_path / "source", "alpha", "1.0.0")
-        (package / "alpha" / "main.agl").write_text(
+        (package / "src" / "main.agl").write_text(
             'let prompt = resource("prompts/missing.md")\nprogram def main() -> unit = ()\n',
             encoding="utf-8",
         )
@@ -7509,7 +7509,7 @@ class TestPackageInstall:
         (package / "prompts").mkdir()
         (package / "prompts" / "review.md").write_text("prompt", encoding="utf-8")
         (package / ".gitignore").write_text("prompts/review.md\n", encoding="utf-8")
-        (package / "alpha" / "main.agl").write_text(
+        (package / "src" / "main.agl").write_text(
             'let prompt = resource("prompts/review.md")\nprogram def main() -> unit = ()\n',
             encoding="utf-8",
         )
@@ -7530,7 +7530,7 @@ class TestPackageInstall:
     ) -> None:
         env["AGM_HOME"] = str(tmp_path / "agm-home")
         dependency = _write_store_test_package(tmp_path / "helpers", "helpers", "1.0.0")
-        (dependency / "helpers" / "assets.agl").write_text(
+        (dependency / "src" / "assets.agl").write_text(
             "export std/prelude::{resource as asset}\n", encoding="utf-8"
         )
         package = _write_store_test_package(tmp_path / "source", "alpha", "1.0.0")
@@ -7541,7 +7541,7 @@ class TestPackageInstall:
         (package / "prompts").mkdir()
         (package / "prompts" / "review.md").write_text("prompt", encoding="utf-8")
         (package / ".gitignore").write_text("prompts/review.md\n", encoding="utf-8")
-        (package / "alpha" / "main.agl").write_text(
+        (package / "src" / "main.agl").write_text(
             "import helpers/assets::{asset}\n"
             'let prompt = asset("prompts/review.md")\n'
             "program def main() -> unit = ()\n",
@@ -7571,12 +7571,12 @@ class TestPackageInstall:
             '[commands]\nshout = { program = "alpha/main::main" }\n',
             encoding="utf-8",
         )
-        (package / "alpha" / "main.agl").write_text(
+        (package / "src" / "main.agl").write_text(
             "extern def shout(value: text) -> text\n"
             'program def main() -> unit = print(shout("hi"))\n',
             encoding="utf-8",
         )
-        (package / "alpha" / "main.py").write_text(
+        (package / "src" / "main.py").write_text(
             "def shout(value):\n    return value.upper()\n", encoding="utf-8"
         )
 
@@ -7632,10 +7632,10 @@ class TestPackageInstall:
             '[commands]\nlaunch = { program = "bravo/main::main" }\n',
             encoding="utf-8",
         )
-        (alpha / "alpha" / "main.agl").write_text(
+        (alpha / "src" / "main.agl").write_text(
             'program def main() -> unit = print "alpha"\n', encoding="utf-8"
         )
-        (bravo / "bravo" / "main.agl").write_text(
+        (bravo / "src" / "main.agl").write_text(
             'program def main() -> unit = print "bravo"\n', encoding="utf-8"
         )
 
@@ -7670,7 +7670,7 @@ class TestPackageInstall:
             '"tools inspect" = { program = "tools/inspect::main" }\n',
             encoding="utf-8",
         )
-        (package / "tools" / "main.agl").write_text(
+        (package / "src" / "main.agl").write_text(
             "import std/config\n"
             "program def main(subject: text) -> unit =\n"
             "  print subject\n"
@@ -7678,7 +7678,7 @@ class TestPackageInstall:
             '  let _ = exec("true")\n',
             encoding="utf-8",
         )
-        (package / "tools" / "inspect.agl").write_text(
+        (package / "src" / "inspect.agl").write_text(
             "program def main(subject: text) -> unit = print subject\n", encoding="utf-8"
         )
         home.mkdir()
@@ -7745,7 +7745,7 @@ class TestPackageInstall:
             'greet = { program = "tools/main::main", description = "Greet someone" }\n',
             encoding="utf-8",
         )
-        (package / "tools" / "main.agl").write_text(
+        (package / "src" / "main.agl").write_text(
             'program def main(@pos, name: text, /, tag: text = "default") -> unit =\n'
             '  print(name + ":" + tag)\n',
             encoding="utf-8",
@@ -7780,10 +7780,10 @@ class TestPackageInstall:
             '[commands]\nlive = { program = "tools/main::main" }\n',
             encoding="utf-8",
         )
-        (package / "tools" / "main.agl").write_text(
+        (package / "src" / "main.agl").write_text(
             'program def main() -> unit = print "old"\n', encoding="utf-8"
         )
-        (package / "tools" / "updated.agl").write_text(
+        (package / "src" / "updated.agl").write_text(
             'program def main() -> unit = print "new"\n', encoding="utf-8"
         )
 
@@ -7824,7 +7824,7 @@ class TestPackageInstall:
             '[commands]\nlaunch = { program = "alpha/main::main" }\n',
             encoding="utf-8",
         )
-        (package / "alpha" / "main.agl").write_text(
+        (package / "src" / "main.agl").write_text(
             'program def main() -> unit = print "launched"\n', encoding="utf-8"
         )
 
@@ -7953,7 +7953,7 @@ class TestPackageInstall:
         program = tmp_path / "program.agl"
         program.write_text("import alpha/main\nprogram def main() -> unit = ()\n", encoding="utf-8")
         before_edit = run_agm(["exec", str(program)], env=env, cwd=tmp_path)
-        (package / "alpha" / "main.agl").write_text("not valid AgL\n", encoding="utf-8")
+        (package / "src" / "main.agl").write_text("not valid AgL\n", encoding="utf-8")
         after_edit = run_agm(["exec", str(program)], env=env, cwd=tmp_path, check=False)
         listing = run_agm(["pkg", "list"], env=env, cwd=tmp_path)
 
@@ -8011,7 +8011,7 @@ class TestPackageInstall:
         two = _write_store_test_package(tmp_path / "alpha-two", "alpha", "2.0.0")
         # Name resolution is part of install-time package validation, so the
         # version that must not be selected fails later, when it is typechecked.
-        (two / "alpha" / "main.agl").write_text(
+        (two / "src" / "main.agl").write_text(
             'let broken: int = "text"\nprogram def main() -> unit = ()\n', encoding="utf-8"
         )
         project = tmp_path / "project"
@@ -9042,11 +9042,11 @@ def _write_pinned_package_project(parent: Path) -> tuple[Path, Path, Path]:
     home = parent / "agm-home"
     for version, answer in (("1.0.0", 1), ("2.0.0", 2)):
         package = home / "packages" / "alpha" / version
-        (package / "alpha").mkdir(parents=True)
+        (package / "src").mkdir(parents=True)
         (package / "package.toml").write_text(
             f'[package]\nname = "alpha"\nversion = "{version}"\n', encoding="utf-8"
         )
-        (package / "alpha" / "value.agl").write_text(f"def answer() -> int = {answer}\n")
+        (package / "src" / "value.agl").write_text(f"def answer() -> int = {answer}\n")
         write_record(package)
     (home / "packages" / "index.toml").write_text(
         '[packages.alpha]\nversion = "1.0.0"\n', encoding="utf-8"
@@ -9065,18 +9065,18 @@ def _write_pinned_package_project(parent: Path) -> tuple[Path, Path, Path]:
 def _write_development_package_pair(parent: Path) -> tuple[Path, Path]:
     """Create a package and a path-sourced dependency for AgL host tests."""
     bravo = parent / "bravo"
-    (bravo / "bravo").mkdir(parents=True)
+    (bravo / "src").mkdir(parents=True)
     (bravo / "package.toml").write_text('[package]\nname = "bravo"\nversion = "1.0.0"\n')
-    (bravo / "bravo" / "shared.agl").write_text("def answer() -> int = 42\n")
+    (bravo / "src" / "shared.agl").write_text("def answer() -> int = 42\n")
 
     alpha = parent / "alpha"
-    (alpha / "alpha").mkdir(parents=True)
+    (alpha / "src").mkdir(parents=True)
     (alpha / "package.toml").write_text(
         '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
         "[dependencies]\n"
         'bravo = { version = "1", path = "../bravo" }\n'
     )
-    module = alpha / "alpha" / "main.agl"
+    module = alpha / "src" / "main.agl"
     module.write_text("import bravo/shared\ndef value() -> int = bravo/shared::answer()\n")
     return alpha, module
 

@@ -56,7 +56,7 @@ def _text_companion() -> _TextCompanion:
             **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
         }
     )
-    module: ModuleType = registry.load_companion(_TEXT_MODULE, _STDLIB_ROOT / "std" / "text.py")
+    module: ModuleType = registry.load_companion(_TEXT_MODULE, _STDLIB_ROOT / "src" / "text.py")
     return cast(_TextCompanion, module)
 
 

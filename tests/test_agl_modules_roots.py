@@ -8,16 +8,20 @@ import pytest
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.roots import RootSet, assemble_roots
+from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.manifest import load_manifest
 from agm.packages.model import PackageInfo
 
 
 def _package_with_a_rogue_module(tmp_path: Path, name: str = "demo") -> PackageInfo:
-    """Mount a package whose root also holds a module outside its module tree."""
+    """Mount a package whose root also holds AgL files outside its module tree."""
     root = tmp_path / "package"
-    (root / name).mkdir(parents=True)
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
     (root / "package.toml").write_text(f'[package]\nname = "{name}"\nversion = "1.0.0"\n')
-    (root / name / "main.agl").write_text("")
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text("")
+    # A directory named after the package is ordinary package content.
+    (root / name).mkdir()
+    (root / name / "rogue.agl").write_text("")
     (root / "assets").mkdir()
     (root / "assets" / "rogue.agl").write_text("")
     return PackageInfo(root, load_manifest(root / "package.toml"))
@@ -33,6 +37,16 @@ def _roots_for(tmp_path: Path, package: PackageInfo, *, loose: bool) -> RootSet:
         cwd=tmp_path,
         package_roots=(package,),
     )
+
+
+def _stdlib_tree(tmp_path: Path, *, name: str = "std") -> Path:
+    """Write a standard-library package root with one module in its module tree."""
+    root = tmp_path / "stdlib"
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (root / "package.toml").write_text(f'[package]\nname = "{name}"\nversion = "1.0.0"\n')
+    (root / MODULE_TREE_DIRNAME / "prelude.agl").write_text("")
+    (root / "stray.agl").write_text("")
+    return root
 
 
 class TestRootSet:
@@ -65,35 +79,33 @@ class TestRootSet:
         assert rs.sorted_roots() == ()
 
 
-class TestMountScoping:
-    """A package-only root admits only its own module tree; a loose root admits all."""
+class TestModuleTreeMounts:
+    """A mounted package exposes its module tree under its declared name."""
 
-    def test_package_only_root_is_scoped_to_its_declared_module_segment(
-        self, tmp_path: Path
-    ) -> None:
+    def test_a_mounted_package_mounts_its_module_tree_under_its_name(self, tmp_path: Path) -> None:
         package = _package_with_a_rogue_module(tmp_path)
         roots = _roots_for(tmp_path, package, loose=False)
 
-        assert roots.sorted_roots_for(("demo",)) == (package.root,)
-        assert roots.sorted_roots_for(("assets",)) == ()
+        assert roots.module_tree_roots("demo") == (package.module_root,)
+        assert roots.module_tree_roots("assets") == ()
 
-    def test_package_only_root_rejects_a_file_outside_its_module_tree(self, tmp_path: Path) -> None:
+    def test_a_mounted_package_root_is_not_a_loose_root(self, tmp_path: Path) -> None:
         package = _package_with_a_rogue_module(tmp_path)
         roots = _roots_for(tmp_path, package, loose=False)
 
-        assert roots.admits_path(package.root, package.module_root / "main.agl")
-        assert not roots.admits_path(package.root, package.root / "assets" / "rogue.agl")
+        assert package.root not in roots.roots
+        assert roots.sorted_roots() == ()
 
-    def test_supplying_the_same_path_as_an_ordinary_root_keeps_it_loose(
+    def test_supplying_the_same_path_as_an_ordinary_root_adds_a_loose_root(
         self, tmp_path: Path
     ) -> None:
         package = _package_with_a_rogue_module(tmp_path)
         roots = _roots_for(tmp_path, package, loose=True)
 
-        assert roots.sorted_roots_for(("assets",)) == (package.root,)
-        assert roots.admits_path(package.root, package.root / "assets" / "rogue.agl")
+        assert roots.sorted_roots() == (package.root,)
+        assert roots.module_tree_roots("demo") == (package.module_root,)
 
-    def test_a_root_with_no_package_mount_admits_everything(self, tmp_path: Path) -> None:
+    def test_an_unmounted_segment_has_no_module_tree(self, tmp_path: Path) -> None:
         plain = tmp_path / "plain"
         plain.mkdir()
         roots = assemble_roots(
@@ -104,25 +116,72 @@ class TestMountScoping:
             cwd=tmp_path,
         )
 
-        assert roots.sorted_roots_for(("anything",)) == (plain.resolve(),)
-        assert roots.admits_path(plain.resolve(), plain / "anything.agl")
+        assert roots.sorted_roots() == (plain.resolve(),)
+        assert roots.module_tree_roots("anything") == ()
+
+    def test_the_standard_library_root_mounts_the_std_tree_without_going_loose(
+        self, tmp_path: Path
+    ) -> None:
+        stdlib = _stdlib_tree(tmp_path)
+        roots = assemble_roots(
+            invocation_root=None,
+            stdlib_root=stdlib,
+            lib_root=None,
+            configured=[],
+            cli=[],
+            cwd=tmp_path,
+        )
+
+        assert roots.module_tree_roots("std") == ((stdlib / MODULE_TREE_DIRNAME).resolve(),)
+        assert stdlib.resolve() not in roots.roots
+
+    def test_mounting_the_std_package_at_the_library_root_keeps_one_mount(
+        self, tmp_path: Path
+    ) -> None:
+        stdlib = _stdlib_tree(tmp_path)
+        std_package = PackageInfo(stdlib, load_manifest(stdlib / "package.toml"))
+        roots = assemble_roots(
+            invocation_root=None,
+            stdlib_root=stdlib,
+            lib_root=None,
+            configured=[],
+            cli=[],
+            cwd=tmp_path,
+            package_roots=(std_package,),
+        )
+
+        assert roots.module_tree_roots("std") == (std_package.module_root,)
+
+    def test_module_tree_roots_are_sorted_and_deduplicated(self, tmp_path: Path) -> None:
+        first = tmp_path / "first"
+        second = tmp_path / "second"
+        for root in (first, second):
+            (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+            (root / "package.toml").write_text('[package]\nname = "demo"\nversion = "1.0.0"\n')
+        packages = tuple(
+            PackageInfo(root, load_manifest(root / "package.toml")) for root in (second, first)
+        )
+        roots = RootSet(roots=frozenset(), packages=(*packages, packages[0]))
+
+        assert roots.module_tree_roots("demo") == tuple(
+            sorted(package.module_root for package in packages)
+        )
 
 
-class TestLooseRootsAreDistinguishing:
-    def test_root_sets_differing_only_in_loose_roots_are_not_equal(self, tmp_path: Path) -> None:
-        # The two root sets search the same directories, carry the same package,
-        # and share the same standard library -- they differ only in whether the
-        # package root is also loose, which is exactly what decides the files
-        # they expose.  Anything that identifies a root set (a cached compiled
-        # image, say) must therefore see them as different.
+class TestRootSetIdentity:
+    def test_root_sets_differing_only_in_a_loose_root_are_not_equal(self, tmp_path: Path) -> None:
+        # The two root sets mount the same package and share the same standard
+        # library -- they differ only in whether the package root is also a
+        # loose root, which is exactly what decides the files they expose.
+        # Anything that identifies a root set (a cached compiled image, say)
+        # must therefore see them as different.
         package = _package_with_a_rogue_module(tmp_path)
         scoped = _roots_for(tmp_path, package, loose=False)
         loose = _roots_for(tmp_path, package, loose=True)
 
-        assert scoped.roots == loose.roots
         assert scoped.packages == loose.packages
         assert scoped.stdlib_roots == loose.stdlib_roots
-        assert scoped.loose_roots != loose.loose_roots
+        assert scoped.roots != loose.roots
         assert scoped != loose
 
 
@@ -166,9 +225,8 @@ class TestAssembleRoots:
             cli=[],
             cwd=tmp_path,
         )
-        assert stdlib.resolve() in rs.roots
         assert rs.stdlib_roots == frozenset({stdlib.resolve()})
-        assert rs.is_standard_library_path(stdlib / "std" / "prelude.agl")
+        assert rs.is_standard_library_path(stdlib / MODULE_TREE_DIRNAME / "prelude.agl")
 
     def test_includes_package_root_and_preserves_its_ownership_metadata(
         self, tmp_path: Path
@@ -176,7 +234,7 @@ class TestAssembleRoots:
         invocation_root = tmp_path / "inv"
         invocation_root.mkdir()
         package_root = tmp_path / "package"
-        (package_root / "demo").mkdir(parents=True)
+        (package_root / MODULE_TREE_DIRNAME).mkdir(parents=True)
         (package_root / "package.toml").write_text('[package]\nname = "demo"\nversion = "1.0.0"\n')
         package = PackageInfo(package_root, load_manifest(package_root / "package.toml"))
 
@@ -189,8 +247,8 @@ class TestAssembleRoots:
             package_roots=(package,),
         )
 
-        assert package.root in roots.roots
         assert roots.packages == (package,)
+        assert roots.module_tree_roots("demo") == (package.module_root,)
 
     def test_missing_package_root_is_not_mounted(self, tmp_path: Path) -> None:
         invocation_root = tmp_path / "inv"
@@ -210,8 +268,8 @@ class TestAssembleRoots:
             package_roots=(package,),
         )
 
-        assert package.root not in roots.roots
         assert roots.packages == ()
+        assert roots.module_tree_roots("demo") == ()
 
     def test_none_lib_root_not_included(self, tmp_path: Path) -> None:
         inv_root = tmp_path / "inv"
@@ -588,6 +646,14 @@ class TestPackageModuleIdFor:
 
         assert roots.package_module_id_for(package.root / "assets" / "rogue.agl") is None
 
+    def test_a_directory_named_after_the_package_is_not_its_module_tree(
+        self, tmp_path: Path
+    ) -> None:
+        package = _package_with_a_rogue_module(tmp_path)
+        roots = _roots_for(tmp_path, package, loose=False)
+
+        assert roots.package_module_id_for(package.root / "demo" / "rogue.agl") is None
+
     def test_file_under_no_mounted_package_is_unowned(self, tmp_path: Path) -> None:
         loose = tmp_path / "loose"
         loose.mkdir()
@@ -605,9 +671,9 @@ class TestPackageModuleIdFor:
     def test_the_innermost_package_owns_a_nested_module_tree(self, tmp_path: Path) -> None:
         outer = _package_with_a_rogue_module(tmp_path, "demo")
         inner_root = outer.module_root / "vendor"
-        (inner_root / "inner").mkdir(parents=True)
+        (inner_root / MODULE_TREE_DIRNAME).mkdir(parents=True)
         (inner_root / "package.toml").write_text('[package]\nname = "inner"\nversion = "1.0.0"\n')
-        module = inner_root / "inner" / "mod.agl"
+        module = inner_root / MODULE_TREE_DIRNAME / "mod.agl"
         module.write_text("")
         inner = PackageInfo(inner_root, load_manifest(inner_root / "package.toml"))
         roots = assemble_roots(

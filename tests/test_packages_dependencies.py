@@ -11,6 +11,7 @@ import semver
 import agm.packages.model as package_model
 from agm.packages.dependencies import DependencyError, validate_dependencies
 from agm.packages.install import install_directory
+from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.manifest import DependencySpec, distribution_manifest, load_manifest
 from agm.packages.model import PackageInfo
 from agm.version import AGM_VERSION
@@ -18,12 +19,14 @@ from agm.version import AGM_VERSION
 
 def _package(root: Path, name: str, version: str, dependencies: str = "") -> PackageInfo:
     root.mkdir()
-    (root / name).mkdir()
+    (root / MODULE_TREE_DIRNAME).mkdir()
     (root / "package.toml").write_text(
         f'[package]\nname = "{name}"\nversion = "{version}"\n' + dependencies,
         encoding="utf-8",
     )
-    (root / name / "main.agl").write_text("program def main() -> unit = ()\n", encoding="utf-8")
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "program def main() -> unit = ()\n", encoding="utf-8"
+    )
     return PackageInfo(root, load_manifest(root / "package.toml"))
 
 
@@ -166,7 +169,7 @@ def test_dependency_check_rejects_cyclic_missing_and_mismatched_path_sources(
 
 def test_dependency_check_validates_path_dependency_discipline(tmp_path: Path) -> None:
     bravo = _package(tmp_path / "bravo", "bravo", "1.0.0")
-    shutil.rmtree(bravo.root / "bravo")
+    shutil.rmtree(bravo.root / MODULE_TREE_DIRNAME)
     alpha = _package(
         tmp_path / "alpha",
         "alpha",
@@ -246,7 +249,7 @@ def test_dependency_check_preserves_active_equal_precedence_build(tmp_path: Path
     )
     package = _package(tmp_path / "alpha", "alpha", "1.0.0", '\n[dependencies]\nbravo = "1"\n')
     for installed in inactive:
-        (installed.root / "bravo" / "main.agl").write_text("tampered", encoding="utf-8")
+        (installed.root / MODULE_TREE_DIRNAME / "main.agl").write_text("tampered", encoding="utf-8")
 
     resolved = validate_dependencies(package, home=home, env={})
 

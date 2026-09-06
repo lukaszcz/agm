@@ -33,10 +33,11 @@ def resolve_module(
 ) -> Path:
     """Resolve *module_id* to its unique canonical file path.
 
-    Searches every root in *roots* whose mount scope admits *module_id* for
-    ``<root>/<module_id.relpath()>``, canonicalizes each hit, and deduplicates
-    by canonical identity (so the same file reached via symlinked roots counts
-    once).
+    Searches every loose root in *roots* for ``<root>/<module_id.relpath()>``
+    and every module tree mounted for the id's leading segment for the path
+    the remaining segments spell, canonicalizes each hit, and deduplicates by
+    canonical identity (so the same file reached via symlinked roots or through
+    both a loose root and a mount counts once).
 
     Parameters
     ----------
@@ -56,26 +57,34 @@ def resolve_module(
     Raises
     ------
     ModuleNotFound
-        When no root contains a file for *module_id*.
+        When no searched directory contains a file for *module_id*.
     AmbiguousModule
         When the id resolves to ≥2 distinct canonical files.
     """
-    # Map canonical path → (one of the) root that produced it.
+    # Map canonical path → (one of the) directory that produced it.
     # Using a dict keyed on canonical Path deduplicates symlinked copies.
     canonical_hits: dict[Path, Path] = {}
 
+    search_roots = roots.sorted_roots()
+    searched: list[Path] = list(search_roots)
     rel = module_id.relpath().replace("/", os.sep)
-    search_roots = roots.sorted_roots_for(module_id.segments)
     for root in search_roots:
         candidate = root / rel
-        if fs.exists(candidate) and roots.admits_path(root, candidate):
-            canon = candidate.resolve()
-            canonical_hits[canon] = root
+        if fs.exists(candidate):
+            canonical_hits[candidate.resolve()] = root
+
+    if len(module_id.segments) > 1:
+        mounted_rel = _relative_path(module_id.segments[1:]) + ".agl"
+        for tree in roots.module_tree_roots(module_id.segments[0]):
+            searched.append(tree)
+            candidate = tree / mounted_rel
+            if fs.exists(candidate):
+                canonical_hits[candidate.resolve()] = tree
 
     if not canonical_hits:
         raise ModuleNotFound(
             module_id,
-            search_roots,
+            tuple(searched),
             span=span,
         )
 
@@ -95,13 +104,16 @@ def expand_wildcard(
 ) -> dict[ModuleId, Path]:
     """Expand a wildcard prefix to all matching module ids and their canonical paths.
 
-    Globs ``<root>/<prefix>.agl`` (the prefix module itself, if it exists) and
-    ``<root>/<prefix>/**/*.agl`` (the full subtree) across every root whose
-    mount scope admits *prefix*.
+    Across every loose root, globs ``<root>/<prefix>.agl`` (the prefix module
+    itself, if it exists) and ``<root>/<prefix>/**/*.agl`` (the full subtree).
+    Across every module tree mounted for the prefix's leading segment, globs
+    the same two patterns for the remaining segments — or, when the prefix is
+    the mount name alone, the whole tree, since a package has no module of its
+    own name.
 
     Each discovered file is mapped to its slash-path :class:`~agm.agl.modules.ids.ModuleId`
     via the inverse of ``ModuleId.relpath()``.  Global uniqueness is enforced: if
-    the same id is found in two roots as distinct canonical files, an
+    the same id is found twice as distinct canonical files, an
     :class:`~agm.agl.modules.errors.AmbiguousModule` error is raised.  The
     same canonical file reached via different roots (symlinks/duplicates) is
     counted once.
@@ -131,41 +143,43 @@ def expand_wildcard(
     AmbiguousModule
         When any matched module id resolves to ≥2 distinct canonical files.
     """
-    prefix_dir = os.sep.join(prefix)  # e.g. "foo/bar" (os-specific)
-
     # Accumulated results: module_id → set of distinct canonical paths found.
     # Using a set of canonicals handles dedup of symlinked/duplicate roots.
     hits: dict[ModuleId, set[Path]] = {}
 
-    def _record_file(file_path: Path, root: Path) -> None:
-        """Record a confirmed .agl file path, computing its ModuleId from root.
+    def _record_file(file_path: Path, base: Path, lead: tuple[str, ...]) -> None:
+        """Record a confirmed .agl file path, computing its ModuleId from *base*.
 
-        *file_path* must be a file that resides under *root* and whose name
+        *file_path* must be a file that resides under *base* and whose name
         ends with ``.agl``; these invariants are guaranteed by the caller.
+        *lead* is the mount's own segment, empty for a loose root.
         """
         canon = file_path.resolve()
-        rel = file_path.relative_to(root)
-        parts = rel.parts
-        # rel.parts is non-empty (file_path is inside root) and last part ends
-        # with ".agl" (guaranteed by the glob pattern and the name check above).
-        segments = (*parts[:-1], parts[-1][:-4])  # strip .agl extension
-        mid = ModuleId(segments=segments)
-        if mid not in hits:
-            hits[mid] = set()
-        hits[mid].add(canon)
+        parts = file_path.relative_to(base).parts
+        # parts is non-empty (file_path is inside base) and its last element
+        # ends with ".agl" (guaranteed by the glob pattern used to find it).
+        mid = ModuleId(segments=(*lead, *parts[:-1], parts[-1][:-4]))
+        hits.setdefault(mid, set()).add(canon)
 
-    for root in roots.sorted_roots_for(prefix):
-        # Pattern 1: <root>/<prefix>.agl — the prefix module itself
-        direct = root / (prefix_dir + ".agl")
-        if fs.is_file(direct) and roots.admits_path(root, direct):
-            _record_file(direct, root)
-
-        # Pattern 2: <root>/<prefix>/**/*.agl — the full subtree
-        subtree_root = root / prefix_dir
+    def _collect(base: Path, relative: tuple[str, ...], lead: tuple[str, ...]) -> None:
+        """Glob the prefix module and its subtree beneath *base*."""
+        if relative:
+            # Pattern 1: <base>/<relative>.agl — the prefix module itself
+            direct = base / (_relative_path(relative) + ".agl")
+            if fs.is_file(direct):
+                _record_file(direct, base, lead)
+        # Pattern 2: <base>/<relative>/**/*.agl — the full subtree
+        subtree_root = base.joinpath(*relative)
         if fs.is_dir(subtree_root):
             for file_path in fs.rglob(subtree_root, "*.agl"):
-                if fs.is_file(file_path) and roots.admits_path(root, file_path):
-                    _record_file(file_path, root)
+                if fs.is_file(file_path):
+                    _record_file(file_path, base, lead)
+
+    for root in roots.sorted_roots():
+        _collect(root, prefix, ())
+
+    for tree in roots.module_tree_roots(prefix[0]):
+        _collect(tree, prefix[1:], prefix[:1])
 
     if not hits:
         raise ModulePrefixNotFound(prefix, span=span)
@@ -184,3 +198,8 @@ def expand_wildcard(
 
     pairs.sort(key=_sort_key)
     return dict(pairs)
+
+
+def _relative_path(segments: tuple[str, ...]) -> str:
+    """Join module-id segments into an os-specific relative path without a suffix."""
+    return os.sep.join(segments)

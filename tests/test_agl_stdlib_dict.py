@@ -77,7 +77,7 @@ def _dict_companion() -> _DictCompanion:
             ),
         }
     )
-    module: ModuleType = registry.load_companion(_DICT_MODULE, _STDLIB_ROOT / "std" / "dict.py")
+    module: ModuleType = registry.load_companion(_DICT_MODULE, _STDLIB_ROOT / "src" / "dict.py")
     return cast(_DictCompanion, module)
 
 

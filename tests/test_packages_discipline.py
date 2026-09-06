@@ -15,6 +15,7 @@ from agm.packages.discipline import (
     validate_archive_package,
     validate_package,
 )
+from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.manifest import CommandSpec, DependencySpec, PackageManifest, load_manifest
 from agm.packages.model import PackageInfo, owning_package
 from tests._timeouts import fail_if_slow
@@ -35,8 +36,7 @@ def _custom_package(
     dependencies: dict[str, DependencySpec] | None = None,
 ) -> PackageInfo:
     root = tmp_path / "package"
-    module_root = root / "custom"
-    module_root.mkdir(parents=True)
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
     commands = {} if command_path is None else {command_path: CommandSpec(program)}
     return PackageInfo(
         root=root,
@@ -56,7 +56,7 @@ class TestPackageDiscipline:
     def test_accepts_kebab_case_package_name_and_command_reference(self, tmp_path: Path) -> None:
         """A package name is an AgL name, and AgL names are kebab-case."""
         root = tmp_path / "package"
-        module_root = root / "review-tools"
+        module_root = root / MODULE_TREE_DIRNAME
         module_root.mkdir(parents=True)
         (module_root / "main.agl").write_text("program def review() -> unit = ()\n")
         package = PackageInfo(
@@ -134,7 +134,7 @@ class TestPackageDiscipline:
             validate_package(package)
 
     def test_rejects_archive_import_of_missing_package_module(self) -> None:
-        modules = {"custom/main.agl": "import custom/missing\n"}
+        modules = {f"{MODULE_TREE_DIRNAME}/main.agl": "import custom/missing\n"}
         manifest = PackageManifest("custom", semver.Version.parse("1.0.0"))
 
         with pytest.raises(DisciplineError):
@@ -145,7 +145,7 @@ class TestPackageDiscipline:
             )
 
     def test_defers_archive_import_validation_until_dependencies_are_available(self) -> None:
-        modules = {"custom/main.agl": "import helpers/api\n"}
+        modules = {f"{MODULE_TREE_DIRNAME}/main.agl": "import helpers/api\n"}
         manifest = PackageManifest(
             "custom",
             semver.Version.parse("1.0.0"),
@@ -162,8 +162,8 @@ class TestPackageDiscipline:
 
     def test_archive_import_validation_accepts_a_bundled_extern_companion(self) -> None:
         files = {
-            "custom/main.agl": "extern def execute() -> unit\n",
-            "custom/main.py": "def execute():\n    return None\n",
+            f"{MODULE_TREE_DIRNAME}/main.agl": "extern def execute() -> unit\n",
+            f"{MODULE_TREE_DIRNAME}/main.py": "def execute():\n    return None\n",
         }
         manifest = PackageManifest("custom", semver.Version.parse("1.0.0"))
 
@@ -176,7 +176,7 @@ class TestPackageDiscipline:
     def test_archive_materialization_oserror_is_a_discipline_error(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        modules = {"custom/main.agl": "let value = 1\n"}
+        modules = {f"{MODULE_TREE_DIRNAME}/main.agl": "let value = 1\n"}
         manifest = PackageManifest("custom", semver.Version.parse("1.0.0"))
 
         def fail_to_create_temporary_directory(*, prefix: str) -> object:
@@ -537,7 +537,7 @@ class TestPackageDiscipline:
 
     def test_rejects_missing_resource_reexported_by_dependency(self, tmp_path: Path) -> None:
         dependency_root = tmp_path / "dependency"
-        (dependency_root / "helpers").mkdir(parents=True)
+        (dependency_root / MODULE_TREE_DIRNAME).mkdir(parents=True)
         dependency = PackageInfo(
             dependency_root,
             PackageManifest("helpers", semver.Version.parse("1.0.0")),
@@ -560,7 +560,7 @@ class TestPackageDiscipline:
         self, tmp_path: Path
     ) -> None:
         dependency_root = tmp_path / "dependency"
-        (dependency_root / "helpers").mkdir(parents=True)
+        (dependency_root / MODULE_TREE_DIRNAME).mkdir(parents=True)
         dependency = PackageInfo(
             dependency_root,
             PackageManifest("helpers", semver.Version.parse("1.0.0")),
@@ -613,13 +613,13 @@ class TestPackageCheckCommand:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         root = tmp_path / "package"
-        (root / "custom").mkdir(parents=True)
+        (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
         (root / "package.toml").write_text(
             '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
             '[commands]\nlaunch = { program = "custom/main::main" }\n',
             encoding="utf-8",
         )
-        (root / "custom" / "main.agl").write_text(
+        (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
             "program def main() -> unit = ()\n", encoding="utf-8"
         )
         self._use_temp_home(monkeypatch, tmp_path)

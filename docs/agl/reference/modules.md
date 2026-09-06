@@ -264,7 +264,7 @@ owning module loads its methods. An explicit prelude import remains available wi
 
 ## Standard library modules
 
-The standard library is an ordinary module tree under the `std/` root: its
+The standard library is an ordinary module tree mounted under `std/`: its
 modules are imported, aliased, re-exported, and hidden from exactly like any
 other module. Three have a language-level role:
 

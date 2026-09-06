@@ -30,6 +30,7 @@ from agm.packages.activation import (
     write_activation_index,
     write_package_provenance,
 )
+from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.manifest import load_manifest
 from agm.packages.model import PackageInfo
 from agm.packages.record import write_record
@@ -43,7 +44,7 @@ def _write_package(
     dependencies: str = "",
 ) -> Path:
     root = home / "packages" / name / version
-    (root / name).mkdir(parents=True)
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
     (root / "package.toml").write_text(
         f'[package]\nname = "{name}"\nversion = "{version}"\n' + dependencies,
         encoding="utf-8",
@@ -55,7 +56,7 @@ def _write_package(
 def _write_development_package(
     root: Path, name: str, version: str, dependencies: str = ""
 ) -> PackageInfo:
-    (root / name).mkdir(parents=True)
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
     (root / "package.toml").write_text(
         f'[package]\nname = "{name}"\nversion = "{version}"\n' + dependencies,
         encoding="utf-8",
@@ -905,7 +906,7 @@ def test_std_is_never_selected_as_a_package_root(tmp_path: Path) -> None:
     home = tmp_path / "agm-home"
     _write_package(home, "std", "1.0.0")
     development_root = tmp_path / "development"
-    (development_root / "std").mkdir(parents=True)
+    (development_root / MODULE_TREE_DIRNAME).mkdir(parents=True)
     (development_root / "package.toml").write_text(
         '[package]\nname = "std"\nversion = "2.0.0"\n', encoding="utf-8"
     )
@@ -966,7 +967,7 @@ def test_effective_exec_roots_treats_stdlib_override_as_exclusive(
     active_std = _write_package(home, "std", AGM_VERSION)
     _write_package(home, "alpha", "1.0.0", f'\n[dependencies]\nstd = "{AGM_VERSION}"\n')
     override = tmp_path / "override"
-    (override / "std").mkdir(parents=True)
+    (override / MODULE_TREE_DIRNAME).mkdir(parents=True)
     write_activation_index(
         ActivationIndex(
             packages={
@@ -1364,11 +1365,13 @@ def test_rebuild_rejects_store_directory_that_disagrees_with_manifest(tmp_path: 
 
 def _write_std_checkout(root: Path, version: str) -> Path:
     """Create a development ``std`` package checkout holding one module."""
-    (root / "std").mkdir(parents=True)
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
     (root / "package.toml").write_text(
         f'[package]\nname = "std"\nversion = "{version}"\n', encoding="utf-8"
     )
-    (root / "std" / "agent.agl").write_text("def value() -> int = 1\n", encoding="utf-8")
+    (root / MODULE_TREE_DIRNAME / "agent.agl").write_text(
+        "def value() -> int = 1\n", encoding="utf-8"
+    )
     return root
 
 
@@ -1383,7 +1386,7 @@ def test_effective_exec_roots_mounts_the_development_std_checkout_holding_the_en
     checkout = _write_std_checkout(tmp_path / "checkout", "9.9.9")
 
     roots = effective_exec_roots(
-        entry_path=checkout / "std" / "agent.agl",
+        entry_path=checkout / MODULE_TREE_DIRNAME / "agent.agl",
         module_paths=[],
         cwd=tmp_path,
         home=tmp_path / "user-home",
@@ -1391,7 +1394,7 @@ def test_effective_exec_roots_mounts_the_development_std_checkout_holding_the_en
     ).roots
 
     assert roots.stdlib_roots == {checkout.resolve()}
-    assert (checkout / "std").resolve() not in roots.roots
+    assert (checkout / MODULE_TREE_DIRNAME).resolve() not in roots.roots
     assert tuple(package.root for package in roots.packages) == (checkout.resolve(),)
 
 
@@ -1402,13 +1405,13 @@ def test_effective_exec_roots_keeps_a_std_checkout_entry_loose_under_a_stdlib_ov
     home = tmp_path / "agm-home"
     home.mkdir()
     override = tmp_path / "override"
-    (override / "std").mkdir(parents=True)
+    (override / MODULE_TREE_DIRNAME).mkdir(parents=True)
     monkeypatch.setenv("AGM_HOME", str(home))
     monkeypatch.setenv("AGM_STDLIB", str(override))
     checkout = _write_std_checkout(tmp_path / "checkout", "9.9.9")
 
     roots = effective_exec_roots(
-        entry_path=checkout / "std" / "agent.agl",
+        entry_path=checkout / MODULE_TREE_DIRNAME / "agent.agl",
         module_paths=[],
         cwd=tmp_path,
         home=tmp_path / "user-home",
@@ -1416,7 +1419,7 @@ def test_effective_exec_roots_keeps_a_std_checkout_entry_loose_under_a_stdlib_ov
     ).roots
 
     assert roots.stdlib_roots == {override.resolve()}
-    assert (checkout / "std").resolve() in roots.roots
+    assert (checkout / MODULE_TREE_DIRNAME).resolve() in roots.roots
     assert roots.packages == ()
 
 
@@ -1426,7 +1429,9 @@ def test_effective_exec_roots_mounts_the_store_stdlib_holding_the_entry(
     """A standard-library file in the immutable store is owned by its package too."""
     home = tmp_path / "agm-home"
     store_root = _write_package(home, "std", AGM_VERSION)
-    (store_root / "std" / "agent.agl").write_text("def value() -> int = 1\n", encoding="utf-8")
+    (store_root / MODULE_TREE_DIRNAME / "agent.agl").write_text(
+        "def value() -> int = 1\n", encoding="utf-8"
+    )
     write_activation_index(
         ActivationIndex({"std": ActivePackage(semver.Version.parse(AGM_VERSION))}),
         home=home,
@@ -1436,7 +1441,7 @@ def test_effective_exec_roots_mounts_the_store_stdlib_holding_the_entry(
     monkeypatch.delenv("AGM_STDLIB", raising=False)
 
     roots = effective_exec_roots(
-        entry_path=store_root / "std" / "agent.agl",
+        entry_path=store_root / MODULE_TREE_DIRNAME / "agent.agl",
         module_paths=[],
         cwd=tmp_path,
         home=tmp_path / "user-home",
@@ -1444,7 +1449,7 @@ def test_effective_exec_roots_mounts_the_store_stdlib_holding_the_entry(
     ).roots
 
     assert roots.stdlib_roots == {store_root.resolve()}
-    assert (store_root / "std").resolve() not in roots.roots
+    assert (store_root / MODULE_TREE_DIRNAME).resolve() not in roots.roots
     assert tuple(package.root for package in roots.packages) == (store_root.resolve(),)
 
 
@@ -1459,7 +1464,7 @@ def test_effective_exec_roots_mounts_a_stdlib_override_that_is_a_std_package(
     monkeypatch.setenv("AGM_STDLIB", str(override))
 
     roots = effective_exec_roots(
-        entry_path=override / "std" / "agent.agl",
+        entry_path=override / MODULE_TREE_DIRNAME / "agent.agl",
         module_paths=[],
         cwd=tmp_path,
         home=tmp_path / "user-home",
@@ -1467,7 +1472,7 @@ def test_effective_exec_roots_mounts_a_stdlib_override_that_is_a_std_package(
     ).roots
 
     assert roots.stdlib_roots == {override.resolve()}
-    assert (override / "std").resolve() not in roots.roots
+    assert (override / MODULE_TREE_DIRNAME).resolve() not in roots.roots
     assert tuple(package.root for package in roots.packages) == (override.resolve(),)
 
 
@@ -1478,8 +1483,8 @@ def test_effective_exec_roots_mounts_nothing_for_a_stdlib_override_without_a_man
     home = tmp_path / "agm-home"
     home.mkdir()
     override = tmp_path / "override"
-    (override / "std").mkdir(parents=True)
-    entry = override / "std" / "agent.agl"
+    (override / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    entry = override / MODULE_TREE_DIRNAME / "agent.agl"
     entry.write_text("def value() -> int = 1\n", encoding="utf-8")
     monkeypatch.setenv("AGM_HOME", str(home))
     monkeypatch.setenv("AGM_STDLIB", str(override))
@@ -1493,7 +1498,7 @@ def test_effective_exec_roots_mounts_nothing_for_a_stdlib_override_without_a_man
     ).roots
 
     assert roots.stdlib_roots == {override.resolve()}
-    assert (override / "std").resolve() in roots.roots
+    assert (override / MODULE_TREE_DIRNAME).resolve() in roots.roots
     assert roots.packages == ()
 
 
@@ -1534,7 +1539,7 @@ def test_effective_exec_roots_mounts_nothing_when_the_stdlib_root_is_not_a_std_p
     monkeypatch.setenv("AGM_STDLIB", str(alpha.root))
 
     roots = effective_exec_roots(
-        entry_path=alpha.root / "alpha" / "main.agl",
+        entry_path=alpha.root / MODULE_TREE_DIRNAME / "main.agl",
         module_paths=[],
         cwd=tmp_path,
         home=tmp_path / "user-home",

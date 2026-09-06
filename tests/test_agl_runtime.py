@@ -40,8 +40,6 @@ from tests._agl_helpers import (
 if TYPE_CHECKING:
     from agm.agl.runtime.codec import OutputCodec
 
-_STDLIB_ROOT = pathlib.Path(__file__).resolve().parents[1] / "stdlib"
-
 
 class TestOperatorProgramsRunEndToEnd:
     """Operator declaration, application, and `is`-test dispatch through a full run."""
@@ -3048,13 +3046,12 @@ class TestRunPreparedProgram:
 
     def test_graph_with_library_module_executes(self, tmp_path: pathlib.Path) -> None:
         """A two-module graph (entry + library) runs to completion."""
-        from agm.agl.modules.roots import RootSet
 
         lib_dir = tmp_path / "lib"
         lib_dir.mkdir()
         (lib_dir / "mymod.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
 
-        roots = RootSet(roots=frozenset({lib_dir.resolve(), _STDLIB_ROOT}))
+        roots = agl_roots(lib_dir.resolve())
         entry = "import mymod::*\nlet r = add(2, 3)\nr"
         prepared = prepare_inline_command(entry, entry_path=None, roots=roots)
         rt = PipelineDriver()
@@ -3099,7 +3096,6 @@ class TestRunPreparedProgram:
 
     def test_multimodule_wildcard_import(self, tmp_path: pathlib.Path) -> None:
         """Wildcard import brings multiple modules into scope."""
-        from agm.agl.modules.roots import RootSet
 
         lib_dir = tmp_path / "lib"
         utils_dir = lib_dir / "utils"
@@ -3109,7 +3105,7 @@ class TestRunPreparedProgram:
             'def greet(name: text) -> text = "Hello, " + name + "!"\n'
         )
 
-        roots = RootSet(roots=frozenset({lib_dir.resolve(), _STDLIB_ROOT}))
+        roots = agl_roots(lib_dir.resolve())
         entry = 'import utils/*::*\nlet n = add(2, 3)\nlet g = greet("World")\nprint n\nprint g\n'
         prepared = prepare_inline_command(entry, entry_path=None, roots=roots)
         rt = PipelineDriver()
@@ -3118,13 +3114,12 @@ class TestRunPreparedProgram:
 
     def test_multimodule_qualified_import(self, tmp_path: pathlib.Path) -> None:
         """Qualified import requires :: qualifier to access names."""
-        from agm.agl.modules.roots import RootSet
 
         lib_dir = tmp_path / "lib"
         lib_dir.mkdir()
         (lib_dir / "calc.agl").write_text("def square(n: int) -> int = n * n\n")
 
-        roots = RootSet(roots=frozenset({lib_dir.resolve(), _STDLIB_ROOT}))
+        roots = agl_roots(lib_dir.resolve())
         entry = "import calc\nlet r = calc::square(5)\nr"
         prepared = prepare_inline_command(entry, entry_path=None, roots=roots)
         rt = PipelineDriver()
@@ -3246,9 +3241,7 @@ class TestPrepareProgramFailures:
         """The graph loader path uses AglError.to_diagnostic()."""
         from unittest.mock import patch
 
-        from agm.agl.modules.roots import RootSet
-
-        roots = RootSet(roots=frozenset({tmp_path.resolve(), _STDLIB_ROOT}))
+        roots = agl_roots(tmp_path.resolve())
         related = SourceSpan(2, 1, 2, 2, 2, 3)
         error = AglError("load failed", related=(("constraint", related),))
         with patch("agm.agl.modules.loader.build_repl_graph", side_effect=error):
@@ -3262,9 +3255,7 @@ class TestPrepareProgramFailures:
         """The graph scope path uses AglError.to_diagnostic()."""
         from unittest.mock import patch
 
-        from agm.agl.modules.roots import RootSet
-
-        roots = RootSet(roots=frozenset({tmp_path.resolve(), _STDLIB_ROOT}))
+        roots = agl_roots(tmp_path.resolve())
         related = SourceSpan(2, 1, 2, 2, 2, 3)
         error = AglError("scope failed", related=(("constraint", related),))
         with patch("agm.agl.scope.program.resolve_program", side_effect=error):
@@ -3276,9 +3267,7 @@ class TestPrepareProgramFailures:
         """A non-AglError exception during graph loading is captured as a diagnostic."""
         from unittest.mock import patch
 
-        from agm.agl.modules.roots import RootSet
-
-        roots = RootSet(roots=frozenset({tmp_path.resolve(), _STDLIB_ROOT}))
+        roots = agl_roots(tmp_path.resolve())
         with patch("agm.agl.modules.loader.build_repl_graph", side_effect=RuntimeError("boom")):
             prepared = prepare_inline_command("let x = 1\nx", entry_path=None, roots=roots)
         assert len(prepared.diagnostics) >= 1
@@ -3288,9 +3277,7 @@ class TestPrepareProgramFailures:
         """A non-AglScopeError exception during resolve_program is captured."""
         from unittest.mock import patch
 
-        from agm.agl.modules.roots import RootSet
-
-        roots = RootSet(roots=frozenset({tmp_path.resolve(), _STDLIB_ROOT}))
+        roots = agl_roots(tmp_path.resolve())
         with patch(
             "agm.agl.scope.program.resolve_program",
             side_effect=RuntimeError("resolve fail"),

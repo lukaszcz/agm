@@ -85,7 +85,7 @@ def _companion(
             **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
         }
     )
-    return active_registry.load_companion(module_id, _STDLIB_ROOT / "std" / f"{name}.py")
+    return active_registry.load_companion(module_id, _STDLIB_ROOT / "src" / f"{name}.py")
 
 
 def test_time_round_trips_fixed_utc_iso_and_strptime_values() -> None:
@@ -186,7 +186,7 @@ def test_random_state_is_isolated_between_concurrent_real_interpreters(tmp_path:
     executable = lower_ir(entry_path.read_text(), caps=extern_caps(), origin_path=entry_path)
     registry = ExternRegistry()
     registry.set_nominals(executable.nominals)
-    registry.load_companion(_RANDOM_MODULE, _STDLIB_ROOT / "std" / "random.py")
+    registry.load_companion(_RANDOM_MODULE, _STDLIB_ROOT / "src" / "random.py")
     state_companion = cast(
         _StateCompanion, registry.load_companion(ENTRY_ID, entry_path.with_suffix(".py"))
     )

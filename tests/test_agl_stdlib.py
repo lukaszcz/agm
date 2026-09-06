@@ -33,12 +33,13 @@ from agm.agl.typecheck.checker import (
 from agm.agl.typecheck.env import AglTypeError, FunctionSignature, ParamSpec
 from agm.agl.typecheck.program import check_program
 from agm.agl.zones import ParamZone
+from tests._agl_helpers import agl_roots
 from tests.agl.module_graph import resolve_and_check_inline_entry, resolve_inline_entry
 
-_ROOTS = RootSet(frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
+_ROOTS = agl_roots()
 _CAPS = HostCapabilities()
-_STD_DIR = Path(__file__).resolve().parents[1] / "stdlib" / "std"
-_STD_OPTION = Path(__file__).resolve().parents[1] / "stdlib" / "std" / "option.agl"
+_STD_DIR = Path(__file__).resolve().parents[1] / "stdlib" / "src"
+_STD_OPTION = Path(__file__).resolve().parents[1] / "stdlib" / "src" / "option.agl"
 
 
 def _check(source: str, *, default_stdlib: bool = True) -> None:
@@ -265,13 +266,13 @@ def test_std_core_source_builtin_shape_is_not_masked_by_seed(
     tmp_path: Path,
 ) -> None:
     stdlib_root = tmp_path / "stdlib"
-    core_path = stdlib_root / "std" / "prelude.agl"
+    core_path = stdlib_root / "src" / "prelude.agl"
     core_path.parent.mkdir(parents=True)
     core_path.write_text("builtin enum Agent\n  | AgentCommand(command: int)\n")
     graph = load_graph(
         "program def main() = ()\n",
         entry_path=None,
-        roots=RootSet(frozenset({stdlib_root})),
+        roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({stdlib_root})),
         default_stdlib=True,
     )
 

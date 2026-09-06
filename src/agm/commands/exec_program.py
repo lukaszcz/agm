@@ -773,7 +773,7 @@ def run_registered(
 
     if package is not None and command_path is not None:
         command = target.package.manifest.commands.get(command_path)
-        if target.module_id.segments[0] != package or command is None:
+        if command is None:
             _registered_command_mismatch(command_path)
         if command.program != program:
             # The index deliberately remains an install-time cache. Editable
@@ -787,8 +787,6 @@ def run_registered(
             target = _resolve_installed_reference_or_exit(
                 program, context=context, package_name=package
             )
-            if target.module_id.segments[0] != package:
-                _registered_command_mismatch(command_path)
 
     if not target.entry_path.is_file():
         print(f"Error: installed program reference {program!r} was not found.", file=sys.stderr)

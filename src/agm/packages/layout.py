@@ -18,6 +18,13 @@ STORE_DIRNAME = "packages"
 ACTIVATION_INDEX_FILENAME = "index.toml"
 """The activation-index file name directly beneath the package store."""
 
+MODULE_TREE_DIRNAME = "src"
+"""The directory holding a package's AgL module tree, directly beneath its root.
+
+Fixed for every package, so a module id's leading segment names the package
+while the rest of the id is a path beneath this directory.
+"""
+
 
 def store_root_path(agm_home: Path) -> Path:
     """Return the package-store root beneath an already-resolved AGM home."""

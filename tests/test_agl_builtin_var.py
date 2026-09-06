@@ -20,9 +20,7 @@ from agm.agl.runtime.option import some_value
 from agm.agl.semantics.values import BoolValue, IntValue, RecordValue, TextValue, Value
 from agm.agl.syntax import BuiltinVarDecl, Call, Expr, VarRef, walk
 from agm.agl.syntax.constants import is_constant_expression
-from tests._agl_helpers import agent_value, run_inline_command
-
-_STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
+from tests._agl_helpers import agent_value, agl_roots, run_inline_command
 
 
 def _run(source: str, *, default_loop_limit: int | None = None) -> RunResult:
@@ -40,7 +38,7 @@ def _run_program(
     builtin_host_settings: dict[str, Value] | None = None,
 ) -> RunResult:
     """Run *source* (with imports) through the program pipeline against the stdlib."""
-    roots = RootSet(roots=frozenset({_STDLIB}) | extra_roots)
+    roots = agl_roots(*extra_roots)
     rt = PipelineDriver(
         default_loop_limit=default_loop_limit,
         shell_exec_timeout=shell_exec_timeout,

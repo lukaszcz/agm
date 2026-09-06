@@ -25,16 +25,17 @@ from agm.packages.archive import (
     verify_archive_discipline,
     write_archive,
 )
+from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.record import RecordEntry, serialize_record
 
 
 def _package_tree(tmp_path: Path) -> Path:
     root = tmp_path / "review_tools"
-    (root / "review_tools").mkdir(parents=True)
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
     (root / "package.toml").write_text(
         '[package]\nversion = "1.2.3"\nname = "review_tools"\n', encoding="utf-8"
     )
-    (root / "review_tools" / "main.agl").write_text(
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
         "program def main() -> unit = ()\n", encoding="utf-8"
     )
     return root
@@ -56,7 +57,7 @@ def test_write_archive_is_deterministic_and_independent_of_git_directory(tmp_pat
         assert archive.namelist() == [
             "review_tools-1.2.3/RECORD",
             "review_tools-1.2.3/package.toml",
-            "review_tools-1.2.3/review_tools/main.agl",
+            "review_tools-1.2.3/src/main.agl",
         ]
         assert all(info.date_time == (1980, 1, 1, 0, 0, 0) for info in archive.infolist())
         assert all((info.external_attr >> 16) == 0o100644 for info in archive.infolist())
@@ -85,7 +86,7 @@ def test_write_archive_excludes_private_vcs_cache_archive_and_ignored_files(tmp_
         "review_tools-1.2.3/RECORD",
         "review_tools-1.2.3/nested/kept.txt",
         "review_tools-1.2.3/package.toml",
-        "review_tools-1.2.3/review_tools/main.agl",
+        "review_tools-1.2.3/src/main.agl",
     ]
 
 
@@ -95,7 +96,7 @@ def test_archive_discipline_resolves_resources_relative_to_the_package_root(
     root = _package_tree(tmp_path)
     (root / "prompts").mkdir()
     (root / "prompts" / "review.md").write_text("prompt", encoding="utf-8")
-    (root / "review_tools" / "main.agl").write_text(
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
         'let prompt = resource("prompts/review.md")\nprogram def main() -> unit = ()\n',
         encoding="utf-8",
     )
@@ -111,7 +112,7 @@ def test_archive_discipline_accepts_a_nonempty_directory_resource(tmp_path: Path
     root = _package_tree(tmp_path)
     (root / "assets").mkdir()
     (root / "assets" / "logo.txt").write_text("logo", encoding="utf-8")
-    (root / "review_tools" / "main.agl").write_text(
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
         'let assets = resource("assets")\nprogram def main() -> unit = ()\n', encoding="utf-8"
     )
 
@@ -124,7 +125,7 @@ def test_archive_discipline_accepts_a_nonempty_directory_resource(tmp_path: Path
 
 def test_write_archive_refuses_symlinks_and_casefolding_collisions(tmp_path: Path) -> None:
     root = _package_tree(tmp_path)
-    (root / "linked.agl").symlink_to(root / "review_tools" / "main.agl")
+    (root / "linked.agl").symlink_to(root / MODULE_TREE_DIRNAME / "main.agl")
 
     with pytest.raises(ArchiveError, match="symlink"):
         write_archive(root, tmp_path / "linked.agmpkg")
@@ -164,7 +165,7 @@ def test_archive_metadata_and_manifest_are_read_without_leaving_an_open_archive(
     extracted = tmp_path / "extracted"
     extracted.mkdir()
     assert extract_archive(archive_path, extracted) == metadata
-    assert (extracted / "review_tools" / "main.agl").is_file()
+    assert (extracted / MODULE_TREE_DIRNAME / "main.agl").is_file()
 
 
 def test_verify_archive_rejects_a_record_that_does_not_match_its_contents(tmp_path: Path) -> None:
@@ -174,7 +175,7 @@ def test_verify_archive_rejects_a_record_that_does_not_match_its_contents(tmp_pa
     prefix = "review_tools-1.2.3/"
     with zipfile.ZipFile(archive_path) as source:
         contents = {info.filename: source.read(info) for info in source.infolist()}
-    contents[prefix + "review_tools/main.agl"] = b"changed"
+    contents[prefix + "src/main.agl"] = b"changed"
     _write_zip(archive_path, list(contents.items()))
 
     with pytest.raises(ArchiveError, match="RECORD"):
@@ -221,7 +222,7 @@ def test_write_archive_refuses_hard_link_destination_aliasing_a_source_file(
     tmp_path: Path,
 ) -> None:
     root = _package_tree(tmp_path)
-    source = root / "review_tools" / "main.agl"
+    source = root / MODULE_TREE_DIRNAME / "main.agl"
     original_source = source.read_bytes()
     destination = tmp_path / "package.agmpkg"
     destination.hardlink_to(source)
@@ -237,7 +238,7 @@ def test_write_archive_atomically_replaces_a_destination_hardlinked_at_replace_s
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _package_tree(tmp_path)
-    source = root / "review_tools" / "main.agl"
+    source = root / MODULE_TREE_DIRNAME / "main.agl"
     original_source = source.read_bytes()
     destination = tmp_path / "package.agmpkg"
     destination.write_text("previous archive", encoding="utf-8")
@@ -304,7 +305,7 @@ def test_write_archive_rejects_oversized_source_before_reading_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _package_tree(tmp_path)
-    payload = root / "review_tools" / "large.bin"
+    payload = root / MODULE_TREE_DIRNAME / "large.bin"
     payload.write_bytes(b"x" * 2048)
     monkeypatch.setattr(package_archive, "MAX_ARCHIVE_ENTRY_SIZE", 1024)
     original_read_bytes = Path.read_bytes
@@ -324,7 +325,7 @@ def test_write_archive_reports_source_stat_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _package_tree(tmp_path)
-    payload = root / "review_tools" / "payload.bin"
+    payload = root / MODULE_TREE_DIRNAME / "payload.bin"
     payload.write_bytes(b"payload")
     manifest = package_archive.load_manifest(root / "package.toml")
     selected = package_archive.distribution_files(root)
@@ -436,7 +437,7 @@ def test_write_archive_rejects_parent_moved_into_source_after_initial_check(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _package_tree(tmp_path)
-    source = root / "review_tools" / "main.agl"
+    source = root / MODULE_TREE_DIRNAME / "main.agl"
     original_source = source.read_bytes()
     destination_parent = tmp_path / "output"
     destination_parent.mkdir()
@@ -466,7 +467,7 @@ def test_write_archive_reports_and_rolls_back_a_detected_parent_move_into_source
     """Concurrent namespace mutation is unsupported but reported when detected."""
 
     root = _package_tree(tmp_path)
-    source = root / "review_tools" / "main.agl"
+    source = root / MODULE_TREE_DIRNAME / "main.agl"
     original_source = source.read_bytes()
     root_collision = root / "package.agmpkg"
     root_collision.write_bytes(b"root source collision")
@@ -762,7 +763,7 @@ def test_write_archive_reports_uninspectable_destination_and_source(
 
     monkeypatch.undo()
     destination.write_text("archive", encoding="utf-8")
-    source = root / "review_tools" / "main.agl"
+    source = root / MODULE_TREE_DIRNAME / "main.agl"
 
     def fail_source_stat(path: Path, *, follow_symlinks: bool = True) -> os.stat_result:
         if path == source and follow_symlinks:
@@ -818,7 +819,7 @@ def test_write_archive_reports_uninspectable_source_entries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _package_tree(tmp_path)
-    source = root / "review_tools" / "main.agl"
+    source = root / MODULE_TREE_DIRNAME / "main.agl"
     original_lstat = Path.lstat
 
     def fail_source_lstat(path: Path) -> os.stat_result:
@@ -1047,8 +1048,8 @@ def test_read_archive_metadata_rejects_file_descendant_conflicts(tmp_path: Path)
         [
             ("review_tools-1.2.3/RECORD", b""),
             ("review_tools-1.2.3/package.toml", b""),
-            ("review_tools-1.2.3/review_tools/custom", b""),
-            ("review_tools-1.2.3/review_tools/custom/main.agl", b""),
+            ("review_tools-1.2.3/src/custom", b""),
+            ("review_tools-1.2.3/src/custom/main.agl", b""),
         ],
     )
 
@@ -1310,7 +1311,7 @@ def test_archive_metadata_preflight_and_zip_parsing_share_one_open_file(
     archive_path = tmp_path / "package.agmpkg"
     replacement = tmp_path / "replacement.agmpkg"
     original_metadata = write_archive(root, archive_path)
-    (root / "review_tools" / "main.agl").write_text(
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
         "program def changed() -> unit = ()\n", encoding="utf-8"
     )
     write_archive(root, replacement)
@@ -1494,7 +1495,7 @@ def test_archive_entry_size_limit_admits_exactly_the_largest_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _package_tree(tmp_path)
-    (root / "review_tools" / "payload.bin").write_bytes(b"x" * 4096)
+    (root / MODULE_TREE_DIRNAME / "payload.bin").write_bytes(b"x" * 4096)
     baseline = tmp_path / "baseline.agmpkg"
     expected = write_archive(root, baseline)
     largest = max(_entry_sizes(baseline))

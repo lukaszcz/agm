@@ -54,7 +54,7 @@ def _path_companion() -> _PathCompanion:
             **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
         }
     )
-    module: ModuleType = registry.load_companion(_PATH_MODULE, _STDLIB_ROOT / "std" / "path.py")
+    module: ModuleType = registry.load_companion(_PATH_MODULE, _STDLIB_ROOT / "src" / "path.py")
     return cast(_PathCompanion, module)
 
 

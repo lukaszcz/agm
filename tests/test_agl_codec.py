@@ -25,7 +25,6 @@ from __future__ import annotations
 import itertools
 from collections.abc import Callable, Mapping
 from decimal import Decimal
-from pathlib import Path
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -47,7 +46,6 @@ from agm.agl.ir.contracts import (
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.modules.roots import RootSet
 from agm.agl.parser.parser import parse_program
 from agm.agl.runtime.codec import JsonCodec, ParseResult, TextCodec, extract_json_text
 from agm.agl.runtime.contract import OutputContract, materialize_contract, materialize_ir_contract
@@ -89,6 +87,7 @@ from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import build_decode_schema, derive_schema
 from agm.agl.typecheck.env import CheckedModule, OutputContractSpec
 from tests._agl_helpers import (
+    agl_roots,
     enum_type,
     enum_typedef,
     next_decl_id,
@@ -3502,7 +3501,7 @@ class TestRegisterCodec:
             def parse(self, raw: str) -> ParseResult:
                 return ParseResult.success(TextValue(raw))
 
-        roots = RootSet(roots=frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
+        roots = agl_roots()
         prepared = prepare_inline_command(
             'let y: text = ask("Q", format = "graph-schema-text")\ny',
             roots=roots,

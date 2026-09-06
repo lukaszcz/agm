@@ -55,7 +55,7 @@ def _json_companion() -> _JsonCompanion:
             **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
         }
     )
-    module: ModuleType = registry.load_companion(_JSON_MODULE, _STDLIB_ROOT / "std" / "json.py")
+    module: ModuleType = registry.load_companion(_JSON_MODULE, _STDLIB_ROOT / "src" / "json.py")
     return cast(_JsonCompanion, module)
 
 

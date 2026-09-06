@@ -256,7 +256,7 @@ def test_packaged_program_reads_a_resource_through_std_fs_in_a_temp_package(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     package_root = tmp_path / "review-tools"
-    entry = package_root / "review_tools" / "read_prompt.agl"
+    entry = package_root / "src" / "read_prompt.agl"
     entry.parent.mkdir(parents=True)
     entry.write_text(
         """import std/fs
@@ -278,7 +278,7 @@ program def main() -> unit =
         entry.read_text(encoding="utf-8"),
         entry,
         roots=RootSet(
-            roots=frozenset({_STDLIB, package_root}),
+            roots=frozenset(),
             packages=(package,),
             stdlib_roots=frozenset({_STDLIB}),
         ),

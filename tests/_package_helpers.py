@@ -18,6 +18,7 @@ from pathlib import Path
 import semver
 
 from agm.packages.activation import ActivationIndex, ActivePackage, write_activation_index
+from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.record import write_record
 from agm.version import AGM_VERSION
 
@@ -60,7 +61,7 @@ def write_installed_package(
     """
 
     package_root = home / ".agm" / "packages" / name / "1.0.0"
-    module = package_root / name / "main.agl"
+    module = package_root / MODULE_TREE_DIRNAME / "main.agl"
     module.parent.mkdir(parents=True)
     registrations = "".join(
         f'"{path}" = {{ program = "{program}" }}\n' for path, program in (commands or {}).items()

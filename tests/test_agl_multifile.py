@@ -19,11 +19,10 @@ import pytest
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.program import resolve_program
-from tests._agl_helpers import prepare_inline_command, run_inline_command
+from tests._agl_helpers import agl_roots, prepare_inline_command, run_inline_command
 from tests.agl.ir_harness import make_graph_from_files as _make_graph_from_files
 
 MULTI_FILE_DIR = Path(__file__).parent / "agl" / "multi_file"
-REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 
 
 def _make_runtime(
@@ -49,11 +48,8 @@ def _run_program(
 ) -> Any:
     """Run a multi-file AgL program and return the RunResult."""
     from agm.agl import PipelineDriver
-    from agm.agl.modules.roots import RootSet
 
-    roots = RootSet(
-        roots=frozenset({*(d.resolve() for d in roots_dirs if d.exists()), REPO_STDLIB_ROOT})
-    )
+    roots = agl_roots(*(d.resolve() for d in roots_dirs if d.exists()))
     prepared = (
         PipelineDriver.prepare_program(entry_source, entry_path=entry_path, roots=roots)
         if entry_path is not None
@@ -103,12 +99,11 @@ def test_selected_program_preflight_excludes_unreachable_call_sites(tmp_path: Pa
     (library_root / "b.agl").write_text('def dormant() -> text = exec("unreachable")\n')
 
     from agm.agl import PipelineDriver
-    from agm.agl.modules.roots import RootSet
     from agm.agl.runtime.arguments import ProgramArguments
 
     prepared = PipelineDriver.prepare_program(
         "import a\nimport b\nprogram def main() -> unit = ()\n",
-        roots=RootSet(roots=frozenset({library_root, REPO_STDLIB_ROOT})),
+        roots=agl_roots(library_root),
     )
     runtime = PipelineDriver()
     discovery = runtime.discover_programs(prepared)
@@ -134,12 +129,11 @@ def test_selected_program_does_not_wire_unreachable_extern(tmp_path: Path) -> No
     (library_root / "b.py").write_text('raise RuntimeError("must not import")\n')
 
     from agm.agl import PipelineDriver
-    from agm.agl.modules.roots import RootSet
     from agm.agl.runtime.arguments import ProgramArguments
 
     prepared = PipelineDriver.prepare_program(
         "import a\nimport b\nprogram def main() -> unit = ()\n",
-        roots=RootSet(roots=frozenset({library_root, REPO_STDLIB_ROOT})),
+        roots=agl_roots(library_root),
     )
     runtime = PipelineDriver()
     discovery = runtime.discover_programs(prepared)

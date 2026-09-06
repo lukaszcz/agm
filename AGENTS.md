@@ -52,7 +52,7 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 - Make sure tests are not flaky.
 - Do not let an assertion pass on the strength of its own test's name: pytest builds `tmp_path` from the test name, so a path in an error message can contain the word being asserted. `just test-neutral-tmp` re-runs the suite with neutrally named temp directories and fails any assertion that does.
 - Keep individual tests cheap. `just test` fails any test that overruns the CPU ceiling in its `check_cpu_budget`; `just test-budget` ranks tests by cost so the ceiling can be recalibrated, and `just test-budget test_cpu_budget=<seconds>` tries out a candidate number. Measure cost in CPU seconds, never wall clock — under `-n auto` a test's wall time tracks the load average rather than the test, while its CPU time varies by well under half.
-- Maintain 100% test coverage of `src/` and of the standard library's Python companions in `stdlib/std/`.
+- Maintain 100% test coverage of `src/` and of the standard library's Python companions in `stdlib/src/`.
 - Maintain 100% command coverage in e2e tests.
 - Group the tests in `tests/` by meaningful categories and name the files meaningfully.
 - NEVER run real agents (claude, codex, pi, ...) in the tests - ALWAYS mock agent calls.

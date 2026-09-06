@@ -11,6 +11,7 @@ from agm.agl.modules.errors import AmbiguousModule, ModuleNotFound, ModulePrefix
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.resolver import expand_wildcard, resolve_module
 from agm.agl.modules.roots import RootSet, assemble_roots
+from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.manifest import load_manifest
 from agm.packages.model import PackageInfo
 
@@ -34,17 +35,19 @@ def _make_module(root: Path, module_path: str) -> Path:
 
 
 def _mounted_package_roots(tmp_path: Path, *, also_loose: bool = False) -> RootSet:
-    """Mount a package whose root also contains an undeclared AgL module."""
+    """Mount a package whose root also contains AgL files outside its module tree."""
     invocation = tmp_path / "invocation"
     invocation.mkdir()
     package_root = tmp_path / "package"
-    (package_root / "demo").mkdir(parents=True)
+    (package_root / MODULE_TREE_DIRNAME).mkdir(parents=True)
     manifest_path = package_root / "package.toml"
     manifest_path.write_text('[package]\nname = "demo"\nversion = "1.0.0"\n')
     package = PackageInfo(package_root, load_manifest(manifest_path))
     _make_module(package_root, "assets/rogue")
     _make_module(package_root, "demo")
     _make_module(package_root, "demo/main")
+    _make_module(package.module_root, "main")
+    _make_module(package.module_root, "sub/deep")
     return assemble_roots(
         invocation_root=invocation,
         lib_root=None,
@@ -52,6 +55,24 @@ def _mounted_package_roots(tmp_path: Path, *, also_loose: bool = False) -> RootS
         cli=(str(package_root),) if also_loose else (),
         cwd=tmp_path,
         package_roots=(package,),
+    )
+
+
+def _stdlib_roots(tmp_path: Path) -> RootSet:
+    """Select a standard-library root holding one module and one stray file."""
+    invocation = tmp_path / "invocation"
+    invocation.mkdir()
+    stdlib_root = tmp_path / "stdlib"
+    (stdlib_root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    _make_module(stdlib_root / MODULE_TREE_DIRNAME, "prelude")
+    _make_module(stdlib_root, "stray")
+    return assemble_roots(
+        invocation_root=invocation,
+        stdlib_root=stdlib_root,
+        lib_root=None,
+        configured=(),
+        cli=(),
+        cwd=tmp_path,
     )
 
 
@@ -117,10 +138,20 @@ class TestResolveModuleFound:
         assert result == mod_file.resolve()
 
 
-class TestResolveModuleNotFound:
-    def test_package_mount_does_not_expose_modules_outside_its_module_tree(
-        self, tmp_path: Path
-    ) -> None:
+class TestPackageMounts:
+    """A mounted package resolves ``<name>/<rest>`` inside its module tree."""
+
+    def test_a_mounted_module_resolves_under_the_package_name(self, tmp_path: Path) -> None:
+        roots = _mounted_package_roots(tmp_path)
+        module_root = (tmp_path / "package" / MODULE_TREE_DIRNAME).resolve()
+
+        assert resolve_module(ModuleId.from_path("demo/main"), roots) == module_root / "main.agl"
+        assert (
+            resolve_module(ModuleId.from_path("demo/sub/deep"), roots)
+            == module_root / "sub" / "deep.agl"
+        )
+
+    def test_a_file_beside_the_module_tree_is_not_a_module(self, tmp_path: Path) -> None:
         roots = _mounted_package_roots(tmp_path)
 
         with pytest.raises(ModuleNotFound):
@@ -128,18 +159,58 @@ class TestResolveModuleNotFound:
         with pytest.raises(ModuleNotFound):
             resolve_module(ModuleId.from_path("demo"), roots)
 
-    def test_not_found_lists_only_the_roots_the_mount_scope_admitted(self, tmp_path: Path) -> None:
-        # A package-only root is out of scope for a foreign top-level segment,
-        # so it is never searched -- and must not be named as if it had been.
+    def test_a_loose_root_over_a_package_root_makes_its_own_tree_ambiguous(
+        self, tmp_path: Path
+    ) -> None:
+        # The package root holds a directory named after the package; supplying
+        # that root loosely makes its files modules too, and the same id then
+        # names two distinct files.
+        roots = _mounted_package_roots(tmp_path, also_loose=True)
+
+        with pytest.raises(AmbiguousModule):
+            resolve_module(ModuleId.from_path("demo/main"), roots)
+
+    def test_not_found_lists_the_searched_module_trees(self, tmp_path: Path) -> None:
+        roots = _mounted_package_roots(tmp_path)
+
+        with pytest.raises(ModuleNotFound) as exc_info:
+            resolve_module(ModuleId.from_path("demo/absent"), roots)
+
+        assert exc_info.value.searched_roots == (
+            (tmp_path / "invocation").resolve(),
+            (tmp_path / "package" / MODULE_TREE_DIRNAME).resolve(),
+        )
+
+    def test_not_found_lists_only_the_roots_that_were_searched(self, tmp_path: Path) -> None:
+        # Nothing mounts "assets", so only the loose invocation root is
+        # searched -- and no module tree may be named as if it had been.
         roots = _mounted_package_roots(tmp_path)
 
         with pytest.raises(ModuleNotFound) as exc_info:
             resolve_module(ModuleId.from_path("assets/absent"), roots)
 
-        searched = exc_info.value.searched_roots
-        assert (tmp_path / "package").resolve() not in searched
-        assert searched == ((tmp_path / "invocation").resolve(),)
+        assert exc_info.value.searched_roots == ((tmp_path / "invocation").resolve(),)
 
+
+class TestStandardLibraryMount:
+    """The selected standard-library root mounts ``std`` and nothing else."""
+
+    def test_std_resolves_inside_the_library_module_tree(self, tmp_path: Path) -> None:
+        roots = _stdlib_roots(tmp_path)
+
+        assert (
+            resolve_module(ModuleId.from_path("std/prelude"), roots)
+            == (tmp_path / "stdlib" / MODULE_TREE_DIRNAME / "prelude.agl").resolve()
+        )
+
+    def test_the_library_root_is_not_loose(self, tmp_path: Path) -> None:
+        roots = _stdlib_roots(tmp_path)
+
+        with pytest.raises(ModuleNotFound):
+            resolve_module(ModuleId.from_path("stray"), roots)
+
+
+class TestResolveModuleNotFound:
     def test_not_found_raises_module_not_found(self, tmp_path: Path) -> None:
         root = tmp_path / "lib"
         root.mkdir()
@@ -272,16 +343,37 @@ class TestResolveModuleDeterminism:
 
 
 class TestExpandWildcard:
-    def test_package_mount_scoping_applies_to_wildcards(self, tmp_path: Path) -> None:
+    def test_a_package_wildcard_spans_its_whole_module_tree(self, tmp_path: Path) -> None:
         roots = _mounted_package_roots(tmp_path)
+        module_root = (tmp_path / "package" / MODULE_TREE_DIRNAME).resolve()
 
         with pytest.raises(ModulePrefixNotFound):
             expand_wildcard(("assets",), roots)
         assert expand_wildcard(("demo",), roots) == {
-            ModuleId.from_path("demo/main"): (tmp_path / "package" / "demo" / "main.agl").resolve()
+            ModuleId.from_path("demo/main"): module_root / "main.agl",
+            ModuleId.from_path("demo/sub/deep"): module_root / "sub" / "deep.agl",
         }
 
-    def test_explicit_loose_root_still_exposes_all_modules(self, tmp_path: Path) -> None:
+    def test_a_wildcard_below_the_package_name_spans_that_subtree(self, tmp_path: Path) -> None:
+        roots = _mounted_package_roots(tmp_path)
+        module_root = (tmp_path / "package" / MODULE_TREE_DIRNAME).resolve()
+        _make_module(module_root, "sub")
+
+        assert expand_wildcard(("demo", "sub"), roots) == {
+            ModuleId.from_path("demo/sub"): module_root / "sub.agl",
+            ModuleId.from_path("demo/sub/deep"): module_root / "sub" / "deep.agl",
+        }
+
+    def test_a_standard_library_wildcard_stays_inside_the_module_tree(self, tmp_path: Path) -> None:
+        roots = _stdlib_roots(tmp_path)
+
+        assert expand_wildcard(("std",), roots) == {
+            ModuleId.from_path("std/prelude"): (
+                tmp_path / "stdlib" / MODULE_TREE_DIRNAME / "prelude.agl"
+            ).resolve()
+        }
+
+    def test_explicit_loose_root_still_exposes_all_files(self, tmp_path: Path) -> None:
         roots = _mounted_package_roots(tmp_path, also_loose=True)
 
         module_id = ModuleId.from_path("assets/rogue")
@@ -289,6 +381,14 @@ class TestExpandWildcard:
         assert expand_wildcard(("assets",), roots) == {
             module_id: (tmp_path / "package" / "assets" / "rogue.agl").resolve()
         }
+
+    def test_a_loose_root_over_a_package_root_makes_its_wildcard_ambiguous(
+        self, tmp_path: Path
+    ) -> None:
+        roots = _mounted_package_roots(tmp_path, also_loose=True)
+
+        with pytest.raises(AmbiguousModule):
+            expand_wildcard(("demo",), roots)
 
     def test_single_root_single_file(self, tmp_path: Path) -> None:
         root = tmp_path / "lib"

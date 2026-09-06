@@ -26,6 +26,8 @@ from agm.agl.semantics.types import (
     Type,
     UnitType,
 )
+from agm.packages.layout import MODULE_TREE_DIRNAME
+from tests._agl_helpers import agl_roots
 
 
 @pytest.mark.parametrize(
@@ -67,7 +69,7 @@ def test_builtin_direct_method_calls_lower_as_receiver_first_direct_calls() -> N
     stdlib_root = Path(__file__).parent / "agl" / "program_modules" / "builtin_method_stdlib"
     prepared = PipelineDriver.prepare_program(
         "program def main() -> unit = print([1].size())\n",
-        roots=RootSet(roots=frozenset({stdlib_root})),
+        roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({stdlib_root})),
     )
     discovery = PipelineDriver().discover_programs(prepared)
 
@@ -85,7 +87,7 @@ def test_builtin_receiver_host_method_reuses_its_core_lowering_route() -> None:
     stdlib_root = Path(__file__).parent / "agl" / "program_modules" / "builtin_method_stdlib"
     prepared = PipelineDriver.prepare_program(
         "program def main() -> unit = print([1].copy())\n",
-        roots=RootSet(roots=frozenset({stdlib_root})),
+        roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({stdlib_root})),
     )
     discovery = PipelineDriver().discover_programs(prepared)
 
@@ -104,7 +106,7 @@ def test_ambient_builtin_methods_are_inferred_before_consumers_without_source_im
     prepared = PipelineDriver.prepare_program(
         "def generic-first[E](values: array[E]) = values.first()\n"
         "program def main() = print(generic-first([9]))\n",
-        roots=RootSet(roots=frozenset({stdlib_root})),
+        roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({stdlib_root})),
     )
 
     assert prepared.resolved is not None, prepared.diagnostics
@@ -140,10 +142,9 @@ def test_dry_run_attributes_ambient_method_externs_to_the_calling_module() -> No
 
 def test_dry_run_keeps_source_reachable_ambient_registry_modules() -> None:
     """An explicit import remains runtime-reachable even when the registry also loads it."""
-    stdlib_root = Path(__file__).resolve().parents[1] / "stdlib"
     prepared = PipelineDriver.prepare_program(
         'import std/array::join\nprogram def main() -> unit = print(join(["a"], ","))\n',
-        roots=RootSet(roots=frozenset({stdlib_root})),
+        roots=agl_roots(),
     )
     discovery = PipelineDriver().discover_programs(prepared)
 
@@ -157,7 +158,7 @@ def test_dry_run_keeps_registry_method_modules_reached_through_source_imports(
 ) -> None:
     """Source provenance reaches a registry method module through an intermediary module."""
     stdlib = tmp_path / "stdlib"
-    std = stdlib / "std"
+    std = stdlib / MODULE_TREE_DIRNAME
     std.mkdir(parents=True)
     (std / "prelude.agl").write_text("builtin def print[T](value: T) -> unit\n")
     (std / "builtin-methods.agl").write_text("import std/math\n")
@@ -169,7 +170,7 @@ def test_dry_run_keeps_registry_method_modules_reached_through_source_imports(
 
     prepared = PipelineDriver.prepare_program(
         "import bridge\nprogram def main() -> unit = ()\n",
-        roots=RootSet(roots=frozenset({tmp_path, stdlib})),
+        roots=RootSet(roots=frozenset({tmp_path}), stdlib_roots=frozenset({stdlib})),
     )
     runtime = PipelineDriver()
     discovery = runtime.discover_programs(prepared)
@@ -189,7 +190,7 @@ def test_builtin_methods_are_ambient_but_owning_module_free_functions_are_not() 
     stdlib_root = Path(__file__).parent / "agl" / "program_modules" / "builtin_method_stdlib"
     prepared = PipelineDriver.prepare_program(
         'program def main() -> unit = print("value".surround("[", "]"))\n',
-        roots=RootSet(roots=frozenset({stdlib_root})),
+        roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({stdlib_root})),
     )
 
     selected = PipelineDriver().discover_programs(prepared)
@@ -198,7 +199,7 @@ def test_builtin_methods_are_ambient_but_owning_module_free_functions_are_not() 
 
     unavailable = PipelineDriver.prepare_program(
         "program def main() -> unit = unavailable()\n",
-        roots=RootSet(roots=frozenset({stdlib_root})),
+        roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({stdlib_root})),
     )
     rejected = PipelineDriver().discover_programs(unavailable)
 

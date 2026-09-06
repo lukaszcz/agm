@@ -73,13 +73,13 @@ def _trace_kinds_and_prints(path: Path) -> tuple[list[str], list[str]]:
 def _write_command_stdlib(root: Path, config: str) -> Path:
     """Create the minimal stdlib needed to exercise the real exec command."""
     stdlib_root = root / "stdlib"
-    config_path = stdlib_root / "std" / "config.agl"
+    config_path = stdlib_root / "src" / "config.agl"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(
         'import std/prelude::*\nbuiltin var default-agent: Agent = AgentCommand("echo")\n' + config,
         encoding="utf-8",
     )
-    for source in (_STDLIB / "std").iterdir():
+    for source in (_STDLIB / "src").iterdir():
         if source.is_file() and source.name != "config.agl":
             copyfile(source, config_path.parent / source.name)
     return stdlib_root

@@ -34,7 +34,7 @@ belong in the program body.
 **unordered set of search roots**:
 
 - the directory of `FILE` (or the working directory for `-c`),
-- when that directory is inside a development package, its containing package and the recursive closure of dependencies declared with relative `path` sources in their manifests,
+- when that directory is inside a development package, its containing package and the recursive closure of dependencies declared with relative `path` sources in their manifests, each contributing its `src/` module tree under its own package name,
 - the selected standard library: a development `std` package checkout whose own module tree holds `FILE` (or the working directory) when there is one, whatever version it declares; otherwise the active immutable `<AGM-home>/packages/std/<AGM_VERSION>/` package when it matches the running binary, where a selected active package with a different version is an error, while AGM's bundled copy (`agm/stdlib` in an installed wheel or the in-repo `stdlib/` tree in a source checkout) is used when no active package is selected or the matching store tree is absent; `AGM_STDLIB` overrides this whole selection without mounting the active package as an additional root,
 - the selected AGM home's global `lib` directory (overridable via `[modules] lib_root` in config),
 - any roots declared under `[modules] roots` in any config layer,

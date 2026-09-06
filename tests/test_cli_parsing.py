@@ -15,6 +15,7 @@ from typer.main import get_command
 import agm.cli as cli
 import agm.parser as parser_helpers
 from agm.core import dry_run as dry_run_state
+from agm.packages.layout import MODULE_TREE_DIRNAME
 
 
 class RecordedArgs(Protocol):
@@ -151,7 +152,7 @@ class TestPackageCheck:
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         package = tmp_path / "demo"
-        module_root = package / "demo"
+        module_root = package / MODULE_TREE_DIRNAME
         module_root.mkdir(parents=True)
         (package / "package.toml").write_text('[package]\nname = "demo"\nversion = "1.0.0"\n')
         monkeypatch.chdir(package)
@@ -170,7 +171,7 @@ class TestPackageCheck:
         self, runner: CliRunner, tmp_path: Path, command_path: str
     ) -> None:
         package = tmp_path / "demo"
-        module_root = package / "demo"
+        module_root = package / MODULE_TREE_DIRNAME
         module_root.mkdir(parents=True)
         (module_root / "main.agl").write_text("program def main() -> unit = ()\n")
         (package / "package.toml").write_text(
@@ -184,8 +185,8 @@ class TestPackageCheck:
         self, runner: CliRunner, tmp_path: Path
     ) -> None:
         package = tmp_path / "alpha"
-        (package / "alpha").mkdir(parents=True)
-        (package / "alpha" / "main.agl").write_text(
+        (package / MODULE_TREE_DIRNAME).mkdir(parents=True)
+        (package / MODULE_TREE_DIRNAME / "main.agl").write_text(
             "program def main() -> unit = ()\n", encoding="utf-8"
         )
         (package / "package.toml").write_text(
@@ -206,8 +207,8 @@ class TestPackageCheck:
         self, runner: CliRunner, tmp_path: Path
     ) -> None:
         package = tmp_path / "alpha"
-        (package / "alpha").mkdir(parents=True)
-        (package / "alpha" / "main.agl").write_text(
+        (package / MODULE_TREE_DIRNAME).mkdir(parents=True)
+        (package / MODULE_TREE_DIRNAME / "main.agl").write_text(
             "program def main() -> unit = ()\n", encoding="utf-8"
         )
         (package / "package.toml").write_text(

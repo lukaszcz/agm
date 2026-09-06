@@ -22,14 +22,16 @@ from agm.agl.parser import AglSyntaxError
 from agm.agl.pipeline import ParsedEntry, PipelineDriver, PreparedProgram
 from agm.agl.semantics.values import RecordValue, TextValue
 from agm.agl.setting_overrides import SettingOverride
+from agm.packages.layout import MODULE_TREE_DIRNAME
 from tests._agl_helpers import (
+    REPO_STDLIB_ROOT,
     agl_roots,
     agl_std_package_roots,
     prepare_inline_command,
     run_inline_command,
 )
 
-_STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
+_STDLIB_MODULES = REPO_STDLIB_ROOT / MODULE_TREE_DIRNAME
 
 
 def _roots() -> RootSet:
@@ -413,7 +415,7 @@ class TestStandardLibraryEntry:
     def test_unknown_engine_key_is_rejected_for_every_library_entry(self, module: str) -> None:
         origin = "--probe"
         _driver, prepared = self._prepare_file(
-            _STDLIB / "std" / f"{module}.agl",
+            _STDLIB_MODULES / f"{module}.agl",
             {"no-such-engine-setting": SettingOverride(source="1", origin=origin)},
         )
         assert prepared.diagnostics
@@ -424,7 +426,7 @@ class TestStandardLibraryEntry:
         """The value really is spliced in as the declaration's default."""
         origin = "--agent"
         driver, prepared = self._prepare_file(
-            _STDLIB / "std" / f"{module}.agl",
+            _STDLIB_MODULES / f"{module}.agl",
             {"default-agent": SettingOverride(source='"not-an-agent"', origin=origin)},
         )
         assert prepared.diagnostics == ()

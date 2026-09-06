@@ -14,14 +14,13 @@ package means to AgL source.
 ## Layout and identity
 
 A package is a directory holding a `package.toml` manifest and a module tree
-in a subdirectory named after the package. Everything else in the directory —
-prompts, templates, data — is a resource, laid out freely outside the module
-tree.
+in its `src/` subdirectory. Everything else in the directory — prompts,
+templates, data — is a resource, laid out freely outside the module tree.
 
 ```
 review-tools/
   package.toml          # manifest: name, version, dependencies, commands
-  review-tools/         # module tree: modules import as review-tools/...
+  src/                  # module tree: modules import as review-tools/...
     review.agl
     review.py           # extern companion, beside its module
     lint.agl
@@ -31,9 +30,11 @@ review-tools/
 
 The package name must be a single AgL identifier segment and not a reserved
 keyword. It is the mandatory first segment of every module the package
-provides: `review-tools/review.agl` has identity `review-tools/review`, both
-inside the package and from any importer. A module file placed outside the
-named module tree does not belong to the package and is not mounted.
+provides: `review-tools/src/review.agl` has identity `review-tools/review`,
+both inside the package and from any importer. The `src/` tree is mounted
+under the package name; the package root itself is not a search root, so a
+module file placed outside `src/` does not belong to the package and is not
+mounted.
 
 A package under development — a source checkout discovered from an execution
 root or from a source file's containing tree — behaves exactly like an
@@ -150,7 +151,6 @@ for it.
 
 An import from a package module that reaches outside its package, its declared
 dependencies, and the standard library is a visibility error naming the
-undeclared package. A module tree whose directory does not match the manifest
-name, a command that names no valid `program def`, and a literal resource with
-no target are reported by package validation before anything runs. All of these
-are static errors.
+undeclared package. A package with no `src/` module tree, a command that names
+no valid `program def`, and a literal resource with no target are reported by
+package validation before anything runs. All of these are static errors.

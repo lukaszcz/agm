@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from agm.agl import PipelineDriver
-from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PreparedProgram, ProgramDiscovery, RunResult
 from agm.agl.repl.session import EntryResult, ReplSession
-from tests._agl_helpers import prepare_inline_command, run_inline_command
+from tests._agl_helpers import agl_roots, prepare_inline_command, run_inline_command
 
 _FAILING_SOURCE = (
     'let idle = AgentCommand("idle")\n'
@@ -30,11 +27,10 @@ _CACHED_SOURCE = (
 
 
 def _prepare_graph(source: str) -> PreparedProgram:
-    stdlib = Path(__file__).resolve().parent.parent / "stdlib"
     return prepare_inline_command(
         source,
         entry_path=None,
-        roots=RootSet(roots=frozenset({stdlib})),
+        roots=agl_roots(),
     )
 
 

@@ -50,13 +50,14 @@ from agm.agent.session import (
     SessionOperation,
     SessionService,
 )
-from tests._agl_helpers import prepare_inline_command
+from agm.packages.layout import MODULE_TREE_DIRNAME
+from tests._agl_helpers import REPO_STDLIB_ROOT, agl_roots, prepare_inline_command
 from tests._process_helpers import FakeShell
 
 AGL_DIR = Path(__file__).parent / "agl"
 PROGRAMS_DIR = AGL_DIR / "programs"
 REJECTIONS_DIR = AGL_DIR / "rejections"
-REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+STDLIB_MODULES_DIR = REPO_STDLIB_ROOT / MODULE_TREE_DIRNAME
 EXTERNS_PROGRAMS_DIR = PROGRAMS_DIR / "externs"
 RESOURCE_PROGRAMS_DIR = PROGRAMS_DIR / "resources"
 _SESSION_STATIC_DECLARATIONS = """\
@@ -825,31 +826,25 @@ def _run_program(
     runtime = PipelineDriver(**runtime_options)
     module_roots = scenario.get("module_roots", [])
     default_stdlib = not scenario.get("no_stdlib", False)
-    stdlib_root = (
-        (AGL_DIR / str(scenario["stdlib_root"])).resolve()
-        if "stdlib_root" in scenario
-        else REPO_STDLIB_ROOT
-    )
+    module_root_paths = [(AGL_DIR / str(root)).resolve() for root in module_roots]
     entry_path: Path | None = None
     roots: Any | None = None
-    if module_roots or "stdlib_root" in scenario:
+    if "stdlib_root" in scenario:
+        # A scenario-supplied standard library replaces the repository one, so
+        # its tree is the only place ``std/...`` resolves.
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(
-            roots=frozenset(
-                {
-                    *((AGL_DIR / str(root)).resolve() for root in module_roots),
-                    stdlib_root,
-                }
-            )
+            roots=frozenset(module_root_paths),
+            stdlib_roots=frozenset({(AGL_DIR / str(scenario["stdlib_root"])).resolve()}),
         )
+    elif module_roots:
+        roots = agl_roots(*module_root_paths)
     elif program.is_relative_to(EXTERNS_PROGRAMS_DIR) or program.is_relative_to(
         RESOURCE_PROGRAMS_DIR
     ):
-        from agm.agl.modules.roots import RootSet
-
         entry_path = program
-        roots = RootSet(roots=frozenset({program.parent.resolve(), stdlib_root}))
+        roots = agl_roots(program.parent.resolve())
     # `inline_entry` sources carry no `program def`: they run through the same
     # synthetic-entry transform as `agm exec -c`.
     prepare = (
@@ -1554,16 +1549,7 @@ def test_static_rejection(program: Path) -> None:
     module_roots = spec.get("module_roots", [])
     roots = None
     if module_roots:
-        from agm.agl.modules.roots import RootSet
-
-        roots = RootSet(
-            roots=frozenset(
-                {
-                    *((AGL_DIR / str(root)).resolve() for root in module_roots),
-                    REPO_STDLIB_ROOT,
-                }
-            )
-        )
+        roots = agl_roots(*((AGL_DIR / str(root)).resolve() for root in module_roots))
     result = _run_source_entry(PipelineDriver(), program.read_text(encoding="utf-8"), roots=roots)
     assert not result.ok, "expected the program to be rejected statically"
     assert result.error is None, "static rejection must happen before execution"
@@ -1608,9 +1594,8 @@ def test_direct_std_option_import_runs_without_the_automatic_prelude(
 ) -> None:
     """An explicit ``std/option`` import remains sufficient under ``--no-stdlib``."""
     from agm.agl import PipelineDriver
-    from agm.agl.modules.roots import RootSet
 
-    roots = RootSet(roots=frozenset({REPO_STDLIB_ROOT}))
+    roots = agl_roots()
     result = _run_source_entry(
         PipelineDriver(),
         "import std/prelude::print\n"
@@ -1632,9 +1617,8 @@ def test_std_core_option_reexport_preserves_nominal_identity(
 ) -> None:
     """The re-export and direct module name one interoperable ``Option`` type."""
     from agm.agl import PipelineDriver
-    from agm.agl.modules.roots import RootSet
 
-    roots = RootSet(roots=frozenset({REPO_STDLIB_ROOT}))
+    roots = agl_roots()
     result = _run_source_entry(
         PipelineDriver(),
         "import std/prelude::{Option as CoreOption, print}\n"
@@ -1672,7 +1656,7 @@ _SCOPED_STDLIB_MODULES = ("errors", "agent", "session", "exec", "io", "value", "
 
 
 def _scoped_stdlib_root(tmp_path: Path) -> Path:
-    """Build a throwaway module root whose builtin surface is one scoped module.
+    """Build a throwaway standard-library root whose builtin surface is one scoped module.
 
     The standard library's builtin declarations are concatenated inside a
     ``scope Std`` region of a replacement ``std/prelude``, importing only
@@ -1683,11 +1667,11 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
     module root because scopes cannot contain them.
     """
     scoped_stdlib_root = tmp_path / "scoped_stdlib"
-    std_dir = scoped_stdlib_root / "std"
+    std_dir = scoped_stdlib_root / MODULE_TREE_DIRNAME
     std_dir.mkdir(parents=True)
 
     def module_lines(name: str) -> list[str]:
-        source = (REPO_STDLIB_ROOT / "std" / f"{name}.agl").read_text(encoding="utf-8")
+        source = (STDLIB_MODULES_DIR / f"{name}.agl").read_text(encoding="utf-8")
         return source.splitlines(keepends=True)
 
     fun_lines = module_lines("fun")
@@ -1718,7 +1702,7 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
         f"{infix_declarations}\nscope Std\n{''.join(scoped_sources)}end Std\n", encoding="utf-8"
     )
     for name in ("option.agl", "pair.agl", "either.agl", "result.agl"):
-        source = (REPO_STDLIB_ROOT / "std" / name).read_text(encoding="utf-8")
+        source = (STDLIB_MODULES_DIR / name).read_text(encoding="utf-8")
         if name == "result.agl":
             source = source.replace(
                 "def attempt[T](f: () -> T) -> Result[T, Exception] =\n"
@@ -1738,7 +1722,7 @@ def test_legacy_exec_signature_rejects_extended_options_with_a_diagnostic(tmp_pa
     result = _run_source_entry(
         PipelineDriver(),
         'program def main() -> unit = Std::exec("echo hi", env = ())\n',
-        roots=RootSet(roots=frozenset({scoped_stdlib_root})),
+        roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({scoped_stdlib_root})),
     )
 
     assert not result.ok
@@ -1771,7 +1755,9 @@ def test_scoped_stdlib_arrangement_runs_end_to_end(
     runtime = PipelineDriver()
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
         result = _run_source_entry(
-            runtime, program, roots=RootSet(roots=frozenset({scoped_stdlib_root}))
+            runtime,
+            program,
+            roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({scoped_stdlib_root})),
         )
     assert list(result.diagnostics) == [], (
         f"unexpected static diagnostics: {' | '.join(d.message for d in result.diagnostics)}"
@@ -1808,7 +1794,9 @@ def test_scoped_stdlib_arrangement_structured_exec_result_is_the_scoped_nominal(
     runtime = PipelineDriver()
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
         result = _run_source_entry(
-            runtime, program, roots=RootSet(roots=frozenset({scoped_stdlib_root}))
+            runtime,
+            program,
+            roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({scoped_stdlib_root})),
         )
     shell.assert_complete()
 
@@ -1841,7 +1829,9 @@ def test_scoped_stdlib_arrangement_uncaught_host_raised_exec_error_reports_scope
     runtime = PipelineDriver()
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
         result = _run_source_entry(
-            runtime, program, roots=RootSet(roots=frozenset({scoped_stdlib_root}))
+            runtime,
+            program,
+            roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({scoped_stdlib_root})),
         )
     shell.assert_complete()
 
@@ -1865,7 +1855,7 @@ def test_scoped_stdlib_arrangement_bare_print_is_undefined_but_qualified_works(
     from agm.agl.modules.roots import RootSet
 
     scoped_stdlib_root = _scoped_stdlib_root(tmp_path)
-    roots = RootSet(roots=frozenset({scoped_stdlib_root}))
+    roots = RootSet(roots=frozenset(), stdlib_roots=frozenset({scoped_stdlib_root}))
     runtime = PipelineDriver()
 
     bare_result = _run_source_entry(

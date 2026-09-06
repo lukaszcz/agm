@@ -99,6 +99,40 @@ class TestResolveInstalledReference:
         )
         assert isinstance(result, ExecTargetError)
 
+    def test_a_reference_naming_no_module_is_an_error(self, tmp_path: Path) -> None:
+        """A bare package name names no module: the id needs a path beneath the tree.
+
+        The same package resolves fine once the reference names a module
+        beneath its tree, so the failure is the missing module segment rather
+        than an inactive package.
+        """
+        home = tmp_path / "home"
+        write_installed_package(home, "tools")
+
+        with_module = resolve_installed_reference(
+            "tools/main::main", home=home, proj_dir=None, cwd=tmp_path
+        )
+        without_module = resolve_installed_reference(
+            "tools::main", home=home, proj_dir=None, cwd=tmp_path
+        )
+
+        assert isinstance(with_module, PackageProgramReference)
+        assert isinstance(without_module, ExecTargetError)
+
+    def test_the_entry_file_is_resolved_inside_the_package_module_tree(
+        self, tmp_path: Path
+    ) -> None:
+        home = tmp_path / "home"
+        module = write_installed_package(home, "tools")
+
+        result = resolve_installed_reference(
+            "tools/main::main", home=home, proj_dir=None, cwd=tmp_path
+        )
+
+        assert isinstance(result, PackageProgramReference)
+        assert result.entry_path == result.package.module_root / "main.agl"
+        assert result.entry_path == module
+
     def test_unknown_package_is_an_error(self, tmp_path: Path) -> None:
         result = resolve_installed_reference(
             "missing/main::main", home=tmp_path, proj_dir=None, cwd=tmp_path

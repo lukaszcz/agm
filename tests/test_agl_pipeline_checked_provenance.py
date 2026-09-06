@@ -8,13 +8,11 @@ the production path and rerun the affected passes.
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from agm.agl.lower import lower_program
-from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import (
     ArgumentPreflight,
     ArtifactProvenanceError,
@@ -23,15 +21,14 @@ from agm.agl.pipeline import (
 )
 from agm.agl.runtime.arguments import ProgramArguments
 from agm.agl.runtime.codec import TextCodec
-from tests._agl_helpers import prepare_inline_command
+from tests._agl_helpers import agl_roots, prepare_inline_command
 
 
 def _prepare_graph(source: str) -> PreparedProgram:
-    stdlib = Path(__file__).resolve().parent.parent / "stdlib"
     return prepare_inline_command(
         source,
         entry_path=None,
-        roots=RootSet(roots=frozenset({stdlib})),
+        roots=agl_roots(),
     )
 
 

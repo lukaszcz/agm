@@ -59,7 +59,7 @@ def _array_companion() -> _ArrayCompanion:
             ),
         }
     )
-    module: ModuleType = registry.load_companion(_ARRAY_MODULE, _STDLIB_ROOT / "std" / "array.py")
+    module: ModuleType = registry.load_companion(_ARRAY_MODULE, _STDLIB_ROOT / "src" / "array.py")
     return cast(_ArrayCompanion, module)
 
 

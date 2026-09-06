@@ -33,7 +33,7 @@ _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 
 def _copy_core_and_option(directory: Path) -> None:
     """Copy standard-library dependencies required by a custom ``std/config``."""
-    for source in (_STDLIB_ROOT / "std").iterdir():
+    for source in (_STDLIB_ROOT / "src").iterdir():
         if source.is_file() and source.name != "config.agl":
             copyfile(source, directory / source.name)
     config_path = directory / "config.agl"
@@ -210,7 +210,7 @@ class TestDefaultsAndSeeding:
         self, tmp_path: Path
     ) -> None:
         stdlib_root = tmp_path / "stdlib"
-        config_path = stdlib_root / "std" / "config.agl"
+        config_path = stdlib_root / "src" / "config.agl"
         config_path.parent.mkdir(parents=True)
         config_path.write_text("builtin var strict-json: bool = true\n", encoding="utf-8")
         _copy_core_and_option(config_path.parent)
@@ -319,7 +319,7 @@ def declared_defaults_stdlib(tmp_path_factory: pytest.TempPathFactory) -> Path:
     state crosses between them.
     """
     stdlib_root = tmp_path_factory.mktemp("declared-defaults") / "stdlib"
-    config_path = stdlib_root / "std" / "config.agl"
+    config_path = stdlib_root / "src" / "config.agl"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(
         "import std/prelude::*\n"
@@ -558,7 +558,7 @@ class TestExplicitZeroLoopLimit:
         self, tmp_path: Path
     ) -> None:
         stdlib_root = tmp_path / "stdlib"
-        config_path = stdlib_root / "std" / "config.agl"
+        config_path = stdlib_root / "src" / "config.agl"
         config_path.parent.mkdir(parents=True)
         config_path.write_text("builtin var max-iters: int = 3\n", encoding="utf-8")
         _copy_core_and_option(config_path.parent)
@@ -698,7 +698,7 @@ class TestResetRestoresMixedSeedOrigins:
         self, tmp_path: Path
     ) -> None:
         stdlib_root = tmp_path / "stdlib"
-        config_path = stdlib_root / "std" / "config.agl"
+        config_path = stdlib_root / "src" / "config.agl"
         config_path.parent.mkdir(parents=True)
         config_path.write_text(
             "import std/prelude::{Option, Agent}\n"
@@ -783,7 +783,7 @@ class TestLiveHostReconfiguration:
 def test_reset_keeps_a_declared_zero_max_iters_disabled(tmp_path: Path) -> None:
     """A zero declaration default remains an unlimited loop setting after reset."""
     stdlib_root = tmp_path / "stdlib"
-    config_path = stdlib_root / "std" / "config.agl"
+    config_path = stdlib_root / "src" / "config.agl"
     config_path.parent.mkdir(parents=True)
     config_path.write_text("builtin var max-iters: int = 0\n", encoding="utf-8")
     _copy_core_and_option(config_path.parent)
@@ -799,7 +799,7 @@ def test_reset_keeps_a_declared_zero_max_iters_disabled(tmp_path: Path) -> None:
 def test_reset_preserves_an_explicit_host_loop_limit(tmp_path: Path) -> None:
     """A host loop limit takes precedence over a declaration default after reset."""
     stdlib_root = tmp_path / "stdlib"
-    config_path = stdlib_root / "std" / "config.agl"
+    config_path = stdlib_root / "src" / "config.agl"
     config_path.parent.mkdir(parents=True)
     config_path.write_text("builtin var max-iters: int = 0\n", encoding="utf-8")
     _copy_core_and_option(config_path.parent)
@@ -818,7 +818,7 @@ def test_reset_preserves_an_explicit_host_loop_limit(tmp_path: Path) -> None:
 def test_reset_uses_declared_live_engine_defaults(tmp_path: Path) -> None:
     """Reset reapplies std/config defaults without a removed runner setting."""
     stdlib_root = tmp_path / "stdlib"
-    config_path = stdlib_root / "std" / "config.agl"
+    config_path = stdlib_root / "src" / "config.agl"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(
         "import std/prelude::*\n"

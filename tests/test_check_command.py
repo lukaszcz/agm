@@ -469,22 +469,22 @@ def test_check_searches_the_development_std_checkout_holding_the_entry(
     monkeypatch.setenv("AGM_HOME", str(home))
     monkeypatch.chdir(tmp_path)
     store_root = home / "packages" / "std" / AGM_VERSION
-    (store_root / "std").mkdir(parents=True)
+    (store_root / "src").mkdir(parents=True)
     (store_root / "package.toml").write_text(
         f'[package]\nname = "std"\nversion = "{AGM_VERSION}"\n', encoding="utf-8"
     )
-    (store_root / "std" / "prelude.agl").write_text("def unused() -> int = 0\n", encoding="utf-8")
+    (store_root / "src" / "prelude.agl").write_text("def unused() -> int = 0\n", encoding="utf-8")
     write_activation_index(
         ActivationIndex({"std": ActivePackage(semver.Version.parse(AGM_VERSION))}),
         home=home,
         env={"AGM_HOME": str(home)},
     )
     checkout = tmp_path / "checkout"
-    (checkout / "std").mkdir(parents=True)
+    (checkout / "src").mkdir(parents=True)
     (checkout / "package.toml").write_text(
         '[package]\nname = "std"\nversion = "9.9.9"\n', encoding="utf-8"
     )
-    entry = checkout / "std" / "agent.agl"
+    entry = checkout / "src" / "agent.agl"
     entry.write_text("def value() -> int = 1\n", encoding="utf-8")
 
     # The checkout holds no ``std/prelude``, so the check fails against it; the
@@ -563,7 +563,7 @@ class TestPackageOwnedEntry:
         """Lay out an empty development package *name* and isolate the AGM home."""
         self._isolated_home(tmp_path, monkeypatch)
         root = tmp_path / name
-        (root / name).mkdir(parents=True)
+        (root / "src").mkdir(parents=True)
         (root / "package.toml").write_text(
             f'[package]\nname = "{name}"\nversion = "1.0.0"\n', encoding="utf-8"
         )
@@ -574,8 +574,8 @@ class TestPackageOwnedEntry:
     ) -> None:
         """Neither file is anonymous, so each may import the other back."""
         root = self._development_package(tmp_path, monkeypatch, "duo")
-        first = root / "duo" / "a.agl"
-        second = root / "duo" / "b.agl"
+        first = root / "src" / "a.agl"
+        second = root / "src" / "b.agl"
         first.write_text(
             "import duo/b\ndef fa() -> int = duo/b::fb()\n",
             encoding="utf-8",
@@ -596,8 +596,8 @@ class TestPackageOwnedEntry:
     ) -> None:
         """A named entry is an ordinary member of its package's module tree."""
         root = self._development_package(tmp_path, monkeypatch, "duo")
-        first = root / "duo" / "a.agl"
-        second = root / "duo" / "b.agl"
+        first = root / "src" / "a.agl"
+        second = root / "src" / "b.agl"
         first.write_text("import duo/b\ndef fa() -> int = 1\n", encoding="utf-8")
         second.write_text("import duo/*\ndef gb() -> int = duo/a::fa()\n", encoding="utf-8")
 
@@ -613,7 +613,7 @@ class TestPackageOwnedEntry:
         """``builtin var`` is a standard-library privilege the entry must keep."""
         self._isolated_home(tmp_path, monkeypatch)
 
-        check_command.run(CheckArgs(files=[str(self._REPO_STDLIB / "std" / "config.agl")]))
+        check_command.run(CheckArgs(files=[str(self._REPO_STDLIB / "src" / "config.agl")]))
 
         captured = capsys.readouterr()
         assert captured.out == ""
@@ -624,7 +624,7 @@ class TestPackageOwnedEntry:
     ) -> None:
         self._isolated_home(tmp_path, monkeypatch)
 
-        check_command.run(CheckArgs(files=[str(self._REPO_STDLIB / "std" / "prelude.agl")]))
+        check_command.run(CheckArgs(files=[str(self._REPO_STDLIB / "src" / "prelude.agl")]))
 
         captured = capsys.readouterr()
         assert captured.out == ""
@@ -634,7 +634,7 @@ class TestPackageOwnedEntry:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         root = self._development_package(tmp_path, monkeypatch, "mine")
-        module = root / "mine" / "settings.agl"
+        module = root / "src" / "settings.agl"
         module.write_text("builtin var log: bool = false\n", encoding="utf-8")
 
         with pytest.raises(SystemExit) as exc_info:
@@ -650,8 +650,8 @@ class TestPackageOwnedEntry:
         built-in spelling is free there whether the file is the checked entry
         or one of its library imports."""
         root = self._development_package(tmp_path, monkeypatch, "kit")
-        owner = root / "kit" / "files.agl"
-        user = root / "kit" / "user.agl"
+        owner = root / "src" / "files.agl"
+        user = root / "src" / "user.agl"
         owner.write_text("def copy(n: int) -> int = n\n", encoding="utf-8")
         user.write_text(
             "import kit/files\ndef twice(n: int) -> int = kit/files::copy(n)\n",
@@ -711,9 +711,9 @@ class TestPackageOwnedEntry:
         the file or an import reached it.
         """
         root = self._development_package(tmp_path, monkeypatch, "kit")
-        owner = root / "kit" / "forms.agl"
+        owner = root / "src" / "forms.agl"
         owner.write_text(source, encoding="utf-8")
-        consumer = root / "kit" / "user.agl"
+        consumer = root / "src" / "user.agl"
         consumer.write_text("import kit/forms\n", encoding="utf-8")
 
         assert self._check_ok(owner, capsys) is accepted

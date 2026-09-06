@@ -200,7 +200,7 @@ ENTRY_ID: ModuleId = ModuleId(segments=(_ENTRY_SEGMENT,))
 RESERVED_ID: ModuleId = ModuleId(segments=(_RESERVED_SEGMENT,))
 
 #: Logical module id for the shipped standard-library prelude
-#: (``stdlib/std/prelude.agl``), the module every other module implicitly
+#: (``stdlib/src/prelude.agl``), the module every other module implicitly
 #: imports.  It is the prelude *injection* point only: which module declares a
 #: given ``builtin`` is not part of its meaning -- see
 #: :attr:`ModuleId.is_standard_library`.

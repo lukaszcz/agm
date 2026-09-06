@@ -31,10 +31,10 @@ from agm.agl.scope import AglScopeError, ModuleResolution
 from agm.agl.scope.program import resolve_program
 from agm.agl.syntax.nodes import FuncDef
 from agm.agl.syntax.visitor import walk
+from tests._agl_helpers import agl_roots
 from tests.agl.ir_harness import make_graph_from_files, write_companion_file
 from tests.agl.module_graph import resolve_program_ast
 
-_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 _SCOPE_REJECTIONS_DIR = Path(__file__).resolve().parent / "agl" / "rejections" / "scope"
 
 
@@ -403,7 +403,7 @@ class TestPlacement:
             next_id,
             path=None,
             cached={},
-            roots=RootSet(roots=frozenset({_STDLIB_ROOT})),
+            roots=agl_roots(),
         )
         with pytest.raises(AglScopeError):
             resolve_program(graph)

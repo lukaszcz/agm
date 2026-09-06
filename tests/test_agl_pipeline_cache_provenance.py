@@ -17,7 +17,6 @@ import pytest
 
 from agm.agl.matchcompile import MatchCompiledProgram, compile_program_matches
 from agm.agl.modules.ids import STD_PRELUDE_ID
-from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import (
     ArtifactProvenanceError,
     PipelineDriver,
@@ -25,7 +24,7 @@ from agm.agl.pipeline import (
     ProgramDiscovery,
 )
 from agm.agl.typecheck.program import check_program
-from tests._agl_helpers import prepare_inline_command
+from tests._agl_helpers import agl_roots, prepare_inline_command
 
 
 def _prepare_graph(
@@ -33,11 +32,10 @@ def _prepare_graph(
     *,
     extra_roots: frozenset[Path] = frozenset(),
 ) -> PreparedProgram:
-    stdlib = Path(__file__).resolve().parent.parent / "stdlib"
     return prepare_inline_command(
         source,
         entry_path=None,
-        roots=RootSet(roots=frozenset({stdlib, *extra_roots})),
+        roots=agl_roots(*extra_roots),
     )
 
 

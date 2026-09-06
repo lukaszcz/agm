@@ -21,6 +21,7 @@ from typer.main import get_command
 import agm.cli as cli
 import agm.commands.pkg.init as init_command
 from agm.cli_support.args import PkgInitArgs
+from agm.packages.layout import MODULE_TREE_DIRNAME
 
 _AGM_COMMAND = get_command(cli.app)
 
@@ -73,7 +74,7 @@ class TestPackageInit:
         assert checked.exit_code == 0
         assert 'name = "demo"' in (package / "package.toml").read_text(encoding="utf-8")
         assert 'version = "0.1.0"' in (package / "package.toml").read_text(encoding="utf-8")
-        assert (package / "demo" / "main.agl").read_text(encoding="utf-8")
+        assert (package / MODULE_TREE_DIRNAME / "main.agl").read_text(encoding="utf-8")
         assert str(package / "package.toml") in created.output
 
     def test_manifest_documents_how_to_declare_dependencies(
@@ -94,7 +95,7 @@ class TestPackageInit:
 
         assert result.exit_code == 0
         assert (tmp_path / "demo" / "package.toml").is_file()
-        assert (tmp_path / "demo" / "demo" / "main.agl").is_file()
+        assert (tmp_path / "demo" / MODULE_TREE_DIRNAME / "main.agl").is_file()
 
     def test_scaffolds_a_kebab_case_package_name(self, runner: CliRunner, tmp_path: Path) -> None:
         """Package names are AgL names, so a kebab-case directory scaffolds."""
@@ -106,7 +107,7 @@ class TestPackageInit:
         assert created.exit_code == 0
         assert checked.exit_code == 0
         assert 'name = "review-tools"' in (package / "package.toml").read_text(encoding="utf-8")
-        assert (package / "review-tools" / "main.agl").is_file()
+        assert (package / MODULE_TREE_DIRNAME / "main.agl").is_file()
 
     def test_name_and_version_options_override_the_defaults(
         self, runner: CliRunner, tmp_path: Path
@@ -128,20 +129,20 @@ class TestPackageInit:
         assert result.exit_code == 0
         assert 'name = "tools"' in manifest
         assert 'version = "2.1.0"' in manifest
-        assert (tmp_path / "review-tools" / "tools" / "main.agl").is_file()
+        assert (tmp_path / "review-tools" / MODULE_TREE_DIRNAME / "main.agl").is_file()
 
     def test_keeps_an_existing_starter_module(self, runner: CliRunner, tmp_path: Path) -> None:
         package = tmp_path / "demo"
-        (package / "demo").mkdir(parents=True)
-        (package / "demo" / "main.agl").write_text(
+        (package / MODULE_TREE_DIRNAME).mkdir(parents=True)
+        (package / MODULE_TREE_DIRNAME / "main.agl").write_text(
             "program def main() -> unit = print('hi')\n", encoding="utf-8"
         )
 
         result = invoke(runner, ["pkg", "init", str(package)])
 
         assert result.exit_code == 0
-        assert "print" in (package / "demo" / "main.agl").read_text(encoding="utf-8")
-        assert str(package / "demo" / "main.agl") not in result.output
+        assert "print" in (package / MODULE_TREE_DIRNAME / "main.agl").read_text(encoding="utf-8")
+        assert str(package / MODULE_TREE_DIRNAME / "main.agl") not in result.output
 
     def test_refuses_a_directory_that_already_holds_a_manifest(
         self, runner: CliRunner, tmp_path: Path

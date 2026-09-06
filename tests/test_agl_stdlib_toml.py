@@ -51,7 +51,7 @@ def _toml_companion() -> _TomlCompanion:
             ),
         }
     )
-    module: ModuleType = registry.load_companion(_TOML_MODULE, _STDLIB_ROOT / "std" / "toml.py")
+    module: ModuleType = registry.load_companion(_TOML_MODULE, _STDLIB_ROOT / "src" / "toml.py")
     return cast(_TomlCompanion, module)
 
 

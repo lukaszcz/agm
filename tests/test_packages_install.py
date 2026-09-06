@@ -5,6 +5,7 @@ from __future__ import annotations
 import errno
 import re
 import shutil
+import zipfile
 from collections.abc import Callable, Generator, Iterable, Iterator
 from pathlib import Path
 from typing import NamedTuple
@@ -40,6 +41,7 @@ from agm.packages.install import (
     refresh_managed_stdlib,
     uninstall_package,
 )
+from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.manifest import PackageManifest
 from agm.packages.model import PackageInfo
 from agm.packages.record import content_hash, read_record, verify_record, write_record
@@ -62,12 +64,14 @@ def _newer_agm_requirement() -> str:
 
 def _package(root: Path, name: str, version: str, dependencies: str = "") -> Path:
     root.mkdir()
-    (root / name).mkdir()
+    (root / MODULE_TREE_DIRNAME).mkdir()
     (root / "package.toml").write_text(
         f'[package]\nname = "{name}"\nversion = "{version}"\n' + dependencies,
         encoding="utf-8",
     )
-    (root / name / "main.agl").write_text("program def main() -> unit = ()\n", encoding="utf-8")
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "program def main() -> unit = ()\n", encoding="utf-8"
+    )
     return root
 
 
@@ -192,8 +196,8 @@ def test_refresh_registers_stdlib_package_under_an_isolated_agm_home(tmp_path: P
     )
 
     assert installed.root == agm_home / "packages" / "std" / AGM_VERSION
-    assert (installed.root / "std" / "prelude.agl").is_file()
-    assert (installed.root / "std" / "option.agl").is_file()
+    assert (installed.root / MODULE_TREE_DIRNAME / "prelude.agl").is_file()
+    assert (installed.root / MODULE_TREE_DIRNAME / "option.agl").is_file()
     assert verify_record(installed.root)
     index = load_activation_index(home=tmp_path / "ignored-home", env={"AGM_HOME": str(agm_home)})
     assert index.packages["std"].version == installed.manifest.version
@@ -240,8 +244,8 @@ def test_managed_stdlib_refresh_stages_under_the_store_lock(
     source = _stdlib_source()
     home = prebuilt_store(_SHIPPED_STDLIB)
     installed_root = _store_root(home, "std", AGM_VERSION)
-    core = installed_root / "std" / "prelude.agl"
-    stale = installed_root / "std" / "stale.agl"
+    core = installed_root / MODULE_TREE_DIRNAME / "prelude.agl"
+    stale = installed_root / MODULE_TREE_DIRNAME / "stale.agl"
     core.write_text("old complete tree\n", encoding="utf-8")
     stale.write_text("stale\n", encoding="utf-8")
     write_record(installed_root)
@@ -268,7 +272,7 @@ def test_managed_stdlib_refresh_stages_under_the_store_lock(
     assert refreshed.root == installed_root
     assert observed_staging is not None
     assert not observed_staging.exists()
-    assert core.read_bytes() == (source / "std" / "prelude.agl").read_bytes()
+    assert core.read_bytes() == (source / MODULE_TREE_DIRNAME / "prelude.agl").read_bytes()
     assert not stale.exists()
     assert verify_record(refreshed.root)
     active = load_activation_index(home=home, env={}).packages["std"]
@@ -321,7 +325,7 @@ def test_managed_stdlib_refresh_restores_the_complete_tree_when_activation_fails
     source = _stdlib_source()
     home = prebuilt_store(_SHIPPED_STDLIB)
     installed_root = _store_root(home, "std", AGM_VERSION)
-    core = installed_root / "std" / "prelude.agl"
+    core = installed_root / MODULE_TREE_DIRNAME / "prelude.agl"
     core.write_text("old complete tree\n", encoding="utf-8")
     write_record(installed_root)
 
@@ -404,7 +408,7 @@ def test_managed_stdlib_refresh_restores_the_complete_tree_when_publication_fail
     source = _stdlib_source()
     home = prebuilt_store(_SHIPPED_STDLIB)
     installed_root = _store_root(home, "std", AGM_VERSION)
-    core = installed_root / "std" / "prelude.agl"
+    core = installed_root / MODULE_TREE_DIRNAME / "prelude.agl"
     core.write_text("old complete tree\n", encoding="utf-8")
     write_record(installed_root)
     original_replace = Path.replace
@@ -502,7 +506,7 @@ def test_install_copies_package_writes_record_and_activates_it(tmp_path: Path) -
     installed = install_directory(source, home=home, env={})
 
     assert installed.root == home / ".agm" / "packages" / "alpha" / "1.0.0"
-    assert (installed.root / "alpha" / "main.agl").is_file()
+    assert (installed.root / MODULE_TREE_DIRNAME / "main.agl").is_file()
     assert (installed.root.parent / ".provenance" / "1.0.0.toml").is_file()
     assert verify_record(installed.root)
     active = load_activation_index(home=home, env={}).packages["alpha"]
@@ -837,7 +841,7 @@ def test_uninstall_cleans_an_interrupted_tombstone_after_a_different_reinstall(
 
     monkeypatch.setattr(package_install.fs, "unlink", original_unlink)
     second_source = _package(tmp_path / "second", "alpha", "2.0.0")
-    (second_source / "alpha" / "main.agl").write_text(
+    (second_source / MODULE_TREE_DIRNAME / "main.agl").write_text(
         'program def main() -> string = "replacement"\n', encoding="utf-8"
     )
     second = install_directory(second_source, home=home, env={})
@@ -1245,7 +1249,7 @@ def test_install_validates_resource_aliases_from_an_installed_satisfying_depende
 ) -> None:
     home = tmp_path / "home"
     dependency = _package(tmp_path / "bravo", "bravo", "1.0.0")
-    (dependency / "bravo" / "assets.agl").write_text(
+    (dependency / MODULE_TREE_DIRNAME / "assets.agl").write_text(
         "export std/prelude::{resource as asset}\n",
         encoding="utf-8",
     )
@@ -1256,7 +1260,7 @@ def test_install_validates_resource_aliases_from_an_installed_satisfying_depende
         "1.0.0",
         '\n[dependencies]\nbravo = "1"\n',
     )
-    (package / "alpha" / "main.agl").write_text(
+    (package / MODULE_TREE_DIRNAME / "main.agl").write_text(
         'import bravo/assets::{asset as load}\nlet prompt = load("prompts/missing.md")\n',
         encoding="utf-8",
     )
@@ -1403,8 +1407,8 @@ def _development_package(root: Path, name: str, version: str) -> Path:
     (root / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
     (root / ".hidden").write_text("hidden", encoding="utf-8")
     (root / "ignored.txt").write_text("ignored", encoding="utf-8")
-    (root / name / "__pycache__").mkdir()
-    (root / name / "__pycache__" / "main.cpython-312.pyc").write_bytes(b"cached")
+    (root / MODULE_TREE_DIRNAME / "__pycache__").mkdir()
+    (root / MODULE_TREE_DIRNAME / "__pycache__" / "main.cpython-312.pyc").write_bytes(b"cached")
     return root
 
 
@@ -1427,7 +1431,7 @@ def test_directory_and_archive_installs_store_the_same_distribution(tmp_path: Pa
         path.relative_to(from_directory.root).as_posix()
         for path in from_directory.root.rglob("*")
         if path.is_file()
-    ) == ["RECORD", "alpha/main.agl", "package.toml"]
+    ) == ["RECORD", "package.toml", "src/main.agl"]
     assert (from_directory.root / "package.toml").read_bytes() == (
         from_archive.root / "package.toml"
     ).read_bytes()
@@ -1470,8 +1474,10 @@ def test_uninstall_removes_a_store_tree_polluted_by_unrecorded_caches(tmp_path: 
     )
     # A companion import writes bytecode next to its source, and a store tree
     # copied by hand can carry VCS metadata; neither appears in RECORD.
-    (installed.root / "alpha" / "__pycache__").mkdir()
-    (installed.root / "alpha" / "__pycache__" / "main.cpython-312.pyc").write_bytes(b"cached")
+    (installed.root / MODULE_TREE_DIRNAME / "__pycache__").mkdir()
+    (installed.root / MODULE_TREE_DIRNAME / "__pycache__" / "main.cpython-312.pyc").write_bytes(
+        b"cached"
+    )
     (installed.root / ".git").mkdir()
     (installed.root / ".git" / "config").write_text("vcs", encoding="utf-8")
 
@@ -1487,7 +1493,7 @@ def test_uninstall_refuses_a_store_tree_with_unrecorded_package_content(tmp_path
     installed = install_directory(
         _package(tmp_path / "source", "alpha", "1.0.0"), home=home, env={}
     )
-    (installed.root / "alpha" / "extra.agl").write_text("()\n", encoding="utf-8")
+    (installed.root / MODULE_TREE_DIRNAME / "extra.agl").write_text("()\n", encoding="utf-8")
 
     with pytest.raises(PackageInstallError, match="remove"):
         uninstall_package("alpha", home=home, env={})
@@ -1727,7 +1733,9 @@ def test_directory_install_revalidates_staged_imports_after_source_changes(
     ) -> None:
         nonlocal staging_path
         staging_path = staging
-        (source_root / "alpha" / "main.agl").write_text("import alpha/missing\n", encoding="utf-8")
+        (source_root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+            "import alpha/missing\n", encoding="utf-8"
+        )
         original_materialize(source_root, manifest, staging)
 
     monkeypatch.setattr(package_install, "materialize_distribution", change_source_before_staging)
@@ -1754,7 +1762,6 @@ def test_directory_install_revalidates_the_staged_package_identity(
         nonlocal staging_path
         staging_path = staging
         original_materialize(source_root, manifest, staging)
-        (staging / "alpha").rename(staging / "bravo")
         (staging / "package.toml").write_text(
             '[package]\nname = "bravo"\nversion = "1.0.0"\n', encoding="utf-8"
         )
@@ -1803,12 +1810,12 @@ def test_install_refuses_tampered_existing_tree_and_cleans_failed_copy(
     home = tmp_path / "home"
     source = _package(tmp_path / "source", "alpha", "1.0.0")
     installed = install_directory(source, home=home, env={})
-    (installed.root / "alpha" / "main.agl").write_text("tampered", encoding="utf-8")
+    (installed.root / MODULE_TREE_DIRNAME / "main.agl").write_text("tampered", encoding="utf-8")
     write_activation_index(ActivationIndex(), home=home, env={})
     with pytest.raises(PackageInstallError, match="integrity"):
         install_directory(source, home=home, env={})
-    (installed.root / "alpha" / "main.agl").write_bytes(
-        (source / "alpha" / "main.agl").read_bytes()
+    (installed.root / MODULE_TREE_DIRNAME / "main.agl").write_bytes(
+        (source / MODULE_TREE_DIRNAME / "main.agl").read_bytes()
     )
 
     fresh = _package(tmp_path / "fresh", "bravo", "1.0.0")
@@ -1849,12 +1856,14 @@ def test_install_rejects_changed_directory_content_for_an_existing_identity(tmp_
     source = _package(tmp_path / "source", "alpha", "1.0.0")
     installed = install_directory(source, home=home, env={})
     changed_source = "program def main() -> unit = ()\nlet changed = 1\n"
-    (source / "alpha" / "main.agl").write_text(changed_source, encoding="utf-8")
+    (source / MODULE_TREE_DIRNAME / "main.agl").write_text(changed_source, encoding="utf-8")
 
     with pytest.raises(PackageInstallError, match="content"):
         install_directory(source, home=home, env={})
 
-    assert (installed.root / "alpha" / "main.agl").read_text(encoding="utf-8") != changed_source
+    assert (installed.root / MODULE_TREE_DIRNAME / "main.agl").read_text(
+        encoding="utf-8"
+    ) != changed_source
 
 
 def test_install_archive_verifies_extracts_records_and_activates_it(tmp_path: Path) -> None:
@@ -1999,7 +2008,7 @@ def test_install_archive_validates_staging_before_canonical_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = _package(tmp_path / "source", "alpha", "1.0.0")
-    (source / "alpha" / "main.agl").write_text(
+    (source / MODULE_TREE_DIRNAME / "main.agl").write_text(
         "import missing\nprogram def main() -> unit = ()\n", encoding="utf-8"
     )
     archive = tmp_path / "alpha.agmpkg"
@@ -2070,7 +2079,7 @@ def test_install_archive_rejects_a_different_content_hash_for_an_existing_identi
 ) -> None:
     first_source = _package(tmp_path / "first-source", "alpha", "1.0.0")
     second_source = _package(tmp_path / "second-source", "alpha", "1.0.0")
-    (second_source / "alpha" / "main.agl").write_text(
+    (second_source / MODULE_TREE_DIRNAME / "main.agl").write_text(
         "program def main() -> unit = ()\nlet different = 1\n", encoding="utf-8"
     )
     first_archive = tmp_path / "first.agmpkg"
@@ -2084,9 +2093,9 @@ def test_install_archive_rejects_a_different_content_hash_for_an_existing_identi
     with pytest.raises(PackageInstallError, match="content"):
         install_archive(second_archive, home=home, env={})
 
-    assert (home / ".agm" / "packages" / "alpha" / "1.0.0" / "alpha" / "main.agl").read_text(
-        encoding="utf-8"
-    ) == "program def main() -> unit = ()\n"
+    assert (
+        home / ".agm" / "packages" / "alpha" / "1.0.0" / MODULE_TREE_DIRNAME / "main.agl"
+    ).read_text(encoding="utf-8") == "program def main() -> unit = ()\n"
 
 
 def test_install_archive_does_not_reopen_an_archive_after_verification(
@@ -2094,7 +2103,7 @@ def test_install_archive_does_not_reopen_an_archive_after_verification(
 ) -> None:
     source = _package(tmp_path / "source", "alpha", "1.0.0")
     replacement_source = _package(tmp_path / "replacement-source", "alpha", "1.0.0")
-    (replacement_source / "alpha" / "main.agl").write_text(
+    (replacement_source / MODULE_TREE_DIRNAME / "main.agl").write_text(
         "program def main() -> unit = ()\n// replacement\n", encoding="utf-8"
     )
     archive = tmp_path / "alpha.agmpkg"
@@ -2111,7 +2120,14 @@ def test_install_archive_does_not_reopen_an_archive_after_verification(
     install_archive(archive, home=tmp_path / "home", env={})
 
     installed_module = (
-        tmp_path / "home" / ".agm" / "packages" / "alpha" / "1.0.0" / "alpha" / "main.agl"
+        tmp_path
+        / "home"
+        / ".agm"
+        / "packages"
+        / "alpha"
+        / "1.0.0"
+        / MODULE_TREE_DIRNAME
+        / "main.agl"
     )
     assert installed_module.read_text(encoding="utf-8") == "program def main() -> unit = ()\n"
 
@@ -2162,7 +2178,7 @@ def test_dry_run_archive_install_rejects_a_content_conflict_with_existing_tree(
 ) -> None:
     first_source = _package(tmp_path / "first-source", "alpha", "1.0.0")
     second_source = _package(tmp_path / "second-source", "alpha", "1.0.0")
-    (second_source / "alpha" / "main.agl").write_text(
+    (second_source / MODULE_TREE_DIRNAME / "main.agl").write_text(
         "program def main() -> unit = ()\nlet different = 1\n", encoding="utf-8"
     )
     first_archive = tmp_path / "first.agmpkg"
@@ -2183,7 +2199,7 @@ def test_dry_run_archive_install_rejects_a_tampered_existing_tree(tmp_path: Path
     write_archive(source, archive)
     home = tmp_path / "home"
     installed = install_archive(archive, home=home, env={})
-    (installed.root / "alpha" / "main.agl").write_text("tampered", encoding="utf-8")
+    (installed.root / MODULE_TREE_DIRNAME / "main.agl").write_text("tampered", encoding="utf-8")
     dry_run.set_enabled(True)
 
     with pytest.raises(PackageInstallError, match="integrity"):
@@ -2249,7 +2265,7 @@ def test_dry_run_archive_install_validates_imports_with_resolved_dependencies(
         "1.0.0",
         '\n[dependencies]\nbravo = "1"\n',
     )
-    (source / "alpha" / "main.agl").write_text(
+    (source / MODULE_TREE_DIRNAME / "main.agl").write_text(
         "import missing\nprogram def main() -> unit = ()\n", encoding="utf-8"
     )
     archive = tmp_path / "alpha.agmpkg"
@@ -2293,8 +2309,8 @@ def test_dry_run_archive_install_rejects_a_missing_module_tree_without_writing(
     tmp_path: Path,
 ) -> None:
     source = _package(tmp_path / "source", "alpha", "1.0.0")
-    (source / "alpha" / "main.agl").unlink()
-    (source / "alpha").rmdir()
+    (source / MODULE_TREE_DIRNAME / "main.agl").unlink()
+    (source / MODULE_TREE_DIRNAME).rmdir()
     archive = tmp_path / "alpha.agmpkg"
     write_archive(source, archive)
     dry_run.set_enabled(True)
@@ -2309,7 +2325,7 @@ def test_dry_run_archive_install_rejects_an_invalid_module_path_without_writing(
     tmp_path: Path,
 ) -> None:
     source = _package(tmp_path / "source", "alpha", "1.0.0")
-    (source / "alpha" / "1invalid.agl").write_text(
+    (source / MODULE_TREE_DIRNAME / "1invalid.agl").write_text(
         "program def invalid() -> unit = ()\n", encoding="utf-8"
     )
     archive = tmp_path / "alpha.agmpkg"
@@ -2327,7 +2343,15 @@ def test_install_archive_refuses_tampering_without_publishing_a_tree(tmp_path: P
     archive = tmp_path / "alpha.agmpkg"
     write_archive(source, archive)
     corrupted = bytearray(archive.read_bytes())
-    corrupted[len(corrupted) // 2] ^= 1
+    with zipfile.ZipFile(archive) as opened:
+        entry = opened.getinfo(f"alpha-1.0.0/{MODULE_TREE_DIRNAME}/main.agl")
+    # Flip a byte in the middle of the module's own stored payload, which
+    # starts after its local header: 30 fixed bytes plus name and extra fields.
+    header = entry.header_offset
+    name_length = int.from_bytes(corrupted[header + 26 : header + 28], "little")
+    extra_length = int.from_bytes(corrupted[header + 28 : header + 30], "little")
+    payload = header + 30 + name_length + extra_length
+    corrupted[payload + entry.compress_size // 2] ^= 1
     archive.write_bytes(corrupted)
 
     with pytest.raises(PackageInstallError, match="archive"):
@@ -2503,7 +2527,7 @@ def test_installed_package_enumeration_rejects_invalid_store_identity(tmp_path: 
     home = tmp_path / "home"
     assert installed_packages(home=home, env={}) == ()
     root = home / ".agm" / "packages" / "alpha" / "1.0.0"
-    (root / "alpha").mkdir(parents=True)
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
     (root / "package.toml").write_text(
         '[package]\nname = "bravo"\nversion = "1.0.0"\n', encoding="utf-8"
     )
@@ -2602,7 +2626,7 @@ def test_directory_install_rolls_back_new_dependency_after_discipline_failure(
 ) -> None:
     home = tmp_path / "home"
     dependency = _package(tmp_path / "bravo", "bravo", "1.0.0")
-    (dependency / "bravo" / "assets.agl").write_text(
+    (dependency / MODULE_TREE_DIRNAME / "assets.agl").write_text(
         "export std/prelude::{resource as asset}\n", encoding="utf-8"
     )
     source = _package(
@@ -2611,7 +2635,7 @@ def test_directory_install_rolls_back_new_dependency_after_discipline_failure(
         "1.0.0",
         '\n[dependencies]\nbravo = { version = "1", path = "../bravo" }\n',
     )
-    (source / "alpha" / "main.agl").write_text(
+    (source / MODULE_TREE_DIRNAME / "main.agl").write_text(
         'import bravo/assets::{asset as load}\nlet prompt = load("prompts/missing.md")\n',
         encoding="utf-8",
     )
@@ -2628,10 +2652,10 @@ def _dependency_with_undistributed_module(root: Path) -> Path:
 
     dependency = _package(root, "bravo", "1.0.0")
     (dependency / ".gitignore").write_text("extras/\n", encoding="utf-8")
-    extras = dependency / "bravo" / "extras"
+    extras = dependency / MODULE_TREE_DIRNAME / "extras"
     extras.mkdir()
     (extras / "util.agl").write_text("let value = 1\n", encoding="utf-8")
-    (dependency / "bravo" / "kept.agl").write_text("let value = 1\n", encoding="utf-8")
+    (dependency / MODULE_TREE_DIRNAME / "kept.agl").write_text("let value = 1\n", encoding="utf-8")
     return dependency
 
 
@@ -2646,7 +2670,7 @@ def test_directory_dependency_is_validated_against_its_stored_distribution(
         "1.0.0",
         '\n[dependencies]\nbravo = { version = "1", path = "../bravo" }\n',
     )
-    main = source / "alpha" / "main.agl"
+    main = source / MODULE_TREE_DIRNAME / "main.agl"
     main.write_text("import bravo/extras/util\nprogram def main() -> unit = ()\n", encoding="utf-8")
 
     with pytest.raises(PackageInstallError):
@@ -2658,7 +2682,7 @@ def test_directory_dependency_is_validated_against_its_stored_distribution(
     main.write_text("import bravo/kept\nprogram def main() -> unit = ()\n", encoding="utf-8")
     install_directory(source, home=home, env={})
 
-    installed = home / ".agm" / "packages" / "bravo" / "1.0.0" / "bravo"
+    installed = home / ".agm" / "packages" / "bravo" / "1.0.0" / MODULE_TREE_DIRNAME
     assert (installed / "kept.agl").is_file()
     assert not (installed / "extras").exists()
     assert set(load_activation_index(home=home, env={}).packages) == {"alpha", "bravo"}
@@ -2674,7 +2698,7 @@ def test_editable_dependency_stays_visible_as_its_live_source(tmp_path: Path) ->
         "1.0.0",
         '\n[dependencies]\nbravo = { version = "1", path = "../bravo" }\n',
     )
-    (source / "alpha" / "main.agl").write_text(
+    (source / MODULE_TREE_DIRNAME / "main.agl").write_text(
         "import bravo/extras/util\nprogram def main() -> unit = ()\n", encoding="utf-8"
     )
 
@@ -2687,13 +2711,13 @@ def test_dependency_command_registration_failure_rolls_back_the_install(tmp_path
     home = tmp_path / "home"
     store = home / ".agm" / "packages"
     charlie = store / "charlie" / "1.0.0"
-    (charlie / "charlie").mkdir(parents=True)
+    (charlie / MODULE_TREE_DIRNAME).mkdir(parents=True)
     (charlie / "package.toml").write_text(
         '[package]\nname = "charlie"\nversion = "1.0.0"\n'
         '\n[commands]\n"exec launch" = { program = "charlie/main::main" }\n',
         encoding="utf-8",
     )
-    (charlie / "charlie" / "main.agl").write_text(
+    (charlie / MODULE_TREE_DIRNAME / "main.agl").write_text(
         "program def main() -> unit = ()\n", encoding="utf-8"
     )
     write_record(charlie)
@@ -2755,7 +2779,7 @@ def test_dry_run_directory_install_validates_the_filtered_distribution(
     prompts = source / "prompts"
     prompts.mkdir()
     (prompts / "review.md").write_text("review", encoding="utf-8")
-    (source / "alpha" / "main.agl").write_text(
+    (source / MODULE_TREE_DIRNAME / "main.agl").write_text(
         'let prompt = resource("prompts/review.md")\nprogram def main() -> unit = ()\n',
         encoding="utf-8",
     )

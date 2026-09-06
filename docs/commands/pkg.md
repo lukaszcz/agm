@@ -19,10 +19,12 @@ means to AgL source.
 ## Quick start: a package with a command
 
 ```sh
-agm pkg init review-tools          # writes package.toml + review-tools/main.agl
+agm pkg init review-tools
+# creates review-tools/package.toml and review-tools/review-tools/main.agl
 ```
 
-Write a program and register it in `package.toml`:
+Replace the starter program in `review-tools/review-tools/main.agl` (any module in the
+`review-tools/review-tools/` module tree works) and register it in `review-tools/package.toml`:
 
 ```agl
 program def review(target: text, strict: bool = false) -> unit =

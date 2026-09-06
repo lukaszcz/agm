@@ -79,9 +79,10 @@ A package module may declare [`program def`](program-structure.md) entry
 points like any other module. A program is addressed by its package-qualified
 module route and declaration path, `review-tools/review::main`, which is how
 the host selects it for execution and how a manifest `[commands]` entry names
-it. A command-backed program may declare value parameters, takes no type
-parameters, and declares an explicit `-> unit` result; it remains an ordinary
-callable function inside the package.
+it. A command-backed program may declare value parameters and takes no type
+parameters; its result is unit like that of any `program def`, whether written
+or left to inference. It remains an ordinary callable function inside the
+package.
 
 ```agl
 program def main() -> unit =

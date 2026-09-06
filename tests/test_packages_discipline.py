@@ -237,7 +237,6 @@ class TestPackageDiscipline:
         (
             "program def main[T]() -> unit = ()",
             "program def main() -> int = 1",
-            "program def main() = ()",
         ),
     )
     def test_rejects_registered_program_with_invalid_entry_signature(
@@ -248,6 +247,17 @@ class TestPackageDiscipline:
 
         with pytest.raises(DisciplineError):
             validate_package(package)
+
+    def test_accepts_registered_program_with_inferred_unit_result(self, tmp_path: Path) -> None:
+        """A registered program may leave its unit result to inference.
+
+        ``program def`` is unit-only in the language whether the result is
+        written or inferred, so an unannotated entry is a legal command target.
+        """
+        package = _custom_package(tmp_path, command_path="start")
+        (package.module_root / "main.agl").write_text("program def main() = ()\n")
+
+        validate_package(package)
 
     def test_accepts_registered_program_with_value_parameters(self, tmp_path: Path) -> None:
         package = _custom_package(tmp_path, command_path="start")

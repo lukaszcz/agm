@@ -1,6 +1,6 @@
 # Packages
 
-The package domain defines portable, versioned AgL module collections. A package is a `package.toml` manifest plus a module tree named after the package, so its modules import under a stable package-qualified path. A manifest may declare version-floor dependencies, literal resources, and CLI commands backed by `program def` entries with no type parameters and an explicit unit result; value parameters project onto the command's CLI surface exactly as they do for `agm exec`. The store, installation, and the managed `std` package are covered in [package-store.md](package-store.md).
+The package domain defines portable, versioned AgL module collections. A package is a `package.toml` manifest plus a module tree named after the package, so its modules import under a stable package-qualified path. A manifest may declare version-floor dependencies, literal resources, and CLI commands backed by `program def` entries with no type parameters and an explicit unit result; value parameters project onto the command's CLI surface exactly as they do for `agm exec`. `agm pkg init` scaffolds that minimum for a new development package. The store, installation, and the managed `std` package are covered in [package-store.md](package-store.md).
 
 ## Package Model
 

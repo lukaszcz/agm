@@ -454,6 +454,7 @@ _HELP_TEXTS: dict[str, str] = {
           DEP/MAIN_CHECKOUT  Remove the main dependency checkout by directory name.
     """),
     "pkg": textwrap.dedent("""\
+        agm pkg init [DIR] [--name NAME] [--version VERSION]
         agm pkg check [DIR]
         agm pkg create [DIR] [-o FILE]
         agm pkg install [--editable] [--shadow] SRC
@@ -461,9 +462,9 @@ _HELP_TEXTS: dict[str, str] = {
         agm pkg list
         agm pkg info NAME
 
-        Validate, create, install, inspect, and remove AgL packages. Archives and directory
-        installs are copied into AGM's versioned store; editable installs mount their live source
-        directory.
+        Initialize, validate, create, install, inspect, and remove AgL packages. Archives and
+        directory installs are copied into AGM's versioned store; editable installs mount their
+        live source directory.
     """),
     "run": textwrap.dedent("""\
         agm run [--no-sandbox] [--no-patch] [--memory LIMIT] [--swap LIMIT]
@@ -953,6 +954,18 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
 
         Remove a dependency worktree by DEP/NAME_OR_BRANCH, or remove the main
         checkout with DEP/repo, DEP/MAIN_CHECKOUT, or --all DEP.
+    """),
+    ("pkg", "init"): textwrap.dedent("""\
+        agm pkg init [DIR] [--name NAME] [--version VERSION]
+
+        Initialize a package in DIR, writing a package.toml manifest and a starter module in the
+        package's module tree. DIR defaults to the current directory and is created when missing.
+        The package name defaults to the directory name and the version to 0.1.0.
+
+        Options:
+          --name NAME      Name the package NAME instead of the directory name.
+          --version VERSION
+                           Set the initial package version.
     """),
     ("pkg", "check"): textwrap.dedent("""\
         agm pkg check [DIR]

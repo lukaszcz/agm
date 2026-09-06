@@ -2,6 +2,7 @@
 
 | Command | Description |
 |---|---|
+| `agm pkg init [DIR] [--name NAME] [--version VERSION]` | Initialize a package directory |
 | `agm pkg check [DIR]` | Validate a package directory |
 | `agm pkg create [DIR] [-o FILE]` | Validate and create a portable package archive |
 | `agm pkg install SRC [--editable] [--shadow]` | Install or activate a package directory or archive |
@@ -51,6 +52,15 @@ creation excludes hidden paths, VCS and cache directories, `.agmpkg` files, and 
 root or nested `.gitignore` files. Portable archives are limited to 10,000 entries, 16 MiB of ZIP
 metadata, 256 path components per entry, 64 MiB expanded per entry, and 512 MiB expanded in total;
 ZIP64 archives are not supported.
+
+`agm pkg init` initializes a package in `DIR`, which defaults to the current directory and is
+created when missing. It writes a `package.toml` manifest and a starter `main.agl` module in the
+package's module tree, so the result passes `agm pkg check` and can be archived immediately. The
+package name defaults to the directory's own name and the version to `0.1.0`; `--name` and
+`--version` override them. The generated manifest carries commented `[dependencies]` guidance and
+declares no dependencies. Initialization refuses a directory that already holds a `package.toml`,
+and never overwrites an existing starter module. With `--dry-run`, AGM reports the files it would
+write without creating them.
 
 `agm pkg check` validates the `package.toml` manifest, module-tree naming discipline, program
 references used by manifest command registrations, and literal resource targets reached through

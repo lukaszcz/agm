@@ -56,6 +56,7 @@ from agm.cli_support.args import (
     PkgCheckArgs,
     PkgCreateArgs,
     PkgInfoArgs,
+    PkgInitArgs,
     PkgInstallArgs,
     PkgListArgs,
     PkgUninstallArgs,
@@ -1618,6 +1619,25 @@ def pkg_check(
     import agm.commands.pkg.check as pkg_check_command
 
     pkg_check_command.run(PkgCheckArgs(directory=directory))
+
+
+@pkg_app.command(name="init")
+def pkg_init(
+    directory: str | None = typer.Argument(
+        None,
+        metavar="DIR",
+        autocompletion=completion.complete_dir_argument,
+    ),
+    name: str | None = typer.Option(None, "--name", metavar="NAME"),
+    version: str = typer.Option("0.1.0", "--version", metavar="VERSION"),
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    import agm.commands.pkg.init as pkg_init_command
+
+    pkg_init_command.run(PkgInitArgs(directory=directory, name=name, version=version))
 
 
 @pkg_app.command(name="create")

@@ -62,7 +62,7 @@ _HELP_TREE: dict[tuple[str, ...], list[str]] = {
     ("wt",): ["new", "rm", "remove"],
     ("worktree",): ["new", "rm", "remove"],
     ("dep",): ["list", "new", "switch", "rm", "remove"],
-    ("pkg",): ["check", "create", "install", "uninstall", "list", "info"],
+    ("pkg",): ["init", "check", "create", "install", "uninstall", "list", "info"],
     ("tmux",): ["open", "close", "layout"],
 }
 

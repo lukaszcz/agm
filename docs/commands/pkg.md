@@ -105,8 +105,12 @@ review = { program = "review-tools/main::review", description = "Review a change
 
 - A key is a one- or multi-word command path. It cannot start with a built-in command or root
   alias (`wsp`, `wt`).
-- `program` is `MODULE::PROGRAM`: a `program def` in this package with no type parameters and a
-  unit result (written or inferred). Its value parameters become the command's arguments.
+- `program` names the `program def` to run, as `<module>::<program>`: the module's slash path
+  (package name, then the `.agl` file's path inside the module tree without its suffix), `::`,
+  and the program's name. `review-tools/main::review` is the program `review` in module
+  `review-tools/main`, the file `review-tools/review-tools/main.agl`. The program must belong to
+  this package, take no type parameters, and return unit (written or inferred). Its value
+  parameters become the command's arguments.
 - `description` is optional and shown in `agm help`.
 
 ## Registered commands

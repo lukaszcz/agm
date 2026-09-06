@@ -54,6 +54,22 @@ class PackageManifest:
     commands: dict[str, CommandSpec] = field(default_factory=dict)
 
 
+def command_paths_for_program(
+    manifest: PackageManifest, reference: str
+) -> tuple[tuple[str, ...], ...]:
+    """Return the command paths *manifest* registers for a ``MODULE::PROGRAM`` *reference*.
+
+    Each path is returned as its own words, sorted, so a program registered
+    under more than one command path yields every one of them.
+    """
+
+    return tuple(
+        tuple(path.split())
+        for path, command in sorted(manifest.commands.items())
+        if command.program == reference
+    )
+
+
 def distribution_manifest(manifest: PackageManifest) -> PackageManifest:
     """Return a publication-safe manifest without local dependency sources.
 

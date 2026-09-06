@@ -11,7 +11,7 @@ from agm.config.general import GeneralConfig, load_general_config
 from agm.config.qualified_keys import (
     QualifiedConfigKey,
     QualifiedConfigLookupError,
-    configured_leaf_names,
+    configured_leaf_tables,
     resolve_qualified_values,
     route_table_paths,
 )
@@ -189,30 +189,89 @@ class TestQualifiedConfigKeys:
         assert entry == (("demo",),)
         assert set(entry).issubset(imported)
 
-    def test_configured_leaf_names_reports_every_consulted_spelling(self) -> None:
+    def test_resolves_a_registered_command_path_table(self) -> None:
+        """A command path addresses the program its package registers under it."""
+        key = QualifiedConfigKey(
+            ("review-tools", "review"), ("main",), "strict", command_paths=(("dev", "review"),)
+        )
+
+        assert resolve_qualified_values(_config({"dev": {"review": {"strict": True}}}), (key,)) == {
+            key: True
+        }
+
+    def test_rejects_a_command_path_table_conflicting_with_its_module_route(self) -> None:
+        key = QualifiedConfigKey(
+            ("review-tools", "judge"), ("main",), "strict", command_paths=(("dev", "review"),)
+        )
+        config = _config(
+            {"dev": {"review": {"strict": True}}, "judge": {"main": {"strict": False}}}
+        )
+
+        with pytest.raises(QualifiedConfigLookupError) as exc_info:
+            resolve_qualified_values(config, (key,))
+
+        assert "conflicting tables" in str(exc_info.value)
+
+    def test_a_later_layer_command_path_table_overrides_a_module_route(self) -> None:
+        key = QualifiedConfigKey(
+            ("review-tools", "judge"), ("main",), "strict", command_paths=(("dev", "review"),)
+        )
+        config = _config(
+            {"judge": {"main": {"strict": False}}}, {"dev": {"review": {"strict": True}}}
+        )
+
+        assert resolve_qualified_values(config, (key,)) == {key: True}
+
+    def test_resolves_every_command_path_registered_for_one_program(self) -> None:
+        """Two registrations of one program are two spellings of its address."""
+        first = QualifiedConfigKey(
+            ("tools", "run"), ("main",), "level", command_paths=(("dev", "run"), ("dev", "r"))
+        )
+
+        assert resolve_qualified_values(_config({"dev": {"r": {"level": "high"}}}), (first,)) == {
+            first: "high"
+        }
+
+    def test_command_path_table_does_not_duplicate_a_module_route_spelling(self) -> None:
+        """A command path that coincides with a module route stays one table."""
+        key = QualifiedConfigKey(("tools", "run"), ("main",), "level", command_paths=(("run", "main"),))
+
+        assert resolve_qualified_values(_config({"run": {"main": {"level": "high"}}}), (key,)) == {
+            key: "high"
+        }
+
+    def test_configured_leaf_tables_report_command_path_leaves(self) -> None:
+        config = _config({"dev": {"review": {"strict": True}}})
+
+        assert configured_leaf_tables(
+            config, ("review-tools", "review"), ("main",), command_paths=(("dev", "review"),)
+        ) == {"strict": ("dev", "review")}
+
+    def test_configured_leaf_tables_report_every_consulted_spelling(self) -> None:
         config = _config(
             {"judge": {"review": {"max-tries": 1}}},
             {"review-tools/judge": {"review": {"region": "eu"}}},
         )
 
-        assert configured_leaf_names(config, ("review-tools", "judge"), ("review",)) == frozenset(
-            {"max-tries", "region"}
-        )
+        assert configured_leaf_tables(config, ("review-tools", "judge"), ("review",)) == {
+            "max-tries": ("judge", "review"),
+            "region": ("review-tools/judge", "review"),
+        }
 
-    def test_configured_leaf_names_excludes_nested_tables(self) -> None:
+    def test_configured_leaf_tables_exclude_nested_tables(self) -> None:
         config = _config({"workflow": {"msg": "hi", "main": {"max-iters": 1}}})
 
-        assert configured_leaf_names(config, ("workflow",)) == frozenset({"msg"})
+        assert configured_leaf_tables(config, ("workflow",)) == {"msg": ("workflow",)}
 
-    def test_configured_leaf_names_skips_reserved_sections(self) -> None:
+    def test_configured_leaf_tables_skip_reserved_sections(self) -> None:
         config = _config({"exec": {"max-iters": 1}})
 
-        assert configured_leaf_names(config, ("exec",)) == frozenset()
+        assert configured_leaf_tables(config, ("exec",)) == {}
 
-    def test_configured_leaf_names_is_empty_without_a_matching_table(self) -> None:
+    def test_configured_leaf_tables_are_empty_without_a_matching_table(self) -> None:
         config = _config({"other": {"region": "eu"}})
 
-        assert configured_leaf_names(config, ("workflow",)) == frozenset()
+        assert configured_leaf_tables(config, ("workflow",)) == {}
 
     def test_resolves_path_normalized_file_layers_with_dotted_and_quoted_headers(
         self, tmp_path: Path

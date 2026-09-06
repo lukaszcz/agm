@@ -105,6 +105,17 @@ quoted route such as `["review-tools/review".review.main]` disambiguates. The
 suffix rules are those of the
 [host environment](host-environment.md#config-file-schema).
 
+A program the manifest registers as a command gains that command path as an
+equivalent address: with `"dev review"` registered for
+`review-tools/review::main`, `[dev.review]` configures the same program as
+`[review-tools.review.review.main]` does, whether it is run as `agm dev
+review`, by reference, or by file path.
+
+```toml
+[dev.review]
+strict = true
+```
+
 ## Resources and companions
 
 [`resource` and `resource-dir`](expressions.md#resource-and-resource-dir) in a

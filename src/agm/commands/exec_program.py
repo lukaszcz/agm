@@ -99,10 +99,9 @@ from agm.config.general import GeneralConfig, exec_config_from_merged, load_gene
 from agm.config.qualified_keys import (
     QualifiedConfigKey,
     QualifiedConfigLookupError,
-    configured_leaf_names,
+    configured_leaf_tables,
     display_table_path,
     resolve_qualified_values,
-    route_table_paths,
 )
 from agm.core import dry_run
 from agm.core.cleanup import preserve_primary_error
@@ -115,6 +114,7 @@ from agm.core.log import (
 from agm.core.parse import parse_timeout
 from agm.core.toml import toml_dict
 from agm.packages.activation import load_activation_index
+from agm.packages.manifest import command_paths_for_program
 from agm.packages.model import owning_package
 
 if TYPE_CHECKING:
@@ -162,6 +162,29 @@ def _package_entry_segments(entry_path: Path | None, roots: RootSet) -> tuple[st
     return None if module_id is None else module_id.segments
 
 
+def _registered_command_paths(
+    entry_path: Path | None,
+    roots: RootSet,
+    module_segments: tuple[str, ...],
+    program_path: tuple[str, ...],
+) -> tuple[tuple[str, ...], ...]:
+    """Return the CLI command paths the entry's own package registers for this program.
+
+    A registered command path addresses the program it names, so it is one
+    more spelling of that program's configuration table — read whether the
+    program was reached as the command, by installed reference, or by file
+    path. The owning package's manifest is the authority dispatch itself
+    checks, so a program no package owns has no command table.
+    """
+    if entry_path is None:
+        return ()
+    package = owning_package(entry_path, roots.packages)
+    if package is None:
+        return ()
+    reference = "::".join(("/".join(module_segments), *program_path))
+    return command_paths_for_program(package.manifest, reference)
+
+
 _T = TypeVar("_T")
 
 
@@ -185,6 +208,7 @@ def _report_undeclared_config_keys(
     argument_keys: Iterable[QualifiedConfigKey],
     *,
     scope_path: tuple[str, ...],
+    command_paths: tuple[tuple[str, ...], ...],
     positional_only_names: Iterable[str],
 ) -> None:
     """Warn about config keys in a program's qualified table that no argument claims.
@@ -198,7 +222,10 @@ def _report_undeclared_config_keys(
     address routes of their own.
 
     *scope_path* is the selected program's own qualified table path (e.g.
-    ``workflow.main``).
+    ``workflow.main``); *command_paths* adds the CLI paths the program is
+    registered under, which address it as well. Each warning names the table
+    the key was actually read from, so it points at the spelling its author
+    wrote.
 
     *positional_only_names* names leaves that are declared but not
     name-addressable — a positional-only program argument, which a config
@@ -207,19 +234,13 @@ def _report_undeclared_config_keys(
     warning than a genuinely undeclared key: it exists, it is just not
     reachable by this channel.
     """
-    entry_paths = route_table_paths(module_segments, scope_path)
     declared = {key.leaf for key in argument_keys}
     positional_only = set(positional_only_names)
-    leaves = sorted(configured_leaf_names(config, module_segments, scope_path))
-    if not leaves:
-        # ``configured_leaf_names`` reads the same *entry_paths* candidates,
-        # so a non-empty result here guarantees ``entry_paths`` is non-empty
-        # below — this early return is what makes that guarantee hold.
-        return
-    table_name = display_table_path(entry_paths[0])
-    for leaf in leaves:
+    leaf_tables = configured_leaf_tables(config, module_segments, scope_path, command_paths)
+    for leaf in sorted(leaf_tables):
         if leaf in declared or leaf in ENGINE_KEY_NAMES:
             continue
+        table_name = display_table_path(leaf_tables[leaf])
         if leaf in positional_only:
             print(
                 f"warning: config key '{leaf}' in the '{table_name}' configuration table "
@@ -372,12 +393,17 @@ def run(
         ),
     )
     engine_program_table: dict[str, object] = {}
+    command_paths: tuple[tuple[str, ...], ...] = ()
     if entry_stem is not None and selected_parsed_program is not None:
         program_path = tuple(segment.name for segment in selected_parsed_program.scope_path) + (
             selected_parsed_program.name,
         )
+        command_paths = _registered_command_paths(
+            entry_path, exec_roots.roots, config_entry_segments, program_path
+        )
         engine_keys = tuple(
-            QualifiedConfigKey(config_entry_segments, program_path, key) for key in ENGINE_KEY_NAMES
+            QualifiedConfigKey(config_entry_segments, program_path, key, command_paths)
+            for key in ENGINE_KEY_NAMES
         )
         try:
             engine_program_table = {
@@ -565,7 +591,7 @@ def run(
         program_path = selected_program.scope_path + (selected_program.name,)
         argument_options = {
             info.name: (
-                QualifiedConfigKey(config_entry_segments, program_path, info.name),
+                QualifiedConfigKey(config_entry_segments, program_path, info.name, command_paths),
                 projected,
             )
             for info, projected in program_option_map.options
@@ -588,6 +614,7 @@ def run(
             config_entry_segments,
             argument_keys,
             scope_path=program_path,
+            command_paths=command_paths,
             positional_only_names=program_option_map.positional_only_names(),
         )
     arguments = ProgramArguments(positional=cli_arguments.positional, named=program_named)

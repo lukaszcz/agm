@@ -28,11 +28,14 @@ class QualifiedConfigKey:
 
     ``module_segments`` is the declaring module's slash path, while
     ``scope_path`` and ``leaf`` name the declaration within that module.
+    ``command_paths`` carries the CLI paths a package registers for this
+    declaration, each of which addresses it as well as its module route does.
     """
 
     module_segments: tuple[str, ...]
     scope_path: tuple[str, ...]
     leaf: str
+    command_paths: tuple[tuple[str, ...], ...] = ()
 
     def display_name(self) -> str:
         """Return the source-style spelling used in lookup diagnostics."""
@@ -69,7 +72,9 @@ def resolve_qualified_values(
         for key in unique_keys:
             if any(
                 _table_path_replaced(layer, path)
-                for path in route_table_paths(key.module_segments, key.scope_path)
+                for path in route_table_paths(
+                    key.module_segments, key.scope_path, key.command_paths
+                )
             ):
                 resolved.pop(key, None)
         resolved.update(_resolve_layer(layer, unique_keys))
@@ -86,7 +91,7 @@ def _resolve_layer(
     values_by_key: dict[QualifiedConfigKey, list[tuple[tuple[str, ...], object]]] = {}
 
     for key in keys:
-        for path in route_table_paths(key.module_segments, key.scope_path):
+        for path in route_table_paths(key.module_segments, key.scope_path, key.command_paths):
             table = _table_at(layer, path)
             if table is None or key.leaf not in table:
                 continue
@@ -116,36 +121,48 @@ def _resolve_layer(
     return resolved
 
 
-def configured_leaf_names(
+def configured_leaf_tables(
     config: GeneralConfig,
     module_segments: tuple[str, ...],
     scope_path: tuple[str, ...] = (),
-) -> frozenset[str]:
-    """Return the leaf key names set in the tables that address one route.
+    command_paths: tuple[tuple[str, ...], ...] = (),
+) -> dict[str, tuple[str, ...]]:
+    """Return each leaf key set on one route, mapped to the table that sets it.
 
     The tables are exactly the ones :func:`resolve_qualified_values` reads for a
     key on this route, across every layer, so a name is reported only when a
     lookup on that route could observe it. A nested table addresses a route of
     its own — a scope region or a program scope — and is never a leaf here.
+
+    A leaf reported with the table it was actually read from lets a diagnostic
+    name the spelling its reader wrote, rather than whichever spelling this
+    route happens to consult first.
     """
-    paths = route_table_paths(module_segments, scope_path)
-    names: set[str] = set()
+    paths = route_table_paths(module_segments, scope_path, command_paths)
+    tables: dict[str, tuple[str, ...]] = {}
     for layer in config.layers:
         for path in paths:
             table = _table_at(layer, path)
             if table is None:
                 continue
-            names.update(name for name, value in table.items() if not isinstance(value, dict))
-    return frozenset(names)
+            for name, value in table.items():
+                if not isinstance(value, dict):
+                    tables.setdefault(name, path)
+    return tables
 
 
 def route_table_paths(
-    module_segments: tuple[str, ...], scope_path: tuple[str, ...] = ()
+    module_segments: tuple[str, ...],
+    scope_path: tuple[str, ...] = (),
+    command_paths: tuple[tuple[str, ...], ...] = (),
 ) -> tuple[tuple[str, ...], ...]:
     """Return the config table paths that address one route, in read order.
 
     Every module-suffix spelling, shortest first, then the exact quoted module
-    anchor. AGM's top-level configuration sections are excluded, except that a
+    anchor, then each *command path* the declaration is registered under, whose
+    own segments are the whole table path: ``agm dev review`` reads
+    ``[dev.review]``. AGM's top-level configuration sections are excluded,
+    except that a
     single-segment loose-file module named after a *command* may address one of
     its nested declaration tables: a command section holds its own settings as
     leaf keys, so a table one level below it is free. A section keyed by AGM's
@@ -171,6 +188,13 @@ def route_table_paths(
         if (not is_reserved_root or is_nested_loose_file_route) and path not in seen_paths:
             seen_paths.add(path)
             paths.append(path)
+    for command_path in command_paths:
+        # A registered command path never starts at a reserved section: package
+        # validation rejects such a registration, so a command table cannot
+        # collide with AGM's own configuration schema.
+        if command_path not in seen_paths:
+            seen_paths.add(command_path)
+            paths.append(command_path)
     return tuple(paths)
 
 

@@ -245,6 +245,85 @@ class TestPackageEntryConfigRoute:
 
         assert capsys.readouterr().out == "prod\n"
 
+    def _install_registered(self, tmp_path: Path, table: str) -> tuple[Path, Path]:
+        """Install a ``tools`` package registering ``agm dev review``, with *table* config."""
+        home = tmp_path / "home"
+        module = write_installed_package(
+            home, "tools", source=self._SOURCE, commands={"dev review": "tools/main::main"}
+        )
+        (home / ".agm" / "config.toml").write_text(table)
+        return home, module
+
+    def test_registered_command_path_addresses_the_program(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """``agm dev review`` reads the ``[dev.review]`` table its registration names."""
+        home, _module = self._install_registered(tmp_path, '[dev.review]\nlevel = "cmd"\n')
+        self._use_home(monkeypatch, home, tmp_path)
+
+        exec_engine.run_registered(
+            "tools/main::main", [], package="tools", command_path="dev review"
+        )
+
+        assert capsys.readouterr().out == "cmd\n"
+
+    def test_command_path_table_addresses_the_program_by_any_spelling(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The command table addresses the program, not one way of reaching it."""
+        home, module = self._install_registered(tmp_path, '[dev.review]\nlevel = "cmd"\n')
+        self._use_home(monkeypatch, home, tmp_path)
+
+        exec_engine.run(ExecArgs(file=str(module), strict_json=None, no_log=False, log_file=None))
+        exec_engine.run_registered("tools/main::main", [])
+
+        assert capsys.readouterr().out == "cmd\ncmd\n"
+
+    def test_rejects_a_command_table_conflicting_with_the_module_route(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home, module = self._install_registered(
+            tmp_path, '[dev.review]\nlevel = "cmd"\n\n[tools.main.main]\nlevel = "route"\n'
+        )
+        self._use_home(monkeypatch, home, tmp_path)
+
+        with pytest.raises(SystemExit):
+            exec_engine.run(
+                ExecArgs(file=str(module), strict_json=None, no_log=False, log_file=None)
+            )
+
+    def test_command_table_key_is_not_reported_as_undeclared(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        home, module = self._install_registered(tmp_path, '[dev.review]\nlevel = "cmd"\n')
+        self._use_home(monkeypatch, home, tmp_path)
+
+        exec_engine.run(ExecArgs(file=str(module), strict_json=None, no_log=False, log_file=None))
+
+        assert capsys.readouterr().err == ""
+
+    def test_undeclared_command_table_key_is_reported(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        home, module = self._install_registered(tmp_path, "[dev.review]\nbogus = 1\n")
+        self._use_home(monkeypatch, home, tmp_path)
+
+        exec_engine.run(ExecArgs(file=str(module), strict_json=None, no_log=False, log_file=None))
+
+        assert "bogus" in capsys.readouterr().err
+
     def test_loose_file_outside_a_package_keeps_its_stem_route(
         self,
         tmp_path: Path,

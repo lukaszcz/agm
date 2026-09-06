@@ -33,7 +33,7 @@ program def review(target: text, strict: bool = false) -> unit =
 
 ```toml
 [commands]
-review = { program = "review-tools/main::review", description = "Review a change" }
+pr-review = { program = "review-tools/main::review", description = "Review a change" }
 ```
 
 Then validate, install, and run it:
@@ -41,8 +41,8 @@ Then validate, install, and run it:
 ```sh
 agm pkg check review-tools
 agm pkg install --editable review-tools   # source edits take effect immediately
-agm review --target src --strict
-agm review --help
+agm pr-review --target src --strict
+agm pr-review --help
 ```
 
 ## Layout
@@ -99,8 +99,8 @@ remote = { version = "2.0.0", url = "https://example.test/remote.agmpkg", hash =
 
 ```toml
 [commands]
-review = { program = "review-tools/main::review", description = "Review a change" }
-"review batch" = { program = "review-tools/main::batch" }   # multi-word command path
+pr-review = { program = "review-tools/main::review", description = "Review a change" }
+"pr-review batch" = { program = "review-tools/main::batch" }   # multi-word command path
 ```
 
 - A key is a one- or multi-word command path. It cannot start with a built-in command or root
@@ -123,8 +123,10 @@ in `agm help` and shell completion and support `--help`.
   take `--name VALUE` (`--name`/`--no-name` for `bool`). See
   [Program arguments](exec.md#program-arguments).
 - **Configuration.** Omitted arguments and engine settings come from the program's qualified table,
-  e.g. `[review-tools.main.review]` for `review-tools/main::review`; see
-  [Configuration](exec.md#configuration).
+  e.g. `[review-tools.main.review]` for `review-tools/main::review`, or from the registered command
+  path itself: `[pr-review]`, and `[dev.review]` for a command registered as `dev review`. Both
+  address the same program, so either spelling applies however it is run, and setting one key
+  through both in one config layer is an error. See [Configuration](exec.md#configuration).
 - **`--dry-run`**, before or after the command path, runs the static pipeline and argument
   validation without executing.
 - **Conflicts.** Two active packages cannot own the same command path; install the later one with

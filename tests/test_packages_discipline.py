@@ -53,6 +53,23 @@ class TestPackageDiscipline:
     def test_accepts_well_disciplined_package(self) -> None:
         validate_package(_package("valid"))
 
+    def test_accepts_kebab_case_package_name_and_command_reference(self, tmp_path: Path) -> None:
+        """A package name is an AgL name, and AgL names are kebab-case."""
+        root = tmp_path / "package"
+        module_root = root / "review-tools"
+        module_root.mkdir(parents=True)
+        (module_root / "main.agl").write_text("program def review() -> unit = ()\n")
+        package = PackageInfo(
+            root=root,
+            manifest=PackageManifest(
+                "review-tools",
+                semver.Version.parse("1.0.0"),
+                commands={"pr-review": CommandSpec("review-tools/main::review")},
+            ),
+        )
+
+        validate_package(package)
+
     @pytest.mark.parametrize("fixture", ("tree_mismatch", "reserved_name"))
     def test_rejects_invalid_module_tree_or_reserved_name(self, fixture: str) -> None:
         with pytest.raises(DisciplineError):
@@ -217,7 +234,7 @@ class TestPackageDiscipline:
         "reference",
         (
             "custom/main",
-            "custom-/main::main",
+            "1custom/main::main",
             "custom/main::invalid/path",
             "outside/main::main",
             "custom/missing::main",
@@ -280,7 +297,7 @@ class TestPackageDiscipline:
             validate_package(package)
 
         (package.module_root / "main.agl").unlink()
-        (package.module_root / "not-valid.agl").write_text("program def main() -> unit = ()\n")
+        (package.module_root / "9invalid.agl").write_text("program def main() -> unit = ()\n")
         with pytest.raises(DisciplineError):
             validate_package(package)
 

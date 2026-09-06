@@ -96,6 +96,18 @@ class TestPackageInit:
         assert (tmp_path / "demo" / "package.toml").is_file()
         assert (tmp_path / "demo" / "demo" / "main.agl").is_file()
 
+    def test_scaffolds_a_kebab_case_package_name(self, runner: CliRunner, tmp_path: Path) -> None:
+        """Package names are AgL names, so a kebab-case directory scaffolds."""
+        package = tmp_path / "review-tools"
+
+        created = invoke(runner, ["pkg", "init", str(package)])
+        checked = invoke(runner, ["pkg", "check", str(package)])
+
+        assert created.exit_code == 0
+        assert checked.exit_code == 0
+        assert 'name = "review-tools"' in (package / "package.toml").read_text(encoding="utf-8")
+        assert (package / "review-tools" / "main.agl").is_file()
+
     def test_name_and_version_options_override_the_defaults(
         self, runner: CliRunner, tmp_path: Path
     ) -> None:
@@ -148,7 +160,7 @@ class TestPackageInit:
     @pytest.mark.parametrize(
         "argv",
         (
-            ["pkg", "init", "review-tools"],
+            ["pkg", "init", "1review"],
             ["pkg", "init", "demo", "--name", "def"],
             ["pkg", "init", "demo", "--name", "run"],
             ["pkg", "init", "demo", "--version", "1.0"],

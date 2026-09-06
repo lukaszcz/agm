@@ -1326,7 +1326,7 @@ def test_requirements_must_name_an_active_package(tmp_path: Path) -> None:
         select_active_packages(home=home, proj_dir=None, cwd=tmp_path, env=env)
 
 
-@pytest.mark.parametrize("name", ("bad-name", "alpha/bravo"))
+@pytest.mark.parametrize("name", ("1bad", "alpha/bravo"))
 def test_write_activation_index_rejects_non_segment_package_names(
     tmp_path: Path, name: str
 ) -> None:

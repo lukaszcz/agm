@@ -1084,7 +1084,7 @@ class TestPackageOwnedEntryIdentity:
     def test_an_unspellable_entry_id_falls_back_to_the_sentinel(self, tmp_path: Path) -> None:
         """A file name no module path can spell names no module."""
         duo = _package(tmp_path, "duo")
-        entry = duo.root / "duo" / "my-mod.agl"
+        entry = duo.root / "duo" / "1mod.agl"
         _write_agl(entry, _MINIMAL)
 
         graph = load_graph(

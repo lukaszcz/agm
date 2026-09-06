@@ -7,8 +7,9 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 # Regex for a valid identifier segment: must start with letter or underscore,
-# followed by letters, digits, or underscores.
-_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# followed by letters, digits, underscores, or hyphens. AgL names are
+# kebab-case, and a module path segment is an AgL name.
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 
 # Reserved segments used exclusively in the ENTRY_ID and RESERVED_ID
 # sentinels.  The NUL byte (\x00) can never appear in a filesystem path
@@ -16,10 +17,6 @@ _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # from_path.
 _ENTRY_SEGMENT = "\x00entry"
 _RESERVED_SEGMENT = "\x00reserved"
-
-# The ambient standard-library registry predates ordinary module-name
-# validation. It is a fixed loader-owned path, not a user-definable spelling.
-_SPECIAL_MODULE_PATHS: frozenset[tuple[str, ...]] = frozenset({("std", "builtin-methods")})
 
 ENTRY_DISPLAY = "<entry>"
 """The entry module's user-facing label, standing in for a name it has not got.
@@ -119,14 +116,11 @@ class ModuleId:
         """Parse a slash-separated module path into a :class:`ModuleId`.
 
         Raises :class:`ValueError` if *s* is empty or any segment is not a
-        valid identifier (``[A-Za-z_][A-Za-z0-9_]*``), except the fixed
-        ``std/builtin-methods`` standard-library registry path.
+        valid identifier (``[A-Za-z_][A-Za-z0-9_-]*``).
         """
         if not s:
             raise ValueError("module id must not be empty")
         segments = s.split("/")
-        if tuple(segments) in _SPECIAL_MODULE_PATHS:
-            return cls(segments=tuple(segments))
         for seg in segments:
             if not seg:
                 raise ValueError(
@@ -136,7 +130,7 @@ class ModuleId:
             if not _IDENTIFIER_RE.match(seg):
                 raise ValueError(
                     f"module id segment {seg!r} is not a valid identifier"
-                    " (must match [A-Za-z_][A-Za-z0-9_]*)"
+                    " (must match [A-Za-z_][A-Za-z0-9_-]*)"
                 )
         return cls(segments=tuple(segments))
 

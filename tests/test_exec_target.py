@@ -95,7 +95,7 @@ class TestResolveInstalledReference:
 
     def test_invalid_module_path_is_an_error(self, tmp_path: Path) -> None:
         result = resolve_installed_reference(
-            "bad-name/main::main", home=tmp_path, proj_dir=None, cwd=tmp_path
+            "1bad/main::main", home=tmp_path, proj_dir=None, cwd=tmp_path
         )
         assert isinstance(result, ExecTargetError)
 

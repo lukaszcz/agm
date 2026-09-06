@@ -77,7 +77,7 @@ groups with other one-letter flags — `-abc` — where only the last letter of 
 group may take a value. A `program def`'s
 parameter list defaults to the **named-only** zone, so a plain `name: text`
 parameter is addressed only by `--name`; an `@arg-pos` parameter opens a
-positional slot. A doubled `--` ends option parsing, so a later
+positional slot. A bare `--` ends option parsing, so a later
 `--`-prefixed token is collected positionally instead of being read as a flag.
 Supplying the same parameter twice (by any combination of position and name)
 is a usage error, as is a flag naming no declared parameter.
@@ -125,7 +125,7 @@ line. `@doc` ([Attributes](grammar.md#attributes)) belongs with them.
 | `@opt-short("c")` | Adds a one-letter alternative spelling `-c` alongside the long flag. |
 | `@opt-env("VAR")` | Names an environment variable read when no CLI token supplies the parameter. |
 | `@opt-metavar("PLACEHOLDER")` | Replaces the placeholder standing for the value in usage and help text. |
-| `@opt-hidden` | Keeps the parameter out of help and completion; it still binds normally when supplied. |
+| `@opt-hidden` | Omits the parameter's `--name` entry from help and completion; a positional-capable parameter keeps its usage slot, and the parameter binds normally when supplied. |
 
 A positional-only parameter is never addressed by name, so `@opt-name`,
 `@opt-short`, `@opt-env`, and `@opt-hidden` on one are static errors.

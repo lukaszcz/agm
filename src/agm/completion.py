@@ -510,7 +510,8 @@ class ExecCommand(TyperCommand):
 
         Click removes the marker as it parses, so it is doubled first: see
         ``program_options.retain_end_of_options``, whose counterpart
-        ``split_exec_tail`` consumes the survivor.
+        ``split_exec_tail`` consumes the survivor only when it is what names
+        the FILE, and otherwise forwards it to the program.
         """
         from agm.cli_support.program_options import retain_end_of_options
 

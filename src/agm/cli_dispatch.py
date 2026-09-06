@@ -181,6 +181,21 @@ class RegisteredProgramCommand(TyperCommand):
         self._path_name = path_name
         self._registration = registration
 
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        """Parse *args*, keeping the reader's end-of-options marker in the tail.
+
+        Click removes the marker as it parses this command's own options, so
+        it is doubled first (``program_options.retain_end_of_options``): Click
+        removes the copy it would have removed anyway and the survivor stays
+        in ``ctx.args`` for the program's own parser. A registered command
+        names no FILE of its own, so every marker it is given belongs to the
+        program — one ``--`` is the program's end-of-options marker, exactly
+        as it is for ``agm exec``.
+        """
+        from agm.cli_support.program_options import retain_end_of_options
+
+        return super().parse_args(ctx, retain_end_of_options(args))
+
     def _discover_program(self) -> "ProgramDeclInfo | None":
         """Discover the referenced ``program def``'s declaration, or ``None``."""
         from agm.commands.exec_program import registered_program_declaration

@@ -341,8 +341,8 @@ _BUILTIN_EXEC_FLAGS: frozenset[str] = frozenset(
 # normalisation.
 RESERVED_FLAGS: frozenset[str] = _BUILTIN_EXEC_FLAGS | engine_key_flags()
 
-# The end-of-options marker. ``agm exec`` consumes one of them, which is why
-# passing a literal ``--`` on to the program takes a doubled marker.
+# The end-of-options marker. ``agm exec`` consumes one only when it is what
+# names the FILE; any other marker belongs to the program and reaches it.
 END_OF_OPTIONS = "--"
 
 
@@ -420,16 +420,18 @@ def _file_index_from_program(
 
 
 def retain_end_of_options(args: "Sequence[str]") -> list[str]:
-    """Return *args* with ``agm exec``'s own end-of-options marker doubled.
+    """Return *args* with the host's own end-of-options marker doubled.
 
     Click's parser removes the first bare ``--`` as it reads the host's own
     options, so the tail it hands over no longer shows where host option
     scanning ended. Doubling the marker keeps both readings: Click removes
     the copy it would have removed anyway — stopping option parsing at
-    exactly the same token — and the survivor marks the boundary for
-    :func:`split_exec_tail`, which consumes it in turn. Exactly one marker is
-    consumed either way, so the program still receives the tokens the
-    doubled-``--`` convention promises it.
+    exactly the same token — and the survivor is the marker the reader wrote.
+    For ``agm exec`` that survivor marks the boundary for
+    :func:`split_exec_tail`, which consumes it only when it is what named the
+    FILE and otherwise forwards it; a registered package command names no
+    FILE, so its survivor always reaches the program. Either way the
+    program's own parser reads it.
     """
     tokens = list(args)
     if END_OF_OPTIONS not in tokens:
@@ -448,16 +450,20 @@ def split_exec_tail(
     The single place a tail token is classified. *tail* is what Click leaves
     after parsing the host's own options: the FILE, the program's tokens, the
     help flags, and the end-of-options marker :func:`retain_end_of_options`
-    kept. The marker ends host option scanning, so the token after it is the
-    FILE however it is spelled — this is how a file named like an option is
-    named — and the marker itself is the one the host consumes. Everything
-    else keeps its written order, so the program's command reads exactly the
-    tokens the reader wrote for it. A tail whose program flags precede the
-    FILE cannot be split by spelling alone — a program flag's arity is not
-    known until the program is, and the FILE is what selects it — so when
-    *program_command_for_file* is given, the rightmost token naming one usable
-    program settles it. Without a resolver (inline ``-c`` source, which names
-    no FILE) the inexpensive spelling-only scan stands.
+    kept. The marker ends host option scanning: when the tokens before it name
+    no FILE, the token after it is the FILE however it is spelled — this is
+    how a file named like an option is named — and the host consumes that
+    marker. A marker that named no FILE was written for the program instead,
+    and is forwarded in its own position for the program's parser to apply.
+    Everything else keeps its written order too, so the program's command
+    reads exactly the tokens the reader wrote for it. A tail whose program
+    flags precede the FILE cannot be split by spelling alone — a program
+    flag's arity is not known until the program is, and the FILE is what
+    selects it — so when *program_command_for_file* is given, the rightmost
+    pre-marker token naming one usable program settles it. That scan is
+    inference where a marker is an explicit statement, so a marker naming a
+    usable program wins over it. Without a resolver (inline ``-c`` source,
+    which names no FILE) the inexpensive spelling-only scan stands.
     """
     tokens = list(tail)
     marker = tokens.index(END_OF_OPTIONS) if END_OF_OPTIONS in tokens else None
@@ -466,16 +472,33 @@ def split_exec_tail(
     needs_program_arity = index is None or any(
         _is_option_token(token) and not _is_host_option(token) for token in before_marker[:index]
     )
-    if marker is None and needs_program_arity and program_command_for_file is not None:
+    if needs_program_arity and program_command_for_file is not None:
         # Preserve the inexpensive spelling-only answer when it actually
         # names a usable program. Otherwise its unknown arity may have put
-        # the FILE one token too early or too late, so let the target's
-        # program signature settle it.
+        # the FILE one token too early or too late, so consult the marker
+        # first — the reader wrote it to say which token is the FILE, where
+        # the pre-marker scan only infers one — and let the target's program
+        # signature settle it only when the marker names no usable program.
         if index is None or program_command_for_file(before_marker[index]) is None:
-            index = _file_index_from_program(before_marker, program_command_for_file)
+            marker_names_file = (
+                marker is not None
+                and marker + 1 < len(tokens)
+                and program_command_for_file(tokens[marker + 1]) is not None
+            )
+            index = (
+                None
+                if marker_names_file
+                else _file_index_from_program(before_marker, program_command_for_file)
+            )
+    consumed: set[int] = set()
     if index is None and marker is not None and marker + 1 < len(tokens):
+        # The marker is what named the FILE, so the host consumes it. A marker
+        # that named no FILE was written for the program instead, and stays in
+        # its own position for the program's own parser to read.
         index = marker + 1
-    consumed = {marker, index}
+        consumed.add(marker)
+    if index is not None:
+        consumed.add(index)
     return ExecTail(
         file=None if index is None else tokens[index],
         tokens=tuple(token for position, token in enumerate(tokens) if position not in consumed),
@@ -779,11 +802,14 @@ def _usage_slots(positional: "tuple[ProgramParamInfo, ...]") -> tuple[str, ...]:
     A slot is named by the parameter's own ``@opt-metavar`` when it declares
     one and by its external name otherwise, so a positional parameter — never
     addressed by a flag — still gets the placeholder its declaration asks for.
+
+    ``@opt-hidden`` is about how a parameter is addressed *by name*, so it
+    hides the parameter's ``--name`` entry alone: every positional-capable
+    parameter keeps its slot here, because the shared binder still fills it
+    from the positional tokens a reader types.
     """
     slots: list[str] = []
     for param in positional:
-        if param.cli.hidden:
-            continue
         slot = param.cli.metavar or param.cli.name
         slots.append(f"[{slot}]" if param.has_default else f"<{slot}>")
     return tuple(slots)
@@ -940,8 +966,8 @@ class ProgramCommand:
 
         Each visible parameter's long flag, its derived negative and its
         ``@opt-short`` spelling, then the help flags the command owns. A
-        hidden parameter contributes none, so completion offers exactly what
-        the help lists.
+        hidden parameter contributes none, so completion offers exactly the
+        ``--name`` entries the help lists.
         """
         spellings: list[str] = []
         for param, projected in self.options:

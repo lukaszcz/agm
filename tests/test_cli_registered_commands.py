@@ -529,13 +529,22 @@ def test_registered_command_binds_a_negated_bool_value_argument(
     assert result.stdout == "false\n"
 
 
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["tools", "run", "--", "--odd"], "--odd|y\n"),
+        (["tools", "run", "--", "--", "--odd"], "--|--odd\n"),
+    ],
+)
 def test_registered_command_reaches_the_programs_end_of_options_marker(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, argv: list[str], expected: str
 ) -> None:
-    """A registered command inherits ``agm exec``'s doubled-``--`` rule.
+    """A registered command inherits ``agm exec``'s single-``--`` rule.
 
-    AGM's own parser consumes one bare ``--``, so a flag-shaped positional
-    value reaches the program only behind a second marker.
+    AGM's own parser keeps the marker the reader wrote, so one bare ``--``
+    is the program's own end-of-options marker and a flag-shaped positional
+    value reaches it behind that single marker. A second marker is then an
+    ordinary positional value of its own.
     """
 
     home = tmp_path / "home"
@@ -548,7 +557,9 @@ def test_registered_command_reaches_the_programs_end_of_options_marker(
         encoding="utf-8",
     )
     module.write_text(
-        'program def main(@arg-pos who: text = "x") -> unit = print who\n', encoding="utf-8"
+        'program def main(@arg-pos who: text = "x", @arg-pos rest: text = "y") -> unit =\n'
+        '  print "%{who}|%{rest}"\n',
+        encoding="utf-8",
     )
     write_record(package_root)
     write_activation_index(
@@ -563,10 +574,10 @@ def test_registered_command_reaches_the_programs_end_of_options_marker(
         ),
     )
 
-    result = invoke(CliRunner(), ["tools", "run", "--", "--", "--odd"])
+    result = invoke(CliRunner(), argv)
 
     assert result.exit_code == 0
-    assert result.stdout == "--odd\n"
+    assert result.stdout == expected
 
 
 def test_registered_command_help_returns_false_when_index_is_unavailable(

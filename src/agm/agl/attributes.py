@@ -188,9 +188,9 @@ class ProgramOptionSpec:
     and defaults to the declared name. ``short`` is a one-letter alternative
     spelling, ``env`` an environment variable read when no value is supplied,
     ``metavar`` the placeholder standing for the value in usage text,
-    ``hidden`` whether the parameter is kept out of help, and ``doc`` its
-    help prose. Every field but ``name`` is absent unless an attribute
-    supplies it.
+    ``hidden`` whether the parameter's own name entry is kept out of help and
+    completion, and ``doc`` its help prose. Every field but ``name`` is absent
+    unless an attribute supplies it.
     """
 
     name: str

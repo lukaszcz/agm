@@ -362,7 +362,7 @@ class TestExecCommandArgParsing:
         agl_file = tmp_path / "test.agl"
         write_file_program(agl_file, "program def main(@arg-pos msg: text) -> unit = print msg\n")
 
-        result = invoke(runner, ["exec", str(agl_file), "--", "--", "-h"])
+        result = invoke(runner, ["exec", str(agl_file), "--", "-h"])
 
         assert result.exit_code == 0
         assert recorded_runs != []
@@ -3720,10 +3720,10 @@ class TestProgramValueArguments:
         assert exc_info.value.code == 1
         assert "bogus" in capsys.readouterr().err
 
-    def test_doubled_dashdash_ends_program_option_parsing(
+    def test_an_end_of_options_marker_ends_program_option_parsing(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """A doubled ``--`` ends option parsing, so a later ``--``-prefixed token
+        """A ``--`` ends option parsing, so a later ``--``-prefixed token
 
         is collected positionally instead of being rejected as an unknown flag.
         """
@@ -4344,6 +4344,29 @@ class TestExecHelpInvocations:
         assert "Odd name." in result.output
         assert "--name" in result.output
 
+    def test_a_hidden_parameter_keeps_the_positional_slot_it_fills(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """``@opt-hidden`` hides the ``--name`` entry only. The parameter still
+        takes a positional token, so the usage a reader follows must show its
+        slot rather than silently shifting the arguments they type."""
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            "program def main(@arg-std a: text, @arg-std @opt-hidden b: text,"
+            " @arg-std c: text) -> unit =\n"
+            '    print "%{a}|%{b}|%{c}"\n',
+        )
+
+        helped = invoke(runner, ["exec", str(agl_file), "-h"])
+        ran = invoke(runner, ["exec", str(agl_file), "1", "2", "3"])
+
+        assert "<a>" in helped.output
+        assert "<b>" in helped.output
+        assert "<c>" in helped.output
+        assert "--b" not in helped.output
+        assert ran.output == "1|2|3\n"
+
     def test_a_program_selection_without_a_file_is_a_usage_error(
         self, runner: CliRunner, recorded_runs: list[object]
     ) -> None:
@@ -4405,17 +4428,67 @@ class TestExecFileSelectorTokens:
         assert "Odd name." in result.output
         assert "--name" in result.output
 
-    def test_the_host_consumes_one_end_of_options_marker(
-        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    def test_a_marker_after_the_file_reaches_the_programs_own_parser(
+        self, runner: CliRunner, tmp_path: Path
     ) -> None:
-        """A doubled marker is what passes a literal ``--`` to the program."""
+        """A single marker written after the FILE is the program's own, so a
+        dash-leading token past it is one of its positional values."""
         agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "program def main() -> unit = ()\n")
+        write_file_program(agl_file, "program def main(@arg-std n: int) -> unit = print n\n")
 
-        result = invoke(runner, ["exec", str(agl_file), "--", "--", "-x"])
+        result = invoke(runner, ["exec", str(agl_file), "--", "-5"])
 
         assert result.exit_code == 0
-        assert getattr(recorded_runs[0], "argument_tokens") == ["--", "-x"]
+        assert result.output == "-5\n"
+
+    def test_the_marker_naming_a_flag_shaped_file_is_the_one_the_host_consumes(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only the marker that named the FILE is consumed, so a second one still
+        reaches the program."""
+        write_file_program(
+            tmp_path / "--weird.agl", "program def main(@arg-std n: int) -> unit = print n\n"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        result = invoke(runner, ["exec", "--", "--weird.agl", "--", "-5"])
+
+        assert result.exit_code == 0
+        assert result.output == "-5\n"
+
+    def test_a_marker_names_the_file_over_a_pre_file_flags_value(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The reader wrote the marker to say which token is the FILE, so a
+        preceding flag's value stays that flag's value even though it too names
+        a runnable program."""
+        write_file_program(tmp_path / "inp.agl", 'program def main() -> unit = print "other"\n')
+        write_file_program(
+            tmp_path / "--weird.agl", "program def main(input: text) -> unit = print input\n"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        result = invoke(runner, ["exec", "--input", "inp.agl", "--", "--weird.agl"])
+
+        assert result.exit_code == 0
+        assert result.output == "inp.agl\n"
+
+    def test_a_pre_file_program_flag_is_resolved_past_a_marker(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """A marker ends host option scanning only: the tokens before it are
+        still split with the selected program's own option arity."""
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            "program def main(@arg-std who: text, @arg-std loud: bool = false) -> unit =\n"
+            "    print who\n",
+        )
+
+        result = invoke(runner, ["exec", "--loud", str(agl_file), "--", "World"])
+
+        assert result.exit_code == 0
+        assert result.output == "World\n"
 
 
 class TestNegatedConstantDefaults:

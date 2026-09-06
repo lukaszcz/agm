@@ -195,12 +195,16 @@ options build, because the program's own parser rejects `--nope` before reaching
 the help flag, but prints `agm exec`'s own help (exit 0) when they collide and
 no program parser exists to reject it.
 
-`agm exec`'s own parser consumes a bare `--` before the program's parser sees
-any tokens, so reaching the program's own end-of-options marker (to pass a
-literal `--`-prefixed positional argument) takes a **doubled** `--` on the
-command line — `agm exec FILE -- -- --odd-looking-value`. That first marker also
-selects a flag-shaped source: `agm exec -- --odd-name.agl` runs the file
-`--odd-name.agl` rather than reading it as an option.
+A bare `--` ends `agm exec`'s own option scanning, and the marker then reaches
+the program unless it is what named the FILE, so a **single** `--` is the
+program's own end-of-options marker: `agm exec FILE -- --odd-looking-value`
+passes that `--`-prefixed token as a positional argument, and
+`agm exec FILE -- --help` is that positional argument too rather than a help
+request. The exception is a marker that selects a flag-shaped source, which
+`agm exec` consumes to do so: `agm exec -- --odd-name.agl` runs the file
+`--odd-name.agl` rather than reading it as an option, and reaching the
+program's own marker as well then takes a second one —
+`agm exec -- --odd-name.agl -- --odd-looking-value`.
 
 A value-taking flag consumes whatever token follows it, flag-shaped or not:
 `--msg --x` supplies the value `--x`. Spell the value inline — `--msg=--x` — when
@@ -252,13 +256,14 @@ in the AgL reference for the language-side definitions.
 | `@opt-short("t")` | Adds `-t` beside the long flag |
 | `@opt-env("VAR")` | Reads `VAR` when no CLI token supplies the parameter |
 | `@opt-metavar("PATH")` | Replaces the value placeholder in usage and help |
-| `@opt-hidden` | Omits the parameter from `--help` and from shell completion |
+| `@opt-hidden` | Omits the parameter's `--name` entry from `--help` and from shell completion; a positional-capable parameter keeps its usage slot |
 
 A short flag takes its value as `-t VALUE` or attached as `-tVALUE`, and
 one-letter flags group: `-abc` is `-a -b -c`, and only the group's last letter
 may take a value — so in `-va -h`, `-h` is the value `-a` asked for, not a help
 request. Short spellings are offered by shell completion alongside the long
-ones; a `@opt-hidden` parameter is offered by neither.
+ones; a `@opt-hidden` parameter's flags are offered by neither, though the
+parameter still fills its positional slot when it has one.
 
 An `@opt-env` variable is consulted only when no CLI token supplies the
 parameter, and **an empty variable counts as unset**: `VAR= agm exec FILE`

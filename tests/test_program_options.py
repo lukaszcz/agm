@@ -790,16 +790,20 @@ class TestRenderHelp:
         assert "<addressee>" in usage
         assert "who" not in usage
 
-    def test_a_hidden_standard_parameter_is_omitted_from_usage(self) -> None:
+    def test_a_hidden_standard_parameter_keeps_its_positional_slot(self) -> None:
+        """Hiding is about the ``--name`` entry only: the parameter still takes a
+        positional token, so the usage line must keep showing its slot."""
         command = _command(
             _param("secret", TextType(), ParamZone.STANDARD, hidden=True),
             _param("name", TextType(), ParamZone.STANDARD),
         )
 
-        usage = command.render_help("main").splitlines()[0]
+        text = command.render_help("main")
+        usage = text.splitlines()[0]
 
-        assert "secret" not in usage
+        assert "<secret>" in usage
         assert "<name>" in usage
+        assert "--secret" not in text
 
     def test_a_declared_metavar_names_the_positional_slot(self) -> None:
         command = _command(
@@ -1141,13 +1145,57 @@ class TestSplitExecTail:
             file="--weird.agl", tokens=("-h",)
         )
 
-    def test_a_marker_after_the_file_is_the_one_the_host_consumes(self) -> None:
-        assert self._split("prog.agl", "--", "--", "-x") == ExecTail(
-            file="prog.agl", tokens=("--", "-x")
+    def test_a_marker_after_the_file_is_forwarded_to_the_program(self) -> None:
+        """The FILE was named before the marker, so the marker was written for
+        the program and reaches its own parser in place."""
+        assert self._split("prog.agl", "--", "-x") == ExecTail(file="prog.agl", tokens=("--", "-x"))
+
+    def test_a_marker_naming_a_flag_shaped_file_is_the_one_the_host_consumes(self) -> None:
+        assert self._split("--", "--weird.agl", "--", "-x") == ExecTail(
+            file="--weird.agl", tokens=("--", "-x")
         )
 
     def test_a_trailing_marker_names_no_file(self) -> None:
-        assert self._split("-h", "--") == ExecTail(file=None, tokens=("-h",))
+        assert self._split("-h", "--") == ExecTail(file=None, tokens=("-h", "--"))
+
+    def test_a_pre_file_option_uses_the_programs_arity_past_a_marker(self) -> None:
+        """The marker ends host option scanning; it does not stop the selected
+        program's own arity from settling which earlier token is the FILE."""
+        command = _command(_param("verbose", BoolType()))
+
+        selected = split_exec_tail(
+            ("--verbose", "prog.agl", "--", "World"),
+            program_command_for_file=lambda file: command if file == "prog.agl" else None,
+        )
+
+        assert selected == ExecTail(file="prog.agl", tokens=("--verbose", "--", "World"))
+
+    def test_a_marker_naming_a_program_outranks_the_pre_marker_probe(self) -> None:
+        """A marker the reader wrote is an explicit statement of which token is
+        the FILE, so it settles the split before the pre-marker probe — whose
+        right-to-left guess would otherwise claim a program flag's value."""
+        command = _command(_param("input", TextType()))
+
+        def resolve(file: str) -> ProgramCommand | None:
+            return command if file in {"inp.agl", "--weird.agl"} else None
+
+        selected = split_exec_tail(
+            ("--input", "inp.agl", "--", "--weird.agl"), program_command_for_file=resolve
+        )
+
+        assert selected == ExecTail(file="--weird.agl", tokens=("--input", "inp.agl"))
+
+    def test_a_trailing_marker_names_no_file_even_with_a_resolver(self) -> None:
+        """There is no token after the marker to name, so the pre-marker tokens
+        are all there is — and they name no program here."""
+        command = _command(_param("verbose", BoolType()))
+
+        selected = split_exec_tail(
+            ("-h", "--"),
+            program_command_for_file=lambda file: command if file == "prog.agl" else None,
+        )
+
+        assert selected == ExecTail(file=None, tokens=("-h", "--"))
 
 
 class TestRetainEndOfOptions:

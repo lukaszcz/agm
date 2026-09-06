@@ -144,15 +144,17 @@ including the qualified configuration/engine-setting tables registered commands 
 `agm exec` does.
 
 `agm COMMAND -h` (or `--help`) prints that command's own help: a usage line naming the command
-path and the referenced program's positional slots, one entry per visible parameter, and
+path and the referenced program's positional slots — an `@opt-hidden` parameter loses its `--name`
+entry only and keeps its usage slot — one entry per parameter whose name is not hidden, and
 `--dry-run`. The description is the registration's own `description` when the manifest supplies
 one, and the referenced `program def`'s `@doc` prose otherwise. A `-h` in a position where a value
 is expected belongs to the parameter that asked for it, and the command runs.
 
-A registered command inherits `agm exec`'s doubled-`--` rule (see
-[Program arguments](exec.md#program-arguments)): AGM's own parser consumes a bare `--` before the
-program's parser sees any token, so reaching the program's own end-of-options marker takes
-`agm COMMAND -- -- --odd-looking-value`.
+A registered command inherits `agm exec`'s single-`--` rule (see
+[Program arguments](exec.md#program-arguments)): the marker the reader writes reaches the program's
+own parser, so `agm COMMAND -- --odd-looking-value` passes that `--`-prefixed token as a positional
+argument. A registered command names no FILE of its own, so it has no flag-shaped-source exception:
+a second `--` is an ordinary positional value.
 
 The global `--dry-run` flag can appear before or after a registered command path; it runs the static
 pipeline and program-argument validation without executing the program. They appear in `agm help` and

@@ -206,3 +206,33 @@ class TestSelectEntryProgram:
         assert selection.entry_programs == (entry,)
         assert selection.selected is None
         assert selection.requested_unmatched is True
+
+
+# ---------------------------------------------------------------------------
+# discover_programs_for_target
+# ---------------------------------------------------------------------------
+
+
+class TestDiscoverProgramsForTarget:
+    def test_an_unreadable_file_token_degrades_silently(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The tail split probes ordinary non-option tokens as candidate FILE
+
+        tokens, so a token that names no readable file must degrade to no
+        programs without writing anything a caller cannot suppress.
+        """
+        from agm.cli_support.program_discovery import discover_programs_for_target
+
+        monkeypatch.chdir(tmp_path)
+
+        assert discover_programs_for_target(
+            file="World", command=None, module_paths=None, no_stdlib=True
+        ) == ((), None)
+
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        assert captured.out == ""

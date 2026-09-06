@@ -158,7 +158,7 @@ def discover_programs_for_target(
         resolve_exec_target,
     )
     from agm.config.context import current_config_context
-    from agm.core.fs import read_text_arg
+    from agm.core.fs import read_text
 
     try:
         context = current_config_context()
@@ -179,7 +179,7 @@ def discover_programs_for_target(
             )
             return programs, target.declaration_path
         if isinstance(target, (InlineSource, FileEntry)):
-            source = command if isinstance(target, InlineSource) else read_text_arg(target.path)
+            source = command if isinstance(target, InlineSource) else read_text(target.path)
             entry_path = target.path if isinstance(target, FileEntry) else None
             exec_roots = effective_exec_roots(
                 entry_path=entry_path,

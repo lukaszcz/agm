@@ -220,7 +220,7 @@ class TestCompanionName:
                 externs.append(node)
 
         walk(resolved.program, visit)
-        return {fd.name: resolved.extern_names[fd.node_id] for fd in externs}
+        return {fd.name: resolved.attributes.extern_names[fd.node_id] for fd in externs}
 
     def test_an_unattributed_extern_uses_its_declared_name(self) -> None:
         assert self._companion_names("extern def helper(x: int) -> int") == {"helper": "helper"}
@@ -288,7 +288,7 @@ class TestCompanionName:
         )
         resolved = parse_and_resolve(source, origin_path=self._PATH)
         assert isinstance(resolved, ModuleResolution)
-        assert sorted(resolved.extern_names.values()) == ["a_size", "b_size"]
+        assert sorted(resolved.attributes.extern_names.values()) == ["a_size", "b_size"]
 
     def test_bad_python_name_rejection_fixture(self) -> None:
         # ``tests/test_agl_e2e.py`` resolves every rejection fixture inline, so

@@ -21,7 +21,7 @@ from agm.agent.runner import (
     command_with_prompt_target_or_exit,
     run_prompt_command,
 )
-from agm.cli_support.args import LoopSelectArgs
+from agm.cli_support.args import LoopCommandArgs
 from agm.core import dry_run
 from agm.core.path import display_path
 
@@ -30,7 +30,7 @@ def _print_dry_run_prompt(label: str, prompt_text: str) -> None:
     print(f"dry-run: prompt [{label}]: {prompt_text}")
 
 
-def run(args: LoopSelectArgs) -> None:
+def run(args: LoopCommandArgs) -> None:
     temp_files: list[Path] = []
     resolved_tasks_dir = tasks_dir(args)
     env = loop_env(resolved_tasks_dir)

@@ -1540,7 +1540,7 @@ def _program_decl_infos(checked: "CheckedProgram") -> tuple[ProgramDeclInfo, ...
             span=item.span,
             parameters=_program_param_infos(checked_module, item),
             is_entry=module_id == checked.entry_id,
-            doc=checked_module.resolved.docs.get(item.node_id),
+            doc=checked_module.resolved.attributes.docs.get(item.node_id),
         )
         for module_id, checked_module, item in program_funcdefs(checked.modules)
     ]
@@ -1575,7 +1575,7 @@ def _program_param_infos(
             type=param_spec.type,
             has_default=param_spec.has_default,
             span=ast_param.span,
-            cli=checked_module.resolved.program_options[ast_param.node_id],
+            cli=checked_module.resolved.attributes.program_options[ast_param.node_id],
         )
         for ast_param, param_spec in zip(funcdef.params, signature.params, strict=True)
     )
@@ -1942,7 +1942,7 @@ def _extern_declarations(
         return declarations
 
     declarations = [
-        (mid, mod.resolved.extern_names[funcdef.node_id])
+        (mid, mod.resolved.attributes.extern_names[funcdef.node_id])
         for mid, mod in checked.modules.items()
         if module_ids is None or mid in module_ids
         for funcdef in collect(mod.resolved.program.body.items)

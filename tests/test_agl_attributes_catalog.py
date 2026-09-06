@@ -36,9 +36,6 @@ class TestCatalogContents:
     def test_specs_are_keyed_by_their_own_name(self) -> None:
         assert all(name == spec.name for name, spec in BUILTIN_ATTRIBUTES.items())
 
-    def test_no_builtin_attribute_repeats(self) -> None:
-        assert [name for name, spec in BUILTIN_ATTRIBUTES.items() if spec.repeatable] == []
-
     def test_specs_are_frozen_and_hashable(self) -> None:
         spec = BUILTIN_ATTRIBUTES["doc"]
         with pytest.raises(dataclasses.FrozenInstanceError):
@@ -110,11 +107,12 @@ class TestDocAttribute:
 
 
 class TestSpecDefaults:
-    def test_a_spec_defaults_to_single_use_without_conflicts(self) -> None:
+    def test_a_spec_defaults_to_an_unconstrained_argument_without_conflicts(self) -> None:
         spec = AttributeSpec(
             name="example",
             targets=frozenset({AttributeTarget.RECORD}),
             arguments=AttributeArguments.NONE,
         )
-        assert spec.repeatable is False
         assert spec.conflicts == ()
+        assert spec.pattern is None
+        assert spec.expected is None

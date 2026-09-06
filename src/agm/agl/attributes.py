@@ -84,15 +84,19 @@ class AttributeSpec:
     """What one attribute name admits.
 
     ``targets`` are the declaration kinds it may sit on, ``arguments`` its
-    argument shape, ``repeatable`` whether one declaration may carry it more
-    than once, and ``conflicts`` the names it may not appear beside.
+    argument shape, and ``conflicts`` the names it may not appear beside.
+    ``pattern`` narrows a text argument further — the spelling a host has to
+    be able to form from it — and ``expected`` phrases that shape for the
+    diagnostic an argument failing it raises. Both are absent for an
+    attribute whose text is arbitrary prose.
     """
 
     name: str
     targets: frozenset[AttributeTarget]
     arguments: AttributeArguments
-    repeatable: bool = False
     conflicts: tuple[str, ...] = ()
+    pattern: re.Pattern[str] | None = None
+    expected: str | None = None
 
 
 #: Every declaration kind: ``@doc`` may sit on all of them.
@@ -163,10 +167,14 @@ NAME_ADDRESSED_OPTION_ATTRIBUTES: tuple[str, ...] = (
 #: ``--no-<name>`` from it. Anything else — a leading, trailing or doubled
 #: hyphen, whitespace, ``=``, other punctuation, the empty text — is rejected.
 OPTION_NAME_PATTERN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*")
+_OPTION_NAME_EXPECTED = (
+    "takes a flag word — ASCII letters, digits and hyphens, beginning with a letter or digit — not"
+)
 
 #: The shape of an ``@opt-short`` argument: exactly one ASCII letter, which a
 #: host spells ``-<short>``.
 OPTION_SHORT_PATTERN = re.compile(r"[A-Za-z]")
+_OPTION_SHORT_EXPECTED = "takes exactly one ASCII letter, not"
 
 _PROGRAM_PARAMETER_ONLY: frozenset[AttributeTarget] = frozenset({AttributeTarget.PROGRAM_PARAMETER})
 
@@ -202,11 +210,19 @@ def _zone_spec(name: str) -> AttributeSpec:
     )
 
 
-def _option_spec(name: str, arguments: AttributeArguments) -> AttributeSpec:
+def _option_spec(
+    name: str,
+    arguments: AttributeArguments,
+    *,
+    pattern: re.Pattern[str] | None = None,
+    expected: str | None = None,
+) -> AttributeSpec:
     return AttributeSpec(
         name=name,
         targets=_PROGRAM_PARAMETER_ONLY,
         arguments=arguments,
+        pattern=pattern,
+        expected=expected,
     )
 
 
@@ -217,8 +233,18 @@ _SPECS: tuple[AttributeSpec, ...] = (
         targets=frozenset({AttributeTarget.EXTERN}),
         arguments=AttributeArguments.ONE_TEXT,
     ),
-    _option_spec(OPTION_SHORT_ATTRIBUTE, AttributeArguments.ONE_TEXT),
-    _option_spec(OPTION_NAME_ATTRIBUTE, AttributeArguments.ONE_TEXT),
+    _option_spec(
+        OPTION_SHORT_ATTRIBUTE,
+        AttributeArguments.ONE_TEXT,
+        pattern=OPTION_SHORT_PATTERN,
+        expected=_OPTION_SHORT_EXPECTED,
+    ),
+    _option_spec(
+        OPTION_NAME_ATTRIBUTE,
+        AttributeArguments.ONE_TEXT,
+        pattern=OPTION_NAME_PATTERN,
+        expected=_OPTION_NAME_EXPECTED,
+    ),
     _option_spec(OPTION_ENV_ATTRIBUTE, AttributeArguments.ONE_TEXT),
     _option_spec(OPTION_METAVAR_ATTRIBUTE, AttributeArguments.ONE_TEXT),
     _option_spec(OPTION_HIDDEN_ATTRIBUTE, AttributeArguments.NONE),

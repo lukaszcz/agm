@@ -28,7 +28,7 @@ from agm.agent.runner import (
     split_command,
     validate_command,
 )
-from agm.cli_support.args import LoopArgs, LoopSelectArgs
+from agm.cli_support.args import LoopArgs, LoopCommandArgs
 from agm.commands.loop.run import run as loop_run
 
 
@@ -204,7 +204,7 @@ def test_prepare_select_invocation_prefers_selector_when_configured(
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
     monkeypatch.chdir(tmp_path)
 
-    args = LoopSelectArgs(
+    args = LoopCommandArgs(
         command_name=None,
         runner="runner --print",
         runner_args=[],
@@ -246,7 +246,7 @@ def test_prepare_select_invocation_falls_back_to_runner_without_selector(
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
     monkeypatch.chdir(tmp_path)
 
-    args = LoopSelectArgs(
+    args = LoopCommandArgs(
         command_name=None,
         runner="runner --print",
         runner_args=["--verbose"],
@@ -369,7 +369,7 @@ def test_use_selector_mode_cli_no_selector_overrides_config(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(tmp_path)
 
-    args = LoopSelectArgs(
+    args = LoopCommandArgs(
         command_name=None,
         runner=None,
         runner_args=[],
@@ -1022,7 +1022,7 @@ class TestPrepareProgressInvocationSelectorPrompt:
         monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
         monkeypatch.chdir(tmp_path)
 
-        args = LoopSelectArgs(
+        args = LoopCommandArgs(
             command_name=None,
             runner="runner",
             runner_args=[],
@@ -1064,7 +1064,7 @@ class TestPrepareProgressInvocationSelectorPrompt:
         monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
         monkeypatch.chdir(tmp_path)
 
-        args = LoopSelectArgs(
+        args = LoopCommandArgs(
             command_name=None,
             runner="runner",
             runner_args=[],
@@ -1103,7 +1103,7 @@ class TestPrepareProgressInvocationSelectorPrompt:
         monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
         monkeypatch.chdir(tmp_path)
 
-        args = LoopSelectArgs(
+        args = LoopCommandArgs(
             command_name=None,
             runner="runner",
             runner_args=[],
@@ -2155,7 +2155,7 @@ class TestPrepareSelectInvocationMissingDefault:
         """prepare_select_invocation exits when no selector prompt is provided
         and the default select.md file is missing."""
         from agm.agent.loop import prepare_select_invocation
-        from agm.cli_support.args import LoopSelectArgs
+        from agm.cli_support.args import LoopCommandArgs
 
         home = tmp_path / "home"
         (home / ".agm" / "prompts").mkdir(parents=True)
@@ -2164,7 +2164,7 @@ class TestPrepareSelectInvocationMissingDefault:
         monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
         monkeypatch.chdir(tmp_path)
 
-        args = LoopSelectArgs(
+        args = LoopCommandArgs(
             command_name=None,
             runner="fake-runner",
             runner_args=[],

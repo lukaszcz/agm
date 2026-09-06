@@ -1028,7 +1028,7 @@ class _Lowerer:
             params=ir_params,
             impl=ExternFunctionBody(
                 name=funcdef.name,
-                companion_name=self._checked.resolved.extern_names[funcdef.node_id],
+                companion_name=self._checked.resolved.attributes.extern_names[funcdef.node_id],
             ),
             param_labels=param_labels,
             result_label=result_label,

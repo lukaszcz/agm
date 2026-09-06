@@ -114,6 +114,7 @@ __all__ = [
     "build_program_command",
     "contains_help_flag",
     "engine_key_flags",
+    "exec_program_help",
     "exec_program_name",
     "native_raw_value",
     "option_none_raw",
@@ -200,6 +201,11 @@ def _help_option() -> click.Option:
         callback=_help_callback,
         help="Show this message and exit.",
     )
+
+
+def _positional_argument() -> click.Argument:
+    """Return the catch-all argument every non-option token lands in."""
+    return click.Argument([_POSITIONAL_DEST], nargs=-1)
 
 
 def _positive_dest(index: int) -> str:
@@ -446,10 +452,12 @@ def split_exec_tail(
     FILE however it is spelled — this is how a file named like an option is
     named — and the marker itself is the one the host consumes. Everything
     else keeps its written order, so the program's command reads exactly the
-    tokens the reader wrote for it. When *program_command_for_file* is given,
-    a tail that contains program flags before FILE is resolved against the
-    selected program's known option arities; ordinary invocation and shell
-    completion need no such discovery and retain the inexpensive scan.
+    tokens the reader wrote for it. A tail whose program flags precede the
+    FILE cannot be split by spelling alone — a program flag's arity is not
+    known until the program is, and the FILE is what selects it — so when
+    *program_command_for_file* is given, the rightmost token naming one usable
+    program settles it. Without a resolver (inline ``-c`` source, which names
+    no FILE) the inexpensive spelling-only scan stands.
     """
     tokens = list(tail)
     marker = tokens.index(END_OF_OPTIONS) if END_OF_OPTIONS in tokens else None
@@ -599,6 +607,21 @@ def _short_flag(param: "ProgramParamInfo") -> str | None:
     return None if short is None else f"-{short}"
 
 
+def _spellings(param: "ProgramParamInfo", projected: ProjectedOption) -> list[str]:
+    """Return every flag one parameter claims: its own, its negative, and its short.
+
+    The one enumeration of a parameter's CLI spellings, so the reservation
+    check (:func:`_check_reservation`) and completion
+    (:meth:`ProgramCommand.option_spellings`) can never disagree about what a
+    parameter occupies.
+    """
+    spellings = [*projected.flags, *projected.negative_flags]
+    short = _short_flag(param)
+    if short is not None:
+        spellings.append(short)
+    return spellings
+
+
 class _ProgramOption(click.Option):
     """A program parameter's Click option: every occurrence recorded, separately.
 
@@ -655,7 +678,11 @@ def _click_params(
     if projected.value_form is ValueForm.BOOL:
         return [
             _ProgramOption(
-                [_positive_dest(index), f"--{spec.name}/--no-{spec.name}", *shorts],
+                [
+                    _positive_dest(index),
+                    f"{projected.flags[0]}/{projected.negative_flags[0]}",
+                    *shorts,
+                ],
                 type=click.BOOL,
                 default=None,
                 multiple=True,
@@ -665,7 +692,7 @@ def _click_params(
             )
         ]
     positive = _ProgramOption(
-        [_positive_dest(index), f"--{spec.name}", *shorts],
+        [_positive_dest(index), projected.flags[0], *shorts],
         default=None,
         multiple=True,
         metavar=spec.metavar or _default_metavar(projected),
@@ -676,7 +703,7 @@ def _click_params(
     if projected.value_form is not ValueForm.OPTION:
         return [positive]
     negative = _ProgramOption(
-        [_negative_dest(index), f"--no-{spec.name}"],
+        [_negative_dest(index), projected.negative_flags[0]],
         is_flag=True,
         type=click.BOOL,
         default=None,
@@ -702,8 +729,16 @@ class _ProgramClickCommand(click.Command):
         params: list[click.Parameter],
         description: str | None,
         usage_slots: tuple[str, ...],
+        context_settings: dict[str, bool] | None = None,
     ) -> None:
-        super().__init__(name=name, params=params, help=description, add_help_option=False)
+        settings: dict[str, bool] = {} if context_settings is None else dict(context_settings)
+        super().__init__(
+            name=name,
+            params=params,
+            help=description,
+            add_help_option=False,
+            context_settings=settings,
+        )
         self.usage_slots = usage_slots
 
     def collect_usage_pieces(self, ctx: click.Context) -> list[str]:
@@ -720,18 +755,21 @@ def _build_click_command(
     description: str | None,
     usage_slots: tuple[str, ...],
     extra_options: Sequence[click.Parameter] = (),
+    context_settings: dict[str, bool] | None = None,
 ) -> _ProgramClickCommand:
     """Assemble one program command: its own parameters, then *extra_options*, then help.
 
-    The single constructor for both the command that parses a program's
-    tokens and the one that renders its help under a host's own invocation
-    name, so the two can never advertise different options.
+    The single constructor for the command that parses a program's tokens,
+    the one that renders its help under a host's own invocation name, and the
+    stand-in for a program that could not be built, so none of them can
+    advertise different options.
     """
     return _ProgramClickCommand(
         name,
         params=[*params, *extra_options, _help_option()],
         description=description,
         usage_slots=usage_slots,
+        context_settings=context_settings,
     )
 
 
@@ -768,15 +806,14 @@ class ProgramCommand:
 
     ``params`` are the Click parameters ``command`` parses with, kept so the
     help rendering (:meth:`render_help`) can present the same surface under a
-    host's own invocation name, and ``usage_slots`` the positional slots its
-    usage line names.
+    host's own invocation name. The positional slots its usage line names
+    live on ``command`` itself.
     """
 
-    command: click.Command
+    command: _ProgramClickCommand
     positional: tuple["ProgramParamInfo", ...]
     options: tuple[tuple["ProgramParamInfo", ProjectedOption], ...]
     params: tuple[click.Parameter, ...]
-    usage_slots: tuple[str, ...]
 
     def parse(self, tokens: Sequence[str]) -> ProgramArguments:
         """Parse *tokens* into raw positional/named host values, keyed by declared name.
@@ -814,9 +851,7 @@ class ProgramCommand:
             raise ValueError(exc.format_message()) from exc
         values = cast(dict[str, object], ctx.params)
         positional = cast(tuple[str, ...], values[_POSITIONAL_DEST])
-        positional_names = {
-            param.name for index, param in enumerate(self.positional) if index < len(positional)
-        }
+        positional_names = self.positionally_filled_names(len(positional))
 
         named: dict[str, object] = {}
         for index, (param, projected) in enumerate(self.options):
@@ -895,7 +930,7 @@ class ProgramCommand:
             program_name,
             params=self.params,
             description=self.command.help if description is None else description,
-            usage_slots=self.usage_slots,
+            usage_slots=self.command.usage_slots,
             extra_options=extra_options,
         )
         return _format_help(command, program_name)
@@ -912,13 +947,22 @@ class ProgramCommand:
         for param, projected in self.options:
             if param.cli.hidden:
                 continue
-            spellings.extend(projected.flags)
-            spellings.extend(projected.negative_flags)
-            short = _short_flag(param)
-            if short is not None:
-                spellings.append(short)
+            spellings.extend(_spellings(param, projected))
         spellings.extend(HELP_FLAGS)
         return tuple(spellings)
+
+    def positionally_filled_names(self, count: int) -> frozenset[str]:
+        """Return the declared names *count* positional tokens fill.
+
+        The shared binder (``runtime.arguments.bind_program_arguments``) pairs
+        positional values with positional-capable parameters left to right,
+        without skipping, so the first *count* of them are the ones a token
+        supplied. Held here so every surface deciding whether a positional
+        token outranks a lower-precedence layer — an ``@opt-env`` fallback in
+        :meth:`parse`, a configured value in ``commands.exec_program`` — reads
+        the binder's pairing rule from one place.
+        """
+        return frozenset(param.name for param in self.positional[:count])
 
     def positional_only_names(self) -> frozenset[str]:
         """Return the external names of this program's positional-only parameters.
@@ -947,11 +991,7 @@ def _check_reservation(
     """
     seen: dict[str, str] = {}
     for param, projected in options:
-        spellings = [*projected.flags, *projected.negative_flags]
-        short = _short_flag(param)
-        if short is not None:
-            spellings.append(short)
-        for flag in spellings:
+        for flag in _spellings(param, projected):
             if flag in RESERVED_FLAGS:
                 return ReservedFlagError(parameter=param.name, flag=flag)
             if flag in seen:
@@ -991,22 +1031,20 @@ def build_program_command(
     collision = _check_reservation(options)
     if collision is not None:
         return collision
-    params: list[click.Parameter] = [click.Argument([_POSITIONAL_DEST], nargs=-1)]
+    params: list[click.Parameter] = [_positional_argument()]
     for index, (param, projected) in enumerate(options):
         params.extend(_click_params(index, param, projected))
-    usage_slots = _usage_slots(positional)
     command = _build_click_command(
         program.declaration_path,
         params=params,
         description=program.doc,
-        usage_slots=usage_slots,
+        usage_slots=_usage_slots(positional),
     )
     return ProgramCommand(
         command=command,
         positional=positional,
         options=options,
         params=tuple(params),
-        usage_slots=usage_slots,
     )
 
 
@@ -1032,12 +1070,12 @@ def _fallback_command() -> click.Command:
     so a help request is still recognized by Click's own parsing rather than
     by a token scan of the host's own.
     """
-    context_settings: dict[str, bool] = {"ignore_unknown_options": True}
-    return click.Command(
-        name="",
-        params=[click.Argument([_POSITIONAL_DEST], nargs=-1), _help_option()],
-        add_help_option=False,
-        context_settings=context_settings,
+    return _build_click_command(
+        "",
+        params=[_positional_argument()],
+        description=None,
+        usage_slots=(),
+        context_settings={"ignore_unknown_options": True},
     )
 
 
@@ -1094,6 +1132,21 @@ def render_program_help(
         extra_options=extra_options,
     )
     return _format_help(command, program_name)
+
+
+def exec_program_help(
+    program_command: "ProgramCommand | None", *, file: str | None, program: str | None
+) -> str:
+    """Render the help of the ``agm exec`` invocation *program_command* was selected by.
+
+    The one rendering shared by the pre-parse help path (``cli._exec_print_help``)
+    and the one reached through :class:`ProgramHelpRequested`
+    (``commands.exec``), so a help request answered before parsing and one
+    recognized while parsing produce the same page.
+    """
+    return render_program_help(
+        program_command, program_name=exec_program_name(file=file, program=program)
+    )
 
 
 def exec_program_name(*, file: str | None, program: str | None) -> str:

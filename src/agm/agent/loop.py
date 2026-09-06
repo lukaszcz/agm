@@ -17,7 +17,7 @@ from agm.agent.runner import (
     split_command,
     validate_command,
 )
-from agm.cli_support.args import LoopArgs, LoopSelectArgs
+from agm.cli_support.args import LoopCommandArgs
 from agm.config.command_config import load_command_config
 from agm.config.context import current_config_context
 from agm.config.general import (
@@ -28,8 +28,6 @@ from agm.config.general import (
 from agm.core.env import clone_env
 from agm.core.fs import is_file
 from agm.core.path import display_path
-
-LoopCommandArgs = LoopArgs | LoopSelectArgs
 
 
 @dataclass(slots=True)

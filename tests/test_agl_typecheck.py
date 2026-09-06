@@ -9481,6 +9481,7 @@ class TestDefensiveGuards:
         builtin_calls: dict[int, object] | None = None,
         declared_functions: dict[str, FuncDef] | None = None,
     ) -> _ModuleResolution:
+        from agm.agl.scope.symbols import AttributeFacts as _AttributeFacts
         from agm.agl.scope.symbols import BuiltinKind as _BuiltinKind
 
         root = ScopeNode(node_id=program.node_id)
@@ -9491,7 +9492,7 @@ class TestDefensiveGuards:
             builtin_calls=bc,
             root_scope=root,
             declared_functions=declared_functions or {},
-            param_zones=_standard_zones(program),
+            attributes=_AttributeFacts(param_zones=_standard_zones(program)),
         )
 
     def test_empty_block_yields_unit(self) -> None:
@@ -10020,13 +10021,13 @@ def _method_header(
     function = next(item for item in resolved.program.body.items if isinstance(item, FuncDef))
     owner = resolved.method_declarations[(ENTRY_ID, ("Point",), function.name)]
     env = TypeEnvironment()
-    _TypeBuilder(env, param_zones=resolved.param_zones).collect(resolved.program)
+    _TypeBuilder(env, param_zones=resolved.attributes.param_zones).collect(resolved.program)
     with env.type_scope(owner):
         signature, _type, _receiver = resolve_function_header(
             env,
             function,
             result_type=function.return_type,
-            param_zones=resolved.param_zones,
+            param_zones=resolved.attributes.param_zones,
             receiver_owner=owner,
         )
     return function, signature.params

@@ -478,6 +478,22 @@ def test_use_rejects_operator_alias_for_scope_route() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "source",
+    (
+        "use foo::bar/baz::x",
+        "use foo::/bar::x",
+        "use ::foo/bar::x",
+    ),
+    ids=("route-segment", "anchored-segment", "current-module-route"),
+)
+def test_use_rejects_a_module_route_after_the_target_head(source: str) -> None:
+    """Only a use target's head is a module route; every segment after it
+    names a scope, so a separator there is a syntax error wherever it sits."""
+    with pytest.raises(AglSyntaxError, match="'::'"):
+        parse_program(source)
+
+
 def test_use_contributes_local_scope_members() -> None:
     resolved = resolve_inline_entry(
         "use Point::*\n\nscope Point\n  def distance() -> int = 1\nend Point\n\ndistance()"

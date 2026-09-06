@@ -1752,89 +1752,84 @@ class TestExecCommandShellComplete:
 class TestProgramArgumentCompletionItems:
     """Unit tests for ``_program_argument_completion_items``."""
 
-    def _programs(self, source: str) -> tuple[Any, ...]:
-        from agm.cli_support.program_discovery import discover_program_declarations_from_source
-
-        return discover_program_declarations_from_source(source)
-
-    def test_text_and_bool_value_parameters_offer_their_flags(self) -> None:
-        programs = self._programs(
-            "program def main(name: text, verbose: bool = false) -> unit = print name\n"
+    def _values(self, source: str, requested: str | None, incomplete: str) -> list[str]:
+        """Return the flags completion offers for *source*'s selected program."""
+        from agm.cli_support.program_discovery import (
+            discover_program_declarations_from_source,
+            select_entry_program,
         )
 
-        values = [
+        programs = discover_program_declarations_from_source(source)
+        selected = select_entry_program(programs, requested=requested).selected
+        if selected is None:
+            return []
+        return [
             item.value
-            for item in completion._program_argument_completion_items(programs, None, "--")
+            for item in completion._program_argument_completion_items(selected, incomplete)
         ]
+
+    def test_text_and_bool_value_parameters_offer_their_flags(self) -> None:
+        values = self._values(
+            "program def main(name: text, verbose: bool = false) -> unit = print name\n",
+            None,
+            "--",
+        )
 
         assert "--name" in values
         assert "--verbose" in values
         assert "--no-verbose" in values
 
     def test_incomplete_prefix_filters_results(self) -> None:
-        programs = self._programs("program def main(apple: text, banana: text) -> unit = ()\n")
-
-        values = [
-            item.value
-            for item in completion._program_argument_completion_items(programs, None, "--a")
-        ]
+        values = self._values(
+            "program def main(apple: text, banana: text) -> unit = ()\n", None, "--a"
+        )
 
         assert values == ["--apple"]
 
     def test_no_selected_program_returns_empty(self) -> None:
-        programs = self._programs(
-            "program def one() -> unit = ()\nprogram def two() -> unit = ()\n"
+        assert (
+            self._values(
+                "program def one() -> unit = ()\nprogram def two() -> unit = ()\n", None, "--"
+            )
+            == []
         )
-
-        assert completion._program_argument_completion_items(programs, None, "--") == []
 
     def test_requested_name_selects_among_several_programs(self) -> None:
-        programs = self._programs(
-            "program def one(alpha: text) -> unit = ()\nprogram def two(beta: text) -> unit = ()\n"
+        values = self._values(
+            "program def one(alpha: text) -> unit = ()\nprogram def two(beta: text) -> unit = ()\n",
+            "two",
+            "--",
         )
-
-        values = [
-            item.value
-            for item in completion._program_argument_completion_items(programs, "two", "--")
-        ]
 
         assert "--beta" in values
         assert "--alpha" not in values
 
     def test_short_spellings_are_offered(self) -> None:
-        programs = self._programs(
-            'program def main(@opt-short("t") tag: text = "a") -> unit = print tag\n'
+        values = self._values(
+            'program def main(@opt-short("t") tag: text = "a") -> unit = print tag\n',
+            None,
+            "-",
         )
-
-        values = [
-            item.value
-            for item in completion._program_argument_completion_items(programs, None, "-")
-        ]
 
         assert "-t" in values
         assert "--tag" in values
 
     def test_a_hidden_parameter_is_never_offered(self) -> None:
-        programs = self._programs(
+        values = self._values(
             "program def main(\n"
             '    tag: text = "a",\n'
             '    @opt-hidden @opt-short("s") secret: text = "",\n'
-            ") -> unit = print tag\n"
+            ") -> unit = print tag\n",
+            None,
+            "-",
         )
-
-        values = [
-            item.value
-            for item in completion._program_argument_completion_items(programs, None, "-")
-        ]
 
         assert "--tag" in values
         assert "--secret" not in values
         assert "-s" not in values
 
     def test_reservation_collision_degrades_to_empty(self) -> None:
-        programs = self._programs("program def main(help: text) -> unit = ()\n")
-
-        assert completion._program_argument_completion_items(programs, None, "--") == []
+        assert self._values("program def main(help: text) -> unit = ()\n", None, "--") == []
 
 
 class TestExecCommandShellCompleteEdgeCases:

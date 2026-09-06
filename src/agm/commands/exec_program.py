@@ -83,6 +83,7 @@ from agm.cli_support.exec_target import (
 )
 from agm.cli_support.program_discovery import (
     discover_program_declarations_from_installed_reference,
+    program_candidates,
     select_declared_program,
     select_entry_program,
     unmatched_program_message,
@@ -522,7 +523,7 @@ def run(
             print(unmatched_program_message(args.program, entry_programs), file=sys.stderr)
             raise SystemExit(1)
         if len(entry_programs) > 1:
-            candidates = ", ".join(program.declaration_path for program in entry_programs)
+            candidates = program_candidates(entry_programs)
             print(
                 f"Error: multiple programs declared; select one with -p: {candidates}",
                 file=sys.stderr,
@@ -584,9 +585,7 @@ def run(
         except QualifiedConfigLookupError as exc:
             print(f"Error: invalid qualified configuration: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
-        positional_names = {
-            info.name for info in program_command.positional[: len(cli_arguments.positional)]
-        }
+        positional_names = program_command.positionally_filled_names(len(cli_arguments.positional))
         cli_supplied_names = set(program_named) | positional_names
         for info, projected, key in argument_options:
             if key in configured_arguments and info.name not in cli_supplied_names:

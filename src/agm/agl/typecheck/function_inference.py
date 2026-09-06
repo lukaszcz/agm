@@ -433,7 +433,7 @@ def _infer_function_component(
                 module.env,
                 node,
                 result_type=result,
-                param_zones=module.resolved.param_zones,
+                param_zones=module.resolved.attributes.param_zones,
                 receiver_owner=receiver_owner,
             )
         register_method_header(module.env, node, signature, receiver, module.module_id)

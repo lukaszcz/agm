@@ -33,12 +33,13 @@ if TYPE_CHECKING:
 _ProgramT = TypeVar("_ProgramT")
 
 __all__ = [
+    "ExecProgramDiscovery",
     "ProgramSelection",
     "select_declared_program",
     "discover_program_declarations_from_installed_reference",
     "discover_program_declarations_from_source",
-    "discover_program_command_for_target",
     "discover_programs_for_target",
+    "program_candidates",
     "select_entry_program",
     "unmatched_program_message",
 ]
@@ -201,30 +202,68 @@ def discover_programs_for_target(
     return (), None
 
 
-def discover_program_command_for_target(
-    *,
-    file: str,
-    requested_program: str | None,
-    module_paths: "list[str] | None",
-    no_stdlib: bool,
-) -> "ProgramCommand | None":
-    """Return the selected program's command for a potential FILE token.
+class ExecProgramDiscovery:
+    """One ``agm exec`` invocation's advisory discovery, memoized per source selector.
 
-    The tail parser calls this only when pre-FILE program options make a
-    spelling-only FILE scan ambiguous. It follows the same advisory discovery
-    and selection path as help and completion, returning ``None`` when the
-    token does not name one usable, selected program.
+    The advisory surfaces of a single invocation ask about the same source
+    repeatedly: the tail split probes candidate FILE tokens
+    (:meth:`command_for_file`), and the help and completion surfaces that
+    follow then ask about the token it settled on (:meth:`programs`). Each
+    answer costs a full static pipeline pass, so they are memoized for the
+    life of the invocation — nothing the pass reads changes within it.
+
+    Held for one invocation rather than in a process-wide cache, so a host
+    that runs several invocations in one process (the test suite, a shell
+    completion server) never serves one invocation's answer to another's
+    configuration context.
     """
-    from agm.cli_support.program_options import program_command_for
 
-    programs, referenced_program = discover_programs_for_target(
-        file=file,
-        command=None,
-        module_paths=module_paths,
-        no_stdlib=no_stdlib,
-    )
-    requested = requested_program if requested_program is not None else referenced_program
-    return program_command_for(select_entry_program(programs, requested=requested).selected)
+    def __init__(
+        self,
+        *,
+        command: str | None,
+        requested_program: str | None,
+        module_paths: "list[str] | None",
+        no_stdlib: bool,
+    ) -> None:
+        self._command = command
+        self._requested_program = requested_program
+        self._module_paths = module_paths
+        self._no_stdlib = no_stdlib
+        self._programs: dict[str | None, tuple[tuple[ProgramDeclInfo, ...], str | None]] = {}
+
+    def programs(self, file: str | None) -> "tuple[tuple[ProgramDeclInfo, ...], str | None]":
+        """Return :func:`discover_programs_for_target`'s answer for *file*, once."""
+        cached = self._programs.get(file)
+        if cached is None:
+            cached = discover_programs_for_target(
+                file=file,
+                command=self._command,
+                module_paths=self._module_paths,
+                no_stdlib=self._no_stdlib,
+            )
+            self._programs[file] = cached
+        return cached
+
+    def selection(self, file: str | None) -> "ProgramSelection":
+        """Return the entry-program selection *file* offers under this invocation's ``-p``."""
+        programs, referenced_program = self.programs(file)
+        requested = (
+            self._requested_program if self._requested_program is not None else referenced_program
+        )
+        return select_entry_program(programs, requested=requested)
+
+    def command_for_file(self, file: str) -> "ProgramCommand | None":
+        """Return the selected program's command for a potential FILE token.
+
+        The tail parser calls this only when pre-FILE program options make a
+        spelling-only FILE scan ambiguous, so it may ask about several
+        candidate tokens; ``None`` means the token does not name one usable,
+        selected program.
+        """
+        from agm.cli_support.program_options import program_command_for
+
+        return program_command_for(self.selection(file).selected)
 
 
 def unmatched_program_message(
@@ -237,9 +276,19 @@ def unmatched_program_message(
     same way — and fails the same way — whether the invocation asked to run
     the program or to describe it.
     """
-    candidates = ", ".join(program.declaration_path for program in entry_programs)
+    candidates = program_candidates(entry_programs)
     suffix = f" Candidates: {candidates}" if candidates else ""
     return f"Error: no program matches '{requested}'.{suffix}"
+
+
+def program_candidates(entry_programs: "tuple[ProgramDeclInfo, ...]") -> str:
+    """Return *entry_programs*' declaration paths as one comma-separated list.
+
+    How every inline host diagnostic names the programs a reader may select
+    with ``-p``, so the "no program matches" and "multiple programs declared"
+    messages spell the same candidates the same way.
+    """
+    return ", ".join(program.declaration_path for program in entry_programs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,12 +303,16 @@ class ProgramSelection:
     names one, or ``None`` when several are declared and *requested* is
     absent or matches none of them. ``requested_unmatched`` tells those two
     ``None`` causes apart: ``True`` only when *requested* was given and
-    matched nothing.
+    matched nothing. ``requested`` is the name the selection was made with —
+    an explicit ``-p`` or the declaration path an installed reference names —
+    so a caller reporting an unmatched request names what was actually asked
+    for rather than re-deriving it.
     """
 
     entry_programs: "tuple[ProgramDeclInfo, ...]"
     selected: "ProgramDeclInfo | None"
     requested_unmatched: bool
+    requested: str | None = None
 
 
 def select_declared_program(
@@ -300,4 +353,5 @@ def select_entry_program(
         entry_programs=entry_programs,
         selected=selected,
         requested_unmatched=requested is not None and selected is None,
+        requested=requested,
     )

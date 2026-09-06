@@ -707,10 +707,7 @@ class _Resolver:
             match_site_pattern_slots=dict(self._match_site_pattern_slots_by_node),
             method_declarations=dict(self._method_declarations),
             use_targets=dict(self._use_targets),
-            param_zones=attribute_facts.param_zones,
-            extern_names=attribute_facts.extern_names,
-            program_options=attribute_facts.program_options,
-            docs=attribute_facts.docs,
+            attributes=attribute_facts,
         )
 
     # ------------------------------------------------------------------
@@ -1065,18 +1062,24 @@ class _Resolver:
             assert isinstance(item, FuncDef)
             self._declared_functions[item.name] = item
 
+    def _non_method_functions(self) -> Iterator[FuncDef]:
+        """Yield the function declarations that are not methods, in declaration order.
+
+        Runs after :meth:`_classify_method_declarations`, so a method (its key
+        is in ``self._method_declarations``) is left out: methods live in their
+        receiver type's own member namespace and are validated against it.
+        """
+        for key, declaration in self._declaration_items.items():
+            if isinstance(declaration, FuncDef) and key not in self._method_declarations:
+                yield declaration
+
     def _validate_function_names(self) -> None:
         """Reject a built-in call name reused as an ordinary function name.
 
-        Runs after :meth:`_classify_method_declarations` so that a method
-        (its key is in ``self._method_declarations``) is exempt: methods live
-        in their receiver type's own member namespace, distinct from the
-        namespace this rule protects. Iterates ``self._declaration_items`` in
-        declaration order for deterministic diagnostics.
+        Methods are exempt: their names live in their receiver type's own
+        member namespace, distinct from the namespace this rule protects.
         """
-        for key, declaration in self._declaration_items.items():
-            if not isinstance(declaration, FuncDef) or key in self._method_declarations:
-                continue
+        for declaration in self._non_method_functions():
             self._validate_function_decl(declaration)
 
     def _validate_function_decl(self, decl: FuncDef) -> None:
@@ -1097,16 +1100,12 @@ class _Resolver:
     def _validate_non_method_type_params(self) -> None:
         """Reject a '_' type-parameter slot on a function that is not a method.
 
-        Runs after :meth:`_classify_method_declarations` so that a method's
-        key (present in ``self._method_declarations``) is exempt: a method's
-        receiver-prefix '_' slots are validated later, against the receiver's
-        arity, during type checking. Every other function declaration —
-        including a plain ``def`` inside a type scope that lacks a ``self``
-        receiver — may not use '_' at all.
+        A method's receiver-prefix '_' slots are validated later, against the
+        receiver's arity, during type checking. Every other function
+        declaration — including a plain ``def`` inside a type scope that lacks
+        a ``self`` receiver — may not use '_' at all.
         """
-        for key, declaration in self._declaration_items.items():
-            if not isinstance(declaration, FuncDef) or key in self._method_declarations:
-                continue
+        for declaration in self._non_method_functions():
             self._reject_type_param_wildcard(declaration)
 
     def _reject_type_param_wildcard(
@@ -1672,46 +1671,24 @@ class _Resolver:
             self._pop_scope()
 
     @contextmanager
-    def _loop_body_ctx(self) -> Iterator[None]:
-        """Context manager that sets ``_in_loop`` to ``True`` for the duration.
+    def _resolution_flags_ctx(
+        self, *, in_loop: bool | None = None, in_function: bool | None = None
+    ) -> Iterator[None]:
+        """Resolve a region with the loop and function flags it dictates.
 
-        Used when resolving a loop's interior (while_cond, body, until_cond)
-        so that ``break``/``continue`` inside are accepted.  Save/restore so
-        nested loops and post-loop scope both behave correctly.
+        A flag passed as ``None`` keeps its enclosing value.  Both are restored
+        on the way out, so nested regions and the code after one see the flags
+        their own position dictates.
         """
-        prev = self._in_loop
-        self._in_loop = True
+        previous = (self._in_loop, self._in_function)
+        if in_loop is not None:
+            self._in_loop = in_loop
+        if in_function is not None:
+            self._in_function = in_function
         try:
             yield
         finally:
-            self._in_loop = prev
-
-    @contextmanager
-    def _fn_boundary_ctx(self) -> Iterator[None]:
-        """Reset enclosing loop/function flags while crossing a function boundary.
-
-        Parameter defaults resolve in the enclosing lexical scope but outside the
-        new function body, so neither loop exits nor returns cross this boundary.
-        """
-        prev_loop = self._in_loop
-        prev_function = self._in_function
-        self._in_loop = False
-        self._in_function = False
-        try:
-            yield
-        finally:
-            self._in_loop = prev_loop
-            self._in_function = prev_function
-
-    @contextmanager
-    def _function_body_ctx(self) -> Iterator[None]:
-        """Mark resolution as occurring inside the current function body."""
-        prev = self._in_function
-        self._in_function = True
-        try:
-            yield
-        finally:
-            self._in_function = prev
+            self._in_loop, self._in_function = previous
 
     def _define(self, name: str, ref: BindingRef) -> None:
         """Define *name* in the current scope; error on redeclaration.
@@ -2278,6 +2255,20 @@ class _Resolver:
         suffix = "" if not target else f"::{'::'.join(target)}"
         return f"/{module.path_str()}{suffix}"
 
+    def _bare_scope_route_contributions(
+        self,
+    ) -> tuple[Mapping[NameAtom, frozenset[BareRoute]], ...]:
+        """Return the namespace-only bare contributions reachable from here."""
+        return (
+            self._import_env.unqualified_scope_routes,
+            *(
+                routes
+                for _node_id, routes in self._reachable_decl_contributions(
+                    self._import_env.decl_bare_scope_routes, self._current_scope().scope_path
+                )
+            ),
+        )
+
     def _bare_use_import_targets(
         self, target: ScopePath
     ) -> tuple[tuple[BareRoute, Mapping[NameAtom, QName]], ...]:
@@ -2315,15 +2306,7 @@ class _Resolver:
                     for qname in selected:
                         members.setdefault(exposed, qname)
 
-        scope_routes = (
-            self._import_env.unqualified_scope_routes,
-            *(
-                routes
-                for _node_id, routes in self._reachable_decl_contributions(
-                    self._import_env.decl_bare_scope_routes, self._current_scope().scope_path
-                )
-            ),
-        )
+        scope_routes = self._bare_scope_route_contributions()
         for provenances in scope_routes:
             for atom, routes in provenances.items():
                 relative = _relative_under(atom, target)
@@ -2341,15 +2324,7 @@ class _Resolver:
     ) -> dict[NameAtom, frozenset[BareRoute]]:
         """Return scope identities supplied by raw bare import contributions."""
         result: dict[NameAtom, set[BareRoute]] = {}
-        provenances = (
-            self._import_env.unqualified_scope_routes,
-            *(
-                routes
-                for _node_id, routes in self._reachable_decl_contributions(
-                    self._import_env.decl_bare_scope_routes, self._current_scope().scope_path
-                )
-            ),
-        )
+        provenances = self._bare_scope_route_contributions()
         for routes_by_atom in provenances:
             for atom, routes in routes_by_atom.items():
                 relative = _relative_under(atom, target)
@@ -2431,11 +2406,11 @@ class _Resolver:
         """Resolve a use target through exact lexical scope paths."""
         if decl.anchored and not decl.current_module:
             return None
-        bases = [()] if decl.current_module else self._scope_bases_for_use()
+        bases = [()] if decl.current_module else self._lexical_scope_bases()
         return next((base + target for base in bases if base + target in self._scope_nodes), None)
 
-    def _scope_bases_for_use(self) -> list[ScopePath]:
-        """Return lexical scope bases while resolving a header declaration."""
+    def _lexical_scope_bases(self) -> list[ScopePath]:
+        """Return the scope paths enclosing the current one, innermost first."""
         bases: list[ScopePath] = []
         scope: ScopeNode | None = self._current_scope()
         while scope is not None:
@@ -3337,13 +3312,7 @@ class _Resolver:
         """Return lexical bases from which an unanchored scope path may start."""
         if chain.anchor is QualifierAnchor.CURRENT_MODULE:
             return [()]
-        bases: list[ScopePath] = []
-        scope: ScopeNode | None = self._current_scope()
-        while scope is not None:
-            if scope.scope_path not in bases:
-                bases.append(scope.scope_path)
-            scope = scope.parent
-        return bases
+        return self._lexical_scope_bases()
 
     def _validate_local_scope_chain(
         self, chain: QualifierChain | None, *, bases: list[ScopePath] | None = None
@@ -4348,7 +4317,7 @@ class _Resolver:
         if node.for_range_step is not None:
             self._resolve_expr(node.for_range_step)
         with self._child_scope(node.node_id) as loop_scope:
-            with self._loop_body_ctx():
+            with self._resolution_flags_ctx(in_loop=True):
                 # Bind for_var (immutable) before resolving while_cond/body/until_cond.
                 if node.for_var is not None:
                     self._check_not_reserved(node.for_var, node.span)
@@ -4423,7 +4392,7 @@ class _Resolver:
         resolved in the enclosing scope (only ``_in_loop`` changes, not the
         scope stack), so they can reference outer bindings but not the params.
         """
-        with self._fn_boundary_ctx():
+        with self._resolution_flags_ctx(in_loop=False, in_function=False):
             for param in node.params:
                 if param.default is not None:
                     self._resolve_expr(param.default)
@@ -4445,7 +4414,7 @@ class _Resolver:
                         )
                     param_scope.define(param.name, ref)
                 if node.body is not None:
-                    with self._function_body_ctx():
+                    with self._resolution_flags_ctx(in_function=True):
                         self._resolve_expr_or_block(node.body)
 
     # ------------------------------------------------------------------

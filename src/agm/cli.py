@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, NoReturn, TypedDict
 
 import typer
 
@@ -52,7 +53,7 @@ from agm.cli_support.args import (
     ExecArgs,
     InitArgs,
     LoopArgs,
-    LoopSelectArgs,
+    LoopCommandArgs,
     OpenArgs,
     PkgCheckArgs,
     PkgCreateArgs,
@@ -82,6 +83,7 @@ from agm.parser import (
 
 if TYPE_CHECKING:
     from agm.agl.runtime.types import ProgramDeclInfo
+    from agm.cli_support.program_discovery import ExecProgramDiscovery
 
 _HELP_TEXTS = parser_helpers._HELP_TEXTS
 _HELP_ALIASES = parser_helpers._HELP_ALIASES
@@ -110,16 +112,30 @@ def _command_path_from_context(ctx: typer.Context) -> list[str]:
     return path
 
 
+def _print_command_help(command_path: Sequence[str]) -> None:
+    """Print one command path's help page, or the overview for the empty path."""
+    if command_path:
+        print_help_for_command_path(list(command_path))
+    else:
+        print_overview()
+
+
 def _print_context_help(ctx: typer.Context, param: object, value: bool) -> None:
     del param
     if not value or ctx.resilient_parsing:
         return
-    command_path = _command_path_from_context(ctx)
-    if command_path:
-        print_help_for_command_path(command_path)
-    else:
-        print_overview()
+    _print_command_help(_command_path_from_context(ctx))
     raise typer.Exit()
+
+
+def _group_help(ctx: typer.Context, *command_path: str) -> None:
+    """Print a command group's own help when it is invoked with no subcommand.
+
+    The root group has no command path of its own and prints the overview.
+    """
+    if ctx.invoked_subcommand is None:
+        _print_command_help(command_path)
+        raise typer.Exit()
 
 
 def _help_option() -> bool:
@@ -183,331 +199,187 @@ def _loop_option_value(
     return args[next_index], next_index + 1
 
 
+def _reject_option_conflict(
+    command_path: Sequence[str], first: str, second: str, *, conflicting: bool
+) -> None:
+    """Reject a command line that gave two options which exclude each other."""
+    if conflicting:
+        exit_with_usage_error(command_path, f"error: {first} and {second} are mutually exclusive")
+
+
+#: Loop options that take a value, in every loop command's vocabulary.
+_LOOP_VALUE_OPTIONS = (
+    "--runner",
+    "--selector",
+    "--tasks-dir",
+    "--prompt",
+    "--prompt-file",
+    "--selector-prompt",
+    "--selector-prompt-file",
+    "--extra-prompt",
+    "--extra-prompt-file",
+    "--extra-selector-prompt",
+    "--extra-selector-prompt-file",
+)
+#: Loop options that stand alone, in every loop command's vocabulary.
+_LOOP_FLAG_OPTIONS = ("--no-selector",)
+#: Loop option pairs that exclude each other, in the order conflicts are reported.
+_LOOP_EXCLUSIVE_OPTIONS = (
+    ("--selector", "--no-selector"),
+    ("--prompt", "--prompt-file"),
+    ("--selector-prompt", "--selector-prompt-file"),
+    ("--extra-prompt", "--extra-prompt-file"),
+    ("--extra-selector-prompt", "--extra-selector-prompt-file"),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _LoopOptions:
+    """The options a loop command line carries, and the operands that follow them."""
+
+    values: Mapping[str, str]
+    flags: frozenset[str]
+    timeout: float | None
+    operands: tuple[str, ...]
+
+    def value(self, option: str) -> str | None:
+        return self.values.get(option)
+
+    def flag(self, option: str) -> bool:
+        return option in self.flags
+
+    def given(self, option: str) -> bool:
+        return option in self.values or self.flag(option)
+
+
+def _parse_loop_options(
+    raw_args: list[str],
+    *,
+    command_path: Sequence[str],
+    value_options: Sequence[str],
+    flag_options: Sequence[str],
+) -> _LoopOptions:
+    """Read a loop command's leading options, stopping at its first operand.
+
+    ``--``, and every token the command has no option for, ends the options and
+    begins the operands.
+    """
+    values: dict[str, str] = {}
+    flags: set[str] = set()
+    timeout: float | None = None
+    index = 0
+    while index < len(raw_args):
+        token = raw_args[index]
+        if token in value_options:
+            values[token], index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+        elif token in flag_options:
+            flags.add(token)
+            index += 1
+        elif token == "--timeout":
+            timeout_text, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            try:
+                timeout = parse_timeout(timeout_text)
+            except ValueError as exc:
+                exit_with_usage_error(command_path, f"error: {exc}")
+        else:
+            break
+
+    options = _LoopOptions(
+        values=values, flags=frozenset(flags), timeout=timeout, operands=tuple(raw_args[index:])
+    )
+    for first, second in _LOOP_EXCLUSIVE_OPTIONS:
+        _reject_option_conflict(
+            command_path, first, second, conflicting=options.given(first) and options.given(second)
+        )
+    return options
+
+
+class _LoopFields(TypedDict):
+    """The argument fields every loop command fills from its options and operands."""
+
+    command_name: str | None
+    runner: str | None
+    runner_args: list[str]
+    selector: str | None
+    no_selector: bool
+    tasks_dir: str | None
+    prompt: str | None
+    prompt_file: str | None
+    selector_prompt: str | None
+    selector_prompt_file: str | None
+    extra_prompt: str | None
+    extra_prompt_file: str | None
+    extra_selector_prompt: str | None
+    extra_selector_prompt_file: str | None
+    timeout: float | None
+
+
+def _loop_fields(options: _LoopOptions) -> _LoopFields:
+    """Project parsed loop options onto the argument fields they fill."""
+    operands = options.operands
+    return _LoopFields(
+        command_name=operands[0] if operands else None,
+        runner=options.value("--runner"),
+        runner_args=run_command.normalize_run_command(list(operands[1:])),
+        selector=options.value("--selector"),
+        no_selector=options.flag("--no-selector"),
+        tasks_dir=options.value("--tasks-dir"),
+        prompt=options.value("--prompt"),
+        prompt_file=options.value("--prompt-file"),
+        selector_prompt=options.value("--selector-prompt"),
+        selector_prompt_file=options.value("--selector-prompt-file"),
+        extra_prompt=options.value("--extra-prompt"),
+        extra_prompt_file=options.value("--extra-prompt-file"),
+        extra_selector_prompt=options.value("--extra-selector-prompt"),
+        extra_selector_prompt_file=options.value("--extra-selector-prompt-file"),
+        timeout=options.timeout,
+    )
+
+
 def _parse_loop_args(
     raw_args: list[str],
     *,
     command_path: Sequence[str],
     command_optional: bool = False,
 ) -> LoopArgs:
-    runner: str | None = None
-    selector: str | None = None
-    no_selector = False
-    tasks_dir: str | None = None
-    no_log = False
-    log_file: str | None = None
-    prompt: str | None = None
-    prompt_file: str | None = None
-    selector_prompt: str | None = None
-    selector_prompt_file: str | None = None
-    extra_prompt: str | None = None
-    extra_prompt_file: str | None = None
-    extra_selector_prompt: str | None = None
-    extra_selector_prompt_file: str | None = None
-    timeout: float | None = None
-    index = 0
-
-    while index < len(raw_args):
-        token = raw_args[index]
-        if token == "--":
-            break
-        if token == "--runner":
-            runner, index = _loop_option_value(
-                raw_args,
-                index,
-                command_path=command_path,
-                option=token,
-            )
-            continue
-        if token == "--selector":
-            selector, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--no-selector":
-            no_selector = True
-            index += 1
-            continue
-        if token == "--tasks-dir":
-            tasks_dir, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--log-file":
-            log_file, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--no-log":
-            no_log = True
-            index += 1
-            continue
-        if token == "--prompt":
-            prompt, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--prompt-file":
-            prompt_file, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--selector-prompt":
-            selector_prompt, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--selector-prompt-file":
-            selector_prompt_file, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--extra-prompt":
-            extra_prompt, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--extra-prompt-file":
-            extra_prompt_file, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--extra-selector-prompt":
-            extra_selector_prompt, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--extra-selector-prompt-file":
-            extra_selector_prompt_file, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--timeout":
-            timeout_str, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            try:
-                timeout = parse_timeout(timeout_str)
-            except ValueError as exc:
-                exit_with_usage_error(command_path, f"error: {exc}")
-            continue
-        break
-
-    if selector is not None and no_selector:
-        exit_with_usage_error(
-            command_path, "error: --selector and --no-selector are mutually exclusive"
-        )
-    if prompt is not None and prompt_file is not None:
-        exit_with_usage_error(
-            command_path, "error: --prompt and --prompt-file are mutually exclusive"
-        )
-    if selector_prompt is not None and selector_prompt_file is not None:
-        exit_with_usage_error(
-            command_path,
-            "error: --selector-prompt and --selector-prompt-file are mutually exclusive",
-        )
-    if extra_prompt is not None and extra_prompt_file is not None:
-        exit_with_usage_error(
-            command_path,
-            "error: --extra-prompt and --extra-prompt-file are mutually exclusive",
-        )
-    if extra_selector_prompt is not None and extra_selector_prompt_file is not None:
-        exit_with_usage_error(
-            command_path,
-            "error: --extra-selector-prompt and "
-            "--extra-selector-prompt-file are mutually exclusive",
-        )
-    remaining = raw_args[index:]
-    if not remaining:
-        if command_optional:
-            if no_log and log_file is not None:
-                exit_with_usage_error(
-                    command_path, "error: --no-log and --log-file are mutually exclusive"
-                )
-            return LoopArgs(
-                command_name=None,
-                runner=runner,
-                runner_args=[],
-                selector=selector,
-                no_selector=no_selector,
-                tasks_dir=tasks_dir,
-                no_log=no_log,
-                log_file=log_file,
-                prompt=prompt,
-                prompt_file=prompt_file,
-                selector_prompt=selector_prompt,
-                selector_prompt_file=selector_prompt_file,
-                extra_prompt=extra_prompt,
-                extra_prompt_file=extra_prompt_file,
-                extra_selector_prompt=extra_selector_prompt,
-                extra_selector_prompt_file=extra_selector_prompt_file,
-                timeout=timeout,
-            )
+    """Parse a loop command line, which adds the trace-logging options."""
+    options = _parse_loop_options(
+        raw_args,
+        command_path=command_path,
+        value_options=(*_LOOP_VALUE_OPTIONS, "--log-file"),
+        flag_options=(*_LOOP_FLAG_OPTIONS, "--no-log"),
+    )
+    if not options.operands and not command_optional:
         print_help_for_command_path(command_path)
         raise typer.Exit()
-    command_name = remaining[0]
-    runner_args = run_command.normalize_run_command(remaining[1:])
-    if no_log and log_file is not None:
-        exit_with_usage_error(command_path, "error: --no-log and --log-file are mutually exclusive")
+    _reject_option_conflict(
+        command_path,
+        "--no-log",
+        "--log-file",
+        conflicting=options.flag("--no-log") and options.value("--log-file") is not None,
+    )
     return LoopArgs(
-        command_name=command_name,
-        runner=runner,
-        runner_args=runner_args,
-        selector=selector,
-        no_selector=no_selector,
-        tasks_dir=tasks_dir,
-        no_log=no_log,
-        log_file=log_file,
-        prompt=prompt,
-        prompt_file=prompt_file,
-        selector_prompt=selector_prompt,
-        selector_prompt_file=selector_prompt_file,
-        extra_prompt=extra_prompt,
-        extra_prompt_file=extra_prompt_file,
-        extra_selector_prompt=extra_selector_prompt,
-        extra_selector_prompt_file=extra_selector_prompt_file,
-        timeout=timeout,
+        no_log=options.flag("--no-log"),
+        log_file=options.value("--log-file"),
+        **_loop_fields(options),
     )
 
 
 def _parse_loop_select_args(
     raw_args: list[str], *, command_path: Sequence[str] = ("loop", "select")
-) -> LoopSelectArgs:
-    runner: str | None = None
-    selector: str | None = None
-    no_selector = False
-    tasks_dir: str | None = None
-    prompt: str | None = None
-    prompt_file: str | None = None
-    selector_prompt: str | None = None
-    selector_prompt_file: str | None = None
-    extra_prompt: str | None = None
-    extra_prompt_file: str | None = None
-    extra_selector_prompt: str | None = None
-    extra_selector_prompt_file: str | None = None
-    timeout: float | None = None
-    index = 0
-
-    while index < len(raw_args):
-        token = raw_args[index]
-        if token == "--":
-            break
-        if token == "--runner":
-            runner, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--selector":
-            selector, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--no-selector":
-            no_selector = True
-            index += 1
-            continue
-        if token == "--tasks-dir":
-            tasks_dir, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--prompt":
-            prompt, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--prompt-file":
-            prompt_file, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--selector-prompt":
-            selector_prompt, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--selector-prompt-file":
-            selector_prompt_file, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--extra-prompt":
-            extra_prompt, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--extra-prompt-file":
-            extra_prompt_file, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--extra-selector-prompt":
-            extra_selector_prompt, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--extra-selector-prompt-file":
-            extra_selector_prompt_file, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            continue
-        if token == "--timeout":
-            timeout_str, index = _loop_option_value(
-                raw_args, index, command_path=command_path, option=token
-            )
-            try:
-                timeout = parse_timeout(timeout_str)
-            except ValueError as exc:
-                exit_with_usage_error(command_path, f"error: {exc}")
-            continue
-        break
-
-    if selector is not None and no_selector:
-        exit_with_usage_error(
-            command_path, "error: --selector and --no-selector are mutually exclusive"
-        )
-    if prompt is not None and prompt_file is not None:
-        exit_with_usage_error(
-            command_path, "error: --prompt and --prompt-file are mutually exclusive"
-        )
-    if selector_prompt is not None and selector_prompt_file is not None:
-        exit_with_usage_error(
-            command_path,
-            "error: --selector-prompt and --selector-prompt-file are mutually exclusive",
-        )
-    if extra_prompt is not None and extra_prompt_file is not None:
-        exit_with_usage_error(
-            command_path,
-            "error: --extra-prompt and --extra-prompt-file are mutually exclusive",
-        )
-    if extra_selector_prompt is not None and extra_selector_prompt_file is not None:
-        exit_with_usage_error(
-            command_path,
-            "error: --extra-selector-prompt and "
-            "--extra-selector-prompt-file are mutually exclusive",
-        )
-    remaining = raw_args[index:]
-    command_name: str | None = None
-    runner_args: list[str] = []
-    if remaining:
-        command_name = remaining[0]
-        runner_args = run_command.normalize_run_command(remaining[1:])
-    return LoopSelectArgs(
-        command_name=command_name,
-        runner=runner,
-        runner_args=runner_args,
-        selector=selector,
-        no_selector=no_selector,
-        tasks_dir=tasks_dir,
-        prompt=prompt,
-        prompt_file=prompt_file,
-        selector_prompt=selector_prompt,
-        selector_prompt_file=selector_prompt_file,
-        extra_prompt=extra_prompt,
-        extra_prompt_file=extra_prompt_file,
-        extra_selector_prompt=extra_selector_prompt,
-        extra_selector_prompt_file=extra_selector_prompt_file,
-        timeout=timeout,
+) -> LoopCommandArgs:
+    """Parse a ``loop select`` command line, which has no trace-logging options."""
+    options = _parse_loop_options(
+        raw_args,
+        command_path=command_path,
+        value_options=_LOOP_VALUE_OPTIONS,
+        flag_options=_LOOP_FLAG_OPTIONS,
     )
+    return LoopCommandArgs(**_loop_fields(options))
 
 
 def _validate_prompt_options(
@@ -518,15 +390,18 @@ def _validate_prompt_options(
     extra_prompt: str | None,
     extra_prompt_file: str | None,
 ) -> None:
-    if prompt is not None and prompt_file is not None:
-        exit_with_usage_error(
-            command_path, "error: --prompt and --prompt-file are mutually exclusive"
-        )
-    if extra_prompt is not None and extra_prompt_file is not None:
-        exit_with_usage_error(
-            command_path,
-            "error: --extra-prompt and --extra-prompt-file are mutually exclusive",
-        )
+    _reject_option_conflict(
+        command_path,
+        "--prompt",
+        "--prompt-file",
+        conflicting=prompt is not None and prompt_file is not None,
+    )
+    _reject_option_conflict(
+        command_path,
+        "--extra-prompt",
+        "--extra-prompt-file",
+        conflicting=extra_prompt is not None and extra_prompt_file is not None,
+    )
 
 
 def _validate_refine_prompt_options(
@@ -538,17 +413,18 @@ def _validate_refine_prompt_options(
     extra_prompt: str | None,
     extra_prompt_file: str | None,
 ) -> None:
-    if prompt is not None and prompt_file is not None:
-        exit_with_usage_error(
-            command_path,
-            f"error: --{prompt_name}-prompt and --{prompt_name}-prompt-file are mutually exclusive",
-        )
-    if extra_prompt is not None and extra_prompt_file is not None:
-        exit_with_usage_error(
-            command_path,
-            f"error: --extra-{prompt_name}-prompt and "
-            f"--extra-{prompt_name}-prompt-file are mutually exclusive",
-        )
+    _reject_option_conflict(
+        command_path,
+        f"--{prompt_name}-prompt",
+        f"--{prompt_name}-prompt-file",
+        conflicting=prompt is not None and prompt_file is not None,
+    )
+    _reject_option_conflict(
+        command_path,
+        f"--extra-{prompt_name}-prompt",
+        f"--extra-{prompt_name}-prompt-file",
+        conflicting=extra_prompt is not None and extra_prompt_file is not None,
+    )
 
 
 def _parse_max_steps(value: str | None, *, command_path: Sequence[str], name: str) -> int | None:
@@ -590,9 +466,7 @@ def main_callback(
 ) -> None:
     del _help
     del _dry_run
-    if ctx.invoked_subcommand is None:
-        print_overview()
-        raise typer.Exit()
+    _group_help(ctx)
 
 
 @app.command()
@@ -754,9 +628,7 @@ def config_callback(
 ) -> None:
     del _help
     del _dry_run
-    if ctx.invoked_subcommand is None:
-        print_help_for_command_path(["config"])
-        raise typer.Exit()
+    _group_help(ctx, "config")
 
 
 @config_app.command(name="cp")
@@ -827,9 +699,7 @@ def workspace_callback(
 ) -> None:
     del _help
     del _dry_run
-    if ctx.invoked_subcommand is None:
-        print_help_for_command_path([ctx.info_name or "workspace"])
-        raise typer.Exit()
+    _group_help(ctx, ctx.info_name or "workspace")
 
 
 @workspace_app.command(name="open")
@@ -962,9 +832,7 @@ def worktree_callback(
 ) -> None:
     del _help
     del _dry_run
-    if ctx.invoked_subcommand is None:
-        print_help_for_command_path([ctx.info_name or "worktree"])
-        raise typer.Exit()
+    _group_help(ctx, ctx.info_name or "worktree")
 
 
 @worktree_app.command()
@@ -1010,13 +878,12 @@ def _print_program_candidates(entry_programs: "tuple[ProgramDeclInfo, ...]") -> 
 
 
 def _exec_print_help(
+    discovery: "ExecProgramDiscovery",
     *,
     tokens: "Sequence[str]",
     file: str | None,
     command: str | None,
     program: str | None = None,
-    module_paths: list[str] | None = None,
-    no_stdlib: bool = False,
 ) -> bool:
     """Print the help *tokens* request, if they request any; report whether they did.
 
@@ -1031,17 +898,12 @@ def _exec_print_help(
     printed instead, followed by the selectable programs when several were
     discovered.
     """
-    from agm.cli_support.program_discovery import (
-        discover_programs_for_target,
-        select_entry_program,
-        unmatched_program_message,
-    )
+    from agm.cli_support.program_discovery import unmatched_program_message
     from agm.cli_support.program_options import (
         contains_help_flag,
-        exec_program_name,
+        exec_program_help,
         program_command_for,
         program_help_requested,
-        render_program_help,
     )
 
     if not contains_help_flag(tokens):
@@ -1049,11 +911,7 @@ def _exec_print_help(
     if file is None and command is None:
         print_help_for_command_path(["exec"])
         return True
-    programs, referenced_program = discover_programs_for_target(
-        file=file, command=command, module_paths=module_paths, no_stdlib=no_stdlib
-    )
-    requested = program if program is not None else referenced_program
-    selection = select_entry_program(programs, requested=requested)
+    selection = discovery.selection(file)
     program_command = program_command_for(selection.selected)
     if not program_help_requested(tokens, program_command):
         return False
@@ -1062,16 +920,16 @@ def _exec_print_help(
             # The reader named a program that does not exist. Help and
             # execution agree on that: there is no command to describe, so the
             # request fails exactly as running it would.
-            print(unmatched_program_message(requested, selection.entry_programs), file=sys.stderr)
+            print(
+                unmatched_program_message(selection.requested, selection.entry_programs),
+                file=sys.stderr,
+            )
             raise SystemExit(1)
         print_help_for_command_path(["exec"])
         _print_program_candidates(selection.entry_programs)
         return True
     print(
-        render_program_help(
-            program_command,
-            program_name=exec_program_name(file=file, program=program),
-        ),
+        exec_program_help(program_command, file=file, program=program),
         end="",
     )
     return True
@@ -1192,31 +1050,30 @@ def exec_cmd(
     # tail — the FILE argument, the program's own option tokens, and the help
     # flags — arrives here as one catch-all.  ``split_exec_tail`` is the single
     # place that says which token is the FILE and which the program reads.
-    from agm.cli_support.program_discovery import discover_program_command_for_target
+    from agm.cli_support.program_discovery import ExecProgramDiscovery
     from agm.cli_support.program_options import split_exec_tail
 
+    # One discovery for the whole invocation: the tail split probes candidate
+    # FILE tokens with it, and the help surface below then asks about the
+    # token it settled on, without paying for a second static pipeline pass.
+    discovery = ExecProgramDiscovery(
+        command=command,
+        requested_program=program,
+        module_paths=module_paths,
+        no_stdlib=no_stdlib,
+    )
     selected = split_exec_tail(
         tail or (),
-        program_command_for_file=(
-            None
-            if command is not None
-            else lambda file: discover_program_command_for_target(
-                file=file,
-                requested_program=program,
-                module_paths=module_paths,
-                no_stdlib=no_stdlib,
-            )
-        ),
+        program_command_for_file=None if command is not None else discovery.command_for_file,
     )
     file = selected.file
     argument_tokens = list(selected.tokens)
     if _exec_print_help(
+        discovery,
         tokens=argument_tokens,
         file=file,
         command=command,
         program=program,
-        module_paths=module_paths,
-        no_stdlib=no_stdlib,
     ):
         raise SystemExit(0)
     del _dry_run
@@ -1225,12 +1082,12 @@ def exec_cmd(
     if command is None and file is None:
         exit_with_usage_error(["exec"], "error: one of the arguments FILE -c/--command is required")
     _check_log_flags_exclusive("exec", no_log=no_log, log=log, log_file=log_file)
-    if log_file is not None and no_log_file:
-        exit_with_usage_error(
-            ["exec"], "error: --log-file and --no-log-file are mutually exclusive"
-        )
-    if timeout is not None and no_timeout:
-        exit_with_usage_error(["exec"], "error: --timeout and --no-timeout are mutually exclusive")
+    _reject_option_conflict(
+        ["exec"], "--log-file", "--no-log-file", conflicting=log_file is not None and no_log_file
+    )
+    _reject_option_conflict(
+        ["exec"], "--timeout", "--no-timeout", conflicting=timeout is not None and no_timeout
+    )
     # Imported lazily: pulls in the AgL DSL (runtime, codec, jsonschema), which
     # would otherwise slow every non-AgL ``agm`` invocation's startup.
     import agm.commands.exec as exec_command
@@ -1455,9 +1312,7 @@ def dep_callback(
 ) -> None:
     del _help
     del _dry_run
-    if ctx.invoked_subcommand is None:
-        print_help_for_command_path(["dep"])
-        raise typer.Exit()
+    _group_help(ctx, "dep")
 
 
 @dep_app.command(name="list")
@@ -1576,9 +1431,7 @@ def pkg_callback(
 ) -> None:
     del _help
     del _dry_run
-    if ctx.invoked_subcommand is None:
-        print_help_for_command_path(["pkg"])
-        raise typer.Exit()
+    _group_help(ctx, "pkg")
 
 
 @pkg_app.command(name="check")
@@ -1689,9 +1542,7 @@ def sync_callback(
 ) -> None:
     del _help
     del _dry_run
-    if ctx.invoked_subcommand is None:
-        print_help_for_command_path(["sync"])
-        raise typer.Exit()
+    _group_help(ctx, "sync")
 
 
 @sync_app.command(name="fetch")
@@ -1760,11 +1611,12 @@ def review(
         extra_prompt=extra_prompt,
         extra_prompt_file=extra_prompt_file,
     )
-    if no_review_file and review_file is not None:
-        exit_with_usage_error(
-            ["review"],
-            "error: --no-review-file and --review-file are mutually exclusive",
-        )
+    _reject_option_conflict(
+        ["review"],
+        "--no-review-file",
+        "--review-file",
+        conflicting=no_review_file and review_file is not None,
+    )
     review_command.run(
         ReviewArgs(
             runner=runner,
@@ -1949,16 +1801,15 @@ def refine(
         extra_prompt=extra_revise_prompt,
         extra_prompt_file=extra_revise_prompt_file,
     )
-    if no_log and log_file is not None:
-        exit_with_usage_error(
-            ["refine"],
-            "error: --no-log and --log-file are mutually exclusive",
-        )
-    if no_max_steps and max_steps is not None:
-        exit_with_usage_error(
-            ["refine"],
-            "error: --no-max-steps and --max-steps are mutually exclusive",
-        )
+    _reject_option_conflict(
+        ["refine"], "--no-log", "--log-file", conflicting=no_log and log_file is not None
+    )
+    _reject_option_conflict(
+        ["refine"],
+        "--no-max-steps",
+        "--max-steps",
+        conflicting=no_max_steps and max_steps is not None,
+    )
     parsed_max_steps = _parse_max_steps(max_steps, command_path=["refine"], name="--max-steps")
     effective_no_max_steps = no_max_steps or (max_steps is not None and parsed_max_steps is None)
     refine_command.run(
@@ -2054,8 +1905,7 @@ def init(
 ) -> None:
     del _help
     del _dry_run
-    if embedded and split:
-        exit_with_usage_error(["init"], "error: --embedded and --split are mutually exclusive")
+    _reject_option_conflict(["init"], "--embedded", "--split", conflicting=embedded and split)
     positional: list[str] = [] if arg1 is None else [arg1] if arg2 is None else [arg1, arg2]
     init_command.run(
         InitArgs(
@@ -2148,9 +1998,7 @@ def tmux_callback(
 ) -> None:
     del _help
     del _dry_run
-    if ctx.invoked_subcommand is None:
-        print_help_for_command_path(["tmux"])
-        raise typer.Exit()
+    _group_help(ctx, "tmux")
 
 
 @tmux_app.command(name="open")

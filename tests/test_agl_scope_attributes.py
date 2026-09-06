@@ -53,7 +53,7 @@ def _entries(resolution: ModuleResolution, owner_name: str) -> tuple[Param, ...]
 def _zones(resolution: ModuleResolution, owner_name: str) -> dict[str, ParamZone]:
     """Return the resolved zone of every entry of the named declaration."""
     return {
-        entry.name: resolution.param_zones[entry.node_id]
+        entry.name: resolution.attributes.param_zones[entry.node_id]
         for entry in _entries(resolution, owner_name)
     }
 
@@ -68,13 +68,13 @@ def _lambda_zones(resolution: ModuleResolution) -> dict[str, ParamZone]:
 
     walk(resolution.program, visit)
     assert len(lambdas) == 1
-    return {p.name: resolution.param_zones[p.node_id] for p in lambdas[0].params}
+    return {p.name: resolution.attributes.param_zones[p.node_id] for p in lambdas[0].params}
 
 
 def _option(resolution: ModuleResolution, owner_name: str, param_name: str) -> ProgramOptionSpec:
     """Return the option spec recognized for one program parameter."""
     entries = {entry.name: entry for entry in _entries(resolution, owner_name)}
-    return resolution.program_options[entries[param_name].node_id]
+    return resolution.attributes.program_options[entries[param_name].node_id]
 
 
 class TestParameterZones:
@@ -196,7 +196,7 @@ class TestAttributeDiagnostics:
 
         enums = [item for item in resolution.program.body.items if isinstance(item, EnumDef)]
         assert [enum.name for enum in enums] == ["Shape"]
-        assert resolution.docs[enums[0].node_id] == "shapes"
+        assert resolution.attributes.docs[enums[0].node_id] == "shapes"
 
     def test_a_zone_attribute_on_an_enum_declaration_is_rejected(self) -> None:
         with pytest.raises(AglScopeError, match="arg-named"):
@@ -207,7 +207,7 @@ class TestAttributeDiagnostics:
 
         lets = [item for item in resolution.program.body.items if isinstance(item, LetDecl)]
         assert len(lets) == 1
-        assert resolution.docs[lets[0].node_id] == "the answer"
+        assert resolution.attributes.docs[lets[0].node_id] == "the answer"
 
     def test_a_zone_attribute_on_a_binding_is_rejected(self) -> None:
         with pytest.raises(AglScopeError, match="arg-pos"):
@@ -231,8 +231,8 @@ class TestAttributeDiagnostics:
 
         aliases = [item for item in resolution.program.body.items if isinstance(item, TypeAlias)]
         assert len(aliases) == 1
-        assert resolution.docs[aliases[0].node_id] == "a count"
-        assert resolution.param_zones == {}
+        assert resolution.attributes.docs[aliases[0].node_id] == "a count"
+        assert resolution.attributes.param_zones == {}
 
 
 class TestProgramOptions:
@@ -326,7 +326,7 @@ class TestProgramOptions:
             "def f(a: int) -> int = a\n\nprogram def main() -> unit = print f(1)\n"
         )
 
-        assert resolution.program_options == {}
+        assert resolution.attributes.program_options == {}
 
 
 class TestDocumentationTexts:
@@ -339,17 +339,17 @@ class TestDocumentationTexts:
 
         functions = [item for item in resolution.program.body.items if isinstance(item, FuncDef)]
         entries = {entry.name: entry for entry in _entries(resolution, "add")}
-        assert resolution.docs[functions[0].node_id] == "adds two numbers"
-        assert resolution.docs[entries["a"].node_id] == "the first"
-        assert entries["b"].node_id not in resolution.docs
+        assert resolution.attributes.docs[functions[0].node_id] == "adds two numbers"
+        assert resolution.attributes.docs[entries["a"].node_id] == "the first"
+        assert entries["b"].node_id not in resolution.attributes.docs
 
     def test_a_record_field_is_documented(self) -> None:
         resolution = resolve_entry('record R\n  @doc("across")\n  x: int\n')
 
         entries = {entry.name: entry for entry in _entries(resolution, "R")}
-        assert resolution.docs[entries["x"].node_id] == "across"
+        assert resolution.attributes.docs[entries["x"].node_id] == "across"
 
     def test_an_undocumented_program_has_no_entry(self) -> None:
         resolution = resolve_entry("program def main() -> unit = ()\n")
 
-        assert resolution.docs == {}
+        assert resolution.attributes.docs == {}

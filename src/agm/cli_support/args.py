@@ -134,15 +134,15 @@ class RunArgs:
 
 
 @dataclass(slots=True)
-class LoopArgs:
+class LoopCommandArgs:
+    """The arguments every agent-loop command takes, and all `loop select` takes."""
+
     command_name: str | None
     runner: str | None
     runner_args: list[str]
     selector: str | None
     no_selector: bool
     tasks_dir: str | None
-    no_log: bool
-    log_file: str | None
     prompt: str | None
     prompt_file: str | None
     selector_prompt: str | None
@@ -155,22 +155,11 @@ class LoopArgs:
 
 
 @dataclass(slots=True)
-class LoopSelectArgs:
-    command_name: str | None
-    runner: str | None
-    runner_args: list[str]
-    selector: str | None
-    no_selector: bool
-    tasks_dir: str | None
-    prompt: str | None
-    prompt_file: str | None
-    selector_prompt: str | None
-    selector_prompt_file: str | None
-    extra_prompt: str | None
-    extra_prompt_file: str | None
-    extra_selector_prompt: str | None
-    extra_selector_prompt_file: str | None
-    timeout: float | None
+class LoopArgs(LoopCommandArgs):
+    """A looping command's arguments: the shared ones plus trace logging."""
+
+    no_log: bool
+    log_file: str | None
 
 
 @dataclass(slots=True)

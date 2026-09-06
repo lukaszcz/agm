@@ -637,6 +637,40 @@ class ResolvedUseTarget:
 
 
 @dataclass(frozen=True, slots=True)
+class AttributeFacts:
+    """The typed facts one module's recognized declaration attributes carry.
+
+    Built by ``scope.attributes.recognize_attributes`` and carried whole on
+    :class:`ModuleResolution`, so a new kind of recognized fact costs one more
+    table here rather than another field on every layer between.
+
+    ``param_zones``
+        The zone of every parameter and field, keyed by ``Param.node_id``, as
+        the declaration's ``@arg-*`` attributes resolved it. Typecheck builds
+        every ``ParamSpec`` and constructor field list from this table; the
+        AST itself carries no zone.
+    ``extern_names``
+        The Python companion name of every ``extern def``, keyed by
+        ``FuncDef.node_id``: its ``@extern-name`` argument, or its declared
+        name verbatim. Two externs of one module never share an entry value.
+        Lowering and companion resolution read this table.
+    ``program_options``
+        The command-line presentation of every ``program def`` parameter,
+        keyed by ``Param.node_id``, as its ``@opt-*`` attributes describe it.
+        Every program parameter has an entry; the host builds a program's CLI
+        from these rather than from declared names.
+    ``docs``
+        The ``@doc`` text of every declaration carrying one, parameters and
+        fields included, keyed by that declaration's node id.
+    """
+
+    param_zones: dict[int, ParamZone] = field(default_factory=dict)
+    extern_names: dict[int, str] = field(default_factory=dict)
+    program_options: dict[int, ProgramOptionSpec] = field(default_factory=dict)
+    docs: dict[int, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
 class ModuleResolution:
     """Output of the scope resolution pass.
 
@@ -707,24 +741,12 @@ class ModuleResolution:
         scope path of its nominal receiver owner. This is scope's definitive
         receiver classification; later passes consume it without re-deriving
         whether a function is a method.
-    ``param_zones``
-        The zone of every parameter and field, keyed by ``Param.node_id``, as
-        the declaration's ``@arg-*`` attributes resolved it. Typecheck builds
-        every ``ParamSpec`` and constructor field list from this table; the
-        AST itself carries no zone.
-    ``extern_names``
-        The Python companion name of every ``extern def``, keyed by
-        ``FuncDef.node_id``: its ``@extern-name`` argument, or its declared
-        name verbatim. Two externs of one module never share an entry value.
-        Lowering and companion resolution read this table.
-    ``program_options``
-        The command-line presentation of every ``program def`` parameter,
-        keyed by ``Param.node_id``, as its ``@opt-*`` attributes describe it.
-        Every program parameter has an entry; the host builds a program's CLI
-        from these rather than from declared names.
-    ``docs``
-        The ``@doc`` text of every declaration carrying one, parameters and
-        fields included, keyed by that declaration's node id.
+    ``attributes``
+        The typed facts this module's declaration attributes carry —
+        parameter zones, extern companion names, program-parameter command-line
+        presentation, and documentation text. See
+        :class:`~agm.agl.scope.attributes.AttributeFacts`, which describes each
+        table; typecheck, lowering, and the host read them from there.
     """
 
     program: Program
@@ -755,10 +777,7 @@ class ModuleResolution:
     match_site_pattern_slots: dict[int, tuple[int, ...]] = field(default_factory=dict)
     method_declarations: dict[DeclarationKey, ScopePath] = field(default_factory=dict)
     use_targets: dict[int, ResolvedUseTarget] = field(default_factory=dict)
-    param_zones: dict[int, ParamZone] = field(default_factory=dict)
-    extern_names: dict[int, str] = field(default_factory=dict)
-    program_options: dict[int, ProgramOptionSpec] = field(default_factory=dict)
-    docs: dict[int, str] = field(default_factory=dict)
+    attributes: AttributeFacts = field(default_factory=AttributeFacts)
 
     def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ScopePath | None:
         """Return scope's receiver classification for *node*, if it has one.

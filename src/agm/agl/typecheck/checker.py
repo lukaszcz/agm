@@ -812,7 +812,7 @@ class _Checker:
             self._env,
             node,
             result_type=node.return_type,
-            param_zones=self._resolved.param_zones,
+            param_zones=self._resolved.attributes.param_zones,
             receiver_owner=receiver_owner,
         )
         if node.is_extern:
@@ -904,7 +904,7 @@ class _Checker:
         """
         for param, spec in zip(node.params, sig.params, strict=True):
             self._reject_undecodable_boundary_type(spec.type, param.span)
-            zone = self._resolved.param_zones[param.node_id]
+            zone = self._resolved.attributes.param_zones[param.node_id]
             if zone != ParamZone.POSITIONAL_ONLY and param.name in ENGINE_KEY_NAMES:
                 raise AglTypeError(
                     f"Program parameter '{param.name}' conflicts with an engine setting name.",
@@ -3456,7 +3456,7 @@ class _Checker:
     # --- Lambda ---
 
     def _check_lambda(self, node: Lambda, *, expected: Type | None) -> Type:
-        validate_required_after_defaulted(node.params, self._resolved.param_zones)
+        validate_required_after_defaulted(node.params, self._resolved.attributes.param_zones)
         # Lambda annotations may reference the rigid type variables of an
         # enclosing generic ``def`` body (the body is checked with them in scope).
         type_vars = self._current_type_vars
@@ -5726,7 +5726,7 @@ def prepare_module_headers(
     module_id: ModuleId,
 ) -> None:
     """Build a module's type table and pre-register its function headers."""
-    _TypeBuilder(env, module_id=module_id, param_zones=resolved.param_zones).collect(
+    _TypeBuilder(env, module_id=module_id, param_zones=resolved.attributes.param_zones).collect(
         resolved.program
     )
     header_checker = _Checker(

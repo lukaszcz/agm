@@ -138,6 +138,22 @@ _SCOPED_DECLARATIONS = (
 # keeps its constructor-pattern meaning instead.
 _MODULE_ROUTE_MESSAGE = "scope paths use '::' between name segments."
 
+#: What separates the segments of a module route and, written first, anchors it.
+_ROUTE_SEPARATOR = "/"
+
+#: What joins a qualifier to what follows it. The lexer drops it from a merged
+#: qualifier's value but not from its span.
+_QUALIFIER_DELIMITER = "::"
+
+
+@dataclass(frozen=True, slots=True)
+class _RouteToken:
+    """One lexer-merged route token, split into the parts a builder needs."""
+
+    name: str
+    anchored: bool
+    span: SourceSpan
+
 
 def _prefix_scope_path(
     item: syntax.ScopeItem, prefix: tuple[syntax.ScopeSegment, ...]
@@ -183,6 +199,9 @@ _ArgLists: TypeAlias = tuple[list[syntax.Expr], list[syntax.NamedArg]]
 _JuxtCall: TypeAlias = tuple[tuple[TypeExpr, ...], _ArgLists]
 _RawItem: TypeAlias = syntax.Item | _RawInfixChain
 _InfixOperatorSpec: TypeAlias = tuple[int, syntax.InfixAssoc, syntax.BinOp | None]
+#: One ``use`` target before its spelling is resolved: the merged qualifier
+#: prefixes, the final target name, a whole-target alias, and the tail.
+_UseTarget: TypeAlias = tuple[tuple[Token, ...], Token | None, str | None, _Selection | None]
 
 
 class _OperatorTables(dict[str, _InfixOperatorSpec]):
@@ -533,47 +552,32 @@ class AstBuilder(Transformer):
     # Scope regions
     # ------------------------------------------------------------------
 
-    def _path_from_tokens(self, args: _Args, *, reject_module_routes: bool) -> _ScopePath:
-        """Build a path from names and lexer-merged qualifier segments."""
+    def _path_from_tokens(self, args: _Args) -> _ScopePath:
+        """Build a scope path from names and lexer-merged qualifier segments.
+
+        A qualifier segment spelling a module route belongs to no scope path,
+        so it is rejected here rather than resolved as a name containing a
+        separator.
+        """
         segments: list[tuple[str, SourceSpan]] = []
         for arg in cast(list[Token], args):
-            name = str(arg)
-            if arg.type == "MODQUAL":
-                if reject_module_routes and "/" in name:
-                    raise AglSyntaxError(
-                        _MODULE_ROUTE_MESSAGE,
-                        span=self._span_from_token(arg),
-                    )
-                token_span = self._span_from_token(arg)
-                segments.append(
-                    (
-                        name,
-                        SourceSpan(
-                            start_line=token_span.start_line,
-                            start_col=token_span.start_col,
-                            end_line=token_span.start_line,
-                            end_col=token_span.start_col + len(name),
-                            start_offset=token_span.start_offset,
-                            end_offset=token_span.start_offset + len(name),
-                            source=token_span.source,
-                        ),
-                    )
-                )
+            if _is_typed_token(arg, "MODQUAL"):
+                segments.append(self._scope_segment(arg))
             else:
-                segments.append((name, self._span_from_token(arg)))
+                segments.append((str(arg), self._span_from_token(arg)))
         return _ScopePath(segments=tuple(segments))
 
     def scope_path(self, meta: Meta, args: _Args) -> _ScopePath:
         """Build a scope path, rejecting slash-separated module routes."""
-        return self._path_from_tokens(args, reject_module_routes=True)
+        return self._path_from_tokens(args)
 
     def decl_head(self, meta: Meta, args: _Args) -> _ScopePath:
         """Build a declaration head with an optional scope-path prefix."""
-        return self._path_from_tokens(args, reject_module_routes=True)
+        return self._path_from_tokens(args)
 
     def path_atom(self, meta: Meta, args: _Args) -> _ScopePath:
         """Build a module-selection path atom."""
-        return self._path_from_tokens(args, reject_module_routes=True)
+        return self._path_from_tokens(args)
 
     def _scope_segments(self, path: _ScopePath) -> tuple[syntax.ScopeSegment, ...]:
         return tuple(
@@ -726,7 +730,7 @@ class AstBuilder(Transformer):
 
     def infix_priority_literal(self, meta: Meta, args: _Args) -> _InfixPriority:
         self._require_infix_at_keyword(meta, args)
-        tok = next(a for a in args if isinstance(a, Token) and a.type == "INT")
+        tok = _required_token(args, "INT")
         return _InfixPriority(value=int(str(tok)), base=None, delta=0)
 
     def infix_priority_relative(self, meta: Meta, args: _Args) -> _InfixPriority:
@@ -736,16 +740,16 @@ class AstBuilder(Transformer):
         return _InfixPriority(value=None, base=op.name, delta=delta)
 
     def _require_infix_at_keyword(self, meta: Meta, args: _Args) -> None:
-        first_name = next((a for a in args if isinstance(a, Token) and a.type == "NAME"), None)
+        first_name = _typed_token(args, "NAME")
         if first_name is None or str(first_name) != "at":
             raise syntax_error_from_meta(meta, "infix priority must start with 'at'.")
 
     def priority_delta_plus(self, meta: Meta, args: _Args) -> int:
-        tok = next(a for a in args if isinstance(a, Token) and a.type == "INT")
+        tok = _required_token(args, "INT")
         return int(str(tok))
 
     def priority_delta_minus(self, meta: Meta, args: _Args) -> int:
-        tok = next(a for a in args if isinstance(a, Token) and a.type == "INT")
+        tok = _required_token(args, "INT")
         return -int(str(tok))
 
     # ------------------------------------------------------------------
@@ -755,10 +759,7 @@ class AstBuilder(Transformer):
     def record_def(self, meta: Meta, args: _Args) -> syntax.RecordDef:
         # Grammar: "record" name type_params? EQ? record_body
         name, scope_path = self._declaration_head(args)
-        type_params_val: tuple[str, ...] = ()
-        for a in args:
-            if _is_str_tuple(a):
-                type_params_val = cast(tuple[str, ...], a)
+        type_params_val = _find_type_params(args)
         attributes = _find_attributes(args)
         return syntax.RecordDef(
             name=name,
@@ -832,10 +833,7 @@ class AstBuilder(Transformer):
     def enum_def(self, meta: Meta, args: _Args) -> syntax.EnumDef:
         # Grammar: "enum" name type_params? EQ? enum_body
         name, scope_path = self._declaration_head(args)
-        type_params_val: tuple[str, ...] = ()
-        for a in args:
-            if _is_str_tuple(a):
-                type_params_val = cast(tuple[str, ...], a)
+        type_params_val = _find_type_params(args)
         members = _find_member_tuple(args)
         return syntax.EnumDef(
             name=name,
@@ -957,10 +955,7 @@ class AstBuilder(Transformer):
     def type_alias(self, meta: Meta, args: _Args) -> syntax.TypeAlias:
         # Grammar: "type" name type_params? EQ type_expr
         name, scope_path = self._declaration_head(args)
-        type_params_val: tuple[str, ...] = ()
-        for a in args:
-            if _is_str_tuple(a):
-                type_params_val = cast(tuple[str, ...], a)
+        type_params_val = _find_type_params(args)
         type_expr = _find_type_expr(args)
         return syntax.TypeAlias(
             name=name,
@@ -976,29 +971,37 @@ class AstBuilder(Transformer):
     # func_def / param_list / param_def / func_body
     # ------------------------------------------------------------------
 
-    def _func_def(self, meta: Meta, args: _Args, *, is_program: bool = False) -> syntax.FuncDef:
-        """Build an ordinary or ``program``-marked function definition."""
+    def _func_def(
+        self,
+        meta: Meta,
+        args: _Args,
+        *,
+        is_program: bool = False,
+        is_builtin: bool = False,
+        is_extern: bool = False,
+    ) -> syntax.FuncDef:
+        """Build a function definition from any ``def`` form.
+
+        ``def`` and ``program def`` carry a body; ``builtin def`` and ``extern
+        def`` share the same shape but declare a return type in place of one.
+        """
         name, scope_path, receiver_type = self._function_declaration_head(args)
-        type_params_val: tuple[str, ...] = ()
-        for a in args:
-            if _is_str_tuple(a):
-                type_params_val = cast(tuple[str, ...], a)
-        type_params_val = self._receiver_type_params(receiver_type) + type_params_val
-        attributes = _find_attributes(args)
         params, return_type, body = self._split_params_type_body(args)
-        assert body is not None, "func_def: no body"
+        assert body is not None or return_type is not None, "func def: no body and no return type"
         return syntax.FuncDef(
             name=name,
             params=params,
             return_type=return_type,
             body=body,
-            type_param_slots=type_params_val,
+            type_param_slots=self._receiver_type_params(receiver_type) + _find_type_params(args),
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
             is_program=is_program,
+            is_builtin=is_builtin,
+            is_extern=is_extern,
             scope_path=scope_path,
             receiver_type=receiver_type,
-            attributes=attributes,
+            attributes=_find_attributes(args),
         )
 
     def func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
@@ -1008,40 +1011,6 @@ class AstBuilder(Transformer):
     def program_func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
         """program_func_def: "program" "def" func_def_tail"""
         return self._func_def(meta, args, is_program=True)
-
-    def _bodyless_func_def(
-        self, meta: Meta, args: _Args, *, is_builtin: bool = False, is_extern: bool = False
-    ) -> syntax.FuncDef:
-        """Shared construction for body-less function signatures.
-
-        Both ``builtin_func_def`` and ``extern_func_def`` share the shape
-        "def" name type_params? (params) -> type_expr with no body; only the
-        leading modifier and the resulting flag differ.
-        """
-        name, scope_path, receiver_type = self._function_declaration_head(args)
-        type_params_val: tuple[str, ...] = ()
-        for a in args:
-            if _is_str_tuple(a):
-                type_params_val = cast(tuple[str, ...], a)
-        type_params_val = self._receiver_type_params(receiver_type) + type_params_val
-        attributes = _find_attributes(args)
-        params, return_type, body = self._split_params_type_body(args)
-        assert return_type is not None, "bodyless func def: no return type"
-        assert body is None, "bodyless func def: unexpected body"
-        return syntax.FuncDef(
-            name=name,
-            params=params,
-            return_type=return_type,
-            body=None,
-            type_param_slots=type_params_val,
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-            is_builtin=is_builtin,
-            is_extern=is_extern,
-            scope_path=scope_path,
-            receiver_type=receiver_type,
-            attributes=attributes,
-        )
 
     def func_decl_head(self, meta: Meta, args: _Args) -> object:
         """Unwrap an ordinary function declaration head."""
@@ -1070,11 +1039,11 @@ class AstBuilder(Transformer):
 
     def builtin_func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
         """builtin_func_def: "builtin" "def" name type_params? (...) -> type_expr"""
-        return self._bodyless_func_def(meta, args, is_builtin=True)
+        return self._func_def(meta, args, is_builtin=True)
 
     def extern_func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
         """extern_func_def: "extern" "def" name type_params? (...) -> type_expr"""
-        return self._bodyless_func_def(meta, args, is_extern=True)
+        return self._func_def(meta, args, is_extern=True)
 
     def param_list(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
         """param_list: param_def (COMMA param_def)* COMMA?"""
@@ -1493,11 +1462,7 @@ class AstBuilder(Transformer):
 
     def call(self, meta: Meta, args: _Args) -> syntax.Call:
         """postfix LPAR arg_list? RPAR → Call node."""
-        callee = cast(syntax.Expr, args[0])
-        type_args: tuple[TypeExpr, ...] = ()
-        if isinstance(callee, syntax.TypeApply):
-            type_args = callee.type_args
-            callee = callee.expr
+        callee, type_args = _split_type_apply(cast(syntax.Expr, args[0]))
         raw_pos_args: list[_RawPosArg] = []
         raw_named_args: list[_RawNamed] = []
         for a in args[1:]:
@@ -1577,12 +1542,8 @@ class AstBuilder(Transformer):
         """
         # args[0] is the callee (postfix result); args[1] is the juxtaposed
         # expression — a juxt_arg Expr or a raw_call Call.
-        callee = cast(syntax.Expr, args[0])
+        callee, type_args = _split_type_apply(cast(syntax.Expr, args[0]))
         arg_expr = cast(syntax.Expr, args[1])
-        type_args: tuple[TypeExpr, ...] = ()
-        if isinstance(callee, syntax.TypeApply):
-            type_args = callee.type_args
-            callee = callee.expr
         return syntax.Call(
             callee=callee,
             type_args=type_args,
@@ -2500,12 +2461,7 @@ class AstBuilder(Transformer):
         name_toks = [a for a in args if _is_name_token(a)]
         assert len(name_toks) >= 1, "pat_constructor: expected name token"
         name = str(name_toks[0])
-        positional: tuple[syntax.Pattern, ...] = ()
-        named: tuple[syntax.PatternField, ...] = ()
-        for a in args:
-            if isinstance(a, _PatternFieldsSplit):
-                positional = a.positional
-                named = a.named
+        positional, named = _pattern_fields(args)
         return syntax.ConstructorPattern(
             qualifier=None,
             name=name,
@@ -2626,7 +2582,7 @@ class AstBuilder(Transformer):
 
     def brace_glob(self, meta: Meta, args: _Args) -> Token:
         """Keep an invalid brace glob for declaration-level validation."""
-        return next(a for a in args if isinstance(a, Token) and a.type == "STAR")
+        return _required_token(args, "STAR")
 
     def brace_nested(self, meta: Meta, args: _Args) -> _Braces:
         """Keep an invalid nested group for declaration-level validation."""
@@ -2635,9 +2591,7 @@ class AstBuilder(Transformer):
     def brace_entries(self, meta: Meta, args: _Args) -> tuple[_SelectedAtom | _Braces | Token, ...]:
         """Collect braces entries without validating their source form yet."""
         return tuple(
-            a
-            for a in args
-            if isinstance(a, (_SelectedAtom, _Braces)) or isinstance(a, Token) and a.type == "STAR"
+            a for a in args if isinstance(a, (_SelectedAtom, _Braces)) or _is_typed_token(a, "STAR")
         )
 
     def braces(self, meta: Meta, args: _Args) -> _Braces:
@@ -2667,7 +2621,7 @@ class AstBuilder(Transformer):
 
     def export_glob_tail(self, meta: Meta, args: _Args) -> Token:
         """Keep an invalid export glob for declaration-level validation."""
-        return next(a for a in args if isinstance(a, Token) and a.type == "STAR")
+        return _required_token(args, "STAR")
 
     def hiding_clause(self, meta: Meta, args: _Args) -> tuple[_ScopePath, ...]:
         """Collect the paths hidden by one declaration."""
@@ -2684,6 +2638,40 @@ class AstBuilder(Transformer):
             start_offset=span.start_offset + start,
             end_offset=span.end_offset - end,
             source=span.source,
+        )
+
+    def _scope_segment(self, token: Token) -> tuple[str, SourceSpan]:
+        """Return the scope segment one merged qualifier token spells.
+
+        A qualifier written inside a path names a scope, so a module route
+        there — a separator anywhere in the token, the leading anchor
+        included — is rejected rather than carried into a name that could
+        never resolve.
+        """
+        if _ROUTE_SEPARATOR in str(token):
+            raise AglSyntaxError(_MODULE_ROUTE_MESSAGE, span=self._span_from_token(token))
+        route = self._route_token(token)
+        return route.name, route.span
+
+    def _route_token(self, token: Token) -> _RouteToken:
+        """Split a merged ``MODPATH`` or ``MODQUAL`` token into its parts.
+
+        A merged token keeps the ``/`` anchoring it in its value, and a
+        qualifier's span still covers the ``::`` joining it to what follows
+        though its value does not. Accounting for both in one place is what
+        lets every builder underline the name and nothing else.
+        """
+        spelling = str(token)
+        anchored = spelling.startswith(_ROUTE_SEPARATOR)
+        delimited = _is_typed_token(token, "MODQUAL")
+        return _RouteToken(
+            name=spelling.removeprefix(_ROUTE_SEPARATOR),
+            anchored=anchored,
+            span=self._trim_token_span(
+                token,
+                start=len(_ROUTE_SEPARATOR) if anchored else 0,
+                end=len(_QUALIFIER_DELIMITER) if delimited else 0,
+            ),
         )
 
     def _path_span(self, path: _ScopePath) -> SourceSpan:
@@ -2727,10 +2715,8 @@ class AstBuilder(Transformer):
     def import_decl(self, meta: Meta, args: _Args) -> syntax.ImportDecl:
         """Build an import declaration and enforce its tail and hiding rules."""
         span = self._span_from_meta(meta)
-        module_path = tuple(
-            str(next(a for a in args if isinstance(a, Token) and a.type == "MODPATH")).split("/")
-        )
-        wildcard = any(isinstance(a, Token) and a.type == "WILDCARD" for a in args)
+        module_path = _module_path(args)
+        wildcard = _typed_token(args, "WILDCARD") is not None
         alias = next((a for a in args if type(a) is str), None)
         tail = next((a for a in args if isinstance(a, _Selection)), None)
         hidden_paths = next((a for a in args if isinstance(a, tuple)), ())
@@ -2758,41 +2744,31 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    def use_suffix_alias(
-        self, meta: Meta, args: _Args
-    ) -> tuple[tuple[Token, ...], Token | None, str | None, _Selection | None]:
+    def use_suffix_alias(self, meta: Meta, args: _Args) -> _UseTarget:
         """Collect a whole-target alias without committing its target spelling."""
         return (), None, next(a for a in args if type(a) is str), None
 
-    def use_suffix(
-        self, meta: Meta, args: _Args
-    ) -> tuple[tuple[Token, ...], Token | None, str | None, _Selection | None]:
+    def use_suffix(self, meta: Meta, args: _Args) -> _UseTarget:
         """Pass through one colon-introduced unresolved use target."""
         return next(a for a in args if isinstance(a, tuple))
 
-    def use_anchored_suffix(
-        self, meta: Meta, args: _Args
-    ) -> tuple[tuple[Token, ...], Token | None, str | None, _Selection | None]:
+    def use_anchored_suffix(self, meta: Meta, args: _Args) -> _UseTarget:
         """Pass through one current-module unresolved use target."""
         return next(a for a in args if isinstance(a, tuple))
 
-    def use_path_alias(
-        self, meta: Meta, args: _Args
-    ) -> tuple[tuple[Token, ...], Token | None, str | None, _Selection | None]:
+    def use_path_alias(self, meta: Meta, args: _Args) -> _UseTarget:
         """Collect an unresolved named use target with a trailing alias."""
         return (
-            tuple(a for a in args if isinstance(a, Token) and a.type == "MODQUAL"),
-            next(a for a in args if isinstance(a, Token) and a.type == "NAME"),
+            _typed_tokens(args, "MODQUAL"),
+            _required_token(args, "NAME"),
             next(a for a in args if type(a) is str),
             None,
         )
 
-    def use_path_single(
-        self, meta: Meta, args: _Args
-    ) -> tuple[tuple[Token, ...], Token | None, str | None, _Selection | None]:
+    def use_path_single(self, meta: Meta, args: _Args) -> _UseTarget:
         """Build a single-member use tail after its unresolved target path."""
-        prefixes = tuple(a for a in args if isinstance(a, Token) and a.type == "MODQUAL")
-        target = next(a for a in args if isinstance(a, Token) and a.type == "NAME")
+        prefixes = _typed_tokens(args, "MODQUAL")
+        target = _required_token(args, "NAME")
         atom = _SelectedAtom(
             path=_ScopePath(((str(target), self._span_from_token(target)),)),
             rename=None,
@@ -2800,24 +2776,20 @@ class AstBuilder(Transformer):
         )
         return prefixes, None, None, _Selection(atom=atom)
 
-    def use_path_glob(
-        self, meta: Meta, args: _Args
-    ) -> tuple[tuple[Token, ...], Token | None, str | None, _Selection | None]:
+    def use_path_glob(self, meta: Meta, args: _Args) -> _UseTarget:
         """Build a glob use tail after its unresolved target path."""
         return (
-            tuple(a for a in args if isinstance(a, Token) and a.type == "MODQUAL"),
+            _typed_tokens(args, "MODQUAL"),
             None,
             None,
             _Selection(),
         )
 
-    def use_path_braces(
-        self, meta: Meta, args: _Args
-    ) -> tuple[tuple[Token, ...], Token | None, str | None, _Selection | None]:
+    def use_path_braces(self, meta: Meta, args: _Args) -> _UseTarget:
         """Build a braced use tail after its unresolved target path."""
         braces = next(a for a in args if isinstance(a, _Braces))
         return (
-            tuple(a for a in args if isinstance(a, Token) and a.type == "MODQUAL"),
+            _typed_tokens(args, "MODQUAL"),
             None,
             None,
             _Selection(braces=braces),
@@ -2826,21 +2798,16 @@ class AstBuilder(Transformer):
     def use_decl(self, meta: Meta, args: _Args) -> syntax.UseDecl:
         """Build a use declaration and enforce its injection and hiding rules."""
         span = self._span_from_meta(meta)
-        path_token = next((a for a in args if isinstance(a, Token) and a.type == "MODPATH"), None)
+        path_token = _typed_token(args, "MODPATH")
         current_module = path_token is None
         anchored = current_module
         target_segments: list[tuple[str, SourceSpan]] = []
         if path_token is not None:
-            spelling = str(path_token)
-            anchored = spelling.startswith("/")
-            target_segments.append(
-                (
-                    spelling.removeprefix("/"),
-                    self._trim_token_span(path_token, start=int(anchored)),
-                )
-            )
+            route = self._route_token(path_token)
+            anchored = route.anchored
+            target_segments.append((route.name, route.span))
         parts = cast(
-            tuple[tuple[Token, ...], Token | None, str | None, _Selection | None],
+            _UseTarget,
             next(
                 a
                 for a in args
@@ -2852,11 +2819,7 @@ class AstBuilder(Transformer):
         )
         prefixes, final_target, alias, tail = parts
         for token in prefixes:
-            if anchored and "/" in str(token):
-                raise AglSyntaxError(_MODULE_ROUTE_MESSAGE, span=self._span_from_token(token))
-            target_segments.append(
-                (str(token).removesuffix("::"), self._trim_token_span(token, end=2))
-            )
+            target_segments.append(self._scope_segment(token))
         if final_target is not None:
             target_segments.append((str(final_target), self._span_from_token(final_target)))
         hidden_paths = cast(
@@ -2895,11 +2858,9 @@ class AstBuilder(Transformer):
     def export_decl(self, meta: Meta, args: _Args) -> syntax.ExportDecl:
         """Build an export declaration and enforce its braces and hiding rules."""
         span = self._span_from_meta(meta)
-        module_path = tuple(
-            str(next(a for a in args if isinstance(a, Token) and a.type == "MODPATH")).split("/")
-        )
-        wildcard = any(isinstance(a, Token) and a.type == "WILDCARD" for a in args)
-        if any(isinstance(a, Token) and a.type == "STAR" for a in args):
+        module_path = _module_path(args)
+        wildcard = _typed_token(args, "WILDCARD") is not None
+        if _typed_token(args, "STAR") is not None:
             raise AglSyntaxError("Export declarations cannot use a glob tail.", span=span)
         braces = next((a for a in args if isinstance(a, _Braces)), None)
         hidden_paths = cast(
@@ -2947,27 +2908,16 @@ class AstBuilder(Transformer):
         """Build one chain segment from a lexer-merged qualifier token."""
         token = args[0]
         assert isinstance(token, Token)
-        spelling = str(token)
-        anchored = spelling.startswith("/")
-        token_span = self._span_from_token(token)
-        span = SourceSpan(
-            start_line=token_span.start_line,
-            start_col=token_span.start_col + (1 if anchored else 0),
-            end_line=token_span.end_line,
-            end_col=token_span.end_col - 2,
-            start_offset=token_span.start_offset + (1 if anchored else 0),
-            end_offset=token_span.end_offset - 2,
-            source=token_span.source,
-        )
+        route = self._route_token(token)
         return _QualifierChainSegment(
             segment=syntax.QualifierSegment(
-                name=spelling.removeprefix("/"),
+                name=route.name,
                 type_args=None,
-                span=span,
+                span=route.span,
                 node_id=self._next_id(),
-                anchored=anchored,
+                anchored=route.anchored,
             ),
-            anchored=anchored,
+            anchored=route.anchored,
         )
 
     def qualifier_applied_segment(self, meta: Meta, args: _Args) -> _QualifierChainSegment:
@@ -3073,12 +3023,7 @@ class AstBuilder(Transformer):
     def pat_qual_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
         """pat_qual_constructor: qual_ref_chain LPAR pattern_fields? RPAR"""
         qualifier = next(a for a in args if isinstance(a, syntax.QualifierChain))
-        positional: tuple[syntax.Pattern, ...] = ()
-        named: tuple[syntax.PatternField, ...] = ()
-        for a in args:
-            if isinstance(a, _PatternFieldsSplit):
-                positional = a.positional
-                named = a.named
+        positional, named = _pattern_fields(args)
         return syntax.ConstructorPattern(
             name=qualifier.member,
             positional=positional,
@@ -3378,6 +3323,32 @@ def _is_name_token(value: object) -> TypeGuard[Token]:
     return isinstance(value, Token) and value.type in _NAME_TOKEN_TYPES
 
 
+def _is_typed_token(value: object, token_type: str) -> TypeGuard[Token]:
+    """True iff *value* is a lexer token of *token_type*."""
+    return isinstance(value, Token) and value.type == token_type
+
+
+def _typed_tokens(args: _Args, token_type: str) -> tuple[Token, ...]:
+    """Return every *token_type* token among a rule's children, in order."""
+    return tuple(a for a in args if _is_typed_token(a, token_type))
+
+
+def _typed_token(args: _Args, token_type: str) -> Token | None:
+    """Return the first *token_type* token among a rule's children, if any."""
+    tokens = _typed_tokens(args, token_type)
+    return tokens[0] if tokens else None
+
+
+def _required_token(args: _Args, token_type: str) -> Token:
+    """Return the *token_type* token the grammar guarantees is among *args*."""
+    return _typed_tokens(args, token_type)[0]
+
+
+def _module_path(args: _Args) -> tuple[str, ...]:
+    """Return the segments of the merged module path a header carries."""
+    return tuple(str(_required_token(args, "MODPATH")).split(_ROUTE_SEPARATOR))
+
+
 def _is_field_tuple(a: object) -> bool:
     """True iff *a* is a field- or parameter-list result (``field_list``/``param_list``).
 
@@ -3389,6 +3360,30 @@ def _is_field_tuple(a: object) -> bool:
 def _is_attribute_tuple(a: object) -> bool:
     """True iff *a* is an ``attributes`` result (always at least one attribute)."""
     return isinstance(a, tuple) and len(a) > 0 and isinstance(a[0], syntax.Attribute)
+
+
+def _split_type_apply(callee: syntax.Expr) -> tuple[syntax.Expr, tuple[TypeExpr, ...]]:
+    """Split a call's callee from the type arguments a ``TypeApply`` supplies it."""
+    if isinstance(callee, syntax.TypeApply):
+        return callee.expr, callee.type_args
+    return callee, ()
+
+
+def _pattern_fields(
+    args: _Args,
+) -> tuple[tuple[syntax.Pattern, ...], tuple[syntax.PatternField, ...]]:
+    """Return a constructor pattern's positional and named fields, empty if it has none."""
+    split = next((a for a in args if isinstance(a, _PatternFieldsSplit)), None)
+    return (split.positional, split.named) if split is not None else ((), ())
+
+
+def _find_type_params(args: _Args) -> tuple[str, ...]:
+    """Return the type-parameter slots among a declaration's children, or none."""
+    slots: tuple[str, ...] = ()
+    for a in args:
+        if _is_str_tuple(a):
+            slots = cast(tuple[str, ...], a)
+    return slots
 
 
 def _find_attributes(args: _Args) -> tuple[syntax.Attribute, ...]:
@@ -3731,9 +3726,26 @@ def _rewrite_item(
             fields=tuple(_rewrite_param(p, table, builder) for p in item.fields),
             attributes=_rewrite_attributes(item.attributes, table, builder),
         )
-    if isinstance(item, syntax.TypeAlias):
+    if isinstance(item, syntax.TypeAlias) and item.attributes:
         return replace(item, attributes=_rewrite_attributes(item.attributes, table, builder))
     return item
+
+
+def _rewrite_arguments(
+    args: tuple[syntax.Expr, ...],
+    named_args: tuple[syntax.NamedArg, ...],
+    table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
+    builder: AstBuilder,
+) -> tuple[tuple[syntax.Expr, ...], tuple[syntax.NamedArg, ...]]:
+    """Group the raw infix chains inside one argument list.
+
+    Calls and attributes take the same argument syntax, so they group it the
+    same way.
+    """
+    return (
+        tuple(_rewrite_expr(arg, table, builder) for arg in args),
+        tuple(_rewrite_named_arg(arg, table, builder) for arg in named_args),
+    )
 
 
 def _rewrite_attributes(
@@ -3746,18 +3758,11 @@ def _rewrite_attributes(
     An attribute argument is an ordinary expression, so it reaches the AST as
     a raw chain whenever it applies a declared infix operator.
     """
-    if not attributes:
-        return attributes
-    return tuple(
-        replace(
-            attribute,
-            args=tuple(_rewrite_expr(arg, table, builder) for arg in attribute.args),
-            named_args=tuple(
-                _rewrite_named_arg(arg, table, builder) for arg in attribute.named_args
-            ),
-        )
-        for attribute in attributes
-    )
+    rewritten: list[syntax.Attribute] = []
+    for attribute in attributes:
+        args, named_args = _rewrite_arguments(attribute.args, attribute.named_args, table, builder)
+        rewritten.append(replace(attribute, args=args, named_args=named_args))
+    return tuple(rewritten)
 
 
 def _rewrite_param(
@@ -3765,6 +3770,8 @@ def _rewrite_param(
     table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
     builder: AstBuilder,
 ) -> syntax.Param:
+    if not param.attributes and param.default is None:
+        return param
     return replace(
         param,
         attributes=_rewrite_attributes(param.attributes, table, builder),
@@ -3810,18 +3817,15 @@ def _rewrite_expr(
         )
     if isinstance(expr, syntax.UnaryNeg):
         return replace(expr, operand=_rewrite_expr(expr.operand, table, builder))
-    if isinstance(expr, syntax.Cast):
-        return replace(expr, expr=_rewrite_expr(expr.expr, table, builder))
-    if isinstance(expr, syntax.IsTest):
-        return replace(expr, expr=_rewrite_expr(expr.expr, table, builder))
-    if isinstance(expr, syntax.TypeApply):
+    if isinstance(expr, (syntax.Cast, syntax.IsTest, syntax.TypeApply)):
         return replace(expr, expr=_rewrite_expr(expr.expr, table, builder))
     if isinstance(expr, syntax.Call):
+        args, named_args = _rewrite_arguments(expr.args, expr.named_args, table, builder)
         return replace(
             expr,
             callee=_rewrite_expr(expr.callee, table, builder),
-            args=tuple(_rewrite_expr(arg, table, builder) for arg in expr.args),
-            named_args=tuple(_rewrite_named_arg(arg, table, builder) for arg in expr.named_args),
+            args=args,
+            named_args=named_args,
         )
     if isinstance(expr, syntax.RecordUpdate):
         return replace(
@@ -4050,29 +4054,14 @@ def _span_covering(left: SourceSpan, right: SourceSpan) -> SourceSpan:
     )
 
 
-def _extract_ann_and_value(
-    tail: _Args,
-) -> tuple[TypeExpr | None, syntax.Expr]:
-    """Extract (type_ann, value) from the tail of a let/var args list.
-
-    Grammar tail is: type_ann? EQ expr
-    With maybe_placeholders=True: [None|TypeExpr, Token(EQ), Expr]
-    """
-    ann: TypeExpr | None = None
-    value: syntax.Expr | None = None
-    for a in tail:
-        if isinstance(a, _ALL_TYPE_EXPRS):
-            ann = a
-        elif _is_expr_obj(a) and not isinstance(a, Token):
-            value = cast(syntax.Expr, a)
-    assert value is not None, f"_extract_ann_and_value: no Expr found in {tail!r}"
-    return ann, value
-
-
 def _extract_ann_and_optional_expr(
     tail: _Args,
 ) -> tuple[TypeExpr | None, syntax.Expr | None]:
-    """Extract (type_ann, optional_expr) from a parameter definition tail."""
+    """Extract (type_ann, optional_expr) from a declaration or parameter tail.
+
+    The tail is ``type_ann? EQ expr``, either half of which the grammar may
+    leave out; ``maybe_placeholders=True`` spells a missing annotation ``None``.
+    """
     ann: TypeExpr | None = None
     value: syntax.Expr | None = None
     for a in tail:
@@ -4080,6 +4069,15 @@ def _extract_ann_and_optional_expr(
             ann = a
         elif _is_expr_obj(a):
             value = cast(syntax.Expr, a)
+    return ann, value
+
+
+def _extract_ann_and_value(
+    tail: _Args,
+) -> tuple[TypeExpr | None, syntax.Expr]:
+    """Extract (type_ann, value) from a tail whose value the grammar requires."""
+    ann, value = _extract_ann_and_optional_expr(tail)
+    assert value is not None, f"_extract_ann_and_value: no Expr found in {tail!r}"
     return ann, value
 
 

@@ -59,6 +59,29 @@ def inline_args(command: str, *, argument_tokens: list[str] | None = None) -> Ex
     )
 
 
+def print_exec_help(
+    *,
+    tokens: list[str],
+    file: str | None,
+    command: str | None,
+    program: str | None = None,
+    module_paths: list[str] | None = None,
+    no_stdlib: bool = False,
+) -> bool:
+    """Print the help *tokens* request, through the discovery ``agm exec`` shares."""
+    from agm.cli_support.program_discovery import ExecProgramDiscovery
+
+    discovery = ExecProgramDiscovery(
+        command=command,
+        requested_program=program,
+        module_paths=module_paths,
+        no_stdlib=no_stdlib,
+    )
+    return cli._exec_print_help(
+        discovery, tokens=tokens, file=file, command=command, program=program
+    )
+
+
 def file_args(path: Path) -> ExecArgs:
     """Build the ``ExecArgs`` an ``agm exec FILE`` invocation produces."""
     return ExecArgs(
@@ -537,7 +560,7 @@ class TestExecDynamicHelp:
     def test_exec_help_for_inline_command_includes_discovered_arguments(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        assert cli._exec_print_help(
+        assert print_exec_help(
             tokens=["--help"],
             file=None,
             command="program def main(count: int = 1) -> unit = print(count + 1)",
@@ -573,7 +596,7 @@ class TestExecDynamicHelp:
             "program def main(region: text = settings::default-region()) -> unit = ()\n",
         )
 
-        assert cli._exec_print_help(
+        assert print_exec_help(
             tokens=["--help"], file=str(entry), command=None, module_paths=[str(module_root)]
         )
 
@@ -589,16 +612,14 @@ class TestExecDynamicHelp:
             lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("unavailable roots")),
         )
 
-        assert cli._exec_print_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
 
         assert "--msg" not in capsys.readouterr().out
 
     def test_exec_help_for_unreadable_file_degrades(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        assert cli._exec_print_help(
-            tokens=["--help"], file=str(tmp_path / "missing.agl"), command=None
-        )
+        assert print_exec_help(tokens=["--help"], file=str(tmp_path / "missing.agl"), command=None)
 
         assert "agm exec" in capsys.readouterr().out
 
@@ -621,7 +642,7 @@ class TestExecDynamicHelp:
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
 
-        assert cli._exec_print_help(tokens=["--help"], file="tools/main::second", command=None)
+        assert print_exec_help(tokens=["--help"], file="tools/main::second", command=None)
 
         assert "--region" in capsys.readouterr().out
 
@@ -4015,7 +4036,7 @@ class TestProgramArgumentsDynamicHelp:
             agl_file, 'program def main(tag: text = "default") -> unit = print tag\n'
         )
 
-        assert cli._exec_print_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
 
         out = capsys.readouterr().out
         assert f"agm exec {agl_file}" in out
@@ -4031,7 +4052,7 @@ class TestProgramArgumentsDynamicHelp:
             'program def main(@doc("Who to greet.") name: text = "you") -> unit = print name\n',
         )
 
-        assert cli._exec_print_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
 
         out = capsys.readouterr().out
         assert "Greet a person." in out
@@ -4049,7 +4070,7 @@ class TestProgramArgumentsDynamicHelp:
             ") -> unit = print tag\n",
         )
 
-        assert cli._exec_print_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
 
         out = capsys.readouterr().out
         assert "--tag" in out
@@ -4066,7 +4087,7 @@ class TestProgramArgumentsDynamicHelp:
             " print tag\n",
         )
 
-        assert cli._exec_print_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
 
         out = capsys.readouterr().out
         assert "-t" in out
@@ -4086,7 +4107,7 @@ class TestProgramArgumentsDynamicHelp:
             "end review\n",
         )
 
-        assert cli._exec_print_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
 
         out = capsys.readouterr().out
         assert "first" in out
@@ -4108,7 +4129,7 @@ class TestProgramArgumentsDynamicHelp:
             "end review\n",
         )
 
-        assert cli._exec_print_help(
+        assert print_exec_help(
             tokens=["--help"], file=str(agl_file), command=None, program="review::main"
         )
 
@@ -4122,7 +4143,7 @@ class TestProgramArgumentsDynamicHelp:
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, 'program def main() -> unit = print "hi"\n')
 
-        assert cli._exec_print_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
 
         out = capsys.readouterr().out
         assert f"agm exec {agl_file}" in out
@@ -4140,7 +4161,7 @@ class TestProgramArgumentsDynamicHelp:
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, "program def main(dry-run: bool = false) -> unit = ()\n")
 
-        assert cli._exec_print_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
 
         assert str(agl_file) not in capsys.readouterr().out
 
@@ -4161,7 +4182,7 @@ class TestProgramArgumentsDynamicHelp:
             'import helper\nprogram def main(tag: text = "default") -> unit = print tag\n',
         )
 
-        assert cli._exec_print_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
 
         out = capsys.readouterr().out
         assert "--tag" in out
@@ -4177,9 +4198,7 @@ class TestProgramArgumentsDynamicHelp:
         )
 
         with pytest.raises(SystemExit) as exc_info:
-            cli._exec_print_help(
-                tokens=["--help"], file=str(agl_file), command=None, program="wrong"
-            )
+            print_exec_help(tokens=["--help"], file=str(agl_file), command=None, program="wrong")
 
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
@@ -4194,7 +4213,7 @@ class TestProgramArgumentsDynamicHelp:
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, 'program def main(tag: text = "a") -> unit = print tag\n')
 
-        assert not cli._exec_print_help(tokens=["--tag", "-h"], file=str(agl_file), command=None)
+        assert not print_exec_help(tokens=["--tag", "-h"], file=str(agl_file), command=None)
 
         assert (
             exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--tag", "-h"])) is None
@@ -4214,7 +4233,7 @@ class TestProgramArgumentsDynamicHelp:
             ") -> unit = print alias\n",
         )
 
-        assert not cli._exec_print_help(tokens=["-va", "-h"], file=str(agl_file), command=None)
+        assert not print_exec_help(tokens=["-va", "-h"], file=str(agl_file), command=None)
 
         assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["-va", "-h"])) is None
         assert capsys.readouterr().out == "-h\n"
@@ -4233,7 +4252,7 @@ class TestProgramArgumentsDynamicHelp:
             'program def main(@opt-short("v") verbose: bool = false) -> unit = print verbose\n',
         )
 
-        assert not cli._exec_print_help(tokens=["-vh"], file=str(agl_file), command=None)
+        assert not print_exec_help(tokens=["-vh"], file=str(agl_file), command=None)
         assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["-vh"])) is None
 
         assert "--verbose" in capsys.readouterr().out

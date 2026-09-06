@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from agm.cli_support.args import LoopArgs, LoopSelectArgs
+from agm.cli_support.args import LoopArgs, LoopCommandArgs
 from agm.commands.loop.run import run as loop_run
 from agm.commands.loop.select import run as select_run
 from agm.commands.loop.step import (
@@ -163,8 +163,8 @@ def _make_select_args(
     extra_selector_prompt_file: str | None = None,
     command_name: str | None = None,
     timeout: float | None = None,
-) -> LoopSelectArgs:
-    return LoopSelectArgs(
+) -> LoopCommandArgs:
+    return LoopCommandArgs(
         command_name=command_name,
         runner=runner,
         runner_args=runner_args if runner_args is not None else [],

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import os
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, ParamSpec, TypeVar, cast
 
 import click
 from click.shell_completion import CompletionItem
@@ -27,6 +28,30 @@ from agm.project.layout import (
     project_deps_dir,
     project_repo_dir,
 )
+
+_P = ParamSpec("_P")
+_CandidateT = TypeVar("_CandidateT")
+
+
+def _completes_quietly(
+    complete: Callable[_P, list[_CandidateT]],
+) -> Callable[_P, list[_CandidateT]]:
+    """Return *complete* with every failure answered as no candidates.
+
+    A completer runs inside the user's shell while they are typing, so a
+    project that cannot be read, a command that exits, or any other failure
+    has to leave the prompt alone rather than print over it.
+    """
+
+    @wraps(complete)
+    def guarded(*args: _P.args, **kwargs: _P.kwargs) -> list[_CandidateT]:
+        try:
+            return complete(*args, **kwargs)
+        except (Exception, SystemExit):
+            return []
+
+    return guarded
+
 
 _COMMON_PANE_COUNTS = ["1", "2", "3", "4", "6", "8", "12", "16"]
 
@@ -189,20 +214,13 @@ def _path_candidates(incomplete: str) -> list[str]:
     return sorted(candidates)
 
 
+@_completes_quietly
 def complete_help_path(ctx: click.Context, incomplete: str) -> list[str]:
-    try:
-        params = cast(dict[str, object], ctx.params)
-        raw_help = params.get("help_command")
-        help_command = (
-            tuple(cast(list[str] | tuple[str, ...], raw_help))
-            if isinstance(raw_help, (list, tuple))
-            else ()
-        )
-        static = _match(_HELP_TREE.get(help_command, []), incomplete)
-        registered = complete_registered_commands(help_command, incomplete)
-        return sorted(set(static) | set(registered))
-    except (Exception, SystemExit):
-        return []
+    params = cast(dict[str, object], ctx.params)
+    help_command = tuple(_string_list(params.get("help_command")))
+    static = _match(_HELP_TREE.get(help_command, []), incomplete)
+    registered = complete_registered_commands(help_command, incomplete)
+    return sorted(set(static) | set(registered))
 
 
 def registered_command_completion(
@@ -228,6 +246,7 @@ def registered_command_completion(
         return [], False
 
 
+@_completes_quietly
 def registered_command_param_completion(
     command_path: Sequence[str], incomplete: str
 ) -> list[CompletionItem]:
@@ -237,27 +256,24 @@ def registered_command_param_completion(
     option flags (and their ``--no-`` forms), the same mechanism
     ``registered_command_help`` renders.
     """
-    try:
-        from agm.cli_dispatch import load_command_index, resolve_registered_command
-        from agm.cli_support.program_options import program_command_for
-        from agm.commands.exec_program import registered_program_declaration
+    from agm.cli_dispatch import load_command_index, resolve_registered_command
+    from agm.cli_support.program_options import program_command_for
+    from agm.commands.exec_program import registered_program_declaration
 
-        context = current_config_context()
-        index = load_command_index(home=context.home, proj_dir=context.proj_dir, cwd=context.cwd)
-        resolution = resolve_registered_command(command_path, index.commands)
-        if resolution is None:
-            return []
-        declaration = registered_program_declaration(
-            resolution.registration.program, resolution.registration.package, context=context
-        )
-        program_command = program_command_for(declaration)
-        flags = (
-            "--dry-run",
-            *(() if program_command is None else program_command.option_spellings()),
-        )
-        return [CompletionItem(flag) for flag in flags if flag.startswith(incomplete)]
-    except (Exception, SystemExit):
+    context = current_config_context()
+    index = load_command_index(home=context.home, proj_dir=context.proj_dir, cwd=context.cwd)
+    resolution = resolve_registered_command(command_path, index.commands)
+    if resolution is None:
         return []
+    declaration = registered_program_declaration(
+        resolution.registration.program, resolution.registration.package, context=context
+    )
+    program_command = program_command_for(declaration)
+    flags = (
+        "--dry-run",
+        *(() if program_command is None else program_command.option_spellings()),
+    )
+    return [CompletionItem(flag) for flag in flags if flag.startswith(incomplete)]
 
 
 def complete_registered_commands(command_path: Sequence[str], incomplete: str) -> list[str]:
@@ -265,193 +281,164 @@ def complete_registered_commands(command_path: Sequence[str], incomplete: str) -
     return registered_command_completion(command_path, incomplete)[0]
 
 
+@_completes_quietly
 def complete_open_target(incomplete: str) -> list[str]:
-    try:
-        repo_dir = _resolve_project_repo_dir()
-        if repo_dir is None:
-            return []
-        candidates = _branch_candidates(repo_dir)
-        candidates.add("repo")
-        return _match(candidates, incomplete)
-    except (Exception, SystemExit):
+    repo_dir = _resolve_project_repo_dir()
+    if repo_dir is None:
         return []
+    candidates = _branch_candidates(repo_dir)
+    candidates.add("repo")
+    return _match(candidates, incomplete)
 
 
+@_completes_quietly
 def complete_close_branch(incomplete: str) -> list[str]:
-    try:
-        repo_dir = _resolve_project_repo_dir()
-        if repo_dir is None:
-            return []
-        return _match(_worktree_branch_candidates(repo_dir), incomplete)
-    except (Exception, SystemExit):
+    repo_dir = _resolve_project_repo_dir()
+    if repo_dir is None:
         return []
+    return _match(_worktree_branch_candidates(repo_dir), incomplete)
 
 
+@_completes_quietly
 def complete_worktree_branch(incomplete: str) -> list[str]:
-    try:
-        repo_dir = _resolve_project_repo_dir()
-        if repo_dir is None:
-            return []
-        return _match(_branch_candidates(repo_dir), incomplete)
-    except (Exception, SystemExit):
+    repo_dir = _resolve_project_repo_dir()
+    if repo_dir is None:
         return []
+    return _match(_branch_candidates(repo_dir), incomplete)
 
 
+@_completes_quietly
 def complete_dep_name(incomplete: str) -> list[str]:
-    try:
-        deps_dir = _resolve_project_deps_dir()
-        if deps_dir is None or not deps_dir.is_dir():
-            return []
-        names = {path.name for path in deps_dir.iterdir() if path.is_dir()}
-        return _match(names, incomplete)
-    except (Exception, SystemExit):
+    deps_dir = _resolve_project_deps_dir()
+    if deps_dir is None or not deps_dir.is_dir():
+        return []
+    names = {path.name for path in deps_dir.iterdir() if path.is_dir()}
+    return _match(names, incomplete)
+
+
+@_completes_quietly
+def complete_dep_branch(ctx: click.Context, incomplete: str) -> list[str]:
+    params = cast(dict[str, object], ctx.params)
+    raw_dep = params.get("dep")
+    dep_name = raw_dep if isinstance(raw_dep, str) else ""
+    if not dep_name:
+        return []
+    repo_dir = _resolve_dep_repo(dep_name)
+    if repo_dir is None:
+        return []
+    return _match(_branch_candidates(repo_dir), incomplete)
+
+
+@_completes_quietly
+def complete_dep_target(incomplete: str) -> list[str]:
+    deps_dir = _resolve_project_deps_dir()
+    if deps_dir is None or not deps_dir.is_dir():
         return []
 
-
-def complete_dep_branch(ctx: click.Context, incomplete: str) -> list[str]:
-    try:
-        params = cast(dict[str, object], ctx.params)
-        raw_dep = params.get("dep")
-        dep_name = raw_dep if isinstance(raw_dep, str) else ""
-        if not dep_name:
-            return []
+    candidates: set[str] = set()
+    for dep_dir in (path for path in deps_dir.iterdir() if path.is_dir()):
+        dep_name = dep_dir.name
+        candidates.add(dep_name)
         repo_dir = _resolve_dep_repo(dep_name)
         if repo_dir is None:
-            return []
-        return _match(_branch_candidates(repo_dir), incomplete)
-    except (Exception, SystemExit):
-        return []
+            continue
+        candidates.add(f"{dep_name}/repo")
+        for branch in _worktree_branch_candidates(repo_dir):
+            candidates.add(f"{dep_name}/{branch}")
+    return _match(candidates, incomplete)
 
 
-def complete_dep_target(incomplete: str) -> list[str]:
-    try:
-        deps_dir = _resolve_project_deps_dir()
-        if deps_dir is None or not deps_dir.is_dir():
-            return []
-
-        candidates: set[str] = set()
-        for dep_dir in (path for path in deps_dir.iterdir() if path.is_dir()):
-            dep_name = dep_dir.name
-            candidates.add(dep_name)
-            repo_dir = _resolve_dep_repo(dep_name)
-            if repo_dir is None:
-                continue
-            candidates.add(f"{dep_name}/repo")
-            for branch in _worktree_branch_candidates(repo_dir):
-                candidates.add(f"{dep_name}/{branch}")
-        return _match(candidates, incomplete)
-    except (Exception, SystemExit):
-        return []
-
-
+@_completes_quietly
 def complete_run_command(ctx: click.Context, incomplete: str) -> list[str]:
+    params = cast(dict[str, object], ctx.params)
+    raw_cmd = params.get("run_command_args")
+    cmd_args = cast(list[str], raw_cmd) if isinstance(raw_cmd, list) else []
+    if cmd_args:
+        return _path_candidates(incomplete)
+
+    candidates: set[str] = set()
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        if not directory:
+            continue
+        path = Path(directory)
+        if not path.is_dir():
+            continue
+        for candidate in path.iterdir():
+            if (
+                candidate.is_file()
+                and os.access(candidate, os.X_OK)
+                and candidate.name.startswith(incomplete)
+            ):
+                candidates.add(candidate.name)
+
     try:
-        params = cast(dict[str, object], ctx.params)
-        raw_cmd = params.get("run_command_args")
-        cmd_args = cast(list[str], raw_cmd) if isinstance(raw_cmd, list) else []
-        if cmd_args:
-            return _path_candidates(incomplete)
+        context = current_config_context()
+        run_config = load_run_config(
+            home=context.home,
+            proj_dir=context.proj_dir,
+            cwd=context.cwd,
+        )
+    except (OSError, SystemExit):
+        run_config = None
+    if run_config is not None:
+        candidates.update(
+            command_name
+            for command_name in run_config.aliases
+            if command_name.startswith(incomplete)
+        )
+    return sorted(candidates)
 
-        candidates: set[str] = set()
-        for directory in os.environ.get("PATH", "").split(os.pathsep):
-            if not directory:
-                continue
-            path = Path(directory)
-            if not path.is_dir():
-                continue
-            for candidate in path.iterdir():
-                if (
-                    candidate.is_file()
-                    and os.access(candidate, os.X_OK)
-                    and candidate.name.startswith(incomplete)
-                ):
-                    candidates.add(candidate.name)
 
-        try:
-            context = current_config_context()
-            run_config = load_run_config(
-                home=context.home,
-                proj_dir=context.proj_dir,
-                cwd=context.cwd,
-            )
-        except (OSError, SystemExit):
-            run_config = None
-        if run_config is not None:
-            candidates.update(
-                command_name
-                for command_name in run_config.aliases
-                if command_name.startswith(incomplete)
-            )
-        return sorted(candidates)
-    except (Exception, SystemExit):
+def _tmux_candidates(list_command: str, name_format: str, incomplete: str) -> list[str]:
+    """Return the names one ``tmux list-*`` query reports, or none when it fails."""
+    result = subprocess.run(
+        ["tmux", list_command, "-F", name_format],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
         return []
+    return _match(set(result.stdout.splitlines()), incomplete)
 
 
+@_completes_quietly
 def complete_tmux_session(incomplete: str) -> list[str]:
-    try:
-        result = subprocess.run(
-            ["tmux", "list-sessions", "-F", "#{session_name}"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError:
-        return []
-    if result.returncode != 0:
-        return []
-    return _match(set(result.stdout.splitlines()), incomplete)
+    return _tmux_candidates("list-sessions", "#{session_name}", incomplete)
 
 
+@_completes_quietly
 def complete_tmux_window(incomplete: str) -> list[str]:
-    try:
-        result = subprocess.run(
-            ["tmux", "list-windows", "-F", "#{window_id}"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError:
-        return []
-    if result.returncode != 0:
-        return []
-    return _match(set(result.stdout.splitlines()), incomplete)
+    return _tmux_candidates("list-windows", "#{window_id}", incomplete)
 
 
+@_completes_quietly
 def complete_pane_count(incomplete: str) -> list[str]:
-    try:
-        return _match(_COMMON_PANE_COUNTS, incomplete)
-    except (Exception, SystemExit):
-        return []
+    return _match(_COMMON_PANE_COUNTS, incomplete)
 
 
+@_completes_quietly
 def complete_path_argument(ctx: click.Context, args: list[str], incomplete: str) -> list[str]:
     del ctx, args
-    try:
-        return _path_candidates(incomplete)
-    except (Exception, SystemExit):
-        return []
+    return _path_candidates(incomplete)
 
 
+@_completes_quietly
 def complete_dir_argument(ctx: click.Context, args: list[str], incomplete: str) -> list[str]:
     """Complete directory paths (directories only, for options like ``-I/--module-path``)."""
     del ctx, args
-    try:
-        return [c for c in _path_candidates(incomplete) if c.endswith("/")]
-    except (Exception, SystemExit):
-        return []
+    return [c for c in _path_candidates(incomplete) if c.endswith("/")]
 
 
+@_completes_quietly
 def complete_package_source(ctx: click.Context, args: list[str], incomplete: str) -> list[str]:
     """Complete package directories and portable package archives."""
     del ctx, args
-    try:
-        return [
-            candidate
-            for candidate in _path_candidates(incomplete)
-            if candidate.endswith("/") or candidate.endswith(".agmpkg")
-        ]
-    except (Exception, SystemExit):
-        return []
+    return [
+        candidate
+        for candidate in _path_candidates(incomplete)
+        if candidate.endswith("/") or candidate.endswith(".agmpkg")
+    ]
 
 
 def _configured_command_names(
@@ -464,33 +451,28 @@ def _configured_command_names(
     return {key for key, value in table.items() if isinstance(key, str) and isinstance(value, dict)}
 
 
+@_completes_quietly
 def complete_agl_file(ctx: click.Context, args: list[str], incomplete: str) -> list[str]:
     """Complete ``.agl`` file paths for the ``agm exec FILE`` argument."""
     del ctx, args
-    try:
-        candidates = _path_candidates(incomplete)
-        return [c for c in candidates if c.endswith(".agl") or c.endswith("/")]
-    except (Exception, SystemExit):
-        return []
+    candidates = _path_candidates(incomplete)
+    return [c for c in candidates if c.endswith(".agl") or c.endswith("/")]
 
 
 def _program_argument_completion_items(
-    programs: "tuple[ProgramDeclInfo, ...]", requested: str | None, incomplete: str
+    program: "ProgramDeclInfo", incomplete: str
 ) -> list[CompletionItem]:
-    """Return ``CompletionItem`` objects for the selected program's own value-parameter flags.
+    """Return ``CompletionItem`` objects for *program*'s own value-parameter flags.
 
-    *programs* is a discovered inventory (from source or an installed
-    reference); *requested* is the ``-p``/``--program`` value already parsed
-    into ``ctx.params``, resolved to one candidate exactly as ``agm exec
-    --help`` resolves it (:func:`~agm.cli_support.program_discovery.
-    select_entry_program`), so completion never disagrees with help about
-    which program's flags apply. Degrades silently to ``[]``.
+    *program* is the declaration the caller's shared discovery already
+    selected, exactly as ``agm exec --help`` selects it
+    (:meth:`~agm.cli_support.program_discovery.ExecProgramDiscovery.selection`),
+    so completion never disagrees with help about which program's flags apply.
+    Degrades silently to ``[]``.
     """
-    from agm.cli_support.program_discovery import select_entry_program
     from agm.cli_support.program_options import program_command_for
 
-    selection = select_entry_program(programs, requested=requested)
-    program_command = program_command_for(selection.selected)
+    program_command = program_command_for(program)
     if program_command is None:
         return []
     return [
@@ -538,47 +520,36 @@ class ExecCommand(TyperCommand):
         base = super().shell_complete(ctx, incomplete)
         if not incomplete.startswith("-"):
             return base
-        from agm.cli_support.program_discovery import (
-            discover_program_command_for_target,
-            discover_programs_for_target,
-        )
+        from agm.cli_support.program_discovery import ExecProgramDiscovery
         from agm.cli_support.program_options import split_exec_tail
 
         params = cast(dict[str, object], ctx.params)
         raw_command = params.get("command")
         raw_program = params.get("program")
         requested_program = raw_program if isinstance(raw_program, str) else None
-        module_paths = _string_list(params.get("module_paths"))
+        # One discovery for this completion: the FILE derivation below may
+        # probe several candidate tokens with it, and the selection it settles
+        # on is then read back without a second static pipeline pass.
+        discovery = ExecProgramDiscovery(
+            command=raw_command if isinstance(raw_command, str) else None,
+            requested_program=requested_program,
+            module_paths=_string_list(params.get("module_paths")),
+            no_stdlib=bool(params.get("no_stdlib")),
+        )
         # The FILE selector comes from the same derivation execution uses, so
         # completion offers a program's own flags for exactly the invocations
         # that would run it.
         file = split_exec_tail(
             _string_list(params.get("tail")),
             program_command_for_file=(
-                None
-                if isinstance(raw_command, str)
-                else lambda file: discover_program_command_for_target(
-                    file=file,
-                    requested_program=requested_program,
-                    module_paths=module_paths,
-                    no_stdlib=bool(params.get("no_stdlib")),
-                )
+                None if isinstance(raw_command, str) else discovery.command_for_file
             ),
         ).file
         try:
-            programs, referenced_program = discover_programs_for_target(
-                file=file,
-                command=raw_command if isinstance(raw_command, str) else None,
-                module_paths=module_paths,
-                no_stdlib=bool(params.get("no_stdlib")),
-            )
-            if not programs:
+            selection = discovery.selection(file)
+            if selection.selected is None:
                 return base
-            extra = _program_argument_completion_items(
-                programs,
-                requested_program if requested_program is not None else referenced_program,
-                incomplete,
-            )
+            extra = _program_argument_completion_items(selection.selected, incomplete)
             items_by_value: dict[str, CompletionItem] = {}
             for item in (*base, *extra):
                 items_by_value[cast(str, item.value)] = item
@@ -590,26 +561,24 @@ class ExecCommand(TyperCommand):
             return base
 
 
+@_completes_quietly
 def complete_revise_command_or_review_file(
     ctx: click.Context, args: list[str], incomplete: str
 ) -> list[str]:
     del ctx, args
     try:
-        try:
-            context = current_config_context()
-            command_matches = _match(
-                _configured_command_names(
-                    "revise",
-                    home=context.home,
-                    proj_dir=context.proj_dir,
-                    cwd=context.cwd,
-                ),
-                incomplete,
-            )
-        except (OSError, SystemExit):
-            command_matches = []
-        if command_matches:
-            return command_matches
-        return _path_candidates(incomplete)
-    except (Exception, SystemExit):
-        return []
+        context = current_config_context()
+        command_matches = _match(
+            _configured_command_names(
+                "revise",
+                home=context.home,
+                proj_dir=context.proj_dir,
+                cwd=context.cwd,
+            ),
+            incomplete,
+        )
+    except (OSError, SystemExit):
+        command_matches = []
+    if command_matches:
+        return command_matches
+    return _path_candidates(incomplete)

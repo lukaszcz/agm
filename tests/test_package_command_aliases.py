@@ -17,6 +17,8 @@ version = "1.0.0"
 devel = { description = "Development tasks", help = "Choose a development workflow." }
 "devel nested check" = { program = "tools/main::main" }
 "devel nested inspect" = { program = "tools/main::main" }
+"devel releases" = {}
+"devel releases inspect" = { program = "tools/main::main" }
 [commands."devel review"]
 program = "tools/main::main"
 description = "Review changes"
@@ -59,6 +61,7 @@ def test_group_help_lists_descendants(command_package: Path, path: str, help_for
     assert "Review the selected subject." in result.output
     if "nested" not in path:
         assert "review" in result.output
+        assert "releases" in result.output
         assert "Choose a development workflow." in result.output
         assert "Review changes" in result.output
 

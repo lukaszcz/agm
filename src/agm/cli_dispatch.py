@@ -192,25 +192,25 @@ def registered_group_help(
             program_docs[key] = None if declaration is None else declaration.doc
         return program_docs[key]
 
+    listed_commands: dict[str, click.Command] = {}
+    for path, command in descendants.items():
+        summary = command.description or command.help
+        if not summary:
+            if command.program:
+                summary = (
+                    program_doc(command.program, command.package) or f"Run the {path} workflow."
+                )
+            else:
+                summary = "Browse subcommands."
+        listed_commands[path] = click.Command(path, help=summary)
+
     guidance = _help_paragraphs(
         registration.description if registration else None,
         registration.help if registration else None,
     )
     group = click.Group(
         help=guidance or f"Commands available under {path_name}.",
-        commands={
-            path: click.Command(
-                path,
-                help=command.description
-                or command.help
-                or (
-                    program_doc(command.program, command.package) or f"Run the {path} workflow."
-                    if command.program
-                    else "Browse subcommands."
-                ),
-            )
-            for path, command in descendants.items()
-        },
+        commands=listed_commands,
     )
     return group.get_help(click.Context(group, info_name=f"agm {path_name}"))
 

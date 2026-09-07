@@ -80,6 +80,8 @@ def expanded_commands(manifest: PackageManifest) -> dict[str, CommandSpec]:
     expansion finite and independent of declaration or activation order.
     """
     commands = dict(manifest.commands)
+    if not manifest.aliases:
+        return commands
     canonical_paths = set(commands)
     for path in commands:
         words = path.split()

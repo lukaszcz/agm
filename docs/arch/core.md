@@ -4,7 +4,7 @@ Two foundation packages sit beneath everything else and serve both halves of AGM
 
 ## Process Execution
 
-Foreground and captured subprocess work goes through one process module. It distinguishes terminal-inheriting from captured runs, offers require-success variants, and manages process groups so an interruption tears down descendants. A caller may register a cleanup command for a resource it owns but does not contain (`agm run` registers the stop of its transient systemd scope); while one is registered, SIGTERM and SIGHUP are delivered as `KeyboardInterrupt` so the cleanup runs before the group is killed. The persistent Pi RPC session in `agent/session/rpc.py` is the one deliberate exception that owns its own streaming process, because that process must outlive a single capture call.
+Foreground and captured subprocess work goes through one process module. It distinguishes terminal-inheriting from captured runs, offers require-success variants, and manages process groups so an interruption tears down descendants. Startup defers Python termination handlers until it owns the child and its reader threads, so early interrupts run the same cleanup as interrupts while waiting without changing the child’s signal mask. A caller may register a cleanup command for a resource it owns but does not contain (`agm run` registers the stop of its transient systemd scope); while one is registered, SIGTERM and SIGHUP are delivered as `KeyboardInterrupt` so the cleanup runs before the group is killed. The persistent Pi RPC session in `agent/session/rpc.py` is the one deliberate exception that owns its own streaming process, because that process must outlive a single capture call.
 
 ## Environment Handling
 

@@ -20,7 +20,8 @@ The standard library ships as a managed store package whose version must exactly
 
 ## Code Entry Points
 
-- `src/agm/packages/store.py`, `record.py`, `archive.py` — store layout and scanning, integrity records, portable archives.
+- `src/agm/packages/store.py`, `errors.py` — store layout and enumeration, with shared lifecycle errors; metadata reads do not import installation or compiler code. Installation loads validation and download dependencies only when needed.
+- `src/agm/packages/record.py`, `archive.py` — integrity records and portable archives.
 - `src/agm/packages/distribution.py` — the one distribution view of a source tree.
 - `src/agm/packages/activation.py`, `install.py`, `fetch.py` — active selections, lifecycle operations, downloads.
 - `src/agm/packages/stdlib.py` — anchor-aware `std` root selection; `src/agm/stdlib_locator.py` — the shipped fallback tree.

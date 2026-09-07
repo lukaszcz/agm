@@ -51,6 +51,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from agm.agl.modules import disk_cache
 from agm.core import fs
 from agm.util.text import normalize_newlines
 
@@ -159,8 +160,23 @@ class ParsedModuleCache:
             if entry is not None and entry.source_text == source_text and _companion_intact(entry):
                 self._entries.move_to_end(key)
                 return entry
-            module, self._next_node_id = build(self._next_node_id, source_text)
-            if not _emits_lexical_advisories(source_text):
+            cacheable = not _emits_lexical_advisories(source_text)
+            persistent = module_id.segments[0] == "std" and cacheable
+            start_id = self._next_node_id
+            restored = (
+                disk_cache.load(module_id, path, source_text, start_id, default_stdlib)
+                if persistent
+                else None
+            )
+            if restored is None:
+                module, self._next_node_id = build(start_id, source_text)
+                if persistent:
+                    disk_cache.save(
+                        module, self._next_node_id, start_id=start_id, default_stdlib=default_stdlib
+                    )
+            else:
+                module, self._next_node_id = restored
+            if cacheable:
                 self._entries[key] = module
                 self._entries.move_to_end(key)
                 while len(self._entries) > self._capacity:

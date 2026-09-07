@@ -437,3 +437,8 @@ value is a runtime error, not a process termination.
   prefix (`warning: line N: message`) to disambiguate them from errors, and they never
   affect the exit code — the program still runs to completion. Program `print` output
   goes to stdout, kept clean of diagnostics.
+
+Parsed standard-library modules are cached under `$XDG_CACHE_HOME/agm/agl`, or
+`~/.cache/agm/agl` when `XDG_CACHE_HOME` is unset. Source edits invalidate cached
+entries automatically. The cache is disposable: deleting it or making it unavailable
+does not prevent execution.

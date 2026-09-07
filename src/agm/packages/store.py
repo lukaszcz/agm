@@ -8,6 +8,7 @@ from pathlib import Path, PureWindowsPath
 import semver
 
 from agm.config.general import agm_home_dir
+from agm.packages.errors import PackageInstallError
 from agm.packages.layout import store_root_path
 from agm.packages.manifest import DependencySpec, ManifestError, load_manifest
 from agm.packages.model import (
@@ -219,3 +220,22 @@ def _store_component(value: str, label: str) -> str:
     ):
         raise StorePathError(f"{label} must be one relative path component")
     return value
+
+
+def installed_packages(
+    *, home: Path, env: Mapping[str, str] | None = None
+) -> tuple[PackageInfo, ...]:
+    """Return all installed immutable package versions, sorted by identity."""
+
+    try:
+        return tuple(
+            iter_installed_packages(
+                home=home,
+                env=env,
+                on_manifest_error=lambda exc, version_dir: PackageInstallError(
+                    f"cannot load installed package at {version_dir}: {exc}"
+                ),
+            )
+        )
+    except StoreIdentityError as exc:
+        raise PackageInstallError(str(exc)) from exc

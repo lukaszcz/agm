@@ -156,6 +156,23 @@ def _run_cleanup_command(
     )
 
 
+def _stop_process(
+    process: subprocess.Popen[bytes],
+    *,
+    isolate_process_group: bool,
+    interrupt_cleanup_cmd: list[str] | None,
+    cwd: Path | None,
+    env: dict[str, str] | None,
+) -> None:
+    try:
+        _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
+    finally:
+        if isolate_process_group:
+            kill_process_group(process)
+        else:
+            terminate_process(process)
+
+
 def _read_pipe_chunks(
     stream: IO[bytes],
     *,
@@ -190,7 +207,7 @@ def _drain_process_streams(
     """Drain stdout/stderr reader threads and return ``(stdout, stderr, timed_out)``.
 
     When *idle_timeout* fires the process is killed and ``timed_out=True`` is returned.
-    Any other ``BaseException`` kills the process, runs the cleanup command, and re-raises.
+    The enclosing process lifetime cleans up exceptions and joins the readers.
     """
     stream_data: dict[str, list[str]] = {"stdout": [], "stderr": []}
     callbacks: dict[str, Callable[[str], None] | None] = {
@@ -199,75 +216,93 @@ def _drain_process_streams(
     }
     timed_out = False
 
-    try:
-        decoders = {
-            "stdout": codecs.getincrementaldecoder("utf-8")(errors="replace"),
-            "stderr": codecs.getincrementaldecoder("utf-8")(errors="replace"),
-        }
-        active_readers = len(readers)
+    decoders = {
+        "stdout": codecs.getincrementaldecoder("utf-8")(errors="replace"),
+        "stderr": codecs.getincrementaldecoder("utf-8")(errors="replace"),
+    }
+    active_readers = len(readers)
+    last_chunk_time = time.monotonic()
+    while active_readers > 0:
+        try:
+            if idle_timeout is not None:
+                remaining = idle_timeout - (time.monotonic() - last_chunk_time)
+                if remaining <= 0:
+                    raise queue.Empty
+                stream_name, chunk = stream_queue.get(timeout=remaining)
+            else:
+                stream_name, chunk = stream_queue.get()
+        except queue.Empty:
+            # Idle timeout: no output received within the deadline.
+            _stop_process(
+                process,
+                isolate_process_group=isolate_process_group,
+                interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+                cwd=cwd,
+                env=env,
+            )
+            timed_out = True
+            break
+        if chunk is None:
+            active_readers -= 1
+            continue
+
         last_chunk_time = time.monotonic()
-        while active_readers > 0:
-            try:
-                if idle_timeout is not None:
-                    remaining = idle_timeout - (time.monotonic() - last_chunk_time)
-                    if remaining <= 0:
-                        raise queue.Empty
-                    stream_name, chunk = stream_queue.get(timeout=remaining)
-                else:
-                    stream_name, chunk = stream_queue.get()
-            except queue.Empty:
-                # Idle timeout: no output received within the deadline.
-                _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
-                if isolate_process_group:
-                    kill_process_group(process)
-                else:
-                    terminate_process(process)
-                timed_out = True
-                break
-            if chunk is None:
-                active_readers -= 1
-                continue
+        text = decoders[stream_name].decode(chunk)
+        if not text:
+            continue
+        if capture_output:
+            stream_data[stream_name].append(text)
+        callback = callbacks[stream_name]
+        if callback is not None:
+            callback(text)
 
-            last_chunk_time = time.monotonic()
-            text = decoders[stream_name].decode(chunk)
-            if not text:
-                continue
-            if capture_output:
-                stream_data[stream_name].append(text)
-            callback = callbacks[stream_name]
-            if callback is not None:
-                callback(text)
+    process.wait()
 
-        process.wait()
+    for stream_name, decoder in decoders.items():
+        text = decoder.decode(b"", final=True)
+        if not text:
+            continue
+        if capture_output:
+            stream_data[stream_name].append(text)
+        callback = callbacks[stream_name]
+        if callback is not None:
+            callback(text)
 
-        for stream_name, decoder in decoders.items():
-            text = decoder.decode(b"", final=True)
-            if not text:
-                continue
-            if capture_output:
-                stream_data[stream_name].append(text)
-            callback = callbacks[stream_name]
-            if callback is not None:
-                callback(text)
-
-        stdout = "".join(stream_data["stdout"])
-        stderr = "".join(stream_data["stderr"])
-    except BaseException:
-        # Cleanup first: whoever interrupted us may escalate to SIGKILL, and
-        # killing the process group can take a second we do not necessarily
-        # have.  The cleanup command releases resources we cannot reach once
-        # we are gone, so it must be the request that gets out first.
-        _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
-        if isolate_process_group:
-            kill_process_group(process)
-        else:
-            terminate_process(process)
-        raise
-    finally:
-        for reader in readers:
-            reader.join()
+    stdout = "".join(stream_data["stdout"])
+    stderr = "".join(stream_data["stderr"])
 
     return stdout, stderr, timed_out
+
+
+@contextlib.contextmanager
+def _defer_interrupts() -> Iterator[None]:
+    """Deliver Python termination handlers after child ownership is established.
+
+    Caught handlers reset on exec, so children retain their ordinary signal
+    behavior. Blocking signals across Popen would also block them in the child.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    pending: list[tuple[int, FrameType | None]] = []
+    handlers: dict[int, Callable[[int, FrameType | None], object]] = {
+        number: handler
+        for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+        if callable(handler := signal.getsignal(number))
+    }
+
+    def defer(number: int, frame: FrameType | None) -> None:
+        pending.append((number, frame))
+
+    for number in handlers:
+        signal.signal(number, defer)
+    try:
+        yield
+    finally:
+        for number, handler in handlers.items():
+            signal.signal(number, handler)
+        for pending_number, frame in pending:
+            handlers[pending_number](pending_number, frame)
 
 
 def _start_process_with_readers(
@@ -280,6 +315,7 @@ def _start_process_with_readers(
     stderr_callback: Callable[[str], None] | None,
     isolate_process_group: bool,
     stdin_text: str | None,
+    interrupt_cleanup_cmd: list[str] | None = None,
 ) -> tuple[
     subprocess.Popen[bytes],
     list[threading.Thread],
@@ -298,77 +334,145 @@ def _start_process_with_readers(
 
     stdin_pipe = subprocess.PIPE if stdin_text is not None else None
 
-    # core.env imports this module, so it cannot import resolve_env here without a cycle
-    process: subprocess.Popen[bytes] = subprocess.Popen(
-        cmd,
-        cwd=cwd,
-        env=os.environ if env is None else env,
-        stdout=subprocess.PIPE if need_stdout_pipe else None,
-        stderr=subprocess.PIPE if need_stderr_pipe else None,
-        stdin=stdin_pipe,
-        text=False,
-        start_new_session=isolate_process_group,
-    )
-
+    process: subprocess.Popen[bytes] | None = None
     stdin_writer: threading.Thread | None = None
     readers: list[threading.Thread] = []
-    stream_queue: queue.Queue[tuple[str, bytes | None]] = queue.Queue()
-
-    # Block SIGINT while the worker threads are created so they inherit a
-    # blocked signal mask.  A process-directed SIGINT (e.g. Ctrl-C) may be
-    # delivered to any thread that has it unblocked; if it lands on a reader
-    # thread, the main thread stays blocked in wait()/get() and the interrupt
-    # is effectively lost.  By blocking it in the workers, the kernel must
-    # deliver it to the main thread, which restores its own mask below.
-    previous_sigmask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
     try:
-        if stdin_text is not None and process.stdin is not None:
-            stdin_pipe_ref = process.stdin
+        # core.env imports this module, so it cannot import resolve_env here without a cycle
+        process = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            env=os.environ if env is None else env,
+            stdout=subprocess.PIPE if need_stdout_pipe else None,
+            stderr=subprocess.PIPE if need_stderr_pipe else None,
+            stdin=stdin_pipe,
+            text=False,
+            start_new_session=isolate_process_group,
+        )
 
-            def _write_stdin(data: bytes, pipe: IO[bytes]) -> None:
-                try:
-                    with pipe:
-                        pipe.write(data)
-                except BrokenPipeError:
-                    # Child exited before reading all stdin — normal outcome, not an error.
-                    pass
+        stream_queue: queue.Queue[tuple[str, bytes | None]] = queue.Queue()
 
-            stdin_writer = threading.Thread(
-                target=_write_stdin,
-                args=(stdin_text.encode(), stdin_pipe_ref),
-                daemon=True,
+        # Block SIGINT while the worker threads are created so they inherit a
+        # blocked signal mask.  A process-directed SIGINT (e.g. Ctrl-C) may be
+        # delivered to any thread that has it unblocked; if it lands on a reader
+        # thread, the main thread stays blocked in wait()/get() and the interrupt
+        # is effectively lost.  By blocking it in the workers, the kernel must
+        # deliver it to the main thread, which restores its own mask below.
+        previous_sigmask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+        try:
+            if stdin_text is not None and process.stdin is not None:
+                stdin_pipe_ref = process.stdin
+
+                def _write_stdin(data: bytes, pipe: IO[bytes]) -> None:
+                    try:
+                        with pipe:
+                            pipe.write(data)
+                    except BrokenPipeError:
+                        # Child exited before reading all stdin — normal outcome, not an error.
+                        pass
+
+                stdin_writer = threading.Thread(
+                    target=_write_stdin,
+                    args=(stdin_text.encode(), stdin_pipe_ref),
+                    daemon=True,
+                )
+                stdin_writer.start()
+
+            if process.stdout is not None:
+                reader = threading.Thread(
+                    target=partial(
+                        _read_pipe_chunks,
+                        process.stdout,
+                        name="stdout",
+                        output_queue=stream_queue,
+                    ),
+                    daemon=True,
+                )
+                reader.start()
+                readers.append(reader)
+
+            if process.stderr is not None:
+                reader = threading.Thread(
+                    target=partial(
+                        _read_pipe_chunks,
+                        process.stderr,
+                        name="stderr",
+                        output_queue=stream_queue,
+                    ),
+                    daemon=True,
+                )
+                reader.start()
+                readers.append(reader)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_sigmask)
+
+        return process, readers, stream_queue, stdin_writer
+    except BaseException:
+        if process is not None:
+            _stop_process(
+                process,
+                isolate_process_group=isolate_process_group,
+                interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+                cwd=cwd,
+                env=env,
             )
-            stdin_writer.start()
+            for reader in readers:
+                reader.join()
+            if stdin_writer is not None and stdin_writer.ident is not None:
+                stdin_writer.join()
+            for pipe in (process.stdin, process.stdout, process.stderr):
+                if pipe is not None:
+                    pipe.close()
+        raise
 
-        if process.stdout is not None:
-            reader = threading.Thread(
-                target=partial(
-                    _read_pipe_chunks,
-                    process.stdout,
-                    name="stdout",
-                    output_queue=stream_queue,
-                ),
-                daemon=True,
-            )
-            reader.start()
-            readers.append(reader)
 
-        if process.stderr is not None:
-            reader = threading.Thread(
-                target=partial(
-                    _read_pipe_chunks,
-                    process.stderr,
-                    name="stderr",
-                    output_queue=stream_queue,
-                ),
-                daemon=True,
+@contextlib.contextmanager
+def _running_process(
+    cmd: list[str],
+    *,
+    cwd: Path | None,
+    env: dict[str, str] | None,
+    capture_output: bool,
+    stdout_callback: Callable[[str], None] | None,
+    stderr_callback: Callable[[str], None] | None,
+    isolate_process_group: bool,
+    stdin_text: str | None,
+    interrupt_cleanup_cmd: list[str] | None,
+) -> Iterator[
+    tuple[subprocess.Popen[bytes], list[threading.Thread], queue.Queue[tuple[str, bytes | None]]]
+]:
+    process: subprocess.Popen[bytes] | None = None
+    readers: list[threading.Thread] = []
+    stdin_writer: threading.Thread | None = None
+    try:
+        with _defer_interrupts():
+            process, readers, stream_queue, stdin_writer = _start_process_with_readers(
+                cmd,
+                cwd=cwd,
+                env=env,
+                capture_output=capture_output,
+                stdout_callback=stdout_callback,
+                stderr_callback=stderr_callback,
+                isolate_process_group=isolate_process_group,
+                stdin_text=stdin_text,
+                interrupt_cleanup_cmd=interrupt_cleanup_cmd,
             )
-            reader.start()
-            readers.append(reader)
+        yield process, readers, stream_queue
+    except BaseException:
+        if process is not None:
+            _stop_process(
+                process,
+                isolate_process_group=isolate_process_group,
+                interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+                cwd=cwd,
+                env=env,
+            )
+        raise
     finally:
-        signal.pthread_sigmask(signal.SIG_SETMASK, previous_sigmask)
-
-    return process, readers, stream_queue, stdin_writer
+        for reader in readers:
+            reader.join()
+        if stdin_writer is not None:
+            stdin_writer.join()
 
 
 def run_subprocess(
@@ -398,8 +502,9 @@ def run_subprocess(
         if interrupt_cleanup_cmd is None
         else terminating_signals_raise_interrupt()
     )
-    with guard:
-        process, readers, stream_queue, _stdin_writer = _start_process_with_readers(
+    with (
+        guard,
+        _running_process(
             cmd,
             cwd=cwd,
             env=env,
@@ -408,8 +513,10 @@ def run_subprocess(
             stderr_callback=stderr_callback,
             isolate_process_group=isolate_process_group,
             stdin_text=None,
-        )
-
+            interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+        ) as (process, readers, stream_queue),
+    ):
+        timed_out = False
         if readers:
             stdout, stderr, timed_out = _drain_process_streams(
                 process,
@@ -424,24 +531,14 @@ def run_subprocess(
                 cwd=cwd,
                 env=env,
             )
-            if timed_out:
-                print(
-                    f"Idle timeout ({idle_timeout}s) exceeded, process terminated.",
-                    file=sys.stderr,
-                )
-                raise SystemExit(124)
-            return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
-        try:
+            completed = subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
+        else:
             process.wait()
-        except BaseException:
-            # Cleanup first — see the matching path in _drain_process_streams.
-            _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
-            if isolate_process_group:
-                kill_process_group(process)
-            else:
-                terminate_process(process)
-            raise
-        return subprocess.CompletedProcess(cmd, process.returncode, None, None)
+            completed = subprocess.CompletedProcess(cmd, process.returncode, None, None)
+    if timed_out:
+        print(f"Idle timeout ({idle_timeout}s) exceeded, process terminated.", file=sys.stderr)
+        raise SystemExit(124)
+    return completed
 
 
 def run_foreground(
@@ -570,87 +667,86 @@ def _run_capture_result_impl(
     """
     start = time.monotonic()
 
-    try:
-        process, readers, stream_queue, stdin_writer = _start_process_with_readers(
-            cmd,
-            cwd=cwd,
-            env=env,
+    with contextlib.ExitStack() as stack:
+        try:
+            process, readers, stream_queue = stack.enter_context(
+                _running_process(
+                    cmd,
+                    cwd=cwd,
+                    env=env,
+                    capture_output=True,
+                    stdout_callback=stdout_callback,
+                    stderr_callback=stderr_callback,
+                    isolate_process_group=isolate_process_group,
+                    stdin_text=stdin_text,
+                    interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+                )
+            )
+        except OSError as exc:
+            # Catches FileNotFoundError (ENOENT), PermissionError (EACCES),
+            # and all other OS-level spawn failures including ENOEXEC, ENOTDIR, etc.
+            elapsed = time.monotonic() - start
+            return (
+                ProcessCaptureResult(
+                    returncode=None,
+                    stdout="",
+                    stderr="",
+                    elapsed=elapsed,
+                    timed_out=False,
+                    spawn_error=str(exc),
+                    spawn_errno=exc.errno,
+                ),
+                exc,
+            )
+        except ValueError as exc:
+            # ``subprocess.Popen`` raises a plain ``ValueError`` (no ``errno``)
+            # before the child is launched for malformed arguments — most notably
+            # ``ValueError('embedded null byte')`` when an argv element contains a
+            # NUL.  Map it to the same spawn-failure result as the OS-level spawn
+            # errors; ``spawn_errno`` is ``None`` since there is no OS error number.
+            # The original exception object is returned so ``run_capture`` can
+            # re-raise it, preserving original exception semantics for all callers.
+            elapsed = time.monotonic() - start
+            return (
+                ProcessCaptureResult(
+                    returncode=None,
+                    stdout="",
+                    stderr="",
+                    elapsed=elapsed,
+                    timed_out=False,
+                    spawn_error=str(exc),
+                    spawn_errno=None,
+                ),
+                exc,
+            )
+
+        stdout, stderr, timed_out = _drain_process_streams(
+            process,
+            readers,
+            stream_queue,
             capture_output=True,
             stdout_callback=stdout_callback,
             stderr_callback=stderr_callback,
+            idle_timeout=idle_timeout,
             isolate_process_group=isolate_process_group,
-            stdin_text=stdin_text,
+            interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+            cwd=cwd,
+            env=env,
         )
-    except OSError as exc:
-        # Catches FileNotFoundError (ENOENT), PermissionError (EACCES),
-        # and all other OS-level spawn failures including ENOEXEC, ENOTDIR, etc.
+
         elapsed = time.monotonic() - start
         return (
             ProcessCaptureResult(
-                returncode=None,
-                stdout="",
-                stderr="",
+                returncode=process.returncode,
+                stdout=stdout,
+                stderr=stderr,
                 elapsed=elapsed,
-                timed_out=False,
-                spawn_error=str(exc),
-                spawn_errno=exc.errno,
-            ),
-            exc,
-        )
-    except ValueError as exc:
-        # ``subprocess.Popen`` raises a plain ``ValueError`` (no ``errno``)
-        # before the child is launched for malformed arguments — most notably
-        # ``ValueError('embedded null byte')`` when an argv element contains a
-        # NUL.  Map it to the same spawn-failure result as the OS-level spawn
-        # errors; ``spawn_errno`` is ``None`` since there is no OS error number.
-        # The original exception object is returned so ``run_capture`` can
-        # re-raise it, preserving original exception semantics for all callers.
-        elapsed = time.monotonic() - start
-        return (
-            ProcessCaptureResult(
-                returncode=None,
-                stdout="",
-                stderr="",
-                elapsed=elapsed,
-                timed_out=False,
-                spawn_error=str(exc),
+                timed_out=timed_out,
+                spawn_error=None,
                 spawn_errno=None,
             ),
-            exc,
+            None,
         )
-
-    stdout, stderr, timed_out = _drain_process_streams(
-        process,
-        readers,
-        stream_queue,
-        capture_output=True,
-        stdout_callback=stdout_callback,
-        stderr_callback=stderr_callback,
-        idle_timeout=idle_timeout,
-        isolate_process_group=isolate_process_group,
-        interrupt_cleanup_cmd=interrupt_cleanup_cmd,
-        cwd=cwd,
-        env=env,
-    )
-
-    # The stdin writer thread is a daemon, but join it now that the process has
-    # exited so it never lingers beyond this call.
-    if stdin_writer is not None:
-        stdin_writer.join()
-
-    elapsed = time.monotonic() - start
-    return (
-        ProcessCaptureResult(
-            returncode=process.returncode,
-            stdout=stdout,
-            stderr=stderr,
-            elapsed=elapsed,
-            timed_out=timed_out,
-            spawn_error=None,
-            spawn_errno=None,
-        ),
-        None,
-    )
 
 
 def run_capture_result(

@@ -413,7 +413,7 @@ _EXTERNAL_AGENT_CLIS: tuple[str, ...] = ("claude", "codex", "opencode", "pi", "s
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _agm_install(tmp_path_factory: pytest.TempPathFactory) -> None:
+def _agm_install(tmp_path_factory: pytest.TempPathFactory, isolated_compiler_cache: None) -> None:
     """Stage a checkout CLI using the interpreter already running the tests.
 
     The temporary prefix preserves executable-based config discovery. Python's

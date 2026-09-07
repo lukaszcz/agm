@@ -11,6 +11,7 @@ from typer.main import get_command
 
 import agm.cli as cli
 import agm.commands.dep.list as dep_list_cmd
+import agm.commands.dep.list as dep_list_command
 from agm.project.dependency_env import read_deps_table
 
 
@@ -534,7 +535,7 @@ class TestDepListViaCli:
         def record(*, verbose: bool = False, all_checkouts: bool = False) -> None:
             calls.append({"verbose": verbose, "all_checkouts": all_checkouts})
 
-        monkeypatch.setattr(cli.dep_list_command, "run", record)
+        monkeypatch.setattr(dep_list_command, "run", record)
         result = _invoke(runner, argv)
         assert result.exit_code == 0
         assert len(calls) == 1

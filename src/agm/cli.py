@@ -10,34 +10,6 @@ from typing import TYPE_CHECKING, NoReturn, Protocol, TypedDict, cast
 
 import typer
 
-import agm.commands.config.copy as config_copy_command
-import agm.commands.config.env as config_env_command
-import agm.commands.config.update as config_update_command
-import agm.commands.dep.list as dep_list_command
-import agm.commands.dep.new as dep_new_command
-import agm.commands.dep.remove as dep_remove_command
-import agm.commands.dep.switch as dep_switch_command
-import agm.commands.init as init_command
-import agm.commands.loop.run as loop_command
-import agm.commands.loop.run as loop_run_command
-import agm.commands.loop.select as loop_select_command
-import agm.commands.loop.step as loop_step_command
-import agm.commands.refine as refine_command
-import agm.commands.review as review_command
-import agm.commands.revise as revise_command
-import agm.commands.run as run_command
-import agm.commands.sync.fetch as sync_fetch_command
-import agm.commands.sync.pull as sync_pull_command
-import agm.commands.tmux.close as tmux_close_command
-import agm.commands.tmux.layout as tmux_layout_command
-import agm.commands.tmux.open as tmux_open_command
-import agm.commands.workspace.close as workspace_close_command
-import agm.commands.workspace.list as workspace_list_command
-import agm.commands.workspace.open as workspace_open_command
-import agm.commands.workspace.setup as workspace_setup_command
-import agm.commands.workspace.shell_regen as workspace_shell_regen_command
-import agm.commands.worktree.new as worktree_new_command
-import agm.commands.worktree.remove as worktree_remove_command
 from agm import completion
 from agm import parser as parser_helpers
 from agm.cli_dispatch import RegisteredCommandGroup, set_dry_run
@@ -329,6 +301,8 @@ class _LoopFields(TypedDict):
 
 def _loop_fields(options: _LoopOptions) -> _LoopFields:
     """Project parsed loop options onto the argument fields they fill."""
+    import agm.commands.run as run_command
+
     operands = options.operands
     return _LoopFields(
         command_name=operands[0] if operands else None,
@@ -511,6 +485,8 @@ def _run_workspace_open(
     pane_count: str | None,
     parent: str | None,
 ) -> None:
+    import agm.commands.workspace.open as workspace_open_command
+
     workspace_open_command.run(
         OpenArgs(
             detached=detached,
@@ -530,6 +506,8 @@ def _run_workspace_close(
     keep_branch: bool,
     keep_workspace: bool,
 ) -> None:
+    import agm.commands.workspace.close as workspace_close_command
+
     workspace_close_command.run(
         CloseArgs(
             branch=_require_value(
@@ -650,6 +628,8 @@ def config_cp(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.config.copy as config_copy_command
+
     del _help
     del _dry_run
     config_copy_command.run(
@@ -670,6 +650,8 @@ def config_copy(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.config.copy as config_copy_command
+
     del _help
     del _dry_run
     config_copy_command.run(
@@ -685,6 +667,8 @@ def config_env(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.config.env as config_env_command
+
     del _help
     del _dry_run
     config_env_command.run(ConfigEnvArgs())
@@ -695,6 +679,8 @@ def config_update(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.config.update as config_update_command
+
     del _help
     del _dry_run
     config_update_command.run(ConfigUpdateArgs())
@@ -800,6 +786,8 @@ def workspace_setup(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.workspace.setup as workspace_setup_command
+
     del _help
     del _dry_run
     workspace_setup_command.run()
@@ -811,6 +799,8 @@ def workspace_list(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.workspace.list as workspace_list_command
+
     del _help
     del _dry_run
     workspace_list_command.run(verbose=verbose)
@@ -824,6 +814,8 @@ def workspace_shell_regen(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.workspace.shell_regen as workspace_shell_regen_command
+
     del _help
     del _dry_run
     workspace_shell_regen_command.run(
@@ -861,6 +853,8 @@ def new(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.worktree.new as worktree_new_command
+
     del _help
     del _dry_run
     worktree_new_command.run(
@@ -1288,6 +1282,8 @@ def worktree_rm(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.worktree.remove as worktree_remove_command
+
     del _help
     del _dry_run
     worktree_remove_command.run(
@@ -1311,6 +1307,8 @@ def worktree_remove(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.worktree.remove as worktree_remove_command
+
     del _help
     del _dry_run
     worktree_remove_command.run(
@@ -1339,6 +1337,8 @@ def dep_list(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.dep.list as dep_list_command
+
     del _help
     del _dry_run
     dep_list_command.run(verbose=verbose, all_checkouts=list_all)
@@ -1353,6 +1353,8 @@ def new_dep(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.dep.new as dep_new_command
+
     del _help
     del _dry_run
     dep_new_command.run(
@@ -1388,6 +1390,8 @@ def dep_switch(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.dep.switch as dep_switch_command
+
     del _help
     del _dry_run
     if dep is None or branch is None:
@@ -1428,6 +1432,8 @@ def dep_remove(
 
 
 def _run_dep_remove(*, command_path: list[str], target: str | None, all: bool) -> None:
+    import agm.commands.dep.remove as dep_remove_command
+
     dep_remove_command.run(
         DepRemoveArgs(
             all=all,
@@ -1583,6 +1589,8 @@ def sync_callback(
 
 @sync_app.command(name="fetch")
 def sync_fetch(_help: bool = _help_option(), _dry_run: bool = _dry_run_option()) -> None:
+    import agm.commands.sync.fetch as sync_fetch_command
+
     del _help
     del _dry_run
     sync_fetch_command.run(object())
@@ -1590,6 +1598,8 @@ def sync_fetch(_help: bool = _help_option(), _dry_run: bool = _dry_run_option())
 
 @sync_app.command(name="pull")
 def sync_pull(_help: bool = _help_option(), _dry_run: bool = _dry_run_option()) -> None:
+    import agm.commands.sync.pull as sync_pull_command
+
     del _help
     del _dry_run
     sync_pull_command.run(object())
@@ -1638,6 +1648,8 @@ def review(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.review as review_command
+
     del _help
     del _dry_run
     _validate_prompt_options(
@@ -1704,6 +1716,8 @@ def revise(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.revise as revise_command
+
     del _help
     del _dry_run
     command_name = command_name_or_review_file if review_file is not None else None
@@ -1819,6 +1833,8 @@ def refine(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.refine as refine_command
+
     del _help
     del _dry_run
     _validate_refine_prompt_options(
@@ -1880,6 +1896,11 @@ def loop(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.loop.run as loop_command
+    import agm.commands.loop.run as loop_run_command
+    import agm.commands.loop.select as loop_select_command
+    import agm.commands.loop.step as loop_step_command
+
     del _help
     del _dry_run
     raw_args = list(ctx.args)
@@ -1939,6 +1960,8 @@ def init(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.init as init_command
+
     del _help
     del _dry_run
     _reject_option_conflict(["init"], "--embedded", "--split", conflicting=embedded and split)
@@ -2005,6 +2028,8 @@ def run(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.run as run_command
+
     del _help
     del _dry_run
     command = [] if run_command_args is None else list(run_command_args)
@@ -2055,6 +2080,8 @@ def tmux_open(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.tmux.open as tmux_open_command
+
     del _help
     del _dry_run
     tmux_open_command.run(
@@ -2072,6 +2099,8 @@ def tmux_close(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.tmux.close as tmux_close_command
+
     del _help
     del _dry_run
     tmux_close_command.run(
@@ -2102,6 +2131,8 @@ def tmux_layout(
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
+    import agm.commands.tmux.layout as tmux_layout_command
+
     del _help
     del _dry_run
     tmux_layout_command.run(

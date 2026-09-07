@@ -15,6 +15,7 @@ import semver
 
 import agm.commands.pkg.install as install_command
 import agm.packages.archive as package_archive
+import agm.packages.fetch as package_fetch
 import agm.packages.install as package_install
 import agm.packages.model as package_model
 import agm.stdlib_locator as stdlib_locator
@@ -2381,7 +2382,7 @@ def test_url_dependency_hands_verified_archive_to_the_installer(
         assert callable(handoff)
         handoff(archive)
 
-    monkeypatch.setattr(package_install, "fetch_archive", fake_fetch)
+    monkeypatch.setattr(package_fetch, "fetch_archive", fake_fetch)
     installed = install_directory(source, home=tmp_path / "home", env={})
 
     assert installed.manifest.name == "alpha"
@@ -2862,7 +2863,7 @@ def test_dry_run_url_dependency_never_fetches_or_creates_scratch(
         nonlocal fetched
         fetched = True
 
-    monkeypatch.setattr(package_install, "fetch_archive", fail_fetch)
+    monkeypatch.setattr(package_fetch, "fetch_archive", fail_fetch)
     dry_run.set_enabled(True)
 
     with pytest.raises(PackageInstallError, match=r"bravo >= 1\.0\.0"):
@@ -2882,7 +2883,7 @@ def test_url_fetch_refuses_when_the_fetch_handoff_does_not_install(
         '\n[dependencies]\nbravo = { version = "1", url = "https://example.test/bravo.agmpkg", '
         'hash = "sha256=' + "0" * 64 + '" }\n',
     )
-    monkeypatch.setattr(package_install, "fetch_archive", lambda **_: None)
+    monkeypatch.setattr(package_fetch, "fetch_archive", lambda **_: None)
 
     with pytest.raises(PackageInstallError, match=r"bravo >= 1\.0\.0"):
         install_directory(source, home=tmp_path / "home", env={})
@@ -2919,7 +2920,7 @@ def test_fetch_failure_and_dry_run_use_clean_dependency_errors(
         'hash = "sha256=' + "0" * 64 + '" }\n',
     )
     monkeypatch.setattr(
-        package_install,
+        package_fetch,
         "fetch_archive",
         lambda **_: (_ for _ in ()).throw(
             package_install.FetchError("fetch failed for bravo >= 1.0.0: offline")

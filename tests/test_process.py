@@ -15,48 +15,78 @@ import agm.core.process as process_mod
 from agm.core.process import ProcessCaptureResult, run_capture, run_capture_result, run_foreground
 
 
-def test_stream_reader_start_restores_sigint_mask_after_interrupt(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("boundary", ["spawn", "unmask", "reader", "reader-failure"])
+@pytest.mark.parametrize(
+    ("mode", "isolate"), [("foreground", True), ("capture", True), ("stdin", False)]
+)
+def test_startup_interrupt_reaps_child_and_runs_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str, mode: str, isolate: bool
 ) -> None:
-    previous_mask = {signal.SIGINT}
-    calls: list[tuple[int, object]] = []
+    """An interrupt before waiting must release the child and external resources."""
+    import subprocess
 
-    class Process:
-        stdin = None
-        stdout = object()
-        stderr = None
+    children: list[subprocess.Popen[bytes]] = []
+    original_spawn = subprocess.Popen
+    original_mask = signal.pthread_sigmask
+    original_start = process_mod.threading.Thread.start
+    cleanup = tmp_path / "cleaned"
 
-    class Thread:
-        def __init__(self, **_kwargs: object) -> None:
-            pass
+    def spawn(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
+        child = original_spawn(*args, **kwargs)
+        children.append(child)
+        if boundary == "spawn" and len(children) == 1:
+            signal.raise_signal(signal.SIGINT)
+        return child
 
-        def start(self) -> None:
-            raise KeyboardInterrupt
+    def mask(how: int, signals: Any) -> set[signal.Signals]:
+        previous = original_mask(how, signals)
+        if boundary == "unmask" and how == signal.SIG_SETMASK:
+            monkeypatch.setattr(signal, "pthread_sigmask", original_mask)
+            signal.raise_signal(signal.SIGINT)
+        return previous
 
-    def mask(how: int, value: object) -> set[signal.Signals]:
-        calls.append((how, value))
-        return previous_mask
+    started_threads = 0
 
-    monkeypatch.setattr(process_mod.subprocess, "Popen", lambda *_args, **_kwargs: Process())
-    monkeypatch.setattr(process_mod.threading, "Thread", Thread)
-    monkeypatch.setattr(process_mod.signal, "pthread_sigmask", mask)
+    def start(thread: process_mod.threading.Thread) -> None:
+        nonlocal started_threads
+        if boundary == "reader-failure" and started_threads > 0:
+            raise RuntimeError("thread creation failed")
+        original_start(thread)
+        started_threads += 1
+        if boundary == "reader":
+            signal.raise_signal(signal.SIGINT)
 
-    with pytest.raises(KeyboardInterrupt):
-        process_mod._start_process_with_readers(
-            ["command"],
-            cwd=None,
-            env=None,
-            capture_output=True,
-            stdout_callback=None,
-            stderr_callback=None,
-            isolate_process_group=False,
-            stdin_text=None,
-        )
-
-    assert calls == [
-        (signal.SIG_BLOCK, {signal.SIGINT}),
-        (signal.SIG_SETMASK, previous_mask),
-    ]
+    monkeypatch.setattr(subprocess, "Popen", spawn)
+    monkeypatch.setattr(signal, "pthread_sigmask", mask)
+    monkeypatch.setattr(process_mod.threading.Thread, "start", start)
+    try:
+        error = RuntimeError if boundary == "reader-failure" else KeyboardInterrupt
+        with pytest.raises(error):
+            options: dict[str, Any] = {"isolate_process_group": isolate}
+            if mode == "stdin":
+                options["stdin_text"] = "input"
+                run = run_capture
+            else:
+                options["capture_output"] = mode == "capture" or boundary.startswith("reader")
+                run = process_mod.run_subprocess
+            run(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                **options,
+                interrupt_cleanup_cmd=[
+                    sys.executable,
+                    "-c",
+                    "from pathlib import Path; import sys; Path(sys.argv[1]).touch()",
+                    str(cleanup),
+                ],
+            )
+        assert children[0].poll() is not None
+        assert cleanup.exists()
+    finally:
+        monkeypatch.setattr(subprocess, "Popen", original_spawn)
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            child.wait()
 
 
 def test_run_capture_streams_stdout_and_stderr_before_process_exit(tmp_path: Path) -> None:
@@ -609,3 +639,11 @@ class TestRunCaptureNullByteReraise:
         result = run_capture_result(["sh", "-c", "echo \x00bad"])
         assert result.spawn_error is not None
         assert result.returncode is None
+
+
+def test_capture_can_run_from_a_worker_thread() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        result = executor.submit(run_capture, [sys.executable, "-c", "print(42)"]).result(timeout=5)
+    assert result == (0, "42\n", "")

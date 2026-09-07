@@ -14,6 +14,7 @@ from typing import Protocol
 
 import requests
 
+from agm.packages.errors import FetchError as FetchError
 from agm.packages.manifest import parse_sha256
 
 # Bounds one connect or read of the transport, and how long a started transfer
@@ -22,10 +23,6 @@ from agm.packages.manifest import parse_sha256
 _FETCH_TIMEOUT_SECONDS = 30.0
 _CHUNK_SIZE = 1024 * 1024
 MAX_ARCHIVE_DOWNLOAD_SIZE = 128 * 1024 * 1024
-
-
-class FetchError(ValueError):
-    """Raised when a package archive cannot be fetched or verified."""
 
 
 class Response(Protocol):

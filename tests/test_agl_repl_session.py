@@ -10,7 +10,6 @@ exactly-once agent dispatch, the ``:set`` param flow, ``reset``, ``load_file``,
 from __future__ import annotations
 
 import dataclasses
-from collections import OrderedDict
 from collections.abc import Mapping
 from pathlib import Path
 from shutil import copyfile, copytree
@@ -7654,39 +7653,25 @@ class TestSessionOpen:
         assert result.value.display_name == "Agent::AgentCommand"
         assert result.value.fields["command"] == TextValue("overridden")
 
-    def test_open_bootstrap_cache_has_bounded_lru_retention(
+    def test_reopened_sessions_keep_their_library_values_after_eviction(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Frequently reused bootstrap images survive while least-recent ones expire."""
-        import agm.agl.modules.loader as loader_mod
+        """Reopening an evicted context must not pick up another library's values."""
         import agm.agl.repl.session as session_mod
 
-        monkeypatch.setattr(session_mod, "_bootstrap_cache", OrderedDict())
         monkeypatch.setattr(session_mod, "BOOTSTRAP_CACHE_MAX_ENTRIES", 2)
-        original = loader_mod.build_repl_graph
-        new_module_counts: list[int] = []
-
-        def spy(*args: object, **kwargs: object) -> object:
-            result = original(*args, **kwargs)
-            _graph, _next_id, new_modules = result
-            new_module_counts.append(len(new_modules))
-            return result
-
-        monkeypatch.setattr(loader_mod, "build_repl_graph", spy)
-        source_stdlib = Path(__file__).resolve().parent.parent / "stdlib"
         roots = tuple(tmp_path / name for name in ("first", "second", "third"))
-        for root in roots:
-            copytree(source_stdlib, root)
+        for value, root in enumerate(roots):
+            modules = root / MODULE_TREE_DIRNAME
+            modules.mkdir(parents=True)
+            (modules / "prelude.agl").write_text(f"let marker: int = {value}\n")
 
-        assert ReplSession(stdlib_root=roots[0]).open() == ()
-        assert ReplSession(stdlib_root=roots[1]).open() == ()
-        assert ReplSession(stdlib_root=roots[0]).open() == ()  # refresh first
-        assert ReplSession(stdlib_root=roots[2]).open() == ()
-        assert ReplSession(stdlib_root=roots[1]).open() == ()  # second was least recent
-
-        assert all(count > 0 for count in new_module_counts)
-        assert len(new_module_counts) == 4
-        assert len(session_mod._bootstrap_cache) == 2
+        for value in (0, 1, 0, 2, 1):
+            session = ReplSession(stdlib_root=roots[value], cwd=tmp_path)
+            assert session.open() == ()
+            result = session.eval_entry("import std/prelude\nstd/prelude::marker")
+            assert result.ok, result.diagnostics
+            assert result.value == IntValue(value)
 
     def test_open_applies_a_well_formed_override_before_the_first_entry(self) -> None:
         from agm.agl.semantics.values import RecordValue, TextValue

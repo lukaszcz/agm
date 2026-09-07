@@ -21,6 +21,7 @@ from agm.agl.syntax.visitor import walk
 from agm.command_catalog import RESERVED_COMMAND_NAMES, invalid_command_path
 from agm.core import fs
 from agm.packages.distribution import MANIFEST_NAME, distribution_files
+from agm.packages.errors import DisciplineError as DisciplineError
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.manifest import PackageManifest, distribution_manifest
 from agm.packages.model import PackageInfo, is_std_package_name
@@ -29,10 +30,6 @@ from agm.util.ident import is_identifier
 
 T = TypeVar("T")
 _ModuleResolutions = Mapping[ModuleId, ModuleResolution]
-
-
-class DisciplineError(ValueError):
-    """Raised when a package directory violates package discipline."""
 
 
 def validate_package(

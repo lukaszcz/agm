@@ -4,7 +4,7 @@ AGM's entry point is a Typer application that defines the command tree, parses a
 
 ## Command Tree
 
-The tree is a root app plus one sub-app per command group; group callbacks print help when invoked without a subcommand. `src/agm/commands/` mirrors the tree — `agm pkg check` dispatches to `commands/pkg/check.py` — while the Typer wiring itself stays in `cli.py`.
+The tree is a root app plus one sub-app per command group; group callbacks print help when invoked without a subcommand. `src/agm/commands/` mirrors the tree — `agm pkg check` dispatches to `commands/pkg/check.py` — while the Typer wiring itself stays in `cli.py`. Command handlers are imported at dispatch, so unrelated command domains do not add to startup.
 
 When no built-in command matches, a lazy fallback derives the package command index from the active or project-pinned package manifests, resolves the longest registered command path, and runs its `program def` through the same execution host as `agm exec` after verifying the manifest and module ownership (see [packages.md](packages.md)). Built-in commands never consult that index or load AgL.
 

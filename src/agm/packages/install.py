@@ -35,12 +35,6 @@ from agm.packages.archive import (
     extract_archive,
     verify_archive_discipline,
 )
-from agm.packages.discipline import (
-    DisciplineError,
-    validate_package,
-    validate_package_distribution,
-    validate_package_structure,
-)
 from agm.packages.distribution import (
     MANIFEST_NAME,
     DistributionError,
@@ -48,7 +42,9 @@ from agm.packages.distribution import (
     is_cache_or_vcs_path,
     materialize_distribution,
 )
-from agm.packages.fetch import FetchError, fetch_archive
+from agm.packages.errors import DisciplineError as DisciplineError
+from agm.packages.errors import FetchError as FetchError
+from agm.packages.errors import PackageInstallError as PackageInstallError
 from agm.packages.manifest import (
     DependencySpec,
     ManifestError,
@@ -74,19 +70,16 @@ from agm.packages.record import (
     write_record,
 )
 from agm.packages.store import (
-    StoreIdentityError,
     canonical_package_store_path,
-    iter_installed_packages,
     package_store_path,
     satisfying_from_store,
     store_root,
 )
+from agm.packages.store import (
+    installed_packages as installed_packages,
+)
 from agm.stdlib_locator import shipped_stdlib_root
 from agm.version import AGM_VERSION
-
-
-class PackageInstallError(ValueError):
-    """Raised when package installation or removal cannot safely proceed."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,6 +224,7 @@ def refresh_managed_stdlib(
     trees, so readers can never observe files being copied into the active
     package directory.
     """
+    from agm.packages.discipline import validate_package
 
     with _package_operation_lock(home=home, env=env):
         package = _validated_directory_package(source)
@@ -405,27 +399,9 @@ def _uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None =
     _finish_uninstall(name, tombstone, version=active.version, home=home, env=env)
 
 
-def installed_packages(
-    *, home: Path, env: Mapping[str, str] | None = None
-) -> tuple[PackageInfo, ...]:
-    """Return all installed immutable package versions, sorted by identity."""
-
-    try:
-        return tuple(
-            iter_installed_packages(
-                home=home,
-                env=env,
-                on_manifest_error=lambda exc, version_dir: PackageInstallError(
-                    f"cannot load installed package at {version_dir}: {exc}"
-                ),
-            )
-        )
-    except StoreIdentityError as exc:
-        raise PackageInstallError(str(exc)) from exc
-
-
 def _validated_directory_package(source: Path) -> PackageInfo:
     """Load and validate one package source directory."""
+    from agm.packages.discipline import validate_package_structure
 
     if source.is_symlink():
         raise PackageInstallError(f"cannot install symbolic-link package root {source}")
@@ -451,6 +427,7 @@ def _stage_directory_package(
     carry — its normalized manifest and its selected files — so a package has
     one stored shape and one content hash however it reaches the store.
     """
+    from agm.packages.discipline import validate_package
 
     source_root = source.resolve()
     staging_parent = destination.parent.resolve()
@@ -519,6 +496,8 @@ def _rollback_managed_refresh(destination: Path, staging: Path, previous: Path |
 def _install_directory(
     source: Path, *, state: _InstallState, editable: bool, shadow: bool
 ) -> PackageInfo:
+    from agm.packages.discipline import validate_package, validate_package_distribution
+
     package = _validated_directory_package(source)
     root = package.root
 
@@ -607,6 +586,7 @@ def _install_directory(
 
 def _install_archive(archive: Path, *, state: _InstallState, shadow: bool) -> PackageInfo:
     """Extract an archive from one verified open ZIP stream and activate it."""
+    from agm.packages.discipline import validate_package, validate_package_structure
 
     archive_path = archive.resolve()
     if dry_run.enabled():
@@ -927,6 +907,7 @@ def _fetch_archive_install(
     name: str, version: str, *, url: str, expected_hash: str, state: _InstallState
 ) -> PackageInfo:
     """Fetch a content-addressed archive and install it in the current transaction."""
+    from agm.packages.fetch import fetch_archive
 
     requirement = f"{name} >= {version}"
     if dry_run.enabled():

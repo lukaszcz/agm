@@ -15,9 +15,10 @@ from agm.packages.activation import (
     reconcile_package_commands,
     resolve_indexed_packages,
 )
-from agm.packages.install import PackageInstallError, installed_packages
+from agm.packages.errors import PackageInstallError
 from agm.packages.manifest import ManifestError
 from agm.packages.model import canonical_package_identity
+from agm.packages.store import installed_packages
 
 
 def run(args: PkgListArgs) -> None:

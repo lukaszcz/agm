@@ -11,6 +11,7 @@ from typer.main import get_command
 
 import agm.cli as cli
 import agm.commands.workspace.list as list_cmd
+import agm.commands.workspace.list as workspace_list_command
 from agm.vcs.git import WorktreeInfo
 
 
@@ -462,7 +463,7 @@ class TestListCommandViaCli:
         def record(*, verbose: bool = False) -> None:
             calls.append(True)
 
-        monkeypatch.setattr(cli.workspace_list_command, "run", record)
+        monkeypatch.setattr(workspace_list_command, "run", record)
         result = _invoke(runner, ["workspace", "list"])
         assert result.exit_code == 0
         assert len(calls) == 1

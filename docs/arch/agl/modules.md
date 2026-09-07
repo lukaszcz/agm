@@ -20,10 +20,12 @@ User-operator chains are resolved once the graph is known, using each module's l
 
 ## Compilation Caches
 
-Two process-global caches make repeated compilation cheap, and neither privileges the standard library:
+Process-local caches reuse imported modules and their derived artifacts:
 
-- The **parsed-module cache** parses each file once per process, validated against the source text itself rather than stat metadata, and draws node ids from a reserved band so cached modules stay disjoint from every graph they are served into.
+- The **parsed-module cache** retains each file’s parsed syntax, validated against the source text itself rather than stat metadata, and draws node ids from a reserved band so cached modules stay disjoint from every graph they are served into.
 - The **artifact cache** (`artifact_cache.py`) is a bounded LRU of what the passes derived per module — resolved modules, checked modules, compiled match sites. An artifact is a pure function of the loaded modules it could read (the module, its transitive dependencies, the ambient method modules), so it is served again only while every one of those is the very same parsed object; an edited file reparses and misses by construction. The entry module is never cached, and host capabilities key the artifacts checked under them.
+
+A disposable disk cache (`modules/disk_cache.py`) also shares parsed standard-library modules across CLI processes under `$XDG_CACHE_HOME/agm/agl` (default `~/.cache/agm/agl`). Entries are tied to source and compiler contents, Python and parser dependency versions, source identity, parser seed, and prelude mode; reads accept only syntax data classes, and writes replace entries atomically. Missing, damaged, or inaccessible entries fall back to parsing. Operator resolution, host capabilities, companion availability, and runtime initialization remain invocation-specific; no executable or checked artifacts are deserialized.
 
 ## Code Entry Points
 

@@ -81,6 +81,16 @@ def pytest_configure(config: pytest.Config) -> None:
         _detach_from_controlling_terminal()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def isolated_compiler_cache(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Generator[None, None, None]:
+    """Keep compiler artifacts and inherited child-process caches disposable."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("XDG_CACHE_HOME", str(tmp_path_factory.mktemp("compiler-cache")))
+        yield
+
+
 @pytest.fixture()
 def self_validation_disabled() -> Generator[None, None, None]:
     """Run the body with AgL's optional self-checks off, as in normal execution.

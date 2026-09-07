@@ -1,11 +1,12 @@
 """End-to-end tests that exercise commands through the ``agm`` CLI.
 
-These tests create real git repos, invoke the installed ``agm`` command-line
-binary, and verify the resulting filesystem and git state.
+These tests create real git repos, invoke the checkout's ``agm`` command-line
+entry point, and verify the resulting filesystem and git state.
 
-The suite installs the current repository version of ``agm`` into an isolated
-temporary virtual environment (see the ``_agm_install`` session fixture) and
-invokes that binary with a fake ``HOME`` so no real user files are touched.
+The suite stages a temporary entry point using the test interpreter and this
+checkout's source (see the ``_agm_install`` session fixture), without installing
+dependencies or consulting a package cache. It runs with a fake ``HOME`` so no
+real user files are touched.
 Test setup uses only raw git/filesystem operations, never other scripts from
 this repository.
 """
@@ -22,6 +23,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import threading
 import time
 import tomllib
@@ -45,6 +47,7 @@ from tests._command_coverage import (
     resolve_leaf_path,
 )
 from tests._git_helpers import clone_with_fork_remote
+from tests._package_helpers import write_installed_package
 from tests._proc_helpers import wait_for_path
 
 
@@ -52,7 +55,7 @@ def _workspace_shell_path(env: dict[str, str], session_name: str) -> Path:
     """Return the per-session wrapper path the real agm writes under *env*.
 
     Mirrors ``agm.project.workspace_shell.workspace_shell_dir`` but resolves
-    ``XDG_CACHE_HOME``/``HOME`` against *env* (the installed agm runs with
+    ``XDG_CACHE_HOME``/``HOME`` against *env* (the checkout CLI runs with
     this env), not the test process environment.
     """
     xdg = env.get("XDG_CACHE_HOME")
@@ -389,13 +392,13 @@ def _runner_records(log: Path) -> list[dict[str, str]]:
 
 
 # ---------------------------------------------------------------------------
-# Isolated install of the current repo's ``agm`` CLI
+# Isolated entry point for the current repo's ``agm`` CLI
 # ---------------------------------------------------------------------------
 
 # Populated once per session (per xdist worker) by the ``_agm_install`` fixture.
-# Keys: ``"bin_dir"`` (the venv ``bin/`` directory), ``"bin"`` (the installed
+# Keys: ``"bin_dir"`` (the temporary ``bin/`` directory), ``"bin"`` (the staged
 # ``agm`` executable) and ``"guard_dir"`` (the guard-shim directory).  Tests
-# invoke ``"bin"`` directly, so AGM resolves this venv as its install prefix.
+# invoke ``"bin"`` directly, so AGM resolves this temporary install prefix.
 _AGM_INSTALL: dict[str, Path] = {}
 
 # The developer's pristine PATH captured at module import (before any test
@@ -408,7 +411,7 @@ _ORIGINAL_PATH: str = os.environ.get("PATH", "")
 
 # External agent/sandbox CLIs that an e2e test must NEVER invoke for real.
 # The ``_agm_install`` fixture places a hard-failing shim for each one in the
-# isolated venv's ``bin/`` (which ``_agm_env`` prepends to PATH).  A test that
+# guard directory (which ``_agm_env`` prepends to PATH).  A test that
 # needs one of these installs a *fake* by prepending its own tmp dir to PATH
 # first, which shadows the shim; a test that forgets to install a fake hits
 # the shim and fails loudly instead of silently calling a real agent.  ``srt``
@@ -419,45 +422,38 @@ _EXTERNAL_AGENT_CLIS: tuple[str, ...] = ("claude", "codex", "opencode", "pi", "s
 
 @pytest.fixture(scope="session", autouse=True)
 def _agm_install(tmp_path_factory: pytest.TempPathFactory) -> None:
-    """Install the current repository version of ``agm`` into an isolated venv.
+    """Stage a checkout CLI using the interpreter already running the tests.
 
-    The venv lives under a temporary directory and is fully disposable; no real
-    user files (``~/.agm``, installed tools, PATH entries) are modified.  Every
-    e2e test then invokes this installed ``agm`` binary, exercising the real
-    packaged console-script entry point rather than ``python -m agm.cli``.
+    The temporary prefix preserves executable-based config discovery. Python's
+    isolated mode excludes ambient PYTHONPATH and user packages; the explicit
+    source path selects this checkout, while dependencies come from the test
+    environment. No second Python installation, build backend or cached wheels
+    are required.
     """
     repo_root = Path(__file__).resolve().parents[1]
-    venv = tmp_path_factory.mktemp("agm-install") / "venv"
-    subprocess.run(
-        ["uv", "venv", str(venv), "--python", "3.12", "--offline"],
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        [
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            str(venv / "bin" / "python"),
-            "--offline",
-            str(repo_root),
-        ],
-        check=True,
-        capture_output=True,
-    )
-    bin_dir = venv / "bin"
+    prefix = tmp_path_factory.mktemp("agm-install")
+    bin_dir = prefix / "bin"
+    bin_dir.mkdir()
     agm_bin = bin_dir / "agm"
-    assert agm_bin.is_file(), f"installed agm binary missing at {agm_bin}"
-    shutil.copytree(repo_root / "stdlib", venv / ".agm" / "stdlib", dirs_exist_ok=True)
+    agm_bin.write_text(
+        "#!/bin/sh\n"
+        f"'''exec' {shlex.quote(sys.executable)} -I \"$0\" \"$@\"\n"
+        "' '''\n"
+        "import sys\n"
+        f"sys.path.insert(0, {str(repo_root / 'src')!r})\n"
+        "from agm.cli import main\n"
+        "sys.exit(main())\n",
+        encoding="utf-8",
+    )
+    agm_bin.chmod(agm_bin.stat().st_mode | stat.S_IEXEC)
     # Install hard-failing guard shims for every external agent/sandbox CLI in
     # a dedicated directory.  ``_agm_env`` places this guard dir AFTER the test's
-    # own fake-CLI dirs and the venv ``bin/`` but BEFORE the rest of PATH, so:
+    # own fake-CLI dirs and the staged ``bin/`` but BEFORE the rest of PATH, so:
     #   - a test-installed fake (prepended first) shadows the guard shim → the
     #     fake is used (intended);
     #   - a bare ``agm`` that AGM itself spawns (the tmux ``agm workspace
     #     setup`` command, ``agm config env`` in a generated workspace rc)
-    #     resolves to the venv ``agm``, never a developer's global install;
+    #     resolves to the staged ``agm``, never a developer's global install;
     #   - a forgotten fake resolves to the guard shim, which fails loudly
     #     instead of falling through to a *real* ``claude``/``codex``/``srt``/…
     #     elsewhere on PATH.
@@ -487,13 +483,19 @@ def _agm_install(tmp_path_factory: pytest.TempPathFactory) -> None:
     subprocess.run(
         [str(agm_bin), "exec", "-c", "print 1"],
         capture_output=True,
-        env=_agm_env({**os.environ, "HOME": str(warm_home)}),
+        env=_agm_env(
+            {
+                "PATH": _ORIGINAL_PATH,
+                "HOME": str(warm_home),
+                "AGM_STDLIB": str(repo_root / "stdlib"),
+            }
+        ),
         check=False,
     )
 
 
 def _agm_argv(args: list[str]) -> list[str]:
-    """Build an argv list invoking the installed ``agm`` binary."""
+    """Build an argv list invoking the staged checkout CLI."""
     return [str(_AGM_INSTALL["bin"]), *args]
 
 
@@ -502,19 +504,19 @@ def _agm_env(env: dict[str, str]) -> dict[str, str]:
 
     The final PATH is::
 
-        <test-prepended dirs> : <venv bin> : <guard shim dir> : <original PATH>
+        <test-prepended dirs> : <staged bin> : <guard shim dir> : <original PATH>
 
     where ``<original PATH>`` is the developer's pristine PATH
-    (``_ORIGINAL_PATH``) minus the venv bin and guard dir.  Test-prepended
+    (``_ORIGINAL_PATH``) minus the staged bin and guard dir.  Test-prepended
     directories (tmp dirs not present in the pristine PATH) are kept first so
     test-installed fakes shadow everything.  Ordering guarantees:
 
-    - A bare ``agm`` resolves to the isolated install's ``agm`` (in the venv
+    - A bare ``agm`` resolves to the checkout entry point (in the temporary
       ``bin/``), so a command AGM spawns for itself can never reach a
       developer's global install.  Which prefix AGM resolves for *itself* is
       independent of PATH: it comes from the path the binary was invoked
       through (see :func:`_install_agm_at_prefix`).
-    - A test-installed fake (in a prepended dir) shadows both the venv and the
+    - A test-installed fake (in a prepended dir) shadows both the entry point and the
       guard shims for that CLI, so the genuine fake is used.
     - A *forgotten* fake resolves to the guard shim (placed ahead of the
       original PATH), which fails loudly instead of silently invoking a real
@@ -522,13 +524,13 @@ def _agm_env(env: dict[str, str]) -> dict[str, str]:
     """
     out = dict(env)
     guard = str(_AGM_INSTALL["guard_dir"])
-    venv_bin = str(_AGM_INSTALL["bin_dir"])
+    bin_dir = str(_AGM_INSTALL["bin_dir"])
     original_set = {e for e in _ORIGINAL_PATH.split(":") if e}
     raw = out.get("PATH", "")
-    all_entries = [e for e in raw.split(":") if e and e != venv_bin and e != guard]
+    all_entries = [e for e in raw.split(":") if e and e != bin_dir and e != guard]
     test_entries = [e for e in all_entries if e not in original_set]
     orig_entries = [e for e in all_entries if e in original_set]
-    out["PATH"] = ":".join([*test_entries, venv_bin, guard, *orig_entries])
+    out["PATH"] = ":".join([*test_entries, bin_dir, guard, *orig_entries])
     return out
 
 
@@ -546,7 +548,7 @@ def run_agm(
     input: str | None = None,
     executable: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run an ``agm`` CLI command as a subprocess via the installed binary.
+    """Run an ``agm`` CLI command as a subprocess via the checkout entry point.
 
     Pass *executable* — see :func:`_install_agm_at_prefix` — to invoke that same
     binary through another prefix's entry point, which is what selects the
@@ -569,7 +571,7 @@ def run_agm(
 
 
 def _install_agm_at_prefix(prefix: Path) -> Path:
-    """Link the installed ``agm`` into *prefix*'s ``bin/`` and return that path.
+    """Link the staged ``agm`` into *prefix*'s ``bin/`` and return that path.
 
     This mirrors how a tool installer places an entry point: a link in the
     prefix's ``bin`` directory pointing at the real console script elsewhere.
@@ -1938,7 +1940,7 @@ class TestWorkspaceShellRegen:
     def test_regenerates_rc_files_in_existing_dir(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        # Point the cache at a tmp dir so the installed agm writes there.
+        # Point the cache at a tmp dir so the checkout CLI writes there.
         env["XDG_CACHE_HOME"] = str(tmp_path / "cache")
         shell_dir = _workspace_shell_path(env, "proj/regen").parent
         shell_dir.mkdir(parents=True)
@@ -9082,7 +9084,23 @@ def _write_development_package_pair(parent: Path) -> tuple[Path, Path]:
 
 
 class TestExecCommand:
-    """agm exec: run an AgL workflow program through the installed CLI."""
+    """agm exec: run an AgL workflow program through the checkout CLI."""
+
+    def test_exec_uses_checkout_with_ambient_python_package_and_stdlib(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        ambient = tmp_path / "ambient"
+        package = ambient / "agm"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text('raise RuntimeError("ambient AGM imported")\n')
+        env["PYTHONPATH"] = str(ambient)
+        write_installed_package(Path(env["HOME"]), "std")
+        program = tmp_path / "main.agl"
+        program.write_text("import std/math\nprogram def main() -> unit =\n  print((2).pow(3))\n")
+
+        result = run_agm(["exec", str(program)], env=env, cwd=tmp_path)
+
+        assert result.stdout.strip() == "8"
 
     def test_executes_program_file_and_prints_output(
         self, tmp_path: Path, env: dict[str, str]

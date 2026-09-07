@@ -8,12 +8,12 @@ The suite mirrors the architecture: AgL is tested pass by pass plus whole-progra
 - **Commands** are tested at the CLI boundary. Most tests invoke `agm` once against a fixture; the multi-command arcs a real user follows live in `tests/test_e2e.py`, where state written by one command is proven to be the state the next one reads.
 - **Domain and primitives** have unit tests for behavior and edge cases.
 
-Tests assert observable behavior, never exact help, warning, or error text. Real agents are never invoked: agent and shell boundaries are mocked, and the e2e harness installs AGM into a temporary venv with `uv` in offline mode. Tests survive concurrent and cross-worktree runs.
+Tests assert observable behavior, never exact help, warning, or error text. Real agents are never invoked: agent and shell boundaries are mocked. The e2e harness stages a temporary CLI entry point using the test interpreter and checkout source, with ambient Python imports disabled. It installs nothing and needs no package cache or second interpreter. Tests survive concurrent and cross-worktree runs.
 
 ## Gates and Invariants
 
 - **Package layering** — `tests/test_agl_dependencies.py` asserts the AgL import contract described in [agl/index.md](agl/index.md).
-- **Coverage** — 100% line and branch coverage of `src/` and of `stdlib/src/` (the standard library's Python companions ship in the wheel), measured through `sys.monitoring`, which is why the project runs on Python 3.14.
+- **Coverage** — 100% line and branch coverage of `src/` and of `stdlib/src/` (the standard library's Python companions ship in the wheel), measured through `sys.monitoring`, which is why `.python-version` pins the development interpreter to Python 3.14.
 - **Command coverage** — `tests/_command_coverage.py` walks the live Typer registry and records which leaf commands the e2e suite actually ran through the real binary, merging across xdist workers; it judges only whole-suite runs.
 - **Documented examples compile** — every ```` ```agl ```` fence under `docs/agl/reference/` runs through the static pipeline (`tests/test_agl_doc_snippets.py`); an `agl-check` marker declares a deliberately incomplete or rejected block.
 - **AgL layout style** — `tools/agl_style.py` is both formatter and checker for every `.agl` file, doc fence, and embedded snippet; `just agl-style` runs inside `just lint`.
@@ -32,7 +32,7 @@ The Emacs mode (`config/emacs/`) and micro rules (`config/micro/`) carry their o
 ## Code Entry Points
 
 - `tests/test_agl_*.py` — AgL pass suites; `tests/test_agl_e2e.py`, `test_agl_multifile.py` — acceptance suites over `tests/agl/`.
-- `tests/test_e2e.py` — the command e2e suite; its `run_agm` helper is the single seam that reaches the installed binary.
+- `tests/test_e2e.py` — the command e2e suite; its `run_agm` helper invokes the staged checkout CLI, also placed on PATH for nested AGM calls.
 - `tests/conftest.py`, `_agl_helpers.py`, `_process_helpers.py`, `_package_helpers.py`, `_git_helpers.py` — shared fixtures and fakes.
 - `tests/_command_coverage.py`, `tests/_durations.py` — the command-coverage and CPU-cost plugins.
 - `justfile` — the `test`, `test-budget`, `test-neutral-tmp`, `lint`, `typecheck`, `vulture`, `test-emacs`, `test-micro`, and `check` recipes.

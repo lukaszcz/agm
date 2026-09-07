@@ -72,7 +72,7 @@ from agm.packages.record import (
 from agm.packages.store import (
     canonical_package_store_path,
     package_store_path,
-    satisfying_from_store,
+    satisfying_installed_package,
     store_root,
 )
 from agm.packages.store import (
@@ -887,20 +887,16 @@ def _installed_satisfying(
         else []
     )
     active = state.index.packages.get(name)
-    selected = satisfying_from_store(
-        _transaction_installed_packages(state), name, requirement, active, extra_candidates=planned
-    )
-    if selected is None:
-        if active is None or active.editable is None:
-            return None
-        try:
-            editable = PackageInfo(active.editable, load_manifest(active.editable / "package.toml"))
-        except ManifestError as exc:
-            raise PackageInstallError(
-                f"cannot load active editable package {name!r}: {exc}"
-            ) from exc
-        return editable if editable.manifest.version >= requirement.version else None
-    return selected
+    try:
+        return satisfying_installed_package(
+            _transaction_installed_packages(state),
+            name,
+            requirement,
+            active,
+            extra_candidates=planned,
+        )
+    except ManifestError as exc:
+        raise PackageInstallError(f"cannot load active editable package {name!r}: {exc}") from exc
 
 
 def _fetch_archive_install(

@@ -15,7 +15,7 @@ from agm.packages.discipline import DisciplineError, validate_package_structure
 from agm.packages.install import PackageInstallError, installed_packages
 from agm.packages.manifest import DependencySpec, ManifestError, load_manifest
 from agm.packages.model import PackageInfo, is_std_package_name, unmet_std_requirement
-from agm.packages.store import satisfying_from_store
+from agm.packages.store import satisfying_installed_package
 
 
 class DependencyError(ValueError):
@@ -114,8 +114,10 @@ def _selected_satisfying(
     try:
         installed = _cached_installed_packages(state)
         active = _cached_activation_index(state).packages.get(name)
-        return satisfying_from_store(installed, name, requirement, active, extra_candidates=extra)
-    except (PackageActivationError, PackageInstallError) as exc:
+        return satisfying_installed_package(
+            installed, name, requirement, active, extra_candidates=extra
+        )
+    except (ManifestError, PackageActivationError, PackageInstallError) as exc:
         raise DependencyError(str(exc)) from exc
 
 

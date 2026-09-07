@@ -174,6 +174,29 @@ def satisfying_from_store(
     return select_satisfying(candidates, active)
 
 
+def satisfying_installed_package(
+    store_packages: Iterable[PackageInfo],
+    name: str,
+    requirement: DependencySpec,
+    active: VersionSelection | None,
+    *,
+    extra_candidates: Iterable[PackageInfo] = (),
+) -> PackageInfo | None:
+    """Select a satisfying stored package or the active editable source."""
+
+    selected = satisfying_from_store(
+        store_packages, name, requirement, active, extra_candidates=extra_candidates
+    )
+    if selected is not None or active is None or active.editable is None:
+        return selected
+    editable = PackageInfo(active.editable, load_manifest(active.editable / "package.toml"))
+    return (
+        editable
+        if editable.manifest.name == name and editable.manifest.version >= requirement.version
+        else None
+    )
+
+
 def is_package_store_root(
     root: Path,
     name: str,

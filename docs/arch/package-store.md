@@ -1,6 +1,6 @@
 # Package Store and Installation
 
-Installed packages live in a store under the AGM home ([config.md](config.md)). An *immutable* installation is a content-hashed tree copied into the store; an *editable* installation mounts a live source tree. An activation index selects one version of each package globally and caches the registered commands; project `[packages]` pins override that selection per invocation.
+Installed packages live in a store under the AGM home ([config.md](config.md)). An *immutable* installation is a content-hashed tree copied into the store; an *editable* installation mounts a live source tree. An activation index selects one version of each package globally and caches the registered commands; dependency installation and validation share the same store-or-editable selection rule. Project `[packages]` pins override that selection per invocation.
 
 ## Distribution
 

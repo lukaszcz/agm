@@ -257,6 +257,41 @@ def test_dependency_check_preserves_active_equal_precedence_build(tmp_path: Path
     assert [str(dependency.manifest.version) for dependency in resolved] == ["1.0.0+macos"]
 
 
+def test_dependency_check_accepts_an_active_editable_dependency(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    editable = _package(tmp_path / "bravo", "bravo", "1.0.0")
+    install_directory(editable.root, home=home, env={}, editable=True)
+    package = _package(tmp_path / "alpha", "alpha", "1.0.0", '\n[dependencies]\nbravo = "1"\n')
+
+    resolved = validate_dependencies(package, home=home, env={})
+
+    assert [dependency.root for dependency in resolved] == [editable.root]
+
+
+def test_dependency_check_rejects_changed_active_editable_identity(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    editable = _package(tmp_path / "bravo", "bravo", "1.0.0")
+    install_directory(editable.root, home=home, env={}, editable=True)
+    (editable.root / "package.toml").write_text(
+        '[package]\nname = "charlie"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    package = _package(tmp_path / "alpha", "alpha", "1.0.0", '\n[dependencies]\nbravo = "1"\n')
+
+    with pytest.raises(DependencyError):
+        validate_dependencies(package, home=home, env={})
+
+
+def test_dependency_check_wraps_an_invalid_active_editable_manifest(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    editable = _package(tmp_path / "bravo", "bravo", "1.0.0")
+    install_directory(editable.root, home=home, env={}, editable=True)
+    (editable.root / "package.toml").write_text("[package", encoding="utf-8")
+    package = _package(tmp_path / "alpha", "alpha", "1.0.0", '\n[dependencies]\nbravo = "1"\n')
+
+    with pytest.raises(DependencyError):
+        validate_dependencies(package, home=home, env={})
+
+
 def test_dependency_check_wraps_an_invalid_package_store(tmp_path: Path) -> None:
     home = tmp_path / "home"
     broken = home / ".agm" / "packages" / "broken" / "1.0.0"

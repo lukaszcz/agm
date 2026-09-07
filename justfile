@@ -105,7 +105,7 @@ test-micro:
 
 # Type-check with mypy
 typecheck:
-    MYPYPATH=src:stubs uv run mypy src/agm/ tools/ --strict --python-version 3.12
+    uv run mypy src/agm/ tools/
 
 # Run type-checking, linting, dead-code checks, tests
 #

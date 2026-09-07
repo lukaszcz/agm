@@ -12,6 +12,7 @@ Tests assert observable behavior, never exact help, warning, or error text. Impo
 
 ## Gates and Invariants
 
+- **Static typing** — `pyproject.toml` configures strict mypy checks and the local source and stub paths, shared by direct `uv run mypy` invocations and `just typecheck`.
 - **Package layering** — `tests/test_agl_dependencies.py` asserts the AgL import contract described in [agl/index.md](agl/index.md).
 - **Coverage** — 100% line and branch coverage of `src/` and of `stdlib/src/` (the standard library's Python companions ship in the wheel), measured through `sys.monitoring`, which is why `.python-version` pins the development interpreter to Python 3.14.
 - **Command coverage** — `tests/_command_coverage.py` walks the live Typer registry and records which leaf commands the e2e suite actually ran through the real binary, merging across xdist workers; it judges only whole-suite runs.

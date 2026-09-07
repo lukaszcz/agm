@@ -26,7 +26,7 @@ Use `just` for the standard workflow:
 - `just lint` runs `ruff check src/ tests/ stdlib/ tools/`, `ruff format --check src/ tests/ stdlib/ tools/`, and `just agl-style` (run `uv run ruff format src/ tests/ stdlib/ tools/` to fix formatting)
 - `just agl-style` checks the layout style of every AgL source, doc snippet, and embedded test snippet; `just agl-style-fix` rewrites them into it
 - `just test` runs the test suite
-- `just typecheck` runs strict `mypy` with `MYPYPATH=src:stubs`
+- `just typecheck` runs strict `mypy`
 - `just check` runs linting, tests, and type checking together
 - `just install` installs the `agm` CLI and copies default config into `~/.agm/`
 

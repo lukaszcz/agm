@@ -38,6 +38,8 @@ testpaths = ["tests"]
 addopts = ["--cov=agm", "--cov=stdlib/src", "--cov-branch", "--cov-fail-under=100"]
 
 [tool.mypy]
+# Keep direct invocations and the standard workflow on the same local stubs.
+mypy_path = ["$MYPY_CONFIG_FILE_DIR/src", "$MYPY_CONFIG_FILE_DIR/stubs"]
 # The toolchain runs on 3.14 -- coverage's sys.monitoring core needs it to
 # measure branches -- but analysis stays on the `requires-python` floor, so the
 # oldest interpreter the project claims to support keeps being checked.

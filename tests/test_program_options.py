@@ -1102,6 +1102,18 @@ class TestHostLookingProgramValues:
         assert protected == ["--message", "agm-program-value-1"]
         assert replacements == {"agm-program-value-1": "--dry-run"}
 
+    def test_protection_uses_a_placeholder_distinct_from_literal_arguments(self) -> None:
+        command = _command(_param("message", TextType()))
+
+        protected, replacements = protect_host_option_values(
+            ["--message", "--dry-run", "agm-program-value-1"],
+            command,
+            frozenset({"--dry-run"}),
+        )
+
+        assert protected == ["--message", "agm-program-value-1-1", "agm-program-value-1"]
+        assert replacements == {"agm-program-value-1-1": "--dry-run"}
+
     def test_protection_leaves_unselected_and_non_host_values_unchanged(self) -> None:
         command = _command(_param("message", TextType()))
 

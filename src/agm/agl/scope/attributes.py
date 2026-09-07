@@ -177,7 +177,7 @@ class _Recognizer:
                 self._extern_name(node, recognized)
             self._entries(
                 node.params,
-                node.attributes,
+                _zone_attribute(recognized),
                 target=(
                     AttributeTarget.PROGRAM_PARAMETER
                     if node.is_program
@@ -188,10 +188,10 @@ class _Recognizer:
                 owner_name=node.name,
             )
         elif isinstance(node, Lambda):
-            self._entries(node.params, (), target=AttributeTarget.PARAMETER)
+            self._entries(node.params, None, target=AttributeTarget.PARAMETER)
         elif isinstance(node, (RecordDef, ExceptionDef, VariantDef)):
-            self._check(node.attributes, _FIELD_OWNERS[type(node)], node.node_id)
-            self._entries(node.fields, node.attributes, target=AttributeTarget.FIELD)
+            recognized = self._check(node.attributes, _FIELD_OWNERS[type(node)], node.node_id)
+            self._entries(node.fields, _zone_attribute(recognized), target=AttributeTarget.FIELD)
         elif isinstance(node, (EnumDef, TypeAlias, LetDecl, VarDecl, BuiltinVarDecl)):
             self._check(node.attributes, _PLAIN_TARGETS[type(node)], node.node_id)
 
@@ -293,7 +293,7 @@ class _Recognizer:
     def _entries(
         self,
         entries: tuple[Param, ...],
-        owner_attributes: tuple[Attribute, ...],
+        owner_zone: ParamZone | None,
         *,
         target: AttributeTarget,
         form_default: ParamZone = ParamZone.STANDARD,
@@ -307,12 +307,11 @@ class _Recognizer:
         A classified method's receiver is positional-only regardless. Entries
         then have to run positional-only, standard, named-only.
         """
-        declared_default = _zone_attribute(owner_attributes)
-        list_default = form_default if declared_default is None else declared_default
+        list_default = form_default if owner_zone is None else owner_zone
         highest = _ZONE_SEQUENCE[0]
         for index, entry in enumerate(entries):
             recognized = self._check(entry.attributes, target, entry.node_id)
-            declared = _zone_attribute(entry.attributes)
+            declared = _zone_attribute(recognized)
             if has_receiver and index == 0:
                 if declared is not None:
                     raise AglScopeError(
@@ -413,10 +412,10 @@ def _check_arguments(attribute: Attribute, spec: AttributeSpec) -> str | None:
     return argument.value
 
 
-def _zone_attribute(attributes: tuple[Attribute, ...]) -> ParamZone | None:
-    """Return the zone the ``@arg-*`` attribute among *attributes* selects."""
-    for attribute in attributes:
-        zone = ZONE_ATTRIBUTES.get(attribute.name)
+def _zone_attribute(recognized: _Recognized) -> ParamZone | None:
+    """Return the zone the recognized ``@arg-*`` attribute selects."""
+    for name in recognized.nodes:
+        zone = ZONE_ATTRIBUTES.get(name)
         if zone is not None:
             return zone
     return None

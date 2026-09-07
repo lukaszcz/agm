@@ -521,13 +521,19 @@ def protect_host_option_values(
     protected = program_command.value_token_indexes(tokens)
     replacements: dict[str, str] = {}
     parsed = list(tokens)
+    unavailable = set(tokens)
     for index in protected:
         value = tokens[index]
         if value.partition("=")[0] not in host_flags:
             continue
         replacement = f"agm-program-value-{index}"
+        suffix = 1
+        while replacement in unavailable:
+            replacement = f"agm-program-value-{index}-{suffix}"
+            suffix += 1
         parsed[index] = replacement
         replacements[replacement] = value
+        unavailable.add(replacement)
     return parsed, replacements
 
 

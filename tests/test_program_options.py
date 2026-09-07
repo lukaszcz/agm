@@ -40,6 +40,7 @@ from agm.cli_support.program_options import (
     exec_program_name,
     program_help_requested,
     project_option,
+    protect_host_option_values,
     split_exec_tail,
 )
 from tests._agl_helpers import next_decl_id
@@ -1055,6 +1056,67 @@ class TestProgramCommandFor:
         from agm.cli_support.program_options import program_command_for
 
         assert program_command_for(None) is None
+
+
+class TestHostLookingProgramValues:
+    """A host must not consume tokens that a program option owns as values."""
+
+    def test_finds_every_separate_value_form(self) -> None:
+        command = _command(
+            _param("verbose", BoolType()),
+            _param("message", TextType()),
+            _param("region", _option_type(TextType())),
+            _param("tag", TextType(), short="t"),
+        )
+        tokens = [
+            "word",
+            "--verbose",
+            "--message",
+            "--dry-run",
+            "--region",
+            "--no-stdlib",
+            "--no-region",
+            "-t",
+            "--log",
+            "-tagm",
+            "--message=inline",
+            "--",
+            "--message",
+        ]
+
+        assert command.value_token_indexes(tokens) == frozenset({3, 5, 8})
+
+    def test_incomplete_and_unknown_short_options_claim_no_value(self) -> None:
+        command = _command(_param("message", TextType()), _param("tag", TextType(), short="t"))
+
+        assert command.value_token_indexes(["--message"]) == frozenset()
+        assert command.value_token_indexes(["-x", "-t"]) == frozenset()
+
+    def test_protection_only_rewrites_host_spelled_values(self) -> None:
+        command = _command(_param("message", TextType()))
+
+        protected, replacements = protect_host_option_values(
+            ["--message", "--dry-run"], command, frozenset({"--dry-run"})
+        )
+
+        assert protected == ["--message", "agm-program-value-1"]
+        assert replacements == {"agm-program-value-1": "--dry-run"}
+
+    def test_protection_leaves_unselected_and_non_host_values_unchanged(self) -> None:
+        command = _command(_param("message", TextType()))
+
+        assert protect_host_option_values(
+            ["--message", "value"], command, frozenset({"--dry-run"})
+        ) == (
+            ["--message", "value"],
+            {},
+        )
+        assert protect_host_option_values(
+            ["--message", "--dry-run"], None, frozenset({"--dry-run"})
+        ) == (
+            ["--message", "--dry-run"],
+            {},
+        )
 
 
 class TestExecProgramName:

@@ -9461,6 +9461,11 @@ class TestProgramParameterValidation:
         sig = checked.function_signatures["main"]
         assert [(p.name, p.kind) for p in sig.params] == [("timeout", ParamZone.POSITIONAL_ONLY)]
 
+    def test_opt_name_replaces_the_declared_name_in_the_engine_namespace(self) -> None:
+        checked = accept_type('program def main(@opt-name("mode") strict-json: text) -> unit = ()')
+
+        assert checked.function_signatures["main"].params[0].name == "strict-json"
+
     def test_required_after_defaulted_ordering_fires_for_program_parameters(self) -> None:
         err = reject_type("program def main(@arg-pos a: int = 1, @arg-pos b: int) -> unit = ()")
         assert "'b' has no default but follows a defaulted positional parameter" in str(err)

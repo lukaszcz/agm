@@ -192,9 +192,23 @@ class RegisteredProgramCommand(TyperCommand):
         program — one ``--`` is the program's end-of-options marker, exactly
         as it is for ``agm exec``.
         """
-        from agm.cli_support.program_options import retain_end_of_options
+        from agm.cli_support.program_options import (
+            program_command_for,
+            protect_host_option_values,
+            retain_end_of_options,
+        )
 
-        return super().parse_args(ctx, retain_end_of_options(args))
+        program_command = program_command_for(self._discover_program())
+        host_flags = frozenset(
+            flag
+            for param in self.params
+            if isinstance(param, TyperOption)
+            for flag in (*param.opts, *param.secondary_opts)
+        )
+        protected, replacements = protect_host_option_values(args, program_command, host_flags)
+        remaining = super().parse_args(ctx, retain_end_of_options(protected))
+        ctx.args[:] = [replacements.get(token, token) for token in ctx.args]
+        return [replacements.get(token, token) for token in remaining]
 
     def _discover_program(self) -> "ProgramDeclInfo | None":
         """Discover the referenced ``program def``'s declaration, or ``None``."""

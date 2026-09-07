@@ -142,6 +142,18 @@ class TestExecArgsParsing:
         args = recorded_runs[0]
         assert getattr(args, "argument_tokens") == ["--k", "v"]
 
+    def test_exec_preserves_a_host_looking_program_option_value(
+        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    ) -> None:
+        """A selected program, not the outer command, owns an option's value token."""
+        agl_file = tmp_path / "test.agl"
+        write_file_program(agl_file, "program def main(msg: text) -> unit = ()\n")
+
+        result = invoke(runner, ["exec", "--no-stdlib", str(agl_file), "--msg", "--dry-run"])
+
+        assert result.exit_code == 0
+        assert getattr(recorded_runs[0], "argument_tokens") == ["--msg", "--dry-run"]
+
     @pytest.mark.parametrize(
         ("source", "program_tokens"),
         (

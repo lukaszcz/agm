@@ -121,6 +121,7 @@ __all__ = [
     "option_some_raw",
     "program_command_for",
     "program_help_requested",
+    "protect_host_option_values",
     "project_option",
     "render_program_help",
     "retain_end_of_options",
@@ -503,6 +504,31 @@ def split_exec_tail(
         file=None if index is None else tokens[index],
         tokens=tuple(token for position, token in enumerate(tokens) if position not in consumed),
     )
+
+
+def protect_host_option_values(
+    tokens: Sequence[str], program_command: ProgramCommand | None, host_flags: frozenset[str]
+) -> tuple[list[str], dict[str, str]]:
+    """Hide host-looking values until an outer Click command has parsed.
+
+    Click otherwise consumes a known host flag even when a selected program's
+    value-taking option owns that following token. Replacing just those
+    tokens with unique non-options preserves ordinary parsing, after which a
+    host restores the original program tail.
+    """
+    if program_command is None:
+        return list(tokens), {}
+    protected = program_command.value_token_indexes(tokens)
+    replacements: dict[str, str] = {}
+    parsed = list(tokens)
+    for index in protected:
+        value = tokens[index]
+        if value.partition("=")[0] not in host_flags:
+            continue
+        replacement = f"agm-program-value-{index}"
+        parsed[index] = replacement
+        replacements[replacement] = value
+    return parsed, replacements
 
 
 @dataclass(frozen=True, slots=True)
@@ -920,6 +946,59 @@ class ProgramCommand:
             elif positive and not positional_overrides_environment:
                 named[param.name] = _positive_raw(projected, flag, cast(str, positive[0]))
         return ProgramArguments(positional=positional, named=named)
+
+    def value_token_indexes(self, tokens: Sequence[str]) -> frozenset[int]:
+        """Return indexes that this program reads as separate option values.
+
+        Hosts use this before their outer Click command runs. A token in one
+        of these positions belongs to the program even when it happens to
+        spell a host option, so the outer command must leave it in the raw
+        tail. Inline long and attached short values are part of their option
+        token and therefore have no separate index to report.
+        """
+        long_options: dict[str, bool] = {}
+        short_options: dict[str, bool] = {}
+        for param, projected in self.options:
+            long_options[projected.flags[0]] = projected.takes_value
+            for flag in projected.negative_flags:
+                long_options[flag] = False
+            short = _short_flag(param)
+            if short is not None:
+                short_options[short] = projected.takes_value
+
+        values: set[int] = set()
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            if token == END_OF_OPTIONS:
+                break
+            if token.startswith("--"):
+                flag, separator, _value = token.partition("=")
+                if separator or not long_options.get(flag, False):
+                    index += 1
+                    continue
+                if index + 1 < len(tokens):
+                    values.add(index + 1)
+                    index += 2
+                    continue
+            elif token.startswith("-") and token != "-":
+                short_group = token[1:]
+                for offset, short in enumerate(short_group):
+                    takes_value = short_options.get(f"-{short}")
+                    if takes_value is None:
+                        continue
+                    if takes_value and offset + 1 == len(short_group) and index + 1 < len(tokens):
+                        values.add(index + 1)
+                        index += 2
+                        break
+                    if takes_value:
+                        index += 1
+                        break
+                else:
+                    index += 1
+                continue
+            index += 1
+        return frozenset(values)
 
     @staticmethod
     def _from_commandline(ctx: click.Context, dest: str) -> bool:

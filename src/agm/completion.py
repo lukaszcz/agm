@@ -5,13 +5,14 @@ from __future__ import annotations
 import os
 import subprocess
 from collections.abc import Callable, Sequence
+from copy import copy
 from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, ParamSpec, TypeVar, cast
+from typing import TYPE_CHECKING, ParamSpec, Protocol, TypeVar, cast
 
 import click
 from click.shell_completion import CompletionItem
-from typer.core import TyperCommand
+from typer.core import TyperCommand, TyperOption
 
 import agm.vcs.git as git_helpers
 from agm.config.context import current_config_context
@@ -31,6 +32,12 @@ from agm.project.layout import (
 
 _P = ParamSpec("_P")
 _CandidateT = TypeVar("_CandidateT")
+
+
+class _ContextWithMetadata(Protocol):
+    """The Click context fields AGM uses beyond Typer's narrow stub."""
+
+    meta: dict[str, object]
 
 
 def _completes_quietly(
@@ -506,16 +513,64 @@ class ExecCommand(TyperCommand):
     """
 
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
-        """Parse *args*, keeping the host's end-of-options marker in the tail.
+        """Parse *args*, preserving program values and the host marker in the tail.
 
         Click removes the marker as it parses, so it is doubled first: see
         ``program_options.retain_end_of_options``, whose counterpart
         ``split_exec_tail`` consumes the survivor only when it is what names
         the FILE, and otherwise forwards it to the program.
         """
-        from agm.cli_support.program_options import retain_end_of_options
+        from agm.cli_support.program_discovery import ExecProgramDiscovery
+        from agm.cli_support.program_options import (
+            program_command_for,
+            protect_host_option_values,
+            retain_end_of_options,
+            split_exec_tail,
+        )
 
-        return super().parse_args(ctx, retain_end_of_options(args))
+        preview = copy(self)
+        preview.params = [param for param in self.params if param.name != "_dry_run"]
+        preview_ctx = click.Context(
+            cast(click.Command, preview),
+            info_name=ctx.info_name,
+            parent=ctx.parent,
+            allow_extra_args=True,
+            ignore_unknown_options=True,
+            help_option_names=[],
+            resilient_parsing=True,
+        )
+        TyperCommand.parse_args(preview, preview_ctx, retain_end_of_options(args))
+        preview_params = cast(dict[str, object], preview_ctx.params)
+        raw_command = preview_params.get("command")
+        raw_program = preview_params.get("program")
+        discovery = ExecProgramDiscovery(
+            command=raw_command if isinstance(raw_command, str) else None,
+            requested_program=raw_program if isinstance(raw_program, str) else None,
+            module_paths=_string_list(preview_params.get("module_paths")),
+            no_stdlib=bool(preview_params.get("no_stdlib")),
+        )
+        selected = split_exec_tail(
+            _string_list(preview_params.get("tail")),
+            program_command_for_file=(
+                None if isinstance(raw_command, str) else discovery.command_for_file
+            ),
+        )
+        program_command = program_command_for(discovery.selection(selected.file).selected)
+        host_flags = frozenset(
+            flag
+            for param in self.params
+            if isinstance(param, TyperOption)
+            for flag in (*param.opts, *param.secondary_opts)
+        )
+        protected, replacements = protect_host_option_values(args, program_command, host_flags)
+        remaining = super().parse_args(ctx, retain_end_of_options(protected))
+        ctx.args[:] = [replacements.get(token, token) for token in ctx.args]
+        parsed_params = cast(dict[str, object], ctx.params)
+        tail = _string_list(parsed_params.get("tail"))
+        if tail:
+            parsed_params["tail"] = tuple(replacements.get(token, token) for token in tail)
+        cast(_ContextWithMetadata, ctx).meta["exec_program_discovery"] = discovery
+        return [replacements.get(token, token) for token in remaining]
 
     def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem]:
         base = super().shell_complete(ctx, incomplete)

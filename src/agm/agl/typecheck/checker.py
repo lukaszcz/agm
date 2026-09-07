@@ -905,9 +905,10 @@ class _Checker:
         for param, spec in zip(node.params, sig.params, strict=True):
             self._reject_undecodable_boundary_type(spec.type, param.span)
             zone = self._resolved.attributes.param_zones[param.node_id]
-            if zone != ParamZone.POSITIONAL_ONLY and param.name in ENGINE_KEY_NAMES:
+            external_name = self._resolved.attributes.program_options[param.node_id].name
+            if zone != ParamZone.POSITIONAL_ONLY and external_name in ENGINE_KEY_NAMES:
                 raise AglTypeError(
-                    f"Program parameter '{param.name}' conflicts with an engine setting name.",
+                    f"Program parameter '{external_name}' conflicts with an engine setting name.",
                     span=param.span,
                 )
 

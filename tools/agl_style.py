@@ -100,6 +100,7 @@ class Structure:
 
     regions: tuple[Region, ...]
     program_lines: frozenset[int]  # 0-based lines starting a `program def`
+    attribute_lines: frozenset[int]  # 0-based lines belonging to an attribute
 
 
 def _nest(markers: Sequence[tuple[int, bool]], start: int) -> tuple[list[Region], int]:
@@ -127,18 +128,25 @@ def structure_of(source: str) -> Structure | None:
         return None
     markers: list[tuple[int, bool]] = []
     program_lines: list[int] = []
+    attribute_lines: set[int] = set()
+    attribute_start: int | None = None
     previous: str | None = None
     for tok in tokens:
         line = tok.line
         if line is None:  # pragma: no cover - only the synthetic layout tokens
             continue
+        if tok.type == "AT":
+            attribute_start = line - 1
+        elif attribute_start is not None and tok.type == "_NEWLINE":
+            attribute_lines.update(range(attribute_start, line))
+            attribute_start = None
         if tok.type in {"SCOPE", "END"}:
             markers.append((line - 1, tok.type == "SCOPE"))
         elif tok.type == "program" and (previous is None or previous in _ITEM_START_TYPES):
             program_lines.append(line - 1)
         previous = tok.type
     regions, _ = _nest(markers, 0)
-    return Structure(tuple(regions), frozenset(program_lines))
+    return Structure(tuple(regions), frozenset(program_lines), frozenset(attribute_lines))
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +230,7 @@ def _header_lines(regions: Iterable[Region]) -> Iterator[int]:
         yield from _header_lines(region.children)
 
 
-def _prefix_block_start(lines: list[str], index: int) -> int:
+def _prefix_block_start(lines: list[str], index: int, attribute_lines: frozenset[int]) -> int:
     """The first line of the prefix documenting *index*, or *index* itself.
 
     A declaration's own lines run back over the comment block above it and over
@@ -231,17 +239,21 @@ def _prefix_block_start(lines: list[str], index: int) -> int:
     """
     start = index
     indent = _indent_of(lines[index])
-    while start > 0 and _indent_of(lines[start - 1]) == indent:
-        previous = lines[start - 1]
-        if not (_is_comment(previous) or _is_attribute(previous)):
+    while start > 0:
+        previous_index = start - 1
+        previous = lines[previous_index]
+        if previous_index in attribute_lines:
+            start -= 1
+            continue
+        if _indent_of(previous) != indent or not (_is_comment(previous) or _is_attribute(previous)):
             break
         start -= 1
     return start
 
 
-def _blank_before(lines: list[str], index: int) -> int | None:
+def _blank_before(lines: list[str], index: int, attribute_lines: frozenset[int]) -> int | None:
     """Where a blank line is owed before *index*, or None when one is not."""
-    target = _prefix_block_start(lines, index)
+    target = _prefix_block_start(lines, index, attribute_lines)
     if target == 0 or _is_blank(lines[target - 1]):
         return None
     return target
@@ -260,14 +272,14 @@ def _apply_blank_lines(lines: list[str], structure: Structure) -> list[Violation
         wanted[following] = ("end-blank", "a blank line belongs after a region's `end`")
 
     for index in sorted(headers):
-        target = _blank_before(lines, index)
+        target = _blank_before(lines, index, structure.attribute_lines)
         if target is not None:
             wanted.setdefault(
                 target, ("scope-blank", "a blank line belongs before a `scope` header")
             )
 
     for index in sorted(structure.program_lines):
-        target = _blank_before(lines, index)
+        target = _blank_before(lines, index, structure.attribute_lines)
         if target is not None:
             wanted.setdefault(
                 target, ("program-blank", "a blank line belongs before a `program def`")

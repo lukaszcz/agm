@@ -6,7 +6,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, NoReturn, TypedDict
+from typing import TYPE_CHECKING, NoReturn, Protocol, TypedDict, cast
 
 import typer
 
@@ -96,6 +96,14 @@ _RUN_CONTEXT_SETTINGS: dict[str, bool | list[str]] = {
     "allow_extra_args": True,
     "ignore_unknown_options": True,
 }
+
+
+class _ContextWithMetadata(Protocol):
+    """The Click context metadata AGM stores for one invocation."""
+
+    meta: dict[str, object]
+
+
 _LOOP_CONTEXT_SETTINGS: dict[str, bool | list[str]] = {
     **_RUN_CONTEXT_SETTINGS,
     "allow_interspersed_args": False,
@@ -938,6 +946,7 @@ def _exec_print_help(
 
 @app.command(name="exec", context_settings=_RUN_CONTEXT_SETTINGS, cls=completion.ExecCommand)
 def exec_cmd(
+    ctx: typer.Context,
     tail: list[str] | None = typer.Argument(
         None,
         metavar="FILE",
@@ -1057,11 +1066,17 @@ def exec_cmd(
     # One discovery for the whole invocation: the tail split probes candidate
     # FILE tokens with it, and the help surface below then asks about the
     # token it settled on, without paying for a second static pipeline pass.
-    discovery = ExecProgramDiscovery(
-        command=command,
-        requested_program=program,
-        module_paths=module_paths,
-        no_stdlib=no_stdlib,
+    metadata = cast(_ContextWithMetadata, ctx).meta
+    cached_discovery = metadata.pop("exec_program_discovery", None)
+    discovery = (
+        cached_discovery
+        if isinstance(cached_discovery, ExecProgramDiscovery)
+        else ExecProgramDiscovery(
+            command=command,
+            requested_program=program,
+            module_paths=module_paths,
+            no_stdlib=no_stdlib,
+        )
     )
     selected = split_exec_tail(
         tail or (),

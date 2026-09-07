@@ -183,6 +183,35 @@ def test_registered_command_treats_only_standalone_dry_run_as_global(
     assert calls == [(["--level=--dry-run"], False), (["--level", "strict"], True)]
 
 
+def test_registered_command_preserves_a_host_looking_program_option_value(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import agm.commands.exec_program as exec_program
+    from agm.cli_support.program_discovery import discover_program_declarations_from_source
+
+    context = ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
+    index = ActivationIndex(
+        commands={"tools lint": CommandRegistration("tools", "tools/lint::main")}
+    )
+    monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
+    monkeypatch.setattr(dispatch, "load_command_index", lambda **_: index)
+    (program,) = discover_program_declarations_from_source(
+        "program def main(message: text) -> unit = ()"
+    )
+    monkeypatch.setattr(exec_program, "registered_program_declaration", lambda *_a, **_k: program)
+    calls: list[list[str]] = []
+
+    def run_registered(_program: str, argument_tokens: list[str], **_kwargs: object) -> None:
+        calls.append(argument_tokens)
+
+    monkeypatch.setattr(exec_program, "run_registered", run_registered)
+
+    result = invoke(CliRunner(), ["tools", "lint", "--message", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert calls == [["--message", "--dry-run"]]
+
+
 def test_registered_command_help_does_not_dispatch_program(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

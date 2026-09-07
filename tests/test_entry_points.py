@@ -87,7 +87,9 @@ class TestTmuxLayoutRun:
             return "@1\n"
 
         monkeypatch.setattr(tmux_layout, "require_capture", fake_require_capture)
-        monkeypatch.setattr(tmux_layout, "require_success", lambda cmd: commands.append(cmd))
+        monkeypatch.setattr(
+            tmux_layout, "require_success", lambda cmd, **_kwargs: commands.append(cmd)
+        )
 
         tmux_layout_cmd.run(TmuxLayoutArgs(pane_count="4", window_id="@1"))
 

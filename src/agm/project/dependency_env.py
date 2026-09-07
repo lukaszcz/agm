@@ -10,6 +10,7 @@ import tomlkit
 import agm.vcs.git as git_helpers
 from agm.core.fs import exists, is_dir, is_file, iterdir, mkdir, read_text, rglob, write_text
 from agm.core.toml import load_toml_file, set_toml_table_value, toml_dict
+from agm.project.dependency_checkout import find_main_dep_repo
 from agm.project.layout import (
     current_workspace,
     default_worktrees_dir,
@@ -158,13 +159,10 @@ def _dependency_checkout_name(dep_dir: Path, repo_path: Path) -> str:
 
 
 def _main_dependency_checkout_name(dep_dir: Path) -> str | None:
-    repos = [
-        (*dependency_repo_sort_key(dep_dir, repo_path), repo_path)
-        for repo_path in dependency_repo_paths(dep_dir)
-    ]
-    if not repos:
+    repo_path = find_main_dep_repo(dep_dir)
+    if repo_path is None:
         return None
-    return _dependency_checkout_name(dep_dir, sorted(repos)[0][2])
+    return _dependency_checkout_name(dep_dir, repo_path)
 
 
 def _dependency_config_checkout_name(dep_dir: Path, config_branch: str) -> str | None:

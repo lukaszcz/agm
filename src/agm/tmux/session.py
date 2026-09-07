@@ -157,6 +157,8 @@ def create_tmux_session(
     if create_detached_session:
         if dry_run.enabled():
             planned_session = session_name or "0"
+            planned_window = f"{planned_session}:^"
+            planned_pane = f"{planned_window}.{{top-left}}"
             dry_run.print_command(
                 [
                     "tmux",
@@ -180,16 +182,16 @@ def create_tmux_session(
                         "-d",
                         "-h",
                         "-t",
-                        f"{planned_session}:0",
+                        planned_window,
                         "-c",
                         str(current),
                         *([] if shell_command is None else [shell_command]),
                     ],
                     cwd=current,
                 )
-            dry_run.print_operation("tmux-layout", f"{planned_session}:0 {pane_total} panes")
+            dry_run.print_operation("tmux-layout", f"{planned_window} {pane_total} panes")
             dry_run.print_command(
-                ["tmux", "select-pane", "-t", f"{planned_session}:0.0"],
+                ["tmux", "select-pane", "-t", planned_pane],
                 cwd=current,
             )
             if switch_to_session:
@@ -223,28 +225,10 @@ def create_tmux_session(
             raise SystemExit(returncode)
 
         target_session = stdout.strip()
-        for _ in range(1, pane_total):
-            status = _tmux_foreground(
-                [
-                    "tmux",
-                    "split-window",
-                    "-d",
-                    "-h",
-                    "-t",
-                    f"{target_session}:0",
-                    "-c",
-                    str(current),
-                    *([] if shell_command is None else [shell_command]),
-                ],
-                cwd=current,
-                env=resolved_env,
-            )
-            if status != 0:
-                raise SystemExit(status)
 
-        def _display(format_string: str) -> str:
+        def _display(format_string: str, *, target: str = target_session) -> str:
             rc, out, err = _tmux_capture(
-                ["tmux", "display-message", "-p", "-t", f"{target_session}:0", format_string],
+                ["tmux", "display-message", "-p", "-t", target, format_string],
                 cwd=current,
                 env=resolved_env,
             )
@@ -256,14 +240,37 @@ def create_tmux_session(
                 raise SystemExit(rc)
             return out.strip()
 
+        target_window = _display("#{window_id}")
+        target_pane = _display("#{pane_id}", target=target_window)
+        for _ in range(1, pane_total):
+            status = _tmux_foreground(
+                [
+                    "tmux",
+                    "split-window",
+                    "-d",
+                    "-h",
+                    "-t",
+                    target_window,
+                    "-c",
+                    str(current),
+                    *([] if shell_command is None else [shell_command]),
+                ],
+                cwd=current,
+                env=resolved_env,
+            )
+            if status != 0:
+                raise SystemExit(status)
+
         apply_layout(
             pane_count=pane_total,
-            window_id=_display("#{window_id}"),
-            width=int(_display("#{window_width}")),
-            height=int(_display("#{window_height}")),
+            window_id=target_window,
+            width=int(_display("#{window_width}", target=target_window)),
+            height=int(_display("#{window_height}", target=target_window)),
+            cwd=current,
+            env=resolved_env,
         )
         status = _tmux_foreground(
-            ["tmux", "select-pane", "-t", f"{target_session}:0.0"],
+            ["tmux", "select-pane", "-t", target_pane],
             cwd=current,
             env=resolved_env,
         )
@@ -298,7 +305,7 @@ def create_tmux_session(
         args.extend([";", "split-window", "-d", "-h", "-c", str(current)])
         if shell_command is not None:
             args.append(shell_command)
-    args.extend([";", "run-shell", layout_command, ";", "select-pane", "-t", "0"])
+    args.extend([";", "run-shell", layout_command])
     if dry_run.enabled():
         dry_run.print_command(args, cwd=current)
         return None
@@ -316,7 +323,7 @@ def queue_shell_command_in_session(
 
     current = Path.cwd() if cwd is None else cwd.resolve()
     resolved_env = clone_env(env)
-    target = f"{session_name}:0.0"
+    target = f"{session_name}:^.{{top-left}}"
     if dry_run.enabled():
         dry_run.print_command(
             ["tmux", "send-keys", "-t", target, shell_command, "C-m"],

@@ -1167,6 +1167,14 @@ class TestFindFirstGitRepo:
 
         assert find_first_git_repo(tmp_path) == nested
 
+    def test_accepts_a_relative_parent_directory(
+        self, tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        nested = init_repo(tmp_path / "deps" / "repo", env)
+        monkeypatch.chdir(tmp_path)
+
+        assert find_first_git_repo(Path("deps")) == nested
+
     def test_exits_when_no_git_repo_found(self, tmp_path: Path) -> None:
         (tmp_path / "notarepo").mkdir()
         with pytest.raises(SystemExit) as exc_info:

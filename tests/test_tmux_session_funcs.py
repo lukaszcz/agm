@@ -312,7 +312,7 @@ class TestQueueCommandInSession:
             env={},
         )
         assert "send-keys" in calls[0]
-        assert "s1:0.0" in calls[0]
+        assert "s1:^.{top-left}" in calls[0]
 
     def test_live_raises_on_failure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(session_module, "run_foreground", lambda *a, **kw: 5)
@@ -552,6 +552,44 @@ class TestCreateTmuxSessionLive:
         )
         assert result == "mysession"
         assert any("new-session" in " ".join(c) for c in calls)
+
+    def test_detached_live_targets_created_window_and_pane_ids(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[list[str]] = []
+
+        def fake_capture(cmd: list[str], **kwargs: Any) -> tuple[int, str, str]:
+            calls.append(list(cmd))
+            if cmd[1] == "new-session":
+                return 0, "mysession\n", ""
+            values = {
+                "#{window_id}": "@9\n",
+                "#{pane_id}": "%17\n",
+                "#{window_width}": "200\n",
+                "#{window_height}": "50\n",
+            }
+            return 0, values[cmd[-1]], ""
+
+        def fake_foreground(cmd: list[str], **kwargs: Any) -> int:
+            calls.append(list(cmd))
+            return 0
+
+        monkeypatch.setattr(session_module, "run_capture", fake_capture)
+        monkeypatch.setattr(session_module, "run_foreground", fake_foreground)
+        monkeypatch.setattr(session_module, "apply_layout", lambda **kw: None)
+
+        create_tmux_session(
+            detach=True,
+            pane_count="2",
+            session_name="mysession",
+            cwd=tmp_path,
+            env={},
+        )
+
+        split = next(command for command in calls if command[1] == "split-window")
+        select = next(command for command in calls if command[1] == "select-pane")
+        assert split[split.index("-t") + 1] == "@9"
+        assert select[select.index("-t") + 1] == "%17"
 
     def test_detached_live_raises_on_new_session_failure(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

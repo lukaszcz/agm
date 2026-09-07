@@ -19,6 +19,7 @@ from agm.project.dependency_env import (
     dep_env_var_name,
     ensure_dependency_configs_for_branch,
     load_dependency_toml_env,
+    read_deps_table,
     update_all_project_dependency_configs,
     update_dependency_config,
     update_dependency_configs_for_branch,
@@ -1235,70 +1236,98 @@ class TestUpdateAllProjectDependencyConfigs:
 
 class TestDependencyConfigCheckoutNameFallback:
     def test_falls_back_to_main_when_branch_path_not_git_repo(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         dep_dir = tmp_path / "dep"
-        dep_dir.mkdir()
         main_dir = dep_dir / "main"
-        main_dir.mkdir()
-        (main_dir / ".git").mkdir()  # .git marker so dependency_repo_paths finds it
-        feat_dir = dep_dir / "feat"
-        feat_dir.mkdir()
-        # main is a git repo, feat is not
-        monkeypatch.setattr(
-            dep_env_module.git_helpers,
-            "is_git_repo",
-            lambda p: p == main_dir,
+        subprocess.run(
+            ["git", "init", "-b", "main", str(main_dir)], env=env, check=True, capture_output=True
         )
+        (dep_dir / "feat").mkdir()
         result = _dependency_config_checkout_name(dep_dir, "feat")
         assert result == "main"
 
-    def test_returns_none_when_no_repos(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_returns_none_when_no_repos(self, tmp_path: Path) -> None:
         dep_dir = tmp_path / "dep"
         dep_dir.mkdir()
-        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda p: False)
         result = _dependency_config_checkout_name(dep_dir, "feat")
         assert result is None
 
 
 class TestMainDependencyCheckoutDepth:
+    def test_dependency_root_can_be_the_main_checkout(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project_dir = tmp_path / "project"
+        (project_dir / "repo").mkdir(parents=True)
+        config_dir = project_dir / "config"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text('[deps]\nlib = "."\n', encoding="utf-8")
+        dep_dir = project_dir / "deps" / "lib"
+        subprocess.run(
+            ["git", "init", "-b", "main", str(dep_dir)], env=env, check=True, capture_output=True
+        )
+
+        ensure_dependency_configs_for_branch(project_dir=project_dir, branch="unknown")
+
+        assert read_deps_table(config_dir / "unknown" / "config.toml") == {"lib": "."}
+
+    def test_linked_worktree_does_not_outrank_main_checkout(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project_dir = tmp_path / "project"
+        (project_dir / "repo").mkdir(parents=True)
+        config_dir = project_dir / "config"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text('[deps]\nlib = "main"\n', encoding="utf-8")
+        dep_dir = project_dir / "deps" / "lib"
+        main_dir = dep_dir / "main"
+        subprocess.run(
+            ["git", "init", "-b", "main", str(main_dir)], env=env, check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "initial"],
+            cwd=main_dir,
+            env=env,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "worktree", "add", "-b", "feature", str(dep_dir / "aaa-feature")],
+            cwd=main_dir,
+            env=env,
+            check=True,
+            capture_output=True,
+        )
+
+        ensure_dependency_configs_for_branch(project_dir=project_dir, branch="unknown")
+
+        assert read_deps_table(config_dir / "unknown" / "config.toml") == {"lib": "main"}
+
     def test_shallowest_checkout_wins_over_a_deeper_one(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """Depth beats name: a nested checkout never outranks a top-level one."""
         dep_dir = tmp_path / "dep"
-        dep_dir.mkdir()
         shallow = dep_dir / "zzz"
-        shallow.mkdir()
-        (shallow / ".git").mkdir()
         deep = dep_dir / "aaa" / "nested"
-        deep.mkdir(parents=True)
-        (deep / ".git").mkdir()
-
-        monkeypatch.setattr(
-            dep_env_module.git_helpers,
-            "is_git_repo",
-            lambda p: p in {shallow, deep},
+        subprocess.run(
+            ["git", "init", "-b", "main", str(shallow)], env=env, check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "init", "-b", "main", str(deep)], env=env, check=True, capture_output=True
         )
 
         # "unknown" has no checkout of its own, so the main checkout is chosen.
         assert _dependency_config_checkout_name(dep_dir, "unknown") == "zzz"
 
     def test_deeper_checkout_is_used_when_it_is_the_only_one(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         dep_dir = tmp_path / "dep"
-        dep_dir.mkdir()
         deep = dep_dir / "aaa" / "nested"
-        deep.mkdir(parents=True)
-        (deep / ".git").mkdir()
-
-        monkeypatch.setattr(
-            dep_env_module.git_helpers,
-            "is_git_repo",
-            lambda p: p == deep,
+        subprocess.run(
+            ["git", "init", "-b", "main", str(deep)], env=env, check=True, capture_output=True
         )
 
         assert _dependency_config_checkout_name(dep_dir, "unknown") == "aaa/nested"
@@ -1364,28 +1393,20 @@ class TestUpdateMainDependencyConfigsWithExistingBranch:
 
 class TestDependencyConfigCheckoutNameNotGitRepo:
     def test_falls_back_to_main_when_branch_path_is_not_git_repo(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """_dependency_config_checkout_name falls back to _main_dependency_checkout_name
         when branch_path doesn't have .git or isn't a git repo."""
         dep_dir = tmp_path / "dep"
-        dep_dir.mkdir()
         feat_dir = dep_dir / "feat"
-        feat_dir.mkdir()
         main_subdir = dep_dir / "main"
-        main_subdir.mkdir()
-        (main_subdir / ".git").mkdir()
-
-        # branch_path/feat/.git doesn't exist => falls back to _main_dependency_checkout_name
-        real_exists = fs_mod.exists
-
-        def fake_exists(p: Path) -> bool:
-            if str(p) == str(feat_dir / ".git"):
-                return False  # Feat is not a git repo at all
-            return real_exists(p)
-
-        monkeypatch.setattr(fs_mod, "exists", fake_exists)
-        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda p: p == main_subdir)
+        subprocess.run(
+            ["git", "init", "-b", "main", str(main_subdir)],
+            env=env,
+            check=True,
+            capture_output=True,
+        )
+        feat_dir.mkdir()
 
         result = dep_env_module._dependency_config_checkout_name(dep_dir, "feat")
         assert result == "main"

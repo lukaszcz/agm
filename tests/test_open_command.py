@@ -92,7 +92,7 @@ class TestQueueSetupAndFocusSession:
         assert "tmux new-session -dP" in out
         assert wrapper in out
         assert ".agent-files" not in out
-        assert "tmux send-keys -t s:0.0 'agm workspace setup' C-m" in out
+        assert "tmux send-keys -t 's:^.{top-left}' 'agm workspace setup' C-m" in out
         assert out.index("tmux new-session") < out.index("agm workspace setup")
         assert "tmux attach-session" not in out
         assert "tmux switch-client" not in out
@@ -118,7 +118,7 @@ class TestQueueSetupAndFocusSession:
         assert "tmux new-session -dP" in out
         assert wrapper in out
         assert ".agent-files" not in out
-        assert "tmux send-keys -t s:0.0 'agm workspace setup' C-m" in out
+        assert "tmux send-keys -t 's:^.{top-left}' 'agm workspace setup' C-m" in out
         assert out.index("tmux new-session") < out.index("agm workspace setup")
         assert "tmux attach-session -t s" in out
 

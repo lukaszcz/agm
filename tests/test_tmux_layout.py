@@ -399,7 +399,7 @@ def test_apply_layout_calls_select_layout_with_correct_args(
 ) -> None:
     captured: list[list[str]] = []
 
-    def fake_require_success(cmd: list[str]) -> None:
+    def fake_require_success(cmd: list[str], **_kwargs: object) -> None:
         captured.append(cmd)
 
     monkeypatch.setattr("agm.tmux.layout.require_success", fake_require_success)
@@ -416,7 +416,7 @@ def test_apply_layout_calls_select_layout_with_correct_args(
 def test_apply_layout_uses_layout_for_window(monkeypatch: pytest.MonkeyPatch) -> None:
     issued_layout: list[str] = []
 
-    def fake_require_success(cmd: list[str]) -> None:
+    def fake_require_success(cmd: list[str], **_kwargs: object) -> None:
         issued_layout.append(cmd[-1])
 
     monkeypatch.setattr("agm.tmux.layout.require_success", fake_require_success)
@@ -429,7 +429,7 @@ def test_apply_layout_uses_layout_for_window(monkeypatch: pytest.MonkeyPatch) ->
 def test_apply_layout_different_pane_counts(monkeypatch: pytest.MonkeyPatch) -> None:
     results: dict[int, str] = {}
 
-    def fake_require_success(cmd: list[str]) -> None:
+    def fake_require_success(cmd: list[str], **_kwargs: object) -> None:
         results[len(results)] = cmd[-1]
 
     monkeypatch.setattr("agm.tmux.layout.require_success", fake_require_success)

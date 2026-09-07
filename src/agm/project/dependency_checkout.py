@@ -25,3 +25,9 @@ def main_dep_repo(dep_dir: Path) -> Path:
     """Return the main checked-out dependency repo under *dep_dir*."""
 
     return git_helpers.find_first_git_repo(dep_dir, main_only=True)
+
+
+def find_main_dep_repo(dep_dir: Path) -> Path | None:
+    """Return the main dependency checkout, including a repository at *dep_dir*."""
+
+    return git_helpers.first_git_repo(dep_dir, main_only=True, include_parent=True)

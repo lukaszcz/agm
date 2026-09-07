@@ -516,9 +516,22 @@ def repo_name_from_url(repo_url: str) -> str:
     return name
 
 
-def find_first_git_repo(parent_dir: Path, *, main_only: bool = False) -> Path:
-    """Find the first child Git root, optionally requiring a main checkout."""
+def first_git_repo(
+    parent_dir: Path,
+    *,
+    main_only: bool = False,
+    include_parent: bool = False,
+) -> Path | None:
+    """Return the first Git root, optionally requiring a main checkout."""
 
+    resolved_parent = parent_dir.resolve(strict=False)
+    if include_parent:
+        git_marker = parent_dir / ".git"
+        repo_root = exact_repo_root(parent_dir)
+        if repo_root is not None and (not main_only or git_marker.is_dir()):
+            return repo_root
+
+    candidates: list[Path] = []
     for directory, child_names, _file_names in parent_dir.walk():
         child_names[:] = sorted(name for name in child_names if name != ".git")
         for child_name in tuple(child_names):
@@ -529,7 +542,22 @@ def find_first_git_repo(parent_dir: Path, *, main_only: bool = False) -> Path:
                 if repo_root is not None:
                     child_names.remove(child_name)
                     if not main_only or git_marker.is_dir():
-                        return repo_root
+                        candidates.append(repo_root)
+    if not candidates:
+        return None
+
+    def _repo_sort_key(path: Path) -> tuple[int, str]:
+        return len(path.relative_to(resolved_parent).parts), str(path)
+
+    return min(candidates, key=_repo_sort_key)
+
+
+def find_first_git_repo(parent_dir: Path, *, main_only: bool = False) -> Path:
+    """Find the first child Git root, optionally requiring a main checkout."""
+
+    repo_root = first_git_repo(parent_dir, main_only=main_only)
+    if repo_root is not None:
+        return repo_root
     print(
         f"error: {parent_dir} must contain at least one checked out branch",
         file=sys.stderr,

@@ -8,11 +8,11 @@ A project has a fixed set of roles — repository, branch worktrees, config dire
 
 ## Workspaces and Worktrees
 
-A *workspace* is the main repository or a linked git worktree for a branch, interpreted with AGM's project config, dependency environment, setup scripts, and tmux lifecycle. Opening a branch without a worktree checks it out into one at a path derived from the branch name; opening a missing branch creates it first. Worktree orchestration coordinates git with dependency setup: creating the worktree, ensuring tracking branches, resolving a branch across remotes the way git does (exactly one remote may carry it). Only branch workspaces can be closed; closing can retain the branch or the worktree while still ending the session.
+A *workspace* is the main repository or a linked git worktree for a branch, interpreted with AGM's project config, dependency environment, setup scripts, and tmux lifecycle. Opening a branch without a worktree checks it out into one at a path derived from the branch name; opening a missing branch creates it first. Both paths share the preparation flow in `commands/workspace/open.py`, which assembles config and environment, creates the worktree, commits generated config, and starts the session. Worktree orchestration coordinates git with dependency setup: creating the worktree, ensuring tracking branches, resolving a branch across remotes the way git does (exactly one remote may carry it). Only branch workspaces can be closed; closing can retain the branch or the worktree while still ending the session.
 
 ## Dependencies
 
-Dependencies are sibling repositories under the project's deps directory, managed by the `dep` command group. Checkout discovery accepts only actual Git roots, excluding ordinary directories that happen to sit inside an enclosing repository. Each dependency contributes `_DIR` environment variables for its checked-out branch, assembled from the project's dependency TOML tables, so a workspace's environment reflects which branch of each dependency is active. Branch dependency configs inherit from the main config.
+Dependencies are sibling repositories under the project's deps directory, managed by the `dep` command group. Checkout discovery accepts only actual Git roots, excluding ordinary directories that happen to sit inside an enclosing repository, and distinguishes the main checkout from linked worktrees. Each dependency contributes `_DIR` environment variables for its checked-out branch, assembled from the project's dependency TOML tables, so a workspace's environment reflects which branch of each dependency is active. Branch dependency configs inherit from the main config.
 
 ## Sync
 
@@ -24,7 +24,7 @@ When a workspace opens, its environment chains the dependency environment, the p
 
 ## Git and Tmux
 
-All git work goes through one VCS module wrapping git as subprocess calls; every helper accepts an explicit environment so it composes with workspace environments. Workspace sessions are tmux sessions created with a filtered environment and a tiled pane layout; session names are unique per workspace, exact-name targeting protects session operations from tmux prefix matching, and an occupied name stops `open` before any git work. All tmux invocations go through the module's wrappers, so a missing binary is a plain error.
+All git work goes through one VCS module wrapping git as subprocess calls; every helper accepts an explicit environment so it composes with workspace environments. Workspace sessions are tmux sessions created with a filtered environment and a tiled pane layout; tmux object IDs keep targeting independent of user index settings, session names are unique per workspace, exact-name targeting protects session operations from tmux prefix matching, and an occupied name stops `open` before any git work. All tmux invocations go through the module's wrappers, so a missing binary is a plain error.
 
 ## Code Entry Points
 

@@ -160,12 +160,13 @@ def open_workspace(
     )
 
 
-def create_workspace(
+def _prepare_workspace(
     *,
     detached: bool,
     pane_count: str | None,
     parent: str | None,
     branch: str,
+    create_branch: bool,
     cwd: Path | None = None,
 ) -> None:
     current = Path.cwd() if cwd is None else cwd.resolve()
@@ -181,12 +182,12 @@ def create_workspace(
     )
     env = load_workspace_env(proj_dir, branch, workspace_dir=repo_path)
     ensure_worktree(
-        new_branch=branch,
+        new_branch=branch if create_branch else None,
         worktrees_dir=None,
-        branch=None,
-        existing_ok=False,
+        branch=None if create_branch else branch,
+        existing_ok=not create_branch,
         cwd=project_repo_dir(proj_dir),
-        start_point=start_point,
+        start_point=start_point if create_branch else None,
         env=env,
     )
     commit_config_dir_changes(
@@ -200,6 +201,24 @@ def create_workspace(
         pane_count=pane_count,
         session_name=branch_session_name(proj_dir, branch),
         repo_path=repo_path,
+    )
+
+
+def create_workspace(
+    *,
+    detached: bool,
+    pane_count: str | None,
+    parent: str | None,
+    branch: str,
+    cwd: Path | None = None,
+) -> None:
+    _prepare_workspace(
+        detached=detached,
+        pane_count=pane_count,
+        parent=parent,
+        branch=branch,
+        create_branch=True,
+        cwd=cwd,
     )
 
 
@@ -211,37 +230,13 @@ def checkout_workspace(
     branch: str,
     cwd: Path | None = None,
 ) -> None:
-    current = Path.cwd() if cwd is None else cwd.resolve()
-    validate_pane_count(pane_count)
-    proj_dir = require_current_project_dir(current)
-    start_point = require_parent_start_point(proj_dir, parent)
-    repo_path = branch_path(proj_dir, branch)
-    mkdir(repo_path, parents=True, exist_ok=True)
-    ensure_dependency_configs_for_branch(
-        project_dir=proj_dir,
-        branch=branch,
-        parent_branch=start_point,
-    )
-    env = load_workspace_env(proj_dir, branch, workspace_dir=repo_path)
-    ensure_worktree(
-        new_branch=None,
-        worktrees_dir=None,
-        branch=branch,
-        existing_ok=True,
-        cwd=project_repo_dir(proj_dir),
-        env=env,
-    )
-    commit_config_dir_changes(
-        proj_dir,
-        f"chore: add config for {branch}",
-        add_paths=[project_config_dir(proj_dir) / branch],
-        env=env,
-    )
-    queue_setup_and_focus_workspace_session(
+    _prepare_workspace(
         detached=detached,
         pane_count=pane_count,
-        session_name=branch_session_name(proj_dir, branch),
-        repo_path=repo_path,
+        parent=parent,
+        branch=branch,
+        create_branch=False,
+        cwd=cwd,
     )
 
 

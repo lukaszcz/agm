@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from agm.core.process import require_capture, require_success
 
 
@@ -98,9 +100,19 @@ def resolve_window_layout_target(window_id: str | None = None) -> tuple[str, int
     return resolved_window_id, width, height
 
 
-def apply_layout(*, pane_count: int, window_id: str, width: int, height: int) -> None:
+def apply_layout(
+    *,
+    pane_count: int,
+    window_id: str,
+    width: int,
+    height: int,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> None:
     """Apply a custom layout to *window_id*."""
 
     require_success(
         ["tmux", "select-layout", "-t", window_id, layout_for_window(pane_count, width, height)],
+        cwd=cwd,
+        env=env,
     )

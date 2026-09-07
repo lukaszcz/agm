@@ -6,6 +6,7 @@ Perform a thorough review of the test suite. Evaluate the general robustness and
   - Is real behavior actually tested, not mocked?
   - Do the tests exercise real bussiness logic requirements instead of overfitting to implementation details?
   - Is test suite performance acceptable, with no single test taking more than 1s?
+  - Are testing guidelines from relevant AGENTS.md files followed?
 
 Iterate on fixing all found issues until the test suite satisfies ALL of the
 requirements above.

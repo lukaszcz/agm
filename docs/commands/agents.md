@@ -60,7 +60,9 @@ default prompt is `revise.md`. When `COMMAND` is provided before `REVIEW_FILE`, 
 `agm refine` runs review/revise cycles until the revise response is `COMPLETE`, or until the maximum
 number of revision attempts is reached. A `CONTINUE` response from revise starts a fresh review;
 any other non-`COMPLETE` response retries revise with the same review file. The default maximum
-is 12. Review output is saved to the default timestamped review path by default.
+is 12. An explicit `--max-steps` overrides a configured `no_max_steps = true`. Under `--dry-run`,
+refine prints one review/revise cycle and exits, including when the configured limit is unlimited.
+Review output is saved to the default timestamped review path by default.
 
 When `COMMAND` is provided, config from `[refine.COMMAND]` is merged over `[refine]` and the same
 command name is forwarded to review/revise config lookup.
@@ -86,6 +88,9 @@ command name is forwarded to review/revise config lookup.
 
 - `[refine] max_steps`, `no_max_steps`, `runner`, `reviewer`, `reviser`, `scope`, `aspects`, `review_prompt`, `review_prompt_file`, `extra_review_prompt`, `extra_review_prompt_file`, `revise_prompt`, `revise_prompt_file`, `extra_revise_prompt`, `extra_revise_prompt_file`, `save_review`, `log_file`, `no_log`
 - `[refine.<command>]` overrides the base refine config for a specific command
+
+For each prompt and extra-prompt pair, either explicit CLI form overrides both configured forms.
+For example, `--review-prompt-file` overrides a configured inline `review_prompt`.
 
 ## AgL session runners
 

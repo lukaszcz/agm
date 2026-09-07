@@ -20,6 +20,7 @@ from agm.commands.refine import _write_review_file, refine
 from agm.core import dry_run
 from tests._git_helpers import init_repo
 from tests._process_helpers import AgentCall, AgentReply, FakeAgent, fake_agent
+from tests._timeouts import fail_if_slow
 
 
 class _FixedDatetime:
@@ -988,6 +989,73 @@ def test_refine_max_steps_one_with_continue_still_exits(
     refine(_refine_args(max_steps=1))
 
     assert _passes(agent) == ["review", "revise"]
+
+
+def test_refine_explicit_max_steps_overrides_configured_unlimited(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _refine_home(tmp_path, monkeypatch)
+    (home / ".agm" / "config.toml").write_text("[refine]\nno_max_steps = true\n")
+    agent = _refine_agent(monkeypatch)
+
+    refine(_refine_args(max_steps=1))
+
+    assert _passes(agent) == ["review", "revise"]
+
+
+def test_refine_dry_run_plans_one_cycle_when_unlimited(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _refine_home(tmp_path, monkeypatch)
+    dry_run.set_enabled(True)
+
+    with fail_if_slow("unlimited refine dry-run did not terminate"):
+        refine(_refine_args(no_max_steps=True))
+
+    output = capsys.readouterr().out
+    assert output.count("Step 1") == 1
+    assert "Step 2" not in output
+    assert output.count("dry-run: review configuration") == 1
+    assert output.count("dry-run: revise configuration") == 1
+    assert output.count("fake-reviewer @") == 1
+    assert output.count("fake-reviser @") == 1
+
+
+def test_refine_explicit_prompt_files_override_configured_inline_prompts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _refine_home(tmp_path, monkeypatch)
+    (home / ".agm" / "config.toml").write_text(
+        "[refine]\n"
+        'review_prompt = "configured review"\n'
+        'extra_review_prompt = "configured review extra"\n'
+        'revise_prompt = "configured revise"\n'
+        'extra_revise_prompt = "configured revise extra"\n'
+    )
+    prompt_files = {
+        "review_prompt_file": "file review",
+        "extra_review_prompt_file": "file review extra",
+        "revise_prompt_file": "file revise",
+        "extra_revise_prompt_file": "file revise extra",
+    }
+    paths: dict[str, str] = {}
+    for option, content in prompt_files.items():
+        path = tmp_path / f"{option}.md"
+        path.write_text(content, encoding="utf-8")
+        paths[option] = str(path)
+
+    agent = fake_agent(
+        monkeypatch,
+        lambda call: "COMPLETE\n" if call.runner == ["fake-reviser"] else "review\n",
+    )
+    refine(_refine_args(max_steps=1, **paths))
+
+    assert agent.prompts == [
+        "file review\nfile review extra",
+        "file revise\nfile revise extra",
+    ]
 
 
 def test_refine_reviews_again_after_continue_and_keeps_the_review_otherwise(

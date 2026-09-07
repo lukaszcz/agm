@@ -13,6 +13,7 @@ from agm.agent.runner import cleanup_temp_files
 from agm.cli_support.args import RefineArgs, ReviewArgs, ReviseArgs
 from agm.config.command_config import load_command_config
 from agm.config.general import RefineConfig, load_refine_config
+from agm.core import dry_run
 from agm.core.log import append_log, prepare_log_file, resolve_log_file
 
 DEFAULT_MAX_STEPS = 12
@@ -46,15 +47,27 @@ def _review_args_from_refine(args: RefineArgs, config: RefineConfig) -> ReviewAr
     save_review = (
         args.save_review if args.save_review is not None else config.save_review
     ) or args.review_file is not None
+    prompt, prompt_file = _prompt_options(
+        args.review_prompt,
+        args.review_prompt_file,
+        config.review_prompt,
+        config.review_prompt_file,
+    )
+    extra_prompt, extra_prompt_file = _prompt_options(
+        args.extra_review_prompt,
+        args.extra_review_prompt_file,
+        config.extra_review_prompt,
+        config.extra_review_prompt_file,
+    )
     return ReviewArgs(
         runner=runner,
         scope=args.scope or config.scope,
         aspects=args.aspects or config.aspects,
         extra_aspects=None,
-        prompt=args.review_prompt or config.review_prompt,
-        prompt_file=args.review_prompt_file or config.review_prompt_file,
-        extra_prompt=args.extra_review_prompt or config.extra_review_prompt,
-        extra_prompt_file=args.extra_review_prompt_file or config.extra_review_prompt_file,
+        prompt=prompt,
+        prompt_file=prompt_file,
+        extra_prompt=extra_prompt,
+        extra_prompt_file=extra_prompt_file,
         command_name=args.command_name,
         require_command_config=False,
         review_file=args.review_file or ("auto" if save_review else None),
@@ -68,24 +81,51 @@ def _revise_args_from_refine(
     review_file: Path,
 ) -> ReviseArgs:
     runner = args.reviser or args.runner or config.reviser or config.runner
+    prompt, prompt_file = _prompt_options(
+        args.revise_prompt,
+        args.revise_prompt_file,
+        config.revise_prompt,
+        config.revise_prompt_file,
+    )
+    extra_prompt, extra_prompt_file = _prompt_options(
+        args.extra_revise_prompt,
+        args.extra_revise_prompt_file,
+        config.extra_revise_prompt,
+        config.extra_revise_prompt_file,
+    )
     return ReviseArgs(
         review_file=str(review_file),
         runner=runner,
-        prompt=args.revise_prompt or config.revise_prompt,
-        prompt_file=args.revise_prompt_file or config.revise_prompt_file,
-        extra_prompt=args.extra_revise_prompt or config.extra_revise_prompt,
-        extra_prompt_file=args.extra_revise_prompt_file or config.extra_revise_prompt_file,
+        prompt=prompt,
+        prompt_file=prompt_file,
+        extra_prompt=extra_prompt,
+        extra_prompt_file=extra_prompt_file,
         command_name=args.command_name,
         require_command_config=False,
     )
 
 
+def _prompt_options(
+    prompt: str | None,
+    prompt_file: str | None,
+    config_prompt: str | None,
+    config_prompt_file: str | None,
+) -> tuple[str | None, str | None]:
+    """Preserve source precedence when forwarding a refine prompt pair."""
+
+    if prompt is not None or prompt_file is not None:
+        return prompt, prompt_file
+    return config_prompt, config_prompt_file
+
+
 def refine(args: RefineArgs) -> None:
     config = _refine_config(args.command_name)
-    if args.no_max_steps or config.no_max_steps:
+    if args.max_steps is not None:
+        max_steps = args.max_steps
+    elif args.no_max_steps or config.no_max_steps:
         max_steps = None
     else:
-        max_steps = args.max_steps or config.max_steps or DEFAULT_MAX_STEPS
+        max_steps = config.max_steps or DEFAULT_MAX_STEPS
     log_file = resolve_log_file(
         command_name="refine",
         enabled=not args.no_log,
@@ -124,6 +164,8 @@ def refine(args: RefineArgs) -> None:
                 stdout_callback=stdout_callback,
                 stderr_callback=stderr_callback,
             )
+            if dry_run.enabled():
+                return
             status = last_response_line(revise_output)
             if status == "COMPLETE":
                 return

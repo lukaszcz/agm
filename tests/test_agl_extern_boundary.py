@@ -925,6 +925,52 @@ def test_deep_recursive_nominal_construction_terminates() -> None:
     assert depth == 299
 
 
+def test_shared_immutable_record_graph_stays_shared_across_the_boundary() -> None:
+    leaf = _fresh_nominal()
+    branch = _fresh_nominal()
+    descriptors = (
+        NominalDescriptor(leaf, ENTRY_ID, (), "Leaf", NominalKind.RECORD),
+        NominalDescriptor(
+            branch,
+            ENTRY_ID,
+            (),
+            "Branch",
+            NominalKind.RECORD,
+            ("left", "right"),
+        ),
+    )
+    synthesize_nominal_classes(descriptors)
+    value: RecordValue = RecordValue(leaf, "Leaf")
+    for _ in range(12):
+        value = RecordValue(branch, "Branch", {"left": value, "right": value})
+
+    encoded = encode_boundary_value(value)
+
+    encoded_nodes = [encoded]
+    for _ in range(12):
+        current = encoded_nodes[-1]
+        left = getattr(current, "left")
+        assert left is getattr(current, "right")
+        encoded_nodes.append(left)
+    assert len({id(node) for node in encoded_nodes}) == 13
+
+    decoded = decode_boundary_value(encoded)
+    assert isinstance(decoded, RecordValue)
+    decoded_nodes = [decoded]
+    for _ in range(12):
+        current = decoded_nodes[-1]
+        left = current.fields["left"]
+        assert left is current.fields["right"]
+        assert isinstance(left, RecordValue)
+        decoded_nodes.append(left)
+    assert len({id(node) for node in decoded_nodes}) == 13
+
+    separately_encoded = encode_boundary_value(value)
+    separately_decoded = decode_boundary_value(encoded)
+    assert separately_encoded is not encoded
+    assert separately_decoded is not decoded
+
+
 def test_synthesizing_an_already_present_identity_reuses_its_class_unchanged() -> None:
     """A ``NominalId``'s layout is fixed at its declaration: a class, once
     synthesized for an identity, is reused verbatim on every later call that

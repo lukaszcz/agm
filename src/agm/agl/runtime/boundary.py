@@ -150,9 +150,11 @@ class _AglNominalShape(Protocol):
     """
 
     @classmethod
-    def _agl_encode(cls, value: RecordValue | ExceptionValue) -> object: ...
+    def _agl_encode(
+        cls, value: RecordValue | ExceptionValue, memo: dict[int, object]
+    ) -> object: ...
 
-    def _agl_decode(self) -> Value: ...
+    def _agl_decode(self, memo: dict[int, Value]) -> Value: ...
 
 
 class _AglNominal:
@@ -200,17 +202,27 @@ class _AglNominal:
         return f"{type(self).__name__}(...)"
 
     @classmethod
-    def _agl_encode(cls, value: RecordValue | ExceptionValue) -> Self:
+    def _agl_encode(cls, value: RecordValue | ExceptionValue, memo: dict[int, object]) -> Self:
         """Snapshot *value*: encode every field once, up front."""
-        return cls(**{name: encode_boundary_value(field) for name, field in value.fields.items()})
+        encoded = object.__new__(cls)
+        fields: dict[str, object] = {}
+        object.__setattr__(encoded, "_agl_values", fields)
+        memo[id(value)] = encoded
+        fields.update(
+            {name: _encode_boundary_value(field, memo) for name, field in value.fields.items()}
+        )
+        return encoded
 
-    def _agl_decode(self) -> Value:
+    def _agl_decode(self, memo: dict[int, Value]) -> Value:
         """Rebuild the AgL value this snapshot stands for."""
         cls = type(self)
-        return _nominal_value(
-            cls._agl_descriptor,
-            {name: decode_boundary_value(self._agl_values[name]) for name in cls._agl_fields},
+        fields: dict[str, Value] = {}
+        value = _nominal_value(cls._agl_descriptor, fields)
+        memo[id(self)] = value
+        fields.update(
+            {name: _decode_boundary_value(self._agl_values[name], memo) for name in cls._agl_fields}
         )
+        return value
 
 
 class _AglRecordView:
@@ -250,13 +262,13 @@ class _AglRecordView:
         )
 
     @classmethod
-    def _agl_encode(cls, value: RecordValue | ExceptionValue) -> Self:
+    def _agl_encode(cls, value: RecordValue | ExceptionValue, memo: dict[int, object]) -> Self:
         """Open a window onto *value*: nothing is copied and no field is read."""
         view = object.__new__(cls)
         object.__setattr__(view, "_agl_value", value)
         return view
 
-    def _agl_decode(self) -> Value:
+    def _agl_decode(self, memo: dict[int, Value]) -> Value:
         """Return the live record this view is a window onto."""
         return self._agl_value
 
@@ -640,6 +652,11 @@ def encode_boundary_value(value: Value) -> object:
     and unchecked: the companion is trusted to treat what it receives as
     read-only.
     """
+    return _encode_boundary_value(value, {})
+
+
+def _encode_boundary_value(value: Value, memo: dict[int, object]) -> object:
+    """Encode *value*, retaining shared nominal nodes within one crossing."""
     if isinstance(value, UnitValue):
         return None
     if isinstance(value, BoolValue):
@@ -665,11 +682,16 @@ def encode_boundary_value(value: Value) -> object:
             )
         return encoder(value)
     if isinstance(value, (RecordValue, ExceptionValue)):
+        encoded = memo.get(id(value))
+        if encoded is not None:
+            return encoded
         try:
             cls = _NOMINAL_CLASSES[value.nominal]
         except KeyError as exc:
             raise BoundaryViolation(f"unknown AgL nominal {value.display_name!r}") from exc
-        return cast("type[_AglNominalShape]", cls)._agl_encode(value)
+        encoded = cast("type[_AglNominalShape]", cls)._agl_encode(value, memo)
+        memo[id(value)] = encoded
+        return encoded
     raise BoundaryViolation(f"cannot encode {type(value).__name__}")
 
 
@@ -682,6 +704,11 @@ def decode_boundary_value(obj: object) -> Value:
     companion import time, on a worker thread, or retained past the call
     that produced it all decode the same way.
     """
+    return _decode_boundary_value(obj, {})
+
+
+def _decode_boundary_value(obj: object, memo: dict[int, Value]) -> Value:
+    """Decode *obj*, retaining shared nominal nodes within one crossing."""
     if obj is None:
         return UNIT_VALUE
     if isinstance(obj, bool):
@@ -707,5 +734,10 @@ def decode_boundary_value(obj: object) -> Value:
         return obj._closure
     descriptor = cast(object, getattr(type(obj), "_agl_descriptor", None))
     if isinstance(descriptor, NominalDescriptor):
-        return cast("_AglNominalShape", obj)._agl_decode()
+        decoded = memo.get(id(obj))
+        if decoded is not None:
+            return decoded
+        decoded = cast("_AglNominalShape", obj)._agl_decode(memo)
+        memo[id(obj)] = decoded
+        return decoded
     raise BoundaryViolation(f"unsupported Python extern value {type(obj).__name__}")

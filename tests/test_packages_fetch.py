@@ -375,7 +375,7 @@ def test_fetch_wraps_get_connection_failure_with_normalized_requirement(tmp_path
             scratch_dir=tmp_path,
         )
 
-    assert str(raised.value) == "fetch failed for tools >= 1.0.0: offline"
+    assert "tools >= 1.0.0" in str(raised.value)
     assert raised.value.__cause__ is error
     assert session.calls == [("https://example.test/tools.agmpkg", True, 30.0)]
     assert not tuple(tmp_path.iterdir())
@@ -395,7 +395,7 @@ def test_fetch_wraps_stream_failure_with_normalized_requirement(tmp_path: Path) 
             scratch_dir=tmp_path,
         )
 
-    assert str(raised.value) == "fetch failed for tools >= 1.0.0: connection interrupted"
+    assert "tools >= 1.0.0" in str(raised.value)
     assert raised.value.__cause__ is error
     assert response.status_checked
     assert not tuple(tmp_path.iterdir())
@@ -425,7 +425,7 @@ def test_fetch_preserves_primary_failure_when_archive_cleanup_fails(
             scratch_dir=tmp_path,
         )
 
-    assert str(raised.value) == "fetch failed for tools >= 1.0.0: offline"
+    assert "tools >= 1.0.0" in str(raised.value)
     assert raised.value.__cause__ is transport_error
 
 
@@ -453,7 +453,7 @@ def test_fetch_wraps_archive_cleanup_failure(
             scratch_dir=tmp_path,
         )
 
-    assert str(raised.value) == "fetch failed for tools >= 1.0.0: cleanup failed: cleanup denied"
+    assert "tools >= 1.0.0" in str(raised.value)
     assert raised.value.__cause__ is cleanup_error
 
 
@@ -506,3 +506,84 @@ def test_fetch_rejects_non_sha256_hash_before_transport(tmp_path: Path, expected
         )
 
     assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    "content", [b"", b"abc", b"abcd"], ids=["empty", "below-limit", "at-limit"]
+)
+def test_fetch_accepts_bytes_up_to_the_exact_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: bytes
+) -> None:
+    monkeypatch.setattr(package_fetch, "MAX_ARCHIVE_DOWNLOAD_SIZE", 4)
+    received: list[bytes] = []
+    fetch_archive(
+        requirement="tools >= 1.0.0",
+        url="https://example.test/tools.agmpkg",
+        expected_hash="sha256=" + hashlib.sha256(content).hexdigest(),
+        handoff=lambda path: received.append(path.read_bytes()),
+        session=_Session(_Response([content[:2], b"", content[2:]])),
+        scratch_dir=tmp_path,
+    )
+    assert received == [content]
+    assert not tuple(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("chunks", [[b"abcde"], [b"ab", b"", b"cde"]], ids=["one-chunk", "split"])
+def test_fetch_rejects_one_byte_over_the_limit_before_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chunks: list[bytes]
+) -> None:
+    monkeypatch.setattr(package_fetch, "MAX_ARCHIVE_DOWNLOAD_SIZE", 4)
+    with pytest.raises(FetchError):
+        fetch_archive(
+            requirement="tools >= 1.0.0",
+            url="https://example.test/tools.agmpkg",
+            expected_hash="sha256=" + hashlib.sha256(b"".join(chunks)).hexdigest(),
+            handoff=lambda _: pytest.fail("oversized content reached the installer"),
+            session=_Session(_Response(chunks)),
+            scratch_dir=tmp_path,
+        )
+    assert not tuple(tmp_path.iterdir())
+
+
+def test_empty_chunks_do_not_extend_the_inactivity_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(package_fetch, "_FETCH_TIMEOUT_SECONDS", 5.0)
+    clock = _Clock()
+    _use_clock(monkeypatch, clock)
+    with pytest.raises(FetchError):
+        fetch_archive(
+            requirement="tools >= 1.0.0",
+            url="https://example.test/tools.agmpkg",
+            expected_hash="sha256=" + hashlib.sha256(b"data").hexdigest(),
+            handoff=lambda _: pytest.fail("stalled content reached the installer"),
+            session=_Session(_PacedResponse(clock, [(2, b""), (2, b""), (2, b"data")])),
+            scratch_dir=tmp_path,
+        )
+    assert not tuple(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("error", [ValueError("invalid archive"), KeyboardInterrupt()])
+def test_installer_failure_removes_the_download_and_preserves_the_original_error(
+    tmp_path: Path, error: BaseException
+) -> None:
+    content = b"archive"
+    received: list[bytes] = []
+
+    def install(path: Path) -> None:
+        received.append(path.read_bytes())
+        raise error
+
+    with pytest.raises(type(error)) as raised:
+        fetch_archive(
+            requirement="tools >= 1.0.0",
+            url="https://example.test/tools.agmpkg",
+            expected_hash="sha256=" + hashlib.sha256(content).hexdigest(),
+            handoff=install,
+            session=_Session(_Response([content])),
+            scratch_dir=tmp_path,
+        )
+
+    assert raised.value is error
+    assert received == [content]
+    assert not tuple(tmp_path.iterdir())

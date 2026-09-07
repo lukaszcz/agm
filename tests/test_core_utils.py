@@ -262,7 +262,10 @@ class TestFsWriteNormal:
         assert d.is_dir()
 
     def test_mkdir_exist_ok(self, tmp_path: Path) -> None:
-        mkdir(tmp_path, exist_ok=True)  # should not raise
+        existing = tmp_path / "existing.txt"
+        existing.write_text("keep", encoding="utf-8")
+        mkdir(tmp_path, exist_ok=True)
+        assert existing.read_text(encoding="utf-8") == "keep"
 
     def test_write_text_creates_file(self, tmp_path: Path) -> None:
         f = tmp_path / "out.txt"
@@ -313,7 +316,11 @@ class TestFsWriteNormal:
         assert not f.exists()
 
     def test_unlink_missing_ok(self, tmp_path: Path) -> None:
-        unlink(tmp_path / "ghost.txt", missing_ok=True)  # should not raise
+        sibling = tmp_path / "sibling.txt"
+        sibling.write_text("keep", encoding="utf-8")
+        unlink(tmp_path / "ghost.txt", missing_ok=True)
+        assert list(tmp_path.iterdir()) == [sibling]
+        assert sibling.read_text(encoding="utf-8") == "keep"
 
     def test_unlink_missing_raises_by_default(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):

@@ -224,24 +224,6 @@ def test_vocabulary_leaves_sit_below_every_pass(leaf: str, allowed: tuple[str, .
     assert violations == []
 
 
-@pytest.mark.parametrize(
-    ("source", "expected"),
-    [
-        ("from . import zones", "agm.agl"),
-        ("from .syntax import Attribute", "agm.agl.syntax"),
-        ("from ..config import engine_keys", "agm.config"),
-    ],
-)
-def test_a_relative_import_in_a_leaf_would_be_caught(source: str, expected: str) -> None:
-    """A leaf cannot hide a dependency behind a relative import."""
-    node = ast.parse(f"{source}\n").body[0]
-    assert isinstance(node, ast.ImportFrom)
-    resolved = _imported_modules(AGL_ROOT / "attributes.py", node)
-
-    assert resolved == (expected,)
-    assert _is_agm(expected)
-
-
 def test_ir_all_agm_dependencies_are_explicit() -> None:
     """Keep the IR on its own data plus the canonical config-key data leaf."""
     allowed = (

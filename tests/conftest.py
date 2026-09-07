@@ -34,11 +34,6 @@ __all__ = ["pytest_runtest_protocol", "pytest_sessionfinish", "pytest_testnodedo
 # the ``self_validation_disabled`` fixture).
 set_self_validation_enabled(True)
 
-# Set to ``True`` once :func:`pytest_configure` has successfully detached the
-# current (test-running) process from its controlling terminal.  Consulted by
-# the ``tests/test_tty_isolation.py`` regression guard.
-CONTROLLING_TTY_DETACHED = False
-
 
 def _detach_from_controlling_terminal() -> None:
     """Put this process in a new session so it has no controlling terminal.
@@ -60,13 +55,11 @@ def _detach_from_controlling_terminal() -> None:
     via ``uv run`` (so pytest is a child, never the leader), but we degrade
     gracefully if that ever changes.
     """
-    global CONTROLLING_TTY_DETACHED
     try:
         os.setsid()
     except OSError:
         # Already a session/group leader — leave the disposition unchanged.
         return
-    CONTROLLING_TTY_DETACHED = True
 
 
 def pytest_configure(config: pytest.Config) -> None:

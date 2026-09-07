@@ -40,7 +40,8 @@ def test_index_get_array_out_of_range() -> None:
         index_get(IndexKind.ARRAY, lst, IntValue(5))
     assert exc_info.value.index == 5
     assert exc_info.value.length == 2
-    assert str(exc_info.value) == "Array index 5 out of range for length 2"
+    assert "5" in str(exc_info.value)
+    assert "2" in str(exc_info.value)
 
 
 def test_index_get_text_uses_unicode_code_points() -> None:

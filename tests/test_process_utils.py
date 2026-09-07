@@ -951,8 +951,17 @@ class TestRunCapture:
 
 
 class TestRequireSuccess:
-    def test_succeeds_silently_when_command_returns_zero(self) -> None:
-        require_success([sys.executable, "-c", "pass"])
+    def test_executes_a_successful_command(self, tmp_path: Path) -> None:
+        output = tmp_path / "output.txt"
+        require_success(
+            [
+                sys.executable,
+                "-c",
+                "from pathlib import Path; import sys; Path(sys.argv[1]).write_text('done')",
+                str(output),
+            ]
+        )
+        assert output.read_text() == "done"
 
     def test_raises_system_exit_when_command_fails(self) -> None:
         with pytest.raises(SystemExit) as exc_info:

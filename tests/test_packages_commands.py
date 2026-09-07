@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -25,15 +24,13 @@ from agm.core import dry_run
 from agm.packages.activation import (
     ActivationIndex,
     ActivePackage,
-    CommandRegistration,
-    CommandShadow,
-    PackageActivationError,
     load_activation_index,
+    write_activation_index,
 )
-from agm.packages.archive import ArchiveError
-from agm.packages.install import PackageInstallError, PackageInstallPlan, install_directory
+from agm.packages.archive import write_archive
+from agm.packages.install import install_archive, install_directory
 from agm.packages.layout import MODULE_TREE_DIRNAME
-from agm.packages.manifest import CommandSpec, DependencySpec, PackageManifest
+from agm.packages.manifest import PackageManifest
 from agm.packages.model import PackageInfo
 from agm.packages.record import write_record
 from agm.version import AGM_VERSION
@@ -46,8 +43,9 @@ def _context(tmp_path: Path) -> ConfigContext:
 
 def _package(tmp_path: Path, name: str = "alpha") -> PackageInfo:
     root = tmp_path / name
-    root.mkdir()
+    root.mkdir(parents=True)
     (root / MODULE_TREE_DIRNAME).mkdir()
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text("program def main() -> unit = ()\n")
     manifest = PackageManifest(name=name, version=semver.Version.parse("1.0.0"))
     (root / "package.toml").write_text(
         f'[package]\nname = "{manifest.name}"\nversion = "{manifest.version}"\n',
@@ -56,76 +54,79 @@ def _package(tmp_path: Path, name: str = "alpha") -> PackageInfo:
     return PackageInfo(root, manifest)
 
 
-def _install_plan(
-    package: PackageInfo, *, command_shadows: tuple[CommandShadow, ...] = ()
-) -> PackageInstallPlan:
-    return PackageInstallPlan(package, command_shadows)
+def _command_package(
+    tmp_path: Path, name: str, *, version: str = "1.0.0", commands: tuple[str, ...] = ("launch",)
+) -> Path:
+    package = _package(tmp_path, name)
+    _write_command_manifest(package.root, name, version=version, commands=commands)
+    return package.root
 
 
-def test_create_command_validates_and_writes_the_default_archive_beside_its_package(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def _write_command_manifest(
+    root: Path, name: str, *, version: str, commands: tuple[str, ...]
+) -> None:
+    registrations = "".join(
+        f'"{command}" = {{ program = "{name}/main::main" }}\n' for command in commands
+    )
+    (root / "package.toml").write_text(
+        f'[package]\nname = "{name}"\nversion = "{version}"\n\n[commands]\n{registrations}'
+    )
+
+
+@pytest.fixture(autouse=True)
+def isolate_package_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(_context(tmp_path).home))
+    monkeypatch.chdir(tmp_path)
+
+
+def test_create_command_writes_an_archive_that_can_be_installed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     package = _package(tmp_path)
-    monkeypatch.setattr(
-        create_command, "validate_archive_source", lambda _, **_kwargs: package.manifest
-    )
-    monkeypatch.setattr(create_command, "validate_dependencies", lambda *_args, **_kwargs: ())
-    monkeypatch.setattr(create_command, "current_config_context", lambda: _context(tmp_path))
-    written: list[Path] = []
-    monkeypatch.setattr(
-        create_command,
-        "write_archive",
-        lambda _root, destination: written.append(destination),
-    )
-
     create_command.run(PkgCreateArgs(directory=str(package.root), output=None))
 
-    assert written == [package.root.parent / "alpha-1.0.0.agmpkg"]
-    assert "alpha-1.0.0.agmpkg" in capsys.readouterr().out
+    archive = package.root.parent / "alpha-1.0.0.agmpkg"
+    assert archive.is_file()
+    assert archive.name in capsys.readouterr().out
+    installed = install_archive(archive, home=_context(tmp_path).home)
+    assert installed.manifest.name == "alpha"
+    assert (installed.root / "package.toml").read_bytes() == (
+        package.root / "package.toml"
+    ).read_bytes()
 
 
 def test_create_command_dry_run_reports_its_plan_without_writing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     package = _package(tmp_path)
-    monkeypatch.setattr(
-        create_command, "validate_archive_source", lambda _, **_kwargs: package.manifest
-    )
-    monkeypatch.setattr(create_command, "validate_dependencies", lambda *_args, **_kwargs: ())
-    monkeypatch.setattr(create_command, "current_config_context", lambda: _context(tmp_path))
-    monkeypatch.setattr(create_command.dry_run, "enabled", lambda: True)
-    monkeypatch.setattr(
-        create_command,
-        "write_archive",
-        lambda *_: (_ for _ in ()).throw(AssertionError("dry-run must not write an archive")),
-    )
+    dry_run.set_enabled(True)
 
     create_command.run(PkgCreateArgs(directory=str(package.root), output="out.agmpkg"))
 
-    assert "dry-run: agm create-package-archive" in capsys.readouterr().out
+    assert "out.agmpkg" in capsys.readouterr().out
+    assert not (tmp_path / "out.agmpkg").exists()
 
 
-def test_create_command_reports_validation_or_archive_errors(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("invalid_manifest", [True, False], ids=["manifest", "destination"])
+def test_create_command_reports_failure_without_publishing_an_archive(
+    tmp_path: Path, invalid_manifest: bool
 ) -> None:
     package = _package(tmp_path)
-    monkeypatch.setattr(
-        create_command, "validate_archive_source", lambda _, **_kwargs: package.manifest
-    )
-    monkeypatch.setattr(create_command, "validate_dependencies", lambda *_args, **_kwargs: ())
-    monkeypatch.setattr(create_command, "current_config_context", lambda: _context(tmp_path))
-    monkeypatch.setattr(
-        create_command,
-        "write_archive",
-        lambda *_: (_ for _ in ()).throw(ArchiveError("broken")),
-    )
+    destination = tmp_path / "out.agmpkg"
+    if invalid_manifest:
+        (package.root / "package.toml").write_text("[broken")
+    else:
+        destination.mkdir()
+    with pytest.raises(SystemExit) as raised:
+        create_command.run(PkgCreateArgs(directory=str(package.root), output=str(destination)))
 
-    with pytest.raises(SystemExit):
-        create_command.run(PkgCreateArgs(directory=str(package.root), output="out.agmpkg"))
+    assert raised.value.code == 1
+    assert not destination.is_file()
+    assert package.root.is_dir()
 
 
 def test_create_rejects_an_older_incompatible_std_before_archive_publication(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     package = _package(tmp_path)
     (package.root / "package.toml").write_text(
@@ -137,7 +138,6 @@ def test_create_rejects_an_older_incompatible_std_before_archive_publication(
         "program def main() -> unit = ()\n", encoding="utf-8"
     )
     destination = tmp_path / "alpha.agmpkg"
-    monkeypatch.setattr(create_command, "current_config_context", lambda: _context(tmp_path))
 
     with pytest.raises(SystemExit):
         create_command.run(PkgCreateArgs(directory=str(package.root), output=str(destination)))
@@ -145,78 +145,39 @@ def test_create_rejects_an_older_incompatible_std_before_archive_publication(
     assert not destination.exists()
 
 
-def test_install_command_delegates_and_renders_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize("archive_source", [False, True], ids=["directory", "archive"])
+def test_installed_package_can_be_inspected_and_removed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], archive_source: bool
 ) -> None:
-    package = _package(tmp_path)
-    monkeypatch.setattr(install_command, "current_config_context", lambda: _context(tmp_path))
-    monkeypatch.setattr(
-        install_command,
-        "install_directory_with_plan",
-        lambda *args, **kwargs: _install_plan(package),
-    )
+    package = _package(tmp_path / "source space λ")
+    source = package.root
+    if archive_source:
+        source = tmp_path / "release space λ.agmpkg"
+        write_archive(package.root, source)
 
-    install_command.run(PkgInstallArgs("source", editable=False, shadow=False))
+    install_command.run(PkgInstallArgs(str(source), editable=False, shadow=archive_source))
+    capsys.readouterr()
+    info_command.run(PkgInfoArgs("alpha"))
+    assert "1.0.0" in capsys.readouterr().out
+    installed = _context(tmp_path).home / ".agm" / "packages" / "alpha" / "1.0.0"
+    assert (installed / "package.toml").read_bytes() == (package.root / "package.toml").read_bytes()
 
-    assert "installed alpha 1.0.0" in capsys.readouterr().out
-
-
-def test_install_command_routes_an_archive_to_the_archive_installer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    archive = tmp_path / "package.agmpkg"
-    archive.write_bytes(b"archive")
-    package = _package(tmp_path)
-    monkeypatch.setattr(install_command, "current_config_context", lambda: _context(tmp_path))
-    monkeypatch.setattr(
-        install_command,
-        "install_archive_with_plan",
-        lambda *args, **kwargs: _install_plan(package),
-    )
-
-    install_command.run(PkgInstallArgs(str(archive), editable=False, shadow=True))
-
-
-def test_shadow_install_renders_displaced_command_owners(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    package = _package(tmp_path)
-    monkeypatch.setattr(install_command, "current_config_context", lambda: _context(tmp_path))
-    monkeypatch.setattr(
-        install_command,
-        "install_directory_with_plan",
-        lambda *args, **kwargs: _install_plan(
-            package, command_shadows=(CommandShadow("launch", ("bravo",)),)
-        ),
-    )
-
-    install_command.run(PkgInstallArgs("source", editable=False, shadow=True))
-
-    assert "shadowed command launch from bravo" in capsys.readouterr().out
+    uninstall_command.run(PkgUninstallArgs("alpha"))
+    assert not installed.exists()
+    with pytest.raises(SystemExit) as raised:
+        info_command.run(PkgInfoArgs("alpha"))
+    assert raised.value.code == 1
+    assert (package.root / "package.toml").is_file()
 
 
 def test_dry_run_shadow_install_reports_the_planned_displacement_without_changing_activation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     context = _context(tmp_path)
 
-    def command_package(name: str) -> Path:
-        root = tmp_path / name
-        (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
-        (root / "package.toml").write_text(
-            f'[package]\nname = "{name}"\nversion = "1.0.0"\n\n'
-            f'[commands]\nlaunch = {{ program = "{name}/main::main" }}\n',
-            encoding="utf-8",
-        )
-        (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
-            "program def main() -> unit = ()\n", encoding="utf-8"
-        )
-        return root
-
-    install_directory(command_package("alpha"), home=context.home)
+    install_directory(_command_package(tmp_path, "alpha"), home=context.home)
     persisted = load_activation_index(home=context.home)
-    candidate = command_package("bravo")
-    monkeypatch.setattr(install_command, "current_config_context", lambda: context)
+    candidate = _command_package(tmp_path, "bravo")
     dry_run.set_enabled(True)
 
     install_command.run(PkgInstallArgs(str(candidate), editable=False, shadow=True))
@@ -225,138 +186,52 @@ def test_dry_run_shadow_install_reports_the_planned_displacement_without_changin
     assert load_activation_index(home=context.home) == persisted
 
 
-def test_install_command_reports_domain_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(install_command, "current_config_context", lambda: _context(tmp_path))
+@pytest.mark.parametrize("operation", ["install", "uninstall"])
+def test_missing_package_is_rejected_without_activating_it(tmp_path: Path, operation: str) -> None:
+    with pytest.raises(SystemExit) as raised:
+        if operation == "install":
+            install_command.run(PkgInstallArgs("missing", editable=True, shadow=False))
+        else:
+            uninstall_command.run(PkgUninstallArgs("missing"))
 
-    def fail(*_: object, **__: object) -> PackageInfo:
-        raise PackageInstallError("bad package")
-
-    monkeypatch.setattr(install_command, "install_directory_with_plan", fail)
-    with pytest.raises(SystemExit):
-        install_command.run(PkgInstallArgs("source", editable=True, shadow=False))
-
-
-def test_uninstall_command_delegates_and_reports_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr(uninstall_command, "current_config_context", lambda: _context(tmp_path))
-    monkeypatch.setattr(uninstall_command, "uninstall_package", lambda *args, **kwargs: None)
-    uninstall_command.run(PkgUninstallArgs("alpha"))
-    assert "uninstalled alpha" in capsys.readouterr().out
-
-    def fail(*_: object, **__: object) -> None:
-        raise PackageInstallError("bad package")
-
-    monkeypatch.setattr(uninstall_command, "uninstall_package", fail)
-    with pytest.raises(SystemExit):
-        uninstall_command.run(PkgUninstallArgs("alpha"))
-
-
-def test_list_command_prints_commands_only_below_their_active_or_editable_owner(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    alpha_old = PackageInfo(
-        tmp_path / "alpha-old",
-        PackageManifest(name="alpha", version=semver.Version.parse("1.0.0")),
-    )
-    context = _context(tmp_path)
-    alpha = PackageInfo(
-        context.home / ".agm" / "packages" / "alpha" / "2.0.0",
-        PackageManifest(name="alpha", version=semver.Version.parse("2.0.0")),
-    )
-    alpha.root.mkdir(parents=True)
-    (alpha.root / "package.toml").write_text(
-        '[package]\nname = "alpha"\nversion = "2.0.0"\n\n'
-        '[commands.launch]\nprogram = "alpha/main::main"\n',
-        encoding="utf-8",
-    )
-    write_record(alpha.root)
-    bravo = _package(tmp_path, "bravo")
-    (bravo.root / "package.toml").write_text(
-        '[package]\nname = "bravo"\nversion = "1.0.0"\n\n'
-        '[commands."bravo updated"]\nprogram = "bravo/main::main"\n',
-        encoding="utf-8",
-    )
-    index = ActivationIndex(
-        {
-            "alpha": ActivePackage(alpha.manifest.version),
-            "bravo": ActivePackage(semver.Version.parse("2.0.0"), editable=bravo.root),
-        },
-        {
-            "launch": CommandRegistration("alpha", "alpha/main::main"),
-            "bravo run": CommandRegistration("bravo", "bravo/main::main"),
-        },
-    )
-    monkeypatch.setattr(list_command, "current_config_context", lambda: context)
-    monkeypatch.setattr(list_command, "load_activation_index", lambda **_: index)
-    monkeypatch.setattr(list_command, "installed_packages", lambda **_: (alpha_old, alpha))
-    monkeypatch.setattr(
-        list_command,
-        "command_shadow_diagnostics",
-        lambda *args, **kwargs: {"alpha": (CommandShadow("launch", ("bravo",)),)},
-    )
-
-    list_command.run(PkgListArgs())
-
-    assert capsys.readouterr().out.splitlines() == [
-        "alpha 1.0.0 installed",
-        "alpha 2.0.0 active",
-        "  command launch (shadows bravo)",
-        "bravo 1.0.0 editable",
-        "  command bravo updated",
-    ]
+    assert raised.value.code == 1
+    assert "missing" not in load_activation_index(home=_context(tmp_path).home).packages
+    assert not (_context(tmp_path).home / ".agm" / "packages" / "missing").exists()
 
 
 def test_list_command_marks_only_the_exact_build_identity_active(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    context = _context(tmp_path)
-    selected = semver.Version.parse("1.0.0+selected")
-    packages = tuple(
-        PackageInfo(
-            tmp_path / build,
-            PackageManifest(name="alpha", version=semver.Version.parse(f"1.0.0+{build}")),
-        )
-        for build in ("other", "selected")
-    )
-    index = ActivationIndex({"alpha": ActivePackage(selected)})
-    monkeypatch.setattr(list_command, "current_config_context", lambda: context)
-    monkeypatch.setattr(list_command, "load_activation_index", lambda **_: index)
-    monkeypatch.setattr(list_command, "installed_packages", lambda **_: packages)
-    monkeypatch.setattr(list_command, "resolve_indexed_packages", lambda *_args, **_kwargs: ())
-    monkeypatch.setattr(list_command, "reconcile_package_commands", lambda *_args, **_kwargs: index)
-    monkeypatch.setattr(list_command, "command_shadow_diagnostics", lambda *_args, **_kwargs: {})
+    for build in ("other", "selected"):
+        package = _package(tmp_path / build)
+        manifest = package.root / "package.toml"
+        manifest.write_text(manifest.read_text().replace("1.0.0", f"1.0.0+{build}"))
+        install_directory(package.root, home=_context(tmp_path).home)
 
     list_command.run(PkgListArgs())
 
-    assert capsys.readouterr().out.splitlines() == [
-        "alpha 1.0.0+other installed",
-        "alpha 1.0.0+selected active",
-    ]
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith("alpha ")]
+    assert lines == ["alpha 1.0.0+other installed", "alpha 1.0.0+selected active"]
 
 
-@pytest.mark.parametrize("error", [PackageActivationError("bad"), PackageInstallError("bad")])
-def test_list_command_reports_index_or_store_errors(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
-) -> None:
-    monkeypatch.setattr(list_command, "current_config_context", lambda: _context(tmp_path))
-    if isinstance(error, PackageActivationError):
-        monkeypatch.setattr(
-            list_command, "load_activation_index", lambda **_: (_ for _ in ()).throw(error)
-        )
+@pytest.mark.parametrize("corruption", ["index", "store"])
+def test_list_command_reports_corrupt_persistent_state(tmp_path: Path, corruption: str) -> None:
+    store = _context(tmp_path).home / ".agm" / "packages"
+    if corruption == "index":
+        store.mkdir(parents=True)
+        (store / "index.toml").write_text("[broken")
     else:
-        monkeypatch.setattr(list_command, "load_activation_index", lambda **_: ActivationIndex())
-        monkeypatch.setattr(
-            list_command, "installed_packages", lambda **_: (_ for _ in ()).throw(error)
-        )
-    with pytest.raises(SystemExit):
+        version = store / "alpha" / "1.0.0"
+        version.mkdir(parents=True)
+        (version / "package.toml").write_text('[package]\nname = "bravo"\nversion = "1.0.0"\n')
+
+    with pytest.raises(SystemExit) as raised:
         list_command.run(PkgListArgs())
+    assert raised.value.code == 1
 
 
 def test_info_command_uses_live_editable_dependency_versions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     alpha = _package(tmp_path, "alpha")
     bravo = _package(tmp_path, "bravo")
@@ -364,16 +239,14 @@ def test_info_command_uses_live_editable_dependency_versions(
         '[package]\nname = "alpha"\nversion = "1.0.0"\n\n[dependencies]\nbravo = "1"\n',
         encoding="utf-8",
     )
-    monkeypatch.setattr(info_command, "current_config_context", lambda: _context(tmp_path))
-    monkeypatch.setattr(
-        info_command,
-        "load_activation_index",
-        lambda **_: ActivationIndex(
+    write_activation_index(
+        ActivationIndex(
             {
                 "alpha": ActivePackage(alpha.manifest.version, editable=alpha.root),
                 "bravo": ActivePackage(semver.Version.parse("2.0.0"), editable=bravo.root),
             }
         ),
+        home=_context(tmp_path).home,
     )
 
     info_command.run(PkgInfoArgs("alpha"))
@@ -382,16 +255,11 @@ def test_info_command_uses_live_editable_dependency_versions(
 
 
 def test_info_command_rejects_immutable_store_escapes_and_identity_mismatches(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     context = _context(tmp_path)
     active = ActivePackage(semver.Version.parse("1.0.0"))
-    monkeypatch.setattr(info_command, "current_config_context", lambda: context)
-    monkeypatch.setattr(
-        info_command,
-        "load_activation_index",
-        lambda **_: ActivationIndex({"alpha": active}),
-    )
+    write_activation_index(ActivationIndex({"alpha": active}), home=_context(tmp_path).home)
 
     store = context.home / ".agm" / "packages"
     external = tmp_path / "external"
@@ -399,7 +267,7 @@ def test_info_command_rejects_immutable_store_escapes_and_identity_mismatches(
     (external / "package.toml").write_text(
         '[package]\nname = "alpha"\nversion = "1.0.0"\n', encoding="utf-8"
     )
-    store.mkdir(parents=True)
+    store.mkdir(parents=True, exist_ok=True)
     (store / "alpha").symlink_to(external, target_is_directory=True)
     with pytest.raises(SystemExit):
         info_command.run(PkgInfoArgs("alpha"))
@@ -423,7 +291,7 @@ def test_info_command_rejects_immutable_store_escapes_and_identity_mismatches(
 
 
 def test_info_command_rejects_different_build_metadata_for_immutable_package(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     context = _context(tmp_path)
     active = ActivePackage(semver.Version.parse("1.0.0+selected"))
@@ -433,54 +301,37 @@ def test_info_command_rejects_different_build_metadata_for_immutable_package(
         '[package]\nname = "alpha"\nversion = "1.0.0+other"\n', encoding="utf-8"
     )
     write_record(root)
-    monkeypatch.setattr(info_command, "current_config_context", lambda: context)
-    monkeypatch.setattr(
-        info_command,
-        "load_activation_index",
-        lambda **_: ActivationIndex({"alpha": active}),
-    )
+    write_activation_index(ActivationIndex({"alpha": active}), home=_context(tmp_path).home)
 
     with pytest.raises(SystemExit):
         info_command.run(PkgInfoArgs("alpha"))
 
 
-def test_info_command_renders_metadata_and_reports_unknown_package(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_info_command_reads_manifest_metadata_and_current_dependency_status(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     package = _package(tmp_path)
-    manifest = PackageManifest(
-        name="alpha",
-        version=semver.Version.parse("1.0.0"),
-        description="Alpha package",
-        license="MIT",
-        authors=("Ada", "Lin"),
-        repository="https://example.test/alpha",
-        keywords=("agents", "tools"),
-        dependencies={
-            "std": DependencySpec(semver.Version.parse(AGM_VERSION)),
-            "bravo": DependencySpec(semver.Version.parse("1.0.0")),
-            "charlie": DependencySpec(semver.Version.parse("2.0.0")),
-            "delta": DependencySpec(semver.Version.parse("1.0.0")),
-            "echo": DependencySpec(semver.Version.parse("1.0.0")),
-        },
-        commands={"run": CommandSpec("alpha/main::main", "Run Alpha")},
+    manifest = package.root / "package.toml"
+    metadata = (
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n'
+        'description = "Alpha package"\nlicense = "MIT"\n'
+        'authors = ["Ada", "Lin"]\nrepository = "https://example.test/alpha"\n'
+        'keywords = ["agents", "tools"]\n\n'
+        '[commands]\nrun = { program = "alpha/main::main", description = "Run Alpha" }\n\n'
+        f'[dependencies]\nstd = "{AGM_VERSION}"\n'
+        'bravo = "1"\ncharlie = "2"\ndelta = "1"\necho = "1"\n'
     )
-    monkeypatch.setattr(info_command, "current_config_context", lambda: _context(tmp_path))
-    monkeypatch.setattr(
-        info_command,
-        "load_activation_index",
-        lambda **_: ActivationIndex(
-            {
-                "alpha": ActivePackage(manifest.version, editable=package.root),
-                "charlie": ActivePackage(semver.Version.parse("1.0.0")),
-                "delta": ActivePackage(semver.Version.parse("1.0.0"), editable=package.root),
-                "echo": ActivePackage(semver.Version.parse("1.0.0")),
-            }
-        ),
+    manifest.write_text(metadata)
+    delta = _package(tmp_path, "delta")
+    index = ActivationIndex(
+        {
+            "alpha": ActivePackage(package.manifest.version, editable=package.root),
+            "charlie": ActivePackage(semver.Version.parse("1.0.0")),
+            "delta": ActivePackage(delta.manifest.version, editable=delta.root),
+            "echo": ActivePackage(semver.Version.parse("1.0.0")),
+        }
     )
-    monkeypatch.setattr(
-        info_command, "resolve_active_package", lambda *_, **__: PackageInfo(package.root, manifest)
-    )
+    write_activation_index(index, home=_context(tmp_path).home)
 
     info_command.run(PkgInfoArgs("alpha"))
 
@@ -490,7 +341,6 @@ def test_info_command_renders_metadata_and_reports_unknown_package(
     assert "authors: Ada, Lin" in output
     assert "repository: https://example.test/alpha" in output
     assert "keywords: agents, tools" in output
-    assert "commands:" in output
     assert "run: alpha/main::main (Run Alpha)" in output
     bound = std_compatibility_bound(AGM_VERSION)
     assert f"requires std >= {AGM_VERSION}, < {bound}: running AGM {AGM_VERSION}" in output
@@ -500,41 +350,42 @@ def test_info_command_renders_metadata_and_reports_unknown_package(
     assert "requires echo >= 1.0.0: active 1.0.0" in output
 
     newer_agm = semver.Version.parse(AGM_VERSION).bump_major()
-    monkeypatch.setattr(
-        info_command,
-        "resolve_active_package",
-        lambda *_, **__: PackageInfo(
-            package.root, replace(manifest, dependencies={"std": DependencySpec(newer_agm)})
-        ),
-    )
+    manifest.write_text(metadata.replace(f'std = "{AGM_VERSION}"', f'std = "{newer_agm}"'))
     info_command.run(PkgInfoArgs("alpha"))
-    assert (
-        f"requires std >= {newer_agm}, < 2.0.0: running AGM {AGM_VERSION} (unsatisfied)"
-        in capsys.readouterr().out
-    )
+    assert "unsatisfied" in capsys.readouterr().out.split("requires std", 1)[1]
 
-    no_description = PackageManifest(name="alpha", version=manifest.version)
-    monkeypatch.setattr(
-        info_command,
-        "resolve_active_package",
-        lambda *_, **__: PackageInfo(package.root, no_description),
-    )
+    manifest.write_text('[package]\nname = "alpha"\nversion = "1.0.0"\n')
     info_command.run(PkgInfoArgs("alpha"))
-    monkeypatch.setattr(info_command, "load_activation_index", lambda **_: ActivationIndex())
-    with pytest.raises(SystemExit):
-        info_command.run(PkgInfoArgs("alpha"))
+    assert capsys.readouterr().out == "alpha 1.0.0\n"
 
-    monkeypatch.setattr(
-        info_command,
-        "load_activation_index",
-        lambda **_: ActivationIndex(
-            {"alpha": ActivePackage(manifest.version, editable=package.root)}
-        ),
-    )
-    monkeypatch.setattr(
-        info_command,
-        "resolve_active_package",
-        lambda *_, **__: (_ for _ in ()).throw(info_command.ManifestError("broken")),
-    )
-    with pytest.raises(SystemExit):
+    manifest.write_text("[broken")
+    with pytest.raises(SystemExit) as raised:
         info_command.run(PkgInfoArgs("alpha"))
+    assert raised.value.code == 1
+
+
+def test_list_attributes_commands_to_the_active_owner_and_rereads_editable_commands(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    home = _context(tmp_path).home
+    alpha = _command_package(tmp_path, "alpha")
+    bravo = _command_package(tmp_path, "bravo", commands=("launch", "bravo run"))
+    install_directory(alpha, home=home)
+    install_directory(bravo, home=home, editable=True, shadow=True)
+    _write_command_manifest(alpha, "alpha", version="2.0.0", commands=("launch",))
+    install_directory(alpha, home=home, shadow=True)
+
+    list_command.run(PkgListArgs())
+
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[lines.index("alpha 1.0.0 installed") + 1] == "alpha 2.0.0 active"
+    assert lines[lines.index("alpha 2.0.0 active") + 1] == "  command launch (shadows bravo)"
+    assert lines[lines.index("bravo 1.0.0 editable") + 1] == "  command bravo run"
+
+    _write_command_manifest(bravo, "bravo", version="1.1.0", commands=("bravo updated",))
+    list_command.run(PkgListArgs())
+    updated = capsys.readouterr().out
+    assert "bravo 1.1.0 editable" in updated
+    assert "command bravo updated" in updated
+    assert "command bravo run" not in updated
+    assert "shadows bravo" not in updated

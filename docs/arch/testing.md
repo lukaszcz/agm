@@ -6,9 +6,9 @@ The suite mirrors the architecture: AgL is tested pass by pass plus whole-progra
 
 - **AgL passes** each have their own suites, plus end-to-end corpora under `tests/agl/` (programs with multi-scenario sidecars, static rejections, multi-file programs, packages). Scope and typecheck have no per-module entry point in production, so their unit suites build a real single-entry `ModuleGraph` through `tests/agl/module_graph.py` rather than checking a bare AST.
 - **Commands** are tested at the CLI boundary. Most tests invoke `agm` once against a fixture; the multi-command arcs a real user follows live in `tests/test_e2e.py`, where state written by one command is proven to be the state the next one reads.
-- **Domain and primitives** have unit tests for behavior and edge cases.
+- **Domain and primitives** have unit tests for behavior and edge cases. Package command tests use real archives, manifests, and activation state; failure fixtures corrupt inputs or fail external I/O instead of replacing domain handlers.
 
-Tests assert observable behavior, never exact help, warning, or error text. Real agents are never invoked: agent and shell boundaries are mocked. The e2e harness stages a temporary CLI entry point using the test interpreter and checkout source, with ambient Python imports disabled. It installs nothing and needs no package cache or second interpreter. Tests survive concurrent and cross-worktree runs.
+Tests assert observable behavior, never exact help, warning, or error text. Import reuse and REPL state are checked through program output, edited modules, recovery, and redeclarations. Real agents are never invoked; agent transports and unavailable tools are faked at their external boundaries, while filesystem, git, shell, and loopback HTTP workflows execute real operations. The e2e harness stages a temporary CLI entry point using the test interpreter and checkout source, with ambient Python imports disabled. It installs nothing and needs no package cache or second interpreter. Tests survive concurrent and cross-worktree runs.
 
 ## Gates and Invariants
 

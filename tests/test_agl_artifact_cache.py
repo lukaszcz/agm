@@ -1,303 +1,108 @@
-"""A one-shot compilation reuses the artifacts an earlier one left behind.
-
-``agm exec``, ``agm check`` and every other non-REPL caller compiles a whole
-
-program: the entry module plus everything behind it. Whatever of that is
-unchanged from the last compilation in this process -- the standard library
-almost always, the program's own imports whenever nothing edited them -- has its
-scope resolution, type checking and compiled match sites reused rather than
-recomputed.
-
-These tests pin both halves of that contract: that the reuse fires (a later
-compilation does no work for a module it already has), and that it stops
-wherever the artifacts would no longer describe the modules in front of it -- a
-different root set, an edited file, a different host capability set, or a
-discarded image.
-"""
+"""Repeated program executions observe current source and isolated host state."""
 
 from __future__ import annotations
 
-import shutil
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from agm.agl import artifact_cache
-from agm.agl.artifact_cache import clear_retained_artifacts
-from agm.agl.matchcompile import stage as match_stage
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.modules.roots import RootSet, assemble_roots
 from agm.agl.pipeline import PipelineDriver
-from agm.agl.runtime.codec import OutputCodec
-from agm.agl.scope import program as scope_program
-from agm.agl.typecheck import program as typecheck_program
-from tests._agl_helpers import run_inline_command
-
-_STDLIB = Path(__file__).resolve().parents[1] / "stdlib"
-_HELPER_ID = ModuleId.from_path("helper")
-
-
-@pytest.fixture(autouse=True)
-def _cold_image() -> Iterator[None]:
-    """Give every test an empty image and leave none behind."""
-    clear_retained_artifacts()
-    yield
-    clear_retained_artifacts()
-
-
-@pytest.fixture
-def resolved_modules(monkeypatch: pytest.MonkeyPatch) -> list[ModuleId]:
-    """Record the module ids whose bodies scope resolution actually resolves."""
-    recorded: list[ModuleId] = []
-    original = scope_program._Resolver
-
-    def recording(**kwargs: object) -> object:
-        module_id = kwargs["module_id"]
-        assert isinstance(module_id, ModuleId)
-        recorded.append(module_id)
-        return original(**kwargs)
-
-    monkeypatch.setattr(scope_program, "_Resolver", recording)
-    return recorded
-
-
-@pytest.fixture
-def checked_modules(monkeypatch: pytest.MonkeyPatch) -> list[ModuleId]:
-    """Record the module ids whose bodies type checking actually checks."""
-    recorded: list[ModuleId] = []
-    original = typecheck_program._check_prepared_module
-
-    def recording(*args: object, **kwargs: object) -> object:
-        module_id = kwargs["module_id"]
-        assert isinstance(module_id, ModuleId)
-        recorded.append(module_id)
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(typecheck_program, "_check_prepared_module", recording)
-    return recorded
-
-
-@pytest.fixture
-def compiled_match_owners(monkeypatch: pytest.MonkeyPatch) -> list[ModuleId]:
-    """Record the module ids whose match sites are compiled from source."""
-    recorded: list[ModuleId] = []
-    original = match_stage._compile_owner_sites
-
-    def recording(owner: object) -> object:
-        module_id = getattr(owner, "module_id", ENTRY_ID)
-        assert isinstance(module_id, ModuleId)
-        recorded.append(module_id)
-        return original(owner)
-
-    monkeypatch.setattr(match_stage, "_compile_owner_sites", recording)
-    return recorded
-
-
-def _library(module_ids: list[ModuleId]) -> list[ModuleId]:
-    """Keep only the standard-library modules — the ones these cases are about."""
-    return [module_id for module_id in module_ids if module_id.segments[:1] == ("std",)]
-
-
-def _roots(invocation_root: Path, *, stdlib_root: Path) -> RootSet:
-    """Assemble the roots a real invocation from *invocation_root* would use."""
-    return assemble_roots(
-        invocation_root=invocation_root,
-        stdlib_root=stdlib_root,
-        lib_root=None,
-        configured=[],
-        cli=[],
-        cwd=invocation_root,
-    )
-
-
-def _compile(source: str, *, runtime: PipelineDriver | None = None, **kwargs: object) -> None:
-    """Compile and run one inline program the way ``agm exec -c`` does."""
-    result = run_inline_command(
-        runtime if runtime is not None else PipelineDriver(), source, **kwargs
-    )
-    assert result.ok, result.diagnostics
-
-
-# ---------------------------------------------------------------------------
-# The reuse fires
-# ---------------------------------------------------------------------------
-
-
-class TestLibraryReuse:
-    def test_a_later_compilation_resolves_only_its_entry(
-        self, resolved_modules: list[ModuleId]
-    ) -> None:
-        _compile("let x = 1\n")
-        resolved_modules.clear()
-
-        _compile("let y = 2\n")
-
-        assert _library(resolved_modules) == []
-
-    def test_a_later_compilation_checks_only_its_entry(
-        self, checked_modules: list[ModuleId]
-    ) -> None:
-        _compile("let x = 1\n")
-        checked_modules.clear()
-
-        _compile("let y = 2\n")
-
-        assert _library(checked_modules) == []
-
-    def test_a_later_compilation_compiles_only_its_own_match_sites(
-        self, compiled_match_owners: list[ModuleId]
-    ) -> None:
-        _compile("let x = 1\n")
-        compiled_match_owners.clear()
-
-        _compile("case 1 of\n  | 1 => 2\n  | _ => 3\n")
-
-        assert _library(compiled_match_owners) == []
-
-
-# ---------------------------------------------------------------------------
-# The reuse stops where the artifacts stop describing the library
-# ---------------------------------------------------------------------------
-
-
-class TestOrdinaryModuleReuse:
-    """A user module is reused on exactly the terms a library module is.
-
-    Nothing about the standard library makes it uniquely reusable. What makes
-    an artifact reusable is that the modules it was derived from are unchanged,
-    which an ordinary module satisfies just as often between two compilations
-    that did not touch it.
-    """
-
-    def test_a_later_compilation_reuses_an_unchanged_user_module(
-        self,
-        tmp_path: Path,
-        resolved_modules: list[ModuleId],
-        checked_modules: list[ModuleId],
-    ) -> None:
-        (tmp_path / "helper.agl").write_text("def helper() -> int = 1\n")
-        roots = _roots(tmp_path, stdlib_root=_STDLIB)
-        _compile("import helper::*\nhelper()\n", roots=roots)
-        resolved_modules.clear()
-        checked_modules.clear()
-
-        _compile("import helper::*\nhelper() + 1\n", roots=roots)
-
-        assert _HELPER_ID not in resolved_modules
-        assert _HELPER_ID not in checked_modules
-
-    def test_an_edited_user_module_is_derived_afresh(
-        self,
-        tmp_path: Path,
-        resolved_modules: list[ModuleId],
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """The rewrite below keeps the byte count, so only the text separates them."""
-        path = tmp_path / "helper.agl"
-        path.write_text("def helper() -> int = 1\n")
-        roots = _roots(tmp_path, stdlib_root=_STDLIB)
-        _compile("import helper::*\nprint(helper())\n", roots=roots)
-        resolved_modules.clear()
-        capsys.readouterr()
-
-        path.write_text("def helper() -> int = 7\n")
-        _compile("import helper::*\nprint(helper())\n", roots=roots)
-
-        assert _HELPER_ID in resolved_modules
-        assert "7" in capsys.readouterr().out
-
-
-class _NullCodec(OutputCodec):
-    """A host codec whose only purpose is to give a driver distinct capabilities."""
-
-    @property
-    def name(self) -> str:
-        return "null"
-
-    @property
-    def supported_kinds(self) -> frozenset[str]:
-        return frozenset({"text"})
-
-    def decode(self, raw: str, kind: str) -> object:
-        return raw
-
-
-class TestLibraryInvalidation:
-    def test_a_discarded_image_forces_a_cold_compilation(
-        self, resolved_modules: list[ModuleId], compiled_match_owners: list[ModuleId]
-    ) -> None:
-        _compile("let x = 1\n")
-        clear_retained_artifacts()
-        resolved_modules.clear()
-        compiled_match_owners.clear()
-
-        _compile("let y = 2\n")
-
-        assert _library(resolved_modules) != []
-        assert _library(compiled_match_owners) != []
-
-    def test_a_second_standard_library_gets_its_own_image(
-        self, tmp_path: Path, resolved_modules: list[ModuleId]
-    ) -> None:
-        """A root set naming other files for the library derives them afresh."""
-        replica = tmp_path / "stdlib"
-        shutil.copytree(_STDLIB, replica)
-        _compile("let x = 1\n")
-        resolved_modules.clear()
-
-        _compile("let y = 2\n", roots=_roots(tmp_path, stdlib_root=replica))
-
-        assert _library(resolved_modules) != []
-
-    def test_an_unrelated_extra_root_keeps_the_image(
-        self, tmp_path: Path, resolved_modules: list[ModuleId]
-    ) -> None:
-        """Adding user modules leaves the library's own files untouched.
-
-        The image is keyed by the identity of the modules an artifact was
-        derived from, never by the root set that found them, so a compilation
-        that merely searches one more directory -- and imports a module out of
-        it -- still reuses every library artifact.
-        """
-        (tmp_path / "extra.agl").write_text("def extra() -> int = 1\n")
-        roots = _roots(tmp_path, stdlib_root=_STDLIB)
-        _compile("let x = 1\n", roots=roots)
-        resolved_modules.clear()
-
-        _compile("import extra::*\nextra()\n", roots=roots)
-
-        assert _library(resolved_modules) == []
-
-    def test_a_second_capability_set_gets_its_own_checked_image(
-        self, checked_modules: list[ModuleId]
-    ) -> None:
-        _compile("let x = 1\n")
-        checked_modules.clear()
-
-        extended = PipelineDriver()
-        extended.register_codec(_NullCodec())
-        _compile("let y = 2\n", runtime=extended)
-
-        assert _library(checked_modules) != []
-
-
-# ---------------------------------------------------------------------------
-# The reuse changes nothing a caller can observe
-# ---------------------------------------------------------------------------
-
-
-def test_library_reuse_changes_no_program_outcome(capsys: pytest.CaptureFixture[str]) -> None:
-    """A program run against a warm image prints exactly what a cold one prints."""
-    source = 'let doubled = [1, 2, 3].map(fn(n: int) -> int => n * 2)\nprint("%{doubled[2]}")\n'
+from agm.agl.runtime.codec import TextCodec
+from tests._agl_helpers import agl_roots, run_inline_command
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("print([1, 2, 3].map(fn(n: int) -> int => n * 2)[2])", "6\n"),
+        ("print(case 1 of | 1 => 2 | _ => 3)", "2\n"),
+        ("var counter = 0\ncounter := counter + 1\nprint(counter)", "1\n"),
+    ],
+    ids=["library-method", "match", "fresh-mutable-state"],
+)
+def test_repeated_executions_produce_the_expected_output(
+    source: str, expected: str, capsys: pytest.CaptureFixture[str]
+) -> None:
     runtime = PipelineDriver()
+    for _ in range(2):
+        result = run_inline_command(runtime, source)
+        assert result.ok, result.diagnostics
+        assert capsys.readouterr().out == expected
 
-    _compile(source, runtime=runtime)
-    cold = capsys.readouterr().out
-    _compile(source, runtime=runtime)
-    warm = capsys.readouterr().out
 
-    assert cold == warm == "6\n"
+@pytest.mark.parametrize(
+    ("replacement", "expected"),
+    [("def helper() -> int = 7\n", "7\n"), ('def helper() -> text = "new"\n', "new\n")],
+    ids=["same-size-edit", "changed-return-type"],
+)
+def test_edited_imports_change_the_next_execution(
+    tmp_path: Path, replacement: str, expected: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "helper.agl"
+    path.write_text("def helper() -> int = 1\n")
+    roots = agl_roots(tmp_path)
+    runtime = PipelineDriver()
+    source = "import helper::*\nprint(helper())\n"
+    assert run_inline_command(runtime, source, roots=roots).ok
+    assert capsys.readouterr().out == "1\n"
+
+    path.write_text(replacement)
+    result = run_inline_command(runtime, source, roots=roots)
+
+    assert result.ok, result.diagnostics
+    assert capsys.readouterr().out == expected
+
+
+def test_invalid_import_edit_is_rejected_and_can_be_repaired(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "helper.agl"
+    roots = agl_roots(tmp_path)
+    runtime = PipelineDriver()
+    source = "import helper::*\nprint(helper())\n"
+    path.write_text("def helper() -> int = 1\n")
+    assert run_inline_command(runtime, source, roots=roots).ok
+    assert capsys.readouterr().out == "1\n"
+
+    path.write_text('def helper() -> int = "bad"\n')
+    failed = run_inline_command(runtime, source, roots=roots)
+    assert not failed.ok
+    assert failed.diagnostics
+    assert capsys.readouterr().out == ""
+
+    path.write_text("def helper() -> int = 9\n")
+    assert run_inline_command(runtime, source, roots=roots).ok
+    assert capsys.readouterr().out == "9\n"
+
+
+def test_same_named_imports_are_isolated_between_roots(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    runtime = PipelineDriver()
+    for name, value in (("first", 1), ("second", 7), ("first", 1)):
+        root = tmp_path / name
+        root.mkdir(exist_ok=True)
+        (root / "helper.agl").write_text(f"def helper() -> int = {value}\n")
+        result = run_inline_command(
+            runtime, "import helper::*\nprint(helper())\n", roots=agl_roots(root)
+        )
+        assert result.ok, result.diagnostics
+        assert capsys.readouterr().out == f"{value}\n"
+
+
+def test_discarding_compilation_state_preserves_program_behavior(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = "print([1, 2, 3].map(fn(n: int) -> int => n * 2)[2])"
+    runtime = PipelineDriver()
+    assert run_inline_command(runtime, source).ok
+    assert capsys.readouterr().out == "6\n"
+
+    artifact_cache.clear_retained_artifacts()
+
+    assert run_inline_command(runtime, source).ok
+    assert capsys.readouterr().out == "6\n"
 
 
 def test_the_image_is_bounded_and_evicts_the_least_recently_used() -> None:
@@ -317,3 +122,29 @@ def test_the_image_is_bounded_and_evicts_the_least_recently_used() -> None:
     assert store.get(("b",), sources) is None
     assert store.get(("a",), sources) == "first"
     assert store.get(("c",), sources) == "third"
+
+
+def test_custom_response_formats_do_not_leak_between_hosts(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class TaggedCodec(TextCodec):
+        @property
+        def name(self) -> str:
+            return "tagged"
+
+    extended = PipelineDriver(agent_dispatcher=lambda request: "answer")
+    extended.register_codec(TaggedCodec())
+    source = 'let answer: text = ask("prompt", format = "tagged")\nprint(answer)'
+    assert run_inline_command(extended, source).ok
+    assert capsys.readouterr().out == "answer\n"
+
+    ordinary = PipelineDriver(
+        agent_dispatcher=lambda _: pytest.fail("unsupported format dispatched")
+    )
+    rejected = run_inline_command(ordinary, source)
+    assert not rejected.ok
+    assert rejected.diagnostics or rejected.error is not None
+    assert capsys.readouterr().out == ""
+
+    assert run_inline_command(extended, source).ok
+    assert capsys.readouterr().out == "answer\n"

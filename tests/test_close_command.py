@@ -10,7 +10,7 @@ import pytest
 import agm.commands.workspace.close as close_module
 from agm.cli_support.args import CloseArgs
 from agm.commands.workspace.close import close_workspace
-from tests._git_helpers import init_repo
+from tests._git_helpers import git_output, init_repo
 
 
 def _make_git_close_project(
@@ -76,124 +76,45 @@ def _install_fake_tmux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, path:
 
 
 class TestCloseSessionRemovesWorkspaceConfig:
-    def _setup_close_dependencies(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, branch: str
-    ) -> tuple[Path, Path]:
-        proj_dir = tmp_path / "proj"
-        repo_dir = proj_dir / "repo"
-        (proj_dir / "config").mkdir(parents=True)
-        repo_dir.mkdir()
-
-        monkeypatch.setattr(close_module, "require_current_project_dir", lambda cwd=None: proj_dir)
-        monkeypatch.setattr(close_module, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(close_module.git_helpers, "current_branch", lambda repo: "main")
-        monkeypatch.setattr(
-            close_module,
-            "is_main_workspace_branch",
-            lambda pd, close_branch, repo_branch: False,
-        )
-        monkeypatch.setattr(
-            close_module.git_helpers, "branch_can_delete", lambda repo, b, **kw: True
-        )
-        monkeypatch.setattr(close_module, "remove_worktree", lambda **kw: None)
-        monkeypatch.setattr(
-            close_module,
-            "load_workspace_env",
-            lambda pd, config_branch, workspace_dir: {"HOME": str(tmp_path / "home")},
-        )
-        monkeypatch.setattr(
-            close_module, "branch_session_name", lambda pd, close_branch: f"proj/{close_branch}"
-        )
-        monkeypatch.setattr(close_module, "close_tmux_session", lambda **kw: None)
-        return proj_dir, proj_dir / "config" / branch
-
-    def test_missing_workspace_config_is_left_uncommitted(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("config_kind", ["missing", "file", "directory"])
+    def test_close_updates_versioned_config_without_touching_other_workspaces(
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+        config_kind: str,
     ) -> None:
-        _, workspace_config = self._setup_close_dependencies(
-            tmp_path, monkeypatch, branch="feature"
+        project, _, worktree = _make_git_close_project(tmp_path, env)
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+        _install_fake_tmux(tmp_path, monkeypatch, path=env["PATH"])
+        config_repo = init_repo(project / "config", env)
+        target = config_repo / "feature"
+        if config_kind == "file":
+            target.write_text("settings")
+        elif config_kind == "directory":
+            target.mkdir()
+            (target / "config.toml").write_text("[run]\ntimeout = 5\n")
+        sibling = config_repo / "other"
+        sibling.mkdir()
+        (sibling / "config.toml").write_text("[run]\ntimeout = 7\n")
+        subprocess.run(["git", "add", "."], cwd=config_repo, env=env, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "workspace configs"], cwd=config_repo, env=env, check=True
         )
+        previous_head = git_output(config_repo, ["rev-parse", "HEAD"], env)
 
-        commit_calls: list[str] = []
-        monkeypatch.setattr(
-            close_module,
-            "commit_config_dir_changes",
-            lambda pd, msg, **kw: commit_calls.append(msg),
-        )
+        close_workspace(branch="feature", cwd=project)
 
-        close_workspace(branch="feature", cwd=tmp_path)
-
-        assert not workspace_config.exists()
-        assert commit_calls == []
-
-    def test_removes_workspace_config_and_commits_with_branch_name(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _, workspace_config = self._setup_close_dependencies(
-            tmp_path, monkeypatch, branch="my-feature"
-        )
-        workspace_config.mkdir()
-
-        commit_messages: list[str] = []
-        monkeypatch.setattr(
-            close_module,
-            "commit_config_dir_changes",
-            lambda pd, msg, **kw: commit_messages.append(msg),
-        )
-
-        close_workspace(branch="my-feature", cwd=tmp_path)
-
-        assert not workspace_config.exists()
-        assert len(commit_messages) == 1
-        assert "my-feature" in commit_messages[0]
-
-    def test_removes_workspace_config_file(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _, workspace_config = self._setup_close_dependencies(
-            tmp_path, monkeypatch, branch="feature"
-        )
-        workspace_config.write_text("data", encoding="utf-8")
-
-        close_workspace(branch="feature", cwd=tmp_path)
-
-        assert not workspace_config.exists()
-
-
-# ===========================================================================
-# close_workspace
-# ===========================================================================
+        assert not target.exists()
+        assert not worktree.exists()
+        assert (sibling / "config.toml").read_text() == "[run]\ntimeout = 7\n"
+        assert git_output(config_repo, ["status", "--porcelain"], env) == ""
+        head = git_output(config_repo, ["rev-parse", "HEAD"], env)
+        assert (head == previous_head) is (config_kind == "missing")
 
 
 class TestCloseSession:
-    def _setup(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, is_main: bool = False
-    ) -> None:
-        proj_dir = tmp_path / "proj"
-        repo_dir = proj_dir / "repo"
-        repo_dir.mkdir(parents=True)
-
-        monkeypatch.setattr(close_module, "require_current_project_dir", lambda cwd=None: proj_dir)
-        monkeypatch.setattr(close_module, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(close_module.git_helpers, "current_branch", lambda repo, **kw: "main")
-        monkeypatch.setattr(
-            close_module, "is_main_workspace_branch", lambda pd, branch, repo_branch: is_main
-        )
-        monkeypatch.setattr(
-            close_module, "load_workspace_env", lambda pd, branch, workspace_dir: {}
-        )
-        monkeypatch.setattr(
-            close_module.git_helpers, "branch_can_delete", lambda repo, b, **kw: True
-        )
-        monkeypatch.setattr(close_module, "remove_worktree", lambda **kw: None)
-        monkeypatch.setattr(
-            close_module, "_remove_workspace_config", lambda *, proj_dir, branch, env: None
-        )
-        monkeypatch.setattr(
-            close_module, "branch_session_name", lambda pd, branch: f"{pd.name}/{branch}"
-        )
-        monkeypatch.setattr(close_module, "close_tmux_session", lambda **kw: None)
-
     def test_removes_worktree_branch_and_closes_session(
         self,
         tmp_path: Path,
@@ -225,13 +146,18 @@ class TestCloseSession:
         assert not _branch_exists(repo_dir, branch, env)
         assert "kill-session -t proj/rocq-9_2" in tmux_log.read_text(encoding="utf-8")
 
-    def test_exits_when_branch_is_main_checkout(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("branch", ["main", "missing"])
+    def test_invalid_close_preserves_the_main_checkout(
+        self, tmp_path: Path, env: dict[str, str], branch: str
     ) -> None:
-        self._setup(tmp_path, monkeypatch, is_main=True)
-        with pytest.raises(SystemExit) as exc_info:
-            close_workspace(branch="main", cwd=tmp_path)
-        assert exc_info.value.code == 1
+        project, repo, worktree = _make_git_close_project(tmp_path, env)
+        with pytest.raises(SystemExit) as raised:
+            close_workspace(branch=branch, cwd=project)
+        assert raised.value.code == 1
+        assert (repo / "README.md").read_text() == "# test\n"
+        assert worktree.is_dir()
+        assert _branch_exists(repo, "main", env)
+        assert _branch_exists(repo, "feature", env)
 
     def test_exits_without_removing_worktree_when_branch_not_deletable(
         self,
@@ -248,36 +174,6 @@ class TestCloseSession:
         assert worktree_dir.exists()
         assert _branch_exists(repo_dir, "feature", env)
         assert "not fully merged" in capsys.readouterr().err
-
-    def test_exits_with_not_merged_message_when_branch_not_fully_merged(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        self._setup(tmp_path, monkeypatch)
-        monkeypatch.setattr(
-            close_module.git_helpers, "branch_can_delete", lambda repo, b, **kw: False
-        )
-        monkeypatch.setattr(
-            close_module.git_helpers, "local_branch_exists", lambda repo, b, **kw: True
-        )
-        with pytest.raises(SystemExit):
-            close_workspace(branch="feature", cwd=tmp_path)
-        captured = capsys.readouterr()
-        assert "not fully merged" in captured.err
-        assert "-D" in captured.err
-
-    def test_exits_with_not_found_message_when_branch_missing(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        self._setup(tmp_path, monkeypatch)
-        monkeypatch.setattr(
-            close_module.git_helpers, "branch_can_delete", lambda repo, b, **kw: False
-        )
-        monkeypatch.setattr(
-            close_module.git_helpers, "local_branch_exists", lambda repo, b, **kw: False
-        )
-        with pytest.raises(SystemExit):
-            close_workspace(branch="feature", cwd=tmp_path)
-        assert "does not exist" in capsys.readouterr().err
 
     def test_force_delete_removes_unmerged_branch(
         self,
@@ -346,47 +242,59 @@ class TestCloseSession:
 
 
 class TestCloseRun:
-    def _setup_force_sensitive_close(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-        proj_dir = tmp_path / "proj"
-        repo_dir = proj_dir / "repo"
-        repo_dir.mkdir(parents=True)
-        (proj_dir / "config").mkdir()
-
-        monkeypatch.setattr(close_module, "require_current_project_dir", lambda cwd=None: proj_dir)
-        monkeypatch.setattr(close_module, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(close_module.git_helpers, "current_branch", lambda repo: "main")
-        monkeypatch.setattr(
-            close_module,
-            "is_main_workspace_branch",
-            lambda pd, branch, repo_branch: False,
-        )
-        monkeypatch.setattr(
-            close_module.git_helpers,
-            "branch_can_delete",
-            lambda repo, branch, **kw: bool(kw.get("force")),
-        )
-        monkeypatch.setattr(
-            close_module.git_helpers, "local_branch_exists", lambda repo, branch: True
-        )
-        monkeypatch.setattr(close_module, "remove_worktree", lambda **kw: None)
-        monkeypatch.setattr(
-            close_module, "load_workspace_env", lambda pd, branch, workspace_dir: {}
-        )
-        monkeypatch.setattr(
-            close_module, "branch_session_name", lambda pd, branch: f"proj/{branch}"
-        )
-        monkeypatch.setattr(close_module, "close_tmux_session", lambda **kw: None)
-        return repo_dir
-
-    def test_run_without_force_rejects_unmerged_branch(
+    @pytest.mark.parametrize(
+        ("force", "force_delete", "keep_workspace", "kept"),
+        [(True, False, False, False), (False, True, False, False), (False, False, True, True)],
+        ids=["force", "force-delete", "keep-workspace"],
+    )
+    def test_unmerged_branch_policy_preserves_or_removes_workspace(
         self,
         tmp_path: Path,
+        env: dict[str, str],
         monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
+        force: bool,
+        force_delete: bool,
+        keep_workspace: bool,
+        kept: bool,
     ) -> None:
-        self._setup_force_sensitive_close(tmp_path, monkeypatch)
+        project, repo, worktree = _make_git_close_project(tmp_path, env, unmerged=True)
+        tmux_log = _install_fake_tmux(tmp_path, monkeypatch, path=env["PATH"])
+        config = project / "config" / "feature"
+        config.mkdir()
+        (config / "config.toml").write_text("[run]\ntimeout = 5\n", encoding="utf-8")
+        monkeypatch.chdir(project)
 
-        with pytest.raises(SystemExit):
+        close_module.run(
+            CloseArgs(
+                branch="feature",
+                force=force,
+                force_delete=force_delete,
+                keep_branch=False,
+                keep_workspace=keep_workspace,
+            )
+        )
+
+        assert worktree.exists() is kept
+        assert config.exists() is kept
+        assert _branch_exists(repo, "feature", env) is kept
+        assert "kill-session -t proj/feature" in tmux_log.read_text(encoding="utf-8")
+        if kept:
+            assert (worktree / "feature.txt").read_text(encoding="utf-8") == "feature\n"
+            assert (config / "config.toml").read_text(encoding="utf-8") == "[run]\ntimeout = 5\n"
+
+    def test_rejected_close_preserves_unmerged_work_and_config(
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        project, repo, worktree = _make_git_close_project(tmp_path, env, unmerged=True)
+        tmux_log = _install_fake_tmux(tmp_path, monkeypatch, path=env["PATH"])
+        config = project / "config" / "feature"
+        config.mkdir()
+        monkeypatch.chdir(project)
+
+        with pytest.raises(SystemExit) as raised:
             close_module.run(
                 CloseArgs(
                     branch="feature",
@@ -397,49 +305,8 @@ class TestCloseRun:
                 )
             )
 
-        assert "not fully merged" in capsys.readouterr().err
-
-    def test_run_force_delete_allows_unmerged_branch(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._setup_force_sensitive_close(tmp_path, monkeypatch)
-
-        close_module.run(
-            CloseArgs(
-                branch="feature",
-                force=False,
-                force_delete=True,
-                keep_branch=False,
-                keep_workspace=False,
-            )
-        )
-
-    def test_run_force_allows_unmerged_branch(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._setup_force_sensitive_close(tmp_path, monkeypatch)
-
-        close_module.run(
-            CloseArgs(
-                branch="feature",
-                force=True,
-                force_delete=False,
-                keep_branch=False,
-                keep_workspace=False,
-            )
-        )
-
-    def test_run_keep_workspace_skips_branch_delete_check(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._setup_force_sensitive_close(tmp_path, monkeypatch)
-
-        close_module.run(
-            CloseArgs(
-                branch="feature",
-                force=False,
-                force_delete=False,
-                keep_branch=False,
-                keep_workspace=True,
-            )
-        )
+        assert raised.value.code == 1
+        assert (worktree / "feature.txt").read_text(encoding="utf-8") == "feature\n"
+        assert config.is_dir()
+        assert _branch_exists(repo, "feature", env)
+        assert not tmux_log.exists()

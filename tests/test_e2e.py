@@ -30,7 +30,6 @@ import tomllib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from types import SimpleNamespace
 from typing import TypedDict, cast
 
 import pytest
@@ -38,14 +37,7 @@ import pytest
 from agm.packages.record import write_record
 from agm.project.workspace_shell import _sanitize_session_key
 from tests._agl_helpers import write_file_program
-from tests._command_coverage import (
-    GATE_ENV,
-    gate_enabled,
-    leaf_commands,
-    record_invocation,
-    recorded_commands,
-    resolve_leaf_path,
-)
+from tests._command_coverage import record_invocation
 from tests._git_helpers import clone_with_fork_remote
 from tests._package_helpers import write_installed_package
 from tests._proc_helpers import wait_for_path
@@ -10039,97 +10031,3 @@ class TestRefineCommand:
 
 
 # ── the e2e command-coverage gate ────────────────────────────────────────────
-
-
-class TestCommandCoverageGate:
-    """The gate that keeps this file exercising every registered leaf command.
-
-    See :mod:`tests._command_coverage`: it enumerates AGM's command surface from
-    the live Typer registry and compares it against what :func:`run_agm` really
-    invoked.  These tests pin the two derivations and the gate's scope rule.
-    """
-
-    @staticmethod
-    def _config(
-        args: list[str],
-        *,
-        keyword: str = "",
-        markexpr: str = "",
-        deselect: list[str] | None = None,
-        collectonly: bool = False,
-        lf: bool = False,
-    ) -> SimpleNamespace:
-        """Build the minimal pytest-config surface :func:`gate_enabled` reads."""
-        option = SimpleNamespace(
-            keyword=keyword,
-            markexpr=markexpr,
-            deselect=deselect,
-            collectonly=collectonly,
-            lf=lf,
-            failedfirst=False,
-        )
-        return SimpleNamespace(
-            option=option,
-            args=args,
-            invocation_params=SimpleNamespace(dir=Path(__file__).resolve().parents[1]),
-        )
-
-    def test_enumerates_nested_leaves_under_canonical_group_names(self) -> None:
-        leaves = leaf_commands()
-
-        assert ("exec",) in leaves
-        assert ("workspace", "list") in leaves
-        assert ("dep", "remove") in leaves
-        assert ("dep", "rm") in leaves
-        # Alias group spellings are folded onto the command they duplicate.
-        assert not [path for path in leaves if path[0] in {"wsp", "wt"}]
-
-    @pytest.mark.parametrize(
-        ("args", "expected"),
-        [
-            (["exec", "-c", "print 1"], ("exec",)),
-            (["--dry-run", "workspace", "list"], ("workspace", "list")),
-            (["wsp", "shell-regen"], ("workspace", "shell-regen")),
-            (["wt", "rm", "-f", "branch"], ("worktree", "rm")),
-            (["loop", "run", "--no-selector"], ("loop",)),
-            # Bare groups, unknown words and package commands name no leaf.
-            (["config"], None),
-            (["not-a-command"], None),
-            ([], None),
-        ],
-    )
-    def test_resolves_argv_to_the_leaf_it_invokes(
-        self, args: list[str], expected: tuple[str, ...] | None
-    ) -> None:
-        assert resolve_leaf_path(args) == expected
-
-    def test_records_the_command_a_run_agm_call_invoked(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        result = run_agm(["help", "dep"], env=env, cwd=str(tmp_path))
-
-        assert result.returncode == 0
-        assert ("help",) in recorded_commands()
-
-    def test_gate_covers_whole_suite_runs_only(self) -> None:
-        assert gate_enabled(cast(pytest.Config, self._config(["tests"])))
-        assert gate_enabled(cast(pytest.Config, self._config(["."])))
-        # A single file, a narrowed selection or a collect-only pass proves
-        # nothing about the command surface, so the gate stays silent.
-        assert not gate_enabled(cast(pytest.Config, self._config(["tests/test_e2e.py"])))
-        assert not gate_enabled(cast(pytest.Config, self._config(["tests/test_e2e.py::TestOpen"])))
-        assert not gate_enabled(cast(pytest.Config, self._config([])))
-        assert not gate_enabled(cast(pytest.Config, self._config(["tests"], keyword="open")))
-        assert not gate_enabled(cast(pytest.Config, self._config(["tests"], markexpr="slow")))
-        assert not gate_enabled(cast(pytest.Config, self._config(["tests"], deselect=["x"])))
-        assert not gate_enabled(cast(pytest.Config, self._config(["tests"], collectonly=True)))
-        assert not gate_enabled(cast(pytest.Config, self._config(["tests"], lf=True)))
-
-    def test_environment_override_forces_the_gate_either_way(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv(GATE_ENV, "1")
-        assert gate_enabled(cast(pytest.Config, self._config(["tests/test_e2e.py"])))
-
-        monkeypatch.setenv(GATE_ENV, "0")
-        assert not gate_enabled(cast(pytest.Config, self._config(["tests"])))

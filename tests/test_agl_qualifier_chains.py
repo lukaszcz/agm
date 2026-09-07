@@ -309,7 +309,7 @@ def test_current_module_unknown_constructor_owner_reports_its_segment(source: st
     with pytest.raises(AglScopeError) as exc_info:
         resolve_inline_entry(source)
 
-    assert exc_info.value.to_diagnostic().message == "'Unknown' is not defined in this module."
+    assert "Unknown" in exc_info.value.to_diagnostic().message
     assert exc_info.value.span == expr.qualifier.segments[0].span
 
 

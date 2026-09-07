@@ -202,15 +202,19 @@ program def main() -> unit =
 (each character as a length-1 `text`). The loop variable `x` takes the
 element/key/char type respectively. `COLLECTION` is evaluated once, at loop
 entry. For an `array`, the loop observes that same mutable value for its
-whole run, so an indexed assignment to an element the cursor has not yet
-reached (through any alias of the array, including the loop body itself)
-changes what `x` is bound to when the cursor gets there. For a `dict`, `x`
-ranges over the key sequence fixed at loop entry — an indexed assignment
-cannot change the key set, so it can never change what `x` is bound to; a
-`d[k]` read inside the body, however, reflects any mutation performed to
-that key's value during the loop. An indexed assignment can change neither
-an array's length nor a dict's key set, so the number of iterations is fixed
-at loop entry regardless of any mutation performed during the loop.
+whole run and captures its length as an upper bound at entry. Each iteration
+reads the element at the cursor's current index from the live array. An
+indexed assignment to an element the cursor has not yet reached (through any
+alias of the array, including the loop body itself) therefore changes what
+`x` is bound to when the cursor gets there. Appending or inserting elements
+cannot increase the entry-time upper bound. Removing elements or clearing the
+array ends iteration when the cursor reaches the live end, so the loop may run
+fewer times than that bound. Insertions and removals before the cursor shift
+live indices in the usual way and can therefore cause an element to be visited
+again or skipped. For a `dict`, `x` ranges over the key sequence fixed at loop
+entry — an indexed assignment cannot change the key set, so it can never change
+what `x` is bound to; a `d[k]` read inside the body, however, reflects any
+mutation performed to that key's value during the loop.
 
 **`for` — integer range.** `for i in a to b` runs `i = a, a+1, …, b`
 (inclusive); `for i in a downto b` runs `i = a, a-1, …, b` (inclusive).
@@ -288,7 +292,7 @@ usual `unit` result, and enclosing loops are abandoned as well.
 ### The host `max-iters` safety valve
 
 A `[n]` bound is the loop's own termination machinery. Loops with a `for`
-clause are bounded by a finite collection. Both are **self-bounded** and are
+clause have a finite entry-time iteration bound. Both are **self-bounded** and are
 never cut short by the host. The host's `max-iters` setting
 (`--max-iters` / `[exec] max-iters` / a `std/config::max-iters` write) is a
 **safety valve** that applies **only to unbounded loops** — those with no `[n]` bound

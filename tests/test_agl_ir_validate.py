@@ -79,6 +79,9 @@ from agm.agl.ir import (
     UseDefault,
     VariantDescriptor,
 )
+from agm.agl.ir.contracts import ContractRequest
+from agm.agl.ir.ids import ContractId
+from agm.agl.ir.nodes import IrExpr
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.modules.ids import STD_CONFIG_ID, ModuleId
 
@@ -2255,13 +2258,12 @@ class TestIrExecValidation:
 
     def _make_prog_with_contract(
         self,
-        node: "object",
-        contract_id: "object",
-        contracts: "object",
+        node: IrExpr,
+        contracts: dict[ContractId, ContractRequest],
     ) -> ExecutableProgram:
         """Build a program with a custom initializer and contracts table."""
 
-        em = ExecutableModule(module_id=MOD_A, initializers=(node,))  # type: ignore[arg-type]
+        em = ExecutableModule(module_id=MOD_A, initializers=(node,))
         sf = SourceFile(display_name="main.agl", normalized_text='exec("x")\n()')
         nom_desc = NominalDescriptor(
             nominal=NOM0,
@@ -2277,7 +2279,7 @@ class TestIrExecValidation:
             nominals={NOM0: nom_desc},
             sources={SID0: sf},
             functions={},
-            contracts=contracts,  # type: ignore[arg-type]
+            contracts=contracts,
         )
 
     def test_ir_exec_valid_cheap(self) -> None:
@@ -2306,7 +2308,7 @@ class TestIrExecValidation:
             contract_id=cid,
             max_attempts=1,
         )
-        prog = self._make_prog_with_contract(node, cid, {cid: contract})
+        prog = self._make_prog_with_contract(node, {cid: contract})
         validate_ir(prog, deep=False)  # no exception
 
     def test_ir_exec_bad_contract_id_raises_deep(self) -> None:
@@ -2324,7 +2326,7 @@ class TestIrExecValidation:
             contract_id=cid,
             max_attempts=1,
         )
-        prog = self._make_prog_with_contract(node, cid, {})  # empty contracts
+        prog = self._make_prog_with_contract(node, {})  # empty contracts
         with pytest.raises(InvalidIrError, match="9999"):
             validate_ir(prog, deep=True)
 
@@ -2355,7 +2357,7 @@ class TestIrExecValidation:
             contract_id=cid,
             max_attempts=1,
         )
-        prog = self._make_prog_with_contract(node, cid, {cid: contract})
+        prog = self._make_prog_with_contract(node, {cid: contract})
         with pytest.raises(InvalidIrError, match="RefDecode.*cycle.*A"):
             validate_ir(prog, deep=True)
 
@@ -2389,7 +2391,7 @@ class TestIrExecValidation:
             contract_id=cid,
             max_attempts=1,
         )
-        prog = self._make_prog_with_contract(node, cid, {cid: contract})
+        prog = self._make_prog_with_contract(node, {cid: contract})
         with pytest.raises(InvalidIrError, match="duplicate.*A"):
             validate_ir(prog, deep=True)
 
@@ -2420,7 +2422,7 @@ class TestIrExecValidation:
             contract_id=cid,
             max_attempts=1,
         )
-        prog = self._make_prog_with_contract(node, cid, {cid: contract})
+        prog = self._make_prog_with_contract(node, {cid: contract})
         with pytest.raises(InvalidIrError, match="defs but decode is None"):
             validate_ir(prog, deep=True)
 
@@ -2450,7 +2452,7 @@ class TestIrExecValidation:
             contract_id=cid,
             max_attempts=1,
         )
-        prog = self._make_prog_with_contract(node, cid, {cid: contract})
+        prog = self._make_prog_with_contract(node, {cid: contract})
         with pytest.raises(InvalidIrError, match="must not carry json_schema/decode/defs"):
             validate_ir(prog, deep=True)
 
@@ -2480,7 +2482,7 @@ class TestIrExecValidation:
             contract_id=cid,
             max_attempts=1,
         )
-        prog = self._make_prog_with_contract(node, cid, {cid: contract})
+        prog = self._make_prog_with_contract(node, {cid: contract})
         with pytest.raises(InvalidIrError, match="must not carry json_schema/decode/defs"):
             validate_ir(prog, deep=True)
 
@@ -2510,6 +2512,6 @@ class TestIrExecValidation:
             contract_id=cid,
             max_attempts=0,  # invalid
         )
-        prog = self._make_prog_with_contract(node, cid, {cid: contract})
+        prog = self._make_prog_with_contract(node, {cid: contract})
         with pytest.raises(InvalidIrError, match="max_attempts"):
             validate_ir(prog, deep=True)

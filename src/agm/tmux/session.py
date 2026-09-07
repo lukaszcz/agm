@@ -428,10 +428,10 @@ def kill_tmux_session(
     current = Path.cwd() if cwd is None else cwd.resolve()
     resolved_env = clone_env(env)
     if dry_run.enabled():
-        dry_run.print_command(["tmux", "kill-session", "-t", session_name], cwd=current)
+        dry_run.print_command(["tmux", "kill-session", "-t", f"={session_name}"], cwd=current)
         return 0
     return _tmux_foreground(
-        ["tmux", "kill-session", "-t", session_name],
+        ["tmux", "kill-session", "-t", f"={session_name}"],
         cwd=current,
         env=resolved_env,
     )

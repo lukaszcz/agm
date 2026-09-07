@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -23,8 +24,6 @@ def test_startup_interrupt_reaps_child_and_runs_cleanup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str, mode: str, isolate: bool
 ) -> None:
     """An interrupt before waiting must release the child and external resources."""
-    import subprocess
-
     children: list[subprocess.Popen[bytes]] = []
     original_spawn = subprocess.Popen
     original_mask = signal.pthread_sigmask
@@ -456,6 +455,45 @@ class TestRunCaptureResultIdleTimeout:
         assert result.returncode == 0
         assert result.timed_out is False
         assert "chunk 0" in result.stdout
+
+    def test_idle_timeout_remains_active_after_output_streams_close(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class ClosedStreamsProcess:
+            returncode: int | None = None
+            stdin = None
+
+            def __init__(self) -> None:
+                empty = tmp_path / "empty"
+                empty.touch()
+                self.stdout = empty.open("rb")
+                self.stderr = empty.open("rb")
+
+            def poll(self) -> int | None:
+                return self.returncode
+
+            def wait(self, timeout: float | None = None) -> int:
+                if self.returncode is not None:
+                    return self.returncode
+                if timeout is not None:
+                    raise subprocess.TimeoutExpired(["child"], timeout)
+                self.returncode = 0
+                return 0
+
+            def terminate(self) -> None:
+                self.returncode = -15
+
+        process = ClosedStreamsProcess()
+        monkeypatch.setattr("subprocess.Popen", lambda *_args, **_kwargs: process)
+
+        result = run_capture_result(
+            ["child"],
+            idle_timeout=1.0,
+            isolate_process_group=False,
+        )
+
+        assert result.timed_out is True
+        assert result.returncode == -15
 
 
 class TestRunCaptureResultCwdEnv:

@@ -433,19 +433,13 @@ class IrClosureValue:
 class IteratorValue:
     """Internal loop iterator cursor.
 
-    Holds the source collection **by reference**, plus a position index, so
-    a mutation performed elsewhere while the loop is running is observed at
-    the cursor's not-yet-reached positions. For an ``array`` source,
-    ``elements`` is the ``ArrayValue``'s own element list object (no copy),
-    so an in-place element mutation is visible immediately. For a ``dict``
-    source, ``elements`` is a tuple of ``TextValue`` materialized once (the
-    keys) — sound because indexed assignment can never change a dict's key
-    set, so the key sequence is fixed for the collection's lifetime even
-    though the values behind those keys may still change. For a ``text``
-    source, ``elements`` is a tuple of ``TextValue`` materialized once (the
-    characters) — sound because ``text`` is immutable, so no assignment can
-    ever change it. Mutable in place so ``IrIterNext`` can advance without
-    rebuilding the object.
+    Holds the source sequence by reference, plus its entry length and a
+    position index. Array element and structural mutations are therefore
+    visible at not-yet-reached live indices, while the entry length prevents
+    appends from extending the loop indefinitely. A shorter live sequence
+    exhausts the cursor early. Dict keys and text characters are immutable
+    tuples materialized once. Mutable in place so ``IrIterNext`` can advance
+    without rebuilding the object.
 
     Never rendered, hashed for equality, serialized, or returned to user
     code — it is an evaluator-internal value only.
@@ -453,6 +447,10 @@ class IteratorValue:
 
     elements: "Sequence[Value]"
     pos: int = 0
+    entry_length: int = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.entry_length = len(self.elements)
 
 
 # ---------------------------------------------------------------------------

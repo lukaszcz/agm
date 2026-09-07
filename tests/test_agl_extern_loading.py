@@ -18,6 +18,7 @@ program that calls an extern.
 from __future__ import annotations
 
 import os
+import py_compile
 import sys
 from pathlib import Path
 
@@ -288,6 +289,31 @@ class TestExternRegistryLoadAndResolve:
         # make this pass or fail on granularity instead of on the rule.
         stamp = py_path.stat().st_mtime_ns + 1_000_000_000
         os.utime(py_path, ns=(stamp, stamp))
+        registry.load_companion(mid, py_path)
+
+        assert registry.resolve(mid, "f")(1) == 10
+
+    def test_reimport_ignores_a_timestamp_valid_stale_bytecode_cache(self, tmp_path: Path) -> None:
+        """A changed companion is compiled from source even when its pyc looks current."""
+        original = "def f(x):\n    return x + 1\n"
+        replacement = "def f(x):\n    return x + 9\n"
+        assert len(replacement) == len(original)
+        py_path = tmp_path / "mod.py"
+        py_path.write_text(original)
+        second = py_path.stat().st_mtime_ns // 1_000_000_000
+        original_mtime = second * 1_000_000_000 + 100_000_000
+        os.utime(py_path, ns=(original_mtime, original_mtime))
+        bytecode_path = py_compile.compile(str(py_path), doraise=True)
+        assert Path(bytecode_path).is_file()
+
+        mid = ModuleId.from_path("lib/mod")
+        registry = ExternRegistry()
+        registry.load_companion(mid, py_path)
+        assert registry.resolve(mid, "f")(1) == 2
+
+        py_path.write_text(replacement)
+        replacement_mtime = second * 1_000_000_000 + 200_000_000
+        os.utime(py_path, ns=(replacement_mtime, replacement_mtime))
         registry.load_companion(mid, py_path)
 
         assert registry.resolve(mid, "f")(1) == 10

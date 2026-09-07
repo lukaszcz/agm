@@ -12,7 +12,7 @@ A *workspace* is the main repository or a linked git worktree for a branch, inte
 
 ## Dependencies
 
-Dependencies are sibling repositories under the project's deps directory, managed by the `dep` command group. Each contributes `_DIR` environment variables for its checked-out branch, assembled from the project's dependency TOML tables, so a workspace's environment reflects which branch of each dependency is active. Branch dependency configs inherit from the main config.
+Dependencies are sibling repositories under the project's deps directory, managed by the `dep` command group. Checkout discovery accepts only actual Git roots, excluding ordinary directories that happen to sit inside an enclosing repository. Each dependency contributes `_DIR` environment variables for its checked-out branch, assembled from the project's dependency TOML tables, so a workspace's environment reflects which branch of each dependency is active. Branch dependency configs inherit from the main config.
 
 ## Sync
 
@@ -24,7 +24,7 @@ When a workspace opens, its environment chains the dependency environment, the p
 
 ## Git and Tmux
 
-All git work goes through one VCS module wrapping git as subprocess calls; every helper accepts an explicit environment so it composes with workspace environments. Workspace sessions are tmux sessions created with a filtered environment and a tiled pane layout; session names are unique per workspace, and an occupied name stops `open` before any git work. All tmux invocations go through the module's wrappers, so a missing binary is a plain error.
+All git work goes through one VCS module wrapping git as subprocess calls; every helper accepts an explicit environment so it composes with workspace environments. Workspace sessions are tmux sessions created with a filtered environment and a tiled pane layout; session names are unique per workspace, exact-name targeting protects session operations from tmux prefix matching, and an occupied name stops `open` before any git work. All tmux invocations go through the module's wrappers, so a missing binary is a plain error.
 
 ## Code Entry Points
 

@@ -74,20 +74,15 @@ class TestUnknownSource:
 
 
 class TestSourceSpanSourceField:
-    def _make_span(self, **kwargs: object) -> SourceSpan:
-        defaults: dict[str, int] = {
-            "start_line": 1,
-            "start_col": 1,
-            "end_line": 1,
-            "end_col": 2,
-            "start_offset": 0,
-            "end_offset": 1,
-        }
-        defaults.update(kwargs)  # type: ignore[arg-type]
-        return SourceSpan(**defaults)  # type: ignore[arg-type]
-
     def test_default_source_is_unknown(self) -> None:
-        span = self._make_span()
+        span = SourceSpan(
+            start_line=1,
+            start_col=1,
+            end_line=1,
+            end_col=2,
+            start_offset=0,
+            end_offset=1,
+        )
         assert span.source is UNKNOWN_SOURCE
 
     def test_custom_source(self) -> None:

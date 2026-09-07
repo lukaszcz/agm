@@ -256,7 +256,21 @@ def _drain_process_streams(
         if callback is not None:
             callback(text)
 
-    process.wait()
+    if timed_out or idle_timeout is None:
+        process.wait()
+    else:
+        remaining = max(0.0, idle_timeout - (time.monotonic() - last_chunk_time))
+        try:
+            process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            _stop_process(
+                process,
+                isolate_process_group=isolate_process_group,
+                interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+                cwd=cwd,
+                env=env,
+            )
+            timed_out = True
 
     for stream_name, decoder in decoders.items():
         text = decoder.decode(b"", final=True)

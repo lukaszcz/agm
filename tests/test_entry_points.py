@@ -45,7 +45,7 @@ class TestTmuxCloseRun:
         tmux_close_cmd.run(TmuxCloseArgs(session_name="mysession"))
 
         out = capsys.readouterr().out
-        assert "tmux kill-session -t mysession" in out
+        assert "tmux kill-session -t =mysession" in out
         assert "Closed session mysession" in out
 
 

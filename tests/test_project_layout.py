@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import agm.core.dry_run as dry_run
 import agm.project.layout as layout_module
 from agm.project.layout import (
     _copy_existing_config_files,
@@ -1033,6 +1034,26 @@ def test_copy_config_replaces_existing_target_env_local_when_merging(tmp_path: P
     assert "CONFIGURED=yes" in target_local
     assert "BRANCH=yes" in target_local
     assert "STALE=value" not in target_local
+
+
+def test_copy_config_dry_run_preserves_existing_target_env_local(tmp_path: Path) -> None:
+    project = tmp_path / "proj"
+    config_dir = project / "config"
+    workspace_config_dir = config_dir / "feat"
+    workspace_config_dir.mkdir(parents=True)
+    (project / "repo").mkdir()
+    target = tmp_path / "checkout"
+    target.mkdir()
+    target_env = target / ".env.local"
+
+    (config_dir / ".env").write_text("CONFIGURED=yes\n", encoding="utf-8")
+    (workspace_config_dir / ".env").write_text("BRANCH=yes\n", encoding="utf-8")
+    target_env.write_text("EXISTING=preserved\n", encoding="utf-8")
+    dry_run.set_enabled(True)
+
+    copy_config(project_dir=project, target=target, branch="feat", cwd=None)
+
+    assert target_env.read_text(encoding="utf-8") == "EXISTING=preserved\n"
 
 
 def test_copy_config_detects_current_workspace_branch_when_branch_not_given(

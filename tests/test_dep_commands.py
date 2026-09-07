@@ -14,7 +14,13 @@ from agm.project.dependency_checkout import (
     main_dep_repo,
 )
 from agm.vcs.git import WorktreeInfo, default_branch_from_remote, default_branch_from_repo
-from tests._git_helpers import clone_local_remote, git_output, git_run, init_repo
+from tests._git_helpers import (
+    add_linked_worktree,
+    clone_local_remote,
+    git_output,
+    git_run,
+    init_repo,
+)
 
 # ---------------------------------------------------------------------------
 # agm.project.dependency_checkout – derive_dep_name
@@ -172,6 +178,15 @@ class TestMainDepRepo:
         # sorted order: alpha < beta → should return alpha
         assert main_dep_repo(dep_dir) == dep_dir / "alpha"
 
+    def test_returns_main_checkout_when_linked_worktree_sorts_first(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        dep_dir = tmp_path / "mydep"
+        repo_dir = init_repo(dep_dir / "main", env)
+        add_linked_worktree(repo_dir, dep_dir / "aaa", env, branch="feature")
+
+        assert main_dep_repo(dep_dir) == repo_dir
+
     def test_exits_when_no_git_repo_found(self, tmp_path: Path) -> None:
         dep_dir = tmp_path / "mydep"
         (dep_dir / "notrepo").mkdir(parents=True)
@@ -201,6 +216,61 @@ class TestDepRemoveRun:
         repo_path = dep_dir / "repo"
         repo_path.mkdir(parents=True)
         return project_dir, dep_dir, repo_path
+
+    @pytest.mark.parametrize(
+        ("scenario", "remove_all", "target"),
+        [
+            ("parent", True, ".."),
+            ("traversal", False, "mylib/../other"),
+            ("external-symlink", True, "escape"),
+            ("deps-root-symlink", True, "escape"),
+            ("external-worktree", True, "mylib"),
+        ],
+    )
+    def test_unsafe_removal_preserves_every_checkout(
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+        scenario: str,
+        remove_all: bool,
+        target: str,
+    ) -> None:
+        project_dir = tmp_path / "project"
+        project_repo = init_repo(project_dir / "repo", env)
+        deps_dir = project_dir / "deps"
+        dep_repo = init_repo(deps_dir / "mylib" / "main", env)
+        preserved = [project_repo / "README.md", dep_repo / "README.md"]
+
+        if scenario == "traversal":
+            other = add_linked_worktree(dep_repo, deps_dir / "other", env, branch="other")
+            preserved.append(other / "README.md")
+        elif scenario == "external-symlink":
+            outside_repo = init_repo(tmp_path / "outside" / "main", env)
+            outside_worktree = add_linked_worktree(
+                outside_repo,
+                tmp_path / "outside" / "feature",
+                env,
+                branch="feature",
+            )
+            (deps_dir / "escape").symlink_to(outside_repo.parent, target_is_directory=True)
+            preserved.extend([outside_repo / "README.md", outside_worktree / "README.md"])
+        elif scenario == "deps-root-symlink":
+            (deps_dir / "escape").symlink_to(deps_dir, target_is_directory=True)
+        elif scenario == "external-worktree":
+            outside_worktree = add_linked_worktree(
+                dep_repo,
+                tmp_path / "outside-worktree",
+                env,
+                branch="external",
+            )
+            preserved.append(outside_worktree / "README.md")
+
+        monkeypatch.chdir(project_dir)
+        with pytest.raises(SystemExit):
+            dep_remove.run(DepRemoveArgs(all=remove_all, target=target))
+
+        assert all(marker.is_file() for marker in preserved)
 
     def test_remove_single_worktree_by_branch_name(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

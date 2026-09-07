@@ -20,6 +20,7 @@ dependencies = [
     { name = "semver" },
     { name = "tomlkit" },
     { name = "typer" },
+    { name = "urllib3" },
 ]
 
 [package.dev-dependencies]
@@ -47,6 +48,7 @@ requires-dist = [
     { name = "semver", specifier = ">=3.0" },
     { name = "tomlkit", specifier = ">=0.13.0" },
     { name = "typer", specifier = ">=0.16.0" },
+    { name = "urllib3", specifier = ">=2.2" },
 ]
 
 [package.metadata.requires-dev]

@@ -34,3 +34,5 @@ Dependency commands track selected dependency checkout names in config `config.t
 `agm dep rm` options:
 
 - `--all DEP`: use `agm dep rm --all DEP` to remove the entire dependency directory, including the main dependency checkout and any linked worktrees
+
+Removal targets must be relative paths without `.` or `..` components. A dependency must resolve below `deps/`, and its worktrees below that dependency's directory. With `--all`, AGM checks every linked worktree before removing any; a detached worktree or one outside the dependency stops removal.

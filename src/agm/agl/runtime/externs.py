@@ -18,7 +18,7 @@ import threading
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
-from types import ModuleType
+from types import CodeType, ModuleType
 from typing import Protocol, cast
 
 from agm.agl.diagnostics import AglError
@@ -121,20 +121,23 @@ class ExternResolutionError(AglError):
         self.name = name
 
 
-class _CacheFreeLoader(importlib.machinery.SourceFileLoader):
-    """A source loader that never writes a bytecode cache beside its source.
+class _SourceOnlyLoader(importlib.machinery.SourceFileLoader):
+    """A source-only loader that never reads or writes a bytecode cache.
 
     CPython's source loader caches compiled bytecode in a ``__pycache__``
     directory next to the module it imports.  A companion is imported from
     wherever its AgL module lives, including an installed package's immutable
     store tree, which AGM must never write into: unrecorded files there are
     not part of the package and would strand its removal.  Discarding the
-    write leaves the import otherwise identical; an already-present cache is
-    still read.
+    write keeps that tree intact. Compiling the current source directly also
+    prevents a timestamp-valid stale cache from defeating the registry's
+    nanosecond file-identity check after a rapid same-size edit.
     """
 
-    def set_data(self, path: str, data: object, *, _mode: int = 0o666) -> None:
-        """Discard bytecode the loader would otherwise cache next to a companion."""
+    def get_code(self, fullname: str) -> CodeType:
+        """Compile *fullname* directly from its current source bytes."""
+        source_path = self.get_filename(fullname)
+        return self.source_to_code(self.get_data(source_path), source_path)
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +386,7 @@ class ExternRegistry:
             f"__{len(self._by_path)}"
         )
         spec = importlib.util.spec_from_file_location(
-            synthetic_name, canonical, loader=_CacheFreeLoader(synthetic_name, str(canonical))
+            synthetic_name, canonical, loader=_SourceOnlyLoader(synthetic_name, str(canonical))
         )
         # A supplied source-file loader always yields a spec; ``None`` would
         # mean the location carries a suffix no loader recognizes.

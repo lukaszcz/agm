@@ -11,7 +11,8 @@ from pathlib import Path
 import pytest
 
 import agm.core.dry_run as dry_run
-from agm.core.dotenv import set_dotenv_value
+from agm.core.dotenv import set_dotenv_value, set_dotenv_values
+from agm.core.env import load_dotenv_file
 from agm.core.fs import (
     access,
     append_text,
@@ -510,6 +511,64 @@ class TestSetDotenvValue:
         set_dotenv_value(env_file, "URL", "https://example.com/path?q=1&r=2")
         content = env_file.read_text(encoding="utf-8")
         assert "URL=https://example.com/path?q=1&r=2\n" in content
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "has # literal comment",
+            "first line\nsecond line",
+            "first line\rsecond line",
+            "first line\r\nsecond line",
+            "'literal single quotes'",
+            '"literal double quotes"',
+            "  both 'quotes' and \"quotes\" with \\slashes # intact  ",
+        ],
+    )
+    def test_value_round_trips_through_dotenv_loader(self, tmp_path: Path, value: str) -> None:
+        env_file = tmp_path / ".env"
+
+        set_dotenv_value(env_file, "VALUE", value)
+
+        assert load_dotenv_file(env_file)["VALUE"] == value
+
+    def test_replaces_entire_multiline_assignment(self, tmp_path: Path) -> None:
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "KEEP=before\nVALUE='old first line\nold second line'\nTAIL=after\n",
+            encoding="utf-8",
+        )
+
+        set_dotenv_value(env_file, "VALUE", "replacement")
+
+        assert load_dotenv_file(env_file) == {
+            "KEEP": "before",
+            "VALUE": "replacement",
+            "TAIL": "after",
+        }
+        assert "old second line" not in env_file.read_text(encoding="utf-8")
+
+    def test_preserves_blank_lines_around_replaced_duplicate_assignments(
+        self, tmp_path: Path
+    ) -> None:
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "KEEP=before\n\nVALUE=first\n\nVALUE=duplicate\nTAIL=after\n",
+            encoding="utf-8",
+        )
+
+        set_dotenv_value(env_file, "VALUE", "replacement")
+
+        assert env_file.read_text(encoding="utf-8") == (
+            "KEEP=before\n\nVALUE=replacement\n\nTAIL=after\n"
+        )
+
+    def test_batch_upsert_after_duplicate_does_not_add_blank_line(self, tmp_path: Path) -> None:
+        env_file = tmp_path / ".env"
+        env_file.write_text("VALUE=first\nVALUE=duplicate\n", encoding="utf-8")
+
+        set_dotenv_values(env_file, {"VALUE": "replacement", "NEW": "added"})
+
+        assert env_file.read_text(encoding="utf-8") == "VALUE=replacement\nNEW=added\n"
 
     def test_empty_file_gets_key_appended(self, tmp_path: Path) -> None:
         env_file = tmp_path / ".env"

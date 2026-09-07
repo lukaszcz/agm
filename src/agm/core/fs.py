@@ -6,6 +6,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
+from stat import S_IMODE
 from uuid import uuid4
 
 from agm.core import dry_run
@@ -142,16 +143,21 @@ def write_text_atomic(path: Path, content: str, *, encoding: str = "utf-8") -> N
     """Write text through a temporary sibling that replaces *path* in one step.
 
     Concurrent readers therefore observe either the previous file or the
-    complete new content, never a partially written file.
+    complete new content, never a partially written file. Existing permissions
+    are retained, and the temporary file remains private while it is populated.
     """
 
     if dry_run.enabled():
         write_text(path, content)
         return
+    destination_mode = S_IMODE(path.stat().st_mode) if path.exists() else None
     temporary_path = path.parent / f".{path.name}.{uuid4().hex}.tmp"
     try:
         with temporary_path.open("x", encoding=encoding) as temporary:
+            default_mode = S_IMODE(os.fstat(temporary.fileno()).st_mode)
+            os.fchmod(temporary.fileno(), 0o600)
             temporary.write(content)
+        temporary_path.chmod(default_mode if destination_mode is None else destination_mode)
         temporary_path.replace(path)
     finally:
         temporary_path.unlink(missing_ok=True)

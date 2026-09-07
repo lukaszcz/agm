@@ -1724,8 +1724,9 @@ class IrInterpreter:
             case IrIterInit(collection=collection_expr):
                 coll = self._eval(collection_expr)
                 if isinstance(coll, ArrayValue):
-                    # The ArrayValue's own element list, by reference: no copy,
-                    # so an in-place element mutation is visible to the cursor.
+                    # Keep the live element list so mutations ahead of the
+                    # cursor remain visible. IteratorValue captures its entry
+                    # length so structural growth cannot extend the loop.
                     return IteratorValue(elements=coll.elements)
                 if isinstance(coll, DictValue):
                     # The key set is fixed for the collection's lifetime, so a
@@ -1742,7 +1743,7 @@ class IrInterpreter:
                 it = self._eval(iter_expr)
                 if not isinstance(it, IteratorValue):  # pragma: no cover
                     raise InvalidIrError(f"IrIterHasNext: expected IteratorValue, got {type(it)!r}")
-                return BoolValue(it.pos < len(it.elements))
+                return BoolValue(it.pos < it.entry_length and it.pos < len(it.elements))
 
             case IrIterNext(iterator=iter_expr):
                 it = self._eval(iter_expr)

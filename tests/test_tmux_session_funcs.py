@@ -195,8 +195,7 @@ class TestKillTmuxSession:
         monkeypatch.setattr(session_module, "run_foreground", fake_foreground)
         rc = kill_tmux_session(session_name="to-kill", cwd=tmp_path, env={})
         assert rc == 0
-        assert "kill-session" in calls[0]
-        assert "to-kill" in calls[0]
+        assert calls[0] == ["tmux", "kill-session", "-t", "=to-kill"]
 
     def test_live_returns_nonzero_returncode(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -12,7 +12,7 @@ The environment module clones the ambient environment, resolves variable referen
 
 ## Filesystem, TOML, and Dotenv I/O
 
-Filesystem mutations and TOML/dotenv reads and writes are wrapped so they participate in dry-run and share one interface. TOML uses round-trip parsing so updating one key preserves the rest of a file; dotenv helpers upsert individual lines; tree copies preserve links instead of dereferencing them.
+Filesystem mutations and TOML/dotenv reads and writes are wrapped so they participate in dry-run and share one interface. TOML uses round-trip parsing so updating one key preserves the rest of a file; dotenv helpers parse complete assignments and publish updates atomically; tree copies preserve links instead of dereferencing them.
 
 ## Dry Run and Cleanup
 

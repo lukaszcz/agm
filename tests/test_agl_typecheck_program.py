@@ -4118,7 +4118,7 @@ def test_unannotated_method_with_no_concrete_return_evidence_is_still_rejected()
 
 def test_named_only_param_in_graph_function(tmp_path: Path) -> None:
     """check_program handles a function with a named-only param (@arg-named z) correctly."""
-    from agm.agl.typecheck.program import CheckedProgram  # type: ignore[import-untyped]
+    from agm.agl.typecheck.program import CheckedProgram
 
     modules = {
         "lib": "def add-named(x: int, @arg-named z: int) -> int = x + z",

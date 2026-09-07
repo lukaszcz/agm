@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import agm.vcs.git as git_helpers
-from agm.core.dotenv import set_dotenv_value
+from agm.core.dotenv import set_dotenv_values, write_dotenv_values
 from agm.core.env import load_config_dotenv_files, resolve_env
 from agm.core.process import require_success
 from agm.core.toml import TomlDict, load_toml_file, toml_dict
@@ -54,10 +54,7 @@ def _merge_config_dotenv_files(config_dirs: list[Path], target_dir: Path) -> Non
     if not merged_env:
         return
     target_env = target_dir / ".env.local"
-    if target_env.exists():
-        target_env.unlink()
-    for key, value in sorted(merged_env.items()):
-        set_dotenv_value(target_env, key, value)
+    write_dotenv_values(target_env, merged_env)
 
 
 def _merge_branch_env_file(source_dir: Path, target_dir: Path) -> None:
@@ -65,8 +62,7 @@ def _merge_branch_env_file(source_dir: Path, target_dir: Path) -> None:
     if not merged_env:
         return
     target_env = target_dir / ".env"
-    for key, value in sorted(merged_env.items()):
-        set_dotenv_value(target_env, key, value)
+    set_dotenv_values(target_env, merged_env)
 
 
 def _resolved_cwd(cwd: Path | None = None) -> Path:

@@ -452,6 +452,11 @@ _HELP_TEXTS: dict[str, str] = {
                              under deps/DEP/ or by checked-out branch name.
           DEP/repo           Remove the main dependency checkout.
           DEP/MAIN_CHECKOUT  Remove the main dependency checkout by directory name.
+
+        Removal targets must be relative paths without . or .. components.
+        Dependencies must resolve below deps/, and worktrees below their dependency.
+        With --all, detached or out-of-dependency worktrees stop removal before
+        any worktree is removed.
     """),
     "pkg": textwrap.dedent("""\
         agm pkg init [DIR] [--name NAME] [--version VERSION]

@@ -1,0 +1,29 @@
+{
+  "scenarios": [
+    {
+      "name": "append_does_not_extend_the_entry_bound",
+      "params": {"mode": 1},
+      "expect": {"stdout": "[1]\n[1, 2]\n"}
+    },
+    {
+      "name": "insert_before_cursor_shifts_live_indices",
+      "params": {"mode": 2},
+      "expect": {"stdout": "[1, 1, 2, 3]\n[9, 1, 2, 3, 4]\n"}
+    },
+    {
+      "name": "removing_ahead_can_shorten_iteration",
+      "params": {"mode": 3},
+      "expect": {"stdout": "[1, 3, 4]\n[1, 3, 4]\n"}
+    },
+    {
+      "name": "removing_behind_shifts_unvisited_indices",
+      "params": {"mode": 4},
+      "expect": {"stdout": "[1, 2, 4]\n[2, 3, 4]\n"}
+    },
+    {
+      "name": "clearing_stops_at_the_live_end",
+      "params": {"mode": 5},
+      "expect": {"stdout": "[1]\n[]\n"}
+    }
+  ]
+}

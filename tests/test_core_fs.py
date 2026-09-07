@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import stat
 from collections.abc import Callable, Generator
 from pathlib import Path
 
@@ -27,6 +28,16 @@ def test_write_text_atomic_replaces_existing_content(tmp_path: Path) -> None:
 
     assert path.read_text(encoding="utf-8") == "current\n"
     assert [child.name for child in tmp_path.iterdir()] == ["index.toml"]
+
+
+def test_write_text_atomic_preserves_existing_permissions(tmp_path: Path) -> None:
+    path = tmp_path / ".env"
+    path.write_text("SECRET=previous\n", encoding="utf-8")
+    path.chmod(0o600)
+
+    fs.write_text_atomic(path, "SECRET=current\n")
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_write_text_atomic_leaves_no_temporary_file_when_the_write_fails(

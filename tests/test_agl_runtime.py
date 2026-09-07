@@ -3075,7 +3075,7 @@ class TestRunPreparedProgram:
         prepared = prepare_inline_command(
             'let r = ask("hello")\nprint r', entry_path=None, roots=roots
         )
-        rt = PipelineDriver(agent_dispatcher=lambda req: "x")  # type: ignore[arg-type]
+        rt = PipelineDriver(agent_dispatcher=lambda req: "x")
         result = rt.run_prepared(prepared, check_only=True)
         assert result.ok is True
         assert len(result.call_sites) >= 1

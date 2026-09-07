@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import signal
 import time
 from collections.abc import Iterator
@@ -11,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 import requests
+from urllib3.response import HTTPResponse
 
 import agm.packages.fetch as package_fetch
 from agm.packages.fetch import FetchError, fetch_archive
@@ -28,6 +30,8 @@ class _Response:
         self.error = error
         self.stream_error = stream_error
         self.status_checked = False
+        self.raw = self
+        self._stream: Iterator[bytes] | None = None
 
     def __enter__(self) -> _Response:
         return self
@@ -45,6 +49,15 @@ class _Response:
         yield from self.chunks
         if self.stream_error is not None:
             raise self.stream_error
+
+    def read1(self, amt: int, decode_content: bool) -> bytes:
+        del decode_content
+        if self._stream is None:
+            self._stream = self.iter_content(amt)
+        for chunk in self._stream:
+            if chunk:
+                return chunk
+        return b""
 
 
 class _BlockingResponse(_Response):
@@ -96,13 +109,13 @@ def _use_clock(monkeypatch: pytest.MonkeyPatch, clock: _Clock) -> None:
 
 class _Session:
     def __init__(
-        self, response: _Response | None = None, *, get_error: Exception | None = None
+        self, response: package_fetch.Response | None = None, *, get_error: Exception | None = None
     ) -> None:
         self.response = response
         self.get_error = get_error
         self.calls: list[tuple[str, bool, float]] = []
 
-    def get(self, url: str, *, stream: bool, timeout: float) -> _Response:
+    def get(self, url: str, *, stream: bool, timeout: float) -> package_fetch.Response:
         self.calls.append((url, stream, timeout))
         if self.get_error is not None:
             raise self.get_error
@@ -280,6 +293,51 @@ def test_fetch_completes_a_steady_transfer_longer_than_the_stall_budget(
     )
 
     assert clock.now > 5.0
+    assert handed_off == [content]
+    assert not tuple(tmp_path.iterdir())
+
+
+def test_fetch_observes_progress_before_a_transport_buffer_fills(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exercise requests' real buffering over a deterministic, paced byte stream."""
+    clock = _Clock()
+    _use_clock(monkeypatch, clock)
+    monkeypatch.setattr(package_fetch, "_FETCH_TIMEOUT_SECONDS", 5.0)
+    chunks = [b"part%d;" % index for index in range(10)]
+    content = b"".join(chunks)
+
+    class PacedBody(io.RawIOBase):
+        def readable(self) -> bool:
+            return True
+
+        def readinto(self, buffer: bytearray) -> int:
+            if not chunks:
+                return 0
+            clock.advance(2.0)
+            chunk = chunks.pop(0)
+            buffer[: len(chunk)] = chunk
+            return len(chunk)
+
+    response = requests.Response()
+    response.status_code = 200
+    response.raw = HTTPResponse(
+        body=io.BufferedReader(PacedBody()),
+        headers={"content-length": str(len(content))},
+        preload_content=False,
+    )
+    handed_off: list[bytes] = []
+
+    fetch_archive(
+        requirement="tools >= 1.0.0",
+        url="https://example.test/tools.agmpkg",
+        expected_hash="sha256=" + hashlib.sha256(content).hexdigest(),
+        handoff=lambda path: handed_off.append(path.read_bytes()),
+        session=_Session(response),
+        scratch_dir=tmp_path,
+    )
+
+    assert clock.now == 20.0
     assert handed_off == [content]
     assert not tuple(tmp_path.iterdir())
 

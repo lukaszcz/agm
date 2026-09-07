@@ -1990,7 +1990,7 @@ class TestClose:
         assert "feat/close-me" not in branches
         assert "Closed session proj/feat/close-me" in result.stdout
         log = tmux_log.read_text()
-        assert "kill-session -t proj/feat/close-me" in log
+        assert "kill-session -t =proj/feat/close-me" in log
 
     def test_worktree_remove_failure_happens_before_other_close_side_effects(
         self, tmp_path: Path, env: dict[str, str]
@@ -2069,7 +2069,7 @@ class TestClose:
         assert not worktree.exists()
         branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
         assert "feat/keep-branch" in branches
-        assert "kill-session -t proj/feat/keep-branch" in tmux_log.read_text()
+        assert "kill-session -t =proj/feat/keep-branch" in tmux_log.read_text()
 
     def test_keep_workspace_keeps_worktree_config_and_branch(
         self, tmp_path: Path, env: dict[str, str]
@@ -2093,7 +2093,7 @@ class TestClose:
         assert not wrapper.exists()
         branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
         assert "feat/keep-workspace" in branches
-        assert "kill-session -t proj/feat/keep-workspace" in tmux_log.read_text()
+        assert "kill-session -t =proj/feat/keep-workspace" in tmux_log.read_text()
 
     def test_close_succeeds_when_workspace_config_not_tracked_by_git(
         self, tmp_path: Path, env: dict[str, str]
@@ -2194,7 +2194,7 @@ class TestWorkspaceOpenClose:
         assert not wrapper.exists()
         assert "Closed session proj/feat/wsp-close" in result.stdout
         log = tmux_log.read_text()
-        assert "kill-session -t proj/feat/wsp-close" in log
+        assert "kill-session -t =proj/feat/wsp-close" in log
 
 
 # ── agm dep new ─────────────────────────────────────────────────────────────
@@ -2644,6 +2644,99 @@ class TestDepRemove:
         run_agm(["dep", "rm", "--all", "mylib"], env=env, cwd=str(project))
 
         assert not (project / "deps" / "mylib").exists()
+
+    @pytest.mark.parametrize(("remove_all", "target"), [(True, ".."), (False, "mylib/../other")])
+    def test_rejects_unsafe_target_without_removing_project(
+        self, tmp_path: Path, env: dict[str, str], remove_all: bool, target: str
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "mylib.git", env)
+        project = TestDepSwitch._setup_dep(tmp_path, bare, env)
+        repo_marker = project / "repo" / "README.md"
+        dependency_marker = project / "deps" / "mylib" / "main" / "README.md"
+        preserved_markers = [repo_marker, dependency_marker]
+        if not remove_all:
+            other_worktree = project / "deps" / "other"
+            _git(
+                "worktree",
+                "add",
+                "-b",
+                "other",
+                str(other_worktree),
+                cwd=str(project / "deps" / "mylib" / "main"),
+                env=env,
+            )
+            preserved_markers.append(other_worktree / "README.md")
+        args = ["dep", "rm", *(["--all"] if remove_all else []), target]
+
+        result = run_agm(args, env=env, cwd=str(project), check=False)
+
+        assert result.returncode != 0
+        assert all(marker.is_file() for marker in preserved_markers)
+
+    def test_rejects_dependency_symlink_outside_deps(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "mylib.git", env)
+        project = TestDepSwitch._setup_dep(tmp_path, bare, env)
+        outside = tmp_path / "outside"
+        outside_checkout = outside / "main"
+        outside.mkdir()
+        _git("clone", str(bare), str(outside_checkout), cwd=str(tmp_path), env=env)
+        outside_worktree = outside / "feature"
+        _git(
+            "worktree",
+            "add",
+            "-b",
+            "feature",
+            str(outside_worktree),
+            cwd=str(outside_checkout),
+            env=env,
+        )
+        (project / "deps" / "escape").symlink_to(outside, target_is_directory=True)
+
+        result = run_agm(["dep", "rm", "--all", "escape"], env=env, cwd=str(project), check=False)
+
+        assert result.returncode != 0
+        assert (outside_checkout / "README.md").is_file()
+        assert (outside_worktree / "README.md").is_file()
+        assert (project / "deps" / "mylib" / "main" / "README.md").is_file()
+
+    def test_rejects_dependency_symlink_to_deps_root(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "mylib.git", env)
+        project = TestDepSwitch._setup_dep(tmp_path, bare, env)
+        deps_dir = project / "deps"
+        (deps_dir / "escape").symlink_to(deps_dir, target_is_directory=True)
+
+        result = run_agm(["dep", "rm", "--all", "escape"], env=env, cwd=str(project), check=False)
+
+        assert result.returncode != 0
+        assert (project / "repo" / "README.md").is_file()
+        assert (deps_dir / "mylib" / "main" / "README.md").is_file()
+
+    def test_remove_all_rejects_linked_worktree_outside_dependency(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "mylib.git", env)
+        project = TestDepSwitch._setup_dep(tmp_path, bare, env)
+        dep_main = project / "deps" / "mylib" / "main"
+        outside_worktree = tmp_path / "outside-worktree"
+        _git(
+            "worktree",
+            "add",
+            "-b",
+            "external",
+            str(outside_worktree),
+            cwd=str(dep_main),
+            env=env,
+        )
+
+        result = run_agm(["dep", "rm", "--all", "mylib"], env=env, cwd=str(project), check=False)
+
+        assert result.returncode != 0
+        assert (dep_main / "README.md").is_file()
+        assert (outside_worktree / "README.md").is_file()
 
     def test_removes_dependency_repo_via_repo_alias(
         self, tmp_path: Path, env: dict[str, str]
@@ -7127,7 +7220,7 @@ class TestTmuxCloseSession:
 
         assert "Closed session my-session" in result.stdout
         log = tmux_log.read_text()
-        assert "kill-session -t my-session" in log
+        assert "kill-session -t =my-session" in log
 
 
 class TestTmuxOpenErrors:
@@ -8697,7 +8790,7 @@ class TestAgentWorkflows:
         # Closing the workspace takes the agent's artifacts with it.
         assert not worktree.exists()
         assert not loop_log.exists()
-        assert "kill-session -t proj/feat/agent" in tmux_log.read_text()
+        assert "kill-session -t =proj/feat/agent" in tmux_log.read_text()
         assert "feat/agent" not in _git("branch", cwd=str(project / "repo"), env=env).stdout
 
     def test_review_then_revise_then_worktree_removal(
@@ -8866,7 +8959,7 @@ class TestAgentWorkflows:
         run_agm(["tmux", "close", "proj/feat/session"], env=env, cwd=str(project))
 
         # Ending the session leaves the workspace the project commands created.
-        assert "kill-session -t proj/feat/session" in tmux_log.read_text()
+        assert "kill-session -t =proj/feat/session" in tmux_log.read_text()
         assert worktree.is_dir()
         assert wrapper.exists()
         listing = run_agm(["workspace", "list"], env=env, cwd=str(project / "repo"))

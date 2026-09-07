@@ -128,7 +128,7 @@ class TestCloseSession:
 
         assert not worktree_dir.exists()
         assert not _branch_exists(repo_dir, "feature", env)
-        assert "kill-session -t proj/feature" in tmux_log.read_text(encoding="utf-8")
+        assert "kill-session -t =proj/feature" in tmux_log.read_text(encoding="utf-8")
 
     def test_closes_sanitized_tmux_session_for_dotted_branch(
         self,
@@ -144,7 +144,7 @@ class TestCloseSession:
 
         assert not worktree_dir.exists()
         assert not _branch_exists(repo_dir, branch, env)
-        assert "kill-session -t proj/rocq-9_2" in tmux_log.read_text(encoding="utf-8")
+        assert "kill-session -t =proj/rocq-9_2" in tmux_log.read_text(encoding="utf-8")
 
     @pytest.mark.parametrize("branch", ["main", "missing"])
     def test_invalid_close_preserves_the_main_checkout(
@@ -233,7 +233,7 @@ class TestCloseSession:
         assert worktree_dir.exists()
         assert workspace_config.exists()
         assert _branch_exists(repo_dir, "feature", env)
-        assert "kill-session -t proj/feature" in tmux_log.read_text(encoding="utf-8")
+        assert "kill-session -t =proj/feature" in tmux_log.read_text(encoding="utf-8")
 
 
 # ===========================================================================
@@ -277,7 +277,7 @@ class TestCloseRun:
         assert worktree.exists() is kept
         assert config.exists() is kept
         assert _branch_exists(repo, "feature", env) is kept
-        assert "kill-session -t proj/feature" in tmux_log.read_text(encoding="utf-8")
+        assert "kill-session -t =proj/feature" in tmux_log.read_text(encoding="utf-8")
         if kept:
             assert (worktree / "feature.txt").read_text(encoding="utf-8") == "feature\n"
             assert (config / "config.toml").read_text(encoding="utf-8") == "[run]\ntimeout = 5\n"

@@ -516,12 +516,20 @@ def repo_name_from_url(repo_url: str) -> str:
     return name
 
 
-def find_first_git_repo(parent_dir: Path) -> Path:
-    """Find the first child directory that is a git work tree."""
+def find_first_git_repo(parent_dir: Path, *, main_only: bool = False) -> Path:
+    """Find the first child Git root, optionally requiring a main checkout."""
 
-    for path in sorted(candidate for candidate in parent_dir.rglob("*") if candidate.is_dir()):
-        if is_git_repo(path):
-            return path
+    for directory, child_names, _file_names in parent_dir.walk():
+        child_names[:] = sorted(name for name in child_names if name != ".git")
+        for child_name in tuple(child_names):
+            path = directory / child_name
+            git_marker = path / ".git"
+            if git_marker.exists():
+                repo_root = exact_repo_root(path)
+                if repo_root is not None:
+                    child_names.remove(child_name)
+                    if not main_only or git_marker.is_dir():
+                        return repo_root
     print(
         f"error: {parent_dir} must contain at least one checked out branch",
         file=sys.stderr,

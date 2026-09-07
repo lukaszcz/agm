@@ -50,9 +50,7 @@ from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
-from agm.agl.lexer import LexError, tokenize  # noqa: E402
+from agm.agl.lexer import LexError, tokenize
 
 INDENT_WIDTH = 2
 

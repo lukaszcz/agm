@@ -25,6 +25,12 @@ _CHUNK_SIZE = 1024 * 1024
 MAX_ARCHIVE_DOWNLOAD_SIZE = 128 * 1024 * 1024
 
 
+class ResponseBody(Protocol):
+    """A streaming body that returns available bytes without filling a buffer."""
+
+    def read1(self, _amt: int, _decode_content: bool, /) -> bytes: ...
+
+
 class Response(Protocol):
     """The small response surface used by the fetch seam."""
 
@@ -34,7 +40,8 @@ class Response(Protocol):
 
     def raise_for_status(self) -> None: ...
 
-    def iter_content(self, _chunk_size: int) -> Iterator[bytes]: ...
+    @property
+    def raw(self) -> ResponseBody: ...
 
 
 class Session(Protocol):
@@ -83,18 +90,22 @@ def fetch_archive(
                         ) as response:
                             response.raise_for_status()
                             stall.check()
-                            for chunk in response.iter_content(_CHUNK_SIZE):
+                            # read1 returns available data instead of waiting for
+                            # a complete chunk, so each read renews the idle budget.
+                            while True:
+                                chunk = response.raw.read1(_CHUNK_SIZE, True)
                                 stall.check()
-                                if chunk:
-                                    downloaded_size += len(chunk)
-                                    if downloaded_size > MAX_ARCHIVE_DOWNLOAD_SIZE:
-                                        raise FetchError(
-                                            f"fetch failed for {requirement}: "
-                                            "package archive exceeds the download size limit"
-                                        )
-                                    file.write(chunk)
-                                    digest.update(chunk)
-                                    stall.progressed()
+                                if not chunk:
+                                    break
+                                downloaded_size += len(chunk)
+                                if downloaded_size > MAX_ARCHIVE_DOWNLOAD_SIZE:
+                                    raise FetchError(
+                                        f"fetch failed for {requirement}: "
+                                        "package archive exceeds the download size limit"
+                                    )
+                                file.write(chunk)
+                                digest.update(chunk)
+                                stall.progressed()
                 except FetchError:
                     raise
                 except Exception as exc:

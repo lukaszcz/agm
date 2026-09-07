@@ -135,6 +135,17 @@ class TestFetchProjectRepos:
 
         assert fetch_cmd.project_git_repos(project_dir) == [repo_dir, dep1_repo]
 
+    def test_embedded_project_ignores_main_repo_directories_during_dependency_discovery(
+        self, tmp_path: Path
+    ) -> None:
+        repo_dir = tmp_path / "proj"
+        project_dir = repo_dir / ".agm"
+        dep_repo = project_dir / "deps" / "lib" / "release" / "v1"
+        _init_git_repo(repo_dir)
+        _init_git_repo(dep_repo)
+
+        assert fetch_cmd.project_git_repos(project_dir) == [repo_dir, dep_repo]
+
 
 class TestFetchProjectReposRunner:
     def test_fetches_each_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

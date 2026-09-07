@@ -200,6 +200,30 @@ def test_load_workspace_env_overrides_existing_env_from_env_sh(
     assert loaded_env["HOLDIR"] == f"{project}/hold"
 
 
+def test_workspace_dotenv_interpolation_uses_current_paths_and_shell_layers(
+    tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "proj"
+    config_dir = project / "config"
+    branch_config_dir = config_dir / "feat"
+    branch_config_dir.mkdir(parents=True)
+    workspace_dir = project / "worktrees" / "feat"
+    workspace_dir.mkdir(parents=True)
+    monkeypatch.setenv("PROJ_DIR", "/previous-project")
+    monkeypatch.setenv("REPO_DIR", "/previous-workspace")
+    (config_dir / ".env").write_text("PROJECT_CACHE=${PROJ_DIR}/cache\n")
+    (config_dir / "env.sh").write_text('export SHELL_CACHE="$PROJECT_CACHE/shell"\n')
+    (branch_config_dir / ".env").write_text(
+        "WORKSPACE_CACHE=${REPO_DIR}/cache\nINHERITED_CACHE=${SHELL_CACHE}/branch\n"
+    )
+
+    loaded_env = load_workspace_env(project, "feat", workspace_dir=workspace_dir, env=env)
+
+    assert loaded_env["PROJECT_CACHE"] == f"{project}/cache"
+    assert loaded_env["WORKSPACE_CACHE"] == f"{workspace_dir}/cache"
+    assert loaded_env["INHERITED_CACHE"] == f"{project}/cache/shell/branch"
+
+
 def test_current_config_branch_ignores_cwd_from_other_project(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

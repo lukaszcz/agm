@@ -9,7 +9,8 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 
-from dotenv import dotenv_values
+from dotenv.main import DotEnv
+from dotenv.variables import parse_variables
 
 from agm.core.process import exit_with_output
 
@@ -132,14 +133,23 @@ def source_env_files(
     return sourced_env
 
 
-def load_dotenv_file(path: Path) -> dict[str, str]:
-    """Load dotenv assignments from *path* without executing shell code."""
+def load_dotenv_file(path: Path, env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Load assignments from *path*, interpolating against *env* and earlier assignments."""
 
     if not path.is_file():
         return {}
 
-    parsed = dotenv_values(path, encoding="utf-8")
-    return {key: value if value is not None else "" for key, value in parsed.items()}
+    resolved_env = clone_env(env)
+    values: dict[str, str] = {}
+    for key, value in DotEnv(path, encoding="utf-8", interpolate=False).parse():
+        resolved = (
+            ""
+            if value is None
+            else "".join(atom.resolve(resolved_env) for atom in parse_variables(value))
+        )
+        values[key] = resolved
+        resolved_env[key] = resolved
+    return values
 
 
 def load_dotenv_files(
@@ -150,7 +160,7 @@ def load_dotenv_files(
 
     resolved_env = clone_env(env)
     for path in paths:
-        resolved_env.update(load_dotenv_file(path))
+        resolved_env.update(load_dotenv_file(path, resolved_env))
     return resolved_env
 
 

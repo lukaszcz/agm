@@ -18,7 +18,9 @@ precedence as `agm config env`: shared `.env`, shared `.env.local`, workspace
 `agm config env` uses the same environment resolution as `agm workspace open`: project and workspace
 `config.toml` `[deps]` tables first, then project `.env`, project `.env.local`, project
 `env.sh`, and matching workspace config files when the current workspace is a branch workspace.
-Apply the printed shell statements with:
+Dotenv `${VAR}` references use the current workspace environment and earlier assignments,
+including values from preceding file layers. `${VAR:-default}` supplies a default for an
+undefined variable. Apply the printed shell statements with:
 
 ```bash
 eval "$(agm config env)"

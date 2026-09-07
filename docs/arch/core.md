@@ -8,7 +8,7 @@ Foreground and captured subprocess work goes through one process module. It dist
 
 ## Environment Handling
 
-The environment module clones the ambient environment, resolves variable references, sources bash env files in one shell to capture their effect, validates shell-safe names, and locates the AGM installation prefix from the path AGM was invoked through. Environments are passed explicitly as dictionaries, so each command controls exactly what its subprocesses see.
+The environment module clones the ambient environment, resolves variable references, sources bash env files in one shell to capture their effect, validates shell-safe names, and locates the AGM installation prefix from the path AGM was invoked through. Environments are passed explicitly as dictionaries, so each command controls exactly what its subprocesses see. Dotenv interpolation uses that explicit environment and preceding assignments across file layers without changing the process environment.
 
 ## Filesystem, TOML, and Dotenv I/O
 

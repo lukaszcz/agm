@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
@@ -11,8 +12,76 @@ from agm.core.env import (
     agm_installation_prefix,
     is_safe_shell_env_assignment_name,
     is_shell_identifier,
+    load_config_dotenv_files,
+    load_dotenv_file,
+    load_dotenv_files,
     source_env_files,
 )
+
+
+def test_dotenv_interpolation_uses_accumulated_config_layers(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    workspace = tmp_path / "workspace"
+    project.mkdir()
+    workspace.mkdir()
+    (project / ".env").write_text("BASE=${SEED}/project\n")
+    (project / ".env.local").write_text("LOCAL=${BASE}/local\n")
+    (workspace / ".env").write_text("WORKSPACE=${LOCAL}/workspace\n")
+    (workspace / ".env.local").write_text("RESULT=${WORKSPACE}/result\n")
+
+    result = load_config_dotenv_files([project, workspace], env={"SEED": "/seed"})
+
+    assert result["RESULT"] == "/seed/project/local/workspace/result"
+
+
+def test_dotenv_interpolation_uses_only_supplied_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AGM_TEST_BASE", "/ambient")
+    monkeypatch.setenv("AGM_TEST_AMBIENT_ONLY", "ambient")
+    dotenv = tmp_path / ".env"
+    dotenv.write_text("RESULT=${AGM_TEST_BASE}/child\nABSENT=${AGM_TEST_AMBIENT_ONLY:-fallback}\n")
+    supplied_env = {"AGM_TEST_BASE": "/explicit"}
+    ambient_before = dict(os.environ)
+
+    result = load_dotenv_files([dotenv], env=supplied_env)
+
+    assert result == {
+        "AGM_TEST_BASE": "/explicit",
+        "RESULT": "/explicit/child",
+        "ABSENT": "fallback",
+    }
+    assert supplied_env == {"AGM_TEST_BASE": "/explicit"}
+    assert dict(os.environ) == ambient_before
+
+
+def test_dotenv_interpolation_respects_assignment_order(tmp_path: Path) -> None:
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        "BASE=first\nBEFORE=${BASE}\nBASE=${BASE}/second\nAFTER=${BASE}\n"
+        "UNSET\nEMPTY=${UNSET:-fallback}\nMISSING=${AGM_TEST_NOT_DEFINED:-fallback}\n"
+    )
+
+    result = load_dotenv_files([dotenv], env={})
+
+    assert result == {
+        "BASE": "first/second",
+        "BEFORE": "first",
+        "AFTER": "first/second",
+        "UNSET": "",
+        "EMPTY": "",
+        "MISSING": "fallback",
+    }
+
+
+def test_dotenv_interpolation_defaults_to_ambient_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AGM_TEST_BASE", "/ambient")
+    dotenv = tmp_path / ".env"
+    dotenv.write_text("RESULT=${AGM_TEST_BASE}/child\n")
+
+    assert load_dotenv_file(dotenv) == {"RESULT": "/ambient/child"}
 
 
 def test_agm_installation_prefix_uses_running_executable_location(

@@ -266,6 +266,8 @@ class ExecArgs:
     no_log_file: bool = False
     # An AgL ``Agent`` literal used to seed std/config::default-agent.
     agent: str | None = None
+    # Static artifacts produced only when CLI ambiguity required early discovery.
+    pipeline_cache: object | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(slots=True)

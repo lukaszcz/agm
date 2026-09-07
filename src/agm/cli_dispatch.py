@@ -17,6 +17,7 @@ from agm.core import dry_run
 
 if TYPE_CHECKING:
     from agm.agl.runtime.types import ProgramDeclInfo
+    from agm.cli_support.program_discovery import ProgramDiscoveryArtifacts
     from agm.cli_support.program_options import ProgramCommand
     from agm.packages.activation import ActivationIndex, CommandRegistration
 
@@ -193,21 +194,28 @@ class RegisteredProgramCommand(TyperCommand):
         as it is for ``agm exec``.
         """
         from agm.cli_support.program_options import (
+            option_value_map,
             program_command_for,
             protect_host_option_values,
+            protect_potential_program_values,
             retain_end_of_options,
         )
 
-        program_command = program_command_for(self._discover_program())
-        host_flags = frozenset(
-            flag
-            for param in self.params
-            if isinstance(param, TyperOption)
-            for flag in (*param.opts, *param.secondary_opts)
+        host_options = option_value_map(
+            tuple(param for param in self.params if isinstance(param, TyperOption))
         )
-        protected, replacements = protect_host_option_values(args, program_command, host_flags)
-        remaining = super().parse_args(ctx, retain_end_of_options(protected))
+        preview = protect_potential_program_values(args, host_options)
+        program, pipeline_cache = (
+            self._discover_program_with_artifacts() if preview != args else (None, None)
+        )
+        program_command = program_command_for(program)
+        protected, replacements = protect_host_option_values(args, program_command, host_options)
+        remaining = super().parse_args(ctx, retain_end_of_options(protected, host_options))
         ctx.args[:] = [replacements.get(token, token) for token in ctx.args]
+        if program is not None:
+            cast(dict[str, object], ctx.meta)["registered_program"] = program
+        if pipeline_cache is not None:
+            cast(dict[str, object], ctx.meta)["registered_pipeline_cache"] = pipeline_cache
         return [replacements.get(token, token) for token in remaining]
 
     def _discover_program(self) -> "ProgramDeclInfo | None":
@@ -218,6 +226,20 @@ class RegisteredProgramCommand(TyperCommand):
             self._registration.program, self._registration.package
         )
 
+    def _discover_program_with_artifacts(
+        self,
+    ) -> "tuple[ProgramDeclInfo | None, ProgramDiscoveryArtifacts | None]":
+        """Discover the declaration and retain its reusable static artifacts."""
+        from agm.commands.exec_program import registered_program_declaration
+
+        artifacts: list[ProgramDiscoveryArtifacts] = []
+        program = registered_program_declaration(
+            self._registration.program,
+            self._registration.package,
+            artifact_sink=artifacts,
+        )
+        return program, artifacts[0] if artifacts else None
+
     def invoke(self, ctx: click.Context) -> None:
         from agm.cli_support.program_options import (
             ProgramHelpRequested,
@@ -226,10 +248,16 @@ class RegisteredProgramCommand(TyperCommand):
             program_help_requested,
         )
 
+        metadata = cast(dict[str, object], ctx.meta)
         if contains_help_flag(ctx.args):
             # This is the first point at which an unknown command has been proven
             # to be registered, so AgL remains unloaded for all builtin commands.
-            program = self._discover_program()
+            cached_program = metadata.pop("registered_program", None)
+            program = (
+                cast("ProgramDeclInfo", cached_program)
+                if cached_program is not None
+                else self._discover_program()
+            )
             command = program_command_for(program)
             if program_help_requested(ctx.args, command):
                 print(
@@ -240,12 +268,22 @@ class RegisteredProgramCommand(TyperCommand):
         from agm.commands.exec_program import RegisteredProgramUsageError, run_registered
 
         try:
-            run_registered(
-                self._registration.program,
-                list(ctx.args),
-                package=self._registration.package,
-                command_path=self._path_name,
-            )
+            cached_pipeline = metadata.pop("registered_pipeline_cache", None)
+            if cached_pipeline is None:
+                run_registered(
+                    self._registration.program,
+                    list(ctx.args),
+                    package=self._registration.package,
+                    command_path=self._path_name,
+                )
+            else:
+                run_registered(
+                    self._registration.program,
+                    list(ctx.args),
+                    package=self._registration.package,
+                    command_path=self._path_name,
+                    pipeline_cache=cast("ProgramDiscoveryArtifacts", cached_pipeline),
+                )
         except ProgramHelpRequested as exc:
             # A help request Click recognized only while parsing the program's
             # own command — a flag bundled into a short group of its own. The

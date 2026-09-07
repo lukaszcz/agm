@@ -214,6 +214,19 @@ class TestSelectEntryProgram:
 
 
 class TestDiscoverProgramsForTarget:
+    def test_a_readable_file_returns_its_discovered_programs(self, tmp_path: Path) -> None:
+        from agm.cli_support.program_discovery import discover_programs_for_target
+
+        source = tmp_path / "main.agl"
+        source.write_text("program def main() -> unit = ()\n", encoding="utf-8")
+
+        programs, referenced = discover_programs_for_target(
+            file=str(source), command=None, module_paths=None, no_stdlib=True
+        )
+
+        assert tuple(program.name for program in programs) == ("main",)
+        assert referenced is None
+
     def test_an_unreadable_file_token_degrades_silently(
         self,
         tmp_path: Path,

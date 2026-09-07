@@ -154,6 +154,36 @@ def test_registered_command_dispatches_trailing_arguments(
     assert calls == [("tools/lint::main", ["--level", "strict"], "tools", "tools lint")]
 
 
+def test_plain_registered_command_does_not_discover_during_outer_parsing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import agm.commands.exec_program as exec_program
+
+    context = ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
+    index = ActivationIndex(
+        packages={"tools": ActivePackage(semver.Version.parse("1.0.0"))},
+        commands={"tools lint": CommandRegistration("tools", "tools/lint::main")},
+    )
+    monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
+    monkeypatch.setattr(dispatch, "load_command_index", lambda **_: index)
+    monkeypatch.setattr(
+        exec_program,
+        "registered_program_declaration",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected discovery")),
+    )
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        exec_program,
+        "run_registered",
+        lambda _program, argument_tokens, **_kwargs: calls.append(argument_tokens),
+    )
+
+    result = invoke(CliRunner(), ["tools", "lint", "input"])
+
+    assert result.exit_code == 0
+    assert calls == [["input"]]
+
+
 def test_registered_command_treats_only_standalone_dry_run_as_global(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -210,6 +240,48 @@ def test_registered_command_preserves_a_host_looking_program_option_value(
 
     assert result.exit_code == 0
     assert calls == [["--message", "--dry-run"]]
+
+
+def test_ambiguous_registered_value_reuses_static_pipeline_artifacts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from agm.agl.matchcompile.stage import MatchCompiledProgram
+    from agm.agl.pipeline import PipelineDriver, PreparedProgram, ProgramDiscovery
+
+    home = tmp_path / "home"
+    write_installed_package(
+        home,
+        "tools",
+        source="program def main(message: text) -> unit = ()\n",
+        commands={"tools run": "tools/main::main"},
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(
+        dispatch,
+        "load_command_index",
+        lambda **_: ActivationIndex(
+            commands={"tools run": CommandRegistration("tools", "tools/main::main")}
+        ),
+    )
+    real_discover = PipelineDriver.discover_programs
+    discoveries = 0
+
+    def counting_discover(
+        self: PipelineDriver,
+        prepared: PreparedProgram,
+        *,
+        compiled: MatchCompiledProgram | None = None,
+    ) -> ProgramDiscovery:
+        nonlocal discoveries
+        discoveries += 1
+        return real_discover(self, prepared, compiled=compiled)
+
+    monkeypatch.setattr(PipelineDriver, "discover_programs", counting_discover)
+
+    result = invoke(CliRunner(), ["tools", "run", "--message", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert discoveries == 1
 
 
 def test_registered_command_help_does_not_dispatch_program(
@@ -1338,6 +1410,21 @@ def test_registered_program_declaration_finds_the_referenced_program(tmp_path: P
     assert registered_program_declaration("not-a-reference", "tools", context=context) is None
     assert registered_program_declaration("tools/bad-name::main", "tools", context=context) is None
     assert registered_program_declaration("other/lint::main", "tools", context=context) is None
+
+
+def test_registered_program_declaration_degrades_when_artifact_discovery_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import agm.commands.exec_program as exec_program
+
+    write_installed_package(tmp_path, "tools")
+    context = ConfigContext(home=tmp_path, proj_dir=None, cwd=tmp_path)
+    monkeypatch.setattr(exec_program, "discover_program_artifacts_for_target", lambda **_: None)
+
+    assert (
+        exec_program.registered_program_declaration("tools/main::main", "tools", context=context)
+        is None
+    )
 
 
 def test_registered_program_declaration_finds_its_own_value_parameters(tmp_path: Path) -> None:

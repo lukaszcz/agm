@@ -1,6 +1,6 @@
 # AgL Pipeline and Hosting
 
-`PipelineDriver` (`agl/pipeline.py`) is the public entry point to AgL. It drives parse → scope → typecheck → match compile → lower/link → evaluate, assembles the host environment, and hands every artifact forward so a program compiles and lowers exactly once however often a host resumes it. `agm exec` and registered package commands (through `commands/exec_program.py`), `agm check`, package discipline validation, and the REPL's entry pipeline all sit on it. There is never a second pipeline: anything a host wants compiled is compiled with the program.
+`PipelineDriver` (`agl/pipeline.py`) is the public entry point to AgL. It drives parse → scope → typecheck → match compile → lower/link → evaluate, assembles the host environment, and hands every artifact forward so a program compiles and lowers exactly once however often a host resumes it. `agm exec` and registered package commands (through `commands/exec_program.py`), `agm check`, package discipline validation, and the REPL's entry pipeline all sit on it. There is never a second pipeline: anything a host wants compiled is compiled with the program. If `agm exec` or registered-command dispatch must discover a signature while resolving an ambiguous raw tail, `cli_support/program_discovery.py` retains the parsed, prepared, checked, and match-compiled products and passes them into the execution host.
 
 ## Host Capabilities
 

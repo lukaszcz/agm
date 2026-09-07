@@ -130,6 +130,28 @@ class TestExecArgsParsing:
         args = recorded_runs[0]
         assert getattr(args, "file") == str(agl_file)
 
+    def test_plain_exec_does_not_discover_the_program_during_cli_parsing(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        recorded_runs: list[object],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import agm.cli_support.program_discovery as program_discovery
+
+        agl_file = tmp_path / "test.agl"
+        write_file_program(agl_file, "program def main() -> unit = ()\n")
+        monkeypatch.setattr(
+            program_discovery,
+            "discover_program_artifacts_for_target",
+            lambda **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected discovery")),
+        )
+
+        result = invoke(runner, ["exec", str(agl_file)])
+
+        assert result.exit_code == 0
+        assert len(recorded_runs) == 1
+
     def test_exec_param_token_after_file(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
@@ -153,6 +175,92 @@ class TestExecArgsParsing:
 
         assert result.exit_code == 0
         assert getattr(recorded_runs[0], "argument_tokens") == ["--msg", "--dry-run"]
+
+    def test_ambiguous_program_value_reuses_cli_static_artifacts(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import agm.agl.pipeline as pipeline
+        from agm.agl.capabilities import HostCapabilities
+        from agm.agl.diagnostics import Diagnostic
+        from agm.agl.scope.program import ResolvedProgram
+        from agm.agl.typecheck.program import CheckedProgram
+
+        agl_file = tmp_path / "test.agl"
+        write_file_program(agl_file, "program def main(msg: text) -> unit = ()\n")
+        real_typecheck = pipeline._run_typecheck_program
+        typechecks = 0
+
+        def counting_typecheck(
+            resolved: ResolvedProgram, capabilities: HostCapabilities
+        ) -> tuple[CheckedProgram | None, tuple[Diagnostic, ...]]:
+            nonlocal typechecks
+            typechecks += 1
+            return real_typecheck(resolved, capabilities)
+
+        monkeypatch.setattr(pipeline, "_run_typecheck_program", counting_typecheck)
+
+        result = invoke(
+            runner,
+            ["exec", "--no-stdlib", str(agl_file), "--msg", "--dry-run"],
+        )
+
+        assert result.exit_code == 0
+        assert result.output == ""
+        assert typechecks == 1
+
+    @pytest.mark.parametrize("value", ["-pnot-a-program", "-csource", "-Idir"])
+    def test_exec_preserves_an_attached_host_option_as_a_program_value(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        recorded_runs: list[object],
+        value: str,
+    ) -> None:
+        agl_file = tmp_path / "test.agl"
+        write_file_program(agl_file, "program def main(msg: text) -> unit = ()\n")
+
+        result = invoke(runner, ["exec", str(agl_file), "--msg", value])
+
+        assert result.exit_code == 0
+        assert getattr(recorded_runs[0], "argument_tokens") == ["--msg", value]
+        assert getattr(recorded_runs[0], "program") is None
+
+    def test_exec_does_not_treat_a_host_option_value_as_a_program_option(
+        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    ) -> None:
+        agl_file = tmp_path / "test.agl"
+        write_file_program(agl_file, "program def main(msg: text) -> unit = ()\n")
+
+        result = invoke(runner, ["exec", "--log-file", "--msg", "--dry-run", str(agl_file)])
+
+        assert result.exit_code == 0
+        args = recorded_runs[0]
+        assert getattr(args, "log_file") == "--msg"
+        assert getattr(args, "argument_tokens") == []
+
+    def test_exec_does_not_duplicate_a_marker_used_as_a_host_option_value(
+        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    ) -> None:
+        agl_file = tmp_path / "test.agl"
+        write_file_program(agl_file, "program def main() -> unit = ()\n")
+
+        result = invoke(runner, ["exec", "--log-file", "--", "--no-stdlib", str(agl_file)])
+
+        assert result.exit_code == 0
+        args = recorded_runs[0]
+        assert getattr(args, "log_file") == "--"
+        assert getattr(args, "no_stdlib") is True
+
+    def test_exec_preserves_a_marker_used_as_a_program_option_value(
+        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    ) -> None:
+        agl_file = tmp_path / "test.agl"
+        write_file_program(agl_file, "program def main(msg: text) -> unit = ()\n")
+
+        result = invoke(runner, ["exec", str(agl_file), "--msg", "--", "--dry-run"])
+
+        assert result.exit_code == 0
+        assert getattr(recorded_runs[0], "argument_tokens") == ["--msg", "--"]
 
     @pytest.mark.parametrize(
         ("source", "program_tokens"),

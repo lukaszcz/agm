@@ -522,8 +522,10 @@ class ExecCommand(TyperCommand):
         """
         from agm.cli_support.program_discovery import ExecProgramDiscovery
         from agm.cli_support.program_options import (
+            option_value_map,
             program_command_for,
             protect_host_option_values,
+            protect_potential_program_values,
             retain_end_of_options,
             split_exec_tail,
         )
@@ -539,7 +541,15 @@ class ExecCommand(TyperCommand):
             help_option_names=[],
             resilient_parsing=True,
         )
-        TyperCommand.parse_args(preview, preview_ctx, retain_end_of_options(args))
+        host_options = option_value_map(
+            tuple(param for param in self.params if isinstance(param, TyperOption))
+        )
+        preview_args = protect_potential_program_values(args, host_options)
+        TyperCommand.parse_args(
+            preview,
+            preview_ctx,
+            retain_end_of_options(preview_args, host_options),
+        )
         preview_params = cast(dict[str, object], preview_ctx.params)
         raw_command = preview_params.get("command")
         raw_program = preview_params.get("program")
@@ -555,15 +565,13 @@ class ExecCommand(TyperCommand):
                 None if isinstance(raw_command, str) else discovery.command_for_file
             ),
         )
-        program_command = program_command_for(discovery.selection(selected.file).selected)
-        host_flags = frozenset(
-            flag
-            for param in self.params
-            if isinstance(param, TyperOption)
-            for flag in (*param.opts, *param.secondary_opts)
+        program_command = (
+            program_command_for(discovery.selection(selected.file).selected)
+            if preview_args != args
+            else None
         )
-        protected, replacements = protect_host_option_values(args, program_command, host_flags)
-        remaining = super().parse_args(ctx, retain_end_of_options(protected))
+        protected, replacements = protect_host_option_values(args, program_command, host_options)
+        remaining = super().parse_args(ctx, retain_end_of_options(protected, host_options))
         ctx.args[:] = [replacements.get(token, token) for token in ctx.args]
         parsed_params = cast(dict[str, object], ctx.params)
         tail = _string_list(parsed_params.get("tail"))

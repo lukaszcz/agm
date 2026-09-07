@@ -82,7 +82,8 @@ from agm.cli_support.exec_target import (
     resolve_installed_reference,
 )
 from agm.cli_support.program_discovery import (
-    discover_program_declarations_from_installed_reference,
+    ProgramDiscoveryArtifacts,
+    discover_program_artifacts_for_target,
     program_candidates,
     select_declared_program,
     select_entry_program,
@@ -289,7 +290,11 @@ def _resolve_registered_program_target(
 
 
 def registered_program_declaration(
-    program: str, package_name: str, *, context: ConfigContext | None = None
+    program: str,
+    package_name: str,
+    *,
+    context: ConfigContext | None = None,
+    artifact_sink: list[ProgramDiscoveryArtifacts] | None = None,
 ) -> ProgramDeclInfo | None:
     """Discover the referenced program's own ``program def`` declaration, degrading on failure.
 
@@ -306,13 +311,20 @@ def registered_program_declaration(
         target = _resolve_registered_program_target(program, package_name, context=context)
         if target is None:
             return None
-        declarations = discover_program_declarations_from_installed_reference(
-            target,
-            home=context.home,
-            proj_dir=context.proj_dir,
-            cwd=context.cwd,
+        artifacts = discover_program_artifacts_for_target(
+            file=program,
+            command=None,
+            module_paths=None,
+            no_stdlib=False,
+            context=context,
         )
-        return select_entry_program(declarations, requested=target.declaration_path).selected
+        if artifacts is None or artifacts.entry_path != target.entry_path:
+            return None
+        if artifact_sink is not None:
+            artifact_sink.append(artifacts)
+        return select_entry_program(
+            artifacts.discovery.programs, requested=target.declaration_path
+        ).selected
     except (Exception, SystemExit):
         return None
 
@@ -367,8 +379,21 @@ def run(
 
     # Inline source remains a statement-oriented host. Its AST is wrapped before
     # scope resolution whenever it has no explicit program entry.
-    parsed = PipelineDriver.parse_entry(source, entry_path=entry_path)
-    if args.command is not None and parsed.program is not None:
+    cached_pipeline = (
+        args.pipeline_cache
+        if isinstance(args.pipeline_cache, ProgramDiscoveryArtifacts)
+        and args.pipeline_cache.source == source
+        and args.pipeline_cache.entry_path == entry_path
+        and args.pipeline_cache.roots == exec_roots.roots
+        and args.pipeline_cache.default_stdlib == (not args.no_stdlib)
+        else None
+    )
+    parsed = (
+        cached_pipeline.parsed
+        if cached_pipeline is not None
+        else PipelineDriver.parse_entry(source, entry_path=entry_path)
+    )
+    if cached_pipeline is None and args.command is not None and parsed.program is not None:
         from agm.agl.parser import wrap_inline_program
 
         program, next_id = wrap_inline_program(parsed.program, next_node_id=parsed.next_id)
@@ -505,11 +530,15 @@ def run(
     # splicing any engine-setting overrides in as part of that same pass.  A
     # source ``std/config::KEY := VALUE`` write takes effect at its program
     # point and overrides the CLI flag, which overrides the config-file layer.
-    prepared = PipelineDriver.prepare_parsed_entry(
-        parsed,
-        roots=exec_roots.roots,
-        default_stdlib=not args.no_stdlib,
-        setting_overrides=engine_seeds.overrides,
+    prepared = (
+        cached_pipeline.prepared
+        if cached_pipeline is not None and not engine_seeds.overrides
+        else PipelineDriver.prepare_parsed_entry(
+            parsed,
+            roots=exec_roots.roots,
+            default_stdlib=not args.no_stdlib,
+            setting_overrides=engine_seeds.overrides,
+        )
     )
 
     # ``prepare_parsed_entry`` was already called above; the same ``PreparedProgram``
@@ -522,7 +551,15 @@ def run(
         shell_exec_timeout=resolved_timeout,
         default_call_depth_limit=resolved_call_depth_limit,
     )
-    discovery = runtime.discover_programs(prepared)
+    discovery = (
+        cached_pipeline.discovery
+        if cached_pipeline is not None
+        and prepared is cached_pipeline.prepared
+        and cached_pipeline.discovery.compiled is not None
+        and cached_pipeline.discovery.compiled.capabilities
+        == runtime.host_environment().capabilities
+        else runtime.discover_programs(prepared)
+    )
     for diag in discovery.warnings:
         print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
     checked = discovery.checked
@@ -763,6 +800,7 @@ def run_registered(
     args: ExecArgs | None = None,
     package: str | None = None,
     command_path: str | None = None,
+    pipeline_cache: ProgramDiscoveryArtifacts | None = None,
 ) -> None:
     """Run an installed reference, verifying a registered command against its manifest.
 
@@ -826,6 +864,9 @@ def run_registered(
                 target.declaration_path
                 if execution_args.program is None
                 else execution_args.program
+            ),
+            pipeline_cache=(
+                pipeline_cache if pipeline_cache is not None else execution_args.pipeline_cache
             ),
         ),
         entry_module_segments=target.module_id.segments,

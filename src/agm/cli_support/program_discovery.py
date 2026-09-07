@@ -26,14 +26,17 @@ from agm.agl.modules.roots import RootSet
 from agm.agl.runtime.request import AgentResponse
 
 if TYPE_CHECKING:
+    from agm.agl.pipeline import ParsedEntry, PreparedProgram, ProgramDiscovery
     from agm.agl.runtime.types import ProgramDeclInfo
     from agm.cli_support.exec_target import PackageProgramReference
     from agm.cli_support.program_options import ProgramCommand
+    from agm.config.context import ConfigContext
 
 _ProgramT = TypeVar("_ProgramT")
 
 __all__ = [
     "ExecProgramDiscovery",
+    "ProgramDiscoveryArtifacts",
     "ProgramSelection",
     "select_declared_program",
     "discover_program_declarations_from_installed_reference",
@@ -43,6 +46,20 @@ __all__ = [
     "select_entry_program",
     "unmatched_program_message",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramDiscoveryArtifacts:
+    """One advisory discovery's reusable static-pipeline products."""
+
+    source: str
+    entry_path: Path | None
+    roots: RootSet
+    default_stdlib: bool
+    parsed: "ParsedEntry"
+    prepared: "PreparedProgram"
+    discovery: "ProgramDiscovery"
+    referenced_program: str | None = None
 
 
 def discover_program_declarations_from_source(
@@ -150,6 +167,29 @@ def discover_programs_for_target(
     unresolvable target, or a source that no longer parses shows no program
     arguments rather than failing the command.
     """
+    artifacts = discover_program_artifacts_for_target(
+        file=file,
+        command=command,
+        module_paths=module_paths,
+        no_stdlib=no_stdlib,
+    )
+    if artifacts is None:
+        return (), None
+    return artifacts.discovery.programs, artifacts.referenced_program
+
+
+def discover_program_artifacts_for_target(
+    *,
+    file: str | None,
+    command: str | None,
+    module_paths: "list[str] | None",
+    no_stdlib: bool,
+    context: "ConfigContext | None" = None,
+) -> ProgramDiscoveryArtifacts | None:
+    """Discover an ``agm exec`` target and retain every reusable static artifact."""
+    from dataclasses import replace
+
+    from agm.agl import PipelineDriver
     from agm.cli_support.exec_roots import effective_exec_roots
     from agm.cli_support.exec_target import (
         FileEntry,
@@ -161,7 +201,8 @@ def discover_programs_for_target(
     from agm.core.fs import read_text
 
     try:
-        context = current_config_context()
+        if context is None:
+            context = current_config_context()
         target = resolve_exec_target(
             file=file,
             command=command,
@@ -169,37 +210,52 @@ def discover_programs_for_target(
             proj_dir=context.proj_dir,
             cwd=context.cwd,
         )
+        source: str | None
+        entry_path: Path | None
+        referenced_program: str | None
         if isinstance(target, PackageProgramReference):
-            programs = discover_program_declarations_from_installed_reference(
-                target,
-                home=context.home,
-                proj_dir=context.proj_dir,
-                cwd=context.cwd,
-                default_stdlib=not no_stdlib,
-            )
-            return programs, target.declaration_path
+            source = target.entry_path.read_text(encoding="utf-8")
+            entry_path = target.entry_path
+            referenced_program = target.declaration_path
+            inline_source = False
         if isinstance(target, (InlineSource, FileEntry)):
             source = command if isinstance(target, InlineSource) else read_text(target.path)
             entry_path = target.path if isinstance(target, FileEntry) else None
-            exec_roots = effective_exec_roots(
-                entry_path=entry_path,
-                module_paths=[] if module_paths is None else module_paths,
-                cwd=context.cwd,
-                home=context.home,
-                proj_dir=context.proj_dir,
-            )
-            assert source is not None
-            programs = discover_program_declarations_from_source(
-                source,
-                inline_source=isinstance(target, InlineSource),
-                entry_path=entry_path,
-                roots=exec_roots.roots,
-                default_stdlib=not no_stdlib,
-            )
-            return programs, None
+            referenced_program = None
+            inline_source = isinstance(target, InlineSource)
+        if not isinstance(target, (PackageProgramReference, InlineSource, FileEntry)):
+            return None
+        exec_roots = effective_exec_roots(
+            entry_path=entry_path,
+            module_paths=[] if module_paths is None else module_paths,
+            cwd=context.cwd,
+            home=context.home,
+            proj_dir=context.proj_dir,
+        )
+        assert source is not None
+        runtime = PipelineDriver(agent_dispatcher=lambda request: AgentResponse(content=""))
+        parsed = runtime.parse_entry(source, entry_path=entry_path)
+        if inline_source and parsed.program is not None:
+            from agm.agl.parser import wrap_inline_program
+
+            program, next_id = wrap_inline_program(parsed.program, next_node_id=parsed.next_id)
+            parsed = replace(parsed, program=program, next_id=next_id)
+        prepared = runtime.prepare_parsed_entry(
+            parsed, roots=exec_roots.roots, default_stdlib=not no_stdlib
+        )
+        discovery = runtime.discover_programs(prepared)
+        return ProgramDiscoveryArtifacts(
+            source=source,
+            entry_path=entry_path,
+            roots=exec_roots.roots,
+            default_stdlib=not no_stdlib,
+            parsed=parsed,
+            prepared=prepared,
+            discovery=discovery,
+            referenced_program=referenced_program,
+        )
     except (Exception, SystemExit):
-        return (), None
-    return (), None
+        return None
 
 
 class ExecProgramDiscovery:
@@ -230,20 +286,29 @@ class ExecProgramDiscovery:
         self._requested_program = requested_program
         self._module_paths = module_paths
         self._no_stdlib = no_stdlib
-        self._programs: dict[str | None, tuple[tuple[ProgramDeclInfo, ...], str | None]] = {}
+        self._artifacts: dict[str | None, ProgramDiscoveryArtifacts | None] = {}
 
-    def programs(self, file: str | None) -> "tuple[tuple[ProgramDeclInfo, ...], str | None]":
-        """Return :func:`discover_programs_for_target`'s answer for *file*, once."""
-        cached = self._programs.get(file)
-        if cached is None:
-            cached = discover_programs_for_target(
+    def artifacts(self, file: str | None) -> ProgramDiscoveryArtifacts | None:
+        """Return one target's discovery artifacts, computing them at most once."""
+        if file not in self._artifacts:
+            self._artifacts[file] = discover_program_artifacts_for_target(
                 file=file,
                 command=self._command,
                 module_paths=self._module_paths,
                 no_stdlib=self._no_stdlib,
             )
-            self._programs[file] = cached
-        return cached
+        return self._artifacts[file]
+
+    def cached_artifacts(self, file: str | None) -> ProgramDiscoveryArtifacts | None:
+        """Return already-computed artifacts without starting discovery."""
+        return self._artifacts.get(file)
+
+    def programs(self, file: str | None) -> "tuple[tuple[ProgramDeclInfo, ...], str | None]":
+        """Return :func:`discover_programs_for_target`'s answer for *file*, once."""
+        artifacts = self.artifacts(file)
+        if artifacts is None:
+            return (), None
+        return artifacts.discovery.programs, artifacts.referenced_program
 
     def selection(self, file: str | None) -> "ProgramSelection":
         """Return the entry-program selection *file* offers under this invocation's ``-p``."""

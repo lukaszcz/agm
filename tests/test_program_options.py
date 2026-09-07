@@ -1102,6 +1102,55 @@ class TestHostLookingProgramValues:
         assert protected == ["--message", "agm-program-value-1"]
         assert replacements == {"agm-program-value-1": "--dry-run"}
 
+    @pytest.mark.parametrize("value", ["-pnot-a-program", "-csource", "-Idir"])
+    def test_protection_recognizes_attached_host_short_option_values(self, value: str) -> None:
+        command = _command(_param("message", TextType()))
+
+        protected, replacements = protect_host_option_values(
+            ["--message", value], command, {"-p": True, "-c": True, "-I": True}
+        )
+
+        assert protected == ["--message", "agm-program-value-1"]
+        assert replacements == {"agm-program-value-1": value}
+
+    def test_host_option_value_is_not_scanned_as_a_program_option(self) -> None:
+        command = _command(_param("message", TextType()))
+
+        protected, replacements = protect_host_option_values(
+            ["--log-file", "--message", "--dry-run"],
+            command,
+            {"--log-file": True, "--dry-run": False},
+        )
+
+        assert protected == ["--log-file", "--message", "--dry-run"]
+        assert replacements == {}
+
+    def test_bare_marker_used_as_a_program_value_is_protected(self) -> None:
+        command = _command(_param("message", TextType()))
+
+        protected, replacements = protect_host_option_values(
+            ["--message", "--", "--dry-run"], command, {"--dry-run": False}
+        )
+
+        assert protected == ["--message", "agm-program-value-1", "--dry-run"]
+        assert replacements == {"agm-program-value-1": "--"}
+
+    def test_preview_placeholder_does_not_collide_with_a_literal_token(self) -> None:
+        from agm.cli_support.program_options import protect_potential_program_values
+
+        assert protect_potential_program_values(
+            ["--message", "--dry-run", "agm-program-preview-1"],
+            {"--dry-run": False},
+        ) == ["--message", "agm-program-preview-1-1", "agm-program-preview-1"]
+
+    def test_value_scan_walks_past_a_short_flag_in_a_bundle(self) -> None:
+        command = _command(
+            _param("verbose", BoolType(), short="v"),
+            _param("tag", TextType(), short="t"),
+        )
+
+        assert command.value_token_indexes(["-vt", "value"]) == frozenset({1})
+
     def test_protection_uses_a_placeholder_distinct_from_literal_arguments(self) -> None:
         command = _command(_param("message", TextType()))
 
@@ -1289,3 +1338,21 @@ class TestRetainEndOfOptions:
         from agm.cli_support.program_options import retain_end_of_options
 
         assert retain_end_of_options(["prog.agl", "-h"]) == ["prog.agl", "-h"]
+
+    def test_a_marker_owned_by_a_host_option_is_not_doubled(self) -> None:
+        from agm.cli_support.program_options import retain_end_of_options
+
+        assert retain_end_of_options(
+            ["--log-file", "--", "--no-stdlib", "prog.agl"],
+            {"--log-file": True, "--no-stdlib": False},
+        ) == ["--log-file", "--", "--no-stdlib", "prog.agl"]
+
+    def test_a_host_short_bundle_can_end_in_a_value_option(self) -> None:
+        from agm.cli_support.program_options import retain_end_of_options
+
+        assert retain_end_of_options(["-hp", "value", "--"], {"-h": False, "-p": True}) == [
+            "-hp",
+            "value",
+            "--",
+            "--",
+        ]

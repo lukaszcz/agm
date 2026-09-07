@@ -82,7 +82,7 @@ not a decode diagnostic.
 from __future__ import annotations
 
 import enum
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
@@ -118,9 +118,11 @@ __all__ = [
     "exec_program_name",
     "native_raw_value",
     "option_none_raw",
+    "option_value_map",
     "option_some_raw",
     "program_command_for",
     "program_help_requested",
+    "protect_potential_program_values",
     "protect_host_option_values",
     "project_option",
     "render_program_help",
@@ -420,12 +422,57 @@ def _file_index_from_program(
     return None
 
 
-def retain_end_of_options(args: "Sequence[str]") -> list[str]:
+type OptionValueMap = Mapping[str, bool] | Collection[str]
+
+
+def _option_value_map(options: OptionValueMap) -> Mapping[str, bool]:
+    """Normalize an option inventory to flag → takes-separate-value metadata."""
+    if isinstance(options, Mapping):
+        return options
+    return {flag: False for flag in options}
+
+
+def _option_token_ownership(token: str, options: OptionValueMap) -> tuple[bool, bool]:
+    """Return whether *token* is owned and claims the next token by *options*.
+
+    The short-option walk follows Click's attached-value convention: a
+    value-taking ``-p`` owns both ``-p VALUE`` and ``-pVALUE``. The second
+    result is true only for the separate form.
+    """
+    option_values = _option_value_map(options)
+    if token.startswith("--"):
+        flag, separator, _value = token.partition("=")
+        takes_value = option_values.get(flag)
+        return (takes_value is not None, bool(takes_value and not separator))
+    if not token.startswith("-") or token == "-":
+        return False, False
+    recognized = False
+    short_group = token[1:]
+    for offset, short in enumerate(short_group):
+        takes_value = option_values.get(f"-{short}")
+        if takes_value is None:
+            continue
+        recognized = True
+        if takes_value:
+            return True, offset + 1 == len(short_group)
+    return recognized, False
+
+
+def option_value_map(params: Sequence[click.Option]) -> dict[str, bool]:
+    """Return Click option spellings and whether each consumes a value."""
+    return {
+        flag: not param.is_flag for param in params for flag in (*param.opts, *param.secondary_opts)
+    }
+
+
+def retain_end_of_options(
+    args: "Sequence[str]", host_options: OptionValueMap = frozenset()
+) -> list[str]:
     """Return *args* with the host's own end-of-options marker doubled.
 
-    Click's parser removes the first bare ``--`` as it reads the host's own
-    options, so the tail it hands over no longer shows where host option
-    scanning ended. Doubling the marker keeps both readings: Click removes
+    Click's parser removes the first bare ``--`` that is not already the
+    value of a host option, so the tail it hands over no longer shows where
+    host option scanning ended. Doubling that marker keeps both readings: Click removes
     the copy it would have removed anyway — stopping option parsing at
     exactly the same token — and the survivor is the marker the reader wrote.
     For ``agm exec`` that survivor marks the boundary for
@@ -435,10 +482,14 @@ def retain_end_of_options(args: "Sequence[str]") -> list[str]:
     program's own parser reads it.
     """
     tokens = list(args)
-    if END_OF_OPTIONS not in tokens:
-        return tokens
-    index = tokens.index(END_OF_OPTIONS)
-    return [*tokens[:index], END_OF_OPTIONS, *tokens[index:]]
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == END_OF_OPTIONS:
+            return [*tokens[:index], END_OF_OPTIONS, *tokens[index:]]
+        _owned, claims_next = _option_token_ownership(token, host_options)
+        index += 2 if claims_next and index + 1 < len(tokens) else 1
+    return tokens
 
 
 def split_exec_tail(
@@ -507,7 +558,7 @@ def split_exec_tail(
 
 
 def protect_host_option_values(
-    tokens: Sequence[str], program_command: ProgramCommand | None, host_flags: frozenset[str]
+    tokens: Sequence[str], program_command: ProgramCommand | None, host_options: OptionValueMap
 ) -> tuple[list[str], dict[str, str]]:
     """Hide host-looking values until an outer Click command has parsed.
 
@@ -518,13 +569,14 @@ def protect_host_option_values(
     """
     if program_command is None:
         return list(tokens), {}
-    protected = program_command.value_token_indexes(tokens)
+    protected = program_command.value_token_indexes(tokens, host_options=host_options)
     replacements: dict[str, str] = {}
     parsed = list(tokens)
     unavailable = set(tokens)
     for index in protected:
         value = tokens[index]
-        if value.partition("=")[0] not in host_flags:
+        owned_by_host, _claims_next = _option_token_ownership(value, host_options)
+        if value != END_OF_OPTIONS and not owned_by_host:
             continue
         replacement = f"agm-program-value-{index}"
         suffix = 1
@@ -535,6 +587,49 @@ def protect_host_option_values(
         replacements[replacement] = value
         unavailable.add(replacement)
     return parsed, replacements
+
+
+def protect_potential_program_values(
+    tokens: Sequence[str], host_options: OptionValueMap
+) -> list[str]:
+    """Hide possible program values for an advisory outer parse.
+
+    Before a source has been discovered its unknown options have unknown
+    arity. Treat a separate token after one as a possible value only for the
+    preview that locates that source. The authoritative pass later uses the
+    discovered :class:`ProgramCommand` and restores ordinary host ownership.
+    """
+    parsed = list(tokens)
+    unavailable = set(tokens)
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == END_OF_OPTIONS:
+            break
+        owned_by_host, host_claims_next = _option_token_ownership(token, host_options)
+        if owned_by_host:
+            index += 2 if host_claims_next and index + 1 < len(tokens) else 1
+            continue
+        possible_program_option = token.startswith("--") and "=" not in token
+        possible_program_option = possible_program_option or (
+            token.startswith("-") and token != "-" and len(token) == 2
+        )
+        if not possible_program_option or index + 1 >= len(tokens):
+            index += 1
+            continue
+        value_index = index + 1
+        value = tokens[value_index]
+        value_owned_by_host, _claims_next = _option_token_ownership(value, host_options)
+        if value == END_OF_OPTIONS or value_owned_by_host:
+            replacement = f"agm-program-preview-{value_index}"
+            suffix = 1
+            while replacement in unavailable:
+                replacement = f"agm-program-preview-{value_index}-{suffix}"
+                suffix += 1
+            parsed[value_index] = replacement
+            unavailable.add(replacement)
+        index += 2
+    return parsed
 
 
 @dataclass(frozen=True, slots=True)
@@ -953,10 +1048,13 @@ class ProgramCommand:
                 named[param.name] = _positive_raw(projected, flag, cast(str, positive[0]))
         return ProgramArguments(positional=positional, named=named)
 
-    def value_token_indexes(self, tokens: Sequence[str]) -> frozenset[int]:
+    def value_token_indexes(
+        self, tokens: Sequence[str], *, host_options: OptionValueMap = frozenset()
+    ) -> frozenset[int]:
         """Return indexes that this program reads as separate option values.
 
-        Hosts use this before their outer Click command runs. A token in one
+        Hosts use this before their outer Click command runs. Host options
+        and their own separate values are skipped as one unit. A token in one
         of these positions belongs to the program even when it happens to
         spell a host option, so the outer command must leave it in the raw
         tail. Inline long and attached short values are part of their option
@@ -978,6 +1076,10 @@ class ProgramCommand:
             token = tokens[index]
             if token == END_OF_OPTIONS:
                 break
+            owned_by_host, host_claims_next = _option_token_ownership(token, host_options)
+            if owned_by_host:
+                index += 2 if host_claims_next and index + 1 < len(tokens) else 1
+                continue
             if token.startswith("--"):
                 flag, separator, _value = token.partition("=")
                 if separator or not long_options.get(flag, False):

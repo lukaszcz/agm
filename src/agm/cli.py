@@ -1126,6 +1126,7 @@ def exec_cmd(
             timeout=timeout,
             no_timeout=no_timeout,
             no_log_file=no_log_file,
+            pipeline_cache=discovery.cached_artifacts(file),
         )
     )
 

@@ -62,6 +62,7 @@ from pathlib import Path
 from typing import Generic, Mapping, TypeVar, cast
 
 from agm.agl.artifact_cache import (
+    module_fingerprints,
     retain_checked_modules,
     retained_checked_modules,
     retained_module_sources,
@@ -123,6 +124,7 @@ from agm.agl.typecheck.function_inference import (
     ModuleCandidateComponent,
     candidate_records_for,
     infer_module_component_candidates,
+    register_method_header,
     resolve_function_header,
 )
 from agm.agl.zones import ParamZone
@@ -191,6 +193,7 @@ class CheckedProgram:
     import_sccs: tuple[tuple[ModuleId, ...], ...] = ()
     resource_roots: Mapping[ModuleId, Path | None] = field(default_factory=dict)
     runtime_modules: frozenset[ModuleId] | None = None
+    module_fingerprints: Mapping[ModuleId, bytes] = field(default_factory=dict)
 
 
 def program_funcdefs(
@@ -451,6 +454,7 @@ def _build_program_type_table(
     *,
     type_table: TypeTable | None = None,
     entry_seed_env: TypeEnvironment | None = None,
+    cached_modules: Mapping[ModuleId, CheckedModule] | None = None,
 ) -> tuple[
     dict[DeclKey, Type],
     dict[DeclKey, GenericTypeDef],
@@ -506,6 +510,15 @@ def _build_program_type_table(
     if entry_seed_env is not None:
         shared_type_table.merge_from(entry_seed_env.type_table)
 
+    interfaces = {
+        mid: cm.type_env.module_interface()
+        for mid, cm in (cached_modules or {}).items()
+        if cm.published_signatures is not None
+    }
+    for interface in interfaces.values():
+        for definition in interface.definitions:
+            shared_type_table.register(definition)
+
     # Step A: register every declared name's handle for all modules.
     # For records/enums: register the handle in both the per-module env AND
     # program_type_table.  For aliases: register in the per-module env only
@@ -513,6 +526,8 @@ def _build_program_type_table(
     per_module_envs: dict[ModuleId, TypeEnvironment] = {}
 
     for mid, rmod in resolved.modules.items():
+        if mid in interfaces:
+            continue
         env = TypeEnvironment(
             module_id=mid,
             local_scope_paths=frozenset(rmod.resolved.scope_nodes),
@@ -558,6 +573,8 @@ def _build_program_type_table(
     program_alias_table: dict[DeclKey, GenericAliasDef] = {}
     alias_decls: dict[DeclKey, TypeAlias] = {}
     for mid, rmod in resolved.modules.items():
+        if mid in interfaces:
+            continue
         program = rmod.resolved.program
         assert isinstance(program, Program)
         for item in static_type_items(program.body.items):
@@ -566,6 +583,13 @@ def _build_program_type_table(
     program_alias_keys = frozenset(alias_decls)
     program_ctor_sig_table: dict[DeclKey, ConstructorSignature] = {}
     program_ctor_field_kinds_table: dict[DeclKey, tuple[tuple[str, ParamZone], ...]] = {}
+
+    for interface in interfaces.values():
+        program_type_table.update(interface.types)
+        program_generic_table.update(interface.generics)
+        program_alias_table.update(interface.aliases)
+        program_ctor_sig_table.update(interface.constructors)
+        program_ctor_field_kinds_table.update(interface.field_kinds)
 
     # Build per-module cross-module-aware environments and builders for
     # body resolution.  Each env knows the full program_type_table and its own
@@ -605,6 +629,8 @@ def _build_program_type_table(
             resolving_aliases.remove(key)
 
     for mid, rmod in resolved.modules.items():
+        if mid in interfaces:
+            continue
         import_env = rmod.import_env
         cross_env = TypeEnvironment(
             program_type_table=program_type_table,
@@ -652,7 +678,7 @@ def _build_program_type_table(
     # Use the COMPLETE set of declared type keys (including aliases), NOT just
     # the record/enum handles in program_type_table, as the fixed resolution
     # order for Step B below.
-    all_type_keys = _collect_all_type_keys(resolved)
+    all_type_keys = {key for key in _collect_all_type_keys(resolved) if key[0] not in interfaces}
 
     def _resolve_one(key: DeclKey) -> None:
         _resolve_body_for_one(
@@ -715,6 +741,7 @@ def _build_program_func_sig_table(
     program_generic_table: dict[DeclKey, GenericTypeDef],
     program_alias_table: dict[DeclKey, GenericAliasDef],
     entry_seed_env: TypeEnvironment | None = None,
+    cached_modules: Mapping[ModuleId, CheckedModule] | None = None,
 ) -> dict[int, FunctionSignatureRecord]:
     """Phase 2: collect explicit top-level function signatures across modules.
 
@@ -733,6 +760,10 @@ def _build_program_func_sig_table(
     result: dict[int, FunctionSignatureRecord] = {}
 
     for mid, rmod in resolved.modules.items():
+        cached = cached_modules.get(mid) if cached_modules is not None else None
+        if cached is not None and cached.published_signatures is not None:
+            result.update(cached.published_signatures)
+            continue
         program = rmod.resolved.program
         assert isinstance(program, Program)
 
@@ -1034,7 +1065,11 @@ def check_program(
     )
     if cached_checked_modules is not None:
         reusable.update(cached_checked_modules)
-    cached_checked_modules = reusable
+    cached_checked_modules = {
+        mid: cm
+        for mid, cm in reusable.items()
+        if mid in resolved.modules and cm.resolved is resolved.modules[mid].resolved
+    }
 
     # One TypeTable shared by every module in this program: the type pre-pass
     # dual-writes into it below, and Phase 4 re-checks each module's own
@@ -1056,6 +1091,7 @@ def check_program(
         resolved,
         type_table=shared_type_table,
         entry_seed_env=entry_seed_env,
+        cached_modules=cached_checked_modules if entry_seed_env is None else None,
     )
 
     # Phase 2: build the program-wide explicit function-signature table.
@@ -1067,6 +1103,7 @@ def check_program(
         program_generic_table,
         program_alias_table,
         entry_seed_env=entry_seed_env,
+        cached_modules=cached_checked_modules,
     )
 
     # Collect import envs for per-module checking.
@@ -1122,6 +1159,23 @@ def check_program(
             module_id=mid,
         )
 
+    for mid, retained in cached_checked_modules.items():
+        env = module_envs[mid]
+        for item in static_function_items(retained.resolved.program.body.items):
+            owner = retained.resolved.receiver_owner_for(mid, item)
+            record = (retained.published_signatures or {}).get(item.node_id)
+            if item.return_type is not None or owner is None or record is None:
+                continue
+            with env.type_scope(tuple(segment.name for segment in item.scope_path)):
+                signature, _, receiver = resolve_function_header(
+                    env,
+                    item,
+                    result_type=record.signature.result,
+                    param_zones=retained.resolved.attributes.param_zones,
+                    receiver_owner=owner,
+                )
+            register_method_header(env, item, signature, receiver, mid)
+
     validate_builtin_declaration_uniqueness(program_modules, resolved.entry_id)
     validate_method_declaration_collisions(program_modules, shared_type_table)
 
@@ -1132,6 +1186,12 @@ def check_program(
     # SCCs (their potential importers); earlier SCCs are dependencies that
     # cannot reference it, so registering there would be wasted work.
     for index, inference_scc in enumerate(inference_sccs):
+        if all(
+            mid in cached_checked_modules
+            and cached_checked_modules[mid].published_signatures is not None
+            for mid in inference_scc
+        ):
+            continue
         candidates = tuple(
             CandidateModule(
                 resolved.modules[mid].resolved,
@@ -1177,6 +1237,11 @@ def check_program(
             import_env=rmod.import_env,
             source_text=rmod.source_text,
             function_signatures=_module_function_signatures(rmod.resolved.program, cp.type_env),
+            published_signatures={
+                item.node_id: program_func_sig_table[item.node_id]
+                for item in static_function_items(rmod.resolved.program.body.items)
+                if item.node_id in program_func_sig_table
+            },
         )
         checked_modules[mid] = cm
 
@@ -1199,6 +1264,9 @@ def check_program(
         import_sccs=resolved.import_sccs,
         resource_roots={mid: resolved.graph.resource_root_for(mid) for mid in presentation_order},
         runtime_modules=runtime_modules,
+        module_fingerprints=module_fingerprints(retainable, capabilities)
+        if entry_seed_env is None
+        else {},
     )
     if self_validation_enabled():
         assert_checked_program_closed(checked, frozenset(reused_modules))

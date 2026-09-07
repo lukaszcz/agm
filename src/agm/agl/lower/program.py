@@ -7,6 +7,7 @@ symbol/function/nominal table and per-module initializer sequences.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterable, Mapping
 
 from agm.agl.ir.builtin_vars import BuiltinVarKey, builtin_var_key
@@ -26,6 +27,7 @@ from agm.agl.ir.program import (
     VariantDescriptor,
 )
 from agm.agl.ir.validate import validate_ir
+from agm.agl.lower import module as module_cache
 from agm.agl.lower.lowerer import (
     _add_builtin_nominals,
     _contract_has_schema,
@@ -180,7 +182,7 @@ def lower_program(
     for mid, cm in checked.modules.items():
         if mid in _already_linked:
             continue
-        source_id = SourceId(link.next_source)
+        source_id = SourceId(cm.resolved.program.node_id if _link is None else link.next_source)
         link.next_source += 1
         display_name = mid.display()
         module_source_text = (
@@ -343,6 +345,7 @@ def lower_program(
             compiled.sites_by_module[mid],
             checked.resource_roots.get(mid),
             has_std_env=STD_ENV_ID in checked.modules,
+            stable_ids=_link is None,
             contract_payloads=contract_payloads,
         )
         module_lowerers[mid] = lowerer
@@ -366,15 +369,53 @@ def lower_program(
     executable_modules: dict[ModuleId, ExecutableModule] = {
         mid: ExecutableModule(module_id=mid, initializers=()) for mid in _already_linked
     }
+    builtin_setting_defaults: dict[BuiltinVarKey | str, IrExpr] = {}
     for mid in ordered_mids:
         cm = checked.modules[mid]
         lowerer = module_lowerers[mid]
+        fingerprint = checked.module_fingerprints.get(mid) if _link is None else None
+        key = None
+        if fingerprint is not None:
+            context = (
+                checked.resource_roots.get(mid),
+                STD_ENV_ID in checked.modules,
+                sorted(link.builtin_nominals.declared.items()),
+                sorted(link.builtin_nominals.members.items()),
+                sorted(link.builtin_nominals.standard_members.items()),
+                [(nid, (contract_payloads or {}).get(nid)) for nid in sorted(cm.contract_specs)],
+            )
+            key = hashlib.sha256(fingerprint + repr(context).encode()).digest()
+        cached = module_cache.load(key) if key is not None else None
+        if cached is not None:
+            cached.link_into(link)
+            executable_modules[mid] = cached.module
+            builtin_setting_defaults.update(cached.defaults)
+            continue
         body = cm.resolved.program.body
         initializers = lowerer.lower_initializers(body, top_level=True)
-        executable_modules[mid] = ExecutableModule(
-            module_id=mid,
-            initializers=initializers,
-        )
+        executable_module = ExecutableModule(module_id=mid, initializers=initializers)
+        executable_modules[mid] = executable_module
+        defaults: dict[BuiltinVarKey | str, IrExpr] = {
+            builtin_var_key(
+                mid, (segment.name for segment in item.scope_path), item.name
+            ): lowerer.lower_expr(item.default)
+            for item in static_items(body.items)
+            if isinstance(item, BuiltinVarDecl) and item.default is not None
+        }
+        builtin_setting_defaults.update(defaults)
+        if key is not None:
+            seed = cm.resolved.program.node_id << 32
+            module_cache.save(
+                key,
+                module_cache.capture(
+                    executable_module,
+                    link,
+                    defaults,
+                    tuple(lowerer.resources),
+                    seed,
+                    seed + (1 << 32),
+                ),
+            )
 
     # Inventory every declaration, including ones without defaults and ones
     # retained from earlier REPL entries, so structural validation can verify
@@ -385,17 +426,6 @@ def lower_program(
         for item in static_items(checked_module.resolved.program.body.items)
         if isinstance(item, BuiltinVarDecl)
     )
-
-    # Lower declared builtin-var defaults separately from program initializers.
-    # They are constant expressions evaluated only while an interpreter is seeded.
-    builtin_setting_defaults: dict[BuiltinVarKey | str, IrExpr] = {
-        builtin_var_key(
-            mid, (segment.name for segment in item.scope_path), item.name
-        ): lowerer.lower_expr(item.default)
-        for mid, lowerer in module_lowerers.items()
-        for item in static_items(checked.modules[mid].resolved.program.body.items)
-        if isinstance(item, BuiltinVarDecl) and item.default is not None
-    }
 
     payloads = contract_payloads if contract_payloads is not None else {}
     dry_run_entries: list[DryRunEntry] = []

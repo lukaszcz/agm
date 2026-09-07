@@ -1,8 +1,8 @@
-"""Disposable parsed standard-library artifacts shared by CLI processes.
+"""Atomic, versioned compiler-artifact storage and parsed-module persistence.
 
-Entries retain the parser's node-id seed and are validated against source and
-compiler contents. Only syntax is persisted: resolution, capabilities, Python
-companions, and execution still use the current invocation's inputs.
+The storage envelope validates compiler/dependency versions and payload integrity.
+The parsed-module API accepts syntax data only; later stages use the data-only
+serializer in ``artifact_serialization`` over the same disposable storage.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ def _compiler_digest() -> bytes:
     if _COMPILER_DIGEST is not None:
         return _COMPILER_DIGEST
     root = Path(__file__).resolve().parents[2]
-    digest = hashlib.sha256((sys.version + version("lark")).encode())
+    digest = hashlib.sha256((sys.version + version("lark") + version("immutables")).encode())
     for path in sorted(root.rglob("*")):
         if path.suffix in {".py", ".lark"}:
             digest.update(path.relative_to(root).as_posix().encode())
@@ -77,12 +77,48 @@ class _SyntaxUnpickler(pickle.Unpickler):
 def _entry(
     module_id: ModuleId, path: Path, source: str, start_id: int, default_stdlib: bool
 ) -> tuple[Path, bytes]:
+    key = repr((str(path), module_id.segments, start_id, default_stdlib)).encode()
+    entry, _ = artifact_entry(key, "cache")
+    identity = hashlib.sha256(_compiler_digest() + key + source.encode()).digest()
+    return entry, identity
+
+
+def artifact_entry(key: bytes, kind: str) -> tuple[Path, bytes]:
+    """Locate a versioned compiler artifact in the user's disposable cache."""
     cache_home = os.environ.get("XDG_CACHE_HOME")
     root = Path(cache_home) if cache_home else Path.home() / ".cache"
-    key = repr((str(path), module_id.segments, start_id, default_stdlib)).encode()
     slot = hashlib.sha256(key).hexdigest()
-    identity = hashlib.sha256(_compiler_digest() + key + source.encode()).digest()
-    return root / "agm" / "agl" / (slot + ".cache"), identity
+    identity = hashlib.sha256(_compiler_digest() + key).digest()
+    return root / "agm" / "agl" / (slot + "." + kind), identity
+
+
+def read_payload(entry: Path, identity: bytes) -> bytes | None:
+    """Read a complete, compatible payload, or report a cache miss."""
+    try:
+        data = entry.read_bytes()
+        payload = data[64:]
+        if data[:32] != identity or data[32:64] != hashlib.sha256(payload).digest():
+            return None
+        return payload
+    except OSError:
+        return None
+
+
+def write_payload(entry: Path, identity: bytes, payload: bytes) -> None:
+    """Publish a complete payload atomically; unavailable storage is harmless."""
+    temporary: Path | None = None
+    try:
+        entry.parent.mkdir(parents=True, exist_ok=True)
+        with NamedTemporaryFile(dir=entry.parent, delete=False) as output:
+            temporary = Path(output.name)
+            output.write(identity + hashlib.sha256(payload).digest() + payload)
+        temporary.replace(entry)
+    except OSError:
+        pass
+    finally:
+        if temporary is not None:
+            with suppress(OSError):
+                temporary.unlink(missing_ok=True)
 
 
 def load(
@@ -93,9 +129,8 @@ def load(
 
     try:
         entry, identity = _entry(module_id, path, source, start_id, default_stdlib)
-        data = entry.read_bytes()
-        payload = data[64:]
-        if data[:32] != identity or data[32:64] != hashlib.sha256(payload).digest():
+        payload = read_payload(entry, identity)
+        if payload is None:
             return None
         value = cast(object, _SyntaxUnpickler(io.BytesIO(payload)).load())
         if not isinstance(value, tuple) or len(value) != 2:
@@ -112,21 +147,11 @@ def load(
 
 def save(module: LoadedModule, next_id: int, *, start_id: int, default_stdlib: bool) -> None:
     """Atomically replace an entry; cache I/O must never prevent compilation."""
-    temporary: Path | None = None
     try:
         path = cast(Path, module.path)
         entry, identity = _entry(
             module.module_id, path, module.source_text, start_id, default_stdlib
         )
-        payload = pickle.dumps((module, next_id), protocol=5)
-        entry.parent.mkdir(parents=True, exist_ok=True)
-        with NamedTemporaryFile(dir=entry.parent, delete=False) as output:
-            temporary = Path(output.name)
-            output.write(identity + hashlib.sha256(payload).digest() + payload)
-        temporary.replace(entry)
+        write_payload(entry, identity, pickle.dumps((module, next_id), protocol=5))
     except OSError:
         pass
-    finally:
-        if temporary is not None:
-            with suppress(OSError):
-                temporary.unlink(missing_ok=True)

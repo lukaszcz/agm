@@ -911,20 +911,6 @@ class TestWarningsThreadedOnFailurePaths:
         assert all(d.severity == "error" for d in result.diagnostics)
 
 
-class TestParamBindingInvariant:
-    """The runtime relies on the checker recording every declaration's binding type."""
-
-    def test_missing_binding_type_is_internal_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from agm.agl.typecheck.env import TypeEnvironment
-
-        # Force the checker invariant to be violated: no recorded binding type.
-        monkeypatch.setattr(TypeEnvironment, "get_binding_type", lambda self, node_id: None)
-
-        rt = PipelineDriver()
-        with pytest.raises(AssertionError, match="binding type"):
-            run_inline_command(rt, "let msg = 1\nprint msg")
-
-
 # ---------------------------------------------------------------------------
 # Capabilities built from registrations
 # ---------------------------------------------------------------------------

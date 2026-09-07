@@ -9,13 +9,12 @@ Nothing distinguishes the standard library here. A module is cacheable because
 its source is unchanged, not because of the root it was found under, so
 ordinary user and package modules are served on exactly the same terms.
 
-Node ids are allocated across a whole module graph from a counter that starts
-at zero, so a module parsed under one compilation's seed cannot simply be
-reused under another's without colliding with it. Cached modules therefore
-draw their ids from a reserved band far above anything ordinary allocation
-reaches (:data:`RESERVED_NODE_ID_BASE`): a compilation served from here leaves
-its own counter untouched, and the two id ranges stay disjoint by
-construction.
+Imported modules draw node ids from content-addressed namespaces above
+:data:`RESERVED_NODE_ID_BASE`. A module's path, logical identity, source and
+prelude mode select its namespace; allocation within it is local. The same
+module version therefore has the same declaration ids across processes and
+import orders, while edits and distinct modules remain disjoint from it and
+from ordinary entry allocation.
 
 An entry is keyed by canonical path, module id, and whether the loader injects
 the standard-library prelude, and it is validated against the source text
@@ -44,6 +43,7 @@ is cached the same way.
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
@@ -61,7 +61,7 @@ if TYPE_CHECKING:
 
 # The first node id reserved for cached modules. Ordinary allocation starts at
 # zero and grows by one per AST node, so no compilation reaches this band;
-# every id in it is still a small Python int.
+# imported declarations use content-addressed integer namespaces above it.
 RESERVED_NODE_ID_BASE = 1 << 40
 
 # An entry holds one module's syntax tree, so the bound trades memory for
@@ -123,18 +123,25 @@ def _emits_lexical_advisories(source_text: str) -> bool:
     return "\t" in source_text
 
 
+def module_node_id_base(
+    module_id: ModuleId, path: Path, source_text: str, default_stdlib: bool
+) -> int:
+    """Allocate a reproducible node namespace for a module's source version."""
+    identity = repr(((str(path), module_id, default_stdlib), source_text)).encode()
+    return (int.from_bytes(hashlib.sha256(identity).digest()[:16]) + 1) << 40
+
+
 class ParsedModuleCache:
     """A bounded store of parsed modules keyed by path, id, and prelude.
 
-    Entries are evicted least-recently-used first. The reserved id counter is
-    never rewound, including by :meth:`clear`, because a graph assembled
-    before an eviction may still hold the modules that carry those ids.
+    Entries are evicted least-recently-used first. Source-version namespaces
+    remain stable across eviction and reopening, independently of which other
+    graphs a host retains.
     """
 
     def __init__(self, *, capacity: int = _DEFAULT_CAPACITY) -> None:
         self._capacity = capacity
         self._entries: OrderedDict[_CacheKey, LoadedModule] = OrderedDict()
-        self._next_node_id = RESERVED_NODE_ID_BASE
         self._lock = threading.Lock()
 
     def get_or_build(
@@ -161,21 +168,23 @@ class ParsedModuleCache:
                 self._entries.move_to_end(key)
                 return entry
             cacheable = not _emits_lexical_advisories(source_text)
-            persistent = module_id.segments[0] == "std" and cacheable
-            start_id = self._next_node_id
+            persistent = cacheable
+            # A content-addressed namespace survives process and import-order
+            # changes. Leave a 32-bit local allocation range for each version.
+            start_id = module_node_id_base(module_id, path, source_text, default_stdlib)
             restored = (
                 disk_cache.load(module_id, path, source_text, start_id, default_stdlib)
                 if persistent
                 else None
             )
             if restored is None:
-                module, self._next_node_id = build(start_id, source_text)
+                module, next_id = build(start_id, source_text)
                 if persistent:
                     disk_cache.save(
-                        module, self._next_node_id, start_id=start_id, default_stdlib=default_stdlib
+                        module, next_id, start_id=start_id, default_stdlib=default_stdlib
                     )
             else:
-                module, self._next_node_id = restored
+                module, _next_id = restored
             if cacheable:
                 self._entries[key] = module
                 self._entries.move_to_end(key)

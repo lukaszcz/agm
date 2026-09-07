@@ -4,6 +4,8 @@
 
 Lowering consumes the match-compiled program and emits one linked, typeless executable program. It translates expressions directed by expected types, allocates program-local identities (symbols, functions, contracts, sources, nominals), and links modules in the loader's reverse-topological import-SCC order — function closures first, then static `let`/`var` initializers in source order — so forward references work. Each `program def`'s own value parameters become a host-facing signature (see below). Each emitted initializer records the source item it completes, which the REPL uses to promote declarations independently.
 
+Imported modules use stable allocation namespaces, allowing their IR and linkable tables to be persisted independently (`lower/module.py`). Reuse validates source dependencies, capabilities, builtin identities, host-materialized contracts, and resource anchors; resource existence and containment are checked again. Whole-program metadata and initialization order are assembled for each invocation. REPL linking retains its session-owned allocation image ([../repl.md](../repl.md)).
+
 Everything type-dependent is read from the checker's side tables — argument bindings, output contracts, selected constructors and methods, cast recipes, codec schema and decode walks, JSON encode plans — never re-inferred; that is what keeps the IR and evaluator typeless. Type arguments are erased. Nominal identity survives as `NominalId`, the checker's own declaration identity, with module, scope path, and name on the linked descriptor; shapes, including mutable fields and enum member layouts, come from the shared `TypeTable`.
 
 Notable lowering shapes:

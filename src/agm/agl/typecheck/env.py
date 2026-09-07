@@ -16,7 +16,10 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
+
+if TYPE_CHECKING:
+    from agm.agl.typecheck.function_inference import FunctionSignatureRecord
 
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.ir.ids import NominalId
@@ -48,6 +51,7 @@ from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.type_table import (
     DeclKey,
     MethodDef,
+    TypeDef,
     TypeTable,
     create_seeded_type_table,
 )
@@ -481,6 +485,7 @@ class CheckedModule:
     argument_bindings: ArgumentBindings
     pattern_classifications: dict[int, ConstructorRef | None]
     partial_calls: dict[int, PartialCallSpec]
+    published_signatures: dict[int, FunctionSignatureRecord] | None = None
     module_id: ModuleId = ENTRY_ID
     import_env: ImportEnv = field(default_factory=lambda: ImportEnv({}, {}))
     source_text: str = ""
@@ -606,6 +611,18 @@ def assert_checked_module_closed(checked: CheckedModule) -> None:
 # ---------------------------------------------------------------------------
 # TypeEnvironment — mutable state during type checking
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ModuleTypeInterface:
+    """Closed declarations a compiled module contributes to its importers."""
+
+    types: dict[DeclKey, Type]
+    generics: dict[DeclKey, GenericTypeDef]
+    aliases: dict[DeclKey, GenericAliasDef]
+    constructors: dict[DeclKey, ConstructorSignature]
+    field_kinds: dict[DeclKey, tuple[tuple[str, ParamZone], ...]]
+    definitions: tuple[TypeDef, ...]
 
 
 class TypeEnvironment:
@@ -811,6 +828,21 @@ class TypeEnvironment:
         # derives the full flattened (base-chain-inherited + own) kinds
         # directly from ``type_table.exception_field_kinds`` on demand instead
         # of a pre-registration step, since that requires no build ordering.
+
+    def module_interface(self) -> ModuleTypeInterface:
+        """Export this module's closed type metadata without another header pass."""
+
+        def own[V](table: Mapping[DeclKey, V] | None) -> dict[DeclKey, V]:
+            return {key: value for key, value in (table or {}).items() if key[0] == self._module_id}
+
+        return ModuleTypeInterface(
+            own(self._program_type_table),
+            own(self._program_generic_table),
+            own(self._program_alias_table),
+            own(self._program_ctor_sig_table),
+            own(self._program_ctor_field_kinds_table),
+            tuple(td for td in self._type_table.entries() if td.module_id == self._module_id),
+        )
 
     @property
     def type_table(self) -> TypeTable:

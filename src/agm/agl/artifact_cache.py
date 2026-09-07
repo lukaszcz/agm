@@ -1,55 +1,33 @@
-"""Process-global reuse of the artifacts a compilation derives from its modules.
+"""Reusable module artifacts in memory and across CLI processes.
 
-Every compilation loads the whole standard library, plus whatever the program
-imports, before it can check a line of the entry in front of it, and re-deriving
-those modules' artifacts dominates the cost of a short program: for a few-line
-entry they are almost all of it.
-The passes already know how to skip that work -- :func:`~agm.agl.scope.program.
-resolve_program` takes ``cached_modules``, :func:`~agm.agl.typecheck.program.
-check_program` takes ``cached_checked_modules``, and
-:func:`~agm.agl.matchcompile.compile_program_matches` takes ``cached_sites`` --
-but only a REPL session, which holds its own image across entries, ever
-supplied them.  This module is the same image for every other caller: one
-compilation's module artifacts, kept for the next one in the same process.
+Resolution, checking, and match compilation retain each module alongside its
+transitive import/export dependencies and ambient method modules. Memory hits
+require identical loaded sources; disk hits validate source-derived identities
+and the compiler version. Modules sharing a dependency closure share a persisted
+stage image. Restored stages anchor their provenance to the current compilation.
 
-What makes an artifact reusable is that it is a pure function of the loaded
-modules it was derived from, never of the entry.  So an artifact is retained
-alongside the *loaded modules the derivation could read* -- the module itself,
-everything reachable from it through the graph's import and export edges, and
-the ambient builtin-method modules every module can see -- and it is served
-again only while every one of those is the very same object.  The parse and
-infix-resolution caches in :mod:`agm.agl.modules.parsed_module_cache` are what
-make that possible: they are why loading the same file twice yields the same
-object rather than an equal one.
-
-That identity condition is the whole condition, which is why nothing here is
-keyed by root set, and why nothing here is confined to the standard library.  A
-root set that resolves an import to a different file yields a different loaded
-module and misses; one that merely adds unrelated roots -- a temporary project
-directory, a package mount -- leaves the modules it does share untouched and
-hits.  A user or package module that was edited between two compilations
-reparses, so it presents new objects and misses by construction; one that was
-not is as reusable as anything in the standard library, and is reused on the
-same terms.  Host capabilities are not derivable from modules, so they key the
-artifacts that are checked against them.
-
-Only the entry module is excluded, because it is the thing being compiled: it
-is reparsed every time and carries whatever the host spliced into it, so it
-would never hit.
+Checked modules publish closed type and function interfaces for importers.
+Capabilities distinguish checked artifacts and IR; the lowerer adds its resource
+and contract context. Entry modules and library cycles reaching the entry are
+never retained. Runtime state and companion callables are never cached here.
 """
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from collections import OrderedDict
 from collections.abc import Mapping
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, cast
+
+from agm.agl import artifact_serialization
+from agm.agl.modules.ids import ModuleId
 
 if TYPE_CHECKING:
     from agm.agl.capabilities import HostCapabilities
+    from agm.agl.lower.module import LoweredModule
     from agm.agl.matchcompile import CachedModuleSites
-    from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule, ModuleGraph
     from agm.agl.scope.program import ResolvedModule
     from agm.agl.typecheck.env import CheckedModule
@@ -90,7 +68,8 @@ class _Entry[V]:
 class _ArtifactStore[V]:
     """A bounded, least-recently-used store of one pass's artifacts."""
 
-    def __init__(self, *, capacity: int = _CAPACITY) -> None:
+    def __init__(self, *, capacity: int = _CAPACITY, kind: str = "") -> None:
+        self.kind = kind
         self._capacity = capacity
         self._entries: OrderedDict[_Key, _Entry[V]] = OrderedDict()
         self._lock = threading.Lock()
@@ -129,9 +108,22 @@ def _same_sources(retained: Sources, current: Sources) -> bool:
 # the pass that both consults and refreshes the image.
 RetainedSources = Mapping["ModuleId", Sources]
 
-_RESOLVED: _ArtifactStore["ResolvedModule"] = _ArtifactStore()
-_CHECKED: _ArtifactStore["CheckedModule"] = _ArtifactStore()
-_SITES: _ArtifactStore["CachedModuleSites"] = _ArtifactStore()
+_RESOLVED: _ArtifactStore["ResolvedModule"] = _ArtifactStore(kind="scope")
+_CHECKED: _ArtifactStore["CheckedModule"] = _ArtifactStore(kind="checked")
+_SITES: _ArtifactStore["CachedModuleSites"] = _ArtifactStore(kind="matches")
+
+
+_LOWERED: _ArtifactStore["LoweredModule"] = _ArtifactStore()
+
+
+def retained_lowered_module(key: bytes) -> LoweredModule | None:
+    """Return linked module data retained under its full compilation identity."""
+    return _LOWERED.get((key,), ())
+
+
+def retain_lowered_module(key: bytes, module: LoweredModule) -> None:
+    """Keep immutable module IR for subsequent compilations in this process."""
+    _LOWERED.put((key,), (), module)
 
 
 def retained_module_sources(graph: ModuleGraph) -> dict[ModuleId, Sources]:
@@ -150,6 +142,8 @@ def retained_module_sources(graph: ModuleGraph) -> dict[ModuleId, Sources]:
         if loaded.path is None or module_id == graph.entry_id:
             continue
         reachable = _reachable(graph, module_id) | set(graph.ambient_modules)
+        if graph.entry_id in reachable:
+            continue
         sources[module_id] = tuple(
             graph.modules[reached]
             for reached in sorted(reachable, key=_ordering_key)
@@ -177,7 +171,9 @@ def _reachable(graph: ModuleGraph, start: ModuleId) -> set[ModuleId]:
 
 def retained_resolved_modules(retainable: RetainedSources) -> dict[ModuleId, ResolvedModule]:
     """Return the resolved modules retained for these sources."""
-    return _served(_RESOLVED, retainable, ())
+    from agm.agl.scope.program import ResolvedModule
+
+    return _served(_RESOLVED, retainable, (), ResolvedModule)
 
 
 def retain_resolved_modules(
@@ -191,7 +187,15 @@ def retained_checked_modules(
     retainable: RetainedSources, capabilities: HostCapabilities
 ) -> dict[ModuleId, CheckedModule]:
     """Return the checked modules retained for these sources."""
-    return _served(_CHECKED, retainable, (capability_signature(capabilities),))
+    from agm.agl.typecheck.env import CheckedModule
+
+    served = _served(_CHECKED, retainable, (capability_signature(capabilities),), CheckedModule)
+    for mid, module in served.items():
+        resolved = _RESOLVED.get((mid,), retainable[mid])
+        if resolved is not None and module.resolved is not resolved.resolved:
+            served[mid] = replace(module, resolved=resolved.resolved)
+            _CHECKED.put((mid, capability_signature(capabilities)), retainable[mid], served[mid])
+    return served
 
 
 def retain_checked_modules(
@@ -207,7 +211,16 @@ def retained_match_sites(
     retainable: RetainedSources, capabilities: HostCapabilities
 ) -> dict[ModuleId, CachedModuleSites]:
     """Return the compiled match sites retained for these sources."""
-    return _served(_SITES, retainable, (capability_signature(capabilities),))
+    from agm.agl.matchcompile import CachedModuleSites
+
+    signature = capability_signature(capabilities)
+    served = _served(_SITES, retainable, (signature,), CachedModuleSites)
+    for mid, sites in served.items():
+        checked = _CHECKED.get((mid, signature), retainable[mid])
+        if checked is not None and sites.owner is not checked:
+            served[mid] = replace(sites, owner=checked)
+            _SITES.put((mid, signature), retainable[mid], served[mid])
+    return served
 
 
 def retain_match_sites(
@@ -220,9 +233,27 @@ def retain_match_sites(
 
 
 def _served[V](
-    store: _ArtifactStore[V], retainable: RetainedSources, discriminator: tuple[object, ...]
+    store: _ArtifactStore[V],
+    retainable: RetainedSources,
+    discriminator: tuple[object, ...],
+    expected: type[V],
 ) -> dict[ModuleId, V]:
     """Collect every artifact these modules still qualify for."""
+    for group in _groups(retainable):
+        sources = retainable[group[0]]
+        if all(store.get((mid, *discriminator), retainable[mid]) is not None for mid in group):
+            continue
+        payload = artifact_serialization.load(
+            _disk_key(sources, discriminator),
+            store.kind,
+            _anchors(store.kind, sources, discriminator, retainable),
+        )
+        if isinstance(payload, dict):
+            artifacts = cast(dict[object, object], payload)
+            for mid in group:
+                artifact = artifacts.get(mid)
+                if isinstance(artifact, expected):
+                    store.put((mid, *discriminator), retainable[mid], artifact)
     served: dict[ModuleId, V] = {}
     for module_id, sources in retainable.items():
         artifact = store.get((module_id, *discriminator), sources)
@@ -238,10 +269,70 @@ def _retain[V](
     artifacts: Mapping[ModuleId, V],
 ) -> None:
     """Retain every artifact belonging to one of these modules."""
-    for module_id, artifact in artifacts.items():
-        sources = retainable.get(module_id)
-        if sources is not None:
-            store.put((module_id, *discriminator), sources, artifact)
+    for group in _groups(retainable):
+        sources = retainable[group[0]]
+        members = {mid: artifacts[mid] for mid in group if mid in artifacts}
+        changed = any(store.get((mid, *discriminator), sources) is None for mid in members)
+        for mid, artifact in members.items():
+            store.put((mid, *discriminator), sources, artifact)
+        if changed:
+            artifact_serialization.save(
+                _disk_key(sources, discriminator),
+                store.kind,
+                members,
+                _anchors(store.kind, sources, discriminator, retainable),
+            )
+
+
+def _anchors(
+    kind: str, sources: Sources, discriminator: tuple[object, ...], retainable: RetainedSources
+) -> tuple[object, ...]:
+    anchors: list[object] = [module.program for module in sources]
+    for module in sources:
+        retained = retainable.get(module.module_id)
+        if retained is None:
+            continue
+        if kind == "checked":
+            resolved = _RESOLVED.get((module.module_id,), retained)
+            if resolved is not None:
+                anchors.append(resolved.resolved)
+        elif kind == "matches":
+            checked = _CHECKED.get((module.module_id, *discriminator), retained)
+            if checked is not None:
+                anchors.extend((checked, checked.type_env.type_table))
+    return tuple(anchors)
+
+
+def _groups(retainable: RetainedSources) -> tuple[tuple[ModuleId, ...], ...]:
+    groups: dict[tuple[ModuleId, ...], list[ModuleId]] = {}
+    for mid, sources in retainable.items():
+        groups.setdefault(tuple(m.module_id for m in sources), []).append(mid)
+    return tuple(tuple(group) for group in groups.values())
+
+
+_FINGERPRINTS: _ArtifactStore[bytes] = _ArtifactStore()
+
+
+def _disk_key(sources: Sources, discriminator: tuple[object, ...]) -> bytes:
+    digest = hashlib.sha256(repr(discriminator).encode())
+    for module in sources:
+        key = (module.module_id,)
+        fingerprint = _FINGERPRINTS.get(key, (module,))
+        if fingerprint is None:
+            fingerprint = hashlib.sha256(repr(module).encode()).digest()
+            _FINGERPRINTS.put(key, (module,), fingerprint)
+        digest.update(fingerprint)
+    return digest.digest()
+
+
+def module_fingerprints(
+    retainable: RetainedSources, capabilities: HostCapabilities
+) -> dict[ModuleId, bytes]:
+    """Dependency identities used to validate independently lowered modules."""
+    return {
+        mid: _disk_key(sources, (mid, capability_signature(capabilities)))
+        for mid, sources in retainable.items()
+    }
 
 
 def clear_retained_artifacts() -> None:
@@ -255,3 +346,5 @@ def clear_retained_artifacts() -> None:
     _RESOLVED.clear()
     _CHECKED.clear()
     _SITES.clear()
+    _FINGERPRINTS.clear()
+    _LOWERED.clear()

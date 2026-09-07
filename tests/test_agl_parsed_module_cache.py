@@ -15,7 +15,6 @@ from agm.agl.modules.loader import LoadedModule, load_graph
 from agm.agl.modules.parsed_module_cache import (
     RESERVED_NODE_ID_BASE,
     ModuleDerivationCache,
-    ParsedModuleCache,
     clear_parsed_module_cache,
 )
 from agm.agl.modules.roots import RootSet
@@ -156,16 +155,14 @@ def test_modified_standard_library_file_is_reparsed(
     assert "def g()" in reloaded.source_text
 
 
-def test_clearing_the_cache_forces_a_reparse(tmp_path: Path, library_parses: list[str]) -> None:
-    path = _write_module(tmp_path, "lib/a", _LIB_SOURCE)
+def test_clearing_memory_preserves_the_loaded_library(tmp_path: Path) -> None:
+    _write_module(tmp_path, "lib/a", _LIB_SOURCE)
     roots = _stdlib_roots(tmp_path)
-
     first = _load(roots)
     clear_parsed_module_cache()
     second = _load(roots)
-
-    assert _library_parse_count(library_parses, path) == 2
-    assert second.program is not first.program
+    assert second.program == first.program
+    assert second.source_text == _LIB_SOURCE
 
 
 def test_cached_node_ids_stay_disjoint_from_a_compilation_entry(tmp_path: Path) -> None:
@@ -326,43 +323,22 @@ def _stub_builder(module: LoadedModule, consumed: int, calls: list[int]) -> obje
     return build
 
 
-def test_reserved_ids_advance_across_distinct_modules(tmp_path: Path) -> None:
-    cache = ParsedModuleCache()
-    path = _write_module(tmp_path, "lib/a", _LIB_SOURCE)
-    other = _write_module(tmp_path, "lib/b", _LIB_SOURCE)
-    module = _load(_stdlib_roots(tmp_path))
-    calls: list[int] = []
-
-    cache.get_or_build(_LIB_ID, path, default_stdlib=False, build=_stub_builder(module, 10, calls))
-    cache.get_or_build(
-        ModuleId.from_path("lib/b"),
-        other,
-        default_stdlib=False,
-        build=_stub_builder(module, 10, calls),
+def test_reopened_libraries_keep_distinct_declarations(tmp_path: Path) -> None:
+    _write_module(tmp_path, "lib/a", _LIB_SOURCE)
+    _write_module(tmp_path, "lib/b", _LIB_SOURCE)
+    roots = _stdlib_roots(tmp_path)
+    graph = load_graph(
+        "import lib/a\nimport lib/b\n", roots=roots, entry_path=None, default_stdlib=False
     )
-
-    assert calls == [RESERVED_NODE_ID_BASE, RESERVED_NODE_ID_BASE + 10]
-
-
-def test_cache_evicts_least_recently_used_entries(tmp_path: Path) -> None:
-    cache = ParsedModuleCache(capacity=1)
-    first_path = _write_module(tmp_path, "lib/a", _LIB_SOURCE)
-    second_path = _write_module(tmp_path, "lib/b", _LIB_SOURCE)
-    module = _load(_stdlib_roots(tmp_path))
-    calls: list[int] = []
-    second_id = ModuleId.from_path("lib/b")
-
-    cache.get_or_build(
-        _LIB_ID, first_path, default_stdlib=False, build=_stub_builder(module, 1, calls)
+    first = all_node_ids(graph.modules[ModuleId.from_path("lib/a")].program)
+    second = all_node_ids(graph.modules[ModuleId.from_path("lib/b")].program)
+    assert first.isdisjoint(second)
+    clear_parsed_module_cache()
+    reopened = load_graph(
+        "import lib/b\nimport lib/a\n", roots=roots, entry_path=None, default_stdlib=False
     )
-    cache.get_or_build(
-        second_id, second_path, default_stdlib=False, build=_stub_builder(module, 1, calls)
-    )
-    cache.get_or_build(
-        _LIB_ID, first_path, default_stdlib=False, build=_stub_builder(module, 1, calls)
-    )
-
-    assert len(calls) == 3
+    assert all_node_ids(reopened.modules[ModuleId.from_path("lib/a")].program) == first
+    assert all_node_ids(reopened.modules[ModuleId.from_path("lib/b")].program) == second
 
 
 def test_derivation_cache_evicts_least_recently_used_entries(tmp_path: Path) -> None:

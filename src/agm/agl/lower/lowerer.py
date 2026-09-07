@@ -428,6 +428,13 @@ class InitializerOrigin:
 
 
 @dataclass
+class _ModuleAllocation:
+    next_sym: int
+    next_fn: int
+    next_contract: int
+
+
+@dataclass
 class _LinkState:
     next_sym: int = 0
     next_fn: int = 0
@@ -478,10 +485,14 @@ class _Lowerer:
         resource_root: Path | None = None,
         *,
         has_std_env: bool = False,
+        stable_ids: bool = False,
         contract_payloads: Mapping[int, ContractPayload] | None = None,
     ) -> None:
         self._checked = checked
         self._link = link
+        seed = checked.resolved.program.node_id << 32
+        self._allocation = _ModuleAllocation(seed, seed, seed) if stable_ids else link
+        self.resources: list[tuple[Path | None, str | None, Path]] = []
         self._module_id = module_id
         self._source_id = source_id
         self._source_text = normalize_newlines(source_text)
@@ -545,8 +556,8 @@ class _Lowerer:
         An omitted ``owner`` defaults to the function whose body is being
         lowered, or to the module when lowering module-level items.
         """
-        sym = SymbolId(self._link.next_sym)
-        self._link.next_sym += 1
+        sym = SymbolId(self._allocation.next_sym)
+        self._allocation.next_sym += 1
         self._link.decl_to_sym[decl_node_id] = sym
         self._link.symbols[sym] = SymbolDescriptor(
             symbol_id=sym,
@@ -599,8 +610,8 @@ class _Lowerer:
         symbol is never exposed in ``_collect_results``.  Used for loop desugaring
         counters (``__count``, ``__n``) that must not be user-visible.
         """
-        sym = SymbolId(self._link.next_sym)
-        self._link.next_sym += 1
+        sym = SymbolId(self._allocation.next_sym)
+        self._allocation.next_sym += 1
         self._link.symbols[sym] = SymbolDescriptor(
             symbol_id=sym,
             mutable=mutable,
@@ -621,14 +632,14 @@ class _Lowerer:
 
     def _alloc_fn(self) -> FunctionId:
         """Allocate a fresh ``FunctionId``."""
-        fn_id = FunctionId(self._link.next_fn)
-        self._link.next_fn += 1
+        fn_id = FunctionId(self._allocation.next_fn)
+        self._allocation.next_fn += 1
         return fn_id
 
     def _alloc_contract(self, request: ContractRequest) -> ContractId:
         """Allocate a fresh ContractId and register the ContractRequest."""
-        cid = ContractId(self._link.next_contract)
-        self._link.next_contract += 1
+        cid = ContractId(self._allocation.next_contract)
+        self._allocation.next_contract += 1
         self._link.contracts[cid] = request
         return cid
 
@@ -2228,6 +2239,7 @@ class _Lowerer:
                 try:
                     path = resource_path(call_node, is_directory=kind is BuiltinKind.RESOURCE_DIR)
                     resolved = resolve_resource(self._resource_root, path)
+                    self.resources.append((self._resource_root, path, resolved))
                 except ResourceError as exc:
                     raise ResourceError(str(exc), span=span) from exc
                 return IrResource(location=loc, path=str(resolved))

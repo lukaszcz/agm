@@ -23,7 +23,7 @@ Tests assert observable behavior, never exact help, warning, or error text. Impo
 
 ## Test Cost
 
-Per-test cost is accounted in CPU seconds (`tests/_durations.py`), never wall clock, which swings with the load average under `-n auto`. `just test` enforces a per-test ceiling; `just test-budget` ranks tests to recalibrate it. The dominant AgL cost is compiling the modules behind a program; process-local artifact reuse and a disposable disk cache for standard-library syntax ([agl/modules.md](agl/modules.md)) reduce repeated work. Tests isolate the disk cache, and eviction workflows use small libraries and evaluated values. Coverage’s first-use instrumentation cost is included in the CPU measurement. `just check` runs the static gates concurrently with the suite.
+Per-test cost is accounted in CPU seconds (`tests/_durations.py`), never wall clock, which swings with the load average under `-n auto`. `just test` enforces a per-test ceiling; `just test-budget` ranks tests to recalibrate it. The dominant AgL cost is compiling the modules behind a program; module precompilation and bounded in-memory artifact reuse ([agl/modules.md](agl/modules.md)) reduce repeated work. Tests isolate the disk cache, and eviction workflows use small libraries and evaluated values. Coverage’s first-use instrumentation cost is included in the CPU measurement. `just check` runs the static gates concurrently with the suite.
 
 ## Editor Modes
 

@@ -130,7 +130,7 @@ def test_session_ask_lowers_a_formatted_strict_json_contract_with_retries() -> N
     )
 
     assert isinstance(answer, IrSessionAsk)
-    assert answer.contract_id == ContractId(0)
+    assert answer.contract_id in program.contracts
     assert answer.max_attempts == 3
     assert program.contracts == {
         answer.contract_id: ContractRequest(

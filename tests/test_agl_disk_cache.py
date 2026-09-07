@@ -17,7 +17,7 @@ from agm.agl.modules import disk_cache
 from agm.agl.modules.errors import MissingExternCompanion
 from agm.agl.modules.ids import STD_PRELUDE_ID
 from agm.agl.modules.loader import LoadedModule, _parse_imported_module
-from agm.agl.modules.parsed_module_cache import RESERVED_NODE_ID_BASE, ParsedModuleCache
+from agm.agl.modules.parsed_module_cache import ParsedModuleCache, module_node_id_base
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import ParsedEntry, PipelineDriver
 
@@ -89,7 +89,13 @@ def _cached_library(root: Path) -> tuple[LoadedModule, int]:
         build=partial(_parse_imported_module, STD_PRELUDE_ID, path, default_stdlib=False),
     )
     # Loading the persisted artifact is the disk cache's public contract.
-    restored = disk_cache.load(STD_PRELUDE_ID, path, path.read_text(), RESERVED_NODE_ID_BASE, False)
+    restored = disk_cache.load(
+        STD_PRELUDE_ID,
+        path,
+        path.read_text(),
+        module_node_id_base(STD_PRELUDE_ID, path, path.read_text(), False),
+        False,
+    )
     assert restored is not None
     return module, restored[1]
 

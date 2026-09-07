@@ -438,7 +438,9 @@ value is a runtime error, not a process termination.
   affect the exit code — the program still runs to completion. Program `print` output
   goes to stdout, kept clean of diagnostics.
 
-Parsed standard-library modules are cached under `$XDG_CACHE_HOME/agm/agl`, or
-`~/.cache/agm/agl` when `XDG_CACHE_HOME` is unset. Source edits invalidate cached
-entries automatically. The cache is disposable: deleting it or making it unavailable
-does not prevent execution.
+Imported modules, including the standard library, are precompiled on demand under
+`$XDG_CACHE_HOME/agm/agl`, or `~/.cache/agm/agl` when `XDG_CACHE_HOME` is unset.
+Source and dependency edits, compiler updates, and relevant compilation settings
+invalidate artifacts automatically. Module initialization and execution use the
+current invocation's configuration and runtime state. The cache is disposable:
+deleting it or making it unavailable does not prevent execution.

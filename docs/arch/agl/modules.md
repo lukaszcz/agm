@@ -20,12 +20,13 @@ User-operator chains are resolved once the graph is known, using each module's l
 
 ## Compilation Caches
 
-Process-local caches reuse imported modules and their derived artifacts:
+Imported modules are precompiled on demand and reused in memory and across CLI processes. The pipeline retains parsed syntax, resolution, closed type/function interfaces, checked bodies, compiled match sites, and independently lowered module IR. Entry modules and dependency cycles reaching the entry are compiled afresh.
 
-- The **parsed-module cache** retains each file’s parsed syntax, validated against the source text itself rather than stat metadata, and draws node ids from a reserved band so cached modules stay disjoint from every graph they are served into.
-- The **artifact cache** (`artifact_cache.py`) is a bounded LRU of what the passes derived per module — resolved modules, checked modules, compiled match sites. An artifact is a pure function of the loaded modules it could read (the module, its transitive dependencies, the ambient method modules), so it is served again only while every one of those is the very same parsed object; an edited file reparses and misses by construction. The entry module is never cached, and host capabilities key the artifacts checked under them.
+`modules/parsed_module_cache.py` assigns content-addressed node namespaces so unchanged declarations keep their identity across import orders and processes. `artifact_cache.py` validates each stage against the module, its transitive import/export dependencies, and the ambient method modules; checked stages also depend on host capabilities. Modules sharing a dependency closure share a persisted frontend image. Restored artifacts attach to the current compilation's source objects, preserving stage provenance.
 
-A disposable disk cache (`modules/disk_cache.py`) also shares parsed standard-library modules across CLI processes under `$XDG_CACHE_HOME/agm/agl` (default `~/.cache/agm/agl`). Entries are tied to source and compiler contents, Python and parser dependency versions, source identity, parser seed, and prelude mode; reads accept only syntax data classes, and writes replace entries atomically. Missing, damaged, or inaccessible entries fall back to parsing. Operator resolution, host capabilities, companion availability, and runtime initialization remain invocation-specific; no executable or checked artifacts are deserialized.
+`lower/module.py` persists module bodies and linkable symbol/function/contract tables. Linking assembles them in the current graph's initialization order and rebuilds whole-program metadata. Resource paths are revalidated, and host-materialized contracts distinguish IR variants. Python companions, configuration, module initializers, and mutable runtime state remain invocation-specific.
+
+`modules/disk_cache.py` stores artifacts under `$XDG_CACHE_HOME/agm/agl` (default `~/.cache/agm/agl`). Source contents, compiler contents, Python and compiler-dependency versions validate reuse; timestamps alone are insufficient. Writes are atomic. `artifact_serialization.py` accepts compiler data classes and source anchors, never arbitrary constructors or host callables. Missing, incompatible, damaged, or inaccessible entries trigger ordinary compilation.
 
 ## Code Entry Points
 
@@ -33,4 +34,4 @@ A disposable disk cache (`modules/disk_cache.py`) also shares parsed standard-li
 - `src/agm/agl/artifact_cache.py` — the cross-compilation artifact cache.
 - `src/agm/config/module_roots.py`, `src/agm/packages/` — configured and package-mounted roots.
 - `stdlib/src/` — the standard library.
-- Tests: `tests/test_agl_modules_*.py`, `test_agl_multifile.py`, `test_agl_parsed_module_cache.py`, `test_agl_artifact_cache.py`, `test_agl_stdlib*.py`.
+- Tests: `tests/test_agl_modules_*.py`, `test_agl_multifile.py`, `test_agl_parsed_module_cache.py`, `test_agl_artifact_cache.py`, `test_agl_precompilation.py`, `test_agl_stdlib*.py`.

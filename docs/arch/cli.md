@@ -6,7 +6,7 @@ AGM's entry point is a Typer application that defines the command tree, parses a
 
 The tree is a root app plus one sub-app per command group; group callbacks print help when invoked without a subcommand. `src/agm/commands/` mirrors the tree — `agm pkg check` dispatches to `commands/pkg/check.py` — while the Typer wiring itself stays in `cli.py`. Command handlers are imported at dispatch, so unrelated command domains do not add to startup.
 
-When no built-in command matches, a lazy fallback derives the package command index from the active or project-pinned package manifests, resolves the longest registered command path, and runs its `program def` through the same execution host as `agm exec` after verifying the manifest and module ownership (see [packages.md](packages.md)). Built-in commands never consult that index or load AgL.
+When no built-in command matches, a lazy fallback derives the package command index from the active or project-pinned package manifests, resolves the longest registered command path, and either displays generated group help or runs its `program def` through the same execution host as `agm exec` after verifying the manifest and module ownership (see [packages.md](packages.md)). Built-in commands never consult that index or load AgL.
 
 ## Argument Handling
 
@@ -20,7 +20,7 @@ When a raw token shape is ambiguous, the selected program command identifies its
 
 ## Help and Completion
 
-Help texts and the command overview live in `parser.py`, resolved by command path; the overview appends registered package commands. Where a program is selected, its own command renders the help — usage, its `@doc` as the description, one entry per visible option with that parameter's `@doc` and metavar — and `agm exec`'s own help is printed only when no program stands for the invocation, followed by the paths a reader can select. Shell completion in `completion.py` discovers dynamic values — branches, dependencies, project paths, tmux sessions, registered command paths, and AgL program parameters — from git, the project layout, the package index, and AgL source rather than hard-coded lists. Failures degrade to no suggestions. Help and completion for `exec` and registered programs come from the same effective module roots and the same built command as execution, so the three never disagree.
+Help texts and the command overview live in `parser.py`, resolved by command path; the overview appends registered package commands. Package groups derive help from their descendants and optional manifest guidance, discovering source summaries only when manifest summaries are absent; command aliases share the canonical metadata. Where a program is selected, its own command renders the help — usage, its `@doc` as the description, one entry per visible option with that parameter's `@doc` and metavar — and `agm exec`'s own help is printed only when no program stands for the invocation, followed by the paths a reader can select. Shell completion in `completion.py` discovers dynamic values — branches, dependencies, project paths, tmux sessions, registered command paths, and AgL program parameters — from git, the project layout, the package index, and AgL source rather than hard-coded lists. Failures degrade to no suggestions. Help and completion for `exec` and registered programs come from the same effective module roots and the same built command as execution, so the three never disagree.
 
 ## Code Entry Points
 

@@ -61,7 +61,7 @@ import only their own tree, packages declared in `[dependencies]`, and `std`.
 
 ## Manifest
 
-`package.toml` has three tables: `[package]` (required), `[dependencies]`, and `[commands]`.
+`package.toml` supports `[package]` (required), `[dependencies]`, `[commands]`, and `[aliases]`.
 
 ### `[package]`
 
@@ -106,7 +106,47 @@ pr-review = { program = "review-tools/main::review", description = "Review a cha
 - A key is a one- or multi-word command path. It cannot start with a built-in command or root
   alias (`wsp`, `wt`).
 - `program` names the `program def` to run as `<module>::<program>`, e.g., `review-tools/main::review` is the program `review` in module `review-tools/main`, the file `review-tools/src/main.agl`. The program must belong to this package, take no type parameters, and return unit. Its arguments become the command's arguments.
-- `description` is optional and shown in `agm help`.
+- `description` is an optional short summary shown in command listings.
+- `help` is optional longer guidance; TOML multiline strings work for examples and paragraphs.
+  Command help includes the description, the program's source `@doc`, and this additional help,
+  omitting identical blocks. Parameter `@doc` attributes describe their options.
+- Omit `program` to describe a command group. A group must have descendant commands. Undeclared
+  parent groups work automatically, with generated help listing their available descendants.
+  Listings use each command's description, help, or source `@doc`, falling back to a generated
+  summary when none is available.
+
+```toml
+[commands.devel]
+description = "Development workflows"
+help = "Choose review to inspect changes before publishing."
+
+[commands."devel review"]
+program = "review-tools/main::review"
+description = "Review changes"
+help = "Run this workflow before opening a pull request."
+
+[aliases]
+dev = "devel"
+rev = "devel review"
+```
+
+`agm devel`, `agm devel --help`, and `agm help devel` show the group's guidance and a generated
+subcommand listing. Leaf commands generate usage and option help from their program signatures,
+so authored help is optional.
+
+### `[aliases]`
+
+Each key is an alternate command path; its string value names a canonical command or group in
+this package. Aliases target canonical paths, not other aliases. The same path restrictions as
+commands apply, and an alias cannot overwrite another command or alias. Group aliases expose
+all canonical descendants: the example supports both `agm dev review` and `agm rev`.
+Aliases participate in activation conflicts, project pins, help, and completion like commands.
+
+Config tables use dots between path words. `[rev]`, `[dev.review]`, and `[devel.review]` all
+address the same program, for both arguments and engine settings, even when it runs through
+`agm exec`. Different keys in these tables combine. Setting the same key through multiple
+spellings in one layer is an ambiguity error; a later config layer overrides an earlier one.
+CLI flags still take precedence. Group tables themselves do not supply inherited defaults.
 
 ## Registered commands
 

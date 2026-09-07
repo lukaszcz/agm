@@ -7794,6 +7794,27 @@ class TestPackageInstall:
         assert "--subject" in command_help.stdout
         assert inspected.stdout == "trailing\n"
 
+    def test_package_group_aliases_share_help_and_config(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        home = tmp_path / "agm-home"
+        env["AGM_HOME"] = str(home)
+        package = self._write_tools_command_package(tmp_path, home)
+        manifest = package / "package.toml"
+        with manifest.open("a") as stream:
+            stream.write(
+                'tools = { help = "Choose a tools workflow." }\n'
+                '[aliases]\nt = "tools"\ninspect = "tools inspect"\n'
+            )
+        (home / "config.toml").write_text('[inspect]\nsubject = "aliased"\n')
+        run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
+        group = run_agm(["t"], env=env, cwd=tmp_path)
+        assert "Choose a tools workflow." in group.stdout
+        assert "inspect" in group.stdout
+        for command in (["t", "inspect"], ["inspect"], ["tools", "inspect"]):
+            result = run_agm(command, env=env, cwd=tmp_path)
+            assert result.stdout == "aliased\n"
+
     def test_registered_commands_resolve_arguments_from_flags_config_and_engine_settings(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

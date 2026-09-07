@@ -470,6 +470,12 @@ _HELP_TEXTS: dict[str, str] = {
         Initialize, validate, create, install, inspect, and remove AgL packages. Archives and
         directory installs are copied into AGM's versioned store; editable installs mount their
         live source directory.
+
+        package.toml [commands] entries name a program, or describe a group when program is
+        omitted. Optional description and help text extend source @doc documentation; groups
+        generate subcommand listings. [aliases] maps alternate paths to canonical commands or
+        groups. Alias paths also name config tables: rev = "devel review" makes [rev] equivalent
+        to [devel.review]. See docs/commands/pkg.md for the manifest reference.
     """),
     "run": textwrap.dedent("""\
         agm run [--no-sandbox] [--no-patch] [--memory LIMIT] [--swap LIMIT]

@@ -272,6 +272,8 @@ def registered_command_param_completion(
     resolution = resolve_registered_command(command_path, index.commands)
     if resolution is None:
         return []
+    if resolution.registration.program is None:
+        return [CompletionItem("--help")] if "--help".startswith(incomplete) else []
     declaration = registered_program_declaration(
         resolution.registration.program, resolution.registration.package, context=context
     )

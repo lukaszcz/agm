@@ -96,8 +96,9 @@ configuration is read by qualified key. Its parameters carry the same
 [presentation attributes](host-environment.md#presentation-attributes) as any
 other program's, so the flags, one-letter spellings, environment fallbacks, and
 `@doc` prose a program declares are what its registered command presents. A
-manifest may also describe the command it registers; that description is what
-the host shows for the command, in place of the program's own `@doc` prose.
+manifest may also supply a short command description and additional `help` prose;
+these appear alongside the program's own `@doc`. Command groups and aliases are
+defined in the [package manifest](../../commands/pkg.md#commands).
 
 ## Program parameters and configuration keys
 

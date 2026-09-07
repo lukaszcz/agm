@@ -298,7 +298,8 @@ def _validate_command_paths(manifest: PackageManifest) -> None:
 
 def _validate_command_programs(manifest: PackageManifest, resolutions: _ModuleResolutions) -> None:
     for command in manifest.commands.values():
-        _validate_program_reference(manifest, command.program, resolutions)
+        if command.program is not None:
+            _validate_program_reference(manifest, command.program, resolutions)
 
 
 def _validate_program_reference(

@@ -1079,6 +1079,11 @@ def test_rebuild_ignores_non_package_store_entries(tmp_path: Path) -> None:
         "[packages.alpha]\n",
         '[packages."bad/name"]\nversion = "1.0.0"\n',
         "commands = 1\n",
+        '[commands.launch]\nprogram = "alpha/main::main"\n',
+        '[commands.launch]\npackage = "alpha"\nprogram = 1\n',
+        '[commands.launch]\npackage = ""\nprogram = "alpha/main::main"\n',
+        '[commands.launch]\npackage = "alpha"\nhelp = 1\n',
+        '[commands.launch]\npackage = "alpha"\nhelp = ""\n',
         '[commands]\nlaunch = "not a table"\n',
         '[packages.alpha]\nversion = "1.0.0"\n\n[commands.launch]\nextra = true\n',
         '[packages.alpha]\nversion = "1.0.0"\n\n[commands.launch]\npackage = "alpha"\n',
@@ -1119,6 +1124,10 @@ def test_activation_index_rejects_invalid_state(tmp_path: Path, content: str) ->
     (
         (ActivePackage(semver.Version.parse("1.0.0"), registration_order=-1), None),
         (ActivePackage(semver.Version.parse("1.0.0")), CommandRegistration("alpha", "")),
+        (
+            ActivePackage(semver.Version.parse("1.0.0")),
+            CommandRegistration("alpha", "alpha/main::main", help=""),
+        ),
         (
             ActivePackage(semver.Version.parse("1.0.0")),
             CommandRegistration("alpha", "alpha/main::main", ""),

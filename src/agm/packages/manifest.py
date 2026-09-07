@@ -12,6 +12,7 @@ from tomlkit.exceptions import TOMLKitError
 
 from agm.agl.keywords import KEYWORDS
 from agm.agl.modules.ids import ModuleId
+from agm.command_catalog import invalid_command_path
 from agm.core.toml import TomlDict, load_toml_file, toml_dict
 
 _SHA256_PREFIXES = ("sha256=", "sha256:", "sha256-")
@@ -35,8 +36,9 @@ class DependencySpec:
 class CommandSpec:
     """One manifest command registration."""
 
-    program: str
+    program: str | None = None
     description: str | None = None
+    help: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +54,7 @@ class PackageManifest:
     keywords: tuple[str, ...] = ()
     dependencies: dict[str, DependencySpec] = field(default_factory=dict)
     commands: dict[str, CommandSpec] = field(default_factory=dict)
+    aliases: dict[str, str] = field(default_factory=dict)
 
 
 def command_paths_for_program(
@@ -65,9 +68,39 @@ def command_paths_for_program(
 
     return tuple(
         tuple(path.split())
-        for path, command in sorted(manifest.commands.items())
+        for path, command in sorted(expanded_commands(manifest).items())
         if command.program == reference
     )
+
+
+def expanded_commands(manifest: PackageManifest) -> dict[str, CommandSpec]:
+    """Expand aliases against canonical paths, including a group's descendants.
+
+    Alias targets always name the package's own canonical tree. This keeps
+    expansion finite and independent of declaration or activation order.
+    """
+    commands = dict(manifest.commands)
+    canonical_paths = set(commands)
+    for path in commands:
+        words = path.split()
+        canonical_paths.update(" ".join(words[:length]) for length in range(1, len(words)))
+    for alias, target in manifest.aliases.items():
+        invalid = invalid_command_path(alias)
+        if invalid is not None:
+            raise ManifestError(f"alias path {alias!r} {invalid}")
+        if target not in canonical_paths:
+            raise ManifestError(f"alias {alias!r} names unknown canonical command {target!r}")
+        additions = {alias: manifest.commands.get(target, CommandSpec())}
+        additions.update(
+            (alias + path[len(target) :], spec)
+            for path, spec in manifest.commands.items()
+            if path.startswith(target + " ")
+        )
+        for path, spec in additions.items():
+            if path in canonical_paths or path in commands:
+                raise ManifestError(f"alias {alias!r} conflicts with command {path!r}")
+            commands[path] = spec
+    return commands
 
 
 def distribution_manifest(manifest: PackageManifest) -> PackageManifest:
@@ -104,7 +137,7 @@ def load_manifest_text(content: str) -> PackageManifest:
 
 
 def _parse_manifest(raw: TomlDict) -> PackageManifest:
-    _only_keys(raw, {"package", "dependencies", "commands"}, "manifest")
+    _only_keys(raw, {"package", "dependencies", "commands", "aliases"}, "manifest")
     package = _required_table(raw, "package")
     _only_keys(
         package,
@@ -112,7 +145,8 @@ def _parse_manifest(raw: TomlDict) -> PackageManifest:
         "package",
     )
     name = validate_package_name(_required_str(package, "name", "package"))
-    return PackageManifest(
+    aliases = _optional_table(raw, "aliases")
+    manifest = PackageManifest(
         name=name,
         version=_version(_required_str(package, "version", "package"), "package version"),
         description=_optional_str(package, "description", "package"),
@@ -122,7 +156,10 @@ def _parse_manifest(raw: TomlDict) -> PackageManifest:
         keywords=_optional_str_list(package, "keywords", "package"),
         dependencies=_dependencies(_optional_table(raw, "dependencies")),
         commands=_commands(_optional_table(raw, "commands")),
+        aliases={path: _required_str(aliases, path, "aliases") for path in aliases},
     )
+    expanded_commands(manifest)
+    return manifest
 
 
 def validate_package_name(value: str) -> str:
@@ -205,11 +242,15 @@ def _commands(raw: TomlDict) -> dict[str, CommandSpec]:
         if not isinstance(value, dict):
             raise ManifestError(f"command {path!r} must be a table")
         command = toml_dict(value)
-        _only_keys(command, {"program", "description"}, f"command {path!r}")
+        _only_keys(command, {"program", "description", "help"}, f"command {path!r}")
         commands[path] = CommandSpec(
-            program=_required_str(command, "program", f"command {path!r}"),
+            program=_optional_str(command, "program", f"command {path!r}"),
             description=_optional_str(command, "description", f"command {path!r}"),
+            help=_optional_str(command, "help", f"command {path!r}"),
         )
+    for path, spec in commands.items():
+        if spec.program is None and not any(child.startswith(path + " ") for child in commands):
+            raise ManifestError(f"command group {path!r} requires subcommands")
     return commands
 
 

@@ -15,7 +15,7 @@ The package domain defines portable, versioned AgL module collections. A package
 
 ## Registered Commands
 
-A manifest `[commands]` table maps a single- or multi-word CLI path to a package-owned `program def`. Activation rejects command conflicts unless the later installation passes `--shadow`. Each invocation derives its effective command registry from the selected package manifests — so project `[packages]` pins affect dispatch, help, and completion — and CLI dispatch resolves the longest registered path and runs it through the same execution host as `agm exec` after verifying manifest and module ownership, binding the referenced program's own CLI arguments and qualified config table the same way ([cli.md](cli.md)). A registered command's help is the referenced program's own command help, spelled for the path the reader invokes and listing `--dry-run` beside the program's options; the manifest `description`, written for the command, is preferred over the program's own `@doc`.
+A manifest `[commands]` table maps a single- or multi-word CLI path to a package-owned `program def`, or describes a group when `program` is absent. `[aliases]` maps alternate paths to canonical commands or groups; the manifest layer expands group aliases to their descendants for activation, dispatch, and qualified config routing. Activation rejects command conflicts unless the later installation passes `--shadow`. Each invocation derives its effective command registry from the selected package manifests — so project `[packages]` pins affect dispatch, help, and completion — and CLI dispatch resolves the longest registered path and runs it through the same execution host as `agm exec` after verifying manifest and module ownership, binding the referenced program's own CLI arguments and qualified config table the same way ([cli.md](cli.md)). A registered command's help is the referenced program's own command help, spelled for the path the reader invokes and listing `--dry-run` beside the program's options; the manifest `description` introduces the program's `@doc` and any additional manifest `help`. Explicit and implicit groups generate descendant listings with optional authored guidance.
 
 ## Façade
 
@@ -23,7 +23,7 @@ The `agm.packages` public façade resolves its exports lazily. Package model lea
 
 ## Code Entry Points
 
-- `src/agm/packages/manifest.py` — manifest schema and the distribution-manifest view.
+- `src/agm/packages/manifest.py` — manifest schema, canonical alias expansion, and the distribution-manifest view.
 - `src/agm/packages/model.py`, `development.py` — package identity, version selection, `std` compatibility bounds, development-package discovery (the containing checkout of a path, and its path-dependency closure).
 - `src/agm/packages/dependencies.py` — dependency-closure resolution.
 - `src/agm/packages/discipline.py` — manifest, tree, and graph validation for directory and archive packages.

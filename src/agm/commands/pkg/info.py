@@ -48,11 +48,15 @@ def run(args: PkgInfoArgs) -> None:
         print(f"repository: {manifest.repository}")
     if manifest.keywords:
         print(f"keywords: {', '.join(manifest.keywords)}")
+    if manifest.aliases:
+        print("aliases:")
+        for alias, target in sorted(manifest.aliases.items()):
+            print(f"  {alias}: {target}")
     if manifest.commands:
         print("commands:")
         for path, command in sorted(manifest.commands.items()):
             description = "" if command.description is None else f" ({command.description})"
-            print(f"  {path}: {command.program}{description}")
+            print(f"  {path}: {command.program or 'command group'}{description}")
     for name, dependency in sorted(manifest.dependencies.items()):
         requirement = f">= {dependency.version}"
         if is_std_package_name(name):

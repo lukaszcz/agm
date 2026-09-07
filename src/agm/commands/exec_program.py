@@ -819,8 +819,10 @@ def run_registered(
     target = _resolve_installed_reference_or_exit(program, context=context, package_name=package)
 
     if package is not None and command_path is not None:
-        command = target.package.manifest.commands.get(command_path)
-        if command is None:
+        from agm.packages.manifest import expanded_commands
+
+        command = expanded_commands(target.package.manifest).get(command_path)
+        if command is None or command.program is None:
             _registered_command_mismatch(command_path)
         if command.program != program:
             # The index deliberately remains an install-time cache. Editable

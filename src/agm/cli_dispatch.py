@@ -96,6 +96,11 @@ def _dry_run_help_option() -> click.Option:
     return click.Option([*parsed.opts, *parsed.secondary_opts], is_flag=True, help=parsed.help)
 
 
+def _help_paragraphs(*parts: str | None) -> str:
+    """Join distinct authored help blocks in presentation order."""
+    return "\n\n".join({part: None for part in parts if part})
+
+
 def registered_command_help(
     path_name: str,
     registration: CommandRegistration,
@@ -117,13 +122,14 @@ def registered_command_help(
     The help is the referenced program's own command help, spelled for the
     command the reader invokes rather than the ``program def`` behind it: its
     usage line names ``agm <path>`` and the program's positional slots, its
-    options are the program's own plus ``--dry-run``, and its description is
-    the manifest's, which a package author writes for this command, in
-    preference to the program's own ``@doc``.
+    options are the program's own plus ``--dry-run``. The manifest description
+    introduces the source ``@doc`` and any additional manifest help.
     """
     from agm.cli_support.program_options import render_program_help
 
-    description = registration.description or (None if program is None else program.doc)
+    description = _help_paragraphs(
+        registration.description, None if program is None else program.doc, registration.help
+    )
     return render_program_help(
         command,
         program_name=f"agm {path_name}",
@@ -141,7 +147,11 @@ def print_registered_command_help(command_path: Sequence[str]) -> bool:
         return False
     path_name = " ".join(command_path)
     registration = index.commands.get(path_name)
-    if registration is None:
+    group_help = registered_group_help(path_name, index.commands)
+    if group_help is not None:
+        print(group_help)
+        return True
+    if registration is None or registration.program is None:
         return False
     from agm.cli_support.program_options import program_command_for
     from agm.commands.exec_program import registered_program_declaration
@@ -156,12 +166,90 @@ def print_registered_command_help(command_path: Sequence[str]) -> bool:
     return True
 
 
+def registered_group_help(
+    path_name: str, commands: Mapping[str, CommandRegistration]
+) -> str | None:
+    """Render authored guidance and a generated listing for an explicit or implicit group."""
+    registration = commands.get(path_name)
+    if registration is not None and registration.program is not None:
+        return None
+    descendants = {
+        path[len(path_name) + 1 :]: command
+        for path, command in sorted(commands.items())
+        if path.startswith(path_name + " ")
+    }
+    if not descendants:
+        return None
+
+    program_docs: dict[tuple[str, str], str | None] = {}
+
+    def program_doc(program: str, package: str) -> str | None:
+        from agm.commands.exec_program import registered_program_declaration
+
+        key = (program, package)
+        if key not in program_docs:
+            declaration = registered_program_declaration(program, package)
+            program_docs[key] = None if declaration is None else declaration.doc
+        return program_docs[key]
+
+    guidance = _help_paragraphs(
+        registration.description if registration else None,
+        registration.help if registration else None,
+    )
+    group = click.Group(
+        help=guidance or f"Commands available under {path_name}.",
+        commands={
+            path: click.Command(
+                path,
+                help=command.description
+                or command.help
+                or (
+                    program_doc(command.program, command.package) or f"Run the {path} workflow."
+                    if command.program
+                    else "Browse subcommands."
+                ),
+            )
+            for path, command in descendants.items()
+        },
+    )
+    return group.get_help(click.Context(group, info_name=f"agm {path_name}"))
+
+
+class RegisteredHelpCommand(TyperCommand):
+    """A group surface whose default action displays its generated help."""
+
+    def __init__(self, help_text: str) -> None:
+        super().__init__(
+            name="registered-group",
+            context_settings={
+                "allow_extra_args": True,
+                "ignore_unknown_options": True,
+                "help_option_names": [],
+            },
+        )
+        self._help_text = help_text
+
+    def invoke(self, ctx: click.Context) -> None:
+        if any(arg not in ("--help", "-h") for arg in ctx.args):
+            ctx.fail("unknown subcommand or option")
+        print(self._help_text)
+
+
 def resolve_registered_command(
     args: Sequence[str], commands: Mapping[str, CommandRegistration]
 ) -> RegisteredCommandResolution | None:
     """Resolve the longest registered command path at the start of *args*."""
 
-    for path_name, registration in sorted(commands.items(), key=_path_length, reverse=True):
+    from agm.packages.activation import CommandRegistration
+
+    paths = dict(commands)
+    for path, registration in commands.items():
+        words = tuple(path.split())
+        for length in range(1, len(words)):
+            paths.setdefault(
+                " ".join(words[:length]), CommandRegistration(registration.package, None)
+            )
+    for path_name, registration in sorted(paths.items(), key=_path_length, reverse=True):
         words = tuple(path_name.split())
         if tuple(args[: len(words)]) == words:
             return RegisteredCommandResolution(registration, tuple(args[len(words) :]))
@@ -181,6 +269,8 @@ class RegisteredProgramCommand(TyperCommand):
         self.params.append(_dry_run_option())
         self._path_name = path_name
         self._registration = registration
+        assert registration.program is not None
+        self._program = registration.program
 
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
         """Parse *args*, keeping the reader's end-of-options marker in the tail.
@@ -222,9 +312,7 @@ class RegisteredProgramCommand(TyperCommand):
         """Discover the referenced ``program def``'s declaration, or ``None``."""
         from agm.commands.exec_program import registered_program_declaration
 
-        return registered_program_declaration(
-            self._registration.program, self._registration.package
-        )
+        return registered_program_declaration(self._program, self._registration.package)
 
     def _discover_program_with_artifacts(
         self,
@@ -234,7 +322,7 @@ class RegisteredProgramCommand(TyperCommand):
 
         artifacts: list[ProgramDiscoveryArtifacts] = []
         program = registered_program_declaration(
-            self._registration.program,
+            self._program,
             self._registration.package,
             artifact_sink=artifacts,
         )
@@ -271,14 +359,14 @@ class RegisteredProgramCommand(TyperCommand):
             cached_pipeline = metadata.pop("registered_pipeline_cache", None)
             if cached_pipeline is None:
                 run_registered(
-                    self._registration.program,
+                    self._program,
                     list(ctx.args),
                     package=self._registration.package,
                     command_path=self._path_name,
                 )
             else:
                 run_registered(
-                    self._registration.program,
+                    self._program,
                     list(ctx.args),
                     package=self._registration.package,
                     command_path=self._path_name,
@@ -328,9 +416,6 @@ class RegisteredCommandGroup(TyperGroup):
 
                 return registered_command_param_completion(command_path, incomplete)
             return [CompletionItem(segment) for segment in registered_segments]
-        if command_path and registered_segments:
-            return [CompletionItem(segment) for segment in registered_segments]
-
         items_by_value: dict[str, CompletionItem] = {
             cast(str, item.value): item for item in super().shell_complete(ctx, incomplete)
         }
@@ -358,7 +443,12 @@ class RegisteredCommandGroup(TyperGroup):
             if resolution is None:
                 raise
             path_name = " ".join(args[: len(args) - len(resolution.trailing_args)])
-            command = RegisteredProgramCommand(path_name, resolution.registration)
+            group_help = registered_group_help(path_name, index.commands)
+            command = (
+                RegisteredHelpCommand(group_help)
+                if group_help is not None
+                else RegisteredProgramCommand(path_name, resolution.registration)
+            )
             return (
                 path_name,
                 command,

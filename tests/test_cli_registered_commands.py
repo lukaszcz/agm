@@ -417,8 +417,8 @@ def test_registered_command_help_omits_program_arguments_on_a_reservation_collis
     assert "help TEXT" not in text
 
 
-def test_registered_command_help_prefers_the_manifest_description_over_the_program_doc() -> None:
-    """A package author's command description outranks the program's own ``@doc``."""
+def test_registered_command_help_includes_manifest_description_and_program_doc() -> None:
+    """A command description introduces the program's own ``@doc``."""
     from agm.cli_support.program_discovery import discover_program_declarations_from_source
 
     (program,) = discover_program_declarations_from_source(
@@ -435,7 +435,7 @@ def test_registered_command_help_prefers_the_manifest_description_over_the_progr
     )
 
     assert "Manifest prose." in described
-    assert "Program prose." not in described
+    assert "Program prose." in described
     assert "Program prose." in undescribed
 
 

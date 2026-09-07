@@ -20,6 +20,7 @@ from agm.packages.layout import activation_index_path as _resolved_activation_in
 from agm.packages.manifest import (
     ManifestError,
     PackageManifest,
+    expanded_commands,
     load_manifest,
     validate_package_name,
 )
@@ -76,8 +77,9 @@ class CommandRegistration:
     """One installed package command recorded in the activation index."""
 
     package: str
-    program: str
+    program: str | None
     description: str | None = None
+    help: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,7 +151,10 @@ def write_activation_index(
         _validate_command_registration(path_name, command, index.packages)
         command_table = tomlkit.table()
         command_table["package"] = command.package
-        command_table["program"] = command.program
+        if command.program is not None:
+            command_table["program"] = command.program
+        if command.help is not None:
+            command_table["help"] = command.help
         if command.description is not None:
             command_table["description"] = command.description
         commands_table[path_name] = command_table
@@ -542,11 +547,11 @@ def validate_package_command_conflicts(
     resolved = _resolved_index_packages(
         index, packages, home=home, env=env, transient_packages=transient_packages
     )
-    candidate_paths = set(manifest.commands)
+    candidate_paths = set(expanded_commands(manifest))
     for package in resolved:
         if package.manifest.name == manifest.name:
             continue
-        conflicts = sorted(candidate_paths.intersection(package.manifest.commands))
+        conflicts = sorted(candidate_paths.intersection(expanded_commands(package.manifest)))
         if conflicts:
             path_name = conflicts[0]
             raise PackageActivationError(
@@ -571,7 +576,7 @@ def merge_package_commands(
         for path_name, registration in index.commands.items()
         if registration.package != manifest.name
     }
-    for path_name, spec in sorted(manifest.commands.items()):
+    for path_name, spec in sorted(expanded_commands(manifest).items()):
         existing = commands.get(path_name)
         if existing is not None and existing.package != manifest.name and not shadow:
             raise PackageActivationError(
@@ -582,6 +587,7 @@ def merge_package_commands(
             package=manifest.name,
             program=spec.program,
             description=spec.description,
+            help=spec.help,
         )
     updated = ActivationIndex(dict(index.packages), commands)
     _validate_commands(updated)
@@ -622,11 +628,12 @@ def _reconciled_commands(
 
     commands: dict[str, CommandRegistration] = {}
     for package in sorted(package_list, key=partial(_command_registration_key, index)):
-        for path_name, spec in sorted(package.manifest.commands.items()):
+        for path_name, spec in sorted(expanded_commands(package.manifest).items()):
             commands[path_name] = CommandRegistration(
                 package.manifest.name,
                 spec.program,
                 spec.description,
+                spec.help,
             )
     reconciled = ActivationIndex(dict(index.packages), commands)
     _validate_commands(reconciled)
@@ -705,7 +712,7 @@ def _validate_rebuild_provenance(provenance: Mapping[str, PackageProvenance | No
 def _command_owners(packages: Iterable[PackageInfo]) -> dict[str, list[PackageInfo]]:
     owners: dict[str, list[PackageInfo]] = {}
     for package in packages:
-        for path_name in package.manifest.commands:
+        for path_name in expanded_commands(package.manifest):
             owners.setdefault(path_name, []).append(package)
     return owners
 
@@ -798,18 +805,18 @@ def _parse_activation_index(raw: TomlDict) -> ActivationIndex:
         if not isinstance(value, dict):
             raise PackageActivationError(f"command registration {path_name!r} must be a table")
         table = toml_dict(value)
-        if set(table).difference({"package", "program", "description"}):
+        if set(table).difference({"package", "program", "description", "help"}):
             raise PackageActivationError(
                 f"command registration {path_name!r} has unsupported fields"
             )
         package = table.get("package")
         program = table.get("program")
         description = table.get("description")
+        help_text = table.get("help")
         if (
             not isinstance(package, str)
-            or not isinstance(program, str)
+            or (program is not None and (not isinstance(program, str) or not program))
             or not package
-            or not program
         ):
             raise PackageActivationError(
                 f"command registration {path_name!r} requires non-empty package and program strings"
@@ -818,7 +825,9 @@ def _parse_activation_index(raw: TomlDict) -> ActivationIndex:
             raise PackageActivationError(
                 f"command registration {path_name!r} has invalid description"
             )
-        commands[path_name] = CommandRegistration(package, program, description)
+        if help_text is not None and (not isinstance(help_text, str) or not help_text):
+            raise PackageActivationError(f"command registration {path_name!r} has invalid help")
+        commands[path_name] = CommandRegistration(package, program, description, help_text)
     index = ActivationIndex(packages, commands)
     _validate_commands(index)
     return index
@@ -838,6 +847,10 @@ def _validate_active_package(name: str, active: ActivePackage) -> None:
 
 def _validate_commands(index: ActivationIndex) -> None:
     for path_name, command in index.commands.items():
+        if command.program is None and not any(
+            path.startswith(path_name + " ") for path in index.commands
+        ):
+            raise PackageActivationError(f"command group {path_name!r} requires subcommands")
         _validate_command_registration(path_name, command, index.packages)
 
 
@@ -852,8 +865,10 @@ def _validate_command_registration(
         raise PackageActivationError(
             f"command path {path_name!r} names inactive package {command.package!r}"
         )
-    if not command.program:
+    if command.program == "":
         raise PackageActivationError(f"command path {path_name!r} requires a program reference")
+    if command.help == "":
+        raise PackageActivationError(f"command path {path_name!r} has invalid help")
     if command.description is not None and not command.description:
         raise PackageActivationError(f"command path {path_name!r} has an invalid description")
 

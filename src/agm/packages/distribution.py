@@ -167,11 +167,21 @@ def normalized_manifest(manifest: PackageManifest) -> bytes:
         lines.extend(("", "[commands]"))
         for path in sorted(manifest.commands):
             command = manifest.commands[path]
-            fields = [("program", command.program)]
+            fields = [
+                (key, value)
+                for key, value in (("program", command.program), ("help", command.help))
+                if value is not None
+            ]
             if command.description is not None:
                 fields.append(("description", command.description))
             rendered = ", ".join(f"{key} = {_toml_string(value)}" for key, value in fields)
             lines.append(f"{_toml_key(path)} = {{ {rendered} }}")
+    if manifest.aliases:
+        lines.extend(("", "[aliases]"))
+        lines.extend(
+            f"{_toml_key(alias)} = {_toml_string(target)}"
+            for alias, target in sorted(manifest.aliases.items())
+        )
     return ("\n".join(lines) + "\n").encode()
 
 

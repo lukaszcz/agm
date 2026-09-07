@@ -116,7 +116,9 @@ Use `agm help` for the command list and `agm help <command>` for detailed help. 
 
 Initialize, validate, archive, install, inspect, and remove AgL packages. Installations use a versioned
 store; editable packages mount their working directory directly. A package can register
-single- or multi-word commands that run its `program def` entries directly.
+single- or multi-word commands that run its `program def` entries directly. Commands support source
+`@doc` documentation, additional manifest help, generated group help, and aliases that also
+name their configuration sections.
 
 ```bash
 agm pkg init [DIR]

@@ -2118,6 +2118,56 @@ let result = make(10).add(2)
         assert result.value.arguments[1].value == 2
         assert not any(isinstance(argument, IrMakeClosure) for argument in result.value.arguments)
 
+    def test_orphan_method_values_and_direct_calls_keep_their_lowering_shapes(
+        self, tmp_path: Path
+    ) -> None:
+        """Foreign receiver methods retain direct calls and receiver-bound closures."""
+        from agm.agl.lower.program import lower_program
+        from agm.agl.modules.loader import load_graph
+
+        (tmp_path / "geometry.agl").write_text("record Point(x: int, y: int)\n", encoding="utf-8")
+        (tmp_path / "metrics.agl").write_text(
+            "import geometry::*\n"
+            "def Point::shift(self, amount: int) -> Point = "
+            "Point(x = self.x + amount, y = self.y)\n",
+            encoding="utf-8",
+        )
+        checked = check_program(
+            resolve_program(
+                load_graph(
+                    "import geometry::*\n"
+                    "import metrics\n"
+                    "program def main() -> unit =\n"
+                    "  let p = Point(x = 2, y = 3)\n"
+                    "  let direct = p.shift(1)\n"
+                    "  let bound = p.shift\n"
+                    "  let partial = p.shift(?)\n"
+                    "  let routed = metrics::Point::shift(?, 1)\n"
+                    "  print(direct.x + bound(2).x + partial(3).x + routed(p).x)\n",
+                    entry_path=None,
+                    roots=agl_roots(tmp_path),
+                )
+            ),
+            _caps(),
+        )
+        program = lower_program(_compiled_checked(checked))
+        ((_, entry_function_id),) = program.program_functions.items()
+        entry = program.functions[entry_function_id]
+
+        assert isinstance(entry.impl, IrFunctionBody)
+        assert isinstance(entry.impl.body, IrBlock)
+        direct = entry.impl.body.items[1]
+        assert isinstance(direct, IrBind)
+        assert isinstance(direct.value, IrDirectCall)
+        assert isinstance(direct.value.arguments[0], IrLoad)
+        assert isinstance(direct.value.arguments[1], IrConstInt)
+        assert direct.value.arguments[1].value == 1
+        for value_index in (2, 3, 4):
+            value = entry.impl.body.items[value_index]
+            assert isinstance(value, IrBind)
+            assert isinstance(value.value, IrBlock)
+            assert isinstance(value.value.items[-1], IrMakeClosure)
+
     def test_method_value_captures_receiver_once_in_one_partial_closure(self) -> None:
         source = """\
 record Meter(value: int)

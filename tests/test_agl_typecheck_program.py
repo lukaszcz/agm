@@ -4397,6 +4397,28 @@ def test_plain_function_can_operate_on_an_imported_type(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_option_member_fallback_selects_a_visible_orphan_method(tmp_path: Path) -> None:
+    modules = {
+        "extension": 'def Option::describe[T](self) -> text = "option"\n',
+        "entry": "import extension\nlet description = Some(value = 1).describe()\n",
+    }
+
+    checked = _check_program(tmp_path, modules)
+
+    assert _binding_value_type(checked, ENTRY_ID, "description") == TextType()
+    with pytest.raises(AglTypeError):
+        _check_program(
+            tmp_path,
+            {
+                **modules,
+                "entry": (
+                    "import extension hiding Option::describe\n"
+                    "let description = Some(value = 1).describe()\n"
+                ),
+            },
+        )
+
+
 def test_orphan_method_requires_its_declaring_module_to_be_reachable(tmp_path: Path) -> None:
     modules = {
         "shapes": (

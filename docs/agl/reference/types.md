@@ -170,13 +170,12 @@ See [Copying values](#copying-values) below for `copy`/`shallow-copy`.)
 #### Builtin-type methods
 
 Methods declared on `array[T]`, `dict[text, T]`, `text`, `json`, `int`, and
-`decimal` are supplied by their owning standard-library modules. When the
-standard-library prelude injects its optional `std/builtin-methods` registry,
-they are ambient members of their receiver types: use them directly wherever a
-value has that type. With `--no-stdlib`, or a custom standard library without
-the registry, import the owning module first. The module's free functions remain
-subject to normal import visibility. See [Functions](functions.md#methods) for
-method declarations, bound values, and calls.
+`decimal` are supplied by their owning standard-library modules. `std/prelude`
+re-exports those modules' receiver scopes, so their methods are available
+wherever the prelude is enabled. With `--no-stdlib`, import the owning module
+first. The module's free functions remain subject to normal import visibility.
+See [Functions](functions.md#methods) for method declarations, bound values, and
+calls.
 
 #### Cycles
 

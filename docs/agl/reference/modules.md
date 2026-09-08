@@ -255,31 +255,29 @@ program def main() -> unit =
   print("ready")
 ```
 
-When the prelude is enabled, the optional `std/builtin-methods` registry is
-also loaded when the standard library provides it, making its receiver methods
-ambient. The `--no-stdlib` option disables both automatic additions; a custom
-standard library may also omit the registry. Either way, importing a method's
-owning module loads its methods. An explicit prelude import remains available with
-`--no-stdlib`.
+The prelude re-exports the receiver scopes of `std/array`, `std/dict`,
+`std/text`, `std/json`, and `std/math`, making those modules' methods available
+wherever the prelude is enabled. The `--no-stdlib` option disables the implicit
+prelude; import a method's owning module first. An explicit prelude import
+remains available with `--no-stdlib`.
 
 ## Standard library modules
 
 The standard library is an ordinary module tree mounted under `std/`: its
 modules are imported, aliased, re-exported, and hidden from exactly like any
-other module. Three have a language-level role:
+other module. Two have a language-level role:
 
 - `std/prelude` is the prelude described above. It declares nothing itself: it
   re-exports the modules declaring the types, exceptions, and built-ins the
-  language itself refers to, together with the generic sum and product types
-  and `std/path`'s `path` type.
+  language itself refers to, together with the generic sum and product types,
+  the receiver scopes that make builtin methods available, and `std/path`'s
+  `path` type.
 - `std/config` exposes the host engine settings as `builtin var` bindings; see
   [Host environment](host-environment.md).
-- `std/builtin-methods` is the optional registry that makes the other modules'
-  receiver methods ambient.
 
 Every other `std/*` module carries no special status; the prelude re-exports
-the first six rows below — plus, from `std/path`, the `path` type alone — and
-the rest are imported explicitly:
+the first six rows below in full, the receiver scopes from the following two
+rows, and `std/path`'s `path` type alone. The rest are imported explicitly:
 
 | Module | Provides |
 | ------ | -------- |

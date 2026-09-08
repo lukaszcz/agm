@@ -36,6 +36,13 @@
 ;;   from where that logical line began rather than from its last physical
 ;;   line.
 ;;
+;; A line is placed again as soon as typing settles which construct it is:
+;; on the `|', `@', or closing bracket that can only start one thing, on the
+;; whitespace that tells a declaration keyword from a name beginning with
+;; the same letters, on the last letter of a branch marker, and — for a
+;; line holding nothing but `builtin', `extern', or `program', which no
+;; separator ever follows — on the newline that ends it.
+;;
 ;; Raw-tail block payloads and multi-line templates are verbatim text, so
 ;; a line inside one is never re-indented, and backward scans treat those
 ;; regions as opaque.  Both checks read `syntax-ppss' rather than the
@@ -397,16 +404,23 @@ A `record\=', `enum\=', or `exception\=' body holds fields rather than
 declarations, so an attribute written in one prefixes a field.  The body
 is recognized from its header: the nearest line above the attribute that
 is indented less than the line it follows, or that line itself when the
-attribute opens the body."
+attribute opens the body.
+
+The walk stops at that line whether or not it declares a type.  Going on
+past it would leave the body altogether and reach the declarations
+around it, and any record or exception among those would claim an
+attribute that prefixes something else entirely."
   (save-excursion
     (beginning-of-line)
     (when (agl--goto-previous-code-line)
       (or (agl--type-declaration-line-p)
           (let ((body (current-indentation))
-                (header nil))
-            (while (and (null header) (agl--goto-previous-code-line))
+                (header nil)
+                (found nil))
+            (while (and (not found) (agl--goto-previous-code-line))
               (when (< (current-indentation) body)
-                (setq header (agl--type-declaration-line-p))))
+                (setq found t
+                      header (agl--type-declaration-line-p))))
             header)))))
 
 (defun agl--attribute-indent ()
@@ -779,18 +793,74 @@ that tells the keyword from such a name."
                        (buffer-substring-no-properties
                         (line-beginning-position) (point)))))
 
+(defun agl--attribute-just-opened-p ()
+  "Return non-nil when the last key opened an attribute on this line.
+
+`@\=' begins an attribute and begins nothing else, so unlike a declaration
+keyword it needs no separator to tell it from a name: the keystroke
+itself settles which construct the line is."
+  (and (eq last-command-event ?@)
+       (string-match-p "\\`[ \t]*@\\'"
+                       (buffer-substring-no-properties
+                        (line-beginning-position) (point)))))
+
+(defun agl--closer-just-typed-p ()
+  "Return non-nil when the last key closed a bracket at the line\='s head.
+
+A closer returns to the line that opened its bracket, and like `@\=' it
+names its own construct: nothing else starts a line with it."
+  (and (memq last-command-event '(?\) ?\] ?}))
+       (agl--closing-bracket-line-p)
+       (= (point) (save-excursion
+                    (beginning-of-line)
+                    (skip-chars-forward " \t")
+                    (1+ (point))))))
+
+(defun agl--modifier-only-line-p ()
+  "Return non-nil when the current line carries a lone declaration modifier."
+  (string-match-p agl--modifier-only-re
+                  (buffer-substring-no-properties
+                   (line-beginning-position) (agl--line-code-end))))
+
+(defun agl--place-preceding-modifier-line ()
+  "Place the lone modifier line the newline just ended, if that is one.
+
+`electric-indent-inhibit\=' keeps RET from re-indenting the line it ends,
+because a body line has several legal columns and the one already there
+is the user\='s.  A line holding nothing but `builtin\=', `extern\=', or
+`program\=' is not such a line: the grammar settles its level, and being
+whole words with nothing after them they are never followed by the
+separator that places a declaration keyword as it is typed.
+
+Returns non-nil when a line moved."
+  (save-excursion
+    (when (and (zerop (forward-line -1))
+               (not (agl--opaque-line-p))
+               (agl--modifier-only-line-p))
+      (let ((target (agl-calculate-indent)))
+        (unless (= target (current-indentation))
+          (indent-line-to target)
+          t)))))
+
 (defun agl-indent-post-self-insert ()
   "Re-indent the current line once its first token settles where it belongs.
 
-Typing `|' at the start of a line, finishing one of the words `else',
-`catch', `until', `done', or `end' there, or separating a declaration
-keyword such as `def' from the name after it all decide which construct
-the line belongs to, so the line is re-indented immediately."
+Typing `|\=' or `@\=' at the start of a line, finishing one of the words
+`else\=', `catch\=', `until\=', `done\=', or `end\=' there, or separating a
+declaration keyword such as `def\=' from the name after it all decide
+which construct the line belongs to, so the line is re-indented
+immediately.  A newline settles the lone modifier line it ends, which no
+keystroke of its own ever will, and the line it opens then follows."
   (when (and (eq major-mode 'agl-mode)
-             (not (agl--opaque-line-p))
-             (or (agl--marker-just-completed-p)
-                 (agl--declaration-just-opened-p)))
-    (agl-indent-line)))
+             (not (agl--opaque-line-p)))
+    (cond ((eq last-command-event ?\n)
+           (when (agl--place-preceding-modifier-line)
+             (agl-indent-line)))
+          ((or (agl--marker-just-completed-p)
+               (agl--declaration-just-opened-p)
+               (agl--attribute-just-opened-p)
+               (agl--closer-just-typed-p))
+           (agl-indent-line)))))
 
 (defun agl-indent-region (start end)
   "Indent each line between START and END as AgL code.

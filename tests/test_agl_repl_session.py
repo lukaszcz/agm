@@ -262,6 +262,16 @@ class TestPersistence:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(42)
 
+    def test_orphan_method_on_a_prelude_generic_type_is_classified(self) -> None:
+        session = open_session()
+
+        declared = session.eval_entry("def Option::describe[T](self) -> T = self.unwrap()")
+        result = session.eval_entry("Some(value = 42).describe()")
+
+        assert declared.ok, declared.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(42)
+
     def test_redeclaring_a_method_replaces_its_prior_member_entry(self) -> None:
         session = open_session()
         assert session.eval_entry("record Meter(value: int)").ok

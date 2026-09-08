@@ -27,7 +27,7 @@ import pytest
 from agm.agl.modules.ids import ENTRY_ID, STD_CONFIG_ID, ModuleId
 from agm.agl.parser import AglSyntaxError
 from agm.agl.scope.program import ResolvedModule, ResolvedProgram, resolve_program
-from agm.agl.scope.symbols import AglScopeError, BinderKind
+from agm.agl.scope.symbols import AglScopeError, BinderKind, ReceiverOwner
 from agm.agl.semantics.values import IntValue
 from agm.agl.syntax.nodes import AssignStmt, Case, ConstructorPattern, FuncDef, VarPattern, VarRef
 from agm.agl.typecheck.program import check_program
@@ -2048,15 +2048,11 @@ class TestTypeDeclarationsInModules:
 
 
 class TestMethodOrphanRule:
-    def test_self_on_a_type_imported_from_another_module_names_the_rule(
+    def test_self_on_a_type_imported_from_another_module_resolves_its_owner(
         self, tmp_path: Path
     ) -> None:
-        """A method on an imported (not locally-declared) type reports the orphan rule.
-
-        'Point' is visible here via 'import shapes::*', so the generic
-        "self requires an enclosing type scope" diagnostic would be
-        misleading (the user is told to do something they already did).
-        """
+        """A bare imported record owns a method declared by the importing module."""
+        shapes_id = ModuleId.from_path("shapes")
         graph = _make_graph_from_files(
             tmp_path,
             {
@@ -2068,35 +2064,189 @@ class TestMethodOrphanRule:
                 "shapes": "record Point\n  x: int",
             },
         )
-        with pytest.raises(AglScopeError, match="Point") as exc_info:
-            resolve_program(graph)
 
-        message = str(exc_info.value)
-        assert "module" in message.lower()
+        resolved = resolve_program(graph).modules[ENTRY_ID].resolved
 
-    def test_self_on_a_region_scoped_glob_imported_type_names_the_rule(
+        assert resolved.method_declarations == {
+            (ENTRY_ID, ("Point",), "tag"): ReceiverOwner(shapes_id, ("Point",)),
+        }
+
+    def test_orphan_receiver_covers_enum_members_exceptions_and_generic_records(
         self, tmp_path: Path
     ) -> None:
-        """The same orphan rule fires for a type reached through a scoped glob import.
-
-        Withholding a scoped import's bare names from the module-wide table
-        must not degrade this to the generic "no enclosing type scope"
-        diagnostic just because the import narrows to its own region.
-        """
+        """Foreign nominal owners retain their declaring module and full type path."""
+        shapes_id = ModuleId.from_path("shapes")
         graph = _make_graph_from_files(
             tmp_path,
             {
                 "entry": (
-                    "scope A\n  import shapes::*\n\n  def Point::tag(self) -> int = self.x\nend A"
+                    "import shapes::*\n\n"
+                    "def Tree::Node::extract[E](self) -> E = self.value\n"
+                    "def Failure::tag(self) -> int = 1\n"
+                    "def Box::get[E](self) -> E = self.value"
+                ),
+                "shapes": (
+                    "enum Tree[E]\n  | Node(value: E)\n\n"
+                    "exception Failure()\n\n"
+                    "record Box[E]\n  value: E"
+                ),
+            },
+        )
+
+        resolved = resolve_program(graph).modules[ENTRY_ID].resolved
+
+        assert resolved.method_declarations == {
+            (ENTRY_ID, ("Tree", "Node"), "extract"): ReceiverOwner(shapes_id, ("Tree", "Node")),
+            (ENTRY_ID, ("Failure",), "tag"): ReceiverOwner(shapes_id, ("Failure",)),
+            (ENTRY_ID, ("Box",), "get"): ReceiverOwner(shapes_id, ("Box",)),
+        }
+
+    def test_self_on_a_region_scoped_glob_imported_type_resolves_its_owner(
+        self, tmp_path: Path
+    ) -> None:
+        """A scoped bare import reaches method declarations in its region."""
+        shapes_id = ModuleId.from_path("shapes")
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "scope A\n  import shapes::*\n\n"
+                    "  def Tree::Node::extract[E](self) -> E = self.value\nend A"
+                ),
+                "shapes": "enum Tree[E]\n  | Node(value: E)",
+            },
+        )
+
+        resolved = resolve_program(graph).modules[ENTRY_ID].resolved
+
+        assert resolved.method_declarations == {
+            (ENTRY_ID, ("A", "Tree", "Node"), "extract"): ReceiverOwner(
+                shapes_id, ("Tree", "Node")
+            ),
+        }
+
+    def test_root_local_type_wins_over_a_bare_import_inside_a_plain_region(
+        self, tmp_path: Path
+    ) -> None:
+        """A local receiver type remains local below a plain scope region."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "import shapes::*\n\nrecord Point\n  x: int\n\n"
+                    "scope A\n  def Point::tag(self) -> int = self.x\nend A"
                 ),
                 "shapes": "record Point\n  x: int",
             },
         )
-        with pytest.raises(AglScopeError, match="Point") as exc_info:
+
+        resolved = resolve_program(graph).modules[ENTRY_ID].resolved
+
+        assert resolved.method_declarations == {
+            (ENTRY_ID, ("A", "Point"), "tag"): ReceiverOwner(ENTRY_ID, ("Point",)),
+        }
+
+    def test_bare_imported_enum_member_can_own_an_orphan_method(self, tmp_path: Path) -> None:
+        """An imported enum-member route exposes its member record as a receiver."""
+        shapes_id = ModuleId.from_path("shapes")
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "import shapes::{Tree::Node}\n\ndef Node::extract[E](self) -> E = self.value"
+                ),
+                "shapes": "enum Tree[E]\n  | Node(value: E)",
+            },
+        )
+
+        resolved = resolve_program(graph).modules[ENTRY_ID].resolved
+
+        assert resolved.method_declarations == {
+            (ENTRY_ID, ("Node",), "extract"): ReceiverOwner(shapes_id, ("Tree", "Node")),
+        }
+
+    def test_plain_scope_named_like_an_imported_type_can_declare_an_orphan(
+        self, tmp_path: Path
+    ) -> None:
+        """A plain scope does not mask a bare imported receiver name."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "import shapes::*\n\nscope Point\n"
+                    "  def Point::tag(self) -> int = self.x\nend Point"
+                ),
+                "shapes": "record Point\n  x: int",
+            },
+        )
+
+        resolved = resolve_program(graph).modules[ENTRY_ID].resolved
+
+        assert resolved.method_declarations == {
+            (ENTRY_ID, ("Point", "Point"), "tag"): ReceiverOwner(
+                ModuleId.from_path("shapes"), ("Point",)
+            ),
+        }
+
+    def test_qualified_only_import_does_not_supply_an_orphan_receiver(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import shapes\ndef Point::tag(self) -> int = 1",
+                "shapes": "record Point()",
+            },
+        )
+
+        with pytest.raises(AglScopeError, match="enclosing type scope"):
             resolve_program(graph)
 
-        message = str(exc_info.value)
-        assert "module" in message.lower()
+    def test_ambiguous_bare_orphan_receiver_is_rejected(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import first::*\nimport second::*\ndef Point::tag(self) -> int = 1",
+                "first": "record Point()",
+                "second": "record Point()",
+            },
+        )
+
+        with pytest.raises(AglScopeError, match="ambiguous"):
+            resolve_program(graph)
+
+    def test_foreign_alias_is_rejected_as_a_receiver(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import shapes::*\ndef Point::tag(self) -> int = 1",
+                "shapes": "record Actual()\ntype Point = Actual",
+            },
+        )
+
+        with pytest.raises(AglScopeError, match="alias"):
+            resolve_program(graph)
+
+    @pytest.mark.parametrize(
+        ("module_source", "receiver"),
+        (
+            ("def Point() -> int = 1", "Point"),
+            ("enum Tree = Node", "Tree::Missing"),
+            ("record Point()", "Point::Nested"),
+        ),
+    )
+    def test_invalid_foreign_receiver_paths_are_not_owners(
+        self, tmp_path: Path, module_source: str, receiver: str
+    ) -> None:
+        """Only imported nominal declarations and enum members can own methods."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": f"import shapes::*\n\ndef {receiver}::tag(self) -> int = 1",
+                "shapes": module_source,
+            },
+        )
+
+        with pytest.raises(AglScopeError):
+            resolve_program(graph)
 
     def test_self_with_no_enclosing_scope_at_all_reports_the_generic_rule(
         self, tmp_path: Path

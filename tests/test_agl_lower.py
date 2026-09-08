@@ -2146,8 +2146,8 @@ let add = make(10).add
         assert receiver.symbol == receiver_bind.symbol
 
 
-class TestBuiltinMethodLowering:
-    """Selected builtin methods reuse the builtin lowering path."""
+class TestHostMethodLowering:
+    """Selected host methods reuse the builtin lowering path."""
 
     def test_agent_method_call_lowers_to_ask_with_receiver_operand(self) -> None:
         source = """\
@@ -2344,7 +2344,7 @@ class TestLowerGraph:
         - Both modules appear in ``program.modules`` with distinct entries.
         - Both modules' functions appear in ``program.functions`` with DISTINCT FunctionIds.
         - ``program.nominals`` contains types from both modules (one record per module).
-        - Exactly one ``SourceFile`` per loaded module, including ambient method libraries.
+        - Exactly one ``SourceFile`` per loaded module, including method libraries.
         - The library ``ExecutableModule.initializers`` contains ONLY function binds
           (IrBind wrapping IrMakeClosure).
         - The entry module is LAST in ``program.modules`` insertion order.
@@ -2395,8 +2395,7 @@ class TestLowerGraph:
 
         prog = lower_program(_compiled_checked(cg))
 
-        # The library, entry, automatic standard-library modules, and ambient
-        # method libraries must appear.
+        # The library, entry, and automatic standard-library modules must appear.
         assert set(prog.modules) == set(cg.modules)
 
         # Entry module is LAST in insertion order
@@ -2405,7 +2404,7 @@ class TestLowerGraph:
             "Entry module must be last in program.modules insertion order"
         )
 
-        # Exactly one SourceFile per module, including ambient method libraries.
+        # Exactly one SourceFile per loaded module.
         assert len(prog.sources) == len(prog.modules)
 
         # Both modules' functions appear in program.functions with DISTINCT FunctionIds.

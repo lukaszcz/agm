@@ -10,7 +10,7 @@ from agm.agl import PipelineDriver
 from agm.agl.ir.nodes import IrCopyValue, IrDirectCall, IrPrint
 from agm.agl.ir.program import IrFunctionBody
 from agm.agl.lower.program import lower_program
-from agm.agl.modules.ids import ENTRY_ID, STD_BUILTIN_METHODS_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_PRELUDE_ID, ModuleId
 from agm.agl.modules.roots import RootSet
 from agm.agl.runtime.arguments import ProgramArguments
 from agm.agl.semantics.type_table import MethodDef, TypeTable
@@ -27,7 +27,7 @@ from agm.agl.semantics.types import (
     UnitType,
 )
 from agm.packages.layout import MODULE_TREE_DIRNAME
-from tests._agl_helpers import agl_roots
+from tests._agl_helpers import agl_std_package_roots
 
 
 @pytest.mark.parametrize(
@@ -63,6 +63,75 @@ def test_builtin_method_table_selects_by_receiver_constructor(
     merged = TypeTable()
     merged.merge_from(table)
     assert merged.lookup_builtin_method(receiver, "selected") == method
+
+
+def test_prelude_reexports_builtin_receiver_scopes_for_bare_routes() -> None:
+    prepared = PipelineDriver.prepare_program(
+        "program def main() -> unit =\n"
+        '  print(text::trim(" value "))\n'
+        "  print(array::size([1]))\n"
+        "  print(int::abs(-1))\n"
+    )
+
+    discovery = PipelineDriver().discover_programs(prepared)
+
+    assert discovery.checked is not None, discovery.diagnostics
+
+
+def test_default_prelude_exposes_receiver_methods() -> None:
+    prepared = PipelineDriver.prepare_program(
+        "program def main() -> unit =\n"
+        "  print([1].size())\n"
+        '  print(" value ".trim())\n'
+        "  print((-1).abs())\n",
+        roots=agl_std_package_roots(),
+    )
+
+    discovery = PipelineDriver().discover_programs(prepared)
+
+    assert discovery.checked is not None, discovery.diagnostics
+
+
+def test_receiver_methods_require_an_import_without_the_prelude() -> None:
+    unavailable = PipelineDriver.prepare_program(
+        "def get-size() -> int = [1].size()\n", default_stdlib=False
+    )
+
+    rejected = PipelineDriver().discover_programs(unavailable)
+
+    assert rejected.checked is None
+    assert rejected.diagnostics
+
+    available = PipelineDriver.prepare_program(
+        "import std/array\ndef get-size() -> int = [1].size()\n",
+        default_stdlib=False,
+    )
+    selected = PipelineDriver().discover_programs(available)
+
+    assert selected.checked is not None, selected.diagnostics
+
+
+def test_local_receiver_scope_coexists_with_the_prelude_reexport() -> None:
+    prepared = PipelineDriver.prepare_program(
+        "scope text\n"
+        "  def shout(value: text) -> text = value.upper()\n"
+        "end text\n"
+        "\n"
+        'program def main() -> unit = print(text::shout("value"))\n'
+    )
+
+    discovery = PipelineDriver().discover_programs(prepared)
+
+    assert discovery.checked is not None, discovery.diagnostics
+
+
+@pytest.mark.parametrize("hidden", ("text", "text::trim"))
+def test_prelude_hiding_receiver_scope_routes_resolves(hidden: str) -> None:
+    prepared = PipelineDriver.prepare_program(
+        f"import std/prelude::* hiding {hidden}\ndef value() -> unit = ()\n"
+    )
+
+    assert prepared.resolved is not None, prepared.diagnostics
 
 
 def test_builtin_direct_method_calls_lower_as_receiver_first_direct_calls() -> None:
@@ -128,8 +197,8 @@ def test_applied_receiver_scope_is_reexportable_and_selectable_by_route(
     assert discovery.checked is not None, discovery.diagnostics
 
 
-def test_ambient_builtin_methods_are_inferred_before_consumers_without_source_imports() -> None:
-    """Ambient method modules are inference dependencies, not user imports."""
+def test_prelude_method_modules_are_inferred_before_consumers() -> None:
+    """Prelude scope exports make method modules ordinary dependencies."""
     stdlib_root = Path(__file__).parent / "agl" / "program_modules" / "builtin_method_stdlib"
     prepared = PipelineDriver.prepare_program(
         "def generic-first[E](values: array[E]) = values.first()\n"
@@ -139,14 +208,11 @@ def test_ambient_builtin_methods_are_inferred_before_consumers_without_source_im
 
     assert prepared.resolved is not None, prepared.diagnostics
     graph = prepared.resolved.graph
-    assert STD_BUILTIN_METHODS_ID not in graph.adjacency[ENTRY_ID]
-    inference_component_index = {
-        mid: index for index, component in enumerate(graph.inference_sccs) for mid in component
+    component_index = {
+        mid: index for index, component in enumerate(graph.sccs) for mid in component
     }
-    assert all(
-        inference_component_index[mid] < inference_component_index[ENTRY_ID]
-        for mid in graph.ambient_modules
-    )
+    assert ModuleId.from_path("std/array") in graph.adjacency[STD_PRELUDE_ID]
+    assert component_index[ModuleId.from_path("std/array")] < component_index[ENTRY_ID]
 
     selected = PipelineDriver().discover_programs(prepared)
 
@@ -156,7 +222,7 @@ def test_ambient_builtin_methods_are_inferred_before_consumers_without_source_im
 def test_dry_run_attributes_ambient_method_externs_to_the_calling_module() -> None:
     """A builtin method backed by an extern is inventoried where the call is written.
 
-    The ambient module declaring the method contributes no call sites of its own,
+    The module declaring the method contributes no call sites of its own,
     so the inventory describes the program's own source rather than the standard
     library's internals.
     """
@@ -168,28 +234,16 @@ def test_dry_run_attributes_ambient_method_externs_to_the_calling_module() -> No
     assert [(entry.module, entry.callee) for entry in inventory] == [(ENTRY_ID, "size")]
 
 
-def test_dry_run_keeps_source_reachable_ambient_registry_modules() -> None:
-    """An explicit import remains runtime-reachable even when the registry also loads it."""
-    prepared = PipelineDriver.prepare_program(
-        'import std/array::join\nprogram def main() -> unit = print(join(["a"], ","))\n',
-        roots=agl_roots(),
-    )
-    discovery = PipelineDriver().discover_programs(prepared)
-
-    assert discovery.compiled is not None, discovery.diagnostics
-    inventory = lower_program(discovery.compiled).dry_run_inventory
-    assert any(entry.module == ModuleId.from_path("std/array") for entry in inventory)
-
-
-def test_dry_run_keeps_registry_method_modules_reached_through_source_imports(
+def test_dry_run_keeps_method_modules_reached_through_source_imports(
     tmp_path: Path,
 ) -> None:
-    """Source provenance reaches a registry method module through an intermediary module."""
+    """Source provenance reaches a method module through an intermediary module."""
     stdlib = tmp_path / "stdlib"
     std = stdlib / MODULE_TREE_DIRNAME
     std.mkdir(parents=True)
-    (std / "prelude.agl").write_text("builtin def print[T](value: T) -> unit\n")
-    (std / "builtin-methods.agl").write_text("import std/math\n")
+    (std / "prelude.agl").write_text(
+        "export std/math::{int}\n\nbuiltin def print[T](value: T) -> unit\n"
+    )
     (std / "math.agl").write_text(
         "extern def helper() -> int\ndef int::external(self) -> int = helper()\n"
     )
@@ -204,7 +258,7 @@ def test_dry_run_keeps_registry_method_modules_reached_through_source_imports(
     discovery = runtime.discover_programs(prepared)
 
     assert prepared.resolved is not None, prepared.diagnostics
-    assert ModuleId.from_path("std/math") in prepared.resolved.graph.ambient_modules
+    assert ModuleId.from_path("std/math") in prepared.resolved.graph.adjacency[STD_PRELUDE_ID]
     assert discovery.compiled is not None, discovery.diagnostics
     (program,) = discovery.programs
     preflight = runtime.preflight_arguments(
@@ -214,7 +268,7 @@ def test_dry_run_keeps_registry_method_modules_reached_through_source_imports(
     assert [site.callee for site in preflight.result.call_sites] == ["helper"]
 
 
-def test_builtin_methods_are_ambient_but_owning_module_free_functions_are_not() -> None:
+def test_receiver_methods_are_available_but_owning_module_free_functions_are_not() -> None:
     stdlib_root = Path(__file__).parent / "agl" / "program_modules" / "builtin_method_stdlib"
     prepared = PipelineDriver.prepare_program(
         'program def main() -> unit = print("value".surround("[", "]"))\n',

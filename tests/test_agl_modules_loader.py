@@ -175,9 +175,11 @@ class TestGraphBuild:
         root = tmp_path / "r"
         root.mkdir()
         graph = load_graph("let x = 1", entry_path=None, roots=_roots(root))
-        registry_id = ModuleId.from_path("std/builtin-methods")
         array_id = ModuleId.from_path("std/array")
+        dict_id = ModuleId.from_path("std/dict")
         text_id = ModuleId.from_path("std/text")
+        json_id = ModuleId.from_path("std/json")
+        math_id = ModuleId.from_path("std/math")
 
         assert ENTRY_ID in graph.modules
         assert STD_PRELUDE_ID in graph.modules
@@ -189,24 +191,10 @@ class TestGraphBuild:
             graph.modules[STD_PRELUDE_ID].path
             == (_REPO_STDLIB_ROOT / MODULE_TREE_DIRNAME / "prelude.agl").resolve()
         )
-        assert {registry_id, array_id, text_id}.issubset(graph.ambient_modules)
         assert graph.adjacency[ENTRY_ID] == (STD_PRELUDE_ID,)
-        assert {array_id, text_id}.issubset(graph.adjacency[registry_id])
-
-    def test_explicit_builtin_method_registry_import_is_not_ambient(self, tmp_path: Path) -> None:
-        """A user registry import retains ordinary source-import semantics."""
-        root = tmp_path / "r"
-        root.mkdir()
-
-        graph = load_graph(
-            "import std/builtin-methods\n()",
-            entry_path=None,
-            roots=_roots(root),
+        assert {array_id, dict_id, text_id, json_id, math_id}.issubset(
+            graph.adjacency[STD_PRELUDE_ID]
         )
-
-        registry_id = ModuleId.from_path("std/builtin-methods")
-        assert registry_id in graph.adjacency[ENTRY_ID]
-        assert registry_id not in graph.ambient_modules
 
     def test_imported_module_appears_in_graph(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -1127,39 +1115,13 @@ class TestPackageOwnedEntryIdentity:
         assert graph.entry_id == ENTRY_ID
 
 
-class TestEntryIsNeverAmbient:
-    """Ambient means reached only through the loader's own injected import.
+@pytest.mark.parametrize("module", ("math", "text"))
+def test_standard_library_entry_is_package_owned(module: str) -> None:
+    entry = _REPO_STDLIB_ROOT / MODULE_TREE_DIRNAME / f"{module}.agl"
 
-    The entry file is reached because the host named it, so it is never an
-    ambient module -- not even when it is the builtin-method registry the
-    loader injects, or one of the modules that registry reaches.
-    """
+    graph = load_graph(entry.read_text(), entry_path=entry, roots=agl_std_package_roots())
 
-    @pytest.mark.parametrize("module", ["math", "prelude", "builtin-methods"])
-    def test_a_standard_library_entry_is_not_ambient(self, module: str) -> None:
-        entry = _REPO_STDLIB_ROOT / MODULE_TREE_DIRNAME / f"{module}.agl"
-
-        graph = load_graph(entry.read_text(), entry_path=entry, roots=agl_std_package_roots())
-
-        assert graph.entry_id == ModuleId.from_path(f"std/{module}")
-        assert graph.entry_id not in graph.ambient_modules
-
-    def test_no_library_module_retains_an_unimported_entry_among_its_sources(self) -> None:
-        """A freshly parsed entry in every module's sources defeats the artifact cache.
-
-        No module imports the builtin-method registry, so nothing depends on
-        this entry and nothing may list it.
-        """
-        from agm.agl.artifact_cache import retained_module_sources
-
-        entry = _REPO_STDLIB_ROOT / MODULE_TREE_DIRNAME / "builtin-methods.agl"
-        graph = load_graph(entry.read_text(), entry_path=entry, roots=agl_std_package_roots())
-        entry_module = graph.modules[graph.entry_id]
-
-        sources = retained_module_sources(graph)
-
-        assert sources
-        assert all(entry_module not in retained for retained in sources.values())
+    assert graph.entry_id == ModuleId.from_path(f"std/{module}")
 
 
 # ---------------------------------------------------------------------------
@@ -1441,10 +1403,12 @@ class TestBuildReplGraph:
         assert ENTRY_ID in graph.modules
         assert STD_PRELUDE_ID in graph.modules
         assert {
-            ModuleId.from_path("std/builtin-methods"),
             ModuleId.from_path("std/array"),
+            ModuleId.from_path("std/dict"),
             ModuleId.from_path("std/text"),
-        }.issubset(graph.ambient_modules)
+            ModuleId.from_path("std/json"),
+            ModuleId.from_path("std/math"),
+        }.issubset(graph.adjacency[STD_PRELUDE_ID])
         assert ENTRY_ID not in new_modules
         assert set(new_modules) == set(graph.modules) - {ENTRY_ID}
         assert all(graph.modules[mid] is module for mid, module in new_modules.items())

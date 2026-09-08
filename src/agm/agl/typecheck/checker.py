@@ -831,7 +831,7 @@ class _Checker:
 
         Scope-classified methods have their own member namespace. Global
         builtin-name and signature rules therefore apply only to ordinary
-        declarations; builtin methods are rejected because they have no host
+        declarations; host-backed methods are rejected because they have no host
         dispatch contract. The receiver check precedes
         ``_validate_program_parameters``, so ``program def Owner::main(self)``
         is reported as a method rather than as an undecodable program

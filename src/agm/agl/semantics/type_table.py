@@ -307,7 +307,7 @@ class TypeTable:
         # Exception method maps flatten inherited entries and therefore need
         # the same whole-cache invalidation as exception fields.
         self._methods: dict[DeclId, dict[str, MethodDef]] = {}
-        self._builtin_methods: dict[str, dict[str, MethodDef]] = {}
+        self._host_methods: dict[str, dict[str, MethodDef]] = {}
         self._exception_methods_cache: dict[DeclId, Mapping[str, MethodDef]] = {}
         # Whole-table non-data-reachability fixpoint (see
         # :meth:`nominal_reaches_non_data`), computed lazily on first use and
@@ -469,7 +469,7 @@ class TypeTable:
         Their methods are consequently indexed by their stable language-level
         constructor spelling (``array``, ``dict``, or one of the scalar names).
         """
-        methods = self._builtin_methods.setdefault(constructor, {})
+        methods = self._host_methods.setdefault(constructor, {})
         methods[method.name] = method
 
     @staticmethod
@@ -496,7 +496,7 @@ class TypeTable:
         constructor = self._builtin_constructor(owner)
         if constructor is None:
             return None
-        return self._builtin_methods.get(constructor, {}).get(name)
+        return self._host_methods.get(constructor, {}).get(name)
 
     def methods_for(self, owner: NominalOwner) -> Mapping[str, MethodDef]:
         """Return methods available on *owner*, including exception bases.
@@ -1417,8 +1417,8 @@ class TypeTable:
         for decl_id, methods in other._methods.items():
             for method in methods.values():
                 self._put_method(decl_id, method)
-        for constructor, methods in other._builtin_methods.items():
-            self._builtin_methods.setdefault(constructor, {}).update(methods)
+        for constructor, methods in other._host_methods.items():
+            self._host_methods.setdefault(constructor, {}).update(methods)
 
 
 def decl_def_sort_key(typedef: TypeDef) -> tuple[tuple[str, ...], tuple[str, ...], str]:

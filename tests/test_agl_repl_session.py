@@ -247,6 +247,57 @@ class TestPersistence:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(42)
 
+    def test_orphan_option_method_redeclaration_keeps_old_bound_values(self) -> None:
+        session = open_session()
+        assert session.eval_entry('def Option::describe[T](self) -> text = "first"').ok
+        assert session.eval_entry("let describe = Some(value = 1).describe").ok
+        assert session.eval_entry('def Option::describe[T](self) -> text = "second"').ok
+
+        retained = session.eval_entry("describe()")
+        current = session.eval_entry("Some(value = 1).describe()")
+
+        assert retained.ok, retained.diagnostics
+        assert retained.value == TextValue("first")
+        assert current.ok, current.diagnostics
+        assert current.value == TextValue("second")
+
+    def test_imported_orphan_method_route_persists_and_can_be_hidden(self, tmp_path: Path) -> None:
+        (tmp_path / "geometry.agl").write_text("record Point(x: int, y: int)\n", encoding="utf-8")
+        (tmp_path / "metrics.agl").write_text(
+            "import geometry::*\ndef Point::norm(self) -> int = self.x * self.x\n",
+            encoding="utf-8",
+        )
+        session = ReplSession(cwd=tmp_path)
+        assert not session.open()
+        assert session.eval_entry("import geometry::*").ok
+        assert session.eval_entry("import metrics").ok
+        assert session.eval_entry("let p = Point(x = 3, y = 4)").ok
+
+        visible = session.eval_entry("p.norm()")
+        assert visible.ok, visible.diagnostics
+        assert visible.value == IntValue(9)
+
+        assert session.eval_entry("import metrics hiding Point::norm").ok
+        assert not session.eval_entry("p.norm()").ok
+
+    def test_imported_orphan_methods_are_ambiguous_across_repl_entries(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "geometry.agl").write_text("record Point(x: int)\n", encoding="utf-8")
+        for name in ("metrics", "fastmath"):
+            (tmp_path / f"{name}.agl").write_text(
+                "import geometry::*\ndef Point::norm(self) -> int = self.x\n",
+                encoding="utf-8",
+            )
+        session = ReplSession(cwd=tmp_path)
+        assert not session.open()
+        assert session.eval_entry("import geometry::*").ok
+        assert session.eval_entry("import metrics").ok
+        assert session.eval_entry("let p = Point(x = 3)").ok
+        assert session.eval_entry("import fastmath").ok
+
+        assert not session.eval_entry("p.norm()").ok
+
     def test_redeclaring_a_method_replaces_its_prior_member_entry(self) -> None:
         session = open_session()
         assert session.eval_entry("record Meter(value: int)").ok

@@ -92,10 +92,18 @@ def test_default_prelude_exposes_receiver_methods() -> None:
     assert discovery.checked is not None, discovery.diagnostics
 
 
-def test_receiver_methods_require_an_import_without_the_prelude() -> None:
-    unavailable = PipelineDriver.prepare_program(
-        "def get-size() -> int = [1].size()\n", default_stdlib=False
-    )
+@pytest.mark.parametrize(
+    ("source", "owner_import"),
+    (
+        ("def get-size() -> int = [1].size()\n", "std/array"),
+        ('def get-trimmed() -> text = " value ".trim()\n', "std/text"),
+        ("def get-absolute() -> int = (-1).abs()\n", "std/math"),
+    ),
+)
+def test_receiver_methods_require_an_import_without_the_prelude(
+    source: str, owner_import: str
+) -> None:
+    unavailable = PipelineDriver.prepare_program(source, default_stdlib=False)
 
     rejected = PipelineDriver().discover_programs(unavailable)
 
@@ -103,8 +111,7 @@ def test_receiver_methods_require_an_import_without_the_prelude() -> None:
     assert rejected.diagnostics
 
     available = PipelineDriver.prepare_program(
-        "import std/array\ndef get-size() -> int = [1].size()\n",
-        default_stdlib=False,
+        f"import {owner_import}\n{source}", default_stdlib=False
     )
     selected = PipelineDriver().discover_programs(available)
 
@@ -151,6 +158,21 @@ def test_prelude_hiding_a_method_keeps_other_receiver_methods_visible() -> None:
 
     assert rejected.checked is None
     assert rejected.diagnostics
+
+
+def test_fixture_prelude_exposes_array_text_and_scalar_methods() -> None:
+    stdlib_root = Path(__file__).parent / "agl" / "program_modules" / "builtin_method_stdlib"
+    prepared = PipelineDriver.prepare_program(
+        "program def main() -> unit =\n"
+        "  let _: int = [1].size()\n"
+        '  let _: text = " value ".trim()\n'
+        "  let _: int = (-1).abs()\n",
+        roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({stdlib_root})),
+    )
+
+    discovery = PipelineDriver().discover_programs(prepared)
+
+    assert discovery.checked is not None, discovery.diagnostics
 
 
 def test_builtin_direct_method_calls_lower_as_receiver_first_direct_calls() -> None:

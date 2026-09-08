@@ -7536,9 +7536,6 @@ class TestSessionOpen:
         assert ReplSession(stdlib_root=stdlib, cwd=workspace).open() == ()
         assert ReplSession(stdlib_root=stdlib, cwd=workspace).open() == ()
 
-        (std / "builtin-methods.agl").write_text("let registry: int = 1\n", encoding="utf-8")
-        assert ReplSession(stdlib_root=stdlib, cwd=workspace).open() == ()
-
         (extra / "two.agl").write_text("let two: int = 2\n", encoding="utf-8")
         refreshed = ReplSession(stdlib_root=stdlib, cwd=workspace)
         assert refreshed.open() == ()

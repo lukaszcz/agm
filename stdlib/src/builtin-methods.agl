@@ -1,7 +1,0 @@
-# This registry is loaded ambiently with the standard library. It makes only
-# receiver methods available; their modules' free functions remain explicit.
-import std/array
-import std/dict
-import std/text
-import std/json
-import std/math

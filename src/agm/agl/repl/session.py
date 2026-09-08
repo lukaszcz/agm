@@ -638,26 +638,14 @@ class ReplSession:
         Source text alone cannot show a newly created competing module file.
         Re-resolving each cached id preserves the resolver's global-uniqueness
         rule, while replaying wildcard discovery also notices newly matched
-        modules. The optional builtin-methods registry must be queried even
-        when it was absent from the cached graph.
+        modules.
         """
-        from agm.agl.modules.errors import ModuleNotFound
-        from agm.agl.modules.ids import STD_BUILTIN_METHODS_ID
         from agm.agl.modules.resolver import expand_wildcard, resolve_module
 
         try:
             for module_id, module in snapshot.modules.items():
                 if resolve_module(module_id, roots) != module.path:
                     return False
-            try:
-                builtin_methods_path = resolve_module(STD_BUILTIN_METHODS_ID, roots)
-            except ModuleNotFound:
-                builtin_methods_path = None
-            cached_builtin_methods = snapshot.modules.get(STD_BUILTIN_METHODS_ID)
-            if builtin_methods_path != (
-                cached_builtin_methods.path if cached_builtin_methods is not None else None
-            ):
-                return False
             return all(
                 tuple(expand_wildcard(prefix, roots).items()) == matches
                 for prefix, matches in snapshot.wildcard_matches

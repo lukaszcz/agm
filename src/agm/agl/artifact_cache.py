@@ -1,7 +1,7 @@
 """Reusable module artifacts in memory and across CLI processes.
 
 Resolution, checking, and match compilation retain each module alongside its
-transitive import/export dependencies and ambient method modules. Memory hits
+transitive import/export dependencies. Memory hits
 require identical loaded sources; disk hits validate source-derived identities
 and the compiler version. Modules sharing a dependency closure share a persisted
 stage image. Restored stages anchor their provenance to the current compilation.
@@ -129,10 +129,9 @@ def retain_lowered_module(key: bytes, module: LoweredModule) -> None:
 def retained_module_sources(graph: ModuleGraph) -> dict[ModuleId, Sources]:
     """Return, per retainable module, everything its artifacts could read.
 
-    A module's own artifacts depend on it, on every module reachable from it
-    through the graph's dependency edges (whose exports decide what its imports
-    name), and on the ambient builtin-method modules, which contribute methods
-    to every module without appearing as a dependency edge.
+    A module's own artifacts depend on it and every module reachable from it
+    through the graph's dependency edges, whose exports decide what its imports
+    name.
 
     A pass derives this once and uses it twice -- to look the image up, and to
     refresh it with what the pass produced.
@@ -141,7 +140,7 @@ def retained_module_sources(graph: ModuleGraph) -> dict[ModuleId, Sources]:
     for module_id, loaded in graph.modules.items():
         if loaded.path is None or module_id == graph.entry_id:
             continue
-        reachable = _reachable(graph, module_id) | set(graph.ambient_modules)
+        reachable = _reachable(graph, module_id)
         if graph.entry_id in reachable:
             continue
         sources[module_id] = tuple(
@@ -289,9 +288,7 @@ def _anchors(
 ) -> tuple[object, ...]:
     anchors: list[object] = [module.program for module in sources]
     for module in sources:
-        retained = retainable.get(module.module_id)
-        if retained is None:
-            continue
+        retained = retainable[module.module_id]
         if kind == "checked":
             resolved = _RESOLVED.get((module.module_id,), retained)
             if resolved is not None:

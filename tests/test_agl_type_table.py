@@ -867,12 +867,12 @@ class TestExceptionAccessors:
 
 
 # ---------------------------------------------------------------------------
-# Method registry — declarations are plain semantic data keyed by their
+# Method index — declarations are plain semantic data keyed by their
 # nominal owner; exception owners inherit their base methods.
 # ---------------------------------------------------------------------------
 
 
-class TestMethodRegistry:
+class TestMethodIndex:
     def test_registers_methods_for_record_enum_and_exception_owners(self) -> None:
         table = TypeTable()
         point = RecordType(name="Point", module_id=_LIB_ID, scope_path=("Models",), decl_id=700016)

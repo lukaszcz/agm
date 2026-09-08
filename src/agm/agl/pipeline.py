@@ -1502,11 +1502,9 @@ def _reachable_modules(
 def _select_program_inventory(
     executable: "ExecutableProgram", graph: "ModuleGraph", module_id: "ModuleId"
 ) -> "ExecutableProgram":
-    """Restrict a selected program to its runtime modules and source inventory."""
+    """Restrict a selected program to its graph-reachable runtime modules and source inventory."""
     source_reachable = frozenset(graph.source_reachable_modules(module_id))
-    runtime_reachable = (
-        frozenset(_reachable_modules(module_id, graph.adjacency)) | graph.ambient_modules
-    )
+    runtime_reachable = frozenset(_reachable_modules(module_id, graph.adjacency))
     return replace(
         executable,
         entry_module=module_id,

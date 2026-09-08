@@ -212,9 +212,3 @@ STD_CONFIG_ID: ModuleId = ModuleId(segments=("std", "config"))
 
 #: Logical module id for the ambient process-environment standard library.
 STD_ENV_ID: ModuleId = ModuleId(segments=("std", "env"))
-
-#: Optional standard-library registry of modules that declare methods on
-#: structural and scalar builtin receivers. The loader follows this module as
-#: an ambient dependency: its methods are selectable everywhere, while its
-#: free functions retain ordinary import visibility.
-STD_BUILTIN_METHODS_ID: ModuleId = ModuleId(segments=("std", "builtin-methods"))

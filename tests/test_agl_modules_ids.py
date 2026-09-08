@@ -7,7 +7,6 @@ import pytest
 from agm.agl.modules.ids import (
     ENTRY_ID,
     RESERVED_ID,
-    STD_BUILTIN_METHODS_ID,
     STD_CONFIG_ID,
     STD_PRELUDE_ID,
     ModuleId,
@@ -98,9 +97,6 @@ class TestModuleIdFromPathValidation:
     def test_segment_with_hyphen_is_accepted(self) -> None:
         """Kebab-case names are ordinary AgL spelling, module paths included."""
         assert ModuleId.from_path("foo-bar").segments == ("foo-bar",)
-
-    def test_builtin_method_registry_path_needs_no_exception(self) -> None:
-        assert ModuleId.from_path("std/builtin-methods") == STD_BUILTIN_METHODS_ID
 
     def test_segment_starting_with_hyphen_raises(self) -> None:
         with pytest.raises(ValueError):

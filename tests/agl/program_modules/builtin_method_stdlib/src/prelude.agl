@@ -1,1 +1,7 @@
+export std/array::{array}
+export std/dict::{dict}
+export std/text::{text}
+export std/json::{json}
+export std/math::{int, decimal}
+
 builtin def print[T](value: T) -> unit

@@ -3942,8 +3942,8 @@ def test_cross_module_method_header_registers_on_the_shared_type_table(tmp_path:
     )
 
 
-def test_only_recognized_builtin_methods_are_admitted_before_lowering(tmp_path: Path) -> None:
-    """Builtin methods use the same host-signature validation as root builtins."""
+def test_only_recognized_host_methods_are_admitted_before_lowering(tmp_path: Path) -> None:
+    """Host methods use the same host-signature validation as root builtins."""
     with pytest.raises(AglTypeError, match="invalid signature"):
         _check_program(
             tmp_path,
@@ -3989,7 +3989,7 @@ def test_mutually_recursive_method_headers_are_available_before_body_checking(
 def test_import_scc_infers_mutually_recursive_method_returns_and_registers_final_signatures(
     tmp_path: Path,
 ) -> None:
-    """Method candidates across an import cycle replace provisional registry signatures."""
+    """Method candidates across an import cycle replace provisional signatures."""
     checked = _check_program(
         tmp_path,
         {

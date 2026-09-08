@@ -743,7 +743,7 @@ def register_method_header(
     receiver: ResolvedReceiver | None,
     module_id: ModuleId,
 ) -> None:
-    """Publish one already-resolved classified method into the shared registry."""
+    """Publish one already-resolved classified method into the shared type table."""
     if receiver is None:
         return
     method = MethodDef(

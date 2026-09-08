@@ -840,7 +840,8 @@ type Metadata = dict[text, json]
 
 Aliases never create a new nominal type: a value of type `Status` *is* a
 value of type `Review`. Aliases are transparent everywhere, including
-qualified member access. Alias chains resolve transitively.
+qualified member access. Alias chains resolve transitively. The standard
+library's `path` ([Modules](modules.md)) is such an alias for `text`.
 
 ## Type parameters and applied types
 

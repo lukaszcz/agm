@@ -2,6 +2,7 @@ import std/config
 import std/env::Environ
 import std/errors::Exception
 import std/option::Option
+import std/path::path
 
 builtin
 record ExecResult
@@ -21,6 +22,6 @@ exception ExecError extends Exception
 builtin def exec(
   command: text,
   env: Environ = std/env::environ,
-  cwd: Option[text] = Option[text]::None,
+  cwd: Option[path] = Option[path]::None,
   timeout: Option[text] = std/config::timeout,
 ) -> ExecResult

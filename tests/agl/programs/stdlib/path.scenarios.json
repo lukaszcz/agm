@@ -9,12 +9,8 @@
       },
       "expect": {
         "stdout_contains": [
-          "draft.txt",
-          "Option::Some(value = \".txt\")",
-          "draft.bak",
-          "\nfalse\ntrue\n",
-          "[\"work\", \"notes\", \"draft.txt\"]",
-          "true\n/abs/b\narchive.tar\nOption::None\n../c\n../..\n[\"/\", \"one\", \"two\"]\ntrue\n"
+          "work/notes/draft.txt\nwork/notes\ndraft.txt\ndraft\nOption::Some(value = \".txt\")\nwork/notes/draft.bak\nwork/notes/renamed.md\nwork/notes/draft.txt\nnotes/draft.txt\nfalse\ntrue\ntrue\n[\"work\", \"notes\", \"draft.txt\"]\ntrue\ntrue\n",
+          "work/extra\n/abs/b\narchive.tar\narchive.tar\nother\nOption::None\n../c\n../..\nfalse\nwork/~/notes\nOption::Some(value = \"/one\")\nOption::None\nOption::None\n[\"/\", \"one\", \"two\"]\ntrue\n"
         ]
       }
     },
@@ -27,12 +23,8 @@
       },
       "expect": {
         "stdout_contains": [
-          "\nwork\nnotes\n",
-          "Option::None",
-          "notes.bak",
-          "\nfalse\ntrue\n",
-          "[\"work\", \"notes\"]",
-          "true\n/abs/b\narchive.tar\nOption::None\n../c\n../..\n[\"/\", \"one\", \"two\"]\ntrue\n"
+          "\nwork\nnotes\nnotes\nOption::None\nwork/notes.bak\nwork/renamed.md\nwork/notes\nnotes\nfalse\ntrue\ntrue\n[\"work\", \"notes\"]\ntrue\ntrue\n",
+          "work/extra\n/abs/b\narchive.tar\narchive.tar\nother\nOption::None\n../c\n../..\nfalse\nwork/~/notes\nOption::Some(value = \"/one\")\nOption::None\nOption::None\n[\"/\", \"one\", \"two\"]\ntrue\n"
         ]
       }
     },
@@ -45,11 +37,8 @@
       },
       "expect": {
         "stdout_contains": [
-          "Option::None",
-          "notes.bak",
-          "\nfalse\ntrue\n",
-          "[\"work\", \"notes\"]",
-          "true\n/abs/b\narchive.tar\nOption::None\n../c\n../..\n[\"/\", \"one\", \"two\"]\ntrue\n"
+          "work/notes\nwork/notes\n\n\nOption::None\nwork/notes.bak\nwork/notes/renamed.md\nwork/notes\nnotes\nfalse\ntrue\ntrue\n[\"work\", \"notes\"]\ntrue\ntrue\n",
+          "work/extra\n/abs/b\narchive.tar\narchive.tar\nother\nOption::None\n../c\n../..\nfalse\nwork/~/notes\nOption::Some(value = \"/one\")\nOption::None\nOption::None\n[\"/\", \"one\", \"two\"]\ntrue\n"
         ]
       }
     }

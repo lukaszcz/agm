@@ -10,3 +10,4 @@ export std/agent
 export std/session
 export std/exec
 export std/package
+export std/path::{path}

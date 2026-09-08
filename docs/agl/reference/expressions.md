@@ -600,10 +600,10 @@ where their function type is expected.
 
 ## `resource` and `resource-dir`
 
-`resource(path: text) -> text` returns the absolute path of an existing packaged
+`resource(path: path) -> path` returns the absolute path of an existing packaged
 or adjacent resource. Its only argument must be a text literal using a relative,
 forward-slash path with no `..` segment; it cannot be computed or passed through a
-binding. `resource-dir() -> text` returns the same absolute resource anchor.
+binding. `resource-dir() -> path` returns the same absolute resource anchor.
 
 Resources in a loose module are anchored at that module's directory. Resources in a
 [package-owned](packages.md) module are anchored at the package root, so they remain stable when the

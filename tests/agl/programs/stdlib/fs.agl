@@ -1,9 +1,9 @@
 import std/fs
 import std/path
 
-def at(root: text, name: text) -> text = path::join([root, name])
+def at(root: path, name: text) -> path = path::join([root, name])
 
-program def main(root: text, scenario: text) -> unit =
+program def main(root: path, scenario: text) -> unit =
   if scenario == "success" =>
     fs::mkdir(at(root, "nested/deep"))
     fs::write(at(root, "nested/source.txt"), "first")
@@ -20,6 +20,8 @@ program def main(root: text, scenario: text) -> unit =
     print(fs::glob(path::join([root, "nested", "**"])).size())
     fs::remove(at(root, "nested"))
     print(fs::exists(at(root, "nested")))
+    print(fs::is-dir(fs::temp-dir()))
+    print(path::is-absolute(fs::temp-dir()))
   if scenario == "missing_file" =>
     let _ = fs::read(at(root, "missing.txt"))
   if scenario == "missing_directory" =>

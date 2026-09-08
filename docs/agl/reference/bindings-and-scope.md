@@ -283,7 +283,7 @@ and an import tail or `use` declaration can contribute a bare name. See
 supplies no initial value, the declared default is used; a host seed wins over
 it. Reading another standard-library binding with neither a host seed nor a
 declared default instead reports an error. A write takes effect from its
-program point onward, exactly like any `var` mutation. The `Option[text]` settings
+program point onward, exactly like any `var` mutation. The optional settings
 are set with `Some("…")` or `None`.
 
 Other standard-library modules may use `builtin var` for their own ambient

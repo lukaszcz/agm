@@ -270,14 +270,16 @@ other module. Three have a language-level role:
 
 - `std/prelude` is the prelude described above. It declares nothing itself: it
   re-exports the modules declaring the types, exceptions, and built-ins the
-  language itself refers to, together with the generic sum and product types.
+  language itself refers to, together with the generic sum and product types
+  and `std/path`'s `path` type.
 - `std/config` exposes the host engine settings as `builtin var` bindings; see
   [Host environment](host-environment.md).
 - `std/builtin-methods` is the optional registry that makes the other modules'
   receiver methods ambient.
 
 Every other `std/*` module carries no special status; the prelude re-exports
-the first six rows below, and the rest are imported explicitly:
+the first six rows below — plus, from `std/path`, the `path` type alone — and
+the rest are imported explicitly:
 
 | Module | Provides |
 | ------ | -------- |
@@ -293,14 +295,17 @@ the first six rows below, and the rest are imported explicitly:
 | `std/regex` | Python-compatible searching, rewriting, and splitting |
 | `std/time` | UTC clock, parsing, formatting, and sleeping |
 | `std/random` | a seedable pseudo-random sequence and UUIDs |
-| `std/path` | lexical path manipulation |
+| `std/path` | the `path` type and lexical path manipulation |
 | `std/fs` | UTF-8 filesystem and directory operations |
 | `std/env` | the ambient environment snapshot and its helpers |
 | `std/process` | process metadata and termination |
 
 A few conventions run through all of them. Every name the library exposes —
 functions, fields, and named arguments alike — is spelled in kebab-case, with
-types and constructors in `CamelCase`. Each module declares the exception
+types and constructors in `CamelCase`. A value naming a filesystem location
+is typed `path` — the transparent `text` alias `std/path` declares and the
+prelude forwards — so a signature says which of its strings are locations
+without making them a separate type. Each module declares the exception
 types its own operations raise, so an error type lives beside the operations
 that produce it; the exceptions the language itself raises live in
 `std/errors`. An operation that raises may have a `?` twin returning `Option`,

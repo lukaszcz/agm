@@ -10,17 +10,17 @@ import std/regex::Match
 import std/time
 import std/toml
 
-def parse-schedule(path: text) -> decimal =
+def parse-schedule(path: path) -> decimal =
   let content = fs::read(path)
   let document = toml::parse(content)
   time::parse-iso((document.get("when") as text).slice(1, -1))
 
-def report-schedule-failure(schedule: text) -> unit =
+def report-schedule-failure(schedule: path) -> unit =
   let parsed = attempt(fn() => parse-schedule(schedule))
   print(parsed.is-err())
   print(parsed.err().is-some())
 
-program def main(workflow: int, root: text) -> unit =
+program def main(workflow: int, root: path) -> unit =
   case workflow of
     | 1 =>
         let names = (exec "inventory").stdout |> json::parse |> (fn(value: json) => value.get("items") as array[json]) |> (fn(items: array[json]) => items.map(fn(item: json) => item.get("name") as text))
@@ -40,5 +40,5 @@ program def main(workflow: int, root: text) -> unit =
     | _ =>
         let workdir = path::normalize("project/../workspace")
         let child = environ.extended({"REPORT_DIR": workdir})
-        let cwd: Option[text] = Option::Some(value = workdir)
+        let cwd: Option[path] = Option::Some(value = workdir)
         print((exec("with-env", env = child, cwd = cwd)).stdout.trim())

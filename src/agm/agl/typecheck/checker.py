@@ -82,6 +82,7 @@ from agm.agl.semantics.type_table import (
     comparable_types,
     is_assignable_in,
     json_cast_hint,
+    qualified_decl_name,
 )
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
@@ -1633,9 +1634,13 @@ class _Checker:
                 span=target.span,
             )
 
-        fields = self._env.type_table.record_fields(receiver_type)
-        if target.field not in fields:
-            self._select_member(receiver_type, target.field, target.span)
+        selected = self._select_member(
+            receiver_type,
+            target.field,
+            target.span,
+            method_receiver=self._option_member_method_receiver(receiver_type, target.field),
+        )
+        if selected.field_type is None:
             raise AglTypeError(
                 f"Method '{target.field}' of record '{receiver_type.name}' is not assignable.",
                 span=target.span,
@@ -1646,7 +1651,7 @@ class _Checker:
                 "declare it with 'var' to assign to it.",
                 span=target.span,
             )
-        return fields[target.field]
+        return selected.field_type
 
     def _check_assigned_value(
         self, stmt: AssignStmt, target_node_id: int, slot_type: Type, obj_expr: Expr
@@ -4584,17 +4589,24 @@ class _Checker:
             )
         return typ
 
-    def _select_member(self, obj_type: Type, name: str, span: SourceSpan) -> _SelectedMember:
-        """Select a field or the nearest visible method of a static receiver type."""
+    def _select_member(
+        self,
+        obj_type: Type,
+        name: str,
+        span: SourceSpan,
+        *,
+        method_receiver: Type | None = None,
+    ) -> _SelectedMember:
+        """Select a field or visible method, rejecting a field/method kind clash."""
         fields: Mapping[str, Type] | None = None
         if isinstance(obj_type, ExceptionType):
             fields = self._env.type_table.exception_fields(obj_type)
         elif isinstance(obj_type, RecordType):
             fields = self._env.type_table.record_fields(obj_type)
-        if fields is not None and name in fields:
-            return _SelectedMember(field_type=fields[name])
+        field_type = None if fields is None else fields.get(name)
 
-        candidate_levels = self._env.type_table.method_candidates(obj_type, name)
+        receiver = obj_type if method_receiver is None else method_receiver
+        candidate_levels = self._env.type_table.method_candidates(receiver, name)
         visible_levels = tuple(
             tuple(
                 method
@@ -4604,31 +4616,77 @@ class _Checker:
             )
             for candidates in candidate_levels
         )
+        visible_methods = tuple(method for level in visible_levels for method in level)
+        if field_type is not None and visible_methods:
+            declarations = ", ".join(_method_declaration_name(method) for method in visible_methods)
+            owner = self._field_owner_name(cast(RecordType | ExceptionType, obj_type), name)
+            raise AglTypeError(
+                f"Field '{owner}::{name}' and visible method {declarations} are ambiguous.",
+                span=span,
+                related=self._method_declaration_related(visible_methods),
+            )
+        if field_type is not None:
+            return _SelectedMember(field_type=field_type)
+
         for visible in visible_levels:
             if len(visible) == 1:
-                return _SelectedMember(method=visible[0], receiver_type=obj_type)
+                return _SelectedMember(method=visible[0], receiver_type=receiver)
             if visible:
                 declarations = ", ".join(_method_declaration_name(method) for method in visible)
-                related = tuple(
-                    (f"'{_method_declaration_name(method)}' is declared here", declaration_span)
-                    for method in visible
-                    if (
-                        declaration_span := self._declaration_spans.get(
-                            (method.module_id, method.scope_path, method.name)
-                        )
-                    )
-                    is not None
-                )
                 raise AglTypeError(
                     f"Member '{name}' of '{obj_type!r}' is ambiguous between {declarations}.",
                     span=span,
-                    related=related,
+                    related=self._method_declaration_related(visible),
                 )
         if any(candidate_levels):
             raise AglTypeError(
                 f"Method '{name}' exists for '{obj_type!r}' but is not visible here.", span=span
             )
         raise _no_member(obj_type, name, span)
+
+    def _method_declaration_related(
+        self, methods: Sequence[MethodDef]
+    ) -> tuple[tuple[str, SourceSpan], ...]:
+        """Return declaration locations for member-selection diagnostics."""
+        return tuple(
+            (f"'{_method_declaration_name(method)}' is declared here", declaration_span)
+            for method in methods
+            if (
+                declaration_span := self._declaration_spans.get(
+                    (method.module_id, method.scope_path, method.name)
+                )
+            )
+            is not None
+        )
+
+    def _field_owner_name(self, obj_type: RecordType | ExceptionType, name: str) -> str:
+        """Return the declaration path that owns a selected field."""
+        owner_ids: tuple[int, ...] = (obj_type.decl_id,)
+        if isinstance(obj_type, ExceptionType):
+            owner_ids += tuple(
+                ancestor.decl_node_id
+                for ancestor in self._env.type_table.ancestor_defs(obj_type.decl_id)
+            )
+        owner = next(
+            (
+                typedef
+                for owner_id in owner_ids
+                if (typedef := self._env.type_table.get_by_id(owner_id)) is not None
+                and any(field_name == name for field_name, _field_type in typedef.fields)
+            ),
+            self._env.type_table.get_by_id(obj_type.decl_id),
+        )
+        assert owner is not None, "compiler bug: field owner is not registered"
+        return qualified_decl_name(owner)
+
+    def _option_member_method_receiver(self, obj_type: RecordType, name: str) -> Type:
+        """Return Option's method owner when an Option member has no own method."""
+        if any(self._env.type_table.method_candidates(obj_type, name)):
+            return obj_type
+        enum_owners = self._env.type_table.enum_owners_for_member(obj_type)
+        if len(enum_owners) == 1 and is_standard_option_enum(enum_owners[0]):
+            return enum_owners[0]
+        return obj_type
 
     def _check_field_access(
         self,
@@ -4644,19 +4702,10 @@ class _Checker:
             if isinstance(obj_type, TypeVarType):
                 raise _no_type_var_members(obj_type, "fields or methods", node.span)
 
-            method_receiver = obj_type
+            method_receiver: Type = obj_type
             direct_candidates = self._env.type_table.method_candidates(obj_type, node.field)
-            has_direct_field = isinstance(obj_type, RecordType) and (
-                node.field in self._env.type_table.record_fields(obj_type)
-            )
-            if (
-                isinstance(obj_type, RecordType)
-                and not has_direct_field
-                and not any(direct_candidates)
-            ):
-                enum_owners = self._env.type_table.enum_owners_for_member(obj_type)
-                if len(enum_owners) == 1 and is_standard_option_enum(enum_owners[0]):
-                    method_receiver = enum_owners[0]
+            if isinstance(obj_type, RecordType):
+                method_receiver = self._option_member_method_receiver(obj_type, node.field)
             if (
                 method_receiver is obj_type
                 and node.field in {"ask", "ask-request"}
@@ -4670,7 +4719,9 @@ class _Checker:
                 ):
                     return _SelectedBuiltinMethod(name=node.field, receiver_type=obj_type)
 
-            selected = self._select_member(method_receiver, node.field, node.span)
+            selected = self._select_member(
+                obj_type, node.field, node.span, method_receiver=method_receiver
+            )
             if selected.field_type is not None:
                 if type_args is not None:
                     raise AglTypeError(

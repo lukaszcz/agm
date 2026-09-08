@@ -68,6 +68,7 @@ class _MemberDeclaration:
 
     kind: Literal["field", "method"]
     span: SourceSpan | None
+    is_owner_local: bool = False
 
 
 @dataclass(slots=True)
@@ -84,6 +85,7 @@ class _MemberIndex:
 
     members: dict[DeclId, dict[str, list[_MemberDeclaration]]] = field(default_factory=dict)
     declared: set[DeclId] = field(default_factory=set)
+    source_owners: set[DeclId] = field(default_factory=set)
 
     def members_of(self, owner_id: DeclId) -> Mapping[str, list[_MemberDeclaration]]:
         """Return *owner_id*'s member namespace, empty for an owner never indexed."""
@@ -119,6 +121,7 @@ def _member_declarations(
             decl_owner_id = typedef.decl_node_id
             owner_ids[module_id, (*declared_path, item.name)] = decl_owner_id
             index.declared.add(decl_owner_id)
+            index.source_owners.add(decl_owner_id)
             members = index.members.setdefault(decl_owner_id, {})
             if isinstance(item, (RecordDef, ExceptionDef)):
                 for source_field in item.fields:
@@ -158,7 +161,11 @@ def _member_declarations(
                 for member in same_named
                 if not (member.kind == "method" and member.span is None)
             ]
-            same_named.append(_MemberDeclaration("method", function.span))
+            same_named.append(
+                _MemberDeclaration(
+                    "method", function.span, is_owner_local=owner_path.module_id == module_id
+                )
+            )
     return index
 
 
@@ -183,16 +190,13 @@ def _raise_collision(
     conflicting: _MemberDeclaration,
 ) -> None:
     """Report the later direct declaration or the more-specific descendant."""
-    if owner_id == conflicting_id:
-        # A retained owner's registration supplies members without source
-        # spans. Its later-entry method is necessarily the one to diagnose.
-        if declared.span is None:
-            assert conflicting.span is not None
-            declared, conflicting = conflicting, declared
-        else:
-            assert conflicting.span is not None
-            if declared.span.start_offset < conflicting.span.start_offset:
-                declared, conflicting = conflicting, declared
+    if (
+        owner_id == conflicting_id
+        and declared.span is not None
+        and conflicting.span is not None
+        and declared.span.start_offset < conflicting.span.start_offset
+    ):
+        declared, conflicting = conflicting, declared
 
     owner_typedef = type_table.get_by_id(owner_id)
     conflicting_typedef = type_table.get_by_id(conflicting_id)
@@ -292,17 +296,17 @@ def validate_method_declaration_collisions(
         for ancestor in ancestors:
             _index_registered_owner(index, type_table, ancestor)
         for name, same_named_members in index.members[owner_id].items():
-            for member in same_named_members:
-                conflicting = next(
-                    (
-                        candidate
-                        for candidate in same_named_members
-                        if candidate.kind != member.kind
-                    ),
-                    None,
+            for method in (
+                member
+                for member in same_named_members
+                if member.kind == "method"
+                and (member.is_owner_local or owner_id not in index.source_owners)
+            ):
+                field = next(
+                    (member for member in same_named_members if member.kind == "field"), None
                 )
-                if conflicting is not None:
-                    _raise_collision(type_table, owner_id, name, member, owner_id, conflicting)
-                conflict = _ancestor_member(index, ancestors, name, member.kind)
+                if field is not None:
+                    _raise_collision(type_table, owner_id, name, method, owner_id, field)
+                conflict = _ancestor_member(index, ancestors, name, "method")
                 if conflict is not None:
-                    _raise_collision(type_table, owner_id, name, member, *conflict)
+                    _raise_collision(type_table, owner_id, name, method, *conflict)

@@ -614,3 +614,107 @@ class TestSelfHealE2E:
         assert (shell_dir / "bash" / "bashrc").exists()
         assert (shell_dir / "zsh" / ".zshrc").exists()
         assert (shell_dir / "sh" / "shrc").exists()
+
+
+class TestCommandArguments:
+    """A wrapper invoked with arguments must run them, not an interactive shell.
+
+    AGM registers the wrapper as ``$SHELL``, so every ``$SHELL -c COMMAND``
+    caller — a compilation command from an editor, ``xargs -S``, git — reaches
+    it.  Dropping the arguments and exec'ing an interactive shell instead left
+    those callers with a shell prompt and no command run.
+    """
+
+    def _wrapper_for(
+        self, real_shell: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> Path:
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        return ensure_workspace_shell("s", env={"SHELL": real_shell})
+
+    def _run(
+        self, wrapper: Path, args: list[str], tmp_path: Path
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(wrapper), *args],
+            input="",
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+
+    @pytest.mark.parametrize("shell_name", ["sh", "bash", "zsh"])
+    def test_dash_c_runs_the_command(
+        self, shell_name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        real_shell = shutil.which(shell_name)
+        if real_shell is None:
+            pytest.skip(f"{shell_name} is required")
+
+        wrapper = self._wrapper_for(real_shell, tmp_path, monkeypatch)
+        result = self._run(wrapper, ["-c", "printf 'ran:%s\\n' ok"], tmp_path)
+
+        assert result.returncode == 0
+        assert "ran:ok" in result.stdout
+
+    @pytest.mark.parametrize("shell_name", ["sh", "bash", "zsh"])
+    def test_dash_c_propagates_exit_status(
+        self, shell_name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        real_shell = shutil.which(shell_name)
+        if real_shell is None:
+            pytest.skip(f"{shell_name} is required")
+
+        wrapper = self._wrapper_for(real_shell, tmp_path, monkeypatch)
+        result = self._run(wrapper, ["-c", "exit 3"], tmp_path)
+
+        assert result.returncode == 3
+
+    def test_dash_c_keeps_the_caller_environment(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The command inherits the caller's environment, workspace vars included."""
+
+        sh = shutil.which("sh")
+        if sh is None:
+            pytest.skip("sh is required")
+
+        wrapper = self._wrapper_for(sh, tmp_path, monkeypatch)
+        result = subprocess.run(
+            [str(wrapper), "-c", 'printf "proj:%s\\n" "$PROJ_DIR"'],
+            input="",
+            cwd=tmp_path,
+            env={**os.environ, "PROJ_DIR": str(tmp_path / "proj")},
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+
+        assert result.returncode == 0
+        assert f"proj:{tmp_path}/proj" in result.stdout
+
+    def test_arguments_run_without_the_agm_binary(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No rc file runs on this path, so nothing needs `agm` on PATH."""
+
+        sh = shutil.which("sh")
+        if sh is None:
+            pytest.skip("sh is required")
+
+        wrapper = self._wrapper_for(sh, tmp_path, monkeypatch)
+        result = subprocess.run(
+            [str(wrapper), "-c", "printf 'ran:%s\\n' ok"],
+            input="",
+            cwd=tmp_path,
+            env={**os.environ, "PATH": str(tmp_path / "empty-bin")},
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+
+        assert result.returncode == 0
+        assert "ran:ok" in result.stdout

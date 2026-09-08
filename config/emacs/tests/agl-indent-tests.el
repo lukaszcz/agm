@@ -35,6 +35,24 @@ indented; the resulting indentation column is returned."
     (indent-region (point-min) (point-max))
     (buffer-substring-no-properties (point-min) (point-max))))
 
+(defun agl-ind--typed (keys)
+  "Return the text of an `agl-mode' buffer after KEYS are typed into it.
+
+Every character is inserted as if typed, so `post-self-insert-hook' runs
+as it does interactively and `electric-indent-mode' sees each key.  A
+`\\r' in KEYS stands for the user erasing the indentation the mode just
+put on the line, which is how a declaration gets written at its own
+level under a deeper body."
+  (with-temp-buffer
+    (agl-mode)
+    (electric-indent-local-mode 1)
+    (dolist (key (string-to-list keys))
+      (let ((last-command-event key))
+        (cond ((eq key ?\r) (delete-region (line-beginning-position) (point)))
+              ((eq key ?\n) (call-interactively #'newline))
+              (t (call-interactively #'self-insert-command)))))
+    (buffer-substring-no-properties (point-min) (point-max))))
+
 ;; --- Block opening ---
 
 (ert-deftest agl-ind-body-after-def-is-indented ()
@@ -359,6 +377,166 @@ indented; the resulting indentation column is returned."
 
 (ert-deftest agl-ind-comment-only-line-is-skipped-for-layout ()
   (should (= (agl-ind--indent-of "def f() -> unit =\n  print \"a\"\n# note\nprint \"b\"\n" 4) 2)))
+
+;; --- Module-level declarations return to their own level ---
+
+(ert-deftest agl-ind-declaration-returns-to-the-module-root ()
+  ;; A `def' is a module item: the grammar never admits one inside a block,
+  ;; so it belongs at the root rather than at the body level carried over
+  ;; from the function above it.
+  (should (= (agl-ind--indent-of "def f() -> unit =\n  print \"a\"\n\ndef g() -> int = 1\n" 4) 0))
+  (should (= (agl-ind--indent-of "def f() -> unit =\n  if\n    | a => 1\n\nrecord R\n" 5) 0)))
+
+(ert-deftest agl-ind-declaration-returns-to-its-scope-region ()
+  (should (= (agl-ind--indent-of
+              "scope A\n  def f() -> unit =\n    print \"a\"\n  def g() -> int = 1\n" 4)
+             2)))
+
+(ert-deftest agl-ind-first-declaration-of-a-region-indents-under-its-header ()
+  (should (= (agl-ind--indent-of "scope A\n  scope B\nrecord R\n" 3) 4)))
+
+(ert-deftest agl-ind-declaration-after-a-closed-region-returns-to-its-level ()
+  (should (= (agl-ind--indent-of
+              "scope A\n  scope B\n    def f() -> int = 1\n  end B\n  def g() -> int = 2\n" 5)
+             2)))
+
+(ert-deftest agl-ind-statement-keyword-is-not-a-declaration ()
+  ;; `print' and `let' are block items; they carry the body's level over
+  ;; rather than returning to the module root.
+  (should (= (agl-ind--indent-of "def f() -> unit =\n  print \"a\"\n\nprint \"b\"\n" 4) 2))
+  (should (= (agl-ind--indent-of "def f() -> unit =\n  print \"a\"\n\nlet b = 1\n" 4) 2)))
+
+;; --- Declarations that carry no body ---
+
+(ert-deftest agl-ind-extern-declaration-does-not-open-a-block ()
+  ;; An `extern def' is implemented by its Python companion, so no block
+  ;; follows it.
+  (should (= (agl-ind--indent-of
+              "extern def size(x: array[int]) -> int\n@extern-name(\"first_option\")\n" 2)
+             0)))
+
+(ert-deftest agl-ind-builtin-declaration-does-not-open-a-block ()
+  ;; A `builtin' on its own line prefixes the declaration under it, and a
+  ;; `builtin def' is implemented by the host.
+  (should (= (agl-ind--indent-of "builtin\nenum Agent\n" 2) 0))
+  (should (= (agl-ind--indent-of "builtin def ask(prompt: text) -> text\nlet x = 1\n" 2) 0)))
+
+(ert-deftest agl-ind-program-modifier-line-does-not-open-a-block ()
+  ;; The grammar lets `program' sit on the line above its `def'.
+  (should (= (agl-ind--indent-of "program\ndef main() -> unit = pass\n" 2) 0)))
+
+(ert-deftest agl-ind-type-declaration-with-an-inline-body-does-not-open-a-block ()
+  ;; A parenthesized field list and an inline member list are the whole
+  ;; declaration; only the bodiless header form opens a block.
+  (should (= (agl-ind--indent-of "record P(x: int, y: int)\nlet p = 1\n" 2) 0))
+  (should (= (agl-ind--indent-of "exception Boom extends Exception()\nlet e = 1\n" 2) 0))
+  (should (= (agl-ind--indent-of "enum Flag | On | Off\nlet f = 1\n" 2) 0)))
+
+(ert-deftest agl-ind-type-declaration-header-still-opens-a-block ()
+  (should (= (agl-ind--indent-of "record Point\nx: int\n" 2) 2))
+  (should (= (agl-ind--indent-of "record Box[T]\nvalue: T\n" 2) 2))
+  (should (= (agl-ind--indent-of "exception Boom extends Exception\nreason: text\n" 2) 2))
+  (should (= (agl-ind--indent-of "builtin record ExecResult\ncode: int\n" 2) 2))
+  (should (= (agl-ind--indent-of "enum Option[T] =\n| None\n" 2) 2)))
+
+;; --- Bracket continuation ---
+
+(ert-deftest agl-ind-closing-bracket-aligns-with-its-opener ()
+  ;; The closer ends the logical line the opener began, so it returns to
+  ;; that line's level instead of sitting at the content column.
+  (should (= (agl-ind--indent-of "let v = f(a,\n          b,\n)\n" 3) 0))
+  (should (= (agl-ind--indent-of "def f() -> unit =\n  let v = g(a,\n)\n" 3) 2)))
+
+(ert-deftest agl-ind-body-after-a-wrapped-signature-indents-from-its-start ()
+  ;; The signature's last line sits at the argument column, but the item it
+  ;; belongs to began at column zero, so its body is one level from there.
+  (should (= (agl-ind--indent-of
+              "program def main(\n    verbose: bool = false) -> unit =\n  print verbose\n" 3)
+             2)))
+
+(ert-deftest agl-ind-statement-after-a-wrapped-call-returns-to-its-level ()
+  (should (= (agl-ind--indent-of "let v = f(a,\n          b)\nlet w = 2\n" 3) 0)))
+
+;; --- Branch markers ---
+
+(ert-deftest agl-ind-pipe-marker-aligns-with-its-sibling ()
+  ;; The branch above ends in a suite of its own; the next `|' is that
+  ;; branch's sibling, not a branch of something the suite opened.
+  (should (= (agl-ind--indent-of
+              "def f() -> int =\n  if\n    | a =>\n        1\n    | else => 2\n" 5)
+             4)))
+
+;; --- Attributes stand with what they prefix ---
+
+(ert-deftest agl-ind-attribute-returns-to-the-declaration-level ()
+  ;; The attribute belongs to the `extern def' under it, so it stands where
+  ;; that declaration does rather than at the body level above.
+  (should (= (agl-ind--indent-of
+              "def f() -> int =\n  try g() catch E as e => 0\n\n@extern-name(\"is_file\")\n" 4)
+             0)))
+
+(ert-deftest agl-ind-field-attribute-keeps-the-field-level ()
+  ;; Inside a record-like body an attribute prefixes a field, not a
+  ;; declaration, so the body's level carries over.
+  (should (= (agl-ind--indent-of "record R\n@arg-named a: int\n" 2) 2))
+  (should (= (agl-ind--indent-of "exception Boom extends Exception\n  message: text\n@arg-named code: int\n" 3) 2)))
+
+;; --- Word markers find the construct they name ---
+
+(ert-deftest agl-ind-loop-terminator-aligns-past-a-nested-construct ()
+  ;; The `case' inside the loop body is not what `until' closes, so the
+  ;; search walks out to the `do' rather than stopping at the first line
+  ;; indented less than the body.
+  (should (= (agl-ind--indent-of
+              "def f() -> unit =\n  do\n    case v of\n      | A => ()\n  until done?\n" 5)
+             2))
+  (should (= (agl-ind--indent-of
+              "def f() -> unit =\n  while cond\n    if a =>\n      step()\n  done\n" 5)
+             2)))
+
+(ert-deftest agl-ind-catch-aligns-with-its-own-try ()
+  (should (= (agl-ind--indent-of
+              "try\n  try\n    risky()\n  catch A as e => 1\ncatch B as e => 2\n" 5)
+             0)))
+
+(ert-deftest agl-ind-second-catch-aligns-with-the-first ()
+  ;; A `try' takes several `catch' clauses, and they stand together.
+  (should (= (agl-ind--indent-of
+              "def f() -> int =\n  try\n    risky()\n  catch A as e => 1\n  catch B as e => 2\n" 5)
+             2)))
+
+(ert-deftest agl-ind-else-aligns-with-an-inline-if ()
+  ;; The `if' wrote its consequent inline, so it opens no block, but it is
+  ;; still the header the `else' continues.
+  (should (= (agl-ind--indent-of
+              "def f() -> int =\n  case v of\n    | A =>\n        if a => 1\n        else => 2\n" 5)
+             8)))
+
+;; --- Typing ---
+
+(ert-deftest agl-ind-newline-keeps-a-wider-body ()
+  ;; A body takes its level from its own first line, so ending that line
+  ;; must not pull it back to the one level the engine would have computed.
+  (should (equal (agl-ind--typed "def f() -> unit =\n  print \"a\"\nprint \"b\"")
+                 "def f() -> unit =\n    print \"a\"\n    print \"b\"")))
+
+(ert-deftest agl-ind-newline-keeps-a-dedented-line ()
+  (should (equal (agl-ind--typed "def f() -> unit =\nlet a = 1\n\rlet b = 2\nlet c = 3")
+                 "def f() -> unit =\n  let a = 1\nlet b = 2\nlet c = 3")))
+
+(ert-deftest agl-ind-typing-a-declaration-keyword-returns-to-its-level ()
+  ;; The space after `def' is the first moment the word can be told from an
+  ;; identifier that merely starts with it, and the line is placed then.
+  (should (equal (agl-ind--typed "def f() -> unit =\nprint \"a\"\n\ndef ")
+                 "def f() -> unit =\n  print \"a\"\n\ndef "))
+  (should (equal (agl-ind--typed "def f() -> unit =\nprint \"a\"\n\nrecord ")
+                 "def f() -> unit =\n  print \"a\"\n\nrecord ")))
+
+(ert-deftest agl-ind-typing-a-longer-identifier-keeps-the-line-put ()
+  ;; `default-agent' begins with the letters of `def' without being it, so
+  ;; nothing moves while it is typed.
+  (should (equal (agl-ind--typed "def f() -> unit =\nlet a = default-agent")
+                 "def f() -> unit =\n  let a = default-agent")))
 
 (provide 'agl-indent-tests)
 ;;; agl-indent-tests.el ends here

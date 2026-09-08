@@ -1432,6 +1432,12 @@ function."
   (setq-local end-of-defun-function #'agl-end-of-defun)
   (setq-local indent-line-function #'agl-indent-line-function)
   (setq-local indent-region-function #'agl-indent-region)
+  ;; RET indents the line it opens, but must not re-indent the line it ends.
+  ;; A layout language gives a line several legal columns, and the one the
+  ;; engine computes is only the likeliest: rewriting the finished line to it
+  ;; would undo the dedent that starts a new declaration and flatten a body
+  ;; deliberately indented wider than `agl-indent-offset'.
+  (setq-local electric-indent-inhibit t)
   (add-hook 'post-self-insert-hook #'agl-indent-post-self-insert nil t)
   (agl-flymake-setup))
 

@@ -101,7 +101,8 @@ An immutable Unicode string. Text indexing (`s[i]`) returns the Unicode code
 point at an integer index; negative indexes count from the end, and an
 out-of-range index raises `IndexError`. Text cannot be changed through indexed
 assignment. Untyped `ask` results default to `text` ([Agent calls](agent-calls.md)).
-Its methods are supplied by the standard library.
+The standard library supplies the standard text methods; user modules may also
+declare text methods.
 
 ### Numbers: `int` and `decimal`
 
@@ -169,13 +170,13 @@ See [Copying values](#copying-values) below for `copy`/`shallow-copy`.)
 
 #### Builtin-type methods
 
-Methods declared on `array[T]`, `dict[text, T]`, `text`, `json`, `int`, and
-`decimal` are supplied by their owning standard-library modules. `std/prelude`
-re-exports those modules' receiver scopes, so their methods are available
-wherever the prelude is enabled. With `--no-stdlib`, import the owning module
-first. The module's free functions remain subject to normal import visibility.
-See [Functions](functions.md#methods) for method declarations, bound values, and
-calls.
+`array[T]`, `dict[text, T]`, `text`, `json`, `int`, `decimal`, and `bool` can
+have methods declared by any module. `std/prelude` re-exports the standard
+library receiver scopes, making their exported methods visible by default;
+`hiding` can remove an individual method route. With `--no-stdlib`, import a
+route to the declaration. Free functions remain subject to normal import
+visibility. See [Functions](functions.md#methods) for method declarations,
+bound values, and calls.
 
 #### Cycles
 
@@ -327,8 +328,8 @@ See [Functions](functions.md) for the declaration and call syntax.
 
 The types below are declared by the standard library and named by the
 language's own constructs — `exec`, `ask`, and sessions — so the reference
-describes them here. `std/prelude` re-exports their declaring modules, and
-every loaded entry and library module except `std/prelude` itself receives an
+describes them here. `std/prelude` re-exports their source modules, and every
+loaded entry and library module except `std/prelude` itself receives an
 automatic `import std/prelude::*`, unless `--no-stdlib` disables it or an
 explicit import whose expansion includes `std/prelude` supplies the prelude
 contribution instead.
@@ -447,8 +448,8 @@ Session lifecycle failures raise `SessionError`; see
 ## Members of nominal types
 
 A method is a member of a record, enum, or exception's nominal type. It is
-available on every value of that type wherever the value is used, so calling it
-does not require an import of the module that declared the type. See
+selectable where the source module declares it or reaches its declaration by a
+qualified import route; `hiding` can remove that route. See
 [Methods](functions.md#methods) for declaration and call syntax.
 
 In the REPL, redeclaring a record, enum, or exception starts a new

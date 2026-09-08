@@ -3313,6 +3313,64 @@ class TestLarkErrorMapping:
         assert span.start_col == 1
         assert span.start_offset == 0
 
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "def f(",
+            "let x =",
+            "record R",
+            "1 +",
+            "case 1 of",
+            "f(1,",
+            "let x = [1,",
+        ],
+    )
+    def test_truncated_source_names_the_end_of_input(self, source: str) -> None:
+        """Source that runs out mid-construct says so, rather than quoting an empty token.
+
+        The LALR parser reports a premature end as an unexpected ``$END`` token,
+        whose value is the empty string.
+        """
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(source)
+
+        assert str(exc_info.value) == "Unexpected end of input."
+
+    def test_end_of_input_error_points_at_the_end_of_the_source(self) -> None:
+        """The ``$END`` token carries a position, so the span beats the (1,1) fallback."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("let x = 1\nlet y =")
+
+        span = exc_info.value.span
+        assert span is not None
+        assert span.start_line == 2
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "def g() -> int =\n  let x = [1,\n",
+            "record R\n  x:\n",
+            "scope S\n  def g() -> int =\n    let x = [1,\nend S\n",
+        ],
+    )
+    def test_block_ending_mid_item_names_the_end_of_block(self, source: str) -> None:
+        """A dedent closing an unfinished item names the block, not an empty token."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(source)
+
+        assert str(exc_info.value) == "Unexpected end of block."
+
+    def test_indent_after_an_unfinished_item_names_the_indentation(self) -> None:
+        """An indent the grammar cannot take is named even when no item is in hand.
+
+        A blank line separates the dangling ``let`` from the block that would
+        have been its body, so the item is still open when the indent arrives.
+        """
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("let x =\n\n  1\n")
+
+        assert str(exc_info.value) == "Unexpected indentation."
+
     def test_generic_lark_error_fallback(self) -> None:
         """A plain LarkError falls back to str(exc) as the message with (1,1) span."""
         from lark.exceptions import LarkError

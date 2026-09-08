@@ -35,11 +35,11 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 ## Coding Style & Naming Conventions
 
 - Formatting: ruff (line length 100)
-- AgL layout, everywhere AgL is written (`.agl` files, ```agl fences in docs, snippets inside Python strings): indent a scope region's items under its header, leave a blank line after a region's closer and before a `program def`, and indent a function body written on its own line. `just agl-style-fix` applies it; `just lint` enforces it.
 - Typing: strict discipline (`mypy` strict); modern union syntax (`str | None`, `dict[str, int]`, `list[str]`)
 - Do NOT use `type: ignore` comments. If ignoring a type rule is necessary, ALWAYS ask the user for permission and explain why.
 - Do NOT use `noqa` comment. If ignoring a lint rule is necessary, ALWAYS ask the user for permission and explain why.
 - Do not use `fmt: skip` or `fmt: off` comments. If ignoring the formatter is necessary, ask the user for permission and explain why.
+- Be radically concise and precise in comments and docstring - convey essential information without extra prose.
 
 ## Testing Guidelines
 
@@ -50,8 +50,7 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 - Test only main app Python code under `src/agm/`, NOT build/install scripts, `justfile` commands or config file content. Do NOT test exact help, warning or error messages.
 - Do NOT add heavy ungated validation or defensive assertions (defense-in-depth) to the code. Write appropriate tests instead. Defense-in-depth assertions are allowed ONLY if they are trivial preconditions or gated behind a test-only flag.
 - Make sure tests are not flaky.
-- Do not let an assertion pass on the strength of its own test's name: pytest builds `tmp_path` from the test name, so a path in an error message can contain the word being asserted. `just test-neutral-tmp` re-runs the suite with neutrally named temp directories and fails any assertion that does.
-- Keep individual tests cheap. `just test` fails any test that overruns the CPU ceiling in its `check_cpu_budget`; `just test-budget` ranks tests by cost so the ceiling can be recalibrated, and `just test-budget test_cpu_budget=<seconds>` tries out a candidate number. Measure cost in CPU seconds, never wall clock — under `-n auto` a test's wall time tracks the load average rather than the test, while its CPU time varies by well under half.
+- Keep individual tests cheap.
 - Maintain 100% test coverage of `src/` and of the standard library's Python companions in `stdlib/src/`.
 - Maintain 100% command coverage in e2e tests.
 - Group the tests in `tests/` by meaningful categories and name the files meaningfully.

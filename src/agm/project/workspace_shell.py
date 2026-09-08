@@ -1,10 +1,19 @@
 """Workspace shell wrapper managed under a user cache directory.
 
-The wrapper launches the user's real interactive shell (``zsh``/``bash``/``sh``)
-so that ``~/.zshrc``/``~/.bashrc``/``~/.shrc`` run normally — preserving the
-user's keybindings, prompt, completions and aliases.  After the user's rc file
-has been sourced, the wrapper appends ``eval "$(agm config env)"`` so the
-workspace environment wins over anything the user's rc set.
+Invoked with no arguments, the wrapper launches the user's real interactive
+shell (``zsh``/``bash``/``sh``) so that ``~/.zshrc``/``~/.bashrc``/``~/.shrc``
+run normally — preserving the user's keybindings, prompt, completions and
+aliases.  After the user's rc file has been sourced, the wrapper appends
+``eval "$(agm config env)"`` so the workspace environment wins over anything
+the user's rc set.
+
+Invoked with arguments, it execs the real shell with them unchanged.  A
+workspace shell exports the wrapper as ``$SHELL``, which makes it the shell
+every ``$SHELL -c COMMAND`` caller runs — an editor's compile command, ``xargs
+-S``, git — so it has to run the command rather than open a shell.  That path
+skips the interactive setup entirely: a shell running a command reads no rc
+file, and the caller already carries the workspace environment, since ``$SHELL``
+names the wrapper only for processes descended from a workspace shell.
 
 Nothing is written under the project's ``.agent-files/``.  The wrapper and its
 rc files live under ``$XDG_CACHE_HOME/agm/shell/<key>/`` (defaulting to
@@ -220,7 +229,6 @@ def _wrapper_content(
             "# agm workspace shell wrapper",
             f"AGM_WORKSPACE_SHELL_DIR={shlex_quote(str(shell_dir))}",
             f"export AGM_WORKSPACE_SHELL={shlex_quote(str(wrapper_path))}",
-            *self_heal_lines,
             (
                 'if [ -z "${AGM_REAL_SHELL:-}" ] '
                 '|| [ "$AGM_REAL_SHELL" = "$AGM_WORKSPACE_SHELL" ]; then'
@@ -228,6 +236,17 @@ def _wrapper_content(
             f"  AGM_REAL_SHELL={shlex_quote(real_shell)}",
             "fi",
             "export AGM_REAL_SHELL",
+            # Arguments mean a command to run, not a shell to sit in: the
+            # wrapper is the workspace's $SHELL, so every `$SHELL -c COMMAND`
+            # caller arrives here.  Hand them to the real shell untouched.  The
+            # workspace environment needs no reapplying — $SHELL names this
+            # wrapper only for processes descended from a workspace shell, which
+            # already export it — and none of the interactive setup below
+            # applies, since a shell running a command reads no rc file.
+            'if [ "$#" -gt 0 ]; then',
+            '  exec "$AGM_REAL_SHELL" "$@"',
+            "fi",
+            *self_heal_lines,
             'case "$(basename "$AGM_REAL_SHELL")" in',
             "  zsh)",
             # Save the user's real ZDOTDIR once (mirroring AGM_USER_ENV for sh)

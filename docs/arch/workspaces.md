@@ -20,7 +20,7 @@ Dependencies are sibling repositories under the project's deps directory, manage
 
 ## Workspace Environment and Shell
 
-When a workspace opens, its environment chains the dependency environment, the project and branch config directories' dotenv files, and shell env files. A per-workspace shell wrapper is generated so interactive sessions start with that environment, and configured setup scripts run to prepare the workspace.
+When a workspace opens, its environment chains the dependency environment, the project and branch config directories' dotenv files, and shell env files. A per-workspace shell wrapper is generated so interactive sessions start with that environment; the wrapper also serves as the workspace's `$SHELL`, so invoked with arguments it runs them through the real shell instead of opening one. Configured setup scripts run to prepare the workspace.
 
 ## Git and Tmux
 

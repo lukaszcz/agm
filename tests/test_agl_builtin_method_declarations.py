@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl import PipelineDriver
+from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PreparedProgram
 from agm.agl.semantics.types import ArrayType, DictType, IntType, TypeVarType
@@ -40,6 +41,18 @@ def _prepare_stdlib_module(tmp_path: Path, module: str, source: str) -> Prepared
 def test_invalid_builtin_method_receivers_are_rejected(source: str) -> None:
     prepared = PipelineDriver.prepare_program(source, default_stdlib=False)
     discovery = PipelineDriver().discover_programs(prepared)
+    assert discovery.checked is None
+    assert discovery.diagnostics
+
+
+def test_bare_array_scope_is_not_a_builtin_receiver_head() -> None:
+    prepared = PipelineDriver.prepare_program(
+        "def array::copy(self) -> int = 0\nprogram def main() -> unit = ()\n",
+        default_stdlib=False,
+    )
+
+    discovery = PipelineDriver().discover_programs(prepared)
+
     assert discovery.checked is None
     assert discovery.diagnostics
 
@@ -154,6 +167,21 @@ def test_builtin_receiver_wildcard_uses_a_private_rigid_type_parameter(tmp_path:
     (type_parameter,) = signature.type_params
     assert type_parameter.startswith("__method_type_slot_")
     assert signature.params[0].type == ArrayType(TypeVarType(type_parameter))
+
+
+def test_unknown_applied_receiver_uses_its_head_name_as_its_scope(tmp_path: Path) -> None:
+    prepared = _prepare_stdlib_module(
+        tmp_path,
+        "std/array",
+        "def bytes[E]::copy(self) -> unit = ()\n",
+    )
+
+    assert prepared.resolved is not None, prepared.diagnostics
+    resolved_module = prepared.resolved.modules[ModuleId.from_path("std/array")]
+    (declaration,) = resolved_module.resolved.program.body.items
+    assert isinstance(declaration, FuncDef)
+
+    assert tuple(segment.name for segment in declaration.scope_path) == ("bytes",)
 
 
 def test_generic_builtin_receiver_binds_its_receiver_slot(tmp_path: Path) -> None:

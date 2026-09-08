@@ -89,7 +89,7 @@ from agm.agl.lexer.tokens import (
 )
 from agm.agl.semantics.text_literal import ESCAPE_DECODE, INTERP_OPEN, INTERP_TRIGGER
 from agm.raw_tail_catalog import RAW_TAIL_BUILTINS
-from agm.util.ident import IDENT_STOP, is_identifier, is_identifier_start
+from agm.util.ident import IDENT_STOP, is_identifier_start
 from agm.util.text import normalize_newlines
 
 # ---------------------------------------------------------------------------
@@ -199,15 +199,11 @@ class _LitSeg:
 class _InterpSeg:
     """An interpolation hole of a triple-quoted template.
 
-    ``tokens`` are the code tokens scanned inside ``%{...}`` followed by the
-    closing ``INTERP_END`` token (already carrying real positions).
-    ``start_pos``/``start_line``/``start_col`` mark the ``%`` of ``%{``.
+    ``tokens`` include the opener, the expression or desugared environment
+    lookup, and the closer, all carrying their original source positions.
     """
 
     tokens: list[Token]
-    start_pos: int
-    start_line: int
-    start_col: int
 
 
 # ---------------------------------------------------------------------------
@@ -543,7 +539,10 @@ class _Scanner:
                 raise LexError("Unterminated single-line string literal", span=span)
             if ch == "\\":
                 buf.append(self._decode_template_escape())
-            elif (environment_name := self._environment_interpolation_name()) is not None:
+            elif (interpolation := self._template_interpolation()) is not None:
+                # Expression fragments include the opener in their diagnostic
+                # span; environment fragments end before it.
+                opener = next(interpolation)
                 yield self._make_token(
                     STRING_FRAGMENT,
                     "".join(buf),
@@ -552,30 +551,8 @@ class _Scanner:
                     frag_start_col,
                 )
                 buf = []
-                yield from self._scan_environment_interpolation(environment_name)
-                frag_start_pos = self._pos
-                frag_start_line = self._line
-                frag_start_col = self._col
-            elif self._src.startswith(INTERP_OPEN, self._pos):
-                # Start of interpolation
-                # AgL's trigger is separate from ``agm.agent.runner`` placeholders.
-                interp_pos = self._pos
-                interp_line = self._line
-                interp_col = self._col
-                self._advance()  # consume '%'
-                self._advance()  # consume '{'
-                yield self._make_token(
-                    STRING_FRAGMENT,
-                    "".join(buf),
-                    frag_start_pos,
-                    frag_start_line,
-                    frag_start_col,
-                )
-                yield self._make_token(
-                    INTERP_START, INTERP_OPEN, interp_pos, interp_line, interp_col
-                )
-                buf = []
-                yield from self._scan_interp_code()
+                yield opener
+                yield from interpolation
                 frag_start_pos = self._pos
                 frag_start_line = self._line
                 frag_start_col = self._col
@@ -588,11 +565,47 @@ class _Scanner:
         """Return the environment name when the cursor starts a ``${NAME}`` hole."""
         if not self._src.startswith("${", self._pos):
             return None
-        end = self._src.find("}", self._pos + 2)
-        if end == -1:
+        start = self._pos + 2
+        if start == len(self._src) or not is_identifier_start(self._src[start]):
             return None
-        name = self._src[self._pos + 2 : end]
-        return name if is_identifier(name) else None
+        end = start + 1
+        # Stop at the first delimiter, so malformed holes cannot repeatedly
+        # search or copy overlapping suffixes of the remaining source.
+        while end < len(self._src) and self._src[end] not in IDENT_STOP:
+            end += 1
+        if end < len(self._src) and self._src[end] == "}":
+            return self._src[start:end]
+        return None
+
+    def _template_interpolation(self) -> Iterator[Token] | None:
+        """Recognize either ordinary-template hole without advancing the cursor."""
+        if self._src.startswith(INTERP_OPEN, self._pos):
+            return self._scan_interpolation()
+        name = self._environment_interpolation_name()
+        return self._scan_interpolation(name) if name is not None else None
+
+    def _scan_interpolation(self, environment_name: str | None = None) -> Iterator[Token]:
+        """Emit one hole, sharing its opener across names, expressions, and raw tails."""
+        start_pos, start_line, start_col = self._pos, self._line, self._col
+        opener = Token(
+            INTERP_START,
+            INTERP_OPEN,
+            start_pos=start_pos,
+            line=start_line,
+            column=start_col,
+            end_line=start_line,
+            end_column=start_col + 2,
+            end_pos=start_pos + 2,
+        )
+        if environment_name is not None:
+            yield opener
+        self._advance(in_string=True)
+        self._advance(in_string=True)
+        if environment_name is None:
+            yield opener
+            yield from self._scan_interp_code()
+        else:
+            yield from self._scan_environment_interpolation(environment_name)
 
     def _decode_template_escape(self) -> str:
         """Decode the escape at the cursor in an ordinary string template."""
@@ -605,7 +618,7 @@ class _Scanner:
         return self._decode_escape()
 
     def _scan_environment_interpolation(self, name: str) -> Iterator[Token]:
-        """Desugar ``${NAME}`` to ``%{std/env::getenv(\"NAME\")}``.
+        """Desugar an environment hole's body to ``std/env::getenv(\"NAME\")``.
 
         The synthetic expression uses the source span of its compact spelling.
         It consequently has the same scope, type, and runtime behavior as the
@@ -615,8 +628,6 @@ class _Scanner:
         start_pos = self._pos
         start_line = self._line
         start_col = self._col
-        self._advance(in_string=True)  # $
-        self._advance(in_string=True)  # {
         name_start = self._pos
         for _ in name:
             self._advance(in_string=True)
@@ -635,7 +646,6 @@ class _Scanner:
                 end_pos=end,
             )
 
-        yield token(INTERP_START, INTERP_OPEN, start_pos, name_start)
         # The qualifier transformer removes the two source characters occupied
         # by ``::`` from every MODQUAL span.  Give this synthetic token an
         # equivalent width inside the hole so its resulting span stays valid.
@@ -727,12 +737,12 @@ class _Scanner:
 
         Positions: the dedent transformation changes fragment *text*, but the
         synthesised tokens are positioned at their original source locations
-        (the first source character of each literal segment, the ``$`` of each
+        (the first source character of each literal segment, the opener of each
         interpolation, the closing triple-quote).  All positions therefore
         point INTO the template's true normalized-source range, never ``None``.
         """
         # Strictly alternating literal/interp segments (always lit-first and
-        # lit-last), each carrying its first-source-character position.
+        # lit-last), retaining literal starts and positioned hole tokens.
         segments: list[_LitSeg | _InterpSeg] = []
         current_lit: list[str] = []
         lit_start_pos = self._pos
@@ -758,46 +768,12 @@ class _Scanner:
                 break
             if ch == "\\":
                 current_lit.append(self._decode_template_escape())
-            elif (environment_name := self._environment_interpolation_name()) is not None:
-                interp_start_pos = self._pos
-                interp_start_line = self._line
-                interp_start_col = self._col
+            elif (interpolation := self._template_interpolation()) is not None:
                 segments.append(
                     _LitSeg("".join(current_lit), lit_start_pos, lit_start_line, lit_start_col)
                 )
                 current_lit = []
-                interp_tokens = list(self._scan_environment_interpolation(environment_name))[1:]
-                segments.append(
-                    _InterpSeg(
-                        interp_tokens,
-                        interp_start_pos,
-                        interp_start_line,
-                        interp_start_col,
-                    )
-                )
-                lit_start_pos = self._pos
-                lit_start_line = self._line
-                lit_start_col = self._col
-            elif self._src.startswith(INTERP_OPEN, self._pos):
-                # Start interpolation; remember the '%' position.
-                interp_start_pos = self._pos
-                interp_start_line = self._line
-                interp_start_col = self._col
-                self._advance()  # consume '%'
-                self._advance()  # consume '{'
-                segments.append(
-                    _LitSeg("".join(current_lit), lit_start_pos, lit_start_line, lit_start_col)
-                )
-                current_lit = []
-                interp_tokens = list(self._scan_interp_code())
-                segments.append(
-                    _InterpSeg(
-                        interp_tokens,
-                        interp_start_pos,
-                        interp_start_line,
-                        interp_start_col,
-                    )
-                )
+                segments.append(_InterpSeg(list(interpolation)))
                 lit_start_pos = self._pos
                 lit_start_line = self._line
                 lit_start_col = self._col
@@ -859,18 +835,7 @@ class _Scanner:
             )
             if part_idx < len(interp_segs):
                 interp_seg = interp_segs[part_idx]
-                yield Token(
-                    INTERP_START,
-                    INTERP_OPEN,
-                    start_pos=interp_seg.start_pos,
-                    line=interp_seg.start_line,
-                    column=interp_seg.start_col,
-                    end_line=interp_seg.start_line,
-                    end_column=interp_seg.start_col + 2,
-                    end_pos=interp_seg.start_pos + 2,
-                )
-                # All inner tokens (already positioned) plus the trailing
-                # INTERP_END token, re-yielded with its real positions intact.
+                # Hole tokens retain their original source positions.
                 yield from interp_seg.tokens
 
         yield Token(
@@ -993,13 +958,7 @@ class _Scanner:
                         fragment = emit_fragment()
                         if fragment is not None:
                             yield fragment
-                        interp_pos, interp_line, interp_col = self._pos, self._line, self._col
-                        for _ in INTERP_OPEN:
-                            self._advance(in_string=True)
-                        yield self._make_token(
-                            INTERP_START, INTERP_OPEN, interp_pos, interp_line, interp_col
-                        )
-                        yield from self._scan_interp_code()
+                        yield from self._scan_interpolation()
                     else:
                         # Copy the whole run up to the next character that could
                         # open a hole or escape it, rather than one char at a

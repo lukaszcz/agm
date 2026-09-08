@@ -538,5 +538,58 @@ level under a deeper body."
   (should (equal (agl-ind--typed "def f() -> unit =\nlet a = default-agent")
                  "def f() -> unit =\n  let a = default-agent")))
 
+(ert-deftest agl-ind-typing-a-lone-modifier-returns-to-its-level ()
+  ;; `builtin\=' and `extern\=' stand alone above the `def\=' they modify, so no
+  ;; separator ever follows them to place the line as it is typed.  The
+  ;; newline that ends the word is the first moment it is known to be the
+  ;; whole line, and the declaration below then follows it.
+  (should (equal (agl-ind--typed "record R\nx: int\n\nbuiltin\ndef f() -> int")
+                 "record R\n  x: int\n\nbuiltin\ndef f() -> int"))
+  (should (equal (agl-ind--typed "scope S\nrecord R\nx: int\n\nbuiltin\ndef f() -> int")
+                 "scope S\n  record R\n    x: int\n\n  builtin\n  def f() -> int")))
+
+(ert-deftest agl-ind-typing-past-a-lone-modifier-leaves-it-put ()
+  ;; The word is a modifier only while it is the whole line; a newline
+  ;; after anything more leaves an ordinary line where the body put it.
+  (should (equal (agl-ind--typed "def f() -> unit =\nlet a = 1\nexterns.count()\n")
+                 "def f() -> unit =\n  let a = 1\n  externs.count()\n  ")))
+
+(ert-deftest agl-ind-typing-a-longer-name-over-a-modifier-keeps-the-line-put ()
+  ;; The word is only a modifier while it stands alone; typing on past it
+  ;; leaves an ordinary name, which the body still carries.
+  (should (equal (agl-ind--typed "def f() -> unit =\nlet a = 1\nexterns.count()")
+                 "def f() -> unit =\n  let a = 1\n  externs.count()")))
+
+(ert-deftest agl-ind-typing-an-attribute-returns-to-its-declaration ()
+  ;; `@\=' opens an attribute and nothing else, so the line is placed on the
+  ;; keystroke itself.
+  (should (equal (agl-ind--typed "def f() -> unit =\nprint \"a\"\n\n@doc(\"x\")")
+                 "def f() -> unit =\n  print \"a\"\n\n@doc(\"x\")")))
+
+(ert-deftest agl-ind-typing-a-field-attribute-stays-in-the-body ()
+  ;; An attribute on a record field belongs to the field, not to the
+  ;; record, so it keeps the body\='s level.
+  (should (equal (agl-ind--typed "record R\nx: int\n@doc(\"y\")\ny: int")
+                 "record R\n  x: int\n  @doc(\"y\")\n  y: int")))
+
+(ert-deftest agl-ind-attribute-after-a-body-ignores-an-earlier-record ()
+  ;; The header a body belongs to is the first line indented less than it.
+  ;; A record declared higher up in the file is not that header, so an
+  ;; attribute below a function body prefixes a declaration, not a field.
+  (should (= (agl-ind--indent-of
+              (concat "exception E extends Exception\n  path: text\n\n"
+                      "def f(p: text) -> unit =\n  print p\n\n"
+                      "@extern-name(\"is_file\")\nextern def g() -> bool\n")
+              7)
+             0)))
+
+(ert-deftest agl-ind-typing-a-closing-bracket-returns-to-its-opener ()
+  ;; A bracket closer belongs to the line that opened it, and the bracket
+  ;; itself is what says so, so the line is placed on that keystroke.
+  (should (equal (agl-ind--typed "builtin def ask[T](\nprompt: text,\n)")
+                 "builtin def ask[T](\n  prompt: text,\n)"))
+  (should (equal (agl-ind--typed "def f() -> unit =\nlet xs = [\n1,\n]")
+                 "def f() -> unit =\n  let xs = [\n    1,\n  ]")))
+
 (provide 'agl-indent-tests)
 ;;; agl-indent-tests.el ends here

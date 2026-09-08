@@ -265,7 +265,7 @@ program def main() -> unit =
   var outer = [inner]
   let copied = shallow-copy(outer)
   copied[0][0] := 9
-  let _ = print(outer)
+  print(outer)
 ```
 
 `copy` is deep: every array, dict, record, enum, and exception reachable from
@@ -290,8 +290,8 @@ program def main() -> unit =
   var pair = [shared, shared]
   let copied = copy(pair)
   copied[0][0] := 9
-  let _ = print(pair)
-  let _ = print(copied)
+  print(pair)
+  print(copied)
 ```
 
 ### Function types: `A -> B` and `(A, B, …) -> C`
@@ -1077,9 +1077,9 @@ record R
 
 program def main() -> unit =
   let r: R = R(x = 1)
-  let _ = print r
-  let _ = print(r as json)
-  let _ = print render(r as json, pretty = true)
+  print r
+  print(r as json)
+  print render(r as json, pretty = true)
 ```
 
 A record (or exception) with a field of type `unit` or a function type cannot

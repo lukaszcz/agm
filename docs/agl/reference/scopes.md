@@ -27,7 +27,7 @@ def Geometry::translate(point: Geometry::Point) -> Geometry::Point =
 
 program def main() -> unit =
   let origin = Geometry::origin()
-  let _ = print(Geometry::Format::label(Geometry::translate(origin)))
+  print(Geometry::Format::label(Geometry::translate(origin)))
 ```
 
 The closer is mandatory and must repeat the complete header path: `scope
@@ -50,7 +50,7 @@ end Text
 def Text::display(value: text) -> text = "[%{normalize(value)}]"
 
 program def main() -> unit =
-  let _ = print(Text::display("ready"))
+  print(Text::display("ready"))
 ```
 
 A region contains nested regions, header `use` and `import` declarations,
@@ -110,8 +110,8 @@ scope Config
 end Config
 
 program def main() -> unit =
-  let _ = print(Config::low)
-  let _ = print(Config::high)
+  print(Config::low)
+  print(Config::high)
 ```
 
 A binding's initializer runs at its region's position in the module body: in
@@ -162,7 +162,7 @@ end Host
 
 program def main() -> unit =
   let result = Host::ExecResult(stdout = "x", exit-code = 0, stderr = "", timed-out = false)
-  let _ = Host::print(result.stdout)
+  Host::print(result.stdout)
 ```
 
 A scoped `builtin record`/`enum`/`exception` carries its declared scope path
@@ -238,7 +238,7 @@ end Point
 program def main() -> unit =
   let point = Point(x = 2, y = 3)
   let shifted = point.shift(4)
-  let _ = print(shifted.total())
+  print(shifted.total())
 ```
 
 Methods may be declared only in the module that declares their receiver type.
@@ -286,7 +286,7 @@ end Text
 
 program def main() -> unit =
   let result = add(1, 2) + Metrics::scale(3)
-  let _ = print(format(result))
+  print(format(result))
 ```
 
 `::*` selects every member. Brace tails select relative paths, and `hiding`

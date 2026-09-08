@@ -28,7 +28,7 @@ Replace the starter program in `review-tools/src/main.agl` (any module in the
 
 ```agl
 program def review(target: text, strict: bool = false) -> unit =
-  let _ = print("reviewing %{target}")
+  print("reviewing %{target}")
 ```
 
 ```toml

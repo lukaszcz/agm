@@ -255,8 +255,8 @@ program def main() -> unit =
   let person = Person(name = "Ada", address = "Main Street")
   let by-member = person.with-address("East Road")
   let by-path = Person::with-address(person, "East Road")
-  let _ = print(by-member.address)
-  let _ = print(by-path.address)
+  print(by-member.address)
+  print(by-path.address)
 ```
 
 A method may update a `var` field through `self`; `self` need not be a mutable
@@ -295,8 +295,8 @@ def Box::size[_](self) -> int = 1
 
 program def main() -> unit =
   let box = Box(value = 7)
-  let _ = print(box.get())
-  let _ = print(box.size())
+  print(box.get())
+  print(box.size())
 ```
 
 An inline enum member likewise establishes a record type scope, including the
@@ -329,8 +329,8 @@ program def main() -> unit =
   let meter = Meter(value = 4)
   let add = meter.add
   let plus = meter.add(?)
-  let _ = print(apply(3, add))
-  let _ = print(plus(5))
+  print(apply(3, add))
+  print(plus(5))
 ```
 
 The `self` spelling is special only in this receiver position. An annotated
@@ -491,7 +491,7 @@ def id[T](x: T) -> T = x
 
 program def main() -> unit =
   let f: text -> text = id
-  let _ = print(f("via value"))
+  print(f("via value"))
 ```
 
 A higher-order declared call can supply those constraints through its other
@@ -616,8 +616,8 @@ def h(a: int, @arg-named key: text) -> text = "%{a}: %{key}"
 
 program def main() -> unit =
   let key = "hello"
-  let _ = print(h(1, key))
-  let _ = print(h(1, key = key))
+  print(h(1, key))
+  print(h(1, key = key))
 ```
 
 **Defaults.** Defaulted parameters may be omitted. Named-only defaults may be
@@ -680,12 +680,12 @@ def digits(a: int, b: int, c: int) -> int = a * 100 + b * 10 + c
 
 program def main() -> unit =
   let inc: (int) -> int = add(?, 1)
-  let _ = print(inc(4))
+  print(inc(4))
   let plus: (int, int) -> int = add
   let plus-two: (int) -> int = plus(?, 2)
-  let _ = print(plus-two(5))
+  print(plus-two(5))
   let fill-edges: (int, int) -> int = digits(?, 9, ?)
-  let _ = print(fill-edges(1, 2))
+  print(fill-edges(1, 2))
 ```
 
 The resulting function type has one parameter for each placeholder. Each
@@ -717,8 +717,8 @@ def shaped(x: int, @arg-named y: int, @arg-named z: int = 0) -> int = x * 100 + 
 program def main() -> unit =
   let fill-y: (int) -> int = shaped(3, y = ?, z = 9)
   let fill-x: (int) -> int = shaped(x = ?, y = 4)
-  let _ = print(fill-y(5))
-  let _ = print(fill-x(2))
+  print(fill-y(5))
+  print(fill-x(2))
 ```
 
 For constructors, the same argument binding rules apply:
@@ -729,7 +729,7 @@ record Box[T]
 
 program def main() -> unit =
   let make-box: (int) -> Box[int] = Box(value = ?)
-  let _ = print(make-box(8).value)
+  print(make-box(8).value)
 ```
 
 Non-placeholder arguments, and the callee expression for a function-value call,
@@ -770,13 +770,13 @@ def fail-created() -> int = raise Abort(message = "created")
 def fail-called(x: int) -> int = raise Abort(message = "called %{x}")
 
 program def main() -> unit =
-  let _ = try
+  try
     let f = add(?, fail-created())
     print(f(1))
   catch Abort as e =>
     print(e.message)              # created
 
-  let _ = try
+  try
     let g = fail-called(?)
     print(g(9))
   catch Abort as e =>
@@ -797,11 +797,11 @@ def map-one[A, B](f: (A) -> B, xs: array[A]) -> array[B] = [f(xs[0])]
 
 program def main() -> unit =
   let keep-ints: (array[int]) -> array[int] = map-one(id, ?)
-  let _ = print(keep-ints([5])[0])
+  print(keep-ints([5])[0])
   let make-single: (int) -> array[int] = singleton(?)
-  let _ = print(make-single(7)[0])
+  print(make-single(7)[0])
   let make-text = singleton::[text](?)
-  let _ = print(make-text("hi")[0])
+  print(make-text("hi")[0])
 ```
 
 Error conditions are reported statically:

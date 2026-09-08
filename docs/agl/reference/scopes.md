@@ -214,14 +214,14 @@ Types establish same-named scopes. An inline enum member declares a record in
 the enum's scope, so `Review::Pass` is an ordinary scoped record type and
 constructor. Referenced members remain at their own declaration paths rather
 than appearing in the referencing enum's scope. A `def` whose first parameter
-is `self` is a method when its enclosing scope is a record, enum, or exception.
-It is called through a receiver value with `.`; a `def` in the same scope with
-an ordinary first parameter remains a scoped function and is called by its
-qualified path.
+is `self` is a method when its enclosing scope resolves to a record, enum, enum
+member, or exception. It is called through a receiver value with `.`; a `def`
+in the same scope with an ordinary first parameter remains a scoped function and
+is called by its qualified path.
 
 A declaration-path method and a method written in a `scope Type` region declare
-members of the same type scope. The two spellings can be mixed when extending a
-type:
+members of the same resolved type scope. The two spellings can be mixed when
+extending a type:
 
 ```agl
 record Point
@@ -241,11 +241,15 @@ program def main() -> unit =
   print(shifted.total())
 ```
 
-A method receiver may name a record, enum, enum member, or exception declared
-in this module, or one made available by a bare import that reaches the method's
-enclosing region. Such a declaration extends the resolved receiver type; a
-qualified-only import does not provide a receiver name. A type alias may be
-used as a target type, but its scope cannot declare methods.
+A plain scope hosts methods for its resolved record, enum, enum member, or
+exception. The receiver may be declared locally or supplied by exactly one bare
+import reaching the method's region; a qualified-only import supplies no
+receiver name. Built-in receiver heads are the exception: `array[E]::name` and
+`dict[text, V]::name` declare methods for those generic receiver types, while
+`text`, `json`, `int`, `decimal`, and `bool` are bare receiver heads. A type
+alias may be used as a target type, but its scope cannot declare methods.
+`Point::norm(p)` written bare follows ordinary scope-path rules, while
+`p.norm()` aggregates visible method declarations across modules.
 
 An enum member's terminal name is an injected bare constructor candidate. In
 ordinary value position, scope resolution requires it to be the only visible

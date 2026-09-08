@@ -220,11 +220,13 @@ tail or `use` declaration.
 `export` forwards public declarations without injecting them into the exporting
 module's local scope. A brace tail selects the declarations to forward; a plain
 export forwards the complete public surface, and `hiding` removes paths from
-that surface. Renames in a brace tail change the forwarded path. Once the
-declaring module is loaded, a method travels with its receiver type: any module
-with a value of that type can call the method without importing the module that
-declared it. Selections, renames, and `hiding` cannot hide a method; they
-control access to qualified declarations, not member calls.
+that surface. Renames in a brace tail change the forwarded path. Methods are
+ordinary declaration paths for these operations: a facade may write
+`export metrics::{Point::norm}`, and an importer can call that re-export by its
+qualified route, such as `facade::Point::norm(point)`. Separately, the import
+makes the declaration route visible for dot selection, so `point.norm()` is
+available. Selection, renaming, and `hiding` therefore control both direct-call
+routes and dot-method visibility.
 
 <!-- agl-check: fragment -->
 ```agl
@@ -256,10 +258,12 @@ program def main() -> unit =
 ```
 
 The prelude re-exports the receiver scopes of `std/array`, `std/dict`,
-`std/text`, `std/json`, and `std/math`, making those modules' methods available
-wherever the prelude is enabled. The `--no-stdlib` option disables the implicit
-prelude; import a method's owning module first. An explicit prelude import
-remains available with `--no-stdlib`.
+`std/text`, `std/json`, and `std/math`, making their exported methods available
+wherever the prelude is enabled. That visibility follows the ordinary import
+route: `import std/prelude::* hiding text::trim` hides `trim` while retaining
+other prelude methods. The `--no-stdlib` option disables the implicit prelude;
+an explicit route to a module or facade exporting a method makes it visible.
+An explicit prelude import remains available with `--no-stdlib`.
 
 ## Standard library modules
 
@@ -287,8 +291,8 @@ rows, and `std/path`'s `path` type alone. The rest are imported explicitly:
 | `std/exec`, `std/agent`, `std/session` | shell execution, agent calls, and agent sessions |
 | `std/package` | package resource lookup |
 | `std/option`, `std/pair`, `std/either`, `std/result` | `Option[T]`, `Pair[A, B]`, `Either[A, B]`, and `Result[T, E]` |
-| `std/array`, `std/dict`, `std/text`, `std/json` | the methods on the matching builtin type, plus that module's free functions |
-| `std/math` | numeric methods on `int` and `decimal`, aggregates, and constants |
+| `std/array`, `std/dict`, `std/text`, `std/json` | builtin receiver scopes and free functions; the prelude re-exports the scopes |
+| `std/math` | builtin receiver scopes for `int`, `decimal`, and `bool`, aggregates, and constants |
 | `std/toml` | conversion between TOML documents and `json` |
 | `std/regex` | Python-compatible searching, rewriting, and splitting |
 | `std/time` | UTC clock, parsing, formatting, and sleeping |

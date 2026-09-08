@@ -58,12 +58,17 @@ program def main() -> unit =
   print(problem.detail-label())
 ```
 
-A method name is declared only once in an exception hierarchy. A subtype cannot
-use the name of a method declared by one of its base types, and a base type
-cannot use a name declared by one of its descendants.
+Method selection starts at the receiver's static exception type, then walks
+its base chain. The nearest level with a visible method wins; multiple visible
+methods at that level are ambiguous. A base type and a subtype may therefore
+declare the same method name, and a value held in a base-typed binding selects
+the base method. Like other methods, an exception method is selectable where
+the source module declares it or reaches its declaration by a qualified import
+route; `hiding` can remove that route.
 
-The built-in `Exception` type declares no methods. A wildcard `catch _ as e
-=>` binds `e` as `Exception`, so no method is available through that binding.
+The built-in `Exception` declaration contains no methods. A wildcard `catch _
+as e =>` binds `e` as `Exception`, so it can select only visible methods on
+`Exception`, not methods on a concrete subtype.
 
 ### Recursive exceptions
 

@@ -379,9 +379,9 @@ in the same zone. An optional `type_params` list after the function name makes
 the `def` generic (e.g. `def id[T](x: T) -> T`); see [Generics](generics.md).
 
 All three function declaration forms accept the same `func_decl_head` surface.
-A builtin receiver is valid only in its owning standard-library module and must
-use the bare generic form (`array[E]` or `dict[text, V]`); see
-[Methods](functions.md#methods). `extern_func_def` is never followed by a body;
+A builtin receiver may be declared in any module and must use the bare generic
+form (`array[E]` or `dict[text, V]`); see [Methods](functions.md#methods).
+`extern_func_def` is never followed by a body;
 it declares a function implemented by a companion Python file (see
 [Python FFI](ffi.md)) rather than an AgL expression.
 

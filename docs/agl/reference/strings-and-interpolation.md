@@ -66,8 +66,8 @@ hole raises a catchable `ExternError` from `std/text::interp`.
 Text indexes address Unicode code points: `"é😀"[0]` is `"é"` and
 `"é😀"[-1]` is `"😀"`. An out-of-range index raises `IndexError`; text is
 immutable, so indexed assignment is not allowed. `std/prelude` re-exports the
-`std/text` receiver scope, so text methods are available wherever the prelude
-is enabled; with `--no-stdlib`, import `std/text` first.
+`std/text` receiver scope, so text methods are visible wherever the prelude is
+enabled; with `--no-stdlib`, import a route to the method first.
 
 ## Uniform rendering rules
 

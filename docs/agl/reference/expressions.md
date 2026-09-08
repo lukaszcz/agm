@@ -351,8 +351,8 @@ program def main() -> unit =
 ## Member access
 
 `expr.member` projects either a field or a method. Fields belong to records,
-exceptions, and `ExecResult`; methods belong to records, enums, and exceptions.
-A field projection yields its field value. A method projection yields a bound
+exceptions, and `ExecResult`; methods belong to records, enums, exceptions, and
+built-in receiver types. A field projection yields its field value. A method projection yields a bound
 function value whose receiver is the value on the left of the dot.
 
 ```agl
@@ -374,11 +374,12 @@ program def main() -> unit =
 
 Thus `meter.add(3)` calls the method with `meter` as its receiver, while
 `meter.add` can be stored, passed to another function, or partially applied.
-A member access is statically checked. Arrays and dictionaries have no fields;
-use indexing to read their elements or values. `std/prelude` re-exports their
+Method selection uses the receiver's static type and the declaration routes
+visible in this module. A same-named field and visible method are ambiguous,
+including as an assignment target. Arrays and dictionaries have no fields; use
+indexing to read their elements or values. `std/prelude` re-exports their
 receiver scopes, so their methods are available wherever the prelude is
-enabled. With `--no-stdlib`, import `std/array` or `std/dict`, respectively,
-before calling a method.
+enabled. With `--no-stdlib`, import a route to the method before calling it.
 
 A member record value exposes its own fields and methods. An enum-typed value
 exposes only methods declared by that enum: it has no fields, even when every

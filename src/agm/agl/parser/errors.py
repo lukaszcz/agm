@@ -10,6 +10,9 @@ Special cases:
   one was chained, which is non-associative in AgL.  A targeted
   "comparisons are non-associative; parenthesize" message is emitted instead of
   the generic "Unexpected token" fallback.
+- The fallback quotes the unexpected token's spelling, so a token that has none
+  is named instead: end of input, end of block, and indentation all reach the
+  parser as zero-width layout tokens.
 """
 
 from __future__ import annotations
@@ -91,6 +94,17 @@ _COMPOSITE_EXPRESSION_STARTERS: frozenset[str] = frozenset(
 # Terminals that end an item.  When one is expected, the parser had a complete
 # item in hand, so an unexpected indent is stray rather than a missing body.
 _ITEM_ENDERS: frozenset[str] = frozenset({"$END", "_DEDENT", "_NEWLINE", "SEMICOLON"})
+
+# Terminals that carry no spelling: quoting their value would print ``''``.  The
+# LALR parser reports a premature end of input as an unexpected ``$END`` rather
+# than raising Lark's own ``UnexpectedEOF``, and a source that runs out inside an
+# indented block reaches ``_DEDENT`` first.  Layout tokens with a message of
+# their own are handled ahead of this fallback naming.
+_ZERO_WIDTH_TOKEN_NAMES: dict[str, str] = {
+    "$END": "end of input",
+    "_DEDENT": "end of block",
+    "_INDENT": "indentation",
+}
 
 
 def _expects_identifier(expected: set[str]) -> bool:
@@ -408,6 +422,9 @@ def syntax_error_from_lark(
                     span=span,
                 )
             return AglSyntaxError("Unexpected newline.", span=span)
+        zero_width = _ZERO_WIDTH_TOKEN_NAMES.get(tok.type)
+        if zero_width is not None:
+            return AglSyntaxError(f"Unexpected {zero_width}.", span=span)
         return AglSyntaxError(
             f"Unexpected {tok.value!r}.",
             span=span,

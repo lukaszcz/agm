@@ -1448,6 +1448,7 @@ function."
 (define-key agl-mode-map (kbd "C-c C-z") #'agl-repl)
 (define-key agl-mode-map (kbd "C-c C-r") #'agl-send-region)
 (define-key agl-mode-map (kbd "C-c C-b") #'agl-send-buffer)
+(define-key agl-mode-map (kbd "C-c C-l") #'flymake-show-buffer-diagnostics)
 
 (provide 'agl-mode)
 ;;; agl-mode.el ends here

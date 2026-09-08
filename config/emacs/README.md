@@ -50,6 +50,12 @@ the directory directly:
 | `C-c C-z` | `agl-repl` — start or switch to the inferior REPL |
 | `C-c C-r` | `agl-send-region` |
 | `C-c C-b` | `agl-send-buffer` |
+| `C-c C-l` | `flymake-show-buffer-diagnostics` — list this file's diagnostics |
+
+A diagnostic's tooltip lasts only while the mouse hovers it, so the listing
+buffer is where a message can be read at length or copied; `C-c C-k` puts the
+same diagnostics in a compilation buffer. Setting `help-at-pt-display-when-idle`
+echoes the message under point in the minibuffer instead of a tooltip.
 
 A sent region goes to the REPL unsplit. When its last line is indented the
 region leaves a block open — a layout block always accepts one more line — so

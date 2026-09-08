@@ -1321,7 +1321,13 @@ class ReplSession:
                 node_id=node.node_id,
                 parent=self._session_scope_nodes[path[:-1]],
                 scope_path=path,
+                is_scope_region=node.is_scope_region,
             )
+        for path, node in checked.resolved.scope_nodes.items():
+            session_node = self._session_scope_nodes.get(path)
+            if session_node is not None and node.is_scope_region:
+                session_node.is_scope_region = True
+
         promoted_type_paths = {(*path, name) for path, name in promoted_type_name_paths}
         for path in promoted_type_paths:
             nested_scope_names = frozenset(

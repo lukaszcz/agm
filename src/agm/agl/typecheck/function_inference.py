@@ -53,7 +53,12 @@ from agm.util.graph import sccs
 
 if TYPE_CHECKING:
     from agm.agl.capabilities import HostCapabilities
-    from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution
+    from agm.agl.scope.symbols import (
+        BindingRef,
+        ConstructorRef,
+        ModuleResolution,
+        ReceiverOwner,
+    )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TYPE_PARAMETER_WILDCARD, TypeExpr
 from agm.agl.typecheck.env import (
@@ -618,23 +623,21 @@ def validate_required_after_defaulted(
 
 
 def _method_owner(
-    env: TypeEnvironment, owner_path: tuple[str, ...]
+    env: TypeEnvironment, owner: "ReceiverOwner"
 ) -> tuple[NominalOwner, int, GenericTypeDef | None]:
     """Return a classified method's nominal owner, generic arity, and definition.
 
-    Scope has already established that ``owner_path`` belongs to a nominal
-    declaration. This helper only obtains that declaration's semantic handle;
-    it deliberately does not classify source declarations itself. The generic
-    definition is ``None`` for a non-generic owner, whose arity is 0.
+    Scope has already established the owner's declaration identity. This helper
+    looks it up through the program declaration indexes, so the owner need not
+    be declared in the method's module.
     """
-    owner_name = "::".join(owner_path)
-    owner = env.get_type(owner_name)
-    if isinstance(owner, (RecordType, EnumType, ExceptionType)):
-        return owner, 0, None
-    generic = env.get_generic_type(owner_name)
-    assert generic is not None
-    assert isinstance(generic.template, (RecordType, EnumType))
-    return generic.template, len(generic.type_params), generic
+    generic = env.get_generic_type_by_declaration(owner.module_id, owner.scope_path)
+    if generic is not None:
+        assert isinstance(generic.template, (RecordType, EnumType))
+        return generic.template, len(generic.type_params), generic
+    nominal = env.get_type_by_declaration(owner.module_id, owner.scope_path)
+    assert isinstance(nominal, (RecordType, EnumType, ExceptionType))
+    return nominal, 0, None
 
 
 @dataclass(frozen=True, slots=True)
@@ -673,11 +676,9 @@ def _method_signature_type_params(node: FuncDef, arity: int) -> tuple[str, ...]:
     )
 
 
-def _builtin_receiver_type(
-    node: FuncDef, owner_path: tuple[str, ...]
-) -> tuple[Type, int, str] | None:
+def _builtin_receiver_type(node: FuncDef, owner: "ReceiverOwner") -> tuple[Type, int, str] | None:
     """Build the semantic type for a previously validated builtin receiver."""
-    receiver = builtin_method_receiver_for(node, owner_path)
+    receiver = builtin_method_receiver_for(node, owner.scope_path)
     if receiver is None:
         return None
     if receiver.name == "array":
@@ -697,20 +698,23 @@ def _builtin_receiver_type(
 
 
 def _receiver_type(
-    env: TypeEnvironment, node: FuncDef, owner_path: tuple[str, ...]
+    env: TypeEnvironment, node: FuncDef, owner: "ReceiverOwner"
 ) -> tuple[Type, ResolvedReceiver]:
     """Build the receiver type and its resolved owner from a classified method declaration."""
-    builtin = _builtin_receiver_type(node, owner_path)
+    builtin = _builtin_receiver_type(node, owner)
+    declaration_scope_path = tuple(segment.name for segment in node.scope_path)
     if builtin is not None:
         receiver, arity, constructor = builtin
         return receiver, ResolvedReceiver(
-            scope_path=owner_path,
+            scope_path=declaration_scope_path,
             owner=receiver,
             type_param_arity=arity,
             builtin_constructor=constructor,
         )
-    owner, arity, generic = _method_owner(env, owner_path)
-    resolved = ResolvedReceiver(scope_path=owner_path, owner=owner, type_param_arity=arity)
+    nominal_owner, arity, generic = _method_owner(env, owner)
+    resolved = ResolvedReceiver(
+        scope_path=declaration_scope_path, owner=nominal_owner, type_param_arity=arity
+    )
     if len(node.type_param_slots) < arity:
         raise AglTypeError(
             f"Method '{node.name}' declares {len(node.type_param_slots)} type parameter(s), "
@@ -725,13 +729,13 @@ def _receiver_type(
                 span=node.span,
             )
     if generic is None:
-        return owner, resolved
+        return nominal_owner, resolved
 
     receiver_args = tuple(
         TypeVarType(name) for name in _method_signature_type_params(node, arity)[:arity]
     )
     return (
-        env.instantiate_from_gdef("::".join(owner_path), generic, receiver_args, node.span),
+        env.instantiate_from_gdef("::".join(owner.scope_path), generic, receiver_args, node.span),
         resolved,
     )
 
@@ -771,7 +775,7 @@ def resolve_function_header(
     *,
     result_type: TypeExpr | Type,
     param_zones: Mapping[int, ParamZone],
-    receiver_owner: tuple[str, ...] | None = None,
+    receiver_owner: "ReceiverOwner | None" = None,
 ) -> tuple[FunctionSignature, FunctionType, ResolvedReceiver | None]:
     """Resolve one function's parameter scheme and declared or supplied result.
 

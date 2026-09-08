@@ -14,7 +14,7 @@ An import contributes a module's full public qualified surface minus what its `h
 
 ## Classification
 
-Scope classifies what typecheck will type: a built-in call is recognized by resolving its callee to a `builtin def` declaration, never by spelling; a `self`-receiver `def` in a nominal scope or on an applied builtin receiver is a method; `builtin var` bindings are host-backed values, of which only root `std/config` bindings are engine settings. Index and field assignment receivers resolve as ordinary reads; typecheck owns container, field, and mutability rules.
+Scope classifies what typecheck will type: a built-in call is recognized by resolving its callee to a `builtin def` declaration, never by spelling; a `self`-receiver `def` resolves to a `ReceiverOwner` declaration, locally or through a bare imported nominal type or enum-member path, while applied builtin receivers retain their declaring module; `builtin var` bindings are host-backed values, of which only root `std/config` bindings are engine settings. Index and field assignment receivers resolve as ordinary reads; typecheck owns container, field, and mutability rules.
 
 ## Attribute Recognition
 
@@ -32,5 +32,5 @@ The facts built from the `@opt-*` attributes and `@doc` are `program_options` an
 - `src/agm/agl/scope/resolver.py` — declaration collection, `use` selection, regional bare contributions.
 - `src/agm/agl/scope/imports.py` — import contribution environments and qualified resolution.
 - `src/agm/agl/scope/program.py` — export maps, re-exports, cross-module resolution.
-- `src/agm/agl/scope/symbols.py` — builtin call names, symbol kinds, and `AttributeFacts`, the recognized-attribute tables the resolution carries.
+- `src/agm/agl/scope/symbols.py` — builtin call names, symbol kinds, `ReceiverOwner`, and `AttributeFacts`, the recognized-attribute tables the resolution carries.
 - Tests: `tests/test_agl_scope*.py`, `test_agl_namespace_*.py`, `test_agl_qualifier_*.py`.

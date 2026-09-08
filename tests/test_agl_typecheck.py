@@ -10027,7 +10027,7 @@ def _method_header(
     owner = resolved.method_declarations[(ENTRY_ID, ("Point",), function.name)]
     env = TypeEnvironment()
     _TypeBuilder(env, param_zones=resolved.attributes.param_zones).collect(resolved.program)
-    with env.type_scope(owner):
+    with env.type_scope(owner.scope_path):
         signature, _type, _receiver = resolve_function_header(
             env,
             function,

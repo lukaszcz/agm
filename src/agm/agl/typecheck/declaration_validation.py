@@ -81,7 +81,7 @@ def validate_builtin_method_ownership(
             owner_path = resolved.receiver_owner_for(module_id, function)
             if owner_path is None:
                 continue
-            receiver = builtin_method_receiver_for(function, owner_path)
+            receiver = builtin_method_receiver_for(function, owner_path.scope_path)
             if receiver is None:
                 continue
             owner_module = BUILTIN_METHOD_OWNERS[receiver.name]
@@ -158,16 +158,22 @@ def _member_declarations(
                     )
         for function in static_function_items(resolved.program.body.items):
             owner_path = resolved.receiver_owner_for(module_id, function)
-            if owner_path is None or builtin_method_receiver_for(function, owner_path) is not None:
+            if (
+                owner_path is None
+                or builtin_method_receiver_for(function, owner_path.scope_path) is not None
+            ):
                 continue
-            method_owner_id = owner_ids.get((module_id, owner_path))
+            method_owner_id = owner_ids.get((owner_path.module_id, owner_path.scope_path))
             if method_owner_id is None:
-                # A method on an owner retained from an earlier REPL entry: its
-                # members come from the registry, without source spans.
-                typedef = type_table.get(module_id, owner_path[-1], owner_path[:-1])
+                # A method on an owner retained from an earlier REPL entry or
+                # another module: its members come from the registry, without
+                # source spans.
+                typedef = type_table.get(
+                    owner_path.module_id, owner_path.scope_path[-1], owner_path.scope_path[:-1]
+                )
                 assert typedef is not None, "compiler bug: method owner is not registered"
                 method_owner_id = typedef.decl_node_id
-                owner_ids[module_id, owner_path] = method_owner_id
+                owner_ids[owner_path.module_id, owner_path.scope_path] = method_owner_id
                 _index_registered_owner(index, type_table, method_owner_id)
             index.declared.add(method_owner_id)
             same_named = index.members.setdefault(method_owner_id, {}).setdefault(function.name, [])

@@ -877,6 +877,18 @@ class TypeEnvironment:
     def get_type(self, name: str) -> Type | None:
         return self._types.get(name)
 
+    def get_type_by_declaration(self, module_id: ModuleId, scope_path: ScopePath) -> Type | None:
+        """Look up a nominal declaration by its module and complete scope path."""
+        name = "::".join(scope_path)
+        if module_id == self._module_id:
+            local = self._types.get(name)
+            if local is not None:
+                return local
+        if self._program_type_table is not None:
+            return self._program_type_table.get((module_id, scope_path[:-1], scope_path[-1]))
+        typedef = self._type_table.get(module_id, scope_path[-1], scope_path[:-1])
+        return None if typedef is None else typedef.handle()
+
     def has_qualified_import_member(self, qualifier: QualifierChain, name: str) -> bool:
         """Return whether a qualifier route contributes *name* after filtering."""
         if self._import_env is None:
@@ -1090,6 +1102,19 @@ class TypeEnvironment:
     def get_generic_type(self, name: str) -> GenericTypeDef | None:
         """Return the ``GenericTypeDef`` for *name*, or ``None`` if unknown."""
         return self._generic_types.get(name)
+
+    def get_generic_type_by_declaration(
+        self, module_id: ModuleId, scope_path: ScopePath
+    ) -> GenericTypeDef | None:
+        """Look up a generic declaration by its module and complete scope path."""
+        name = "::".join(scope_path)
+        if module_id == self._module_id:
+            local = self._generic_types.get(name)
+            if local is not None:
+                return local
+        if self._program_generic_table is None:
+            return None
+        return self._program_generic_table.get((module_id, scope_path[:-1], scope_path[-1]))
 
     def instantiate_nominal(
         self,

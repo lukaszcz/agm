@@ -241,11 +241,11 @@ program def main() -> unit =
   print(shifted.total())
 ```
 
-Methods may be declared only in the module that declares their receiver type.
-To add behavior to a type from another module, declare a plain function that
-takes the value as an ordinary parameter and call that function directly. A
-type alias may be used as its target type, but its scope cannot declare methods;
-methods are declared only on records, enums, and exceptions.
+A method receiver may name a record, enum, enum member, or exception declared
+in this module, or one made available by a bare import that reaches the method's
+enclosing region. Such a declaration extends the resolved receiver type; a
+qualified-only import does not provide a receiver name. A type alias may be
+used as a target type, but its scope cannot declare methods.
 
 An enum member's terminal name is an injected bare constructor candidate. In
 ordinary value position, scope resolution requires it to be the only visible

@@ -155,6 +155,68 @@ def test_opened_alias_resolves_while_its_type_body_is_being_built(tmp_path: Path
     )
 
 
+def test_foreign_method_receiver_checks_and_selects_through_its_declaring_type(
+    tmp_path: Path,
+) -> None:
+    """An orphan method shares its foreign receiver with direct and dot calls."""
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": (
+                "import geometry::*\n"
+                "import metrics\n\n"
+                "let p = Point(x = 2, y = 3)\n"
+                "let dot = p.shift(1).norm()\n"
+                "let direct = metrics::Point::norm(p)\n"
+                "let boxed = Box(value = 4).get()\n"
+                "let extracted = Node(value = 5).extract()\n"
+                "extracted"
+            ),
+            "geometry": (
+                "record Point\n  x: int\n  y: int\n\n"
+                "record Box[E]\n  value: E\n\n"
+                "enum Tree[E]\n  | Node(value: E)\n\n"
+                "def Point::shift(self, amount: int) -> Point = "
+                "Point(x = self.x + amount, y = self.y)"
+            ),
+            "metrics": (
+                "import geometry::*\n\n"
+                "def Point::norm(self: geometry::Point) -> int = "
+                "self.x * self.x + self.y * self.y\n"
+                "def Box::get[E](self) -> E = self.value\n"
+                "def Tree::Node::extract[E](self) -> E = self.value"
+            ),
+        },
+    )
+
+    assert _binding_value_type(checked, ENTRY_ID, "dot") == IntType()
+    assert _binding_value_type(checked, ENTRY_ID, "direct") == IntType()
+    assert _binding_value_type(checked, ENTRY_ID, "boxed") == IntType()
+    assert _binding_value_type(checked, ENTRY_ID, "extracted") == IntType()
+
+
+def test_foreign_method_receiver_annotation_must_match_its_owner(tmp_path: Path) -> None:
+    """A receiver annotation cannot name a different imported nominal."""
+    graph = _make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import geometry\nimport metrics\n()",
+            "geometry": "record Point()\nrecord Other()",
+            "metrics": "import geometry::*\ndef Point::tag(self: Other) -> int = 1",
+        },
+    )
+
+    with pytest.raises(AglTypeError):
+        _check_graph(graph)
+
+
+def test_declaration_type_lookup_falls_back_to_the_shared_type_table() -> None:
+    """The declaration-index accessor works outside a program environment too."""
+    env = TypeEnvironment()
+
+    assert env.get_type_by_declaration(ENTRY_ID, ("Missing",)) is None
+
+
 def test_graph_func_signature_prepass_skips_inferred_return_type(tmp_path: Path) -> None:
     """Program context lets an unannotated def infer inside its own module."""
     cg = _check_program(

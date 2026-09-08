@@ -1,6 +1,6 @@
 # AgL Name Resolution
 
-The scope pass resolves every name in the program, over the whole module graph, and publishes immutable side tables. Typecheck consumes them and never re-resolves; scope in turn never guesses — any ambiguous bare or qualified route is a static error.
+The scope pass resolves every name in the program, over the whole module graph, and publishes immutable side tables, including each module's reachable declaration identities. Typecheck consumes them and never re-resolves; scope in turn never guesses — any ambiguous bare or qualified route is a static error.
 
 ## Namespaces and Scopes
 

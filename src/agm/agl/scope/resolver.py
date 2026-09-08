@@ -717,6 +717,7 @@ class _Resolver:
             pattern_slots=dict(self._pattern_slots),
             match_site_pattern_slots=dict(self._match_site_pattern_slots_by_node),
             method_declarations=dict(self._method_declarations),
+            reachable_declarations=self._reachable_declarations(),
             use_targets=dict(self._use_targets),
             attributes=attribute_facts,
         )
@@ -724,6 +725,25 @@ class _Resolver:
     # ------------------------------------------------------------------
     # Pre-passes
     # ------------------------------------------------------------------
+
+    def _reachable_declarations(self) -> frozenset[DeclarationKey]:
+        """Return local, imported, and retained declaration identities."""
+        reachable = set(self._declarations)
+        for contribution in self._import_env.contributions.values():
+            for module_id, atom in contribution.members.values():
+                path = _bare_path(atom)
+                reachable.add((module_id, path[:-1], path[-1]))
+        retained_nodes = (*self._repl_session_scope_nodes.values(), self._repl_session_scope)
+        for node in retained_nodes:
+            if node is None:
+                continue
+            for ref in (*node.bindings.values(), *node.members.values()):
+                if ref.module_id != RESERVED_ID and ref.kind in {
+                    BinderKind.function_binding,
+                    BinderKind.constructor_binding,
+                }:
+                    reachable.add((ref.module_id, ref.scope_path, ref.name))
+        return frozenset(reachable)
 
     def _collect_declarations(self, program: Program) -> None:
         """Collect static declarations into one path-keyed namespace.

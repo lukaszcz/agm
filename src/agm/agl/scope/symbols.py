@@ -759,6 +759,10 @@ class ModuleResolution:
         :class:`ReceiverOwner`. This is scope's definitive receiver
         classification; later passes consume it without re-deriving whether a
         function is a method.
+    ``reachable_declarations``
+        Declaration identities this module declares or reaches through imports.
+        Import contributions already reflect route selection and ``hiding``;
+        bare-only ``use`` declarations do not contribute identities.
     ``attributes``
         The typed facts this module's declaration attributes carry —
         parameter zones, extern companion names, program-parameter command-line
@@ -794,6 +798,7 @@ class ModuleResolution:
     pattern_slots: dict[int, PatternSlot] = field(default_factory=dict)
     match_site_pattern_slots: dict[int, tuple[int, ...]] = field(default_factory=dict)
     method_declarations: dict[DeclarationKey, ReceiverOwner] = field(default_factory=dict)
+    reachable_declarations: frozenset[DeclarationKey] = frozenset()
     use_targets: dict[int, ResolvedUseTarget] = field(default_factory=dict)
     attributes: AttributeFacts = field(default_factory=AttributeFacts)
 

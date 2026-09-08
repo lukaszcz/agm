@@ -375,11 +375,10 @@ program def main() -> unit =
 Thus `meter.add(3)` calls the method with `meter` as its receiver, while
 `meter.add` can be stored, passed to another function, or partially applied.
 A member access is statically checked. Arrays and dictionaries have no fields;
-use indexing to read their elements or values. Their methods are available by
-member access when the loader injects the optional `std/builtin-methods`
-registry. With `--no-stdlib`, or a custom standard library without that
-registry, import `std/array` or `std/dict`, respectively, before calling a
-method.
+use indexing to read their elements or values. `std/prelude` re-exports their
+receiver scopes, so their methods are available wherever the prelude is
+enabled. With `--no-stdlib`, import `std/array` or `std/dict`, respectively,
+before calling a method.
 
 A member record value exposes its own fields and methods. An enum-typed value
 exposes only methods declared by that enum: it has no fields, even when every

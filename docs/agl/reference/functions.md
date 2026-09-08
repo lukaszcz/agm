@@ -226,14 +226,12 @@ form, so
 nominal generic receiver, `_` may occupy an unused builtin receiver slot; it
 binds a private rigid parameter and cannot be named by the method body.
 
-Declared builtin receiver methods are available by member access once their
-owning module is loaded. With the standard-library prelude enabled, the loader
-injects the optional `std/builtin-methods` registry when present, loading the
-owning modules ambiently; then `xs.size()` or `(-3).abs()` does not need an
-import of that module. With `--no-stdlib`, or a custom standard library without
-the registry, import the owning module first. This ambient availability applies
-only to methods: an ordinary free function in an owning module still requires
-an import. Ordinary and `extern` builtin-receiver methods use the same
+`std/prelude` re-exports the receiver scopes of `std/array`, `std/dict`,
+`std/text`, `std/json`, and `std/math`, so their methods are available wherever
+the prelude is enabled: `xs.size()` and `(-3).abs()` need no owning-module
+import. With `--no-stdlib`, import the owning module first. This availability
+applies only to methods: an ordinary free function in an owning module still
+requires an import. Ordinary and `extern` builtin-receiver methods use the same
 direct-call, bound-method, and generic-specialization rules as nominal methods.
 
 A `builtin def` receiver method is instead a call-only host route. Its name and

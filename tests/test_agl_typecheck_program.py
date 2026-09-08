@@ -4319,18 +4319,7 @@ def test_sibling_exception_branches_may_reuse_a_method_name() -> None:
 
 @pytest.mark.parametrize(
     ("source", "line"),
-    (
-        ('record Point\n  label: text\ndef Point::label(self) -> text = "point"\n()', 3),
-        (
-            "exception Base extends Exception\n"
-            "  code: int\n"
-            'def Base::label(self) -> text = "base"\n'
-            "exception Child extends Base\n"
-            "  label: text\n"
-            "()",
-            5,
-        ),
-    ),
+    (('record Point\n  label: text\ndef Point::label(self) -> text = "point"\n()', 3),),
 )
 def test_check_module_enforces_method_field_collisions(source: str, line: int) -> None:
     with pytest.raises(AglTypeError) as raised:
@@ -4623,6 +4612,147 @@ def test_exception_methods_use_nearest_static_level_and_base_dispatch(tmp_path: 
 
     assert _binding_value_type(checked, ENTRY_ID, "nearest") == TextType()
     assert _binding_value_type(checked, ENTRY_ID, "static") == IntType()
+
+
+def test_field_and_visible_orphan_method_are_ambiguous_on_read_and_assignment(
+    tmp_path: Path,
+) -> None:
+    modules = {
+        "shapes": "record Point\n  var describe: int\n",
+        "metrics": "import shapes::*\ndef Point::describe(self) -> int = 1\n",
+        "entry": (
+            "import shapes\nimport metrics\nlet point = shapes::Point(describe = 1)\n"
+            "point.describe\n"
+        ),
+    }
+    with pytest.raises(AglTypeError) as read:
+        _check_program(tmp_path, modules)
+    assert "ambiguous" in str(read.value).lower()
+
+    modules["entry"] = (
+        "import shapes\nimport metrics\nlet point = shapes::Point(describe = 1)\n"
+        "point.describe := 2\n"
+    )
+    with pytest.raises(AglTypeError) as assignment:
+        _check_program(tmp_path, modules)
+    assert "ambiguous" in str(assignment.value).lower()
+
+
+def test_hiding_or_qualifying_an_orphan_method_repairs_a_field_method_clash(
+    tmp_path: Path,
+) -> None:
+    modules = {
+        "shapes": "record Point\n  var describe: int\n",
+        "metrics": "import shapes::*\ndef Point::describe(self) -> int = 1\n",
+        "entry": (
+            "import shapes\n"
+            "import metrics hiding Point::describe\n"
+            "let point = shapes::Point(describe = 1)\n"
+            "point.describe := 2\n"
+            "point.describe\n"
+        ),
+    }
+    checked = _check_program(tmp_path, modules)
+    result = _module_items(checked.modules[ENTRY_ID])[-1]
+    assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()
+
+    modules["entry"] = (
+        "import shapes\nimport metrics\nmetrics::Point::describe(shapes::Point(describe = 1))\n"
+    )
+    checked = _check_program(tmp_path, modules)
+    result = _module_items(checked.modules[ENTRY_ID])[-1]
+    assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()
+
+
+def test_unimported_orphan_method_does_not_clash_with_a_field(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "shapes": "record Point\n  describe: int\n",
+            "metrics": "import shapes::*\ndef Point::describe(self) -> int = 1\n",
+            "entry": "import shapes\nlet point = shapes::Point(describe = 1)\npoint.describe\n",
+        },
+    )
+    result = _module_items(checked.modules[ENTRY_ID])[-1]
+    assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()
+
+
+def test_base_method_and_derived_field_clash_only_for_derived_static_type() -> None:
+    checked = _check(
+        "exception Base extends Exception\n"
+        "  code: int\n"
+        'def Base::describe(self) -> text = "base"\n'
+        "exception Derived extends Base\n"
+        "  describe: text\n"
+        'let derived = Derived(message = "bad", code = 1, describe = "field")\n'
+        "let base: Base = derived\n"
+        "base.describe()"
+    )
+    result = _module_items(checked)[-1]
+    assert checked.node_types[result.node_id] == TextType()
+
+    with pytest.raises(AglTypeError) as raised:
+        _check(
+            "exception Base extends Exception\n"
+            "  code: int\n"
+            'def Base::describe(self) -> text = "base"\n'
+            "exception Derived extends Base\n"
+            "  describe: text\n"
+            'Derived(message = "bad", code = 1, describe = "field").describe\n'
+        )
+    assert "ambiguous" in str(raised.value).lower()
+
+
+def test_inherited_field_and_visible_orphan_method_are_ambiguous(tmp_path: Path) -> None:
+    with pytest.raises(AglTypeError) as raised:
+        _check_program(
+            tmp_path,
+            {
+                "errors": (
+                    "exception Base extends Exception\n"
+                    "  describe: text\n"
+                    "exception Derived extends Base()\n"
+                ),
+                "methods": 'import errors::*\ndef Base::describe(self) -> text = "method"\n',
+                "entry": (
+                    "import errors\n"
+                    "import methods\n"
+                    'errors::Derived(message = "bad", describe = "field").describe\n'
+                ),
+            },
+        )
+
+    assert "ambiguous" in str(raised.value).lower()
+
+
+def test_base_method_and_derived_field_are_legal_across_modules(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "errors": (
+                "exception Base extends Exception\n"
+                "  code: int\n"
+                "exception Derived extends Base\n"
+                "  describe: text\n"
+            ),
+            "methods": 'import errors::*\ndef Base::describe(self) -> text = "base"\n',
+            "entry": "import errors\nimport methods\n()\n",
+        },
+    )
+    assert ENTRY_ID in checked.modules
+
+
+def test_option_member_field_and_visible_option_method_are_ambiguous(tmp_path: Path) -> None:
+    with pytest.raises(AglTypeError) as raised:
+        _check_program(
+            tmp_path,
+            {
+                "methods": "def Option::value[T](self) -> T = self.unwrap()\n",
+                "entry": "import methods\nSome(value = 1).value\n",
+            },
+        )
+
+    assert "ambiguous" in str(raised.value).lower()
 
 
 def test_assignment_target_respects_method_visibility(tmp_path: Path) -> None:

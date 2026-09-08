@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import glob as glob_module
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import NoReturn, TypeVar
@@ -103,6 +104,11 @@ def glob(pattern: str) -> object:
     return _run(pattern, "glob", lambda: array(glob_module.glob(pattern, recursive=True)))
 
 
+def temp_dir() -> str:
+    """Return the host's temporary-file directory."""
+    return tempfile.gettempdir()
+
+
 __all__ = [
     "append",
     "copy",
@@ -115,5 +121,6 @@ __all__ = [
     "move",
     "read",
     "remove",
+    "temp_dir",
     "write",
 ]

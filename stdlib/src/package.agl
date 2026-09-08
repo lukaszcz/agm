@@ -1,2 +1,4 @@
-builtin def resource(path: text) -> text
-builtin def resource-dir() -> text
+import std/path::path
+
+builtin def resource(path: path) -> path
+builtin def resource-dir() -> path

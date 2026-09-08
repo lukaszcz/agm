@@ -1,21 +1,36 @@
 import std/path
 
-program def main(parts: array[text], path: text, base: text) -> unit =
+# `path` needs no import tail: the prelude forwards the type.
+def under(base: path, name: text) -> path = path::join([base, name])
+
+program def main(parts: array[path], path: path, base: path) -> unit =
   print(path::join(parts))
   print(path::dirname(path))
   print(path::basename(path))
+  print(path::stem(path))
   print(path::extension(path))
   print(path::with-extension(path, ".bak"))
+  print(path::with-name(path, "renamed.md"))
   print(path::normalize(path))
   print(path::relative(path, base))
   print(path::is-absolute(path))
   print(path::is-absolute(path::absolute(path)))
+  print(path::is-under(path, base))
   print(path::parts(path))
   print(path::is-absolute(path::home()))
+  print(path::is-absolute(path::expand-user("~")))
+  print(under(base, "extra"))
   print(path::join(["a", "/abs", "b"]))
   print(path::with-extension("archive.tar.gz", ""))
+  print(path::stem("archive.tar.gz"))
+  print(path::with-name("plain", "other"))
   print(path::extension(".bashrc"))
   print(path::normalize("a/b/../../../c"))
   print(path::relative("a/b", "a/b/c/d"))
+  print(path::is-under("a/b/../..", "a"))
+  print(path::expand-user("work/~/notes"))
+  print(path::common-prefix(["/one/two/a.txt", "/one/three/b.txt"]))
+  print(path::common-prefix([]))
+  print(path::common-prefix(["/abs", "rel"]))
   print(path::parts("/one/two"))
   print(path::dirname("plain") == "" and path::basename("/") == "")

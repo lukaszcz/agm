@@ -1,24 +1,27 @@
+import std/path::path
 import std/result::Result
 
 exception FsError extends Exception
-  path: text
+  path: path
   operation: text
 
-extern def read(path: text) -> text
-extern def write(path: text, content: text) -> unit
-extern def append(path: text, content: text) -> unit
-extern def exists(path: text) -> bool
-extern def list(path: text) -> array[text]
-extern def mkdir(path: text) -> unit
-extern def remove(path: text) -> unit
-extern def copy(source: text, destination: text) -> unit
-extern def move(source: text, destination: text) -> unit
-extern def glob(pattern: text) -> array[text]
+extern def read(path: path) -> text
+extern def write(path: path, content: text) -> unit
+extern def append(path: path, content: text) -> unit
+extern def exists(path: path) -> bool
+extern def list(path: path) -> array[path]
+extern def mkdir(path: path) -> unit
+extern def remove(path: path) -> unit
+extern def copy(source: path, destination: path) -> unit
+extern def move(source: path, destination: path) -> unit
+extern def glob(pattern: text) -> array[path]
+@extern-name("temp_dir")
+extern def temp-dir() -> path
 
-def try-read(path: text) -> Result[text, FsError] =
+def try-read(path: path) -> Result[text, FsError] =
   try Result::Ok(value = read(path)) catch FsError as e => Result::Err(error = e)
 
 @extern-name("is_file")
-extern def is-file(path: text) -> bool
+extern def is-file(path: path) -> bool
 @extern-name("is_dir")
-extern def is-dir(path: text) -> bool
+extern def is-dir(path: path) -> bool

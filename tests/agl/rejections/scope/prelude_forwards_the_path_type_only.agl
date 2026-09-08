@@ -1,0 +1,2 @@
+# The prelude forwards std/path's type, not its functions.
+program def main(file: path) -> unit = print(dirname(file))

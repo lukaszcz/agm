@@ -175,12 +175,12 @@ key:
 | `strict-json` | `bool` | `false` (lenient recovery) |
 | `max-iters` | `int` | `0` (off) |
 | `default-agent` | `Agent` | `AgentClaude("sonnet", "medium")` |
-| `log-file` | `Option[text]` | `None` |
+| `log-file` | `Option[path]` | `None` |
 | `timeout` | `Option[text]` | `None` |
 
 Import `std/config` and read or write a setting through a qualified target
 (`std/config::max-iters`); writing zero disables that safety valve.
-`default-agent` is a typed `Agent` value — its selected member `RecordValue` at runtime — used by `ask` when its `agent` option is omitted. The `Option[text]` settings (`log-file`, `timeout`) take a
+`default-agent` is a typed `Agent` value — its selected member `RecordValue` at runtime — used by `ask` when its `agent` option is omitted. The optional settings (`log-file`, `timeout`) take a
 `Some("…")` or `None` value.
 
 ### Precedence

@@ -172,7 +172,7 @@ The settings and their types are:
 | Setting | Type | Meaning |
 |---------|------|---------|
 | `log` | `bool` | Enable/disable trace logging. |
-| `log-file` | `Option[text]` | Path to the trace log file. |
+| `log-file` | `Option[path]` | Path to the trace log file. |
 | `strict-json` | `bool` | Parse agent JSON output strictly. |
 | `max-iters` | `int` | Safety-valve cap for unbounded loops. |
 | `default-agent` | `Agent` | Default value for `ask` calls. |
@@ -184,7 +184,7 @@ names an imported setting the same way a read does ([Modules](modules.md)): a
 qualified target always works, and a bare `max-iters := …` works after
 `import std/config::*` or an equivalent `use`, so the name is in scope
 unqualified.
-The `Option[text]` settings (`log-file`, `timeout`) are set with `Some("…")` or
+The optional settings (`log-file`, `timeout`) are set with `Some("…")` or
 `None`. A `timeout` read preserves the exact assigned text; its parsed duration
 controls shell execution without normalizing the stored value.
 

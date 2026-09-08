@@ -21,13 +21,14 @@ A bare expression before the final block item is evaluated in a discarded-value
 position and must have type `unit` or `bottom`. `bottom` is the type of an
 expression that does not return normally, such as `raise`, `return`, `break`,
 or `continue`; it is assignable wherever a value is expected. Binders and
-declarations are valid intermediate items. To run a value-producing expression
-for effect without retaining its result, bind it to `_`:
+declarations are valid intermediate items. A `unit`-valued call is written
+bare; to run a value-producing expression for effect without retaining its
+result, bind it to `_`:
 
 ```agl
 program def main() -> unit =
   let _ = ["report"]
-  let _ = print "report fetched"
+  print "report fetched"
 ```
 
 `_` creates no readable name and may be used repeatedly. The same rule applies
@@ -344,7 +345,7 @@ Built-in exception types are constructed like records:
 
 ```agl
 program def main() -> unit =
-  let _ = raise Abort(message = "Cannot continue.")
+  raise Abort(message = "Cannot continue.")
 ```
 
 ## Member access
@@ -366,9 +367,9 @@ program def main() -> unit =
   let add = meter.add
   let plus = meter.add(?)
   meter.value := 7
-  let _ = print(value)
-  let _ = print(add(3))
-  let _ = print(plus(5))
+  print(value)
+  print(add(3))
+  print(plus(5))
 ```
 
 Thus `meter.add(3)` calls the method with `meter` as its receiver, while

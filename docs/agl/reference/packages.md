@@ -87,7 +87,7 @@ package.
 
 ```agl
 program def main() -> unit =
-  let _ = print("review loop")
+  print("review loop")
 ```
 
 A registered command runs its program exactly as a directly executed program
@@ -141,7 +141,7 @@ import std/fs
 let prompt = resource("prompts/review.md")
 
 program def main() -> unit =
-  let _ = print(fs::read(prompt))
+  print(fs::read(prompt))
 ```
 
 An [`extern def`](ffi.md) companion is the `.py` sibling of its module inside

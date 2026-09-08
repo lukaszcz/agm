@@ -266,9 +266,9 @@ value:
 
 ```agl
 program def main() -> unit =
-  let _ = exec "make build"
-  let _ = ask "Log a status update."
-  let _ = print "done"
+  exec "make build"
+  ask "Log a status update."
+  print "done"
 ```
 
 `=` is not an expression operator, so `n = 2` as a block item is a syntax

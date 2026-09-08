@@ -45,7 +45,7 @@ import std/text
 
 program def main() -> unit =
   let vars = {"name": "Ada"}
-  let _ = print std/text::interp("Hello, \%{name}!", vars)
+  print std/text::interp("Hello, \%{name}!", vars)
 ```
 
 Runtime holes are **name-only**: `%{name}` names a single AgL identifier and
@@ -134,7 +134,7 @@ Function values render as opaque handles in templates:
 ```agl
 program def main() -> unit =
   let f = fn(x: int) => x
-  let _ = print "function is %{f}"
+  print "function is %{f}"
 ```
 
 They still cannot be stored in a `json` slot or used where a JSON-shaped value

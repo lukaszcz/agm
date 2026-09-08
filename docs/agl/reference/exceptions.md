@@ -54,8 +54,8 @@ def DetailedProblem::detail-label(self) -> text = self.label() + ": %{self.detai
 
 program def main() -> unit =
   let problem = DetailedProblem(message = "failed", code = 7, detail = "network")
-  let _ = print(problem.label())
-  let _ = print(problem.detail-label())
+  print(problem.label())
+  print(problem.detail-label())
 ```
 
 A method name is declared only once in an exception hierarchy. A subtype cannot
@@ -207,7 +207,7 @@ exception DeployError extends Exception
   exit-code: int
 
 program def main() -> unit =
-  let _ = raise DeployError("api", 1, message = "deployment failed")
+  raise DeployError("api", 1, message = "deployment failed")
 ```
 
 Any concrete built-in exception type is constructible the same way: its own

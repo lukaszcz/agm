@@ -47,7 +47,7 @@ written directly without parentheses:
 
 ```agl
 program def main() -> unit =
-  let _ = exec "make build"
+  exec "make build"
 ```
 
 With named arguments, parentheses are required.
@@ -148,8 +148,8 @@ A **nonzero exit does not raise** in this form — the caller branches on
 ```agl
 program def main() -> unit =
   let res = exec "ls -la"
-  let _ = print(res.stdout)
-  let _ = if res.exit-code != 0 =>
+  print(res.stdout)
+  if res.exit-code != 0 =>
     print("command failed: %{res.stderr}")
 ```
 
@@ -182,7 +182,7 @@ discarded and the call returns `void`:
 
 ```agl
 program def main() -> unit =
-  let _ = exec "make build"
+  exec "make build"
   let completed: unit = exec "make lint"
 ```
 
@@ -226,7 +226,7 @@ parsed or unit form:
 
 ```agl
 program def main() -> unit =
-  let _ = try
+  try
     let data: dict[text, int] = exec "compute-stats --json"
   catch ExecError as e =>
     print "command failed (%{e.exit-code}): %{e.stderr}"

@@ -128,7 +128,7 @@ scope Math
 end Math
 
 program def main() -> unit =
-  let _ = print(add(1, 2))
+  print(add(1, 2))
 ```
 
 An explicit `/` anchors a module route, and a leading `::` anchors a local
@@ -252,7 +252,7 @@ member except `ask` bare.
 import std/prelude::* hiding ask
 
 program def main() -> unit =
-  let _ = print("ready")
+  print("ready")
 ```
 
 When the prelude is enabled, the optional `std/builtin-methods` registry is

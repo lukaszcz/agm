@@ -80,10 +80,10 @@ program def main() -> unit =
   let box = Box(value = 7)
   let mapped = box.map::[text](fn(value: int) -> text => "v=%{value}")
   let outcome: Outcome[int, text] = Ok(value = 1)
-  let _ = print(box.get())
-  let _ = print(box.size())
-  let _ = print(mapped.value)
-  let _ = print(outcome.is-ok())
+  print(box.get())
+  print(box.size())
+  print(mapped.value)
+  print(outcome.is-ok())
 ```
 
 The receiver fixes the leading method type parameters. In the example,
@@ -103,7 +103,7 @@ def Box::build[U](value: U) -> Box[U] = Box(value = value)
 
 program def main() -> unit =
   let box = Box::build("ready")
-  let _ = print(box.value)
+  print(box.value)
 ```
 
 ## Type application
@@ -125,7 +125,7 @@ program def main() -> unit =
   let bi: Box[int] = Box(value = 1)
   let bt: Box[text] = Box(value = "hi")
   let nested: Box[Box[int]] = Box(value = Box(value = 7))
-  let _ = print nested.value.value
+  print nested.value.value
 ```
 
 `Box[int]`, `Option[text]`, `Outcome[int, text]`, and the nested
@@ -156,10 +156,10 @@ record Box[T]
 def apply[T](f: T -> T, value: T) -> T = f(value)
 
 program def main() -> unit =
-  let _ = print(id(5))
-  let _ = print(id("hi"))
+  print(id(5))
+  print(id("hi"))
   let bi: Box[int] = Box(value = 5)
-  let _ = print(apply(id, 5))
+  print(apply(id, 5))
 ```
 
 Arguments provide exact type evidence before an expected result type is used.
@@ -222,11 +222,11 @@ def map-one[A, B](f: (A) -> B, xs: array[A]) -> array[B] = [f(xs[0])]
 
 program def main() -> unit =
   let keep-ints: (array[int]) -> array[int] = map-one(id, ?)
-  let _ = print(keep-ints([5])[0])
+  print(keep-ints([5])[0])
   let make-single: (int) -> array[int] = singleton(?)
-  let _ = print(make-single(7)[0])
+  print(make-single(7)[0])
   let make-text = singleton::[text](?)
-  let _ = print(make-text("hi")[0])
+  print(make-text("hi")[0])
 ```
 
 ## Constructor references and generic constructor values
@@ -246,7 +246,7 @@ program def main() -> unit =
   let direct: Box[int] = Box(value = 1)
   let mk: int -> Box[int] = Box
   let one = mk(1)
-  let _ = print one.value
+  print one.value
 ```
 
 A **generic field-bearing** constructor or generic `def` used as a
@@ -261,9 +261,9 @@ record Box[T]
 program def main() -> unit =
   let f: int -> int = id
   let mk: int -> Box[int] = Box
-  let _ = print(f(7))
+  print(f(7))
   let made = mk(2)
-  let _ = print made.value
+  print made.value
 ```
 
 A generic function occurrence can also be constrained by the other arguments
@@ -280,7 +280,7 @@ program def main() -> unit =
   let n = apply(id, 42)
   let mk: int -> Box[int] = Box
   let made = map(42, mk)
-  let _ = print made.value
+  print made.value
 ```
 
 The same expression-local inference applies to every generic constructor form,
@@ -380,7 +380,7 @@ inside one:
 ```agl
 program def main() -> unit =
   let xs: array[int] = [1, 2]
-  let _ = print xs[0]
+  print xs[0]
 ```
 
 `array[int]` is not assignable to `array[decimal]` or `array[json]`, and
@@ -528,7 +528,7 @@ def describe-option(o: Option[int]) -> text =
 program def main() -> unit =
   let d: Option[int] = Option::Some(value = 11)
   let line = describe-option(d)
-  let _ = print line
+  print line
 ```
 
 Qualification is accepted in expression, pattern, and `is`-test positions

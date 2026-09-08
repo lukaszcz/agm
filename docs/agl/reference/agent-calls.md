@@ -129,8 +129,8 @@ program def main() -> unit =
   let candidates: array[Agent] = [reviewer, second-opinion, scripted, hosted]
   let first-pass: text = review-with(reviewer, "the release notes")
   let second-pass: text = review-with(second-opinion, first-pass)
-  let _ = print("%{candidates.size()} agents available")
-  let _ = print(second-pass)
+  print("%{candidates.size()} agents available")
+  print(second-pass)
 ```
 
 Each member record selects its backend invocation. `AgentCommand` accepts a
@@ -257,7 +257,7 @@ unit call:
 
 ```agl
 program def main() -> unit =
-  let _ = ask "Notify the reviewer."
+  ask "Notify the reviewer."
 ```
 
 Because nothing is parsed, `format`, `strict-json`, and `on-parse-error` are

@@ -100,6 +100,34 @@ def test_builtin_receiver_host_method_reuses_its_core_lowering_route() -> None:
     assert isinstance(entry.impl.body.value, IrCopyValue)
 
 
+@pytest.mark.parametrize(
+    ("receiver", "method", "argument", "receiver_call"),
+    (
+        ("array", "first", "[7]", "[8].first()"),
+        ("dict", "value", '{"value": 7}', '{"value": 8}.value()'),
+    ),
+)
+def test_applied_receiver_scope_is_reexportable_and_selectable_by_route(
+    tmp_path: Path, receiver: str, method: str, argument: str, receiver_call: str
+) -> None:
+    stdlib_root = Path(__file__).parent / "agl" / "program_modules" / "builtin_method_stdlib"
+    (tmp_path / "facade.agl").write_text(
+        f"export std/{receiver}::{{{receiver}}}\n", encoding="utf-8"
+    )
+    prepared = PipelineDriver.prepare_program(
+        f"import facade::{{{receiver}}}\n"
+        "program def main() -> unit =\n"
+        f"  print({receiver}::{method}({argument}))\n"
+        f"  print({receiver_call})\n",
+        roots=RootSet(roots=frozenset({tmp_path}), stdlib_roots=frozenset({stdlib_root})),
+    )
+
+    assert prepared.resolved is not None, prepared.diagnostics
+    discovery = PipelineDriver().discover_programs(prepared)
+
+    assert discovery.checked is not None, discovery.diagnostics
+
+
 def test_ambient_builtin_methods_are_inferred_before_consumers_without_source_imports() -> None:
     """Ambient method modules are inference dependencies, not user imports."""
     stdlib_root = Path(__file__).parent / "agl" / "program_modules" / "builtin_method_stdlib"

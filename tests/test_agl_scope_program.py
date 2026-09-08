@@ -3391,3 +3391,98 @@ class TestDiagnosticSpans:
         diagnostic = exc_info.value.to_diagnostic()
         assert (diagnostic.line, diagnostic.column) == (2, 9)
         assert (diagnostic.end_line, diagnostic.end_column) == (2, 19)
+
+
+class TestAppliedBuiltinReceiverScopes:
+    @pytest.mark.parametrize(
+        ("receiver", "source"),
+        (
+            ("array", "def array[E]::first(self) -> E = self[0]"),
+            ("dict", 'def dict[text, V]::value(self) -> V = self["value"]'),
+        ),
+    )
+    def test_applied_receiver_publishes_its_plain_scope(
+        self, tmp_path: Path, receiver: str, source: str
+    ) -> None:
+        result = resolve_program(
+            _make_graph_from_files(
+                tmp_path,
+                {"entry": "import lib\n()", "lib": source},
+                default_stdlib=False,
+            )
+        )
+
+        lib_id = ModuleId.from_path("lib")
+        assert result.modules[lib_id].scope_exports[receiver] == frozenset({(lib_id, receiver)})
+
+    def test_applied_receiver_names_share_one_declaration_scope(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import lib\n()",
+                "lib": (
+                    "def array[E]::first(self) -> E = self[0]\n"
+                    "def array[T]::first(self) -> T = self[0]"
+                ),
+            },
+            default_stdlib=False,
+        )
+
+        with pytest.raises(AglScopeError):
+            resolve_program(graph)
+
+    @pytest.mark.parametrize(
+        ("receiver", "method", "source"),
+        (
+            ("array", "first", "def array[E]::first(self) -> E = self[0]"),
+            ("dict", "value", 'def dict[text, V]::value(self) -> V = self["value"]'),
+        ),
+    )
+    def test_facade_reexports_an_applied_receiver_scope_for_import(
+        self, tmp_path: Path, receiver: str, method: str, source: str
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": f"import facade::{{{receiver}}}\nuse {receiver}::*\n{method}()",
+                "facade": f"export lib::{{{receiver}}}",
+                "lib": source,
+            },
+            default_stdlib=False,
+        )
+
+        result = resolve_program(graph)
+
+        method_ref = _find_varref(graph.modules[ENTRY_ID].program, method)
+        assert method_ref is not None
+        binding = result.modules[ENTRY_ID].resolved.resolution[method_ref.node_id]
+        assert (binding.module_id, binding.scope_path, binding.name) == (
+            ModuleId.from_path("lib"),
+            (receiver,),
+            method,
+        )
+
+    def test_ambiguity_diagnostic_renders_an_applied_receiver_declaration_path(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "import facade\n"
+                    "import other\n"
+                    "use facade::array::*\n"
+                    "use other::array::*\n"
+                    "first()"
+                ),
+                "facade": "export lib::{array}",
+                "lib": "def array[E]::first(self) -> E = self[0]",
+                "other": "def array[T]::first(self) -> T = self[0]",
+            },
+            default_stdlib=False,
+        )
+
+        with pytest.raises(AglScopeError) as exc_info:
+            resolve_program(graph)
+
+        assert "lib::array::first" in str(exc_info.value)

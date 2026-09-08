@@ -35,13 +35,15 @@ The layout rules:
    logical line continues until the bracket closes. Array literals, dictionary
    literals, constructor argument lists, and function call argument lists may
    therefore span multiple lines.
-4. **Branch-marker continuation.** When the first token of a line is `|`,
-   `else`, `catch`, `until`, or `done`, the line continues the enclosing
-   construct instead of starting a new item, and may align with the enclosing
-   keyword without opening a new block. This is what lets `if`/`case` branches,
-   `else` branches, `catch` clauses, enum members, and the `until`/`done`
-   terminator of a loop sit at the same indentation as the construct that owns
-   them:
+4. **Continuation markers.** None of `|`, `else`, `catch`, `until`, `done`,
+   `->`, `=>`, and `=` can begin a construct, so a line whose first token is
+   one of them always continues the line before it rather than starting a new
+   item, and may sit at any column — including the enclosing construct's —
+   without opening a new block.
+
+   This is what lets `if`/`case` branches, `else` branches, `catch` clauses,
+   enum members, and the `until`/`done` terminator of a loop align with the
+   construct that owns them:
 
    <!-- agl-check: fragment -->
    ```agl
@@ -54,6 +56,23 @@ The layout rules:
    do[5]
      r := reviewer.ask("Review %{artifact}")
    until r is Pass
+   ```
+
+   The same rule lets a long signature or binding wrap before its return type,
+   its `=`, or a branch arrow:
+
+   ```agl
+   def describe(status: text)
+       -> text
+       = case status of
+         | "ok"
+           => "all clear"
+         | _
+           => "needs attention"
+
+   program def main()
+       -> unit
+       = print (describe "ok")
    ```
 
 A semicolon `;` also separates items in a block; see

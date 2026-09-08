@@ -3026,6 +3026,53 @@ class TestMultiLineBranches:
 
 
 # ---------------------------------------------------------------------------
+# Signature continuation
+# ---------------------------------------------------------------------------
+
+
+class TestSignatureContinuation:
+    """``->``, ``=>``, and ``=`` may open a line, continuing the one before it."""
+
+    @pytest.mark.parametrize(
+        "wrapped",
+        (
+            'def f()\n    -> unit = print "hi"',
+            'def f()\n-> unit = print "hi"',
+            'def f()\n        -> unit\n        = print "hi"',
+            'def f() -> unit\n    = print "hi"',
+        ),
+        ids=("indented", "aligned", "both-wrapped", "equals-only"),
+    )
+    def test_wrapped_signature_matches_the_inline_spelling(self, wrapped: str) -> None:
+        assert first(parse(wrapped)) == first(parse('def f() -> unit = print "hi"'))
+
+    def test_wrapped_return_type_keeps_a_suite_body(self) -> None:
+        wrapped = 'def f()\n    -> unit\n    print "hi"'
+        assert first(parse(wrapped)) == first(parse('def f() -> unit\n    print "hi"'))
+
+    def test_wrapped_return_type_in_a_scope_region(self) -> None:
+        wrapped = "scope Point\n  def x(self)\n  -> int = 1\nend Point"
+        assert first(parse(wrapped)) == first(
+            parse("scope Point\n  def x(self) -> int = 1\nend Point")
+        )
+
+    def test_wrapped_function_type_annotation(self) -> None:
+        wrapped = "let g: (int)\n    -> text = h"
+        assert first(parse(wrapped)) == first(parse("let g: (int) -> text = h"))
+
+    def test_wrapped_binder_equals(self) -> None:
+        assert first(parse("let total\n    = 1 + 2")) == first(parse("let total = 1 + 2"))
+
+    def test_wrapped_branch_arrow(self) -> None:
+        wrapped = "case x of\n| Pass\n    => ok\n| Fail\n    => err"
+        assert first(parse(wrapped)) == first(parse("case x of\n| Pass => ok\n| Fail => err"))
+
+    def test_wrapped_lambda_return_type(self) -> None:
+        wrapped = "let k = fn(x: int)\n    -> int => x"
+        assert first(parse(wrapped)) == first(parse("let k = fn(x: int) -> int => x"))
+
+
+# ---------------------------------------------------------------------------
 # REPL seam
 # ---------------------------------------------------------------------------
 

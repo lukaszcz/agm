@@ -1413,6 +1413,65 @@ class TestPipeContinuation:
 
 
 # ---------------------------------------------------------------------------
+# Signature continuation (->, =>, =)
+# ---------------------------------------------------------------------------
+
+
+class TestSignatureContinuation:
+    """A line opening with ``->``, ``=>``, or ``=`` continues the previous line."""
+
+    @staticmethod
+    def _preceding_layout(types: list[str], token: str) -> list[str]:
+        """Return the layout tokens immediately before the first *token*."""
+        index = types.index(token)
+        seen: list[str] = []
+        for j in range(index - 1, -1, -1):
+            if types[j] not in ("_NEWLINE", "_INDENT", "_DEDENT"):
+                break
+            seen.append(types[j])
+        return seen
+
+    def test_indented_return_type_joins_the_signature(self) -> None:
+        types = [t for t, _ in tok('def f()\n    -> unit = print "hi"')]
+        assert self._preceding_layout(types, "THIN_ARROW") == []
+
+    def test_aligned_return_type_joins_the_signature(self) -> None:
+        types = [t for t, _ in tok('def f()\n-> unit = print "hi"')]
+        assert self._preceding_layout(types, "THIN_ARROW") == []
+
+    def test_return_type_line_opens_the_suite_body_that_follows(self) -> None:
+        types = [t for t, _ in tok('def f()\n    -> unit\n    print "hi"')]
+        assert self._preceding_layout(types, "THIN_ARROW") == []
+        # The body still opens exactly one block, and it is not opened before ``->``.
+        assert types.count("_INDENT") == 1
+        assert types.index("_INDENT") > types.index("THIN_ARROW")
+
+    def test_body_equals_joins_the_signature(self) -> None:
+        types = [t for t, _ in tok('def f() -> unit\n    = print "hi"')]
+        assert self._preceding_layout(types, "EQ") == []
+        assert "_INDENT" not in types
+
+    def test_binder_equals_joins_its_binding(self) -> None:
+        types = [t for t, _ in tok("let total\n    = 1 + 2")]
+        assert self._preceding_layout(types, "EQ") == []
+
+    def test_branch_arrow_joins_its_pattern(self) -> None:
+        types = [t for t, _ in tok("case x of\n| Pass\n    => 1")]
+        assert self._preceding_layout(types, "ARROW") == []
+
+    def test_continuation_pops_only_levels_deeper_than_its_column(self) -> None:
+        # The ``->`` sits at the column of the scope region's body, so the
+        # region level stays open while the nested signature line closes.
+        source = "scope s\n  def f()\n  -> unit = pass\nend s"
+        types = [t for t, _ in tok(source)]
+        assert self._preceding_layout(types, "THIN_ARROW") == []
+
+    def test_continuation_line_never_pushes_an_indent(self) -> None:
+        types = [t for t, _ in tok('def f()\n        -> unit = print "hi"')]
+        assert "_INDENT" not in types
+
+
+# ---------------------------------------------------------------------------
 # _NEWLINE token value (indentation width)
 # ---------------------------------------------------------------------------
 

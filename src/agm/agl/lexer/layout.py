@@ -12,11 +12,14 @@ Key rules
 - On a ``_NEWLINE`` token: compare the carried indentation width against the
   stack top.  Deeper → emit ``_INDENT``.  Same → emit ``_NEWLINE`` as-is.
   Shallower → emit one or more ``_DEDENT`` s and verify alignment.
-- ``|``/``else``/``catch``/``until``/``done``-continuation rule: when the
-  first significant token on the next line is ``|``, ``else``, ``catch``,
-  ``until``, or ``done``, the ``_NEWLINE`` is suppressed and only the
-  ``_DEDENT`` s needed to pop the stack to levels strictly greater than the
-  keyword's column are emitted.  These lines never push an indent.
+- Continuation rule: when the first significant token on the next line cannot
+  begin a construct — ``|``, ``else``, ``catch``, ``until``, ``done``, ``->``,
+  ``=>``, or ``=`` — the ``_NEWLINE`` is suppressed and only the ``_DEDENT`` s
+  needed to pop the stack to levels strictly greater than that token's column
+  are emitted.  These lines never push an indent.  This is what lets branch
+  markers and loop terminators align with the construct that owns them, and
+  what lets a signature's return type or a body's ``=`` wrap onto its own
+  line.
 - At EOF: unwind remaining indent levels with ``_DEDENT`` s.
 - Template tokens never produce ``_NEWLINE`` s (the scanner does not emit them
   inside templates).
@@ -44,7 +47,9 @@ from agm.agl.diagnostics import SourceSpan
 from agm.agl.keywords import KW_CATCH, KW_DO, KW_DONE, KW_ELSE, KW_UNTIL
 from agm.agl.lexer.errors import LexError
 from agm.agl.lexer.tokens import (
+    ARROW,
     DEDENT,
+    EQ,
     INDENT,
     INTERP_END,
     INTERP_START,
@@ -58,12 +63,25 @@ from agm.agl.lexer.tokens import (
     RSQB,
     TEMPLATE_END,
     TEMPLATE_START,
+    THIN_ARROW,
 )
 
 # Tokens that increase paren depth (newlines suppressed inside these)
 _OPEN_BRACKETS = {LPAR, LSQB, LBRACE, INTERP_START, TEMPLATE_START}
 # Tokens that decrease paren depth
 _CLOSE_BRACKETS = {RPAR, RSQB, RBRACE, INTERP_END, TEMPLATE_END}
+# Tokens that no construct can begin with: a line opening with one of these
+# continues the line before it instead of starting a new item.
+_CONTINUATION = {
+    PIPE,
+    KW_ELSE,
+    KW_CATCH,
+    KW_UNTIL,
+    KW_DONE,
+    THIN_ARROW,
+    ARROW,
+    EQ,
+}
 
 
 def _synthetic(typ: str, value: str, ref: Token) -> Token:
@@ -237,16 +255,16 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
         # Peek at the next token to check for the continuation rule.
         sig = _peek_next()
 
-        if sig is not None and sig.type in (PIPE, KW_ELSE, KW_CATCH, KW_UNTIL, KW_DONE):
+        if sig is not None and sig.type in _CONTINUATION:
             # Continuation rule: suppress the _NEWLINE and emit only the DEDENTs
             # needed to pop the stack to levels strictly greater than the
-            # keyword's column.  These lines never push an indent.
+            # token's column.  These lines never push an indent.
             kw_col = (sig.column or 1) - 1  # convert 1-based column to 0-based
 
             while len(indent_stack) > 1 and indent_stack[-1] > kw_col:
                 yield from _pop_level(tok, sig)
 
-            # Suppress the _NEWLINE — the keyword continues the current construct
+            # Suppress the _NEWLINE — the token continues the current construct.
             # Clear any _pending_loop_body: the `do` body must have been inline
             # (we already cleared it on the first significant token after `do`).
             _pending_loop_body = False

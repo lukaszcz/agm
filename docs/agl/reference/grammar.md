@@ -18,7 +18,7 @@ field_name ::= NAME
 
 program      ::= module_block EOF
 
-module_block ::= module_item ((NEWLINE | ";") module_item)* (NEWLINE | ";")?
+module_block ::= [ module_item ((NEWLINE | ";") module_item)* (NEWLINE | ";")? ]
 module_item   ::= scope_region | item
 block         ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 

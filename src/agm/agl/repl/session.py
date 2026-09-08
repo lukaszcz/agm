@@ -136,8 +136,8 @@ def has_runnable_statements(text: str) -> bool:
     diagnostic rather than being silently dropped.
 
     Shared by the interactive console (blank-line handling) and ``load_file``
-    (an empty / comment-only file loads as a benign no-op rather than a parse
-    error).
+    (an empty / comment-only file loads as a benign no-op).  Such source parses
+    to an empty module, so this only spares the caller a pointless pipeline run.
     """
     from agm.agl.lexer import tokenize
 
@@ -1604,8 +1604,8 @@ class ReplSession:
             simple_let_pattern_name,
         )
 
-        # A parsed program always has at least one item (empty/comment-only
-        # source fails parsing earlier).
+        # An entry echoed here always has at least one item: blank and
+        # comment-only entries are filtered by ``has_runnable_statements``.
         last = program.body.items[-1]
         # Bare expression (not a binder or declaration) → "expression"
         if not isinstance(last, (Binder, Declaration, ScopeRegion)):
@@ -1677,8 +1677,8 @@ class ReplSession:
             simple_let_pattern_name,
         )
 
-        # A parsed program always has at least one item (empty/comment-only
-        # source fails parsing earlier).
+        # An entry echoed here always has at least one item: blank and
+        # comment-only entries are filtered by ``has_runnable_statements``.
         last = program.body.items[-1]
         # Bare expression → node type from checked side table. Infix chains are
         # resolved after graph assembly, so use their rewritten entry item.
@@ -1888,8 +1888,8 @@ class ReplSession:
                     break
             return saved_results
 
-        # A blank / comment-only file has nothing to run — load it as a no-op
-        # rather than surfacing the parser's "Unexpected end of input" error.
+        # A blank / comment-only file parses to an empty module with nothing
+        # to run; skip the pipeline entirely and load it as a no-op.
         if not has_runnable_statements(normalized):
             return []
 

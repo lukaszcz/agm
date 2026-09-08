@@ -12,9 +12,13 @@ separated by newlines or semicolons. There is no syntactic distinction between
 *statements* and *expressions*: every item is an expression with a well-defined
 type, and executable bodies are expression-oriented sequences.
 
+The module block is the only block that may be empty. A source file holding no
+items — blank, or nothing but comments — is a legal module that declares and
+exports nothing; running it still requires a `program def`.
+
 ```ebnf
 program      ::= module_block EOF
-module_block ::= module_item ((NEWLINE | ";") module_item)* (NEWLINE | ";")?
+module_block ::= [ module_item ((NEWLINE | ";") module_item)* (NEWLINE | ";")? ]
 module_item   ::= scope_region | item
 block         ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 item          ::= import_decl                     (* header position only *)

@@ -96,8 +96,10 @@
 
 start: module_block
 
-// The module root is the only normal block that admits scope regions.
-module_block: module_item (_sep module_item)* _sep?
+// The module root is the only normal block that admits scope regions.  It is
+// also the only block that may be empty: a source file holding no items at all
+// is a legal, empty module.
+module_block: (module_item (_sep module_item)* _sep?)?
 
 ?module_item: scope_region
             | item

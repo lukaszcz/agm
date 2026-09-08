@@ -641,6 +641,15 @@ class TestLexer:
         assert "class:agl.comment" not in styles
         assert "".join(text for _style, text in fragments) == source
 
+    def test_half_typed_string_after_a_comment_line_is_styled(self) -> None:
+        # A half-typed entry does not tokenize, so highlighting falls back to
+        # scanning for the open quote.  The scan must step over the preceding
+        # comment line rather than reading its ``#`` as the start of one that
+        # runs to the end of the entry.
+        getter = AglPromptLexer().lex_document(Document('# note\nlet x = "abc'))
+        assert self._style_of(getter(0), "# note") == "class:agl.comment"
+        assert self._style_of(getter(1), '"abc') == "class:agl.string"
+
     def test_exception_name_colours_by_position(self) -> None:
         # An exception declares a type and a constructor, exactly like a record.
         lexer = AglPromptLexer()

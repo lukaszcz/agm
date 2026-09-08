@@ -89,7 +89,16 @@ the blank line that closes it is sent too.
   enclosing lines actually sit at, not multiples of
   `agl-indent-offset` — a body or a `|` branch takes its column from the
   line that starts it, so a wider body and guard markers aligned under
-  an inline `if | …` both survive a region re-indent.
+  an inline `if | …` both survive a region re-indent. For the same
+  reason `RET` indents the line it opens but never re-indents the line
+  it ends.
+- Where the grammar settles a line's level, it is used instead of the
+  column carried over from the line above: a `def`, `record`, `import`,
+  or other module item returns to the root or scope region that encloses
+  it, `until`, `done`, `catch`, and `else` align with the header they
+  name, and a bracket's closer returns to the line that opened it. A
+  declaration keyword re-indents its line as soon as the space after it
+  is typed, as a branch marker does when its word is complete.
 
 ## Tests
 

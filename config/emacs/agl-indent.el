@@ -13,17 +13,28 @@
 ;;
 ;; - Bracket continuation: while a `(', `[', `{', or `%{' interpolation is
 ;;   open, the logical line continues, and a continuation line aligns with
-;;   the bracket's content column.
+;;   the bracket's content column — except the line that closes the
+;;   bracket, which returns to the level of the line that opened it.
 ;; - Branch-marker continuation: a line whose first token is `|', `else',
 ;;   `catch', `until', or `done' continues the enclosing construct and
-;;   aligns with the line that opened it.
+;;   aligns with the line that opened it, or with the `|' sibling that
+;;   already stands at the branch column.
 ;; - Symbolic continuation: a line whose first token is `->', `=>', or `='
 ;;   wraps the line above it — a signature's return type, a body's or a
 ;;   binder's `=', a branch's arrow — and indents one level under the line
 ;;   it continues, or alongside it when that line is itself such a wrap.
+;; - Module-level declarations: the grammar admits a `def', `record',
+;;   `enum', `exception', `type', `import', `export', or `scope' only at a
+;;   module's root and inside a scope region, never inside a block body, so
+;;   such a line returns to the level of the region enclosing it rather
+;;   than carrying the body above it over.
 ;; - Block opening: a line that opens a suite indents its body one
-;;   `agl-indent-offset' deeper.
-;; - Otherwise the previous logical line's indentation carries over.
+;;   `agl-indent-offset' deeper.  A declaration that carries no body — an
+;;   `extern def', a `builtin def', a bare modifier line, a record or enum
+;;   whose fields are written inline — opens nothing.
+;; - Otherwise the previous logical line's indentation carries over, taken
+;;   from where that logical line began rather than from its last physical
+;;   line.
 ;;
 ;; Raw-tail block payloads and multi-line templates are verbatim text, so
 ;; a line inside one is never re-indented, and backward scans treat those
@@ -99,6 +110,62 @@ which is what `agl--block-opener-keyword-p' checks.")
 
 The opener spellings end in `$', which is the regexp end-of-line anchor,
 so they are escaped through `regexp-opt' rather than spelled inline.")
+
+(defconst agl--declaration-keyword-re
+  (regexp-opt '("def" "record" "enum" "exception" "type" "extern"
+                "builtin" "program" "import" "use" "export" "scope"
+                "infixl" "infixr"))
+  "Regexp matching a keyword that declares a module item.
+
+The grammar admits these declarations at a module's root and inside a
+scope region only, never inside a block body (see the item list in
+docs/agl/reference/grammar.md), so such a line returns to the level of
+the region enclosing it instead of continuing the body above.  `let' and
+`var' are absent: they declare bindings, which a block does admit.")
+
+(defconst agl--declaration-head-re
+  "[^][ \t(){},|;=]+"
+  "Regexp matching the name a declaration declares.
+
+An AgL name consumes everything that is not whitespace and not a
+structural delimiter, and `::' makes a qualified head one token
+(`enum Workflow::Status'), so the class subtracts the delimiters rather
+than listing what a name admits.")
+
+(defconst agl--modifier-only-re
+  (concat "\\`[ \t]*" (regexp-opt '("builtin" "extern" "program")) "[ \t]*\\'")
+  "Regexp matching a line carrying nothing but a declaration modifier.
+
+`builtin', `extern', and `program' each prefix a declaration the grammar
+lets start on the line below, which is then that modifier's sibling
+rather than its body.")
+
+(defconst agl--body-less-function-re
+  (concat "\\`[ \t]*" (regexp-opt '("builtin" "extern")) "[ \t]+def[ \t]")
+  "Regexp matching a function declaration that never carries a body.
+
+A `builtin def' is implemented by the host and an `extern def' by its
+Python companion, so no block follows either.")
+
+(defconst agl--type-declaration-re
+  (concat "\\`[ \t]*\\(?:builtin[ \t]+\\)?"
+          (regexp-opt '("record" "enum" "exception")) "[ \t]")
+  "Regexp matching a record, enum, or exception declaration line.")
+
+(defconst agl--type-header-re
+  (concat "\\`[ \t]*\\(?:builtin[ \t]+\\)?"
+          (regexp-opt '("record" "enum" "exception"))
+          "[ \t]+" agl--declaration-head-re
+          "\\(?:[ \t]*\\[[^]]*\\]\\)?"
+          "\\(?:[ \t]+extends[ \t]+" agl--declaration-head-re "\\)?"
+          "[ \t]*=?[ \t]*\\'")
+  "Regexp matching a record, enum, or exception whose body is a block.
+
+These three declarations may write their members inline instead —
+`record P(x: int)', `enum Flag | On | Off' — and then own no block at
+all, so a header opens one only when nothing but the declared name, its
+type parameters, an `extends' base, and the optional `=' is on the
+line.")
 
 (defconst agl--block-header-re
   (concat "\\`[ \t]*\\(?:"
@@ -202,21 +269,47 @@ Return non-nil when such a line was found."
 ;; Indentation computation
 ;; ---------------------------------------------------------------------------
 
+(defun agl--closing-bracket-line-p ()
+  "Return non-nil if the current line opens with a closing bracket."
+  (save-excursion
+    (beginning-of-line)
+    (skip-chars-forward " \t")
+    (and (memq (char-after) '(?\) ?\] ?\})) t)))
+
 (defun agl--enclosing-bracket-column ()
   "Return the content column of the innermost open bracket, or nil.
 
 While a bracket is open the logical line continues, so a continuation
-line aligns just past that bracket."
+line aligns just past that bracket.  A line that opens with the closing
+bracket ends that logical line instead of continuing it, so it returns
+to the level of the line the bracket was opened on."
   (let* ((state (save-excursion (syntax-ppss (line-beginning-position))))
          (open (nth 1 state)))
     (when open
       (save-excursion
-        (goto-char open)
-        (forward-char 1)
-        (skip-chars-forward " \t")
-        (if (eolp)
-            (+ (progn (goto-char open) (current-indentation)) agl-indent-offset)
-          (current-column))))))
+        (cond
+         ((agl--closing-bracket-line-p)
+          (goto-char open)
+          (current-indentation))
+         (t
+          (goto-char open)
+          (forward-char 1)
+          (skip-chars-forward " \t")
+          (if (eolp)
+              (+ (progn (goto-char open) (current-indentation)) agl-indent-offset)
+            (current-column))))))))
+
+(defun agl--logical-line-indentation ()
+  "Return the indentation of the line the current line\='s item began on.
+
+A bracket continues one logical line across newlines, so a line written
+inside one has no level of its own: what places the item, and the block
+it may open, is the column its first line sits at."
+  (let* ((state (save-excursion (syntax-ppss (line-beginning-position))))
+         (open (car (nth 9 state))))
+    (if open
+        (save-excursion (goto-char open) (current-indentation))
+      (current-indentation))))
 
 (defun agl--branch-marker-line-p ()
   "Return non-nil if the current line begins with a branch marker."
@@ -275,15 +368,70 @@ case the two align."
   "Return non-nil if the current line closes a scope region."
   (agl--first-word-p "end"))
 
-(defun agl--scope-closer-indent ()
-  "Return the column this line\='s `end\=' should sit at.
+(defun agl--declaration-line-p ()
+  "Return non-nil if the current line\='s first token declares a module item."
+  (save-excursion
+    (beginning-of-line)
+    (skip-chars-forward " \t")
+    (and (looking-at agl--declaration-keyword-re)
+         (agl--ident-boundary-after-p (match-end 0)))))
 
-An `end\=' closes the nearest scope region still open above it, which the
-enclosing indentation cannot name: a region\='s last item may itself be a
-`record\=' or `case\=' header whose own body is deeper, and that header is
-not what the `end\=' closes.  The owner is therefore found structurally,
-by walking back over the preceding code lines and letting each `end\='
-skip the `scope\=' it already closed."
+(defun agl--attribute-line-p ()
+  "Return non-nil if the current line\='s first token is an attribute."
+  (save-excursion
+    (beginning-of-line)
+    (skip-chars-forward " \t")
+    (eq (char-after) ?@)))
+
+(defun agl--type-declaration-line-p ()
+  "Return non-nil if the current line declares a record, enum, or exception."
+  (and (string-match-p agl--type-declaration-re
+                       (buffer-substring-no-properties
+                        (line-beginning-position) (agl--line-code-end)))
+       t))
+
+(defun agl--field-attribute-p ()
+  "Return non-nil when the current line\='s attribute prefixes a field.
+
+A `record\=', `enum\=', or `exception\=' body holds fields rather than
+declarations, so an attribute written in one prefixes a field.  The body
+is recognized from its header: the nearest line above the attribute that
+is indented less than the line it follows, or that line itself when the
+attribute opens the body."
+  (save-excursion
+    (beginning-of-line)
+    (when (agl--goto-previous-code-line)
+      (or (agl--type-declaration-line-p)
+          (let ((body (current-indentation))
+                (header nil))
+            (while (and (null header) (agl--goto-previous-code-line))
+              (when (< (current-indentation) body)
+                (setq header (agl--type-declaration-line-p))))
+            header)))))
+
+(defun agl--attribute-indent ()
+  "Return the column this line\='s attribute should sit at.
+
+An attribute stands immediately above what it prefixes and takes that
+line\='s column, so it is placed as the declaration below it will be —
+except inside a record, enum, or exception body, where what follows is a
+field and the body\='s level carries over."
+  (if (agl--field-attribute-p)
+      (agl--carried-over-indent)
+    (agl--declaration-indent)))
+
+(defun agl--enclosing-region-column (declaration)
+  "Return the column the region enclosing the current line places, or nil.
+
+The region is found structurally, by walking back over the preceding
+code lines and letting each `end\=' skip the `scope\=' it already closed:
+the enclosing indentation cannot name it, since a region\='s last item may
+itself be a `record\=' or `case\=' header whose own body is deeper.
+
+With DECLARATION nil the answer is the region header\='s own column, which
+is where its `end\=' belongs.  With DECLARATION non-nil it is where the
+region\='s items belong, so a header reports one level in and the walk
+also stops at a declaration already written at that level."
   (save-excursion
     (beginning-of-line)
     (let ((depth 0)
@@ -293,42 +441,132 @@ skip the `scope\=' it already closed."
               ((agl--first-word-p "scope")
                (if (> depth 0)
                    (setq depth (1- depth))
-                 (setq column (current-indentation))))))
-      (or column 0))))
+                 (setq column (if declaration
+                                  (+ (current-indentation) agl-indent-offset)
+                                (current-indentation)))))
+              ((and declaration (zerop depth) (agl--declaration-line-p))
+               (setq column (current-indentation)))))
+      column)))
 
-(defun agl--branch-owner ()
+(defun agl--scope-closer-indent ()
+  "Return the column this line\='s `end\=' should sit at.
+
+An `end\=' closes the nearest scope region still open above it and stands
+at that region header\='s own column."
+  (or (agl--enclosing-region-column nil) 0))
+
+(defun agl--declaration-indent ()
+  "Return the column this line\='s module-level declaration should sit at.
+
+A declaration belongs to the module root or to a scope region, never to
+a block body, so it returns to the level of the region enclosing it —
+named by the region\='s header or by a declaration already written there."
+  (or (agl--enclosing-region-column t) 0))
+
+(defun agl--pipe-marker-line-p ()
+  "Return non-nil if the current line begins with a `|\=' branch marker."
+  (and (agl--branch-marker-line-p)
+       (save-excursion
+         (beginning-of-line)
+         (skip-chars-forward " \t")
+         (eq (char-after) ?|))))
+
+(defconst agl--marker-opener-alist
+  '(("else" "if")
+    ("catch" "try")
+    ("until" "for" "while" "do")
+    ("done" "for" "while" "do"))
+  "The header keywords each word marker continues.
+
+`|\=' is absent: it introduces a branch of whatever construct encloses it
+— an `if\=', a `case\=', an `enum\=' — so its owner is found by position
+rather than by name.")
+
+(defun agl--line-first-word ()
+  "Return the current line\='s first word, or nil when it starts otherwise.
+
+The word must be a whole AgL token: `done-with\=' is one identifier that
+merely begins with the letters of a marker."
+  (save-excursion
+    (beginning-of-line)
+    (skip-chars-forward " \t")
+    (when (looking-at "[a-z]+")
+      (let ((word (match-string-no-properties 0)))
+        (and (agl--ident-boundary-after-p (match-end 0)) word)))))
+
+(defun agl--word-marker-owner (marker)
+  "Return the column of the construct MARKER continues, or nil.
+
+MARKER is `else\=', `catch\=', `until\=', or `done\=', each of which names the
+headers it can continue, so the owner is found by walking out through
+the lines that enclose this one — those at a strictly smaller
+indentation than any seen so far — to the nearest such header.  A
+construct nested in the body passed on the way is never one of them,
+which is what the enclosing walk buys over stopping at the first
+shallower line.
+
+A clause of the same word met on the way is a sibling — one `try\=' takes
+several `catch\=' clauses — and stands where this one belongs, but only
+until a header is found further out: the sibling may instead belong to a
+construct nested inside the one being continued."
+  (let ((openers (cdr (assoc marker agl--marker-opener-alist)))
+        (limit nil)
+        (sibling nil)
+        (column nil))
+    (save-excursion
+      (beginning-of-line)
+      (while (and (null column) (agl--goto-previous-code-line))
+        (let ((indent (current-indentation)))
+          (when (or (null limit) (< indent limit))
+            (setq limit indent)
+            (let ((word (agl--line-first-word)))
+              (cond ((member word openers) (setq column indent))
+                    ((and (equal word marker) (null sibling))
+                     (setq sibling indent))))))))
+    (or column sibling)))
+
+(defun agl--positional-owner (pipe)
   "Return (INDENT . OPENS-BLOCK) for the construct a branch marker continues.
 
 The marker's own column is whatever the user has typed so far, so it is
 not used.  The search starts from the previous code line: when that line
 opens a suite it IS the construct's header, and otherwise the header is
-the nearest preceding line indented less than it."
+the nearest preceding line indented less than it.
+
+PIPE is non-nil when the marker being placed is a `|\='.  A `|\=' whose
+search lands on another `|\=' has found a sibling branch rather than a
+header, and siblings share a column: the branch that came first already
+stands where this one belongs, whether it opened a suite of its own or
+not."
   (save-excursion
     (when (agl--goto-previous-code-line)
-      (let ((previous (current-indentation)))
-        (if (agl--opens-block-p)
-            (cons previous t)
-          (let ((owner nil))
-            (while (and (not owner) (agl--goto-previous-code-line))
-              (when (< (current-indentation) previous)
-                (setq owner (cons (current-indentation) (agl--opens-block-p)))))
-            (or owner (cons 0 nil))))))))
+      (cond
+       ((and pipe (agl--pipe-marker-line-p)) (cons (current-indentation) nil))
+       ((agl--opens-block-p) (cons (current-indentation) t))
+       (t
+        (let ((previous (current-indentation))
+              (owner nil))
+          (while (and (not owner) (agl--goto-previous-code-line))
+            (when (< (current-indentation) previous)
+              (setq owner (if (and pipe (agl--pipe-marker-line-p))
+                              (cons (current-indentation) nil)
+                            (cons (current-indentation) (agl--opens-block-p))))))
+          (or owner (cons 0 nil))))))))
 
 (defun agl--branch-marker-indent ()
   "Return the column the current line's branch marker should sit at.
 
 A `|' introduces a branch inside the construct's body, so it indents one
-level under a header that opens a suite.  The terminators `else',
+level under a header that opens a suite.  The word markers `else',
 `catch', `until', and `done' close or continue the construct itself and
-align with its header."
-  (let* ((owner (agl--branch-owner))
-         (indent (or (car owner) 0))
-         (opens (cdr owner))
-         (pipe (save-excursion
-                 (beginning-of-line)
-                 (skip-chars-forward " \t")
-                 (eq (char-after) ?|))))
-    (if (and pipe opens) (+ indent agl-indent-offset) indent)))
+align with its header, which they name: only when no such header stands
+above them is the header guessed from position instead."
+  (let ((pipe (agl--pipe-marker-line-p)))
+    (or (and (not pipe) (agl--word-marker-owner (agl--line-first-word)))
+        (let* ((owner (agl--positional-owner pipe))
+               (indent (or (car owner) 0))
+               (opens (cdr owner)))
+          (if (and pipe opens) (+ indent agl-indent-offset) indent)))))
 
 (defun agl--block-opener-symbol-p (code start)
   "Return non-nil when CODE ends with a symbolic suite introducer.
@@ -365,10 +603,17 @@ than the `exec$' opener, so the same token-boundary check applies."
   "Return non-nil when CODE is a declaration or compound-statement header.
 
 CODE and START are as in `agl--block-opener-symbol-p'.  A header owns a
-block only when its body is not written inline on the same line."
+block only when its body is not written inline on the same line, and
+only when the declaration has a body at all: a bare modifier, a
+`builtin def', an `extern def', and a record or enum whose members are
+written inline all own nothing that follows them."
   (and (string-match agl--block-header-re code)
        (agl--ident-boundary-after-p (+ start (match-end 0)))
-       (not (string-match-p "=[ \t]*[^ \t]" code))))
+       (not (string-match-p "=[ \t]*[^ \t]" code))
+       (not (string-match-p agl--modifier-only-re code))
+       (not (string-match-p agl--body-less-function-re code))
+       (or (not (string-match-p agl--type-declaration-re code))
+           (string-match-p agl--type-header-re code))))
 
 (defun agl--opens-block-p ()
   "Return non-nil if the current line opens a nested block.
@@ -386,6 +631,23 @@ whether the spelling it found is a whole AgL token."
              (agl--raw-tail-opener-p code start)
              (agl--block-header-p code start)))))
 
+(defun agl--carried-over-indent ()
+  "Return the column carried over from the line above the current one.
+
+The previous logical line sets the level: its own when it opens nothing,
+and one `agl-indent-offset\=' deeper when it opens a block.  A raw-tail
+payload IS its opener\='s block, so crossing one returns to the opener\='s
+level rather than nesting under it."
+  (save-excursion
+    (beginning-of-line)
+    (if (not (agl--goto-previous-code-line))
+        0
+      (let ((previous (agl--logical-line-indentation))
+            (crossed agl--crossed-verbatim-region))
+        (if (and (agl--opens-block-p) (not crossed))
+            (+ previous agl-indent-offset)
+          previous)))))
+
 (defun agl-calculate-indent ()
   "Return the column `agl-indent-line' should indent the current line to."
   (save-excursion
@@ -399,15 +661,11 @@ whether the spelling it found is a whole AgL token."
      ((agl--branch-marker-line-p) (agl--branch-marker-indent))
      ;; A symbolic continuation wraps the line above rather than opening a block.
      ((agl--continuation-symbol-line-p) (agl--continuation-symbol-indent))
-     (t
-      (save-excursion
-        (if (not (agl--goto-previous-code-line))
-            0
-          (let ((previous (current-indentation))
-                (crossed agl--crossed-verbatim-region))
-            (if (and (agl--opens-block-p) (not crossed))
-                (+ previous agl-indent-offset)
-              previous))))))))
+     ;; A module-level declaration returns to the region that encloses it.
+     ((agl--declaration-line-p) (agl--declaration-indent))
+     ;; An attribute is placed as the line it prefixes will be.
+     ((agl--attribute-line-p) (agl--attribute-indent))
+     (t (agl--carried-over-indent)))))
 
 (defun agl--enclosing-levels ()
   "Return the columns of the blocks enclosing the current line, deepest first.
@@ -464,9 +722,8 @@ above."
                (> column (current-indentation))))
         (save-excursion
           (beginning-of-line)
-          (and (agl--branch-marker-line-p)
-               (progn (skip-chars-forward " \t") (eq (char-after) ?|))
-               (let ((owner (agl--branch-owner)))
+          (and (agl--pipe-marker-line-p)
+               (let ((owner (agl--positional-owner t)))
                  (and owner (> column (car owner)))))))))
 
 ;; ---------------------------------------------------------------------------
@@ -496,24 +753,43 @@ verbatim."
   (agl-indent-line (and (eq last-command 'indent-for-tab-command)
                         (eq this-command 'indent-for-tab-command))))
 
-(defun agl-indent-post-self-insert ()
-  "Re-indent the current line after a branch marker is completed.
+(defun agl--marker-just-completed-p ()
+  "Return non-nil when the last key completed a branch marker or `end\='.
 
-Typing `|' at the start of a line, or finishing one of the words
-`else', `catch', `until', `done', or `end' there, changes which construct
-the line belongs to, so the line is re-indented immediately.  The marker
-is matched here rather than through a predicate, so the check never
-depends on `match-data' surviving another call."
+The marker is matched here rather than through a predicate, so the check
+never depends on `match-data' surviving another call."
+  (let ((end (point)))
+    (save-excursion
+      (beginning-of-line)
+      (skip-chars-forward " \t")
+      (and (looking-at agl--marker-or-closer-re)
+           (= end (match-end 0))
+           (or (eq (char-after) ?|)
+               (agl--ident-boundary-after-p (match-end 0)))))))
+
+(defun agl--declaration-just-opened-p ()
+  "Return non-nil when the last key ended a line\='s declaration keyword.
+
+The trigger is the whitespace after the keyword rather than its last
+letter: an AgL name may begin with those letters and go on
+(`default-agent' is one name), and the separator is the first character
+that tells the keyword from such a name."
+  (and (memq last-command-event '(?\s ?\t))
+       (string-match-p (concat "\\`[ \t]*" agl--declaration-keyword-re "[ \t]\\'")
+                       (buffer-substring-no-properties
+                        (line-beginning-position) (point)))))
+
+(defun agl-indent-post-self-insert ()
+  "Re-indent the current line once its first token settles where it belongs.
+
+Typing `|' at the start of a line, finishing one of the words `else',
+`catch', `until', `done', or `end' there, or separating a declaration
+keyword such as `def' from the name after it all decide which construct
+the line belongs to, so the line is re-indented immediately."
   (when (and (eq major-mode 'agl-mode)
              (not (agl--opaque-line-p))
-             (let ((end (point)))
-               (save-excursion
-                 (beginning-of-line)
-                 (skip-chars-forward " \t")
-                 (and (looking-at agl--marker-or-closer-re)
-                      (= end (match-end 0))
-                      (or (eq (char-after) ?|)
-                          (agl--ident-boundary-after-p (match-end 0)))))))
+             (or (agl--marker-just-completed-p)
+                 (agl--declaration-just-opened-p)))
     (agl-indent-line)))
 
 (defun agl-indent-region (start end)

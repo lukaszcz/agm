@@ -1190,6 +1190,185 @@ class TestMethodIndex:
         assert found == get
         assert found.receiver_type_param_arity == 1
 
+    def test_lookup_builtin_method_excludes_nominal_methods(self) -> None:
+        table = TypeTable()
+        point = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700099)
+        table.register(
+            TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=700099)
+        )
+        method = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Point",),
+            name="show",
+            decl_node_id=1,
+            signature=FunctionType(params=(point,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        table.register_method(point, method)
+
+        assert table.method_candidates(point, "show") == ((method,),)
+        assert table.method_candidates(UnitType(), "show") == ()
+        assert table.lookup_builtin_method(point, "show") is None
+        assert table.lookup_builtin_method(TextType(), "show") is None
+
+    def test_method_candidates_keep_same_name_declarations_from_distinct_keys(self) -> None:
+        table = TypeTable()
+        point = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700100)
+        table.register(
+            TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=700100)
+        )
+        first = MethodDef(
+            module_id=ModuleId.from_path("first"),
+            scope_path=("Point",),
+            name="show",
+            decl_node_id=1,
+            signature=FunctionType(params=(point,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        second = MethodDef(
+            module_id=ModuleId.from_path("second"),
+            scope_path=("Point",),
+            name="show",
+            decl_node_id=2,
+            signature=FunctionType(params=(point,), result=TextType()),
+            receiver_type_param_arity=0,
+        )
+
+        table.register_method(point, second)
+        table.register_method(point, first)
+
+        assert table.method_candidates(point, "show") == ((first, second),)
+
+    def test_method_registration_replaces_a_matching_declaration_key(self) -> None:
+        table = TypeTable()
+        point = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700101)
+        table.register(
+            TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=700101)
+        )
+        original = MethodDef(
+            module_id=ModuleId.from_path("methods"),
+            scope_path=("Point",),
+            name="show",
+            decl_node_id=1,
+            signature=FunctionType(params=(point,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        replacement = replace(
+            original, decl_node_id=2, signature=FunctionType(params=(point,), result=TextType())
+        )
+
+        table.register_method(point, original)
+        table.register_method(point, replacement)
+
+        assert table.method_candidates(point, "show") == ((replacement,),)
+
+    def test_method_candidates_keep_exception_levels_nearest_first(self) -> None:
+        table = TypeTable()
+        root = ExceptionType(name="Root", module_id=ENTRY_ID, decl_id=700102)
+        middle = ExceptionType(name="Middle", module_id=ENTRY_ID, decl_id=700103)
+        leaf = ExceptionType(name="Leaf", module_id=ENTRY_ID, decl_id=700104)
+        table.register(
+            TypeDef(kind="exception", name="Root", module_id=ENTRY_ID, decl_node_id=700102)
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Middle",
+                module_id=ENTRY_ID,
+                base=700102,
+                decl_node_id=700103,
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception", name="Leaf", module_id=ENTRY_ID, base=700103, decl_node_id=700104
+            )
+        )
+        root_method = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Root",),
+            name="show",
+            decl_node_id=1,
+            signature=FunctionType(params=(root,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        middle_method = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Middle",),
+            name="show",
+            decl_node_id=2,
+            signature=FunctionType(params=(middle,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        leaf_method = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Leaf",),
+            name="show",
+            decl_node_id=3,
+            signature=FunctionType(params=(leaf,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+
+        table.register_method(root, root_method)
+        table.register_method(middle, middle_method)
+        table.register_method(leaf, leaf_method)
+
+        assert table.method_candidates(leaf, "show") == (
+            (leaf_method,),
+            (middle_method,),
+            (root_method,),
+        )
+
+    def test_builtin_method_candidates_are_keyed_by_constructor(self) -> None:
+        table = TypeTable()
+        text_method = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("text",),
+            name="show",
+            decl_node_id=1,
+            signature=FunctionType(params=(TextType(),), result=TextType()),
+            receiver_type_param_arity=0,
+        )
+        int_method = replace(
+            text_method,
+            scope_path=("int",),
+            decl_node_id=2,
+            signature=FunctionType(params=(IntType(),), result=IntType()),
+        )
+
+        table.register_builtin_method("text", text_method)
+        table.register_builtin_method("int", int_method)
+
+        assert table.method_candidates(TextType(), "show") == ((text_method,),)
+        assert table.method_candidates(IntType(), "show") == ((int_method,),)
+
+    def test_merge_from_unions_method_candidate_maps(self) -> None:
+        point = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700105)
+        target = TypeTable()
+        source = TypeTable()
+        typedef = TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=700105)
+        target.register(typedef)
+        source.register(typedef)
+        target_method = MethodDef(
+            module_id=ModuleId.from_path("target"),
+            scope_path=("Point",),
+            name="show",
+            decl_node_id=1,
+            signature=FunctionType(params=(point,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        source_method = replace(
+            target_method,
+            module_id=ModuleId.from_path("source"),
+            decl_node_id=2,
+        )
+        target.register_method(point, target_method)
+        source.register_method(point, source_method)
+
+        target.merge_from(source)
+
+        assert target.method_candidates(point, "show") == ((source_method, target_method),)
+
 
 # ---------------------------------------------------------------------------
 # TypeTable.exception_field_kinds — own fields honor their declared kind;

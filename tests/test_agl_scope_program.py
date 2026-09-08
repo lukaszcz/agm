@@ -25,7 +25,8 @@ from pathlib import Path
 import pytest
 
 from agm.agl.modules.ids import ENTRY_ID, STD_CONFIG_ID, ModuleId
-from agm.agl.parser import AglSyntaxError
+from agm.agl.parser import AglSyntaxError, parse_program_seeded
+from agm.agl.repl import ReplSession
 from agm.agl.scope.program import ResolvedModule, ResolvedProgram, resolve_program
 from agm.agl.scope.symbols import AglScopeError, BinderKind, ReceiverOwner
 from agm.agl.semantics.values import IntValue
@@ -2569,6 +2570,155 @@ class TestExceptionDefInGraph:
             "Enum member 'Conflict' should have been skipped; only the ExceptionDef "
             f"candidate should remain. Got: {candidates}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Test: reachable declaration identities
+# ---------------------------------------------------------------------------
+
+
+class TestReachableDeclarations:
+    def test_locals_and_import_routes_publish_declaration_identities(self, tmp_path: Path) -> None:
+        metrics_id = ModuleId.from_path("metrics")
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "import metrics\n"
+                    "\n"
+                    "scope Region\n"
+                    "  import metrics::*\n"
+                    "  def marker() -> int = 1\n"
+                    "end Region\n"
+                    "\n"
+                    "record Local()\n"
+                    "def Local::show(self) -> int = 1"
+                ),
+                "metrics": "scope Point\n  def norm() -> int = 1\nend Point",
+            },
+            default_stdlib=False,
+        )
+
+        reachable = resolve_program(graph).modules[ENTRY_ID].resolved.reachable_declarations
+
+        assert reachable == {
+            (ENTRY_ID, (), "Local"),
+            (ENTRY_ID, ("Local",), "show"),
+            (ENTRY_ID, ("Region",), "marker"),
+            (metrics_id, ("Point",), "norm"),
+        }
+
+    def test_region_scoped_import_is_module_wide(self, tmp_path: Path) -> None:
+        metrics_id = ModuleId.from_path("metrics")
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "scope Region\n  import metrics::*\nend Region\n\n()",
+                "metrics": "scope Point\n  def norm() -> int = 1\nend Point",
+            },
+            default_stdlib=False,
+        )
+
+        reachable = resolve_program(graph).modules[ENTRY_ID].resolved.reachable_declarations
+
+        assert reachable == {(metrics_id, ("Point",), "norm")}
+
+    @pytest.mark.parametrize("import_decl", ("import metrics::{Point::norm}", "import metrics::*"))
+    def test_import_tails_and_wildcards_publish_declaration_identities(
+        self, tmp_path: Path, import_decl: str
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": f"{import_decl}\n()",
+                "metrics": "scope Point\n  def norm() -> int = 1\nend Point",
+            },
+            default_stdlib=False,
+        )
+
+        reachable = resolve_program(graph).modules[ENTRY_ID].resolved.reachable_declarations
+
+        assert (ModuleId.from_path("metrics"), ("Point",), "norm") in reachable
+
+    def test_facade_reexport_preserves_the_declaration_origin(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import facade\n()",
+                "facade": "export metrics::{Point::norm}",
+                "metrics": "scope Point\n  def norm() -> int = 1\nend Point",
+            },
+            default_stdlib=False,
+        )
+
+        reachable = resolve_program(graph).modules[ENTRY_ID].resolved.reachable_declarations
+
+        assert (ModuleId.from_path("metrics"), ("Point",), "norm") in reachable
+
+    def test_hiding_removes_a_reachable_declaration(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import metrics hiding Point::norm\n()",
+                "metrics": "scope Point\n  def norm() -> int = 1\nend Point",
+            },
+            default_stdlib=False,
+        )
+
+        reachable = resolve_program(graph).modules[ENTRY_ID].resolved.reachable_declarations
+
+        assert (ModuleId.from_path("metrics"), ("Point",), "norm") not in reachable
+
+    def test_use_adds_no_declaration_identities(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {"entry": "use Point::*\n\nscope Point\n  def norm() -> int = 1\nend Point\n\n()"},
+            default_stdlib=False,
+        )
+
+        reachable = resolve_program(graph).modules[ENTRY_ID].resolved.reachable_declarations
+
+        assert reachable == {(ENTRY_ID, ("Point",), "norm")}
+
+    def test_implicit_prelude_import_publishes_stdlib_declarations(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(tmp_path, {"entry": "()"})
+
+        reachable = resolve_program(graph).modules[ENTRY_ID].resolved.reachable_declarations
+
+        assert (ModuleId.from_path("std/text"), ("text",), "trim") in reachable
+
+    def test_retained_repl_declarations_persist(self, tmp_path: Path) -> None:
+        prior = resolve_repl_entry("def saved() -> int = 1\nsaved()", default_stdlib=False)
+        graph = _make_graph_from_files(tmp_path, {"entry": "()"}, default_stdlib=False)
+        current = (
+            resolve_program(
+                graph,
+                entry_parent_scope=prior.root_scope,
+                entry_repl_session_scope=prior.root_scope,
+            )
+            .modules[ENTRY_ID]
+            .resolved
+        )
+
+        assert (ENTRY_ID, (), "saved") in current.reachable_declarations
+
+    def test_retained_repl_import_persists(self, tmp_path: Path) -> None:
+        (tmp_path / "metrics.agl").write_text(
+            "scope Point\n  def norm() -> int = 1\nend Point\n", encoding="utf-8"
+        )
+        session = ReplSession(cwd=tmp_path, default_stdlib=False)
+        assert not session.open()
+        assert session.eval_entry("import metrics").ok
+        program, next_node_id = parse_program_seeded(
+            "()", start_id=session._next_node_id, resolve_infix=False
+        )
+
+        checked = session._entry_pipeline.resolve_and_check_program(
+            program, next_node_id, session._runtime.host_environment()
+        )
+        reachable = checked.modules[ENTRY_ID].resolved.reachable_declarations
+
+        assert (ModuleId.from_path("metrics"), ("Point",), "norm") in reachable
 
 
 # ---------------------------------------------------------------------------

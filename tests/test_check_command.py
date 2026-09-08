@@ -3,8 +3,9 @@
 Covers:
 - CLI wires FILE arguments (one or more), -I/--module-path, and --no-stdlib
   into CheckArgs; missing FILE is a usage error.
-- A clean program file and a clean library module (no `program def`, the case
-  `agm exec --dry-run` rejects) check successfully with no output.
+- A clean program file, a clean library module (no `program def`, the case
+  `agm exec --dry-run` rejects), and a module with no items at all check
+  successfully with no output.
 - Syntax errors, type errors, and errors inside an imported module are
   reported as GNU-style diagnostics on stderr with exit code 1.
 - Several files are each checked independently, in order, even when an
@@ -168,6 +169,20 @@ class TestCheckCommand:
         """A library module with no `program def` is the case `exec --dry-run` rejects."""
         agl_file = tmp_path / "lib.agl"
         agl_file.write_text("def double(n: int) -> int = n * 2\n")
+
+        check_command.run(CheckArgs(files=[str(agl_file)]))
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == ""
+
+    @pytest.mark.parametrize("source", ["", "# a placeholder module\n"])
+    def test_module_without_items_succeeds(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], source: str
+    ) -> None:
+        """A module holding no items at all is legal and checks clean."""
+        agl_file = tmp_path / "blank.agl"
+        agl_file.write_text(source)
 
         check_command.run(CheckArgs(files=[str(agl_file)]))
 

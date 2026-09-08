@@ -439,8 +439,30 @@ class AstBuilder(Transformer):
         # into the AST itself.
         self._bare_qualified_pattern_ids: set[int] = set()
 
+    def _source_start_span(self) -> SourceSpan:
+        """Build the empty span at the start of the source being built.
+
+        An empty module root matches no tokens, so Lark leaves its meta unset;
+        this is the position such a module and its items-free block report.
+        """
+        return SourceSpan(
+            start_line=1,
+            start_col=1,
+            end_line=1,
+            end_col=1,
+            start_offset=0,
+            end_offset=0,
+            source=self._source,
+        )
+
     def _span_from_meta(self, meta: Meta) -> SourceSpan:
-        """Build a SourceSpan from Lark tree Meta, stamped with self._source."""
+        """Build a SourceSpan from Lark tree Meta, stamped with self._source.
+
+        A rule that matched no tokens carries no position, and spans the start
+        of its source instead.
+        """
+        if meta.empty:
+            return self._source_start_span()
         return SourceSpan(
             start_line=meta.line,
             start_col=meta.column,
@@ -509,7 +531,11 @@ class AstBuilder(Transformer):
         )
 
     def module_block(self, meta: Meta, args: _Args) -> syntax.Block:
-        """Build the module-root block, whose items may include scope regions."""
+        """Build the module-root block, whose items may include scope regions.
+
+        It is also the only block that may be empty: a source holding no items
+        is a legal, empty module.
+        """
         block = self._build_block(meta, args)
         if not self._allow_late_uses:
             self._validate_use_placement(block.items)

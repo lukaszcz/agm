@@ -281,11 +281,6 @@ class TestProgramRoot:
         assert isinstance(prog.body, Block)
         assert isinstance(first(prog), IntLit)
 
-    def test_empty_block_raises(self) -> None:
-        # An empty source is not valid (block needs at least one item).
-        with pytest.raises(AglSyntaxError):
-            parse("")
-
     def test_block_multiple_items(self) -> None:
         prog = parse("1\n2\n3")
         assert len(items(prog)) == 3
@@ -3063,6 +3058,12 @@ class TestReplSeam:
         # record header without body
         assert is_incomplete_source("record R")
 
+    @pytest.mark.parametrize("source", ["", "   ", "# just a comment"])
+    def test_is_incomplete_source_items_free_entry(self, source: str) -> None:
+        # A blank or comment-only entry is a complete (empty) module, so the
+        # REPL submits it as a no-op instead of opening a continuation prompt.
+        assert not is_incomplete_source(source)
+
     def test_is_incomplete_source_real_error(self) -> None:
         # == is a real error, not an incomplete source.
         assert not is_incomplete_source("x == y")
@@ -4850,3 +4851,29 @@ print exec$ true
             result = run_inline_command(PipelineDriver(), "exec$ true")
 
         assert result.ok
+
+
+class TestEmptyModule:
+    """A module with no items is a legal, empty module."""
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "",
+            "\n",
+            "\n\n\n",
+            "# only a comment\n",
+            "\n# a comment after a blank line\n\n",
+            "   \n\t\n",
+        ],
+    )
+    def test_source_without_items_parses_to_an_empty_program(self, source: str) -> None:
+        program = parse_program(source)
+
+        assert program.body.items == ()
+
+    def test_empty_program_body_has_a_span(self) -> None:
+        program = parse_program("")
+
+        assert program.body.span.start_line >= 1
+        assert program.span.start_line >= 1

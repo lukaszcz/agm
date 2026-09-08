@@ -379,6 +379,27 @@ class TestImportedModuleErrors:
 
 
 # ---------------------------------------------------------------------------
+# An items-free module
+# ---------------------------------------------------------------------------
+
+
+class TestEmptyModule:
+    """A module contributing no declarations is importable and runnable."""
+
+    def test_empty_module_is_importable(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "blank.agl").write_text("# nothing here yet\n")
+        entry = tmp_path / "prog.agl"
+        entry.write_text('import blank::*\nprogram def main() -> unit = print "ran"\n')
+
+        result = _run_program(entry.read_text(), entry_path=entry, roots_dirs=[tmp_path])
+
+        assert result.ok is True
+        assert "ran" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
 # Scenario 4: lib-root module (separate lib root directory)
 # ---------------------------------------------------------------------------
 

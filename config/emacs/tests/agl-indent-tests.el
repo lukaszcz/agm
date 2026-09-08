@@ -135,6 +135,31 @@ indented; the resulting indentation column is returned."
   ;; `done-with' is one AgL identifier, not the `done' marker.
   (should (= (agl-ind--indent-of "def f() -> unit =\n  done-with()\n" 2) 2)))
 
+;; --- Symbolic continuation lines ---
+
+(ert-deftest agl-ind-wrapped-return-type-indents-under-its-signature ()
+  (should (= (agl-ind--indent-of "def f()\n-> unit = pass\n" 2) 2)))
+
+(ert-deftest agl-ind-wrapped-body-equals-indents-under-its-signature ()
+  (should (= (agl-ind--indent-of "def f() -> unit\n= pass\n" 2) 2)))
+
+(ert-deftest agl-ind-wrapped-binder-equals-indents-under-its-binder ()
+  (should (= (agl-ind--indent-of "let total\n= 1 + 2\n" 2) 2)))
+
+(ert-deftest agl-ind-wrapped-branch-arrow-indents-under-its-pattern ()
+  (should (= (agl-ind--indent-of "case x of\n  | Pass\n=> ok\n" 3) 4)))
+
+(ert-deftest agl-ind-second-continuation-aligns-with-the-first ()
+  ;; `-> unit' already wraps the signature, so the `=' continues that same
+  ;; logical line rather than nesting one level deeper again.
+  (should (= (agl-ind--indent-of "def f()\n    -> unit\n= pass\n" 3) 4)))
+
+(ert-deftest agl-ind-continuation-symbol-is-not-a-longer-operator ()
+  ;; `==' and `->>' are single operator tokens, not the `=' and `->'
+  ;; continuation markers, so those lines fall back to the carry-over rule.
+  (should (= (agl-ind--indent-of "let ok = a\n== b\n" 2) 0))
+  (should (= (agl-ind--indent-of "let ok = a\n->> b\n" 2) 0)))
+
 ;; --- Scope regions ---
 
 (ert-deftest agl-ind-body-after-scope-header-is-indented ()

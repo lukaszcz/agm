@@ -302,5 +302,5 @@ caps such loops at `max-iters` body executions, raising
 `max-iters` value of `0`; a source write of zero also disables an active host limit.
 
 The `until` keyword (and `done`) may start its own line aligned with `do`,
-courtesy of the branch-marker continuation rule
+courtesy of the continuation-marker rule
 ([Lexical structure](lexical-structure.md)).

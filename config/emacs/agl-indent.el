@@ -17,6 +17,10 @@
 ;; - Branch-marker continuation: a line whose first token is `|', `else',
 ;;   `catch', `until', or `done' continues the enclosing construct and
 ;;   aligns with the line that opened it.
+;; - Symbolic continuation: a line whose first token is `->', `=>', or `='
+;;   wraps the line above it — a signature's return type, a body's or a
+;;   binder's `=', a branch's arrow — and indents one level under the line
+;;   it continues, or alongside it when that line is itself such a wrap.
 ;; - Block opening: a line that opens a suite indents its body one
 ;;   `agl-indent-offset' deeper.
 ;; - Otherwise the previous logical line's indentation carries over.
@@ -61,6 +65,15 @@ by `agl--scope-closer-indent' instead.")
 
 Both change which construct the line being typed belongs to, so both are
 worth re-indenting on as soon as the word is complete.")
+
+(defconst agl--continuation-symbol-re
+  "\\(?:=>\\|->\\|=\\)"
+  "Regexp matching a symbolic token that can only continue the line above.
+
+No AgL construct begins with `->', `=>', or `=', so a line opening with
+one wraps the line before it (see the layout rules in
+docs/agl/reference/lexical-structure.md).  The two-character spellings
+lead the alternation so a maximal match wins.")
 
 (defconst agl--block-opener-symbol-re
   "\\(?:=>\\|->\\|[=:]\\)[ \t]*$"
@@ -222,6 +235,34 @@ line aligns just past that bracket."
            ;; identifier (`done-with' is one name).
            (agl--ident-boundary-after-p (match-end 0))))))
 
+(defun agl--continuation-symbol-line-p ()
+  "Return non-nil if the current line begins with a symbolic continuation.
+
+The spelling alone does not settle it: an operator name is a maximal run
+of operator characters, so the `==' opening a line is one comparison
+token rather than the `=' marker, and `->>' is one user operator rather
+than `->'."
+  (save-excursion
+    (beginning-of-line)
+    (skip-chars-forward " \t")
+    (and (looking-at agl--continuation-symbol-re)
+         (not (agl--operator-name-char-p (char-after (match-end 0)))))))
+
+(defun agl--continuation-symbol-indent ()
+  "Return the column the current line\='s symbolic continuation should sit at.
+
+The marker wraps the previous code line, so it indents one level under
+it — unless that line is itself a wrap of the same logical line, in which
+case the two align."
+  (save-excursion
+    (beginning-of-line)
+    (if (not (agl--goto-previous-code-line))
+        0
+      (let ((previous (current-indentation)))
+        (if (or agl--crossed-verbatim-region (agl--continuation-symbol-line-p))
+            previous
+          (+ previous agl-indent-offset))))))
+
 (defun agl--first-word-p (word)
   "Return non-nil when WORD is the current line\='s first whole token."
   (save-excursion
@@ -356,6 +397,8 @@ whether the spelling it found is a whole AgL token."
      ((agl--scope-closer-line-p) (agl--scope-closer-indent))
      ;; A branch marker aligns with the construct it continues.
      ((agl--branch-marker-line-p) (agl--branch-marker-indent))
+     ;; A symbolic continuation wraps the line above rather than opening a block.
+     ((agl--continuation-symbol-line-p) (agl--continuation-symbol-indent))
      (t
       (save-excursion
         (if (not (agl--goto-previous-code-line))

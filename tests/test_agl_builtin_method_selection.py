@@ -57,12 +57,12 @@ def test_builtin_method_table_selects_by_receiver_constructor(
 
     table.register_builtin_method(constructor, method)
 
-    assert table.lookup_builtin_method(receiver, "selected") == method
-    assert table.lookup_builtin_method(UnitType(), "selected") is None
+    assert table.method_candidates(receiver, "selected") == ((method,),)
+    assert table.method_candidates(UnitType(), "selected") == ()
 
     merged = TypeTable()
     merged.merge_from(table)
-    assert merged.lookup_builtin_method(receiver, "selected") == method
+    assert merged.method_candidates(receiver, "selected") == ((method,),)
 
 
 def test_prelude_reexports_builtin_receiver_scopes_for_bare_routes() -> None:
@@ -132,6 +132,25 @@ def test_prelude_hiding_receiver_scope_routes_resolves(hidden: str) -> None:
     )
 
     assert prepared.resolved is not None, prepared.diagnostics
+
+
+def test_prelude_hiding_a_method_keeps_other_receiver_methods_visible() -> None:
+    visible = PipelineDriver.prepare_program(
+        'import std/prelude::* hiding text::trim\ndef value() -> int = "value".size()\n',
+        roots=agl_std_package_roots(),
+    )
+    selected = PipelineDriver().discover_programs(visible)
+
+    assert selected.checked is not None, selected.diagnostics
+
+    hidden = PipelineDriver.prepare_program(
+        'import std/prelude::* hiding text::trim\ndef value() -> text = " value ".trim()\n',
+        roots=agl_std_package_roots(),
+    )
+    rejected = PipelineDriver().discover_programs(hidden)
+
+    assert rejected.checked is None
+    assert rejected.diagnostics
 
 
 def test_builtin_direct_method_calls_lower_as_receiver_first_direct_calls() -> None:

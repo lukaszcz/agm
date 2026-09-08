@@ -74,6 +74,7 @@ from agm.agl.scope.imports import (
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_DISPLAY_NAMES,
     BUILTIN_CALL_NAMES,
+    BUILTIN_METHOD_RECEIVER_NAMES,
     BUILTIN_TYPE_STATIC_OWNER_PATHS,
     AglScopeError,
     BinderKind,
@@ -279,10 +280,6 @@ _BUILTIN_CALL_NAMES = BUILTIN_CALL_NAMES
 
 # The set of names that may NOT be used as any kind of binding.
 _RESERVED_NAMES: frozenset[str] = frozenset(_BUILTIN_CALL_NAMES)
-
-_BUILTIN_METHOD_RECEIVER_NAMES: frozenset[str] = frozenset(
-    {"array", "dict", "text", "json", "int", "decimal", "bool"}
-)
 
 _TEXTUALLY_ORDERED_BINDER_KINDS: frozenset[BinderKind] = frozenset(
     {
@@ -949,7 +946,7 @@ class _Resolver:
         if nominal_owner is not None:
             return nominal_owner
         if declaration.receiver_type is not None or (
-            len(owner_path) == 1 and owner_path[0] in _BUILTIN_METHOD_RECEIVER_NAMES
+            len(owner_path) == 1 and owner_path[0] in BUILTIN_METHOD_RECEIVER_NAMES
         ):
             return ReceiverOwner(self._module_id, owner_path)
         return None

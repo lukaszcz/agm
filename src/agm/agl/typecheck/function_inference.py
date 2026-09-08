@@ -15,6 +15,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, NamedTuple
 
 from agm.agl.modules.ids import ModuleId
+from agm.agl.scope.symbols import DeclarationKey
 from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.type_table import MethodDef, NominalOwner
 from agm.agl.semantics.types import (
@@ -135,6 +136,7 @@ class CandidateModule:
     env: TypeEnvironment
     capabilities: "HostCapabilities"
     module_id: ModuleId
+    declaration_spans: Mapping[DeclarationKey, SourceSpan] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,7 +161,14 @@ class ModuleCandidateComponent:
         module_id: ModuleId,
     ) -> "ModuleCandidateComponent":
         """Build the synthetic component for one module checked in isolation."""
-        return cls((CandidateModule(resolved, env, capabilities, module_id),), (env,))
+        declaration_spans = {
+            key: ref.decl_span
+            for key, ref in resolved.declarations.items()
+            if ref.decl_span is not None
+        }
+        return cls(
+            (CandidateModule(resolved, env, capabilities, module_id, declaration_spans),), (env,)
+        )
 
     def discovery_targets(self) -> tuple[TypeEnvironment, ...]:
         """Return the import-SCC environments that need provisional signatures."""
@@ -369,6 +378,7 @@ def _seed_candidate_visible_bindings(
             resolved=module.resolved,
             capabilities=module.capabilities,
             module_id=module.module_id,
+            declaration_spans=module.declaration_spans,
         )
         # A value binding that reads a component candidate (directly or through
         # an earlier such binding) cannot be typed before that candidate closes:
@@ -429,6 +439,7 @@ def _infer_function_component(
             resolved=module.resolved,
             capabilities=module.capabilities,
             module_id=module.module_id,
+            declaration_spans=module.declaration_spans,
         )
         receiver_owner = module.resolved.receiver_owner_for(module.module_id, node)
         checker._validate_funcdef_header(node, is_method=receiver_owner is not None)
@@ -460,6 +471,7 @@ def _infer_function_component(
                 resolved=module.resolved,
                 capabilities=module.capabilities,
                 module_id=module.module_id,
+                declaration_spans=module.declaration_spans,
             )
             checker._slot_resolution.update(session.slot_resolution_snapshots[module.module_id])
             checker._slot_constructor_refs.update(

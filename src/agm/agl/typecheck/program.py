@@ -71,7 +71,7 @@ from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import ImportEnv
 from agm.agl.scope.program import ResolvedProgram
-from agm.agl.scope.symbols import ModuleResolution
+from agm.agl.scope.symbols import DeclarationKey, ModuleResolution
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
 from agm.agl.semantics.type_table import (
@@ -102,7 +102,6 @@ from agm.agl.typecheck.builder import _TypeBuilder
 from agm.agl.typecheck.checker import _check_prepared_module, prepare_module_headers
 from agm.agl.typecheck.declaration_validation import (
     validate_builtin_declaration_uniqueness,
-    validate_builtin_method_ownership,
     validate_method_declaration_collisions,
 )
 from agm.agl.typecheck.env import (
@@ -406,6 +405,16 @@ def _collect_all_type_keys(
             # function. Only non-builtin types reach this point.
             all_keys.add(_decl_key(mid, item))
     return all_keys
+
+
+def _declaration_spans(resolved: ResolvedProgram) -> dict[DeclarationKey, SourceSpan]:
+    """Index source spans for declarations available to program-wide diagnostics."""
+    return {
+        key: ref.decl_span
+        for module in resolved.modules.values()
+        for key, ref in module.resolved.declarations.items()
+        if ref.decl_span is not None
+    }
 
 
 def _find_type_decl_span(resolved: ResolvedProgram, key: DeclKey) -> SourceSpan | None:
@@ -1145,7 +1154,7 @@ def check_program(
             env.set_binding_type(var_node_id, var_type)
 
     program_modules = {module_id: module.resolved for module_id, module in resolved.modules.items()}
-    validate_builtin_method_ownership(program_modules)
+    declaration_spans = _declaration_spans(resolved)
 
     for mid in ordered_mids:
         prepare_module_headers(
@@ -1194,6 +1203,7 @@ def check_program(
                 module_envs[mid],
                 capabilities,
                 mid,
+                declaration_spans,
             )
             for mid in inference_scc
         )
@@ -1226,6 +1236,7 @@ def check_program(
             prepare_headers=False,
             infer_candidates=False,
             candidate_records=candidate_records,
+            declaration_spans=declaration_spans,
         )
         cm = replace(
             cp,

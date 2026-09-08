@@ -51,6 +51,10 @@ BareAtom = str | ScopePath
 DeclarationKey = tuple[ModuleId, ScopePath, str]
 QName: TypingTypeAlias = tuple[ModuleId, BareAtom]
 
+BUILTIN_METHOD_RECEIVER_NAMES: frozenset[str] = frozenset(
+    {"array", "dict", "text", "json", "int", "decimal", "bool"}
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ReceiverOwner:

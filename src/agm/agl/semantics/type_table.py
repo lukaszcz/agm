@@ -507,38 +507,6 @@ class TypeTable:
             for decl_id in owner_ids
         )
 
-    @staticmethod
-    def _nearest_candidate(candidates: tuple[tuple[MethodDef, ...], ...]) -> MethodDef | None:
-        return next((method for level in candidates for method in level), None)
-
-    def lookup_builtin_method(self, owner: Type, name: str) -> MethodDef | None:
-        """Return the nearest built-in receiver method named *name*."""
-        if self._builtin_constructor(owner) is None:
-            return None
-        return self._nearest_candidate(self.method_candidates(owner, name))
-
-    def methods_for(self, owner: NominalOwner) -> Mapping[str, MethodDef]:
-        """Return the nearest method for each name available on *owner*."""
-        owner_ids: tuple[DeclId, ...] = (owner.decl_id,)
-        if isinstance(owner, ExceptionType):
-            owner_ids = tuple(
-                decl_id
-                for decl_id, _typedef in reversed(
-                    self._exception_chain(owner.decl_id, caller="methods_for")
-                )
-            )
-        names = {name for decl_id in owner_ids for name in self._methods.get(decl_id, {})}
-        return {
-            name: candidate
-            for name in sorted(names)
-            if (candidate := self._nearest_candidate(self.method_candidates(owner, name)))
-            is not None
-        }
-
-    def lookup_method(self, owner: NominalOwner, name: str) -> MethodDef | None:
-        """Return the nearest method named *name*, or ``None`` on a miss."""
-        return self._nearest_candidate(self.method_candidates(owner, name))
-
     def declared_methods(self, owner_id: DeclId) -> Mapping[str, MethodDef]:
         """Return the direct method chosen for each name declared on *owner_id*."""
         return {
@@ -1629,9 +1597,10 @@ def is_assignable_in(table: TypeTable, value_type: Type, target_type: Type) -> b
 
     The pure :func:`semantics.types.is_assignable` rules apply unchanged.  In
     addition, a member record is assignable to an enum when it occurs in that
-    enum instantiation's declared member set.  This is deliberately a
-    top-level, directed relation: containers remain invariant and enums and
-    exceptions do not gain membership-based conversions.
+    enum instantiation's declared member set, and an exception is assignable
+    to any exception in its base chain. This is deliberately a top-level,
+    directed relation: containers remain invariant and enums do not gain
+    membership-based conversions.
     """
     if is_assignable(value_type, target_type):
         return True
@@ -1641,6 +1610,11 @@ def is_assignable_in(table: TypeTable, value_type: Type, target_type: Type) -> b
         and value_type in table.enum_members(target_type)
     ):
         return True
+    if isinstance(value_type, ExceptionType) and isinstance(target_type, ExceptionType):
+        return any(
+            ancestor.decl_node_id == target_type.decl_id
+            for ancestor in table.ancestor_defs(value_type.decl_id)
+        )
     return False
 
 

@@ -8,7 +8,7 @@ from functools import partial
 from typing import Literal
 
 from agm.agl.modules.ids import ModuleId, spell_declaration
-from agm.agl.scope.symbols import ModuleResolution
+from agm.agl.scope.symbols import BUILTIN_METHOD_RECEIVER_NAMES, ModuleResolution
 from agm.agl.semantics.type_table import (
     DeclId,
     TypeTable,
@@ -28,16 +28,6 @@ from agm.agl.syntax.nodes import (
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import AppliedT, ArrayT, DictT, NameT
 from agm.agl.typecheck.env import AglTypeError
-
-BUILTIN_METHOD_OWNERS: dict[str, ModuleId] = {
-    "array": ModuleId(("std", "array")),
-    "dict": ModuleId(("std", "dict")),
-    "text": ModuleId(("std", "text")),
-    "json": ModuleId(("std", "json")),
-    "int": ModuleId(("std", "math")),
-    "decimal": ModuleId(("std", "math")),
-    "bool": ModuleId(("std", "math")),
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,30 +57,9 @@ def builtin_method_receiver_for(
         return BuiltinMethodReceiver("dict", receiver.value.name)
     if isinstance(receiver, AppliedT):
         raise AglTypeError("Unknown builtin method receiver.", span=receiver.span)
-    if receiver is None and len(owner_path) == 1 and owner_path[0] in BUILTIN_METHOD_OWNERS:
+    if receiver is None and len(owner_path) == 1 and owner_path[0] in BUILTIN_METHOD_RECEIVER_NAMES:
         return BuiltinMethodReceiver(owner_path[0])
     return None
-
-
-def validate_builtin_method_ownership(
-    modules: Mapping[ModuleId, ModuleResolution],
-) -> None:
-    """Apply the builtin receiver orphan rule before function headers are resolved."""
-    for module_id, resolved in modules.items():
-        for function in static_function_items(resolved.program.body.items):
-            owner_path = resolved.receiver_owner_for(module_id, function)
-            if owner_path is None:
-                continue
-            receiver = builtin_method_receiver_for(function, owner_path.scope_path)
-            if receiver is None:
-                continue
-            owner_module = BUILTIN_METHOD_OWNERS[receiver.name]
-            if module_id != owner_module:
-                raise AglTypeError(
-                    f"Methods on builtin type '{receiver.name}' may only be declared in "
-                    f"'{owner_module.path_str()}'.",
-                    span=function.span,
-                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,9 +122,13 @@ def _member_declarations(
             members = index.members.setdefault(decl_owner_id, {})
             if isinstance(item, (RecordDef, ExceptionDef)):
                 for source_field in item.fields:
-                    members.setdefault(source_field.name, []).append(
-                        _MemberDeclaration("field", source_field.span)
-                    )
+                    same_named = members.setdefault(source_field.name, [])
+                    same_named[:] = [
+                        member
+                        for member in same_named
+                        if not (member.kind == "field" and member.span is None)
+                    ]
+                    same_named.append(_MemberDeclaration("field", source_field.span))
         for function in static_function_items(resolved.program.body.items):
             owner_path = resolved.receiver_owner_for(module_id, function)
             if (
@@ -189,77 +162,15 @@ def _member_declarations(
     return index
 
 
-def _descendant_index(type_table: TypeTable) -> dict[DeclId, tuple[DeclId, ...]]:
-    """Map every registered exception to its descendants, nearest first.
-
-    The inverse of ``TypeTable.ancestor_defs``: a base declaration needs it to
-    see the members its descendants already occupy, including descendants
-    retained from an earlier REPL entry. Inverting the relation once per
-    validation pass keeps the whole pass linear in the registered exceptions;
-    asking each owner for its own descendants separately would rescan every
-    declaration and rewalk every base chain per owner.
-
-    A descendant's depth is its own index within its nearest-first ancestor
-    chain, and ``entries()`` yields declarations in registration order, so
-    descendants at equal depth keep a deterministic relative order.
-    """
-    found: dict[DeclId, list[tuple[int, DeclId]]] = {}
-    for typedef in type_table.entries():
-        if typedef.kind != "exception":
-            continue
-        candidate_id = typedef.decl_node_id
-        if type_table.is_orphaned(candidate_id):
-            # A declaration an incremental entry never promoted: it has no
-            # values and no name, so its members constrain nothing.
-            continue
-        for depth, base in enumerate(type_table.ancestor_defs(candidate_id)):
-            found.setdefault(base.decl_node_id, []).append((depth, candidate_id))
-    result: dict[DeclId, tuple[DeclId, ...]] = {}
-    for base_id, entries in found.items():
-        entries.sort(key=_descendant_entry_depth)
-        result[base_id] = tuple(candidate for _depth, candidate in entries)
-    return result
-
-
-def _descendant_entry_depth(entry: tuple[int, DeclId]) -> int:
-    """Order a ``_descendant_index`` entry by its distance from the queried base."""
-    return entry[0]
-
-
-def _relatives(
-    index: _MemberIndex,
-    type_table: TypeTable,
-    descendant_index: Mapping[DeclId, tuple[DeclId, ...]],
-    owner_id: DeclId,
-) -> tuple[
-    tuple[DeclId, ...],
-    tuple[DeclId, ...],
-]:
-    """Return *owner_id*'s indexed exception ancestors and unchecked descendants.
-
-    A descendant this compile unit also declares is skipped: its own ancestor
-    scan already covers the pair, so reporting it from both ends would make the
-    diagnostic depend on iteration order.
-    """
-    ancestors = tuple(base.decl_node_id for base in type_table.ancestor_defs(owner_id))
-    descendants = tuple(
-        descendant_id
-        for descendant_id in descendant_index.get(owner_id, ())
-        if descendant_id not in index.declared
-    )
-    for relative in (*ancestors, *descendants):
-        _index_registered_owner(index, type_table, relative)
-    return ancestors, descendants
-
-
-def _related_member(
-    index: _MemberIndex, related: tuple[DeclId, ...], name: str
+def _ancestor_member(
+    index: _MemberIndex, ancestors: tuple[DeclId, ...], name: str, kind: Literal["field", "method"]
 ) -> tuple[DeclId, _MemberDeclaration] | None:
-    """Find the nearest related owner that already declares *name*."""
-    for relative in related:
-        members = index.members_of(relative).get(name)
-        if members:
-            return relative, members[0]
+    """Find the nearest ancestor member of a different kind with *name*."""
+    for ancestor in ancestors:
+        members = index.members_of(ancestor).get(name, ())
+        conflicting = next((member for member in members if member.kind != kind), None)
+        if conflicting is not None:
+            return ancestor, conflicting
     return None
 
 
@@ -371,34 +282,27 @@ def validate_builtin_declaration_uniqueness(
 def validate_method_declaration_collisions(
     modules: Mapping[ModuleId, ModuleResolution], type_table: TypeTable
 ) -> None:
-    """Reject field/method namespace collisions after nominal shapes are available.
-
-    The scope pass is the authoritative source for method declarations, so this
-    validation is independent of whether a method needs candidate inference
-    before its header can be registered. An exception is checked against every
-    ancestor and against every descendant this compile unit does not itself
-    declare, so a base declared after its descendants is rejected too.
-    """
+    """Reject method collisions with fields of their owner or its ancestors."""
     index = _member_declarations(modules, type_table)
-    descendant_index = _descendant_index(type_table)
 
     # Order owners deterministically so a program reports one stable collision.
     sort_key = partial(decl_id_sort_key, type_table.defs)
     for owner_id in sorted(index.declared, key=sort_key):
-        ancestors, descendants = _relatives(index, type_table, descendant_index, owner_id)
+        ancestors = tuple(base.decl_node_id for base in type_table.ancestor_defs(owner_id))
+        for ancestor in ancestors:
+            _index_registered_owner(index, type_table, ancestor)
         for name, same_named_members in index.members[owner_id].items():
-            if len(same_named_members) > 1:
-                _raise_collision(
-                    type_table,
-                    owner_id,
-                    name,
-                    same_named_members[0],
-                    owner_id,
-                    same_named_members[1],
+            for member in same_named_members:
+                conflicting = next(
+                    (
+                        candidate
+                        for candidate in same_named_members
+                        if candidate.kind != member.kind
+                    ),
+                    None,
                 )
-
-            member = same_named_members[0]
-            for related in (ancestors, descendants):
-                conflict = _related_member(index, related, name)
+                if conflicting is not None:
+                    _raise_collision(type_table, owner_id, name, member, owner_id, conflicting)
+                conflict = _ancestor_member(index, ancestors, name, member.kind)
                 if conflict is not None:
                     _raise_collision(type_table, owner_id, name, member, *conflict)

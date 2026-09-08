@@ -136,6 +136,18 @@ class TestMembershipAssignable:
         assert not is_assignable_in(table, target, EnumType("Other", decl_id=5))
         assert not is_assignable_in(table, ExceptionType("Oops", decl_id=6), target)
 
+    def test_accepts_an_exception_subtype_as_its_base(self) -> None:
+        table = TypeTable()
+        base = ExceptionType("Base", decl_id=10)
+        derived = ExceptionType("Derived", decl_id=11)
+        table.register(TypeDef(kind="exception", name="Base", module_id=ENTRY_ID, decl_node_id=10))
+        table.register(
+            TypeDef(kind="exception", name="Derived", module_id=ENTRY_ID, base=10, decl_node_id=11)
+        )
+
+        assert is_assignable_in(table, derived, base)
+        assert not is_assignable_in(table, base, derived)
+
     def test_preserves_function_result_invariance(self) -> None:
         table, _node, leaf, _other, _tree = _member_assignability_table()
         target = EnumType("Tree", (IntType(),), decl_id=4)

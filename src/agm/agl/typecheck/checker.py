@@ -52,7 +52,7 @@ from typing import Literal, Protocol, TypeGuard, assert_never, cast
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic, static_root_message
 from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, ModuleId, spell_declaration
 from agm.agl.scope.imports import (
     qualification_repair_guidance,
 )
@@ -64,6 +64,7 @@ from agm.agl.scope.symbols import (
     BuiltinKind,
     BuiltinStaticKind,
     ConstructorRef,
+    DeclarationKey,
     ModuleResolution,
     PatternSlot,
     builtin_type_static_kind,
@@ -251,14 +252,18 @@ def _builtin_method_receiver_key(receiver_type: RecordType | EnumType) -> _Built
     return NominalId(receiver_type.decl_id)
 
 
-def _no_member(
-    obj_type: RecordType | EnumType | ExceptionType, field: str, span: SourceSpan
-) -> AglTypeError:
+def _method_declaration_name(method: MethodDef) -> str:
+    """Return a method declaration's qualified source spelling."""
+    return spell_declaration(method.module_id, (*method.scope_path, method.name))
+
+
+def _no_member(obj_type: Type, field: str, span: SourceSpan) -> AglTypeError:
     """Return the diagnostic for a member the receiver declares neither way."""
-    return AglTypeError(
-        f"{obj_type.kind.capitalize()} '{obj_type.name}' has no field or method '{field}'.",
-        span=span,
-    )
+    if isinstance(obj_type, (RecordType, EnumType, ExceptionType)):
+        subject = f"{obj_type.kind.capitalize()} '{obj_type.name}'"
+    else:
+        subject = f"Built-in receiver '{obj_type!r}'"
+    return AglTypeError(f"{subject} has no field or method '{field}'.", span=span)
 
 
 def _no_type_var_members(obj_type: TypeVarType, members: str, span: SourceSpan) -> AglTypeError:
@@ -292,6 +297,15 @@ class _ExternTarget:
 
 
 _ExternTargets = tuple[_ExternTarget, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _SelectedMember:
+    """A field or visible method selected from a receiver's static type."""
+
+    field_type: Type | None = None
+    method: MethodDef | None = None
+    receiver_type: Type | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -665,6 +679,7 @@ class _Checker:
         module_id: ModuleId = ENTRY_ID,
         candidate_session: CandidateSession | None = None,
         candidate_records: Mapping[int, FunctionSignatureRecord] | None = None,
+        declaration_spans: Mapping[DeclarationKey, SourceSpan] | None = None,
     ) -> None:
         self._env = env
         self._resolved = resolved
@@ -672,6 +687,11 @@ class _Checker:
         self._module_id = module_id
         self._declaration_scope_paths = {
             ref.decl_node_id: ref.scope_path for ref in resolved.declarations.values()
+        }
+        self._declaration_spans = declaration_spans or {
+            key: ref.decl_span
+            for key, ref in resolved.declarations.items()
+            if ref.decl_span is not None
         }
         self._candidate_session = candidate_session
         # Callers pass only candidate-inferred records here (see
@@ -1615,12 +1635,11 @@ class _Checker:
 
         fields = self._env.type_table.record_fields(receiver_type)
         if target.field not in fields:
-            if self._env.type_table.lookup_method(receiver_type, target.field) is not None:
-                raise AglTypeError(
-                    f"Method '{target.field}' of record '{receiver_type.name}' is not assignable.",
-                    span=target.span,
-                )
-            raise _no_member(receiver_type, target.field, target.span)
+            self._select_member(receiver_type, target.field, target.span)
+            raise AglTypeError(
+                f"Method '{target.field}' of record '{receiver_type.name}' is not assignable.",
+                span=target.span,
+            )
         if target.field not in self._env.type_table.record_mutable_fields(receiver_type):
             raise AglTypeError(
                 f"Field '{target.field}' of record '{receiver_type.name}' is immutable; "
@@ -4565,6 +4584,52 @@ class _Checker:
             )
         return typ
 
+    def _select_member(self, obj_type: Type, name: str, span: SourceSpan) -> _SelectedMember:
+        """Select a field or the nearest visible method of a static receiver type."""
+        fields: Mapping[str, Type] | None = None
+        if isinstance(obj_type, ExceptionType):
+            fields = self._env.type_table.exception_fields(obj_type)
+        elif isinstance(obj_type, RecordType):
+            fields = self._env.type_table.record_fields(obj_type)
+        if fields is not None and name in fields:
+            return _SelectedMember(field_type=fields[name])
+
+        candidate_levels = self._env.type_table.method_candidates(obj_type, name)
+        visible_levels = tuple(
+            tuple(
+                method
+                for method in candidates
+                if (method.module_id, method.scope_path, method.name)
+                in self._resolved.reachable_declarations
+            )
+            for candidates in candidate_levels
+        )
+        for visible in visible_levels:
+            if len(visible) == 1:
+                return _SelectedMember(method=visible[0], receiver_type=obj_type)
+            if visible:
+                declarations = ", ".join(_method_declaration_name(method) for method in visible)
+                related = tuple(
+                    (f"'{_method_declaration_name(method)}' is declared here", declaration_span)
+                    for method in visible
+                    if (
+                        declaration_span := self._declaration_spans.get(
+                            (method.module_id, method.scope_path, method.name)
+                        )
+                    )
+                    is not None
+                )
+                raise AglTypeError(
+                    f"Member '{name}' of '{obj_type!r}' is ambiguous between {declarations}.",
+                    span=span,
+                    related=related,
+                )
+        if any(candidate_levels):
+            raise AglTypeError(
+                f"Method '{name}' exists for '{obj_type!r}' but is not visible here.", span=span
+            )
+        raise _no_member(obj_type, name, span)
+
     def _check_field_access(
         self,
         node: FieldAccess,
@@ -4579,85 +4644,70 @@ class _Checker:
             if isinstance(obj_type, TypeVarType):
                 raise _no_type_var_members(obj_type, "fields or methods", node.span)
 
-            fields: Mapping[str, Type] | None = None
-            if isinstance(obj_type, ExceptionType):
-                fields = self._env.type_table.exception_fields(obj_type)
-            elif isinstance(obj_type, RecordType):
-                fields = self._env.type_table.record_fields(obj_type)
+            method_receiver = obj_type
+            direct_candidates = self._env.type_table.method_candidates(obj_type, node.field)
+            has_direct_field = isinstance(obj_type, RecordType) and (
+                node.field in self._env.type_table.record_fields(obj_type)
+            )
+            if (
+                isinstance(obj_type, RecordType)
+                and not has_direct_field
+                and not any(direct_candidates)
+            ):
+                enum_owners = self._env.type_table.enum_owners_for_member(obj_type)
+                if len(enum_owners) == 1 and is_standard_option_enum(enum_owners[0]):
+                    method_receiver = enum_owners[0]
+            if (
+                method_receiver is obj_type
+                and node.field in {"ask", "ask-request"}
+                and isinstance(obj_type, RecordType)
+                and not any(direct_candidates)
+            ):
+                builtin_agent = self._env.type_table.builtin_declaration("Agent")
+                if builtin_agent is not None and any(
+                    owner.decl_id == builtin_agent.decl_node_id
+                    for owner in self._env.type_table.enum_owners_for_member(obj_type)
+                ):
+                    return _SelectedBuiltinMethod(name=node.field, receiver_type=obj_type)
 
-            # Fields always win. Collision validation is deliberately a later
-            # declaration-time concern, but lookup preserves field behavior now.
-            if fields is not None and node.field in fields:
+            selected = self._select_member(method_receiver, node.field, node.span)
+            if selected.field_type is not None:
                 if type_args is not None:
                     raise AglTypeError(
                         "Explicit type arguments can only be applied to a generic method.",
                         span=node.span,
                     )
-                field_type = fields[node.field]
                 if isinstance(obj_type, RecordType):
                     self._set_inferred_return_expr_provenance(
                         node.node_id,
                         self._provenance_for_field_result(obj_type, node.field, node.obj),
                     )
-                return field_type
+                return selected.field_type
 
-            method_receiver = obj_type
-            if isinstance(obj_type, (RecordType, EnumType, ExceptionType)):
-                method = self._env.type_table.lookup_method(obj_type, node.field)
-                if isinstance(obj_type, RecordType) and method is None:
-                    enum_owners = self._env.type_table.enum_owners_for_member(obj_type)
-                    if len(enum_owners) == 1 and is_standard_option_enum(enum_owners[0]):
-                        method_receiver = enum_owners[0]
-                        method = self._env.type_table.lookup_method(method_receiver, node.field)
-            else:
-                method = self._env.type_table.lookup_builtin_method(obj_type, node.field)
-            if method is not None:
-                self._record_method_selection(node.node_id, method)
-                if method.is_builtin:
-                    # Host methods are call-only and their dispatch-specific
-                    # checker owns explicit type arguments and result typing.
-                    # Do not freshen the declared generic result merely to
-                    # discover the selected method; return the selection
-                    # itself rather than a fabricated function type.
-                    return _SelectedBuiltinMethod(
-                        name=method.name,
-                        receiver_type=method_receiver,
-                        method=method,
-                    )
-                bound = self._bound_method_type(
-                    method, method_receiver, type_args=type_args, expected=expected, span=node.span
+            method = selected.method
+            receiver = selected.receiver_type
+            assert method is not None and receiver is not None
+            self._record_method_selection(node.node_id, method)
+            if method.is_builtin:
+                return _SelectedBuiltinMethod(
+                    name=method.name, receiver_type=receiver, method=method
                 )
-                if self._env.is_extern_node_id(method.decl_node_id):
-                    self._set_extern_expr_targets(
-                        node.node_id,
-                        (
-                            _ExternTarget(
-                                name=method.name,
-                                result_type=bound.result,
-                                decl_node_id=method.decl_node_id,
-                                module_id=method.module_id,
-                            ),
-                        ),
-                    )
-                return bound
-            if isinstance(obj_type, (RecordType, EnumType, ExceptionType)):
-                builtin_agent = self._env.type_table.builtin_declaration("Agent")
-                if (
-                    node.field in {"ask", "ask-request"}
-                    and isinstance(obj_type, RecordType)
-                    and builtin_agent is not None
-                    and any(
-                        owner.decl_id == builtin_agent.decl_node_id
-                        for owner in self._env.type_table.enum_owners_for_member(obj_type)
-                    )
-                ):
-                    return _SelectedBuiltinMethod(name=node.field, receiver_type=obj_type)
-                raise _no_member(obj_type, node.field, node.span)
-            raise AglTypeError(
-                f"Member access requires a record, enum, exception, or built-in receiver; "
-                f"got '{obj_type!r}'.",
-                span=node.span,
+            bound = self._bound_method_type(
+                method, receiver, type_args=type_args, expected=expected, span=node.span
             )
+            if self._env.is_extern_node_id(method.decl_node_id):
+                self._set_extern_expr_targets(
+                    node.node_id,
+                    (
+                        _ExternTarget(
+                            name=method.name,
+                            result_type=bound.result,
+                            decl_node_id=method.decl_node_id,
+                            module_id=method.module_id,
+                        ),
+                    ),
+                )
+            return bound
         except AglTypeError as exc:
             raise self._frame_inferred_return_error(exc, exprs=(node.obj,)) from exc
 
@@ -5751,6 +5801,7 @@ def _check_prepared_module(
     prepare_headers: bool = True,
     infer_candidates: bool = True,
     candidate_records: Mapping[int, FunctionSignatureRecord] | None = None,
+    declaration_spans: Mapping[DeclarationKey, SourceSpan] | None = None,
 ) -> CheckedModule:
     """Check using a prepared environment and return only finalized annotations.
 
@@ -5784,6 +5835,7 @@ def _check_prepared_module(
         capabilities=capabilities,
         module_id=module_id,
         candidate_records=candidate_records,
+        declaration_spans=declaration_spans,
     )
     checker.check_body(resolved.program)
     checked = checker.result()

@@ -1,1 +1,0 @@
-{"module_roots": ["program_modules/builtin_method_owners"], "diagnostic": {"line": 1, "message_contains": ["std/array"]}}

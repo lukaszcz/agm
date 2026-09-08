@@ -93,6 +93,24 @@ def _check(src: str, *, default_stdlib: bool = True) -> CheckedModule:
     return resolve_and_check_inline_entry(src, _CAPS, default_stdlib=default_stdlib)
 
 
+def _selected_method(table: TypeTable, owner: Type, name: str) -> MethodDef | None:
+    """Return the nearest sole candidate for assertions that need its metadata."""
+    return next(
+        (method for level in table.method_candidates(owner, name) for method in level), None
+    )
+
+
+def test_orphaned_declaration_releases_its_current_name() -> None:
+    table = TypeTable()
+    typedef = TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=700200)
+    table.register(typedef)
+
+    table.orphan(typedef.decl_node_id)
+
+    assert table.get(ENTRY_ID, "Point") is None
+    assert table.is_orphaned(typedef.decl_node_id)
+
+
 def test_builtin_member_identity_falls_back_for_non_enum_prelude_types() -> None:
     assert (
         source_enum_member_decl_id(
@@ -921,10 +939,10 @@ class TestMethodIndex:
         table.register_method(fault, fault_code)
         table.register_method(point, point_shift)
 
-        assert table.lookup_method(point, "shift") == point_shift
-        assert table.lookup_method(color, "primary") == color_primary
-        assert table.lookup_method(fault, "code") == fault_code
-        assert table.methods_for(fault) == table.methods_for(fault) == {"code": fault_code}
+        assert _selected_method(table, point, "shift") == point_shift
+        assert _selected_method(table, color, "primary") == color_primary
+        assert _selected_method(table, fault, "code") == fault_code
+        assert table.method_candidates(fault, "code") == ((fault_code,),)
         assert point_shift.module_id == _LIB_ID
         assert point_shift.scope_path == ("Models", "Point")
         assert point_shift.name == "shift"
@@ -965,7 +983,7 @@ class TestMethodIndex:
         )
         table.register_method(root, describe)
 
-        assert table.lookup_method(leaf, "describe") == describe
+        assert _selected_method(table, leaf, "describe") == describe
 
     def test_register_method_invalidates_cached_inherited_lookup_miss(self) -> None:
         table = TypeTable()
@@ -984,7 +1002,7 @@ class TestMethodIndex:
             )
         )
 
-        assert table.lookup_method(child, "status") is None
+        assert _selected_method(table, child, "status") is None
 
         status = MethodDef(
             module_id=ENTRY_ID,
@@ -996,7 +1014,7 @@ class TestMethodIndex:
         )
         table.register_method(base, status)
 
-        assert table.lookup_method(child, "status") == status
+        assert _selected_method(table, child, "status") == status
 
     def test_exception_lookup_rejects_a_cyclic_base_chain(self) -> None:
         table = TypeTable()
@@ -1020,7 +1038,7 @@ class TestMethodIndex:
         )
 
         with pytest.raises(AssertionError, match="cyclic exception base chain"):
-            table.lookup_method(
+            table.method_candidates(
                 ExceptionType(name="A", module_id=ENTRY_ID, decl_id=700014), "missing"
             )
 
@@ -1031,7 +1049,7 @@ class TestMethodIndex:
             TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=700000)
         )
 
-        assert table.lookup_method(point, "missing") is None
+        assert _selected_method(table, point, "missing") is None
 
     def test_merge_from_overwrites_method_entries_and_invalidates_exception_lookup_cache(
         self,
@@ -1062,7 +1080,7 @@ class TestMethodIndex:
                 receiver_type_param_arity=0,
             ),
         )
-        table_method = target.lookup_method(child, "status")
+        table_method = _selected_method(target, child, "status")
         assert table_method is not None
         assert table_method.signature.result == TextType()
 
@@ -1081,7 +1099,7 @@ class TestMethodIndex:
         source.register_method(base, replacement)
         target.merge_from(source)
 
-        assert target.lookup_method(child, "status") == replacement
+        assert _selected_method(target, child, "status") == replacement
 
     def test_merge_from_skips_identical_method_entries(self) -> None:
         fault = ExceptionType(name="Fault", module_id=ENTRY_ID, decl_id=700017)
@@ -1103,12 +1121,12 @@ class TestMethodIndex:
             TypeDef(kind="exception", name="Fault", module_id=ENTRY_ID, decl_node_id=700017)
         )
         target.register_method(fault, method)
-        before = dict(target.methods_for(fault))
+        before = target.method_candidates(fault, "status")
 
         target.merge_from(source)
 
-        assert dict(target.methods_for(fault)) == before == {"status": method}
-        assert target.lookup_method(fault, "status") == method
+        assert target.method_candidates(fault, "status") == before == ((method,),)
+        assert _selected_method(target, fault, "status") == method
 
     def test_merge_from_drops_inherited_methods_of_an_overwritten_base_def(self) -> None:
         """An overwritten base def takes its own methods, and the memo, with it.
@@ -1144,7 +1162,7 @@ class TestMethodIndex:
                 receiver_type_param_arity=0,
             ),
         )
-        assert target.lookup_method(child, "message") is not None
+        assert _selected_method(target, child, "message") is not None
 
         source = TypeTable()
         source.register(
@@ -1158,7 +1176,7 @@ class TestMethodIndex:
         )
         target.merge_from(source)
 
-        assert target.lookup_method(child, "message") is None
+        assert _selected_method(target, child, "message") is None
 
     def test_generic_owner_records_receiver_type_parameter_arity(self) -> None:
         table = TypeTable()
@@ -1184,13 +1202,13 @@ class TestMethodIndex:
         )
         table.register_method(box, get)
 
-        found = table.lookup_method(
-            RecordType(name="Box", module_id=ENTRY_ID, decl_id=700002), "get"
+        found = _selected_method(
+            table, RecordType(name="Box", module_id=ENTRY_ID, decl_id=700002), "get"
         )
         assert found == get
         assert found.receiver_type_param_arity == 1
 
-    def test_lookup_builtin_method_excludes_nominal_methods(self) -> None:
+    def test_method_candidates_exclude_unrelated_receiver_types(self) -> None:
         table = TypeTable()
         point = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700099)
         table.register(
@@ -1208,8 +1226,8 @@ class TestMethodIndex:
 
         assert table.method_candidates(point, "show") == ((method,),)
         assert table.method_candidates(UnitType(), "show") == ()
-        assert table.lookup_builtin_method(point, "show") is None
-        assert table.lookup_builtin_method(TextType(), "show") is None
+        assert table.method_candidates(point, "show") == ((method,),)
+        assert table.method_candidates(TextType(), "show") == ((),)
 
     def test_method_candidates_keep_same_name_declarations_from_distinct_keys(self) -> None:
         table = TypeTable()
@@ -1941,10 +1959,10 @@ class TestSupersession:
         table.register_method(new_handle, explain)
 
         # Each declaration owns only its own method...
-        assert table.lookup_method(old_handle, "describe") == describe
-        assert table.lookup_method(old_handle, "explain") is None
-        assert table.lookup_method(new_handle, "explain") == explain
-        assert table.lookup_method(new_handle, "describe") is None
+        assert _selected_method(table, old_handle, "describe") == describe
+        assert _selected_method(table, old_handle, "explain") is None
+        assert _selected_method(table, new_handle, "explain") == explain
+        assert _selected_method(table, new_handle, "describe") is None
 
         # ...and its own exception base chain.
         assert table.exception_def(old_handle).base == 700302

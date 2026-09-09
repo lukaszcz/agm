@@ -4298,6 +4298,34 @@ def test_method_cannot_share_a_name_with_an_inherited_exception_field(
     assert "field" in str(raised.value).lower()
 
 
+@pytest.mark.parametrize(
+    ("declarations", "receiver", "member"),
+    (
+        ("record Point\n  label: text\n", "Point", "label"),
+        (
+            "exception Base extends Exception\n  code: int\nexception Derived extends Base()\n",
+            "Derived",
+            "code",
+        ),
+    ),
+)
+def test_orphan_method_cannot_collide_with_a_foreign_owner_or_ancestor_field(
+    tmp_path: Path, declarations: str, receiver: str, member: str
+) -> None:
+    with pytest.raises(AglTypeError) as raised:
+        _check_program(
+            tmp_path,
+            {
+                "shapes": declarations,
+                "methods": f"import shapes::*\ndef {receiver}::{member}(self) -> int = 1\n",
+                "entry": "import shapes\nimport methods\n()\n",
+            },
+        )
+
+    assert raised.value.span is not None and raised.value.span.start_line == 2
+    assert "field" in str(raised.value).lower()
+
+
 def test_sibling_exception_branches_may_reuse_a_method_name() -> None:
     """Two branches under a shared base are not each other's ancestor/descendant.
 
@@ -4636,54 +4664,27 @@ def test_exception_methods_use_nearest_static_level_and_base_dispatch(tmp_path: 
     assert _binding_value_type(checked, ENTRY_ID, "static") == IntType()
 
 
-def test_field_and_visible_orphan_method_are_ambiguous_on_read_and_assignment(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "entry",
+    (
+        "import shapes\nimport metrics hiding Point::describe\n()\n",
+        "import shapes\nimport metrics\nmetrics::Point::describe(shapes::Point(describe = 1))\n",
+    ),
+)
+def test_hiding_or_qualifying_cannot_repair_an_orphan_method_field_collision(
+    tmp_path: Path, entry: str
 ) -> None:
-    modules = {
-        "shapes": "record Point\n  var describe: int\n",
-        "metrics": "import shapes::*\ndef Point::describe(self) -> int = 1\n",
-        "entry": (
-            "import shapes\nimport metrics\nlet point = shapes::Point(describe = 1)\n"
-            "point.describe\n"
-        ),
-    }
-    with pytest.raises(AglTypeError) as read:
-        _check_program(tmp_path, modules)
-    assert "ambiguous" in str(read.value).lower()
+    with pytest.raises(AglTypeError) as raised:
+        _check_program(
+            tmp_path,
+            {
+                "shapes": "record Point\n  var describe: int\n",
+                "metrics": "import shapes::*\ndef Point::describe(self) -> int = 1\n",
+                "entry": entry,
+            },
+        )
 
-    modules["entry"] = (
-        "import shapes\nimport metrics\nlet point = shapes::Point(describe = 1)\n"
-        "point.describe := 2\n"
-    )
-    with pytest.raises(AglTypeError) as assignment:
-        _check_program(tmp_path, modules)
-    assert "ambiguous" in str(assignment.value).lower()
-
-
-def test_hiding_or_qualifying_an_orphan_method_repairs_a_field_method_clash(
-    tmp_path: Path,
-) -> None:
-    modules = {
-        "shapes": "record Point\n  var describe: int\n",
-        "metrics": "import shapes::*\ndef Point::describe(self) -> int = 1\n",
-        "entry": (
-            "import shapes\n"
-            "import metrics hiding Point::describe\n"
-            "let point = shapes::Point(describe = 1)\n"
-            "point.describe := 2\n"
-            "point.describe\n"
-        ),
-    }
-    checked = _check_program(tmp_path, modules)
-    result = _module_items(checked.modules[ENTRY_ID])[-1]
-    assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()
-
-    modules["entry"] = (
-        "import shapes\nimport metrics\nmetrics::Point::describe(shapes::Point(describe = 1))\n"
-    )
-    checked = _check_program(tmp_path, modules)
-    result = _module_items(checked.modules[ENTRY_ID])[-1]
-    assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()
+    assert "field" in str(raised.value).lower()
 
 
 def test_unimported_orphan_method_does_not_clash_with_a_field(tmp_path: Path) -> None:
@@ -4725,7 +4726,7 @@ def test_base_method_and_derived_field_clash_only_for_derived_static_type() -> N
     assert "ambiguous" in str(raised.value).lower()
 
 
-def test_inherited_field_and_visible_orphan_method_are_ambiguous(tmp_path: Path) -> None:
+def test_orphan_method_cannot_collide_with_a_foreign_owner_field(tmp_path: Path) -> None:
     with pytest.raises(AglTypeError) as raised:
         _check_program(
             tmp_path,
@@ -4744,7 +4745,7 @@ def test_inherited_field_and_visible_orphan_method_are_ambiguous(tmp_path: Path)
             },
         )
 
-    assert "ambiguous" in str(raised.value).lower()
+    assert "field" in str(raised.value).lower()
 
 
 def test_base_method_and_derived_field_are_legal_across_modules(tmp_path: Path) -> None:

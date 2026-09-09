@@ -14,7 +14,7 @@ An import contributes a module's full public qualified surface minus what its `h
 
 ## Classification
 
-Scope classifies what typecheck will type: a built-in call is recognized by resolving its callee to a `builtin def` declaration, never by spelling; a `self`-receiver `def` resolves to a `ReceiverOwner` declaration, locally or through a bare imported nominal type or enum-member path, while applied builtin receivers retain their declaring module; `builtin var` bindings are host-backed values, of which only root `std/config` bindings are engine settings. Index and field assignment receivers resolve as ordinary reads; typecheck owns container, field, and mutability rules.
+Scope classifies what typecheck will type: a built-in call is recognized by resolving its callee to a `builtin def` declaration, never by spelling; a `self`-receiver `def` resolves to a `ReceiverOwner`, locally or through a bare imported nominal type or enum-member path, while applied builtin receivers retain their declaring module. Each module's resolution publishes the declarations reachable through its routes. `builtin var` bindings are host-backed values, of which only root `std/config` bindings are engine settings. Index and field assignment receivers resolve as ordinary reads; typecheck owns container, field, and mutability rules.
 
 ## Attribute Recognition
 

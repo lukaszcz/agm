@@ -93,6 +93,24 @@ def _check(src: str, *, default_stdlib: bool = True) -> CheckedModule:
     return resolve_and_check_inline_entry(src, _CAPS, default_stdlib=default_stdlib)
 
 
+def _selected_method(table: TypeTable, owner: Type, name: str) -> MethodDef | None:
+    """Return the nearest sole candidate for assertions that need its metadata."""
+    return next(
+        (method for level in table.method_candidates(owner, name) for method in level), None
+    )
+
+
+def test_orphaned_declaration_releases_its_current_name() -> None:
+    table = TypeTable()
+    typedef = TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=700200)
+    table.register(typedef)
+
+    table.orphan(typedef.decl_node_id)
+
+    assert table.get(ENTRY_ID, "Point") is None
+    assert table.is_orphaned(typedef.decl_node_id)
+
+
 def test_builtin_member_identity_falls_back_for_non_enum_prelude_types() -> None:
     assert (
         source_enum_member_decl_id(
@@ -867,12 +885,12 @@ class TestExceptionAccessors:
 
 
 # ---------------------------------------------------------------------------
-# Method registry — declarations are plain semantic data keyed by their
+# Method index — declarations are plain semantic data keyed by their
 # nominal owner; exception owners inherit their base methods.
 # ---------------------------------------------------------------------------
 
 
-class TestMethodRegistry:
+class TestMethodIndex:
     def test_registers_methods_for_record_enum_and_exception_owners(self) -> None:
         table = TypeTable()
         point = RecordType(name="Point", module_id=_LIB_ID, scope_path=("Models",), decl_id=700016)
@@ -921,10 +939,10 @@ class TestMethodRegistry:
         table.register_method(fault, fault_code)
         table.register_method(point, point_shift)
 
-        assert table.lookup_method(point, "shift") == point_shift
-        assert table.lookup_method(color, "primary") == color_primary
-        assert table.lookup_method(fault, "code") == fault_code
-        assert table.methods_for(fault) == table.methods_for(fault) == {"code": fault_code}
+        assert _selected_method(table, point, "shift") == point_shift
+        assert _selected_method(table, color, "primary") == color_primary
+        assert _selected_method(table, fault, "code") == fault_code
+        assert table.method_candidates(fault, "code") == ((fault_code,),)
         assert point_shift.module_id == _LIB_ID
         assert point_shift.scope_path == ("Models", "Point")
         assert point_shift.name == "shift"
@@ -965,7 +983,7 @@ class TestMethodRegistry:
         )
         table.register_method(root, describe)
 
-        assert table.lookup_method(leaf, "describe") == describe
+        assert _selected_method(table, leaf, "describe") == describe
 
     def test_register_method_invalidates_cached_inherited_lookup_miss(self) -> None:
         table = TypeTable()
@@ -984,7 +1002,7 @@ class TestMethodRegistry:
             )
         )
 
-        assert table.lookup_method(child, "status") is None
+        assert _selected_method(table, child, "status") is None
 
         status = MethodDef(
             module_id=ENTRY_ID,
@@ -996,7 +1014,7 @@ class TestMethodRegistry:
         )
         table.register_method(base, status)
 
-        assert table.lookup_method(child, "status") == status
+        assert _selected_method(table, child, "status") == status
 
     def test_exception_lookup_rejects_a_cyclic_base_chain(self) -> None:
         table = TypeTable()
@@ -1020,7 +1038,7 @@ class TestMethodRegistry:
         )
 
         with pytest.raises(AssertionError, match="cyclic exception base chain"):
-            table.lookup_method(
+            table.method_candidates(
                 ExceptionType(name="A", module_id=ENTRY_ID, decl_id=700014), "missing"
             )
 
@@ -1031,7 +1049,7 @@ class TestMethodRegistry:
             TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=700000)
         )
 
-        assert table.lookup_method(point, "missing") is None
+        assert _selected_method(table, point, "missing") is None
 
     def test_merge_from_overwrites_method_entries_and_invalidates_exception_lookup_cache(
         self,
@@ -1062,7 +1080,7 @@ class TestMethodRegistry:
                 receiver_type_param_arity=0,
             ),
         )
-        table_method = target.lookup_method(child, "status")
+        table_method = _selected_method(target, child, "status")
         assert table_method is not None
         assert table_method.signature.result == TextType()
 
@@ -1081,7 +1099,7 @@ class TestMethodRegistry:
         source.register_method(base, replacement)
         target.merge_from(source)
 
-        assert target.lookup_method(child, "status") == replacement
+        assert _selected_method(target, child, "status") == replacement
 
     def test_merge_from_skips_identical_method_entries(self) -> None:
         fault = ExceptionType(name="Fault", module_id=ENTRY_ID, decl_id=700017)
@@ -1103,12 +1121,12 @@ class TestMethodRegistry:
             TypeDef(kind="exception", name="Fault", module_id=ENTRY_ID, decl_node_id=700017)
         )
         target.register_method(fault, method)
-        before = dict(target.methods_for(fault))
+        before = target.method_candidates(fault, "status")
 
         target.merge_from(source)
 
-        assert dict(target.methods_for(fault)) == before == {"status": method}
-        assert target.lookup_method(fault, "status") == method
+        assert target.method_candidates(fault, "status") == before == ((method,),)
+        assert _selected_method(target, fault, "status") == method
 
     def test_merge_from_drops_inherited_methods_of_an_overwritten_base_def(self) -> None:
         """An overwritten base def takes its own methods, and the memo, with it.
@@ -1144,7 +1162,7 @@ class TestMethodRegistry:
                 receiver_type_param_arity=0,
             ),
         )
-        assert target.lookup_method(child, "message") is not None
+        assert _selected_method(target, child, "message") is not None
 
         source = TypeTable()
         source.register(
@@ -1158,7 +1176,7 @@ class TestMethodRegistry:
         )
         target.merge_from(source)
 
-        assert target.lookup_method(child, "message") is None
+        assert _selected_method(target, child, "message") is None
 
     def test_generic_owner_records_receiver_type_parameter_arity(self) -> None:
         table = TypeTable()
@@ -1184,11 +1202,190 @@ class TestMethodRegistry:
         )
         table.register_method(box, get)
 
-        found = table.lookup_method(
-            RecordType(name="Box", module_id=ENTRY_ID, decl_id=700002), "get"
+        found = _selected_method(
+            table, RecordType(name="Box", module_id=ENTRY_ID, decl_id=700002), "get"
         )
         assert found == get
         assert found.receiver_type_param_arity == 1
+
+    def test_method_candidates_exclude_unrelated_receiver_types(self) -> None:
+        table = TypeTable()
+        point = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700099)
+        table.register(
+            TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=700099)
+        )
+        method = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Point",),
+            name="show",
+            decl_node_id=1,
+            signature=FunctionType(params=(point,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        table.register_method(point, method)
+
+        assert table.method_candidates(point, "show") == ((method,),)
+        assert table.method_candidates(UnitType(), "show") == ()
+        assert table.method_candidates(point, "show") == ((method,),)
+        assert table.method_candidates(TextType(), "show") == ((),)
+
+    def test_method_candidates_keep_same_name_declarations_from_distinct_keys(self) -> None:
+        table = TypeTable()
+        point = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700100)
+        table.register(
+            TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=700100)
+        )
+        first = MethodDef(
+            module_id=ModuleId.from_path("first"),
+            scope_path=("Point",),
+            name="show",
+            decl_node_id=1,
+            signature=FunctionType(params=(point,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        second = MethodDef(
+            module_id=ModuleId.from_path("second"),
+            scope_path=("Point",),
+            name="show",
+            decl_node_id=2,
+            signature=FunctionType(params=(point,), result=TextType()),
+            receiver_type_param_arity=0,
+        )
+
+        table.register_method(point, second)
+        table.register_method(point, first)
+
+        assert table.method_candidates(point, "show") == ((first, second),)
+
+    def test_method_registration_replaces_a_matching_declaration_key(self) -> None:
+        table = TypeTable()
+        point = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700101)
+        table.register(
+            TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=700101)
+        )
+        original = MethodDef(
+            module_id=ModuleId.from_path("methods"),
+            scope_path=("Point",),
+            name="show",
+            decl_node_id=1,
+            signature=FunctionType(params=(point,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        replacement = replace(
+            original, decl_node_id=2, signature=FunctionType(params=(point,), result=TextType())
+        )
+
+        table.register_method(point, original)
+        table.register_method(point, replacement)
+
+        assert table.method_candidates(point, "show") == ((replacement,),)
+
+    def test_method_candidates_keep_exception_levels_nearest_first(self) -> None:
+        table = TypeTable()
+        root = ExceptionType(name="Root", module_id=ENTRY_ID, decl_id=700102)
+        middle = ExceptionType(name="Middle", module_id=ENTRY_ID, decl_id=700103)
+        leaf = ExceptionType(name="Leaf", module_id=ENTRY_ID, decl_id=700104)
+        table.register(
+            TypeDef(kind="exception", name="Root", module_id=ENTRY_ID, decl_node_id=700102)
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Middle",
+                module_id=ENTRY_ID,
+                base=700102,
+                decl_node_id=700103,
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception", name="Leaf", module_id=ENTRY_ID, base=700103, decl_node_id=700104
+            )
+        )
+        root_method = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Root",),
+            name="show",
+            decl_node_id=1,
+            signature=FunctionType(params=(root,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        middle_method = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Middle",),
+            name="show",
+            decl_node_id=2,
+            signature=FunctionType(params=(middle,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        leaf_method = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Leaf",),
+            name="show",
+            decl_node_id=3,
+            signature=FunctionType(params=(leaf,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+
+        table.register_method(root, root_method)
+        table.register_method(middle, middle_method)
+        table.register_method(leaf, leaf_method)
+
+        assert table.method_candidates(leaf, "show") == (
+            (leaf_method,),
+            (middle_method,),
+            (root_method,),
+        )
+
+    def test_builtin_method_candidates_are_keyed_by_constructor(self) -> None:
+        table = TypeTable()
+        text_method = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("text",),
+            name="show",
+            decl_node_id=1,
+            signature=FunctionType(params=(TextType(),), result=TextType()),
+            receiver_type_param_arity=0,
+        )
+        int_method = replace(
+            text_method,
+            scope_path=("int",),
+            decl_node_id=2,
+            signature=FunctionType(params=(IntType(),), result=IntType()),
+        )
+
+        table.register_builtin_method("text", text_method)
+        table.register_builtin_method("int", int_method)
+
+        assert table.method_candidates(TextType(), "show") == ((text_method,),)
+        assert table.method_candidates(IntType(), "show") == ((int_method,),)
+
+    def test_merge_from_unions_method_candidate_maps(self) -> None:
+        point = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700105)
+        target = TypeTable()
+        source = TypeTable()
+        typedef = TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=700105)
+        target.register(typedef)
+        source.register(typedef)
+        target_method = MethodDef(
+            module_id=ModuleId.from_path("target"),
+            scope_path=("Point",),
+            name="show",
+            decl_node_id=1,
+            signature=FunctionType(params=(point,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        source_method = replace(
+            target_method,
+            module_id=ModuleId.from_path("source"),
+            decl_node_id=2,
+        )
+        target.register_method(point, target_method)
+        source.register_method(point, source_method)
+
+        target.merge_from(source)
+
+        assert target.method_candidates(point, "show") == ((source_method, target_method),)
 
 
 # ---------------------------------------------------------------------------
@@ -1762,10 +1959,10 @@ class TestSupersession:
         table.register_method(new_handle, explain)
 
         # Each declaration owns only its own method...
-        assert table.lookup_method(old_handle, "describe") == describe
-        assert table.lookup_method(old_handle, "explain") is None
-        assert table.lookup_method(new_handle, "explain") == explain
-        assert table.lookup_method(new_handle, "describe") is None
+        assert _selected_method(table, old_handle, "describe") == describe
+        assert _selected_method(table, old_handle, "explain") is None
+        assert _selected_method(table, new_handle, "explain") == explain
+        assert _selected_method(table, new_handle, "describe") is None
 
         # ...and its own exception base chain.
         assert table.exception_def(old_handle).base == 700302

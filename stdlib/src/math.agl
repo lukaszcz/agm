@@ -1,3 +1,5 @@
+import std/errors::RangeError
+
 scope IntInternals
   extern def int_pow(self: int, exponent: int) -> int
 end IntInternals
@@ -6,6 +8,9 @@ scope DecimalInternals
   extern def sqrt(self: decimal) -> decimal
   extern def pow(self: decimal, exponent: int) -> decimal
 end DecimalInternals
+
+scope bool
+end bool
 
 let pi: decimal = 3.141592653589793238462643383
 let e: decimal = 2.718281828459045235360287471

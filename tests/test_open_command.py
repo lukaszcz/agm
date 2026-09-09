@@ -80,22 +80,38 @@ class TestQueueSetupAndFocusSession:
         monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
         dry_run.set_enabled(True)
 
+        project_dir = tmp_path / "project"
+        identities: list[tuple[Path | None, Path | None]] = []
+
+        def record_shell(
+            _session_name: str,
+            *,
+            project_dir: Path | None = None,
+            workspace_dir: Path | None = None,
+            env: dict[str, str] | None = None,
+        ) -> Path:
+            del env
+            identities.append((project_dir, workspace_dir))
+            return tmp_path / "shell"
+
+        monkeypatch.setattr(open_module, "ensure_workspace_shell", record_shell)
         queue_setup_and_focus_workspace_session(
             detached=True,
             pane_count=None,
             session_name="s",
+            project_dir=project_dir,
             repo_path=tmp_path,
         )
 
         out = capsys.readouterr().out
-        wrapper = str(workspace_shell.workspace_shell_dir("s") / "shell")
         assert "tmux new-session -dP" in out
-        assert wrapper in out
+        assert str(tmp_path / "shell") in out
         assert ".agent-files" not in out
         assert "tmux send-keys -t 's:^.{top-left}' 'agm workspace setup' C-m" in out
         assert out.index("tmux new-session") < out.index("agm workspace setup")
         assert "tmux attach-session" not in out
         assert "tmux switch-client" not in out
+        assert identities == [(project_dir, tmp_path)]
 
     def test_not_detached_raises_system_exit(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -110,6 +126,7 @@ class TestQueueSetupAndFocusSession:
                 detached=False,
                 pane_count=None,
                 session_name="s",
+                project_dir=tmp_path / "project",
                 repo_path=tmp_path,
             )
         assert exc_info.value.code == 0
@@ -448,6 +465,7 @@ class TestOpenSession:
             detached: bool,
             pane_count: str | None,
             session_name: str,
+            project_dir: Path,
             repo_path: Path,
             run_setup: bool,
         ) -> None:
@@ -773,6 +791,7 @@ class TestOpenWorkspaceRemoteBranches:
             detached: bool,
             pane_count: str | None,
             session_name: str,
+            project_dir: Path,
             repo_path: Path,
             run_setup: bool,
         ) -> None:

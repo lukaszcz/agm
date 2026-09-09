@@ -220,11 +220,13 @@ tail or `use` declaration.
 `export` forwards public declarations without injecting them into the exporting
 module's local scope. A brace tail selects the declarations to forward; a plain
 export forwards the complete public surface, and `hiding` removes paths from
-that surface. Renames in a brace tail change the forwarded path. Once the
-declaring module is loaded, a method travels with its receiver type: any module
-with a value of that type can call the method without importing the module that
-declared it. Selections, renames, and `hiding` cannot hide a method; they
-control access to qualified declarations, not member calls.
+that surface. Renames in a brace tail change the forwarded path. Methods are
+ordinary declaration paths for these operations: a facade may write
+`export metrics::{Point::norm}`, and an importer can call that re-export by its
+qualified route, such as `facade::Point::norm(point)`. Separately, the import
+makes the declaration route visible for dot selection, so `point.norm()` is
+available. Selection, renaming, and `hiding` therefore control both direct-call
+routes and dot-method visibility.
 
 <!-- agl-check: fragment -->
 ```agl
@@ -255,31 +257,31 @@ program def main() -> unit =
   print("ready")
 ```
 
-When the prelude is enabled, the optional `std/builtin-methods` registry is
-also loaded when the standard library provides it, making its receiver methods
-ambient. The `--no-stdlib` option disables both automatic additions; a custom
-standard library may also omit the registry. Either way, importing a method's
-owning module loads its methods. An explicit prelude import remains available with
-`--no-stdlib`.
+The prelude re-exports the receiver scopes of `std/array`, `std/dict`,
+`std/text`, `std/json`, and `std/math`, making their exported methods available
+wherever the prelude is enabled. That visibility follows the ordinary import
+route: `import std/prelude::* hiding text::trim` hides `trim` while retaining
+other prelude methods. The `--no-stdlib` option disables the implicit prelude;
+an explicit route to a module or facade exporting a method makes it visible.
+An explicit prelude import remains available with `--no-stdlib`.
 
 ## Standard library modules
 
 The standard library is an ordinary module tree mounted under `std/`: its
 modules are imported, aliased, re-exported, and hidden from exactly like any
-other module. Three have a language-level role:
+other module. Two have a language-level role:
 
 - `std/prelude` is the prelude described above. It declares nothing itself: it
   re-exports the modules declaring the types, exceptions, and built-ins the
-  language itself refers to, together with the generic sum and product types
-  and `std/path`'s `path` type.
+  language itself refers to, together with the generic sum and product types,
+  the receiver scopes that make builtin methods available, and `std/path`'s
+  `path` type.
 - `std/config` exposes the host engine settings as `builtin var` bindings; see
   [Host environment](host-environment.md).
-- `std/builtin-methods` is the optional registry that makes the other modules'
-  receiver methods ambient.
 
 Every other `std/*` module carries no special status; the prelude re-exports
-the first six rows below — plus, from `std/path`, the `path` type alone — and
-the rest are imported explicitly:
+the first six rows below in full, the receiver scopes from the following two
+rows, and `std/path`'s `path` type alone. The rest are imported explicitly:
 
 | Module | Provides |
 | ------ | -------- |
@@ -289,8 +291,8 @@ the rest are imported explicitly:
 | `std/exec`, `std/agent`, `std/session` | shell execution, agent calls, and agent sessions |
 | `std/package` | package resource lookup |
 | `std/option`, `std/pair`, `std/either`, `std/result` | `Option[T]`, `Pair[A, B]`, `Either[A, B]`, and `Result[T, E]` |
-| `std/array`, `std/dict`, `std/text`, `std/json` | the methods on the matching builtin type, plus that module's free functions |
-| `std/math` | numeric methods on `int` and `decimal`, aggregates, and constants |
+| `std/array`, `std/dict`, `std/text`, `std/json` | builtin receiver scopes and free functions; `std/text` also provides `TextBuilder`; the prelude re-exports the scopes |
+| `std/math` | builtin receiver scopes for `int`, `decimal`, and `bool`, aggregates, and constants |
 | `std/toml` | conversion between TOML documents and `json` |
 | `std/regex` | Python-compatible searching, rewriting, and splitting |
 | `std/time` | UTC clock, parsing, formatting, and sleeping |

@@ -1,15 +1,15 @@
 """Reusable module artifacts in memory and across CLI processes.
 
 Resolution, checking, and match compilation retain each module alongside its
-transitive import/export dependencies and ambient method modules. Memory hits
+transitive import/export dependencies. Memory hits
 require identical loaded sources; disk hits validate source-derived identities
 and the compiler version. Modules sharing a dependency closure share a persisted
 stage image. Restored stages anchor their provenance to the current compilation.
 
 Checked modules publish closed type and function interfaces for importers.
 Capabilities distinguish checked artifacts and IR; the lowerer adds its resource
-and contract context. Entry modules and library cycles reaching the entry are
-never retained. Runtime state and companion callables are never cached here.
+and contract context. Entry modules are never retained; non-entry cycle members may be retained
+against the exact entry source. Runtime state and companion callables are never cached here.
 """
 
 from __future__ import annotations
@@ -129,10 +129,9 @@ def retain_lowered_module(key: bytes, module: LoweredModule) -> None:
 def retained_module_sources(graph: ModuleGraph) -> dict[ModuleId, Sources]:
     """Return, per retainable module, everything its artifacts could read.
 
-    A module's own artifacts depend on it, on every module reachable from it
-    through the graph's dependency edges (whose exports decide what its imports
-    name), and on the ambient builtin-method modules, which contribute methods
-    to every module without appearing as a dependency edge.
+    A module's own artifacts depend on it and every module reachable from it
+    through the graph's dependency edges, whose exports decide what its imports
+    name.
 
     A pass derives this once and uses it twice -- to look the image up, and to
     refresh it with what the pass produced.
@@ -141,9 +140,7 @@ def retained_module_sources(graph: ModuleGraph) -> dict[ModuleId, Sources]:
     for module_id, loaded in graph.modules.items():
         if loaded.path is None or module_id == graph.entry_id:
             continue
-        reachable = _reachable(graph, module_id) | set(graph.ambient_modules)
-        if graph.entry_id in reachable:
-            continue
+        reachable = _reachable(graph, module_id)
         sources[module_id] = tuple(
             graph.modules[reached]
             for reached in sorted(reachable, key=_ordering_key)

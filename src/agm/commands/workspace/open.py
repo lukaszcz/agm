@@ -81,6 +81,7 @@ def create_configured_workspace_session(
     detached: bool,
     pane_count: str | None,
     session_name: str,
+    project_dir: Path,
     repo_path: Path,
     run_setup: bool,
 ) -> None:
@@ -90,7 +91,13 @@ def create_configured_workspace_session(
         pane_count=pane_count,
         session_name=session_name,
         cwd=repo_path,
-        shell_command=str(ensure_workspace_shell(session_name)),
+        shell_command=str(
+            ensure_workspace_shell(
+                session_name,
+                project_dir=project_dir,
+                workspace_dir=repo_path,
+            )
+        ),
     )
     if run_setup:
         queue_command_in_session(
@@ -108,12 +115,14 @@ def queue_setup_and_focus_workspace_session(
     detached: bool,
     pane_count: str | None,
     session_name: str,
+    project_dir: Path,
     repo_path: Path,
 ) -> None:
     create_configured_workspace_session(
         detached=detached,
         pane_count=pane_count,
         session_name=session_name,
+        project_dir=project_dir,
         repo_path=repo_path,
         run_setup=True,
     )
@@ -155,6 +164,7 @@ def open_workspace(
         detached=detached,
         pane_count=pane_count,
         session_name=session_name,
+        project_dir=proj_dir,
         repo_path=repo_path,
         run_setup=False,
     )
@@ -200,6 +210,7 @@ def _prepare_workspace(
         detached=detached,
         pane_count=pane_count,
         session_name=branch_session_name(proj_dir, branch),
+        project_dir=proj_dir,
         repo_path=repo_path,
     )
 

@@ -89,7 +89,9 @@ program def main() -> unit =
 The receiver fixes the leading method type parameters. In the example,
 `box.map` has its `E` fixed as `int`; inference and the `::[…]` suffix apply
 only to `U`, so `box.map::[text](...)` pins `U` to `text`. A bound generic
-method follows the same rule.
+method follows the same rule. A method on a generic receiver reached through a
+bare import uses these same positional receiver slots; only the receiver's
+resolution and the method declaration's visibility differ.
 
 A `def` in a type scope without a `self` receiver is not a method and declares
 its type parameters in the ordinary way; it does not inherit or capture the

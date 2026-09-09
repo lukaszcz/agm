@@ -757,6 +757,21 @@ def test_for_loop_text_iterates_characters() -> None:
     assert result["count"] == IntValue(5)
 
 
+def test_for_loop_text_keeps_original_unicode_source() -> None:
+    source = (
+        'var text = "é😀e\\u0301"\nvar seen = ""\nvar count = 0\n'
+        "for ch in text do\n"
+        '  text := "replacement"\n'
+        "  count := count + 1\n"
+        '  if ch == "e" => continue\n'
+        "  seen := seen + ch\n"
+        "done\n"
+    )
+    result = evaluate_ir(source)
+    assert result["seen"] == TextValue("é😀\u0301")
+    assert result["count"] == IntValue(4)
+
+
 def test_for_loop_var_accessible_in_body() -> None:
     """The iteration variable is in scope inside the loop body."""
     source = 'var last = ""\nfor ch in "abc" do\n  last := ch\ndone\nlast\n'

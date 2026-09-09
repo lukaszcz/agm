@@ -6939,7 +6939,9 @@ class TestOpen:
 
         branch_cfg = project / "config" / "mybranch"
         branch_cfg.mkdir(parents=True)
-        (branch_cfg / "env.sh").write_text(f'touch "{project}/branch-env-sourced"\n')
+        (branch_cfg / "env.sh").write_text(
+            f'touch "{project}/branch-env-sourced"\nexport BRANCH_ENV=loaded\n'
+        )
 
         clone = tmp_path / "tmp-clone"
         _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
@@ -6948,6 +6950,21 @@ class TestOpen:
         run_agm(["open", "mybranch"], env=env, cwd=str(project))
 
         assert (project / "branch-env-sourced").exists()
+        workspace = project / "worktrees" / "mybranch"
+        stale_env = _agm_env(env)
+        stale_env["PROJ_DIR"] = str(project)
+        stale_env["REPO_DIR"] = str(project / "repo")
+        result = subprocess.run(
+            [str(_workspace_shell_path(env, "proj/mybranch"))],
+            input='printf "branch:%s repo:%s\\n" "$BRANCH_ENV" "$REPO_DIR"\nexit\n',
+            cwd=workspace,
+            env=stale_env,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+        assert f"branch:loaded repo:{workspace}" in result.stdout
 
     def test_dotenv_files_are_applied_before_env_sh_with_branch_precedence(
         self, tmp_path: Path, env: dict[str, str]
@@ -9260,6 +9277,55 @@ class TestExecCommand:
         result = run_agm(["exec", str(module)], env=env, cwd=alpha)
 
         assert result.returncode == 0
+
+    def test_exec_and_check_multi_module_orphan_methods(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "geometry.agl").write_text("record Point(x: int, y: int)\n", encoding="utf-8")
+        (work / "metrics.agl").write_text(
+            "import geometry::*\n"
+            "def Point::shift(self, amount: int) -> Point = "
+            "Point(x = self.x + amount, y = self.y)\n"
+            "def Point::norm(self) -> int = self.x * self.x + self.y * self.y\n",
+            encoding="utf-8",
+        )
+        program = work / "main.agl"
+        program.write_text(
+            "import geometry::*\n"
+            "import metrics\n"
+            "program def main() -> unit =\n"
+            "  let p = Point(x = 2, y = 3)\n"
+            "  let f = p.norm\n"
+            "  let shift = p.shift(?)\n"
+            "  let routed = metrics::Point::shift(?, 1)\n"
+            "  print(f())\n"
+            "  print(shift(1).norm())\n"
+            "  print(routed(p).norm())\n",
+            encoding="utf-8",
+        )
+
+        executed = run_agm(["exec", str(program)], env=env, cwd=work)
+        checked = run_agm(["check", str(program)], env=env, cwd=work)
+
+        assert executed.stdout.splitlines() == ["13", "18", "18"]
+        assert checked.returncode == 0
+
+        (work / "fastmath.agl").write_text(
+            "import geometry::*\ndef Point::norm(self) -> int = self.x\n", encoding="utf-8"
+        )
+        ambiguous = work / "ambiguous.agl"
+        ambiguous.write_text(
+            "import geometry::*\nimport metrics\nimport fastmath\n"
+            "program def main() -> unit = print(Point(x = 2, y = 3).norm())\n",
+            encoding="utf-8",
+        )
+
+        rejected = run_agm(["check", str(ambiguous)], env=env, cwd=work, check=False)
+
+        assert rejected.returncode != 0
+        assert "norm" in rejected.stderr.lower()
 
     def test_exec_command_flag_runs_inline_program(
         self, tmp_path: Path, env: dict[str, str]

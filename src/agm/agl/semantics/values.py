@@ -437,15 +437,15 @@ class IteratorValue:
     position index. Array element and structural mutations are therefore
     visible at not-yet-reached live indices, while the entry length prevents
     appends from extending the loop indefinitely. A shorter live sequence
-    exhausts the cursor early. Dict keys and text characters are immutable
-    tuples materialized once. Mutable in place so ``IrIterNext`` can advance
-    without rebuilding the object.
+    exhausts the cursor early. Dict keys are materialized once; text retains
+    its string and wraps each code point only when consumed. Mutable in place
+    so ``IrIterNext`` can advance without rebuilding the object.
 
     Never rendered, hashed for equality, serialized, or returned to user
     code — it is an evaluator-internal value only.
     """
 
-    elements: "Sequence[Value]"
+    elements: "Sequence[Value] | str"
     pos: int = 0
     entry_length: int = field(init=False)
 

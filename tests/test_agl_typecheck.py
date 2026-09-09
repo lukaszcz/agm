@@ -2745,8 +2745,8 @@ class TestAsk:
         assert "prompt" in str(err).lower() or "argument" in str(err).lower()
 
     def test_ask_wrong_agent_type(self) -> None:
-        err = reject_type('let x = "not_agent"\nx.ask("Q")')
-        assert "member access" in str(err).lower()
+        err = reject_type('record Other()\nOther().ask("Q")')
+        assert "field or method" in str(err).lower()
 
     def test_ask_with_json_codec(self) -> None:
         r = accept_type('let n: int = ask("Q", format = "json")\nn')
@@ -10027,7 +10027,7 @@ def _method_header(
     owner = resolved.method_declarations[(ENTRY_ID, ("Point",), function.name)]
     env = TypeEnvironment()
     _TypeBuilder(env, param_zones=resolved.attributes.param_zones).collect(resolved.program)
-    with env.type_scope(owner):
+    with env.type_scope(owner.scope_path):
         signature, _type, _receiver = resolve_function_header(
             env,
             function,
@@ -10108,7 +10108,7 @@ class TestMethodHeaders:
         assert isinstance(outcome_decl, LetDecl)
         outcome_type = checked.type_env.get_binding_type(outcome_decl.pattern.node_id)
         assert isinstance(outcome_type, EnumType)
-        method = checked.type_env.type_table.lookup_method(outcome_type, "tag")
+        ((method,),) = checked.type_env.type_table.method_candidates(outcome_type, "tag")
         assert method is not None
         assert method.receiver_type_param_arity == 2
 

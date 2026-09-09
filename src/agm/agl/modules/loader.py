@@ -46,7 +46,6 @@ from agm.agl.modules.errors import (
 )
 from agm.agl.modules.ids import (
     ENTRY_ID,
-    STD_BUILTIN_METHODS_ID,
     STD_PRELUDE_ID,
     ModuleId,
     expand_module_wildcard,
@@ -175,13 +174,6 @@ class ModuleGraph:
     source_adjacency:
         The subset of direct dependency edges authored in source. Loader
         injections are absent, retaining provenance for runtime inventories.
-    ambient_modules:
-        Standard-library modules reached from the optional builtin-method
-        registry when the loader, rather than source imports, introduced it.
-        They are linked and initialized for every selected program,
-        but contribute no names to an entry's import environment. They are
-        virtual dependencies only for :attr:`inference_sccs`; :attr:`adjacency`
-        and :attr:`sccs` retain source import/export graph semantics.
     """
 
     modules: dict[ModuleId, LoadedModule]
@@ -189,44 +181,17 @@ class ModuleGraph:
     sccs: tuple[tuple[ModuleId, ...], ...]
     adjacency: dict[ModuleId, tuple[ModuleId, ...]]
     source_adjacency: dict[ModuleId, tuple[ModuleId, ...]] = field(default_factory=dict)
-    ambient_modules: frozenset[ModuleId] = frozenset()
     roots: RootSet = field(default_factory=lambda: RootSet(roots=frozenset()))
     # Unambiguous root-level user fixities visible while assembling the entry.
     # REPL promotion uses this to retain declarations with relative priorities
     # without retaining imported operators as session declarations.
     entry_infix_ambient: dict[str, tuple[int, syntax.InfixAssoc]] = field(default_factory=dict)
 
-    @property
-    def inference_sccs(self) -> tuple[tuple[ModuleId, ...], ...]:
-        """Return dependency-ordered SCCs with ambient methods available first.
-
-        Ambient builtin-method modules do not form source import edges: adding
-        them to :attr:`adjacency` would expose their routes and free functions
-        to user scope and would alter ordinary graph consumers. Candidate
-        inference nevertheless needs their closed method signatures before it
-        processes any consuming module. This derived graph adds those ordering-
-        only edges while retaining every real edge, so any resulting cycle is
-        still inferred as one component.
-        """
-        if not self.ambient_modules:
-            return self.sccs
-        ambient = tuple(sorted(self.ambient_modules, key=_mid_sort_key))
-        inference_adjacency = {
-            mid: [
-                *targets,
-                *(ambient if mid not in self.ambient_modules else ()),
-            ]
-            for mid, targets in self.adjacency.items()
-        }
-        return _tarjan_sccs(inference_adjacency)
-
     def source_reachable_modules(self, module_id: ModuleId) -> tuple[ModuleId, ...]:
         """Return modules reachable through source-authored import/export edges.
 
         ``source_adjacency`` records edge provenance at load time, excluding
-        loader-injected standard-library and builtin-method-registry edges.
-        Thus a module reached through a source import remains reachable even
-        if it also belongs to the ambient registry closure.
+        loader-injected standard-library edges.
         """
         adjacency = self.source_adjacency or self.adjacency
         reachable: list[ModuleId] = []
@@ -332,28 +297,6 @@ def _synthetic_stdlib_import(node_id: int) -> ImportDecl:
         hidden=(),
         span=span,
         node_id=node_id,
-    )
-
-
-def _ambient_builtin_methods_import() -> ImportDecl:
-    """Return the loader-only edge to the optional builtin-method registry."""
-    span = SourceSpan(
-        start_line=0,
-        start_col=0,
-        end_line=0,
-        end_col=0,
-        start_offset=0,
-        end_offset=0,
-        source=SourceId(label="<builtin-method-registry>"),
-    )
-    return ImportDecl(
-        module_path=STD_BUILTIN_METHODS_ID.segments,
-        wildcard=False,
-        alias=None,
-        tail=None,
-        hidden=(),
-        span=span,
-        node_id=-1,
     )
 
 
@@ -1108,7 +1051,6 @@ def _load_into_graph(
     # and therefore the start_id seed assignments — are stable regardless of
     # dict/set ordering.
     queue: deque[_ResolvedDependency] = deque()
-    loader_injected_registry = False
 
     def _resolve_dependencies(
         source: ModuleId,
@@ -1130,7 +1072,7 @@ def _load_into_graph(
                     source_path, target_path, mid, roots=roots, span=decl.span
                 )
                 targets.append(mid)
-                if decl.span.source.label not in {"<stdlib-import>", "<builtin-method-registry>"}:
+                if decl.span.source.label != "<stdlib-import>":
                     source_targets.append(mid)
                 if mid not in modules:
                     new_pairs.append((mid, decl, target_path))
@@ -1147,18 +1089,6 @@ def _load_into_graph(
     for mid, loaded in modules.items():
         if mid != entry_id:
             _resolve_dependencies(mid, (*loaded.imports, *loaded.export_decls))
-
-    if default_stdlib:
-        registry_decl = _ambient_builtin_methods_import()
-        try:
-            registry_path = resolve_module(STD_BUILTIN_METHODS_ID, roots, span=registry_decl.span)
-        except ModuleNotFound:
-            # The registry was introduced after existing standard libraries.
-            # Its absence deliberately preserves their current module set.
-            pass
-        else:
-            queue.append((STD_BUILTIN_METHODS_ID, registry_decl, registry_path))
-            loader_injected_registry = True
 
     while queue:
         mid, decl, canon_path = queue.popleft()
@@ -1178,36 +1108,12 @@ def _load_into_graph(
         _resolve_dependencies(mid, (*loaded.imports, *loaded.export_decls))
 
     sccs = _tarjan_sccs(adj)
-    # The registry is ambient only when the loader alone introduced it. An
-    # explicit source import (including one in a standard-library module)
-    # keeps its normal route, visibility, and runtime-dependency semantics.
-    ambient_roots = (
-        {STD_BUILTIN_METHODS_ID}
-        if loader_injected_registry
-        and not any(STD_BUILTIN_METHODS_ID in targets for targets in adj.values())
-        else set()
-    )
-    ambient_modules: set[ModuleId] = set()
-    pending = list(ambient_roots)
-    while pending:
-        current = pending.pop()
-        if current in ambient_modules:
-            continue
-        ambient_modules.add(current)
-        pending.extend(adj[current])
-    # The entry is reached because the host named it, so it is never ambient
-    # however the closure happens to run through it. Retaining it would put a
-    # freshly parsed module into every other module's artifact sources and
-    # would strip the ambient ordering guarantee from the whole graph whenever
-    # the entry is the registry itself.
-    ambient_modules.discard(entry_id)
     graph = ModuleGraph(
         modules=modules,
         entry_id=entry_id,
         sccs=sccs,
         adjacency={mid: tuple(targets) for mid, targets in adj.items()},
         source_adjacency={mid: tuple(targets) for mid, targets in source_adj.items()},
-        ambient_modules=frozenset(ambient_modules),
         roots=roots,
     )
     if preflight_reexport_cycles:

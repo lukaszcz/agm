@@ -22,7 +22,7 @@ from agm.agl.scope import (
     BuiltinKind,
     ModuleResolution,
 )
-from agm.agl.scope.symbols import BinderKind, BindingRef, ScopeNode
+from agm.agl.scope.symbols import BinderKind, BindingRef, ReceiverOwner, ScopeNode
 from agm.agl.syntax.nodes import (
     AsPattern,
     AssignStmt,
@@ -2029,7 +2029,7 @@ class TestMethodReceiverClassification:
         resolved = parse_and_resolve(f"{declaration}\ndef {owner}::identity(self) -> int = 1\n()")
 
         assert resolved.method_declarations == {
-            (ENTRY_ID, (owner,), "identity"): (owner,),
+            (ENTRY_ID, (owner,), "identity"): ReceiverOwner(ENTRY_ID, (owner,)),
         }
 
     def test_inline_member_type_scope_allows_methods(self) -> None:
@@ -2038,7 +2038,7 @@ class TestMethodReceiverClassification:
         )
 
         assert resolved.method_declarations == {
-            (ENTRY_ID, ("Tree", "Node"), "identity"): ("Tree", "Node"),
+            (ENTRY_ID, ("Tree", "Node"), "identity"): ReceiverOwner(ENTRY_ID, ("Tree", "Node")),
         }
 
     def test_method_named_after_a_builtin_call_is_exempt_from_the_reserved_name_rule(
@@ -2049,7 +2049,7 @@ class TestMethodReceiverClassification:
         )
 
         assert resolved.method_declarations == {
-            (ENTRY_ID, ("Point",), "print"): ("Point",),
+            (ENTRY_ID, ("Point",), "print"): ReceiverOwner(ENTRY_ID, ("Point",)),
         }
 
     def test_shorthand_and_region_methods_have_identical_classification(self) -> None:
@@ -2065,8 +2065,8 @@ class TestMethodReceiverClassification:
         )
 
         assert resolved.method_declarations == {
-            (ENTRY_ID, ("Point",), "shorthand"): ("Point",),
-            (ENTRY_ID, ("Point",), "region"): ("Point",),
+            (ENTRY_ID, ("Point",), "shorthand"): ReceiverOwner(ENTRY_ID, ("Point",)),
+            (ENTRY_ID, ("Point",), "region"): ReceiverOwner(ENTRY_ID, ("Point",)),
         }
 
     @pytest.mark.parametrize(
@@ -2088,7 +2088,7 @@ class TestMethodReceiverClassification:
         name = "builtin-host" if "builtin" in source else "extern_host"
 
         assert resolved.method_declarations == {
-            (ENTRY_ID, ("Point",), name): ("Point",),
+            (ENTRY_ID, ("Point",), name): ReceiverOwner(ENTRY_ID, ("Point",)),
         }
 
     @pytest.mark.parametrize(

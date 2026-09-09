@@ -101,7 +101,8 @@ An immutable Unicode string. Text indexing (`s[i]`) returns the Unicode code
 point at an integer index; negative indexes count from the end, and an
 out-of-range index raises `IndexError`. Text cannot be changed through indexed
 assignment. Untyped `ask` results default to `text` ([Agent calls](agent-calls.md)).
-Its methods are supplied by the standard library.
+The standard library supplies the standard text methods; user modules may also
+declare text methods.
 
 ### Numbers: `int` and `decimal`
 
@@ -169,14 +170,13 @@ See [Copying values](#copying-values) below for `copy`/`shallow-copy`.)
 
 #### Builtin-type methods
 
-Methods declared on `array[T]`, `dict[text, T]`, `text`, `json`, `int`, and
-`decimal` are supplied by their owning standard-library modules. When the
-standard-library prelude injects its optional `std/builtin-methods` registry,
-they are ambient members of their receiver types: use them directly wherever a
-value has that type. With `--no-stdlib`, or a custom standard library without
-the registry, import the owning module first. The module's free functions remain
-subject to normal import visibility. See [Functions](functions.md#methods) for
-method declarations, bound values, and calls.
+`array[T]`, `dict[text, T]`, `text`, `json`, `int`, `decimal`, and `bool` can
+have methods declared by any module. `std/prelude` re-exports the standard
+library receiver scopes, making their exported methods visible by default;
+`hiding` can remove an individual method route. With `--no-stdlib`, import a
+route to the declaration. Free functions remain subject to normal import
+visibility. See [Functions](functions.md#methods) for method declarations,
+bound values, and calls.
 
 #### Cycles
 
@@ -328,8 +328,8 @@ See [Functions](functions.md) for the declaration and call syntax.
 
 The types below are declared by the standard library and named by the
 language's own constructs — `exec`, `ask`, and sessions — so the reference
-describes them here. `std/prelude` re-exports their declaring modules, and
-every loaded entry and library module except `std/prelude` itself receives an
+describes them here. `std/prelude` re-exports their source modules, and every
+loaded entry and library module except `std/prelude` itself receives an
 automatic `import std/prelude::*`, unless `--no-stdlib` disables it or an
 explicit import whose expansion includes `std/prelude` supplies the prelude
 contribution instead.
@@ -448,8 +448,8 @@ Session lifecycle failures raise `SessionError`; see
 ## Members of nominal types
 
 A method is a member of a record, enum, or exception's nominal type. It is
-available on every value of that type wherever the value is used, so calling it
-does not require an import of the module that declared the type. See
+selectable where the source module declares it or reaches its declaration by a
+qualified import route; `hiding` can remove that route. See
 [Methods](functions.md#methods) for declaration and call syntax.
 
 In the REPL, redeclaring a record, enum, or exception starts a new
@@ -911,16 +911,20 @@ Typing is exact nominal matching with these implicit coercions:
 3. **An enum member record widens to an enum that declares it.** This applies only
    when checking against a known enum slot; it never finds a common enum while
    inferring a mixed expression.
-4. There are no other implicit conversions. In particular, an `array` or
+4. **A derived exception widens to any ancestor in its `extends` chain.** This
+   applies only against a known base-exception slot and preserves the value's
+   concrete identity. It does not propagate through containers, and `catch`
+   matching remains exact.
+5. There are no other implicit conversions. In particular, an `array` or
    `dict` value — even one that is JSON-shaped — is never implicitly absorbed
    into `json`: an implicit conversion never copies a data structure, and
    converting a container to `json` builds one. Use an explicit `as json`
    cast (see [Casts and convertibility](#casts-and-convertibility) below).
-5. Equality (`==`, `!=`) and ordering comparisons require both operands to
+6. Equality (`==`, `!=`) and ordering comparisons require both operands to
    have the *same* type after rule 1. Operands whose type is, or transitively
    contains, a function, `unit`, or opaque `Session` value are a static error — see
    [Values and equality](#values-and-equality) below.
-6. All branches of a `case` expression must have the same type after rule 1.
+7. All branches of a `case` expression must have the same type after rule 1.
 
 For explicit, user-requested conversions between types, see
 [Casts and convertibility](#casts-and-convertibility) below.

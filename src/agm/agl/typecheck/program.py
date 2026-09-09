@@ -41,12 +41,11 @@ Algorithm
    annotations for top-level ``FuncDef`` declarations in every module,
    producing a declaration-node-id-keyed signature table.
 
-3. **Import-SCC candidate inference** — consume the loader's derived
-   inference SCCs in reverse topological order. Ambient builtin-method modules
-   are ordering-only dependencies, so their closed method signatures publish
-   before consuming program modules without becoming source imports. Each
-   candidate function dependency SCC publishes only closed unannotated
-   signatures; one resulting cycle builds a single cross-module function graph.
+3. **Import-SCC candidate inference** — consume the loader's graph SCCs in
+   reverse topological order. Ordinary dependency SCCs publish their closed
+   signatures before their importers are considered. Each candidate function
+   dependency SCC publishes only closed unannotated signatures; one resulting
+   cycle builds a single cross-module function graph.
 
 4. **Authoritative per-module type-check** — after every signature is concrete,
    recheck each module body with its module-aware
@@ -72,7 +71,7 @@ from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import ImportEnv
 from agm.agl.scope.program import ResolvedProgram
-from agm.agl.scope.symbols import ModuleResolution
+from agm.agl.scope.symbols import DeclarationKey, ModuleResolution
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
 from agm.agl.semantics.type_table import (
@@ -103,7 +102,6 @@ from agm.agl.typecheck.builder import _TypeBuilder
 from agm.agl.typecheck.checker import _check_prepared_module, prepare_module_headers
 from agm.agl.typecheck.declaration_validation import (
     validate_builtin_declaration_uniqueness,
-    validate_builtin_method_ownership,
     validate_method_declaration_collisions,
 )
 from agm.agl.typecheck.env import (
@@ -181,8 +179,7 @@ class CheckedProgram:
         dependency-ordered lowering after this pass's presentation ordering.
     ``runtime_modules``
         Entry-reachable modules through explicit source imports and exports.
-        Loader-injected standard-library and ambient-registry edges do not add
-        dry-run call sites.
+        Loader-injected standard-library edges do not add dry-run call sites.
     """
 
     modules: dict[ModuleId, CheckedModule]
@@ -408,6 +405,15 @@ def _collect_all_type_keys(
             # function. Only non-builtin types reach this point.
             all_keys.add(_decl_key(mid, item))
     return all_keys
+
+
+def _declaration_spans(resolved: ResolvedProgram) -> dict[DeclarationKey, SourceSpan]:
+    """Index source spans for declarations available to program-wide diagnostics."""
+    return {
+        key: ref.decl_span
+        for module in resolved.modules.values()
+        for key, ref in module.resolved.declarations.items()
+    }
 
 
 def _find_type_decl_span(resolved: ResolvedProgram, key: DeclKey) -> SourceSpan | None:
@@ -1113,10 +1119,8 @@ def check_program(
 
     # Phase 3: build every module environment before candidate inference. The
     # completed explicit headers are present in every environment, while each
-    # derived inference SCC later adds only its closed candidates. Ambient
-    # builtin-method modules are ordering-only dependencies, leaving the
-    # loader's source graph and its SCCs unchanged for other consumers.
-    inference_sccs = resolved.graph.inference_sccs
+    # dependency SCC later adds only its closed candidates.
+    inference_sccs = resolved.graph.sccs
     ordered_mids = tuple(mid for inference_scc in inference_sccs for mid in inference_scc)
     module_envs: dict[ModuleId, TypeEnvironment] = {}
     for mid in ordered_mids:
@@ -1149,7 +1153,7 @@ def check_program(
             env.set_binding_type(var_node_id, var_type)
 
     program_modules = {module_id: module.resolved for module_id, module in resolved.modules.items()}
-    validate_builtin_method_ownership(program_modules)
+    declaration_spans = _declaration_spans(resolved)
 
     for mid in ordered_mids:
         prepare_module_headers(
@@ -1179,8 +1183,8 @@ def check_program(
     validate_builtin_declaration_uniqueness(program_modules, resolved.entry_id)
     validate_method_declaration_collisions(program_modules, shared_type_table)
 
-    # Candidate discovery follows the derived reverse-topological inference
-    # SCC sequence. A cycle is one cross-module function graph; a dependency
+    # Candidate discovery follows the reverse-topological dependency SCC
+    # sequence. A cycle is one cross-module function graph; a dependency
     # SCC's concrete records are available before its importers are considered.
     # Each SCC's closed signatures are published only into itself and the later
     # SCCs (their potential importers); earlier SCCs are dependencies that
@@ -1198,6 +1202,7 @@ def check_program(
                 module_envs[mid],
                 capabilities,
                 mid,
+                declaration_spans,
             )
             for mid in inference_scc
         )
@@ -1230,6 +1235,7 @@ def check_program(
             prepare_headers=False,
             infer_candidates=False,
             candidate_records=candidate_records,
+            declaration_spans=declaration_spans,
         )
         cm = replace(
             cp,

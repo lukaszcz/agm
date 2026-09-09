@@ -411,6 +411,6 @@ def test_builtin_exception_constructor_resolves_without_the_standard_library() -
     standard library switched off, that candidate's owner has no entry in
     the shared whole-program type table (built only from each module's own,
     non-builtin declarations), so resolving it must fall back to the local
-    always-seeded builtin registry instead of assuming the whole-program
+    always-seeded builtin environment instead of assuming the whole-program
     pre-pass always populated it."""
     _check('raise Abort(message = "stop")\n', default_stdlib=False)

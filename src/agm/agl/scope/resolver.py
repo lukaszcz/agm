@@ -74,6 +74,7 @@ from agm.agl.scope.imports import (
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_DISPLAY_NAMES,
     BUILTIN_CALL_NAMES,
+    BUILTIN_METHOD_RECEIVER_NAMES,
     BUILTIN_TYPE_STATIC_OWNER_PATHS,
     AglScopeError,
     BinderKind,
@@ -86,6 +87,7 @@ from agm.agl.scope.symbols import (
     LocalUseContribution,
     ModuleResolution,
     PatternSlot,
+    ReceiverOwner,
     ResolvedUseTarget,
     ScopeNode,
     ScopePath,
@@ -279,10 +281,6 @@ _BUILTIN_CALL_NAMES = BUILTIN_CALL_NAMES
 # The set of names that may NOT be used as any kind of binding.
 _RESERVED_NAMES: frozenset[str] = frozenset(_BUILTIN_CALL_NAMES)
 
-_BUILTIN_METHOD_RECEIVER_NAMES: frozenset[str] = frozenset(
-    {"array", "dict", "text", "json", "int", "decimal", "bool"}
-)
-
 _TEXTUALLY_ORDERED_BINDER_KINDS: frozenset[BinderKind] = frozenset(
     {
         BinderKind.let_binding,
@@ -296,6 +294,11 @@ _TEXTUALLY_ORDERED_BINDER_KINDS: frozenset[BinderKind] = frozenset(
 def _scope_path_sort_key(path: ScopePath) -> tuple[int, ScopePath]:
     """Order scope paths by depth, then lexical spelling."""
     return (len(path), path)
+
+
+def _receiver_owner_sort_key(owner: ReceiverOwner) -> tuple[tuple[str, ...], ScopePath]:
+    """Order resolved receiver owners by their declaration identity."""
+    return (owner.module_id.segments, owner.scope_path)
 
 
 def _supersedes(candidate: ConstructorRef, cref: ConstructorRef) -> bool:
@@ -348,7 +351,7 @@ class _Resolver:
         ]
         | None = None,
         cross_module_constructible_types: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
-        cross_module_type_scopes: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
+        cross_module_type_owners: Mapping[QName, ReceiverOwner] | None = None,
         program_import_envs: Mapping[ModuleId, ImportEnv] | None = None,
         allow_root_statements: bool = False,
         is_standard_library_module: bool = False,
@@ -407,9 +410,9 @@ class _Resolver:
                         (declaration_module_id, member.node_id)
                     ] = constructor
         self._cross_module_constructible_types = cross_module_constructible_types
-        # Public type declarations establish scope paths even when they have
-        # no separately public child members.
-        self._cross_module_type_scopes = cross_module_type_scopes
+        # Public nominal declarations and inline enum members establish scope
+        # paths even when they have no separately public child members.
+        self._cross_module_type_owners = dict(cross_module_type_owners or {})
         # Whole-program public-type table, used to follow a type alias's
         # target across an import when deciding whether the alias has a
         # variant-less constructor.
@@ -502,6 +505,9 @@ class _Resolver:
             if path
         }
         self._scope_paths: set[ScopePath] = {(), *self._repl_session_scope_nodes}
+        self._scope_region_paths: set[ScopePath] = {
+            path for path, node in self._repl_session_scope_nodes.items() if node.is_scope_region
+        }
         self._ordered_binding_paths: set[ScopePath] = set()
         self._scope_node_ids: dict[ScopePath, int] = {
             path: node.node_id for path, node in self._repl_session_scope_nodes.items() if path
@@ -516,9 +522,9 @@ class _Resolver:
         self._type_declarations_by_path: dict[
             ScopePath, list[RecordDef | EnumDef | ExceptionDef | TypeAlias]
         ] = {}
-        # Structured method identity -> nominal receiver owner path. This is
+        # Structured method identity -> nominal receiver owner. This is
         # scope's single receiver classification artifact for later passes.
-        self._method_declarations: dict[DeclarationKey, ScopePath] = {}
+        self._method_declarations: dict[DeclarationKey, ReceiverOwner] = {}
         self._scoped_constructor_candidates: dict[tuple[ScopePath, str], list[ConstructorRef]] = {}
         # Constructor candidates: name -> ordered list of ConstructorRef.
         self._constructor_candidates: dict[str, list[ConstructorRef]] = {}
@@ -644,15 +650,6 @@ class _Resolver:
         # establishes path-keyed membership before qualifier validation and the
         # legacy root worker build their compatibility tables.
         self._collect_declarations(program)
-        self._classify_method_declarations()
-        self._validate_function_names()
-        self._validate_non_method_type_params()
-        # Attribute recognition is per-declaration and independent of where a
-        # module lives, so it precedes the extern placement rule: a malformed
-        # attribute or a companion-name clash is reported as written even in an
-        # inline source, which cannot host an extern at all.
-        attribute_facts = recognize_attributes(program, declares_receiver=self._declares_receiver)
-        self._validate_extern_backing()
 
         # Pre-pass 2: collect top-level def names for mutual recursion.
         self._collect_func_decls(program)
@@ -674,6 +671,12 @@ class _Resolver:
         self._define_constructor_bindings()
 
         self._resolve_block_items(program.body.items)
+        self._validate_function_names()
+        self._validate_non_method_type_params()
+        # Receiver classification follows the ordered lexical walk, so attribute
+        # recognition runs only after every method declaration is known.
+        attribute_facts = recognize_attributes(program, declares_receiver=self._declares_receiver)
+        self._validate_extern_backing()
         self._validate_local_use_contributions()
         self._validate_retained_imported_use_routes()
 
@@ -706,6 +709,7 @@ class _Resolver:
             pattern_slots=dict(self._pattern_slots),
             match_site_pattern_slots=dict(self._match_site_pattern_slots_by_node),
             method_declarations=dict(self._method_declarations),
+            reachable_declarations=self._reachable_declarations(),
             use_targets=dict(self._use_targets),
             attributes=attribute_facts,
         )
@@ -713,6 +717,25 @@ class _Resolver:
     # ------------------------------------------------------------------
     # Pre-passes
     # ------------------------------------------------------------------
+
+    def _reachable_declarations(self) -> frozenset[DeclarationKey]:
+        """Return local, imported, and retained declaration identities."""
+        reachable = set(self._declarations)
+        for contribution in self._import_env.contributions.values():
+            for module_id, atom in contribution.members.values():
+                path = _bare_path(atom)
+                reachable.add((module_id, path[:-1], path[-1]))
+        retained_nodes = (*self._repl_session_scope_nodes.values(), self._repl_session_scope)
+        for node in retained_nodes:
+            if node is None:
+                continue
+            for ref in (*node.bindings.values(), *node.members.values()):
+                if ref.module_id != RESERVED_ID and ref.kind in {
+                    BinderKind.function_binding,
+                    BinderKind.constructor_binding,
+                }:
+                    reachable.add((ref.module_id, ref.scope_path, ref.name))
+        return frozenset(reachable)
 
     def _collect_declarations(self, program: Program) -> None:
         """Collect static declarations into one path-keyed namespace.
@@ -728,6 +751,7 @@ class _Resolver:
         if isinstance(item, ScopeRegion):
             path = enclosing_path + (item.segment.name,)
             self._ensure_scope_path(path, item.segment.node_id, item.span)
+            self._scope_region_paths.add(path)
             for child in item.items:
                 self._collect_item_declaration(child, path)
             return
@@ -847,18 +871,10 @@ class _Resolver:
                 self._scope_node_ids.setdefault(member_scope, member.node_id)
                 self._type_paths.add(member_scope)
 
-    def _classify_method_declarations(self) -> None:
-        """Classify receiver parameters after every declaration path is complete.
-
-        ``alias_targets`` maps each alias-owned type path to its target: a
-        rendered string, retained from a prior REPL entry, or this entry's own
-        ``TypeAlias`` declaration, rendered lazily only if a method is actually
-        rejected on that path. A path this entry redeclares as a nominal type
-        (record/enum/exception) is popped so a stale retained alias target
-        cannot reject a method on that redeclaration; a path this entry
-        redeclares as an alias always overrides whatever the retained state
-        held, in either direction.
-        """
+    def _classify_method_declaration(self, declaration: FuncDef) -> None:
+        """Classify one receiver after preceding lexical contributions are visible."""
+        if not declaration.params or declaration.params[0].name != "self":
+            return
         alias_targets: dict[ScopePath, str | TypeAlias] = {
             path: target
             for path, target in self._repl_session_type_paths.items()
@@ -870,57 +886,164 @@ class _Resolver:
                 alias_targets[type_scope] = type_decl
             else:
                 alias_targets.pop(type_scope, None)
-        for key, declaration in self._declaration_items.items():
-            if not isinstance(declaration, FuncDef) or not declaration.params:
-                continue
-            receiver = declaration.params[0]
-            if receiver.name != "self":
-                continue
-            owner_path = key[1]
-            alias_target = alias_targets.get(owner_path)
-            if alias_target is not None:
-                target_text = (
-                    alias_target
-                    if isinstance(alias_target, str)
-                    else render_type_expr(alias_target.type_expr)
-                )
-                raise AglScopeError(
-                    f"'self' cannot declare a method in alias scope '{owner_path[-1]}', "
-                    f"which targets '{target_text}'.",
-                    span=receiver.span,
-                )
-            if (
-                (
-                    owner_path in self._type_paths
-                    and (
-                        (self._module_id, owner_path[:-1], owner_path[-1])
-                        in self._declaration_items
-                        or self._scope_entity_kinds.get(
-                            (self._module_id, owner_path[:-1], owner_path[-1])
-                        )
-                        == "type"
-                        or owner_path in self._repl_session_type_paths
-                    )
-                )
-                or declaration.receiver_type is not None
-                or (len(owner_path) == 1 and owner_path[0] in _BUILTIN_METHOD_RECEIVER_NAMES)
-            ):
-                if receiver.default is not None:
-                    raise AglScopeError(
-                        f"Receiver 'self' for method '{declaration.name}' "
-                        "cannot have a default value.",
-                        span=receiver.span,
-                    )
-                self._method_declarations[key] = owner_path
-            elif receiver.type_expr is None:
-                if self._is_orphan_receiver(owner_path):
-                    raise AglScopeError(
-                        f"'self' cannot declare a method on '{owner_path[-1]}', which is "
-                        "declared in another module; methods must be declared in the module "
-                        "that declares their receiver type.",
-                        span=receiver.span,
-                    )
+        receiver = declaration.params[0]
+        owner_path = tuple(segment.name for segment in declaration.scope_path)
+        region_path, type_path = self._receiver_region_and_type_path(owner_path)
+        owner = (
+            self._local_receiver_owner(owner_path, declaration)
+            if declaration.receiver_type is not None
+            else self._lexical_receiver_owner(region_path, type_path, alias_targets, receiver.span)
+        )
+        if owner is None:
+            owner = self._local_receiver_owner(owner_path, declaration)
+        if owner is None:
+            owner = self._foreign_receiver_owner(owner_path, receiver.span)
+        if owner is None:
+            if receiver.type_expr is None:
                 raise AglScopeError("'self' requires an enclosing type scope.", span=receiver.span)
+            return
+        if receiver.default is not None:
+            raise AglScopeError(
+                f"Receiver 'self' for method '{declaration.name}' cannot have a default value.",
+                span=receiver.span,
+            )
+        key = (self._module_id, owner_path, declaration.name)
+        self._method_declarations[key] = owner
+
+    def _raise_alias_receiver(self, name: str, target: str | TypeAlias, span: SourceSpan) -> None:
+        """Reject a method receiver that names an alias."""
+        target_text = target if isinstance(target, str) else render_type_expr(target.type_expr)
+        raise AglScopeError(
+            f"'self' cannot declare a method in alias scope '{name}', "
+            f"which targets '{target_text}'.",
+            span=span,
+        )
+
+    def _local_receiver_owner(
+        self, owner_path: ScopePath, declaration: FuncDef
+    ) -> ReceiverOwner | None:
+        """Return a local nominal or builtin receiver owner, if one is declared."""
+        if declaration.receiver_type is not None:
+            return ReceiverOwner(self._module_id, owner_path)
+        _region_path, type_path = self._receiver_region_and_type_path(owner_path)
+        if len(type_path) == 1 and type_path[0] in BUILTIN_METHOD_RECEIVER_NAMES:
+            return ReceiverOwner(self._module_id, type_path)
+        return None
+
+    def _local_nominal_receiver_owner(self, path: ScopePath) -> ReceiverOwner | None:
+        """Return the local nominal type declaration at *path*, if present."""
+        if not path:
+            return None
+        key = (self._module_id, path[:-1], path[-1])
+        if path in self._type_paths and (
+            key in self._declaration_items
+            or self._scope_entity_kinds.get(key) == "type"
+            or path in self._repl_session_type_paths
+        ):
+            return ReceiverOwner(self._module_id, path)
+        return None
+
+    def _lexical_receiver_owner(
+        self,
+        region_path: ScopePath,
+        type_path: ScopePath,
+        alias_targets: Mapping[ScopePath, str | TypeAlias],
+        span: SourceSpan,
+    ) -> ReceiverOwner | None:
+        """Resolve a local receiver from the nearest enclosing lexical region."""
+        for length in range(len(region_path), -1, -1):
+            candidate = (*region_path[:length], *type_path)
+            alias_target = alias_targets.get(candidate)
+            if alias_target is not None:
+                self._raise_alias_receiver(candidate[-1], alias_target, span)
+            owner = self._local_nominal_receiver_owner(candidate)
+            if owner is not None:
+                return owner
+        return None
+
+    def _foreign_receiver_owner(
+        self, owner_path: ScopePath, span: SourceSpan
+    ) -> ReceiverOwner | None:
+        """Resolve a receiver through the ordinary nearest bare contribution layer."""
+        _region_path, type_path = self._receiver_region_and_type_path(owner_path)
+        if not type_path:
+            return None
+        atom = _bare_atom(type_path)
+
+        def is_type(ref: BindingRef) -> bool:
+            source = _bare_atom((*ref.scope_path, ref.name))
+            key = (ref.module_id, source)
+            return key in self._cross_module_type_owners or isinstance(
+                self._all_public_types.get(key), TypeAlias
+            )
+
+        nearest = self._nearest_bare_contribution_layer(atom, binding_predicate=is_type)
+        refs: set[BindingRef] = set()
+        selected_layer: ScopeNode | None = None
+        if nearest is not None:
+            selected_layer, refs, _constructors = nearest
+        assert self._root_scope is not None
+        imported_refs = {
+            ref
+            for qname in self._import_env.unqualified.get(atom, frozenset())
+            if is_type(ref := self._cross_module_member_ref(atom, qname, span)[0])
+        }
+        if selected_layer is None:
+            refs = imported_refs
+        elif selected_layer is self._root_scope:
+            refs.update(imported_refs)
+
+        owners: set[ReceiverOwner] = set()
+        if not refs and len(type_path) == 1:
+            for exposed, qnames in self._import_env.unqualified.items():
+                if _bare_path(exposed)[-1:] != type_path:
+                    continue
+                for module_id, source in qnames:
+                    source_path = _bare_path(source)
+                    parent = _bare_atom(source_path[:-1])
+                    if isinstance(self._all_public_types.get((module_id, parent)), EnumDef):
+                        owner = self._cross_module_type_owners.get((module_id, source))
+                        if owner is not None:
+                            owners.add(owner)
+            owners.update(
+                ReceiverOwner(
+                    candidate.owner_module_id, (*candidate.owner_path, candidate.owner_name)
+                )
+                for candidate in self._bare_constructor_candidates(type_path[0])
+            )
+        for ref in refs:
+            source = _bare_atom((*ref.scope_path, ref.name))
+            declaration = self._all_public_types.get((ref.module_id, source))
+            if isinstance(declaration, TypeAlias):
+                self._raise_alias_receiver(type_path[0], declaration, span)
+            owners.add(self._cross_module_type_owners[(ref.module_id, source)])
+        if len(owners) == 1:
+            return next(iter(owners))
+        if len(owners) > 1:
+            names = ", ".join(
+                spell_declaration(owner.module_id, owner.scope_path)
+                for owner in sorted(owners, key=_receiver_owner_sort_key)
+            )
+            raise AglScopeError(
+                f"Method receiver '{'::'.join(type_path)}' is ambiguous: {names}.", span=span
+            )
+        return None
+
+    def _receiver_region_and_type_path(self, owner_path: ScopePath) -> tuple[ScopePath, ScopePath]:
+        """Split a method path at its longest prefix of plain scope regions."""
+        region_length = 0
+        for length in range(1, len(owner_path)):
+            prefix = owner_path[:length]
+            key = (self._module_id, prefix[:-1], prefix[-1])
+            if (
+                prefix in self._scope_region_paths
+                and self._scope_entity_kinds.get(key) != "type"
+                and prefix not in self._repl_session_type_paths
+            ):
+                region_length = length
+            else:
+                break
+        return owner_path[:region_length], owner_path[region_length:]
 
     def _reachable_decl_contributions(
         self, table: Mapping[int, Mapping[NameAtom, frozenset[_T]]], path: ScopePath
@@ -939,34 +1062,6 @@ class _Resolver:
             if path[: len(decl_scope_path)] == decl_scope_path:
                 yield node_id, contributed
 
-    def _is_orphan_receiver(self, owner_path: ScopePath) -> bool:
-        """Return whether *owner_path* names a type imported from another module.
-
-        Consults the import environment's bare contributions — the same
-        names that make a tailed-imported type name callable
-        without qualification — together with the whole-program type table,
-        so a receiver on a type this module can see but does not declare
-        reports the "no orphans" rule instead of the generic "no enclosing
-        type scope" diagnostic. *owner_path*'s last segment is the receiver's
-        own bare name; every segment before it is the region the receiver is
-        declared in, whose reach is exactly a scoped import declared there or
-        in one of its ancestors -- the same reach an ordinary bare reference
-        there already gets from ``resolve_bare_contribution_layer`` -- unioned with
-        the module-wide root table.
-        """
-        if not owner_path:
-            return False
-        name = owner_path[-1]
-        candidates: set[QName] = set(self._import_env.unqualified.get(name, frozenset()))
-        for _node_id, bare in self._reachable_decl_contributions(
-            self._import_env.decl_bare, owner_path[:-1]
-        ):
-            candidates.update(bare.get(name, frozenset()))
-        return any(
-            module != self._module_id and (module, source) in self._cross_module_type_scopes
-            for module, source in candidates
-        )
-
     def _build_scope_nodes(self, root: ScopeNode) -> dict[ScopePath, ScopeNode]:
         """Build named-scope layers and populate their declaration memberships."""
         nodes: dict[ScopePath, ScopeNode] = {(): root}
@@ -978,6 +1073,7 @@ class _Resolver:
                 node_id=self._scope_node_ids[path],
                 parent=nodes[path[:-1]],
                 scope_path=path,
+                is_scope_region=path in self._scope_region_paths,
             )
             if retained is not None:
                 # A retained member is registered like any freshly declared
@@ -1065,7 +1161,7 @@ class _Resolver:
     def _non_method_functions(self) -> Iterator[FuncDef]:
         """Yield the function declarations that are not methods, in declaration order.
 
-        Runs after :meth:`_classify_method_declarations`, so a method (its key
+        Runs after the ordered resolution walk, so a method (its key
         is in ``self._method_declarations``) is left out: methods live in their
         receiver type's own member namespace and are validated against it.
         """
@@ -2041,7 +2137,7 @@ class _Resolver:
             )
             imported_member = any(
                 (qname := members.get(member)) is not None
-                and qname not in self._cross_module_type_scopes
+                and qname not in self._cross_module_type_owners
                 for _route, members in parent.imported
             )
             if local_member or imported_member:
@@ -2229,7 +2325,7 @@ class _Resolver:
         for atom, qname in members.items():
             path = _bare_path(atom)
             if path == target:
-                exists = exists or qname in self._cross_module_type_scopes
+                exists = exists or qname in self._cross_module_type_owners
             elif path[: len(target)] == target:
                 exists = True
                 relative_members[_bare_atom(path[len(target) :])] = qname
@@ -2294,7 +2390,7 @@ class _Resolver:
                     selected = (origin,) if origin in qnames else ()
                     if not selected or (
                         not relative
-                        and not any(qname in self._cross_module_type_scopes for qname in selected)
+                        and not any(qname in self._cross_module_type_owners for qname in selected)
                     ):
                         continue
                     members = members_by_route.setdefault(
@@ -2624,6 +2720,7 @@ class _Resolver:
             contribute(exposed, source)
         scope.imported_use_contributions.append(
             ImportedUseContribution(
+                declaration=decl,
                 target=self._use_targets[decl.node_id],
                 refreshes_all_members=decl.tail == (),
                 members=dict(selected),
@@ -2712,6 +2809,7 @@ class _Resolver:
         """
         if node.scope_path:
             with self._named_scope(tuple(segment.name for segment in node.scope_path)):
+                self._classify_method_declaration(node)
                 self._validate_qualifier_chains(node)
                 self._resolve_params_and_body(node)
             return
@@ -2723,6 +2821,7 @@ class _Resolver:
             )
         # Defaults are resolved in the enclosing (root) scope — they are
         # evaluated in the function's definition scope.
+        self._classify_method_declaration(node)
         self._validate_qualifier_chains(node)
         previous_synthetic_entry = self._in_synthetic_entry
         previous_entry_items = self._synthetic_entry_items
@@ -4051,7 +4150,7 @@ class _Resolver:
         for segment in qualifier.segments[1:]:
             cumulative = (*cumulative, segment.name)
             if segment.type_args is not None and not any(
-                members.get(_bare_atom(cumulative)) in self._cross_module_type_scopes
+                members.get(_bare_atom(cumulative)) in self._cross_module_type_owners
                 and members.get(_bare_atom(atom_path)) is not None
                 for _, members in route_members
             ):

@@ -155,6 +155,84 @@ def test_opened_alias_resolves_while_its_type_body_is_being_built(tmp_path: Path
     )
 
 
+def test_foreign_method_receiver_checks_and_selects_through_its_declaring_type(
+    tmp_path: Path,
+) -> None:
+    """An orphan method shares its foreign receiver with direct and dot calls."""
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": (
+                "import geometry::*\n"
+                "import metrics\n\n"
+                "let p = Point(x = 2, y = 3)\n"
+                "let dot = p.shift(1).norm()\n"
+                "let direct = metrics::Point::norm(p)\n"
+                "let boxed = Box(value = 4).get()\n"
+                "let extracted = Node(value = 5).extract()\n"
+                "extracted"
+            ),
+            "geometry": (
+                "record Point\n  x: int\n  y: int\n\n"
+                "record Box[E]\n  value: E\n\n"
+                "enum Tree[E]\n  | Node(value: E)\n\n"
+                "def Point::shift(self, amount: int) -> Point = "
+                "Point(x = self.x + amount, y = self.y)"
+            ),
+            "metrics": (
+                "import geometry::*\n\n"
+                "def Point::norm(self: geometry::Point) -> int = "
+                "self.x * self.x + self.y * self.y\n"
+                "def Box::get[E](self) -> E = self.value\n"
+                "def Tree::Node::extract[E](self) -> E = self.value"
+            ),
+        },
+    )
+
+    assert _binding_value_type(checked, ENTRY_ID, "dot") == IntType()
+    assert _binding_value_type(checked, ENTRY_ID, "direct") == IntType()
+    assert _binding_value_type(checked, ENTRY_ID, "boxed") == IntType()
+    assert _binding_value_type(checked, ENTRY_ID, "extracted") == IntType()
+
+
+def test_nested_imported_receiver_annotations_resolve(tmp_path: Path) -> None:
+    _check_program(
+        tmp_path,
+        {
+            "entry": (
+                "import shapes::*\n\n"
+                "def Geo::Point::choose("
+                "self: Geo::Point, other: Geo::Point"
+                ") -> Geo::Point = other"
+            ),
+            "shapes": "scope Geo\n  record Point()\nend Geo",
+        },
+        default_stdlib=False,
+    )
+
+
+def test_foreign_method_receiver_annotation_must_match_its_owner(tmp_path: Path) -> None:
+    """A receiver annotation cannot name a different imported nominal."""
+    graph = _make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import geometry\nimport metrics\n()",
+            "geometry": "record Point()\nrecord Other()",
+            "metrics": "import geometry::*\ndef Point::tag(self: Other) -> int = 1",
+        },
+    )
+
+    with pytest.raises(AglTypeError):
+        _check_graph(graph)
+
+
+def test_declaration_type_lookup_falls_back_to_the_shared_type_table() -> None:
+    """The declaration-index accessor works outside a program environment too."""
+    env = TypeEnvironment()
+
+    assert env.get_type_by_declaration(ENTRY_ID, ("Missing",)) is None
+
+
 def test_graph_func_signature_prepass_skips_inferred_return_type(tmp_path: Path) -> None:
     """Program context lets an unannotated def infer inside its own module."""
     cg = _check_program(
@@ -213,6 +291,63 @@ def test_candidate_inference_reads_a_preceding_destructuring_let_binder() -> Non
     )
 
     assert checked.function_signatures["capture"].result == IntType()
+
+
+def test_candidate_seeding_defers_binding_that_calls_unannotated_orphan_method() -> None:
+    checked = resolve_and_check_repl_entry(
+        "let answer: int = Some(value = 1).answer()\ndef Option::answer[T](self) = 42\nanswer",
+        _CAPS,
+    )
+
+    result = checked.resolved.program.body.items[-1]
+    assert checked.node_types[result.node_id] == IntType()
+
+
+def test_candidate_dependency_flows_through_top_level_binding_to_orphan_method() -> None:
+    checked = resolve_and_check_repl_entry(
+        "record R\n  value: int\nlet x = R(value = 0).m()\ndef f() = x\ndef R::m(self) = 1\nf()",
+        _CAPS,
+    )
+
+    assert checked.function_signatures["f"].result == IntType()
+    result = checked.resolved.program.body.items[-1]
+    assert checked.node_types[result.node_id] == IntType()
+
+
+def test_candidate_seeding_keeps_unrelated_same_named_field_binding() -> None:
+    checked = resolve_and_check_repl_entry(
+        "record Payload\n"
+        "  answer: int\n"
+        "let seed = Payload(answer = 42).answer\n"
+        "def Option::answer[T](self) = seed\n"
+        "Some(value = 1).answer()",
+        _CAPS,
+    )
+
+    result = checked.resolved.program.body.items[-1]
+    assert checked.node_types[result.node_id] == IntType()
+
+
+def test_candidate_seeding_defers_field_whose_receiver_uses_candidate_method() -> None:
+    checked = resolve_and_check_repl_entry(
+        "record Payload\n"
+        "  answer: int\n"
+        "let seed = Some(value = Payload(answer = 42)).answer().answer\n"
+        "def Option::answer[T](self) = self.unwrap()\n"
+        "seed",
+        _CAPS,
+    )
+
+    result = checked.resolved.program.body.items[-1]
+    assert checked.node_types[result.node_id] == IntType()
+
+
+def test_candidate_seeding_defers_invalid_same_named_field_receiver() -> None:
+    with pytest.raises(AglTypeError):
+        resolve_and_check_repl_entry(
+            "let seed = (1 + true).answer\ndef Option::answer[T](self) = self.unwrap()\nseed",
+            _CAPS,
+        )
 
 
 def test_program_signature_prepass_preserves_builtin_header_metadata(tmp_path: Path) -> None:
@@ -3928,12 +4063,11 @@ def test_cross_module_method_header_registers_on_the_shared_type_table(tmp_path:
 
     shapes_id = ModuleId.from_path("shapes")
     table = checked.modules[ENTRY_ID].type_env.type_table
-    # Methods are keyed by declaration identity, so the owner handle passed to
-    # lookup_method must carry Point's real decl_id, not a hand-written literal's
-    # default NO_DECL_ID — fetch it from the table's registered TypeDef first.
+    # Methods are keyed by declaration identity, so the owner handle must carry
+    # Point's real decl_id, not a hand-written literal's default NO_DECL_ID.
     point_typedef = table.get(shapes_id, "Point")
     assert point_typedef is not None
-    method = table.lookup_method(point_typedef.handle(), "radius")
+    ((method,),) = table.method_candidates(point_typedef.handle(), "radius")
     assert method is not None
     assert method.module_id == shapes_id
     assert method.scope_path == ("Point",)
@@ -3942,8 +4076,8 @@ def test_cross_module_method_header_registers_on_the_shared_type_table(tmp_path:
     )
 
 
-def test_only_recognized_builtin_methods_are_admitted_before_lowering(tmp_path: Path) -> None:
-    """Builtin methods use the same host-signature validation as root builtins."""
+def test_only_recognized_host_methods_are_admitted_before_lowering(tmp_path: Path) -> None:
+    """Host methods use the same host-signature validation as root builtins."""
     with pytest.raises(AglTypeError, match="invalid signature"):
         _check_program(
             tmp_path,
@@ -3983,13 +4117,24 @@ def test_mutually_recursive_method_headers_are_available_before_body_checking(
     table = checked.modules[ENTRY_ID].type_env.type_table
     counter_typedef = table.get(ENTRY_ID, "Counter")
     assert counter_typedef is not None
-    assert set(table.methods_for(counter_typedef.handle())) == {"even", "odd"}
+    assert tuple(
+        table.method_candidates(counter_typedef.handle(), "even")[0][0].signature.params
+    ) == (
+        counter_typedef.handle(),
+        IntType(),
+    )
+    assert tuple(
+        table.method_candidates(counter_typedef.handle(), "odd")[0][0].signature.params
+    ) == (
+        counter_typedef.handle(),
+        IntType(),
+    )
 
 
 def test_import_scc_infers_mutually_recursive_method_returns_and_registers_final_signatures(
     tmp_path: Path,
 ) -> None:
-    """Method candidates across an import cycle replace provisional registry signatures."""
+    """Method candidates across an import cycle replace provisional signatures."""
     checked = _check_program(
         tmp_path,
         {
@@ -4015,8 +4160,8 @@ def test_import_scc_infers_mutually_recursive_method_returns_and_registers_final
     a_typedef = table.get(a_id, "A")
     b_typedef = table.get(b_id, "B")
     assert a_typedef is not None and b_typedef is not None
-    a_method = table.lookup_method(a_typedef.handle(), "from-b")
-    b_method = table.lookup_method(b_typedef.handle(), "from-a")
+    ((a_method,),) = table.method_candidates(a_typedef.handle(), "from-b")
+    ((b_method,),) = table.method_candidates(b_typedef.handle(), "from-a")
     assert a_method is not None and b_method is not None
     assert strip_decl_ids(a_method.signature) == FunctionType(
         params=(RecordType("A", module_id=a_id), IntType()), result=IntType()
@@ -4060,7 +4205,7 @@ def test_unannotated_function_infers_result_through_a_member_call_in_either_sour
     assert checked.function_signatures["use"].result == IntType()
     box_type = checked.type_env.get_type("Box")
     assert box_type is not None
-    method = checked.type_env.type_table.lookup_method(box_type, "twice")
+    ((method,),) = checked.type_env.type_table.method_candidates(box_type, "twice")
     assert method is not None
     assert method.signature.result == IntType()
 
@@ -4080,8 +4225,8 @@ def test_unannotated_methods_are_mutually_recursive_through_member_calls() -> No
     table = checked.type_env.type_table
     counter_type = checked.type_env.get_type("Counter")
     assert counter_type is not None
-    even = table.lookup_method(counter_type, "is-even")
-    odd = table.lookup_method(counter_type, "is-odd")
+    ((even,),) = table.method_candidates(counter_type, "is-even")
+    ((odd,),) = table.method_candidates(counter_type, "is-odd")
     assert even is not None and odd is not None
     assert even.signature.result == BoolType()
     assert odd.signature.result == BoolType()
@@ -4099,7 +4244,7 @@ def test_unannotated_method_infers_result_through_a_forward_referenced_function(
 
     box_type = checked.type_env.get_type("Box")
     assert box_type is not None
-    method = checked.type_env.type_table.lookup_method(box_type, "describe")
+    ((method,),) = checked.type_env.type_table.method_candidates(box_type, "describe")
     assert method is not None
     assert method.signature.result == IntType()
     assert checked.function_signatures["helper"].result == IntType()
@@ -4226,82 +4371,32 @@ def test_method_cannot_share_a_name_with_an_inherited_exception_field(
     assert "field" in str(raised.value).lower()
 
 
-def test_exception_method_cannot_redeclare_an_unannotated_method_from_any_base(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("declarations", "receiver", "member"),
+    (
+        ("record Point\n  label: text\n", "Point", "label"),
+        (
+            "exception Base extends Exception\n  code: int\nexception Derived extends Base()\n",
+            "Derived",
+            "code",
+        ),
+    ),
+)
+def test_orphan_method_cannot_collide_with_a_foreign_owner_or_ancestor_field(
+    tmp_path: Path, declarations: str, receiver: str, member: str
 ) -> None:
-    source = (
-        "exception Base extends Exception\n"
-        "  code: int\n"
-        'def Base::label(self) = "base"\n'
-        "exception Middle extends Base()\n"
-        "exception Leaf extends Middle()\n"
-        'def Leaf::label(self) -> text = "leaf"\n'
-        "()"
-    )
-
     with pytest.raises(AglTypeError) as raised:
-        _check_program(tmp_path, {"entry": source})
-
-    assert raised.value.span is not None and raised.value.span.start_line == 6
-    assert "label" in str(raised.value).lower()
-    assert "method" in str(raised.value).lower()
-    # The conflicting method belongs to 'Base', not to the nearest ancestor
-    # 'Middle', and its declaration is offered as a note.
-    assert "'Base'" in str(raised.value)
-    assert "'Middle'" not in str(raised.value)
-    assert [span.start_line for _text, span in raised.value.related] == [3]
-
-
-def test_inherited_method_collision_names_the_ancestor_that_declares_it(tmp_path: Path) -> None:
-    source = (
-        "exception Root extends Exception\n"
-        "  code: int\n"
-        "exception Mid extends Root()\n"
-        "exception Leaf extends Mid()\n"
-        'def Root::label(self) -> text = "root"\n'
-        'def Leaf::label(self) -> text = "leaf"\n'
-        "()"
-    )
-
-    with pytest.raises(AglTypeError) as raised:
-        _check_program(tmp_path, {"entry": source})
-
-    assert raised.value.span is not None and raised.value.span.start_line == 6
-    assert "'Root'" in str(raised.value)
-    assert "'Mid'" not in str(raised.value)
-    assert [span.start_line for _text, span in raised.value.related] == [5]
-
-
-def test_base_declared_after_its_descendants_collides_with_the_nearest_matching_one() -> None:
-    """A base's own method, declared once its descendants are already retained.
-
-    Mirrors ``test_inherited_method_collision_names_the_ancestor_that_declares_it``
-    from the opposite end: 'Base' is checked in a later entry that seeds a prior
-    entry's environment, where 'Middle' and 'Leaf' (three levels deep) are already
-    registered but not redeclared here, so only the descendant scan — not the
-    ancestor scan — can find the collision. 'Middle' does not declare the
-    colliding name, so the walk must continue past it to the actual owner,
-    'Leaf', two levels down.
-    """
-    base_decl = "exception Base extends Exception\n  code: int\n"
-    earlier = _check(
-        base_decl
-        + "exception Middle extends Base()\n"
-        + "exception Leaf extends Middle()\n"
-        + 'def Leaf::label(self) -> text = "leaf"\n'
-        + "()"
-    )
-
-    with pytest.raises(AglTypeError) as raised:
-        _check(
-            base_decl + 'def Base::label(self) -> text = "base"\n()',
-            seed_env=earlier.type_env,
+        _check_program(
+            tmp_path,
+            {
+                "shapes": declarations,
+                "methods": f"import shapes::*\ndef {receiver}::{member}(self) -> int = 1\n",
+                "entry": "import shapes\nimport methods\n()\n",
+            },
         )
 
-    assert "'Leaf'" in str(raised.value)
-    assert "'Middle'" not in str(raised.value)
-    assert "label" in str(raised.value).lower()
-    assert "method" in str(raised.value).lower()
+    assert raised.value.span is not None and raised.value.span.start_line == 2
+    assert "field" in str(raised.value).lower()
 
 
 def test_sibling_exception_branches_may_reuse_a_method_name() -> None:
@@ -4323,58 +4418,9 @@ def test_sibling_exception_branches_may_reuse_a_method_name() -> None:
     )
 
 
-def test_sibling_exception_branch_still_collides_with_the_shared_base() -> None:
-    """The same name is still rejected when the shared base itself declares it."""
-    with pytest.raises(AglTypeError) as raised:
-        _check(
-            "exception Base extends Exception\n"
-            "  code: int\n"
-            "exception BranchA extends Base()\n"
-            "exception BranchB extends Base()\n"
-            'def Base::label(self) -> text = "base"\n'
-            'def BranchA::label(self) -> text = "a"\n'
-            'def BranchB::label(self) -> text = "b"\n'
-            "()"
-        )
-
-    assert "'Base'" in str(raised.value)
-    assert "label" in str(raised.value).lower()
-    assert "method" in str(raised.value).lower()
-
-
-def test_descendant_exception_field_cannot_shadow_an_inherited_method(tmp_path: Path) -> None:
-    source = (
-        "exception Base extends Exception\n"
-        "  code: int\n"
-        'def Base::label(self) -> text = "base"\n'
-        "exception Middle extends Base()\n"
-        "exception Leaf extends Middle\n"
-        "  label: text\n"
-        "()"
-    )
-
-    with pytest.raises(AglTypeError) as raised:
-        _check_program(tmp_path, {"entry": source})
-
-    assert raised.value.span is not None and raised.value.span.start_line == 6
-    assert "label" in str(raised.value).lower()
-    assert "method" in str(raised.value).lower()
-
-
 @pytest.mark.parametrize(
     ("source", "line"),
-    (
-        ('record Point\n  label: text\ndef Point::label(self) -> text = "point"\n()', 3),
-        (
-            "exception Base extends Exception\n"
-            "  code: int\n"
-            'def Base::label(self) -> text = "base"\n'
-            "exception Child extends Base\n"
-            "  label: text\n"
-            "()",
-            5,
-        ),
-    ),
+    (('record Point\n  label: text\ndef Point::label(self) -> text = "point"\n()', 3),),
 )
 def test_check_module_enforces_method_field_collisions(source: str, line: int) -> None:
     with pytest.raises(AglTypeError) as raised:
@@ -4445,3 +4491,446 @@ def test_plain_function_can_operate_on_an_imported_type(tmp_path: Path) -> None:
 
     result = _module_items(checked.modules[ENTRY_ID])[-1]
     assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()
+
+
+# ---------------------------------------------------------------------------
+# Import-scoped method selection
+# ---------------------------------------------------------------------------
+
+
+def test_option_member_fallback_selects_a_visible_orphan_method(tmp_path: Path) -> None:
+    modules = {
+        "extension": 'def Option::describe[T](self) -> text = "option"\n',
+        "entry": "import extension\nlet description = Some(value = 1).describe()\n",
+    }
+
+    checked = _check_program(tmp_path, modules)
+
+    assert _binding_value_type(checked, ENTRY_ID, "description") == TextType()
+    with pytest.raises(AglTypeError):
+        _check_program(
+            tmp_path,
+            {
+                **modules,
+                "entry": (
+                    "import extension hiding Option::describe\n"
+                    "let description = Some(value = 1).describe()\n"
+                ),
+            },
+        )
+
+
+def test_option_member_fallback_ignores_an_unreachable_direct_method(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "direct": 'def Option::Some::describe[T](self) -> text = "some"\n',
+            "bridge": "import direct\n",
+            "fallback": 'def Option::describe[T](self) -> text = "option"\n',
+            "entry": (
+                "import bridge\nimport fallback\nlet description = Some(value = 1).describe()\n"
+            ),
+        },
+    )
+
+    assert _binding_value_type(checked, ENTRY_ID, "description") == TextType()
+
+
+def test_non_agent_record_does_not_gain_agent_methods_without_stdlib() -> None:
+    with pytest.raises(AglTypeError):
+        _check('record Worker()\nWorker().ask("hello")', default_stdlib=False)
+
+
+def test_hidden_agent_member_method_is_not_synthesized(tmp_path: Path) -> None:
+    with pytest.raises(AglTypeError):
+        _check_program(
+            tmp_path,
+            {
+                "entry": (
+                    "import std/prelude::* hiding Agent::ask\n"
+                    'AgentCommand(command = "worker").ask("hello")\n'
+                ),
+            },
+        )
+
+
+def test_orphan_method_requires_its_declaring_module_to_be_reachable(tmp_path: Path) -> None:
+    modules = {
+        "shapes": (
+            "record Point\n"
+            "  x: int\n"
+            "def Point::shift(self, amount: int) -> Point = Point(x = self.x + amount)\n"
+        ),
+        "metrics": "import shapes::*\ndef Point::norm(self) -> int = self.x\n",
+        "bridge": "import metrics\n",
+        "entry": (
+            "import shapes\n"
+            "import bridge\n"
+            "let point = shapes::Point(x = 1)\n"
+            "let coordinate = point.x\n"
+            "let shifted = point.shift(1)\n"
+            "point.norm()\n"
+        ),
+    }
+
+    with pytest.raises(AglTypeError) as raised:
+        _check_program(tmp_path, modules)
+
+    assert "visible" in str(raised.value).lower()
+    assert raised.value.span is not None and raised.value.span.start_line == 6
+
+
+def test_visible_orphan_method_is_selected_and_hiding_removes_it(tmp_path: Path) -> None:
+    modules = {
+        "shapes": "record Point\n  x: int\n",
+        "metrics": "import shapes::*\ndef Point::norm(self) -> int = self.x\n",
+        "entry": "import shapes\nimport metrics\nshapes::Point(x = 1).norm()\n",
+    }
+    checked = _check_program(tmp_path, modules)
+    result = _module_items(checked.modules[ENTRY_ID])[-1]
+    assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()
+
+    modules["entry"] = (
+        "import shapes\nimport metrics hiding Point::norm\nshapes::Point(x = 1).norm()\n"
+    )
+    with pytest.raises(AglTypeError) as raised:
+        _check_program(tmp_path, modules)
+    assert "visible" in str(raised.value).lower()
+
+
+def test_same_level_visible_methods_are_ambiguous(tmp_path: Path) -> None:
+    modules = {
+        "shapes": "record Point\n  x: int\n",
+        "metrics": "import shapes::*\ndef Point::norm(self) -> int = self.x\n",
+        "fastmath": "import shapes::*\ndef Point::norm(self) -> int = self.x + 1\n",
+        "entry": ("import shapes\nimport metrics\nimport fastmath\nshapes::Point(x = 1).norm()\n"),
+    }
+
+    with pytest.raises(AglTypeError) as raised:
+        _check_program(tmp_path, modules)
+
+    assert "ambiguous" in str(raised.value).lower()
+
+
+def test_nearest_exception_method_wins() -> None:
+    checked = _check(
+        "exception Base extends Exception\n"
+        "  code: int\n"
+        'def Base::describe(self) -> text = "base"\n'
+        "exception Derived extends Base()\n"
+        'def Derived::describe(self) -> text = "derived"\n'
+        'Derived(message = "error", code = 1).describe()\n'
+    )
+
+    result = _module_items(checked)[-1]
+    selection = checked.method_selections[result.callee.node_id]
+    assert selection.scope_path == ("Derived",)
+
+
+@pytest.mark.parametrize(
+    "method_route",
+    (
+        "import metrics",
+        "import metrics::{Point::norm}",
+        "import metrics::*",
+        "scope Region\n  import metrics\nend Region",
+    ),
+)
+def test_orphan_method_is_visible_through_each_import_route(
+    tmp_path: Path, method_route: str
+) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "shapes": "record Point\n  x: int\n",
+            "metrics": "import shapes::*\ndef Point::norm(self) -> int = self.x\n",
+            "entry": f"import shapes\n{method_route}\nshapes::Point(x = 1).norm()\n",
+        },
+    )
+
+    result = _module_items(checked.modules[ENTRY_ID])[-1]
+    assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()
+
+
+def test_facade_reexport_makes_an_orphan_method_visible(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "shapes": "record Point\n  x: int\n",
+            "metrics": "import shapes::*\ndef Point::norm(self) -> int = self.x\n",
+            "facade": "export metrics::{Point::norm}",
+            "entry": "import shapes\nimport facade\nshapes::Point(x = 1).norm()\n",
+        },
+    )
+
+    result = _module_items(checked.modules[ENTRY_ID])[-1]
+    assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()
+
+
+def test_method_consumer_needs_no_route_to_its_receiver_type(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "shapes": "record Point\n  x: int\n",
+            "metrics": (
+                "import shapes::*\n"
+                "def Point::norm(self) -> int = self.x\n"
+                "def origin() -> Point = Point(x = 0)\n"
+            ),
+            "entry": (
+                "import metrics\n"
+                "let p = metrics::origin()\n"
+                "let coordinate = p.x\n"
+                "let dot = metrics::origin().norm()\n"
+                "let direct = metrics::Point::norm(metrics::origin())\n"
+                "[coordinate, dot, direct]"
+            ),
+        },
+    )
+
+    assert _binding_value_type(checked, ENTRY_ID, "coordinate") == IntType()
+    assert _binding_value_type(checked, ENTRY_ID, "dot") == IntType()
+    assert _binding_value_type(checked, ENTRY_ID, "direct") == IntType()
+
+    with pytest.raises(AglScopeError):
+        _check_program(
+            tmp_path,
+            {
+                "shapes": "record Point\n  x: int\n",
+                "metrics": (
+                    "import shapes::*\n"
+                    "def Point::norm(self) -> int = self.x\n"
+                    "def origin() -> Point = Point(x = 0)\n"
+                ),
+                "entry": "import metrics\nPoint::norm(metrics::origin())\n",
+            },
+        )
+
+
+def test_home_and_orphan_methods_are_ambiguous_with_declaration_spans(tmp_path: Path) -> None:
+    with pytest.raises(AglTypeError) as raised:
+        _check_program(
+            tmp_path,
+            {
+                "shapes": ("record Point\n  x: int\ndef Point::norm(self) -> int = self.x\n"),
+                "metrics": "import shapes::*\ndef Point::norm(self) -> int = self.x + 1\n",
+                "entry": "import shapes\nimport metrics\nshapes::Point(x = 1).norm()\n",
+            },
+        )
+
+    assert "ambiguous" in str(raised.value).lower()
+    assert len(raised.value.related) == 2
+    assert {span.start_line for _message, span in raised.value.related} == {3, 2}
+
+
+def test_qualified_method_call_repairs_a_same_level_ambiguity(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "shapes": "record Point\n  x: int\n",
+            "metrics": "import shapes::*\ndef Point::norm(self) -> int = self.x\n",
+            "fastmath": "import shapes::*\ndef Point::norm(self) -> int = self.x + 1\n",
+            "entry": (
+                "import shapes\n"
+                "import metrics\n"
+                "import fastmath\n"
+                "metrics::Point::norm(shapes::Point(x = 1))\n"
+            ),
+        },
+    )
+
+    result = _module_items(checked.modules[ENTRY_ID])[-1]
+    assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()
+
+
+def test_exception_methods_use_nearest_static_level_and_base_dispatch(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "errors": (
+                "exception Base extends Exception\n  code: int\nexception Derived extends Base()\n"
+            ),
+            "base_methods": "import errors::*\ndef Base::describe(self) -> int = self.code\n",
+            "derived_methods": (
+                "import errors::*\ndef Derived::describe(self) -> text = self.message\n"
+            ),
+            "entry": (
+                "import errors\n"
+                "import base_methods\n"
+                "import derived_methods\n"
+                'let derived = errors::Derived(message = "bad", code = 1)\n'
+                "let base: errors::Base = derived\n"
+                "let nearest = derived.describe()\n"
+                "let static = base.describe()\n"
+                "nearest"
+            ),
+        },
+    )
+
+    assert _binding_value_type(checked, ENTRY_ID, "nearest") == TextType()
+    assert _binding_value_type(checked, ENTRY_ID, "static") == IntType()
+
+
+@pytest.mark.parametrize(
+    "entry",
+    (
+        "import shapes\nimport metrics hiding Point::describe\n()\n",
+        "import shapes\nimport metrics\nmetrics::Point::describe(shapes::Point(describe = 1))\n",
+    ),
+)
+def test_hiding_or_qualifying_cannot_repair_an_orphan_method_field_collision(
+    tmp_path: Path, entry: str
+) -> None:
+    with pytest.raises(AglTypeError) as raised:
+        _check_program(
+            tmp_path,
+            {
+                "shapes": "record Point\n  var describe: int\n",
+                "metrics": "import shapes::*\ndef Point::describe(self) -> int = 1\n",
+                "entry": entry,
+            },
+        )
+
+    assert "field" in str(raised.value).lower()
+
+
+def test_unimported_orphan_method_does_not_clash_with_a_field(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "shapes": "record Point\n  describe: int\n",
+            "metrics": "import shapes::*\ndef Point::describe(self) -> int = 1\n",
+            "entry": "import shapes\nlet point = shapes::Point(describe = 1)\npoint.describe\n",
+        },
+    )
+    result = _module_items(checked.modules[ENTRY_ID])[-1]
+    assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()
+
+
+def test_base_method_and_derived_field_clash_only_for_derived_static_type() -> None:
+    checked = _check(
+        "exception Base extends Exception\n"
+        "  code: int\n"
+        'def Base::describe(self) -> text = "base"\n'
+        "exception Derived extends Base\n"
+        "  describe: text\n"
+        'let derived = Derived(message = "bad", code = 1, describe = "field")\n'
+        "let base: Base = derived\n"
+        "base.describe()"
+    )
+    result = _module_items(checked)[-1]
+    assert checked.node_types[result.node_id] == TextType()
+
+    with pytest.raises(AglTypeError) as raised:
+        _check(
+            "exception Base extends Exception\n"
+            "  code: int\n"
+            'def Base::describe(self) -> text = "base"\n'
+            "exception Derived extends Base\n"
+            "  describe: text\n"
+            'Derived(message = "bad", code = 1, describe = "field").describe\n'
+        )
+    assert "ambiguous" in str(raised.value).lower()
+
+
+def test_orphan_method_cannot_collide_with_a_foreign_owner_field(tmp_path: Path) -> None:
+    with pytest.raises(AglTypeError) as raised:
+        _check_program(
+            tmp_path,
+            {
+                "errors": (
+                    "exception Base extends Exception\n"
+                    "  describe: text\n"
+                    "exception Derived extends Base()\n"
+                ),
+                "methods": 'import errors::*\ndef Base::describe(self) -> text = "method"\n',
+                "entry": (
+                    "import errors\n"
+                    "import methods\n"
+                    'errors::Derived(message = "bad", describe = "field").describe\n'
+                ),
+            },
+        )
+
+    assert "field" in str(raised.value).lower()
+
+
+def test_foreign_field_collision_is_reported_at_the_method_file(tmp_path: Path) -> None:
+    with pytest.raises(AglTypeError) as raised:
+        _check_program(
+            tmp_path,
+            {
+                "shapes": "\n" * 30 + "record Point\n  describe: int\n",
+                "methods": ('import shapes::*\ndef Point::describe(self) -> text = "method"\n'),
+                "entry": "import shapes\nimport methods\n()\n",
+            },
+        )
+
+    assert raised.value.span is not None
+    assert raised.value.span.source.label.endswith("methods.agl")
+    assert len(raised.value.related) == 1
+    assert raised.value.related[0][1].source.label.endswith("shapes.agl")
+
+
+def test_base_method_and_derived_field_are_legal_across_modules(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "errors": (
+                "exception Base extends Exception\n"
+                "  code: int\n"
+                "exception Derived extends Base\n"
+                "  describe: text\n"
+            ),
+            "methods": 'import errors::*\ndef Base::describe(self) -> text = "base"\n',
+            "entry": "import errors\nimport methods\n()\n",
+        },
+    )
+    assert ENTRY_ID in checked.modules
+
+
+def test_option_member_field_and_visible_option_method_are_ambiguous(tmp_path: Path) -> None:
+    with pytest.raises(AglTypeError) as raised:
+        _check_program(
+            tmp_path,
+            {
+                "methods": "def Option::value[T](self) -> T = self.unwrap()\n",
+                "entry": "import methods\nSome(value = 1).value\n",
+            },
+        )
+
+    assert "ambiguous" in str(raised.value).lower()
+
+
+def test_assignment_target_respects_method_visibility(tmp_path: Path) -> None:
+    modules = {
+        "shapes": "record Point\n  x: int\n",
+        "metrics": "import shapes::*\ndef Point::norm(self) -> int = self.x\n",
+        "bridge": "import metrics\n",
+        "entry": (
+            "import shapes\nimport bridge\nlet point = shapes::Point(x = 1)\npoint.norm := 2\n"
+        ),
+    }
+    with pytest.raises(AglTypeError) as hidden:
+        _check_program(tmp_path, modules)
+    assert "visible" in str(hidden.value).lower()
+
+    modules["entry"] = (
+        "import shapes\nimport metrics\nlet point = shapes::Point(x = 1)\npoint.norm := 2\n"
+    )
+    with pytest.raises(AglTypeError) as selected:
+        _check_program(tmp_path, modules)
+    assert "assignable" in str(selected.value).lower()
+
+
+def test_builtin_methods_may_be_declared_outside_their_standard_module(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "methods": "def text::shout(self) -> text = self\n",
+            "entry": 'import methods\n"hello".shout()\n',
+        },
+    )
+
+    result = _module_items(checked.modules[ENTRY_ID])[-1]
+    assert checked.modules[ENTRY_ID].node_types[result.node_id] == TextType()

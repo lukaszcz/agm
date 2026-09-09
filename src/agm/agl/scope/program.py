@@ -61,6 +61,7 @@ from agm.agl.scope.symbols import (
     BinderKind,
     ConstructorRef,
     ModuleResolution,
+    ReceiverOwner,
     ScopeNode,
     ScopePath,
     alias_denotes_constructible_type,
@@ -477,6 +478,23 @@ def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[NameAtom
             let_atom = _let_atom(item)
             if let_atom is not None:
                 result[let_atom] = (self_id, let_atom)
+    return result
+
+
+def _public_type_owners(
+    all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
+) -> dict[QName, ReceiverOwner]:
+    """Index public nominal declarations and inline enum members by QName."""
+    result: dict[QName, ReceiverOwner] = {}
+    for (module_id, atom), declaration in all_public_types.items():
+        path = _path(atom)
+        if isinstance(declaration, (RecordDef, EnumDef, ExceptionDef)):
+            result[module_id, atom] = ReceiverOwner(module_id, path)
+        if isinstance(declaration, EnumDef):
+            for member in declaration.members:
+                if isinstance(member, VariantDef):
+                    member_atom = _atom((*path, member.name))
+                    result[module_id, member_atom] = ReceiverOwner(module_id, (*path, member.name))
     return result
 
 
@@ -969,6 +987,7 @@ def resolve_program(
                     )
 
     prelude_static_decl_node_ids = _builtin_static_decl_node_ids(all_public_funcs, all_public_types)
+    cross_module_type_owners = _public_type_owners(all_public_types)
     cross_module_constructor_refs = _member_record_constructor_refs(all_public_types)
     referenced_member_constructor_refs: dict[tuple[ModuleId, int], tuple[ConstructorRef, ...]] = {}
     for mid, loaded in graph.modules.items():
@@ -1031,7 +1050,7 @@ def resolve_program(
             builtin_static_decl_node_ids=prelude_static_decl_node_ids,
             referenced_member_constructor_refs=referenced_member_constructor_refs,
             cross_module_constructible_types=cross_module_constructible_types,
-            cross_module_type_scopes=frozenset(all_public_types),
+            cross_module_type_owners=cross_module_type_owners,
             program_import_envs=import_envs,
             all_public_types=all_public_types,
             allow_root_statements=is_entry and entry_parent_scope is not None,

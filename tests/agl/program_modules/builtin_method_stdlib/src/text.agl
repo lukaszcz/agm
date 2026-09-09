@@ -1,4 +1,5 @@
 def text::surround(self, before: text, after: text) -> text = before + self + after
 def text::append(self, suffix: text) -> text = self + suffix
+def text::trim(self) -> text = self
 builtin def text::render(self) -> text
 def unavailable() -> text = "free"

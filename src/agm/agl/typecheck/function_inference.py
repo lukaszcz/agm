@@ -15,6 +15,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, NamedTuple
 
 from agm.agl.modules.ids import ModuleId
+from agm.agl.scope.symbols import DeclarationKey
 from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.type_table import MethodDef, NominalOwner
 from agm.agl.semantics.types import (
@@ -53,7 +54,13 @@ from agm.util.graph import sccs
 
 if TYPE_CHECKING:
     from agm.agl.capabilities import HostCapabilities
-    from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution
+    from agm.agl.scope.symbols import (
+        BindingRef,
+        ConstructorRef,
+        ModuleResolution,
+        ReceiverOwner,
+    )
+    from agm.agl.typecheck.checker import _Checker
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TYPE_PARAMETER_WILDCARD, TypeExpr
 from agm.agl.typecheck.env import (
@@ -130,6 +137,7 @@ class CandidateModule:
     env: TypeEnvironment
     capabilities: "HostCapabilities"
     module_id: ModuleId
+    declaration_spans: Mapping[DeclarationKey, SourceSpan] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,7 +162,10 @@ class ModuleCandidateComponent:
         module_id: ModuleId,
     ) -> "ModuleCandidateComponent":
         """Build the synthetic component for one module checked in isolation."""
-        return cls((CandidateModule(resolved, env, capabilities, module_id),), (env,))
+        declaration_spans = {key: ref.decl_span for key, ref in resolved.declarations.items()}
+        return cls(
+            (CandidateModule(resolved, env, capabilities, module_id, declaration_spans),), (env,)
+        )
 
     def discovery_targets(self) -> tuple[TypeEnvironment, ...]:
         """Return the import-SCC environments that need provisional signatures."""
@@ -261,30 +272,53 @@ def _candidate_methods_by_name(functions: dict[int, _CandidateFunction]) -> dict
 def _function_dependencies(
     functions: dict[int, _CandidateFunction],
 ) -> dict[int, tuple[int, ...]]:
-    """Collect body references to batch candidates by resolved declaration id."""
+    """Collect candidate references from bodies and their top-level bindings."""
     methods_by_name = _candidate_methods_by_name(functions)
+    binding_values: dict[int, tuple[CandidateModule, object]] = {}
+    modules = {module.module_id: module for module, _ in functions.values()}
+    for module in modules.values():
+        program = module.resolved.program
+        assert isinstance(program, Program)
+        for item in static_items(program.body.items):
+            if isinstance(item, LetDecl):
+                for binding_id in pattern_binding_node_ids(item.pattern):
+                    binding_values[binding_id] = (module, item.value)
+            elif isinstance(item, VarDecl):
+                binding_values[item.node_id] = (module, item.value)
+
     dependencies: dict[int, tuple[int, ...]] = {}
     for declaration_id, (module, node) in functions.items():
         assert node.body is not None
         referenced: set[int] = set()
+        visited_bindings: set[int] = set()
 
-        def visit(item: object) -> None:
-            if isinstance(item, VarRef):
-                reference = module.resolved.resolution.get(item.node_id)
-                if reference is not None and reference.decl_node_id in functions:
-                    referenced.add(reference.decl_node_id)
-            elif isinstance(item, FieldAccess):
-                # A member call's target is only disambiguated from a field
-                # read later, by the checker; over-approximate here with an
-                # edge to every same-named candidate method so a missing edge
-                # never lets an SCC close out of order. Widening an SCC is
-                # safe; missing an edge is the bug this closes.
-                referenced.update(methods_by_name.get(item.field, ()))
+        def visit_from(owner: CandidateModule, value: object) -> None:
+            def visit(item: object) -> None:
+                if isinstance(item, VarRef):
+                    reference = owner.resolved.resolution.get(item.node_id)
+                    if reference is None:
+                        return
+                    if reference.decl_node_id in functions:
+                        referenced.add(reference.decl_node_id)
+                    binding = binding_values.get(reference.decl_node_id)
+                    if binding is not None and reference.decl_node_id not in visited_bindings:
+                        visited_bindings.add(reference.decl_node_id)
+                        visit_from(*binding)
+                elif isinstance(item, FieldAccess):
+                    # A member call's target is only disambiguated from a field
+                    # read later, by the checker; over-approximate here with an
+                    # edge to every same-named candidate method so a missing edge
+                    # never lets an SCC close out of order. Widening an SCC is
+                    # safe; missing an edge is the bug this closes.
+                    referenced.update(methods_by_name.get(item.field, ()))
+
+            walk(value, visit)
 
         # Walking the whole body deliberately includes direct calls, function
-        # values, partial applications, type applications, and member calls.
-        # Defaults are checked only by authoritative validation.
-        walk(node.body, visit)
+        # values, partial applications, type applications, member calls, and
+        # transitively referenced top-level binding initializers. Defaults are
+        # checked only by authoritative validation.
+        visit_from(module, node.body)
 
         def dependency_key(node_id: int) -> tuple[tuple[str, ...], int, int]:
             return _function_key(functions, node_id)
@@ -334,24 +368,56 @@ def _register_signature(
     env.set_binding_type(node.node_id, function_type)
 
 
-def _references_tainted_binding(module: CandidateModule, item: object, tainted: set[int]) -> bool:
+def _references_tainted_binding(
+    module: CandidateModule,
+    item: object,
+    tainted: set[int],
+    candidate_methods: Mapping[str, Sequence[int]],
+    checker: "_Checker",
+) -> bool:
     """Whether a top-level binding reads a declaration whose type is not yet fixed."""
     found = False
 
     def visit(node: object) -> None:
         nonlocal found
-        if not isinstance(node, VarRef):
-            return
-        reference = module.resolved.resolution.get(node.node_id)
-        if reference is not None and reference.decl_node_id in tainted:
-            found = True
+        if isinstance(node, VarRef):
+            reference = module.resolved.resolution.get(node.node_id)
+            if reference is not None and reference.decl_node_id in tainted:
+                found = True
+        elif isinstance(node, FieldAccess) and any(
+            declaration_id in tainted for declaration_id in candidate_methods.get(node.field, ())
+        ):
+            if _references_tainted_binding(module, node.obj, tainted, candidate_methods, checker):
+                found = True
+                return
+            try:
+                receiver_type = checker._check_expr(node.obj, expected=None)
+            except AglTypeError:
+                found = True
+                return
+            fields = (
+                checker._env.type_table.exception_fields(receiver_type)
+                if isinstance(receiver_type, ExceptionType)
+                else (
+                    checker._env.type_table.record_fields(receiver_type)
+                    if isinstance(receiver_type, RecordType)
+                    else {}
+                )
+            )
+            # A declared field is selected independently of an unrelated
+            # same-named provisional method. The authoritative check still
+            # diagnoses a real field/method ambiguity if both apply.
+            if node.field not in fields:
+                found = True
 
     walk(item, visit)
     return found
 
 
 def _seed_candidate_visible_bindings(
-    component: ModuleCandidateComponent, session: CandidateSession
+    component: ModuleCandidateComponent,
+    session: CandidateSession,
+    candidate_methods: Mapping[str, Sequence[int]],
 ) -> None:
     """Capture source-visible top-level value bindings for each function body."""
     from agm.agl.typecheck.checker import _Checker
@@ -364,6 +430,7 @@ def _seed_candidate_visible_bindings(
             resolved=module.resolved,
             capabilities=module.capabilities,
             module_id=module.module_id,
+            declaration_spans=module.declaration_spans,
         )
         # A value binding that reads a component candidate (directly or through
         # an earlier such binding) cannot be typed before that candidate closes:
@@ -378,7 +445,7 @@ def _seed_candidate_visible_bindings(
                     module.env.snapshot_binding_types()
                 )
             elif isinstance(item, (LetDecl, VarDecl)):
-                if _references_tainted_binding(module, item, tainted):
+                if _references_tainted_binding(module, item, tainted, candidate_methods, checker):
                     if isinstance(item, LetDecl):
                         # A let site's selected binders are the declaration ids
                         # referenced by later code, not the match-site id.
@@ -424,6 +491,7 @@ def _infer_function_component(
             resolved=module.resolved,
             capabilities=module.capabilities,
             module_id=module.module_id,
+            declaration_spans=module.declaration_spans,
         )
         receiver_owner = module.resolved.receiver_owner_for(module.module_id, node)
         checker._validate_funcdef_header(node, is_method=receiver_owner is not None)
@@ -444,8 +512,12 @@ def _infer_function_component(
     session.binding_snapshots = {
         module.module_id: module.env.snapshot_binding_types() for module in component.modules
     }
+    candidate_methods: dict[str, list[int]] = {}
+    for module, node in functions:
+        if module.resolved.receiver_owner_for(module.module_id, node) is not None:
+            candidate_methods.setdefault(node.name, []).append(node.node_id)
     try:
-        _seed_candidate_visible_bindings(component, session)
+        _seed_candidate_visible_bindings(component, session, candidate_methods)
         for module, node, result, signature, _receiver in provisional:
             module.env.restore_binding_types(
                 session.visible_binding_snapshots[(module.module_id, node.node_id)]
@@ -455,6 +527,7 @@ def _infer_function_component(
                 resolved=module.resolved,
                 capabilities=module.capabilities,
                 module_id=module.module_id,
+                declaration_spans=module.declaration_spans,
             )
             checker._slot_resolution.update(session.slot_resolution_snapshots[module.module_id])
             checker._slot_constructor_refs.update(
@@ -618,23 +691,21 @@ def validate_required_after_defaulted(
 
 
 def _method_owner(
-    env: TypeEnvironment, owner_path: tuple[str, ...]
+    env: TypeEnvironment, owner: "ReceiverOwner"
 ) -> tuple[NominalOwner, int, GenericTypeDef | None]:
     """Return a classified method's nominal owner, generic arity, and definition.
 
-    Scope has already established that ``owner_path`` belongs to a nominal
-    declaration. This helper only obtains that declaration's semantic handle;
-    it deliberately does not classify source declarations itself. The generic
-    definition is ``None`` for a non-generic owner, whose arity is 0.
+    Scope has already established the owner's declaration identity. This helper
+    looks it up through the program declaration indexes, so the owner need not
+    be declared in the method's module.
     """
-    owner_name = "::".join(owner_path)
-    owner = env.get_type(owner_name)
-    if isinstance(owner, (RecordType, EnumType, ExceptionType)):
-        return owner, 0, None
-    generic = env.get_generic_type(owner_name)
-    assert generic is not None
-    assert isinstance(generic.template, (RecordType, EnumType))
-    return generic.template, len(generic.type_params), generic
+    generic = env.get_generic_type_by_declaration(owner.module_id, owner.scope_path)
+    if generic is not None:
+        assert isinstance(generic.template, (RecordType, EnumType))
+        return generic.template, len(generic.type_params), generic
+    nominal = env.get_type_by_declaration(owner.module_id, owner.scope_path)
+    assert isinstance(nominal, (RecordType, EnumType, ExceptionType))
+    return nominal, 0, None
 
 
 @dataclass(frozen=True, slots=True)
@@ -673,11 +744,9 @@ def _method_signature_type_params(node: FuncDef, arity: int) -> tuple[str, ...]:
     )
 
 
-def _builtin_receiver_type(
-    node: FuncDef, owner_path: tuple[str, ...]
-) -> tuple[Type, int, str] | None:
+def _builtin_receiver_type(node: FuncDef, owner: "ReceiverOwner") -> tuple[Type, int, str] | None:
     """Build the semantic type for a previously validated builtin receiver."""
-    receiver = builtin_method_receiver_for(node, owner_path)
+    receiver = builtin_method_receiver_for(node, owner.scope_path)
     if receiver is None:
         return None
     if receiver.name == "array":
@@ -697,20 +766,23 @@ def _builtin_receiver_type(
 
 
 def _receiver_type(
-    env: TypeEnvironment, node: FuncDef, owner_path: tuple[str, ...]
+    env: TypeEnvironment, node: FuncDef, owner: "ReceiverOwner"
 ) -> tuple[Type, ResolvedReceiver]:
     """Build the receiver type and its resolved owner from a classified method declaration."""
-    builtin = _builtin_receiver_type(node, owner_path)
+    builtin = _builtin_receiver_type(node, owner)
+    declaration_scope_path = tuple(segment.name for segment in node.scope_path)
     if builtin is not None:
         receiver, arity, constructor = builtin
         return receiver, ResolvedReceiver(
-            scope_path=owner_path,
+            scope_path=declaration_scope_path,
             owner=receiver,
             type_param_arity=arity,
             builtin_constructor=constructor,
         )
-    owner, arity, generic = _method_owner(env, owner_path)
-    resolved = ResolvedReceiver(scope_path=owner_path, owner=owner, type_param_arity=arity)
+    nominal_owner, arity, generic = _method_owner(env, owner)
+    resolved = ResolvedReceiver(
+        scope_path=declaration_scope_path, owner=nominal_owner, type_param_arity=arity
+    )
     if len(node.type_param_slots) < arity:
         raise AglTypeError(
             f"Method '{node.name}' declares {len(node.type_param_slots)} type parameter(s), "
@@ -725,13 +797,13 @@ def _receiver_type(
                 span=node.span,
             )
     if generic is None:
-        return owner, resolved
+        return nominal_owner, resolved
 
     receiver_args = tuple(
         TypeVarType(name) for name in _method_signature_type_params(node, arity)[:arity]
     )
     return (
-        env.instantiate_from_gdef("::".join(owner_path), generic, receiver_args, node.span),
+        env.instantiate_from_gdef("::".join(owner.scope_path), generic, receiver_args, node.span),
         resolved,
     )
 
@@ -743,7 +815,7 @@ def register_method_header(
     receiver: ResolvedReceiver | None,
     module_id: ModuleId,
 ) -> None:
-    """Publish one already-resolved classified method into the shared registry."""
+    """Publish one already-resolved classified method into the shared type table."""
     if receiver is None:
         return
     method = MethodDef(
@@ -771,7 +843,7 @@ def resolve_function_header(
     *,
     result_type: TypeExpr | Type,
     param_zones: Mapping[int, ParamZone],
-    receiver_owner: tuple[str, ...] | None = None,
+    receiver_owner: "ReceiverOwner | None" = None,
 ) -> tuple[FunctionSignature, FunctionType, ResolvedReceiver | None]:
     """Resolve one function's parameter scheme and declared or supplied result.
 

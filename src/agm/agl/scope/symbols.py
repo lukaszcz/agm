@@ -8,7 +8,7 @@ Data model
   or enum variant).
 - ``PatternSlot`` — scope-created metadata for a shared branch binding whose
   final meaning is selected by type checking.
-- ``method_declarations`` — receiver-owning type paths keyed by structured method identities.
+- ``method_declarations`` — receiver owners keyed by structured method identities.
 - ``ScopeNode`` — a node in the scope tree (one per scope-introducing
   construct).  The root ``ScopeNode`` is always present; nested scopes form a
   tree for visibility analysis.
@@ -50,6 +50,26 @@ ScopePath = tuple[str, ...]
 BareAtom = str | ScopePath
 DeclarationKey = tuple[ModuleId, ScopePath, str]
 QName: TypingTypeAlias = tuple[ModuleId, BareAtom]
+
+BUILTIN_METHOD_RECEIVER_NAMES: frozenset[str] = frozenset(
+    {"array", "dict", "text", "json", "int", "decimal", "bool"}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ReceiverOwner:
+    """The nominal declaration or builtin scope a method receiver extends.
+
+    ``module_id`` and ``scope_path`` identify a nominal receiver type where it
+    was declared, or a builtin receiver scope in the method's declaring module.
+    The method itself remains keyed by its declaring module and scope path in
+    ``method_declarations``.
+    """
+
+    module_id: ModuleId
+    scope_path: ScopePath
+
+
 BareRoute: TypingTypeAlias = tuple[ModuleId, ScopePath]
 
 
@@ -515,6 +535,7 @@ class ImportedUseContribution:
     import environment.
     """
 
+    declaration: UseDecl
     target: ResolvedUseTarget
     refreshes_all_members: bool
     members: Mapping[BareAtom, QName]
@@ -533,6 +554,7 @@ class ScopeNode:
     - ``bindings``: lexical value bindings introduced *directly* in this scope.
     - ``parent``: the enclosing scope (``None`` for the root scope).
     - ``node_id``: the ``node_id`` of the AST construct that opened this scope.
+    - ``is_scope_region``: whether an explicit ``scope`` region opened this layer.
     - ``bare_contributions``/``bare_constructor_contributions``: selected
       imports snapshotted for this region.
 
@@ -547,6 +569,7 @@ class ScopeNode:
     parent: ScopeNode | None = None
     bindings: dict[str, BindingRef] = field(default_factory=dict)
     scope_path: ScopePath = ()
+    is_scope_region: bool = False
     members: dict[str, BindingRef] = field(default_factory=dict)
     bare_contributions: dict[BareAtom, set[BindingRef]] = field(default_factory=dict)
     bare_constructor_contributions: dict[BareAtom, set[ConstructorRef]] = field(
@@ -737,10 +760,14 @@ class ModuleResolution:
         slot ids its pattern created, in creation (outer-to-inner) order. The
         checker selects exactly these after that match site is classified.
     ``method_declarations``
-        Maps each method's structured declaration identity to the complete
-        scope path of its nominal receiver owner. This is scope's definitive
-        receiver classification; later passes consume it without re-deriving
-        whether a function is a method.
+        Maps each method's structured declaration identity to its resolved
+        :class:`ReceiverOwner`. This is scope's definitive receiver
+        classification; later passes consume it without re-deriving whether a
+        function is a method.
+    ``reachable_declarations``
+        Declaration identities this module declares or reaches through imports.
+        Import contributions already reflect route selection and ``hiding``;
+        bare-only ``use`` declarations do not contribute identities.
     ``attributes``
         The typed facts this module's declaration attributes carry —
         parameter zones, extern companion names, program-parameter command-line
@@ -775,11 +802,12 @@ class ModuleResolution:
     )
     pattern_slots: dict[int, PatternSlot] = field(default_factory=dict)
     match_site_pattern_slots: dict[int, tuple[int, ...]] = field(default_factory=dict)
-    method_declarations: dict[DeclarationKey, ScopePath] = field(default_factory=dict)
+    method_declarations: dict[DeclarationKey, ReceiverOwner] = field(default_factory=dict)
+    reachable_declarations: frozenset[DeclarationKey] = frozenset()
     use_targets: dict[int, ResolvedUseTarget] = field(default_factory=dict)
     attributes: AttributeFacts = field(default_factory=AttributeFacts)
 
-    def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ScopePath | None:
+    def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ReceiverOwner | None:
         """Return scope's receiver classification for *node*, if it has one.
 
         Every consumer of ``method_declarations`` asks this one question of a

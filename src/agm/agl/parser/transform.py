@@ -268,6 +268,7 @@ class _BuiltinReceiverHead:
     """A function declaration head headed by an applied builtin receiver."""
 
     name: str
+    receiver_scope_name: str
     receiver_type: TypeExpr
     span: SourceSpan
 
@@ -636,7 +637,7 @@ class AstBuilder(Transformer):
             receiver.name,
             (
                 syntax.ScopeSegment(
-                    name=render_type_expr(receiver.receiver_type),
+                    name=receiver.receiver_scope_name,
                     span=receiver.span,
                     node_id=self._next_id(),
                 ),
@@ -1061,7 +1062,12 @@ class AstBuilder(Transformer):
                 span=segment.span,
                 node_id=self._next_id(),
             )
-        return _BuiltinReceiverHead(name=name, receiver_type=receiver_type, span=segment.span)
+        return _BuiltinReceiverHead(
+            name=name,
+            receiver_scope_name=segment.name,
+            receiver_type=receiver_type,
+            span=segment.span,
+        )
 
     def builtin_func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
         """builtin_func_def: "builtin" "def" name type_params? (...) -> type_expr"""

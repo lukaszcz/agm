@@ -638,26 +638,14 @@ class ReplSession:
         Source text alone cannot show a newly created competing module file.
         Re-resolving each cached id preserves the resolver's global-uniqueness
         rule, while replaying wildcard discovery also notices newly matched
-        modules. The optional builtin-methods registry must be queried even
-        when it was absent from the cached graph.
+        modules.
         """
-        from agm.agl.modules.errors import ModuleNotFound
-        from agm.agl.modules.ids import STD_BUILTIN_METHODS_ID
         from agm.agl.modules.resolver import expand_wildcard, resolve_module
 
         try:
             for module_id, module in snapshot.modules.items():
                 if resolve_module(module_id, roots) != module.path:
                     return False
-            try:
-                builtin_methods_path = resolve_module(STD_BUILTIN_METHODS_ID, roots)
-            except ModuleNotFound:
-                builtin_methods_path = None
-            cached_builtin_methods = snapshot.modules.get(STD_BUILTIN_METHODS_ID)
-            if builtin_methods_path != (
-                cached_builtin_methods.path if cached_builtin_methods is not None else None
-            ):
-                return False
             return all(
                 tuple(expand_wildcard(prefix, roots).items()) == matches
                 for prefix, matches in snapshot.wildcard_matches
@@ -1090,6 +1078,8 @@ class ReplSession:
         next_start_id: int,
         partial: bool,
         promoted_declaration_ids: frozenset[int],
+        promoted_scope_region_paths: frozenset[tuple[str, ...]],
+        promoted_use_declaration_ids: frozenset[int],
         infix_ambient: Mapping[str, tuple[int, "InfixAssoc"]],
     ) -> tuple[str, ...]:
         """Promote declarations whose IR initialization completed in this entry."""
@@ -1315,16 +1305,45 @@ class ReplSession:
             else []
         )
 
-        # Named scope paths are namespaces: a region's path is retained whenever
-        # it is not part of an unpromoted type's scope subtree, and its members
-        # are promoted individually below. Inline enum members establish nested
-        # type scopes, so skipping only the enum's own path would both try to
-        # install a child below a missing parent and rewrite a prior enum's
-        # members after a failed redeclaration.
+        # Keep only namespace paths reached by execution or required by a
+        # promoted declaration. A later empty region must not leak through a
+        # failed entry merely because scope checking saw it.
+        required_scope_paths = set(promoted_scope_region_paths)
+        for item in entry_declarations:
+            if item.node_id not in promoted_declaration_ids or not isinstance(
+                item, (EnumDef, ExceptionDef, FuncDef, LetDecl, RecordDef, TypeAlias, VarDecl)
+            ):
+                continue
+            item_path = tuple(segment.name for segment in item.scope_path)
+            if isinstance(item, (EnumDef, ExceptionDef, RecordDef, TypeAlias)):
+                item_path = (*item_path, item.name)
+            required_scope_paths.update(
+                item_path[:length] for length in range(1, len(item_path) + 1)
+            )
         for path, node in checked.resolved.scope_nodes.items():
+            for name, ref in node.members.items():
+                if not _is_promoted(ref.decl_node_id):
+                    continue
+                member_path = (
+                    (*path, name) if (*path, name) in checked.resolved.scope_nodes else path
+                )
+                required_scope_paths.update(
+                    member_path[:length] for length in range(1, len(member_path) + 1)
+                )
+        for path, node in checked.resolved.scope_nodes.items():
+            session_node = self._session_scope_nodes.get(path)
+            promoted_region = path in promoted_scope_region_paths or any(
+                declaration_path[: len(path)] == path
+                for declaration_path in required_scope_paths
+                if len(declaration_path) > len(path)
+            )
+            if session_node is not None:
+                if node.is_scope_region and promoted_region:
+                    session_node.is_scope_region = True
+                continue
             if (
                 not path
-                or path in self._session_scope_nodes
+                or path not in required_scope_paths
                 or is_unpromoted_type_scope(path)
                 or is_retired_member_scope(path)
             ):
@@ -1333,7 +1352,9 @@ class ReplSession:
                 node_id=node.node_id,
                 parent=self._session_scope_nodes[path[:-1]],
                 scope_path=path,
+                is_scope_region=node.is_scope_region and promoted_region,
             )
+
         promoted_type_paths = {(*path, name) for path, name in promoted_type_name_paths}
         for path in promoted_type_paths:
             nested_scope_names = frozenset(
@@ -1354,9 +1375,12 @@ class ReplSession:
                     and _is_promoted(ref.decl_node_id)
                 ):
                     session_node.register_member(name, ref)
-            current_targets = {
-                contribution.target for contribution in node.imported_use_contributions
-            }
+            promoted_imported_uses = [
+                contribution
+                for contribution in node.imported_use_contributions
+                if contribution.declaration.node_id in promoted_use_declaration_ids
+            ]
+            current_targets = {contribution.target for contribution in promoted_imported_uses}
             for contribution in session_node.imported_use_contributions:
                 for atom, refs in contribution.bindings.items():
                     retained = session_node.bare_contributions.get(atom)
@@ -1375,7 +1399,7 @@ class ReplSession:
                 for contribution in session_node.imported_use_contributions
                 if contribution.target not in current_targets
             ]
-            session_node.imported_use_contributions.extend(node.imported_use_contributions)
+            session_node.imported_use_contributions.extend(promoted_imported_uses)
             for contribution in session_node.imported_use_contributions:
                 for atom, refs in contribution.bindings.items():
                     session_node.bare_contributions.setdefault(atom, set()).update(refs)
@@ -1383,8 +1407,13 @@ class ReplSession:
                     session_node.bare_constructor_contributions.setdefault(atom, set()).update(
                         constructor_refs
                     )
+            promoted_local_uses = [
+                contribution
+                for contribution in node.local_use_contributions
+                if contribution.declaration.node_id in promoted_use_declaration_ids
+            ]
             current_local_targets = {
-                local_contribution.target for local_contribution in node.local_use_contributions
+                local_contribution.target for local_contribution in promoted_local_uses
             }
             for local_contribution in session_node.local_use_contributions:
                 for atom, refs in local_contribution.bindings.items():
@@ -1410,7 +1439,7 @@ class ReplSession:
                 for local_contribution in session_node.local_use_contributions
                 if local_contribution.target not in current_local_targets
             ]
-            for local_contribution in node.local_use_contributions:
+            for local_contribution in promoted_local_uses:
                 source = self._session_scope_nodes.get(local_contribution.source.scope_path)
                 if source is not None:
                     session_node.contribute_local_use(replace(local_contribution, source=source))
@@ -1454,6 +1483,14 @@ class ReplSession:
                 previous_type_env,
                 entry_binding_node_ids - promoted_binding_node_ids,
                 unpromoted_function_names,
+            )
+            new_type_env.type_table.restore_methods_from(
+                previous_type_env.type_table,
+                {
+                    item.node_id
+                    for item in entry_declarations
+                    if isinstance(item, FuncDef) and item.node_id not in promoted_declaration_ids
+                },
             )
             new_type_env.seal()
             self._type_env = new_type_env

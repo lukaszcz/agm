@@ -548,14 +548,7 @@ class BuiltinCallChecker:
             agent_request_type = self._resolve_host_record_contract("AgentRequest", span=node.span)
         expected_agent_type = self._ctx._env.type_table.record_fields(agent_request_type)["agent"]
         if receiver_type is not None and callee == "ask-request":
-            is_agent_member = isinstance(receiver_type, RecordType) and any(
-                owner == expected_agent_type
-                for owner in self._ctx._env.type_table.enum_owners_for_member(receiver_type)
-            )
-            if not is_agent_member:
-                self._ctx._assert_assignable_from(
-                    receiver_type, expected_agent_type, node.span, node
-                )
+            self._ctx._assert_assignable_from(receiver_type, expected_agent_type, node.span, node)
         if "agent" in named:
             agent_na = named["agent"]
             agent_type = self._ctx._check_expr(agent_na.value, expected=expected_agent_type)

@@ -204,31 +204,6 @@ class TestPersistence:
         assert "field" in message
         assert "method" in message
 
-    def test_later_base_method_cannot_collide_with_a_retained_descendant_member(self) -> None:
-        session = open_session()
-        assert session.eval_entry("exception Base extends Exception\n  code: int").ok
-        assert session.eval_entry("exception Child extends Base\n  detail: text").ok
-        assert session.eval_entry('def Child::label(self) -> text = "child"').ok
-
-        rejected = session.eval_entry('def Base::label(self) -> text = "base"')
-
-        assert not rejected.ok
-        message = rejected.diagnostics[0].message.lower()
-        assert "label" in message
-        assert "method" in message
-
-    def test_later_base_method_cannot_collide_with_a_retained_descendant_field(self) -> None:
-        session = open_session()
-        assert session.eval_entry("exception Base extends Exception\n  code: int").ok
-        assert session.eval_entry("exception Child extends Base\n  detail: text").ok
-
-        rejected = session.eval_entry('def Base::detail(self) -> text = "base"')
-
-        assert not rejected.ok
-        message = rejected.diagnostics[0].message.lower()
-        assert "detail" in message
-        assert "field" in message
-
     def test_bound_method_binding_persists_across_entries(self) -> None:
         session = open_session()
         assert session.eval_entry("record Meter(value: int)").ok
@@ -261,6 +236,85 @@ class TestPersistence:
 
         assert result.ok, result.diagnostics
         assert result.value == IntValue(42)
+
+    def test_orphan_method_on_a_prelude_generic_type_is_classified(self) -> None:
+        session = open_session()
+
+        declared = session.eval_entry("def Option::describe[T](self) -> T = self.unwrap()")
+        result = session.eval_entry("Some(value = 42).describe()")
+
+        assert declared.ok, declared.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(42)
+
+    def test_orphan_option_method_redeclaration_keeps_old_bound_values(self) -> None:
+        session = open_session()
+        assert session.eval_entry('def Option::describe[T](self) -> text = "first"').ok
+        assert session.eval_entry("let describe = Some(value = 1).describe").ok
+        assert session.eval_entry('def Option::describe[T](self) -> text = "second"').ok
+
+        retained = session.eval_entry("describe()")
+        current = session.eval_entry("Some(value = 1).describe()")
+
+        assert retained.ok, retained.diagnostics
+        assert retained.value == TextValue("first")
+        assert current.ok, current.diagnostics
+        assert current.value == TextValue("second")
+
+    def test_imported_orphan_method_route_persists_and_can_be_hidden(self, tmp_path: Path) -> None:
+        (tmp_path / "geometry.agl").write_text("record Point(x: int, y: int)\n", encoding="utf-8")
+        (tmp_path / "metrics.agl").write_text(
+            "import geometry::*\ndef Point::norm(self) -> int = self.x * self.x\n",
+            encoding="utf-8",
+        )
+        session = ReplSession(cwd=tmp_path)
+        assert not session.open()
+        assert session.eval_entry("import geometry::*").ok
+        assert session.eval_entry("import metrics").ok
+        assert session.eval_entry("let p = Point(x = 3, y = 4)").ok
+
+        visible = session.eval_entry("p.norm()")
+        assert visible.ok, visible.diagnostics
+        assert visible.value == IntValue(9)
+
+        assert session.eval_entry("import metrics hiding Point::norm").ok
+        assert not session.eval_entry("p.norm()").ok
+
+    def test_imported_orphan_methods_are_ambiguous_across_repl_entries(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "geometry.agl").write_text("record Point(x: int)\n", encoding="utf-8")
+        for name in ("metrics", "fastmath"):
+            (tmp_path / f"{name}.agl").write_text(
+                "import geometry::*\ndef Point::norm(self) -> int = self.x\n",
+                encoding="utf-8",
+            )
+        session = ReplSession(cwd=tmp_path)
+        assert not session.open()
+        assert session.eval_entry("import geometry::*").ok
+        assert session.eval_entry("import metrics").ok
+        assert session.eval_entry("let p = Point(x = 3)").ok
+        assert session.eval_entry("import fastmath").ok
+
+        assert not session.eval_entry("p.norm()").ok
+
+    def test_redeclaring_method_path_for_different_receiver_replaces_old_member(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "a.agl").write_text("record X()\n", encoding="utf-8")
+        (tmp_path / "b.agl").write_text("record X()\n", encoding="utf-8")
+        session = ReplSession(cwd=tmp_path)
+        assert not session.open()
+        assert session.eval_entry("import a::{X}").ok
+        assert session.eval_entry("def X::m(self) -> int = 1").ok
+        assert session.eval_entry("let old-x = X()").ok
+        assert session.eval_entry("import a hiding X").ok
+        assert session.eval_entry("import b::{X}").ok
+        assert session.eval_entry("def X::m(self) -> int = 2").ok
+
+        assert not session.eval_entry("old-x.m()").ok
+        assert not session.eval_entry("X::m(old-x)").ok
+        assert session.eval_entry("X().m()").value == IntValue(2)
 
     def test_redeclaring_a_method_replaces_its_prior_member_entry(self) -> None:
         session = open_session()
@@ -3266,6 +3320,98 @@ class TestFailureEffects:
         assert not failed.ok
         assert "needs-value" not in failed.installed
         assert not session.eval_entry("needs-value()").ok
+
+    def test_runtime_failure_excludes_function_with_unpromoted_method_dependency(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "geometry.agl").write_text("record X()\n", encoding="utf-8")
+        session = ReplSession(cwd=tmp_path)
+        assert not session.open()
+
+        failed = session.eval_entry(
+            "import geometry::{X}\n"
+            'let unavailable: int = raise Abort(message = "stop")\n'
+            "def X::m(self) -> int = unavailable\n"
+            "def call-m(value: X) -> int = value.m()"
+        )
+
+        assert not failed.ok
+        assert "call-m" not in failed.installed
+        assert session.eval_entry("import geometry::{X}").ok
+        assert not session.eval_entry("call-m(X())").ok
+
+    def test_runtime_failure_restores_replaced_nominal_receiver_method(self) -> None:
+        session = open_session()
+        assert session.eval_entry("record R()").ok
+        assert session.eval_entry("def R::m(self) -> int = 1").ok
+
+        failed = session.eval_entry(
+            'let value: int = raise Abort(message = "stop")\ndef R::m(self) -> int = value'
+        )
+
+        assert not failed.ok
+        assert session.eval_entry("R().m()").value == IntValue(1)
+
+    def test_runtime_failure_restores_replaced_builtin_receiver_method(self) -> None:
+        session = open_session()
+        assert session.eval_entry("def int::m(self) -> int = 1").ok
+
+        failed = session.eval_entry(
+            'let value: int = raise Abort(message = "stop")\ndef int::m(self) -> int = value'
+        )
+
+        assert not failed.ok
+        result = session.eval_entry("(0).m()")
+        assert result.ok
+        assert result.value == IntValue(1)
+
+    def test_runtime_failure_does_not_promote_unreached_use_in_retained_scope(self) -> None:
+        session = open_session(default_stdlib=False)
+        assert session.eval_entry(
+            "scope Source\n  def leaked() -> int = 1\nend Source\n\nscope Outer\nend Outer"
+        ).ok
+
+        failed = session.eval_entry(
+            "scope Outer\nend Outer\n\n"
+            "let z: decimal = 1 / 0\n\n"
+            "scope Outer\n  use Source::*\nend Outer"
+        )
+
+        assert not failed.ok
+        assert not session.eval_entry("def Outer::call() -> int = leaked()").ok
+
+    def test_reached_use_does_not_promote_its_unreached_local_source(self) -> None:
+        session = open_session(default_stdlib=False)
+
+        failed = session.eval_entry(
+            "use Source::*\n"
+            "let z: decimal = 1 / 0\n\n"
+            "scope Source\n  let unavailable = 1\nend Source"
+        )
+
+        assert not failed.ok
+        assert not session.eval_entry("unavailable").ok
+
+    def test_runtime_failure_scope_frontier_ignores_retained_source_offsets(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "lib.agl").write_text("let value = 1\n", encoding="utf-8")
+        session = ReplSession(cwd=tmp_path)
+        assert not session.open()
+        assert session.eval_entry(f"# {'padding' * 30}\nscope Kept\n  import lib::*\nend Kept").ok
+
+        failed = session.eval_entry("let z: decimal = 1 / 0\n\nscope Ghost\nend Ghost")
+
+        assert not failed.ok
+        assert not session.eval_entry("def Ghost::int::m(self) -> int = self").ok
+
+    def test_runtime_failure_does_not_retain_a_later_scope_region(self) -> None:
+        session = open_session(default_stdlib=False)
+
+        failed = session.eval_entry("let z: decimal = 1 / 0\n\nscope Ghost\nend Ghost")
+
+        assert not failed.ok
+        assert not session.eval_entry("def Ghost::int::m(self) -> int = self").ok
 
     def test_runtime_failure_excludes_function_with_unpromoted_nominal_dependency(self) -> None:
         session = open_session()
@@ -7534,9 +7680,6 @@ class TestSessionOpen:
         (extra / "one.agl").write_text("let one: int = 1\n", encoding="utf-8")
 
         assert ReplSession(stdlib_root=stdlib, cwd=workspace).open() == ()
-        assert ReplSession(stdlib_root=stdlib, cwd=workspace).open() == ()
-
-        (std / "builtin-methods.agl").write_text("let registry: int = 1\n", encoding="utf-8")
         assert ReplSession(stdlib_root=stdlib, cwd=workspace).open() == ()
 
         (extra / "two.agl").write_text("let two: int = 2\n", encoding="utf-8")

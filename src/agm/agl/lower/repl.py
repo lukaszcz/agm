@@ -26,6 +26,7 @@ from agm.agl.syntax.nodes import (
     RecordDef,
     ScopeRegion,
     TypeAlias,
+    UseDecl,
     VarDecl,
     VariantDef,
     pattern_binder_candidates,
@@ -110,6 +111,43 @@ class ReplPromotionPlan:
     initializers: tuple[InitializerOrigin, ...]
     declaration_dependencies: Mapping[int, frozenset[int]]
     imported_module_dependencies: Mapping[int, frozenset[ModuleId]]
+    scope_region_source_indices: Mapping[tuple[str, ...], tuple[int, ...]] = field(
+        default_factory=dict
+    )
+    use_declaration_source_indices: Mapping[int, int] = field(default_factory=dict)
+
+    def _source_frontier(self, completed_initializer_indices: Collection[int]) -> int:
+        completed_indices = set(completed_initializer_indices)
+        return min(
+            (
+                origin.source_index
+                for index, origin in enumerate(self.initializers)
+                if index not in completed_indices and not origin.is_function
+            ),
+            default=len(self.source_declaration_ids),
+        )
+
+    def completed_scope_region_paths(
+        self, completed_initializer_indices: Collection[int]
+    ) -> frozenset[tuple[str, ...]]:
+        """Return explicit regions reached before the failed source frontier."""
+        frontier = self._source_frontier(completed_initializer_indices)
+        return frozenset(
+            path
+            for path, indices in self.scope_region_source_indices.items()
+            if any(index <= frontier for index in indices)
+        )
+
+    def completed_use_declaration_ids(
+        self, completed_initializer_indices: Collection[int]
+    ) -> frozenset[int]:
+        """Return use declarations reached before the failed source frontier."""
+        frontier = self._source_frontier(completed_initializer_indices)
+        return frozenset(
+            node_id
+            for node_id, source_index in self.use_declaration_source_indices.items()
+            if source_index <= frontier
+        )
 
     def completed_declaration_ids(
         self,
@@ -126,14 +164,7 @@ class ReplPromotionPlan:
         completed: set[int] = set()
         for index in sorted(completed_indices):
             completed.update(self.source_declaration_ids[self.initializers[index].source_index])
-        source_frontier = min(
-            (
-                origin.source_index
-                for index, origin in enumerate(self.initializers)
-                if index not in completed_indices and not origin.is_function
-            ),
-            default=len(self.source_declaration_ids),
-        )
+        source_frontier = self._source_frontier(completed_indices)
         for declaration_ids in self.source_declaration_ids[:source_frontier]:
             completed.update(declaration_ids)
 
@@ -256,8 +287,11 @@ def _declaration_dependencies(
             elif binding.module_id in library_module_ids:
                 imported_modules.add(binding.module_id)
         method = checked.method_selection_for(node_id)
-        if method is not None and method.module_id in library_module_ids:
-            imported_modules.add(method.module_id)
+        if method is not None:
+            if method.decl_node_id in entry_declaration_ids:
+                dependencies.add(method.decl_node_id)
+            elif method.module_id in library_module_ids:
+                imported_modules.add(method.module_id)
         constructor = checked.constructor_ref_for(node_id)
         if constructor is not None and constructor.owner_decl_node_id in entry_declaration_ids:
             dependencies.add(constructor.owner_decl_node_id)
@@ -338,6 +372,9 @@ def _promotion_plan(
     leaf_items = tuple(static_items(checked.resolved.program.body.items))
     source_declaration_ids = tuple(_item_declaration_ids(item, checked) for item in leaf_items)
     entry_declaration_ids = frozenset().union(*source_declaration_ids, frozenset())
+    use_declaration_source_indices = {
+        item.node_id: index for index, item in enumerate(leaf_items) if isinstance(item, UseDecl)
+    }
     # A top-level nominal handle promotes with its own source item. Synthetic
     # inline-member records promote with their EnumDef owner instead, so a
     # function mentioning ``E::A`` cannot survive without ``E``.
@@ -364,6 +401,20 @@ def _promotion_plan(
             alias_declaration_ids[item.name] = alias_declaration_ids.get(
                 item.name, frozenset()
             ) | frozenset({item.node_id})
+    region_indices: dict[tuple[str, ...], list[int]] = {}
+    source_index = 0
+
+    def collect_regions(items: tuple[Item, ...], parent: tuple[str, ...] = ()) -> None:
+        nonlocal source_index
+        for item in items:
+            if isinstance(item, ScopeRegion):
+                path = (*parent, item.segment.name)
+                region_indices.setdefault(path, []).append(source_index)
+                collect_regions(cast(tuple[Item, ...], item.items), path)
+            else:
+                source_index += 1
+
+    collect_regions(checked.resolved.program.body.items)
     declaration_dependencies: dict[int, frozenset[int]] = {}
     imported_module_dependencies: dict[int, frozenset[ModuleId]] = {}
     for item, declaration_ids in zip(leaf_items, source_declaration_ids, strict=True):
@@ -385,6 +436,10 @@ def _promotion_plan(
         initializers=initializer_origins,
         declaration_dependencies=MappingProxyType(declaration_dependencies),
         imported_module_dependencies=MappingProxyType(imported_module_dependencies),
+        scope_region_source_indices=MappingProxyType(
+            {path: tuple(indices) for path, indices in region_indices.items()}
+        ),
+        use_declaration_source_indices=MappingProxyType(use_declaration_source_indices),
     )
 
 

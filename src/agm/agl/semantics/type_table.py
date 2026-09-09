@@ -24,8 +24,8 @@ representation shared by records, enums, and exceptions.
 ``TypeTable.exception_fields`` has no ``type_args`` to substitute but instead
 flattens the ``extends`` base chain into one field mapping. The table also
 keeps plain ``MethodDef`` data keyed by nominal owner identity or by a built-in
-receiver constructor; exception method lookup uses the same base-chain
-flattening and cache discipline as exception fields.
+receiver constructor. Method candidates retain every declaration sharing an
+owner and name, and expose exception inheritance as nearest-first levels.
 
 ``comparable_types``/``_reaches_non_data`` live here rather than in
 ``semantics.types`` because their record/enum/exception arms consult the
@@ -54,7 +54,7 @@ diagnostic (agent output target, cast target, parameter type).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, assert_never, cast
@@ -137,6 +137,11 @@ class MethodDef:
     receiver_type_param_arity: int
     type_params: tuple[str, ...] = ()
     is_builtin: bool = False
+
+    @property
+    def declaration_key(self) -> DeclKey:
+        """Return the method's structured declaration identity."""
+        return self.module_id, self.scope_path, self.name
 
 
 # ``ParamZone.value`` strings (``"positional_only"``/``"standard"``/
@@ -303,12 +308,10 @@ class TypeTable:
         self._standard_builtins: dict[str, TypeDef] | None = None
         self._host_minted_ids: frozenset[DeclId] | None = None
         # Methods are independent plain declaration data, keyed by their
-        # nominal owner's identity rather than by an import environment.
-        # Exception method maps flatten inherited entries and therefore need
-        # the same whole-cache invalidation as exception fields.
-        self._methods: dict[DeclId, dict[str, MethodDef]] = {}
-        self._builtin_methods: dict[str, dict[str, MethodDef]] = {}
-        self._exception_methods_cache: dict[DeclId, Mapping[str, MethodDef]] = {}
+        # nominal owner's identity rather than by an import environment. Each
+        # name preserves every declaration identity that contributes it.
+        self._methods: dict[DeclId, dict[str, dict[DeclKey, MethodDef]]] = {}
+        self._builtin_methods: dict[str, dict[str, dict[DeclKey, MethodDef]]] = {}
         # Whole-table non-data-reachability fixpoint (see
         # :meth:`nominal_reaches_non_data`), computed lazily on first use and
         # invalidated (set back to ``None``) whenever a declaration is added,
@@ -440,37 +443,76 @@ class TypeTable:
         key = (typedef.module_id, typedef.scope_path, typedef.name)
         return self._name_index.get(key) == typedef.decl_node_id
 
-    def _put_method(self, decl_id: DeclId, method: MethodDef) -> None:
-        """Write *method* into *decl_id*'s direct map, invalidating caches on change.
+    @staticmethod
+    def _method_sort_key(method: MethodDef) -> tuple[tuple[str, ...], tuple[str, ...], str]:
+        return method.module_id.segments, method.scope_path, method.name
 
-        A repeated registration of the same declaration is a no-op, while a
-        redeclaration replaces the previous entry so REPL state cannot retain a
-        stale method.
-        """
-        methods = self._methods.setdefault(decl_id, {})
-        if methods.get(method.name) == method:
-            return
-        methods[method.name] = method
-        self._exception_methods_cache.clear()
+    @classmethod
+    def _method_level(cls, methods: Mapping[DeclKey, MethodDef]) -> tuple[MethodDef, ...]:
+        return tuple(sorted(methods.values(), key=cls._method_sort_key))
+
+    def _remove_method_declaration(self, declaration_key: DeclKey) -> None:
+        """Remove a superseded method declaration from every receiver."""
+        for methods in self._methods.values():
+            for candidates in methods.values():
+                candidates.pop(declaration_key, None)
+        for methods in self._builtin_methods.values():
+            for candidates in methods.values():
+                candidates.pop(declaration_key, None)
+
+    def _put_method(self, decl_id: DeclId, method: MethodDef) -> None:
+        """Register *method* under its declaration key on *decl_id*."""
+        self._remove_method_declaration(method.declaration_key)
+        self._methods.setdefault(decl_id, {}).setdefault(method.name, {})[
+            method.declaration_key
+        ] = method
 
     def register_method(self, owner: NominalOwner, method: MethodDef) -> None:
-        """Register *method* under its nominal *owner*.
-
-        Method declarations are deliberately data-only: scope classifies a
-        receiver and typecheck resolves its header before calling this table;
-        neither frontend package is imported here.
-        """
+        """Register *method* under its nominal *owner*."""
         self._put_method(owner.decl_id, method)
 
     def register_builtin_method(self, constructor: str, method: MethodDef) -> None:
-        """Register *method* under a built-in receiver type constructor.
+        """Register *method* under a built-in receiver type constructor."""
+        self._remove_method_declaration(method.declaration_key)
+        self._builtin_methods.setdefault(constructor, {}).setdefault(method.name, {})[
+            method.declaration_key
+        ] = method
 
-        Unlike nominal owners, built-in types have no declaration identity.
-        Their methods are consequently indexed by their stable language-level
-        constructor spelling (``array``, ``dict``, or one of the scalar names).
-        """
-        methods = self._builtin_methods.setdefault(constructor, {})
-        methods[method.name] = method
+    def restore_methods_from(self, previous: TypeTable, declaration_ids: Collection[int]) -> None:
+        """Restore methods replaced by unpromoted declarations from *previous*."""
+        declaration_keys = {
+            method.declaration_key
+            for methods in self._methods.values()
+            for candidates in methods.values()
+            for method in candidates.values()
+            if method.decl_node_id in declaration_ids
+        } | {
+            method.declaration_key
+            for methods in self._builtin_methods.values()
+            for candidates in methods.values()
+            for method in candidates.values()
+            if method.decl_node_id in declaration_ids
+        }
+        if not declaration_keys:
+            return
+        for methods in self._methods.values():
+            for candidates in methods.values():
+                for key in declaration_keys:
+                    candidates.pop(key, None)
+        for methods in self._builtin_methods.values():
+            for candidates in methods.values():
+                for key in declaration_keys:
+                    candidates.pop(key, None)
+        for decl_id, methods in previous._methods.items():
+            for candidates in methods.values():
+                for key, method in candidates.items():
+                    if key in declaration_keys:
+                        self._put_method(decl_id, method)
+        for constructor, methods in previous._builtin_methods.items():
+            for candidates in methods.values():
+                for key, method in candidates.items():
+                    if key in declaration_keys:
+                        self.register_builtin_method(constructor, method)
 
     @staticmethod
     def _builtin_constructor(owner: Type) -> str | None:
@@ -491,42 +533,30 @@ class TypeTable:
             return "bool"
         return None
 
-    def lookup_builtin_method(self, owner: Type, name: str) -> MethodDef | None:
-        """Return the built-in receiver method selected by *owner* and *name*."""
+    def method_candidates(
+        self, owner: NominalOwner | Type, name: str
+    ) -> tuple[tuple[MethodDef, ...], ...]:
+        """Return same-owner candidates for *name*, nearest exception level first."""
         constructor = self._builtin_constructor(owner)
-        if constructor is None:
-            return None
-        return self._builtin_methods.get(constructor, {}).get(name)
-
-    def methods_for(self, owner: NominalOwner) -> Mapping[str, MethodDef]:
-        """Return methods available on *owner*, including exception bases.
-
-        Record and enum methods are their owner's direct entries. Exception
-        methods are base-first flattened mappings, cached per nominal owner;
-        the typecheck pass owns the later no-overriding diagnostic, so a direct
-        entry wins if invalid data reaches this low-level registry.
-        """
-        decl_id = owner.decl_id
-        if not isinstance(owner, ExceptionType):
-            return self._methods.get(decl_id, {})
-        cached = self._exception_methods_cache.get(decl_id)
-        if cached is not None:
-            return cached
-        result = self._flatten_exception_methods(decl_id)
-        self._exception_methods_cache[decl_id] = result
-        return result
-
-    def lookup_method(self, owner: NominalOwner, name: str) -> MethodDef | None:
-        """Return the available method named *name*, or ``None`` on a miss."""
-        return self.methods_for(owner).get(name)
+        if constructor is not None:
+            return (self._method_level(self._builtin_methods.get(constructor, {}).get(name, {})),)
+        if not isinstance(owner, (RecordType, EnumType, ExceptionType)):
+            return ()
+        owner_ids: tuple[DeclId, ...] = (owner.decl_id,)
+        if isinstance(owner, ExceptionType):
+            owner_ids += tuple(base.decl_node_id for base in self.ancestor_defs(owner.decl_id))
+        return tuple(
+            self._method_level(self._methods.get(decl_id, {}).get(name, {}))
+            for decl_id in owner_ids
+        )
 
     def declared_methods(self, owner_id: DeclId) -> Mapping[str, MethodDef]:
-        """Return only the methods declared directly on *owner_id*, never inherited ones.
-
-        Declaration-level rules attribute a member to the type that declares it,
-        which the inheritance-flattening :meth:`methods_for` cannot answer.
-        """
-        return self._methods.get(owner_id, {})
+        """Return the direct method chosen for each name declared on *owner_id*."""
+        return {
+            name: self._method_level(methods)[0]
+            for name, methods in self._methods.get(owner_id, {}).items()
+            if methods
+        }
 
     def _exception_chain(self, decl_id: DeclId, *, caller: str) -> list[tuple[DeclId, TypeDef]]:
         """Return *decl_id*'s base chain, base first, rejecting a cyclic base link.
@@ -561,12 +591,6 @@ class TypeTable:
         chain = self._exception_chain(typedef.base, caller="ancestor_defs")
         return tuple(base_def for _base_id, base_def in reversed(chain))
 
-    def _flatten_exception_methods(self, decl_id: DeclId) -> Mapping[str, MethodDef]:
-        methods: dict[str, MethodDef] = {}
-        for chain_id, _typedef in self._exception_chain(decl_id, caller="methods_for"):
-            methods.update(self._methods.get(chain_id, {}))
-        return methods
-
     def _invalidate_cache_for(self, decl_id: DeclId) -> None:
         self._record_fields_cache.pop(decl_id, None)
         self._enum_members_cache.pop(decl_id, None)
@@ -578,7 +602,6 @@ class TypeTable:
         # maintain a reverse-inheritance index.
         self._exception_fields_cache.clear()
         self._exception_field_kinds_cache.clear()
-        self._exception_methods_cache.clear()
         # The non-data-reachability and finiteness fixpoints are whole-table
         # (any declaration's flag can in principle depend on any other's), so
         # a single changed identity invalidates the whole cached result rather
@@ -1415,10 +1438,13 @@ class TypeTable:
         # orphaned once must stay orphaned for the rest of the session.
         self._orphaned |= other._orphaned
         for decl_id, methods in other._methods.items():
-            for method in methods.values():
-                self._put_method(decl_id, method)
+            for candidates in methods.values():
+                for method in candidates.values():
+                    self._put_method(decl_id, method)
         for constructor, methods in other._builtin_methods.items():
-            self._builtin_methods.setdefault(constructor, {}).update(methods)
+            for candidates in methods.values():
+                for method in candidates.values():
+                    self.register_builtin_method(constructor, method)
 
 
 def decl_def_sort_key(typedef: TypeDef) -> tuple[tuple[str, ...], tuple[str, ...], str]:
@@ -1614,9 +1640,10 @@ def is_assignable_in(table: TypeTable, value_type: Type, target_type: Type) -> b
 
     The pure :func:`semantics.types.is_assignable` rules apply unchanged.  In
     addition, a member record is assignable to an enum when it occurs in that
-    enum instantiation's declared member set.  This is deliberately a
-    top-level, directed relation: containers remain invariant and enums and
-    exceptions do not gain membership-based conversions.
+    enum instantiation's declared member set, and an exception is assignable
+    to any exception in its base chain. This is deliberately a top-level,
+    directed relation: containers remain invariant and enums do not gain
+    membership-based conversions.
     """
     if is_assignable(value_type, target_type):
         return True
@@ -1626,6 +1653,11 @@ def is_assignable_in(table: TypeTable, value_type: Type, target_type: Type) -> b
         and value_type in table.enum_members(target_type)
     ):
         return True
+    if isinstance(value_type, ExceptionType) and isinstance(target_type, ExceptionType):
+        return any(
+            ancestor.decl_node_id == target_type.decl_id
+            for ancestor in table.ancestor_defs(value_type.decl_id)
+        )
     return False
 
 

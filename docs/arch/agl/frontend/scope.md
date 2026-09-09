@@ -1,6 +1,6 @@
 # AgL Name Resolution
 
-The scope pass resolves every name in the program, over the whole module graph, and publishes immutable side tables. Typecheck consumes them and never re-resolves; scope in turn never guesses — any ambiguous bare or qualified route is a static error.
+The scope pass resolves every name in the program, over the whole module graph, and publishes immutable side tables, including each module's reachable declaration identities. Typecheck consumes them and never re-resolves; scope in turn never guesses — any ambiguous bare or qualified route is a static error.
 
 ## Namespaces and Scopes
 
@@ -14,7 +14,7 @@ An import contributes a module's full public qualified surface minus what its `h
 
 ## Classification
 
-Scope classifies what typecheck will type: a built-in call is recognized by resolving its callee to a `builtin def` declaration, never by spelling; a `self`-receiver `def` in a nominal scope or on an applied builtin receiver is a method; `builtin var` bindings are host-backed values, of which only root `std/config` bindings are engine settings. Index and field assignment receivers resolve as ordinary reads; typecheck owns container, field, and mutability rules.
+Scope classifies what typecheck will type: a built-in call is recognized by resolving its callee to a `builtin def` declaration, never by spelling; during the ordered lexical walk, a `self`-receiver `def` resolves to a `ReceiverOwner` through the same nearest bare-contribution and constructor precedence as ordinary names, while builtin receiver spellings are recognized independently of any enclosing named region and retain their declaring module. Each module's resolution publishes the declarations reachable through its routes. `builtin var` bindings are host-backed values, of which only root `std/config` bindings are engine settings. Index and field assignment receivers resolve as ordinary reads; typecheck owns container, field, and mutability rules.
 
 ## Attribute Recognition
 
@@ -32,5 +32,5 @@ The facts built from the `@opt-*` attributes and `@doc` are `program_options` an
 - `src/agm/agl/scope/resolver.py` — declaration collection, `use` selection, regional bare contributions.
 - `src/agm/agl/scope/imports.py` — import contribution environments and qualified resolution.
 - `src/agm/agl/scope/program.py` — export maps, re-exports, cross-module resolution.
-- `src/agm/agl/scope/symbols.py` — builtin call names, symbol kinds, and `AttributeFacts`, the recognized-attribute tables the resolution carries.
+- `src/agm/agl/scope/symbols.py` — builtin call names, symbol kinds, `ReceiverOwner`, and `AttributeFacts`, the recognized-attribute tables the resolution carries.
 - Tests: `tests/test_agl_scope*.py`, `test_agl_namespace_*.py`, `test_agl_qualifier_*.py`.

@@ -145,8 +145,8 @@ program def main() -> unit =
 ```
 
 An [`extern def`](ffi.md) companion is the `.py` sibling of its module inside
-the module tree and travels with the package; there is no separate declaration
-for it.
+the module tree and is included with the package; there is no separate
+declaration for it.
 
 ## Diagnostics
 

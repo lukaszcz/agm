@@ -209,32 +209,89 @@ def with-named-default(x: int, @arg-named tag: text = "ok") -> text =
 
 ## Methods
 
-A `def` in a record, enum, or exception scope is a **method** when its first
-parameter is `self`. The receiver is supplied by member access: `p.f(x)` is
-the same call as `Type::f(p, x)`. A method names its enclosing type explicitly
-in its annotations; there is no implicit receiver type name.
+A `def` whose first parameter is `self` and whose enclosing scope resolves to
+a receiver type — a record, enum, enum member, exception, or builtin receiver
+— is a **method**: a scoped function selected by its receiver's **static type**.
+`p.f(x)` supplies `p` as the first argument of the selected function, while
+`Type::f(p, x)` calls one function by its ordinary scope path. A method is not
+dynamically dispatched.
 
-The standard library may also declare a method for a builtin receiver directly
-in its declaration head. This syntax is available to ordinary, `builtin`, and
-`extern` definitions. `array[E]::name` and `dict[text, V]::name` bind their
-receiver element or value parameter; `text`, `json`, `int`, `decimal`, and
-`bool` are bare receivers. Each builtin receiver has exactly one
-owning module, and such a declaration belongs only there; the same declaration
-in another module is rejected. A builtin receiver must use its bare generic
-form, so
-`array[int]::name` and `dict[text, array[int]]::name` are invalid. As with a
-nominal generic receiver, `_` may occupy an unused builtin receiver slot; it
-binds a private rigid parameter and cannot be named by the method body.
+The receiver part of `def Type::f(self)` (or `scope Type` containing that
+`def`) resolves as a type name in the module containing the declaration. A
+locally declared record, enum, enum member, or exception wins. Otherwise, exactly one
+type made bare-visible in that region by an import tail or `use` must provide
+the name. Renamed contributions may provide that spelling. A qualified import
+alone provides no bare receiver name, and a type alias cannot name a method
+receiver. The declaration extends the resolved type's plain scope in the
+module that contains the `def`; it does not add a declaration to the type's
+home module.
 
-Declared builtin receiver methods are available by member access once their
-owning module is loaded. With the standard-library prelude enabled, the loader
-injects the optional `std/builtin-methods` registry when present, loading the
-owning modules ambiently; then `xs.size()` or `(-3).abs()` does not need an
-import of that module. With `--no-stdlib`, or a custom standard library without
-the registry, import the owning module first. This ambient availability applies
-only to methods: an ordinary free function in an owning module still requires
-an import. Ordinary and `extern` builtin-receiver methods use the same
-direct-call, bound-method, and generic-specialization rules as nominal methods.
+<!-- agl-check: fragment -->
+```agl
+# geometry.agl
+record Point
+  x: int
+  y: int
+
+def Point::shift(self, amount: int) -> Point = Point(x = self.x + amount, y = self.y)
+
+# metrics.agl
+import geometry::*
+
+def Point::norm(self) -> int = self.x * self.x + self.y * self.y
+
+# main.agl
+import geometry::*
+import metrics
+
+program def main() -> unit =
+  let p = Point(x = 2, y = 3)
+  print(p.shift(1).norm())
+  print(metrics::Point::norm(p))
+```
+
+`metrics::Point` in this example is a plain scope of `metrics`. A bare
+`Point::norm(p)` follows ordinary scope-path resolution; dot selection is the
+operation that gathers methods for a receiver type across modules.
+
+A method is selectable in a module when that module declares it or can reach
+its declaration by a qualified import route. Any import form — a plain import,
+alias, bare tail, wildcard, or facade re-export — can provide that route;
+`hiding` removes it. `use` adds bare names only and does not affect method
+visibility. The implicit
+`import std/prelude::*` is an ordinary route, so it also makes the methods its
+receiver-scope re-exports expose available.
+
+Selection starts at the receiver's static type and, for exceptions, walks its
+base chain. The nearest level containing visible methods wins. Two or more
+visible methods at that level are a static ambiguity; hide one route or call
+the intended function by its qualified path. A home-module method and an
+orphan method have equal priority, and `Base::f` and `Derived::f` may both be
+declared in one module. A value held in a `Base` binding selects `Base::f`,
+even when its runtime value is `Derived`.
+
+Fields and methods are distinct member kinds. If a receiver's static type has
+a field and any visible same-named method at its level or an ancestor level,
+the member read is ambiguous. The same rule applies to `receiver.name := value`;
+hide the method to use the field, or call the method by a qualified path. A
+method declaration itself is rejected only when its resolved owner or an
+ancestor already has a field of that name.
+
+A builtin receiver may be named in a method declaration in any module. This
+syntax is available to ordinary, `builtin`, and `extern` definitions:
+`array[E]::name` and `dict[text, V]::name` bind their receiver element or value
+parameter; `text`, `json`, `int`, `decimal`, and `bool` are bare receivers. A
+builtin receiver must use its bare generic form, so `array[int]::name` and
+`dict[text, array[int]]::name` are invalid. As with a nominal generic receiver,
+`_` may occupy an unused receiver slot; it binds a private rigid parameter and
+cannot be named by the method body.
+
+The prelude re-exports builtin receiver scopes, making standard-library methods
+reachable wherever the prelude is enabled. With `--no-stdlib`, import a route
+to the module or facade that exports the method. Free functions remain subject
+to ordinary imports. Ordinary and `extern` builtin-receiver methods use the
+same direct-call, bound-method, and generic-specialization rules as nominal
+methods.
 
 A `builtin def` receiver method is instead a call-only host route. Its name and
 signature must be one of `print`, `render`, `copy`, or `shallow-copy`; each
@@ -275,11 +332,12 @@ program def main() -> unit =
   print(alias.value)
 ```
 
-`self` must be the first parameter. It has no default
-and cannot be supplied by name. Its annotation is optional; when written, it
-must be exactly the enclosing type with the method's receiver type parameters.
-For example, `self: Box[E]` is valid for a `Box` method whose leading type
-parameter is `E`, while `self: Box[int]` is not.
+`self` must be the first parameter. It has no default and cannot be
+supplied by name. Its annotation is optional; when written, it must be exactly
+the resolved receiver type with its receiver type parameters. Thus an orphan
+on `geometry::Point` may write either `self: Point` or `self: geometry::Point`;
+for a generic `Box` receiver, `self: Box[E]` is valid while `self: Box[int]`
+is not.
 
 On a generic receiver type, the first type parameters of a method bind the
 receiver type parameters in positional order. Their names are the method's
@@ -333,12 +391,13 @@ program def main() -> unit =
   print(plus(5))
 ```
 
-The `self` spelling is special only in this receiver position. An annotated
-`self` elsewhere is an ordinary parameter. `def` and `extern def` may declare
-methods. A `builtin def` may also declare a host method when its signature is a
-recognized host contract: the standard library declares `Agent::ask` and
-`Agent::ask`. This method uses the same selection and receiver rules,
-but are call-only rather than bound function values; see [Agent calls](agent-calls.md).
+`self` is special only as a method receiver. Elsewhere it is an ordinary
+identifier and, as an ordinary parameter, requires an annotation. `def` and
+`extern def` may declare methods. A `builtin def` may also declare a host method
+when its signature is a recognized host contract: the standard library declares
+`Agent::ask` and `Agent::ask-request`. These methods use the same selection and
+receiver rules, but are call-only rather than bound function values; see
+[Agent calls](agent-calls.md).
 
 ### Scope and forward references
 

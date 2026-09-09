@@ -1,4 +1,4 @@
-# Methods are ambient through std/builtin-methods; this module imports nothing.
+# Prelude receiver-scope exports make these methods available without an import.
 
 program def main(values: array[int]) -> unit =
   print(values.size())

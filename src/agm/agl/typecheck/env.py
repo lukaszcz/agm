@@ -877,6 +877,18 @@ class TypeEnvironment:
     def get_type(self, name: str) -> Type | None:
         return self._types.get(name)
 
+    def get_type_by_declaration(self, module_id: ModuleId, scope_path: ScopePath) -> Type | None:
+        """Look up a nominal declaration by its module and complete scope path."""
+        name = "::".join(scope_path)
+        if module_id == self._module_id:
+            local = self._types.get(name)
+            if local is not None:
+                return local
+        if self._program_type_table is not None:
+            return self._program_type_table.get((module_id, scope_path[:-1], scope_path[-1]))
+        typedef = self._type_table.get(module_id, scope_path[-1], scope_path[:-1])
+        return None if typedef is None else typedef.handle()
+
     def has_qualified_import_member(self, qualifier: QualifierChain, name: str) -> bool:
         """Return whether a qualifier route contributes *name* after filtering."""
         if self._import_env is None:
@@ -1090,6 +1102,19 @@ class TypeEnvironment:
     def get_generic_type(self, name: str) -> GenericTypeDef | None:
         """Return the ``GenericTypeDef`` for *name*, or ``None`` if unknown."""
         return self._generic_types.get(name)
+
+    def get_generic_type_by_declaration(
+        self, module_id: ModuleId, scope_path: ScopePath
+    ) -> GenericTypeDef | None:
+        """Look up a generic declaration by its module and complete scope path."""
+        name = "::".join(scope_path)
+        if module_id == self._module_id:
+            local = self._generic_types.get(name)
+            if local is not None:
+                return local
+        if self._program_generic_table is None:
+            return None
+        return self._program_generic_table.get((module_id, scope_path[:-1], scope_path[-1]))
 
     def instantiate_nominal(
         self,
@@ -1793,16 +1818,19 @@ class TypeEnvironment:
                 return True
         return False
 
-    def _is_missing_local_scoped_type(self, qualifier: QualifierChain) -> bool:
+    def _is_missing_local_scoped_type(self, qualifier: QualifierChain, name: str) -> bool:
         """Whether an unresolved qualifier belongs to a local scope, not a route."""
         if qualifier.anchor is QualifierAnchor.CURRENT_MODULE:
             return True
-        return self._has_local_scope_prefix(qualifier) and not (
-            self._import_env is not None
-            and qualifier_candidates(
-                self._import_env, qualifier.route_segments, anchored=qualifier.anchored
-            )
+        has_import_route = self._import_env is not None and qualifier_candidates(
+            self._import_env, qualifier.route_segments, anchored=qualifier.anchored
         )
+        has_bare_import = (
+            self._import_env is not None
+            and not qualifier.anchored
+            and _type_path_atom((*qualifier.route_segments, name)) in self._import_env.unqualified
+        )
+        return self._has_local_scope_prefix(qualifier) and not (has_import_route or has_bare_import)
 
     @staticmethod
     def _unknown_scoped_type_message(qualifier: QualifierChain, name: str) -> str:
@@ -2017,7 +2045,7 @@ class TypeEnvironment:
     ) -> Type:
         """Resolve ``module::Name[args]`` through the module import environment."""
         rendered = qualifier.render()
-        if self._is_missing_local_scoped_type(qualifier):
+        if self._is_missing_local_scoped_type(qualifier, name):
             raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
         if self._import_env is None or self._program_generic_table is None:
             raise AglTypeError(
@@ -2158,7 +2186,7 @@ class TypeEnvironment:
                     span=span,
                 )
                 return opened
-        if self._is_missing_local_scoped_type(qualifier):
+        if self._is_missing_local_scoped_type(qualifier, name):
             raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
         if self._program_type_table is None or self._import_env is None:
             raise AglTypeError(

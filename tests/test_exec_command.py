@@ -2033,6 +2033,25 @@ class TestExecFFI:
         captured = capsys.readouterr()
         assert captured.out == "42\n"
 
+    def test_exec_calls_an_extern_backed_orphan_method(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "geometry.agl").write_text("record Point(x: int)\n", encoding="utf-8")
+        (tmp_path / "metrics.agl").write_text(
+            "import geometry::*\nextern def Point::norm(self) -> int\n", encoding="utf-8"
+        )
+        (tmp_path / "metrics.py").write_text("def norm(point):\n    return 42\n", encoding="utf-8")
+        program = tmp_path / "main.agl"
+        write_file_program(
+            program,
+            "import geometry::*\nimport metrics\nprint(Point(x = 1).norm())\n",
+            encoding="utf-8",
+        )
+
+        assert exec_command.run(_exec_args(program)) is None
+
+        assert capsys.readouterr().out == "42\n"
+
     def test_dry_run_lists_the_extern_call_site_without_importing_companion(
         self,
         tmp_path: Path,

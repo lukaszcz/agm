@@ -910,16 +910,20 @@ Typing is exact nominal matching with these implicit coercions:
 3. **An enum member record widens to an enum that declares it.** This applies only
    when checking against a known enum slot; it never finds a common enum while
    inferring a mixed expression.
-4. There are no other implicit conversions. In particular, an `array` or
+4. **A derived exception widens to any ancestor in its `extends` chain.** This
+   applies only against a known base-exception slot and preserves the value's
+   concrete identity. It does not propagate through containers, and `catch`
+   matching remains exact.
+5. There are no other implicit conversions. In particular, an `array` or
    `dict` value — even one that is JSON-shaped — is never implicitly absorbed
    into `json`: an implicit conversion never copies a data structure, and
    converting a container to `json` builds one. Use an explicit `as json`
    cast (see [Casts and convertibility](#casts-and-convertibility) below).
-5. Equality (`==`, `!=`) and ordering comparisons require both operands to
+6. Equality (`==`, `!=`) and ordering comparisons require both operands to
    have the *same* type after rule 1. Operands whose type is, or transitively
    contains, a function, `unit`, or opaque `Session` value are a static error — see
    [Values and equality](#values-and-equality) below.
-6. All branches of a `case` expression must have the same type after rule 1.
+7. All branches of a `case` expression must have the same type after rule 1.
 
 For explicit, user-requested conversions between types, see
 [Casts and convertibility](#casts-and-convertibility) below.

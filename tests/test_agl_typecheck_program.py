@@ -195,6 +195,22 @@ def test_foreign_method_receiver_checks_and_selects_through_its_declaring_type(
     assert _binding_value_type(checked, ENTRY_ID, "extracted") == IntType()
 
 
+def test_nested_imported_receiver_annotations_resolve(tmp_path: Path) -> None:
+    _check_program(
+        tmp_path,
+        {
+            "entry": (
+                "import shapes::*\n\n"
+                "def Geo::Point::choose("
+                "self: Geo::Point, other: Geo::Point"
+                ") -> Geo::Point = other"
+            ),
+            "shapes": "scope Geo\n  record Point()\nend Geo",
+        },
+        default_stdlib=False,
+    )
+
+
 def test_foreign_method_receiver_annotation_must_match_its_owner(tmp_path: Path) -> None:
     """A receiver annotation cannot name a different imported nominal."""
     graph = _make_graph_from_files(

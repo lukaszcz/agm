@@ -1818,15 +1818,21 @@ class TypeEnvironment:
                 return True
         return False
 
-    def _is_missing_local_scoped_type(self, qualifier: QualifierChain) -> bool:
+    def _is_missing_local_scoped_type(self, qualifier: QualifierChain, name: str) -> bool:
         """Whether an unresolved qualifier belongs to a local scope, not a route."""
         if qualifier.anchor is QualifierAnchor.CURRENT_MODULE:
             return True
-        return self._has_local_scope_prefix(qualifier) and not (
+        has_import_route = self._import_env is not None and qualifier_candidates(
+            self._import_env, qualifier.route_segments, anchored=qualifier.anchored
+        )
+        has_bare_import = (
             self._import_env is not None
-            and qualifier_candidates(
-                self._import_env, qualifier.route_segments, anchored=qualifier.anchored
-            )
+            and not qualifier.anchored
+            and _type_path_atom((*qualifier.route_segments, name))
+            in self._import_env.unqualified
+        )
+        return self._has_local_scope_prefix(qualifier) and not (
+            has_import_route or has_bare_import
         )
 
     @staticmethod
@@ -2042,7 +2048,7 @@ class TypeEnvironment:
     ) -> Type:
         """Resolve ``module::Name[args]`` through the module import environment."""
         rendered = qualifier.render()
-        if self._is_missing_local_scoped_type(qualifier):
+        if self._is_missing_local_scoped_type(qualifier, name):
             raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
         if self._import_env is None or self._program_generic_table is None:
             raise AglTypeError(
@@ -2183,7 +2189,7 @@ class TypeEnvironment:
                     span=span,
                 )
                 return opened
-        if self._is_missing_local_scoped_type(qualifier):
+        if self._is_missing_local_scoped_type(qualifier, name):
             raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
         if self._program_type_table is None or self._import_env is None:
             raise AglTypeError(

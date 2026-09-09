@@ -2362,6 +2362,23 @@ class TestMethodOrphanRule:
         with pytest.raises(AglScopeError, match="ambiguous"):
             resolve_program(graph)
 
+    def test_renamed_orphan_receiver_collision_is_ambiguous(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "import first::{Original as Point}\n"
+                    "import second::{Point}\n"
+                    "def Point::tag(self) -> int = 1"
+                ),
+                "first": "record Original()",
+                "second": "record Point()",
+            },
+        )
+
+        with pytest.raises(AglScopeError, match="ambiguous"):
+            resolve_program(graph)
+
     def test_foreign_alias_is_rejected_as_a_receiver(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
             tmp_path,

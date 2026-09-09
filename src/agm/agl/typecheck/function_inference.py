@@ -161,11 +161,7 @@ class ModuleCandidateComponent:
         module_id: ModuleId,
     ) -> "ModuleCandidateComponent":
         """Build the synthetic component for one module checked in isolation."""
-        declaration_spans = {
-            key: ref.decl_span
-            for key, ref in resolved.declarations.items()
-            if ref.decl_span is not None
-        }
+        declaration_spans = {key: ref.decl_span for key, ref in resolved.declarations.items()}
         return cls(
             (CandidateModule(resolved, env, capabilities, module_id, declaration_spans),), (env,)
         )

@@ -1050,7 +1050,6 @@ def resolve_program(
             builtin_static_decl_node_ids=prelude_static_decl_node_ids,
             referenced_member_constructor_refs=referenced_member_constructor_refs,
             cross_module_constructible_types=cross_module_constructible_types,
-            cross_module_type_scopes=frozenset(cross_module_type_owners),
             cross_module_type_owners=cross_module_type_owners,
             program_import_envs=import_envs,
             all_public_types=all_public_types,

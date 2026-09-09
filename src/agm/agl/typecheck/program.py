@@ -413,7 +413,6 @@ def _declaration_spans(resolved: ResolvedProgram) -> dict[DeclarationKey, Source
         key: ref.decl_span
         for module in resolved.modules.values()
         for key, ref in module.resolved.declarations.items()
-        if ref.decl_span is not None
     }
 
 

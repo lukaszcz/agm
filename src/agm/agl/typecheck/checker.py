@@ -306,7 +306,6 @@ class _SelectedMember:
 
     field_type: Type | None = None
     method: MethodDef | None = None
-    receiver_type: Type | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -690,9 +689,7 @@ class _Checker:
             ref.decl_node_id: ref.scope_path for ref in resolved.declarations.values()
         }
         self._declaration_spans = declaration_spans or {
-            key: ref.decl_span
-            for key, ref in resolved.declarations.items()
-            if ref.decl_span is not None
+            key: ref.decl_span for key, ref in resolved.declarations.items()
         }
         self._candidate_session = candidate_session
         # Callers pass only candidate-inferred records here (see
@@ -4595,7 +4592,7 @@ class _Checker:
         name: str,
         span: SourceSpan,
         *,
-        method_receiver: Type | None = None,
+        method_receiver: Type,
     ) -> _SelectedMember:
         """Select a field or visible method, rejecting a field/method kind clash."""
         fields: Mapping[str, Type] | None = None
@@ -4605,8 +4602,7 @@ class _Checker:
             fields = self._env.type_table.record_fields(obj_type)
         field_type = None if fields is None else fields.get(name)
 
-        receiver = obj_type if method_receiver is None else method_receiver
-        candidate_levels = self._env.type_table.method_candidates(receiver, name)
+        candidate_levels = self._env.type_table.method_candidates(method_receiver, name)
         visible_levels = self._visible_method_levels(candidate_levels)
         visible_methods = tuple(method for level in visible_levels for method in level)
         if field_type is not None and visible_methods:
@@ -4622,7 +4618,7 @@ class _Checker:
 
         for visible in visible_levels:
             if len(visible) == 1:
-                return _SelectedMember(method=visible[0], receiver_type=receiver)
+                return _SelectedMember(method=visible[0])
             if visible:
                 declarations = ", ".join(_method_declaration_name(method) for method in visible)
                 raise AglTypeError(
@@ -4644,8 +4640,7 @@ class _Checker:
             tuple(
                 method
                 for method in candidates
-                if (method.module_id, method.scope_path, method.name)
-                in self._resolved.reachable_declarations
+                if method.declaration_key in self._resolved.reachable_declarations
             )
             for candidates in candidate_levels
         )
@@ -4657,12 +4652,7 @@ class _Checker:
         return tuple(
             (f"'{_method_declaration_name(method)}' is declared here", declaration_span)
             for method in methods
-            if (
-                declaration_span := self._declaration_spans.get(
-                    (method.module_id, method.scope_path, method.name)
-                )
-            )
-            is not None
+            if (declaration_span := self._declaration_spans.get(method.declaration_key)) is not None
         )
 
     def _field_owner_name(self, obj_type: RecordType | ExceptionType, name: str) -> str:
@@ -4746,15 +4736,14 @@ class _Checker:
                 return selected.field_type
 
             method = selected.method
-            receiver = selected.receiver_type
-            assert method is not None and receiver is not None
+            assert method is not None
             self._record_method_selection(node.node_id, method)
             if method.is_builtin:
                 return _SelectedBuiltinMethod(
-                    name=method.name, receiver_type=receiver, method=method
+                    name=method.name, receiver_type=method_receiver, method=method
                 )
             bound = self._bound_method_type(
-                method, receiver, type_args=type_args, expected=expected, span=node.span
+                method, method_receiver, type_args=type_args, expected=expected, span=node.span
             )
             if self._env.is_extern_node_id(method.decl_node_id):
                 self._set_extern_expr_targets(

@@ -138,6 +138,11 @@ class MethodDef:
     type_params: tuple[str, ...] = ()
     is_builtin: bool = False
 
+    @property
+    def declaration_key(self) -> DeclKey:
+        """Return the method's structured declaration identity."""
+        return self.module_id, self.scope_path, self.name
+
 
 # ``ParamZone.value`` strings (``"positional_only"``/``"standard"``/
 # ``"named_only"``) — ``semantics`` may not import ``syntax.nodes`` (see
@@ -439,10 +444,6 @@ class TypeTable:
         return self._name_index.get(key) == typedef.decl_node_id
 
     @staticmethod
-    def _method_key(method: MethodDef) -> DeclKey:
-        return method.module_id, method.scope_path, method.name
-
-    @staticmethod
     def _method_sort_key(method: MethodDef) -> tuple[tuple[str, ...], tuple[str, ...], str]:
         return method.module_id.segments, method.scope_path, method.name
 
@@ -453,7 +454,7 @@ class TypeTable:
     def _put_method(self, decl_id: DeclId, method: MethodDef) -> None:
         """Register *method* under its declaration key on *decl_id*."""
         self._methods.setdefault(decl_id, {}).setdefault(method.name, {})[
-            self._method_key(method)
+            method.declaration_key
         ] = method
 
     def register_method(self, owner: NominalOwner, method: MethodDef) -> None:
@@ -463,7 +464,7 @@ class TypeTable:
     def register_builtin_method(self, constructor: str, method: MethodDef) -> None:
         """Register *method* under a built-in receiver type constructor."""
         self._builtin_methods.setdefault(constructor, {}).setdefault(method.name, {})[
-            self._method_key(method)
+            method.declaration_key
         ] = method
 
     @staticmethod
@@ -496,12 +497,7 @@ class TypeTable:
             return ()
         owner_ids: tuple[DeclId, ...] = (owner.decl_id,)
         if isinstance(owner, ExceptionType):
-            owner_ids = tuple(
-                decl_id
-                for decl_id, _typedef in reversed(
-                    self._exception_chain(owner.decl_id, caller="method_candidates")
-                )
-            )
+            owner_ids += tuple(base.decl_node_id for base in self.ancestor_defs(owner.decl_id))
         return tuple(
             self._method_level(self._methods.get(decl_id, {}).get(name, {}))
             for decl_id in owner_ids

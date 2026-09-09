@@ -162,15 +162,15 @@ def _member_declarations(
     return index
 
 
-def _ancestor_member(
-    index: _MemberIndex, ancestors: tuple[DeclId, ...], name: str, kind: Literal["field", "method"]
+def _ancestor_field(
+    index: _MemberIndex, ancestors: tuple[DeclId, ...], name: str
 ) -> tuple[DeclId, _MemberDeclaration] | None:
-    """Find the nearest ancestor member of a different kind with *name*."""
+    """Find the nearest ancestor field named *name*."""
     for ancestor in ancestors:
-        members = index.members_of(ancestor).get(name, ())
-        conflicting = next((member for member in members if member.kind != kind), None)
-        if conflicting is not None:
-            return ancestor, conflicting
+        fields = index.members_of(ancestor).get(name, ())
+        field = next((member for member in fields if member.kind == "field"), None)
+        if field is not None:
+            return ancestor, field
     return None
 
 
@@ -296,6 +296,6 @@ def validate_method_declaration_collisions(
                 )
                 if field is not None:
                     _raise_collision(type_table, owner_id, name, method, owner_id, field)
-                conflict = _ancestor_member(index, ancestors, name, "method")
+                conflict = _ancestor_field(index, ancestors, name)
                 if conflict is not None:
                     _raise_collision(type_table, owner_id, name, method, *conflict)

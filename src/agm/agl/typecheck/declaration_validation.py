@@ -182,11 +182,12 @@ def _raise_collision(
     conflicting_id: DeclId,
     conflicting: _MemberDeclaration,
 ) -> None:
-    """Report the later direct declaration or the more-specific descendant."""
+    """Report a method collision, preferring the later same-source declaration."""
     if (
         owner_id == conflicting_id
         and declared.span is not None
         and conflicting.span is not None
+        and declared.span.source == conflicting.span.source
         and declared.span.start_offset < conflicting.span.start_offset
     ):
         declared, conflicting = conflicting, declared

@@ -219,8 +219,9 @@ dynamically dispatched.
 The receiver part of `def Type::f(self)` (or `scope Type` containing that
 `def`) resolves as a type name in the module containing the declaration. A
 locally declared record, enum, enum member, or exception wins. Otherwise, exactly one
-bare-imported type reaching that region must provide the name. A qualified
-import alone provides no bare receiver name, and an alias cannot name a method
+type made bare-visible in that region by an import tail or `use` must provide
+the name. Renamed contributions may provide that spelling. A qualified import
+alone provides no bare receiver name, and a type alias cannot name a method
 receiver. The declaration extends the resolved type's plain scope in the
 module that contains the `def`; it does not add a declaration to the type's
 home module.

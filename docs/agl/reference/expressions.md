@@ -352,8 +352,10 @@ program def main() -> unit =
 
 `expr.member` projects either a field or a method. Fields belong to records,
 exceptions, and `ExecResult`; methods belong to records, enums, exceptions, and
-built-in receiver types. A field projection yields its field value. A method projection yields a bound
-function value whose receiver is the value on the left of the dot.
+built-in receiver types. A field projection yields its field value. An ordinary
+or `extern` method projection yields a bound function value whose receiver is
+the value on the left of the dot. A `builtin def` receiver method is call-only:
+`expr.member(...)` is valid, but projecting it as a value is not.
 
 ```agl
 record Meter

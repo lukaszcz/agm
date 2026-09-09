@@ -101,9 +101,10 @@ positions.
 `by` carries no syntactic role: the range stride is spelled `step`.
 
 `self` is a **contextual identifier**, not a keyword. It is special only as the
-first parameter of a `def` in a record, enum, or exception scope, where it is
-the method receiver. Everywhere else it is an ordinary identifier, including
-as a field name or an annotated function parameter.
+first parameter of a `def` whose enclosing path resolves to a record, enum,
+exception, or built-in receiver type; that includes foreign receiver names
+made bare-visible by an import or `use`. Everywhere else it is an ordinary
+identifier, including as a field name or an annotated function parameter.
 
 **Contextual keywords** — `print`, `ask`, and `exec` are NOT reserved; they
 lex as plain `NAME` tokens and are given their built-in meaning during scope

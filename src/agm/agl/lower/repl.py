@@ -26,6 +26,7 @@ from agm.agl.syntax.nodes import (
     RecordDef,
     ScopeRegion,
     TypeAlias,
+    UseDecl,
     VarDecl,
     VariantDef,
     pattern_binder_candidates,
@@ -113,6 +114,7 @@ class ReplPromotionPlan:
     scope_region_source_indices: Mapping[tuple[str, ...], tuple[int, ...]] = field(
         default_factory=dict
     )
+    use_declaration_source_indices: Mapping[int, int] = field(default_factory=dict)
 
     def _source_frontier(self, completed_initializer_indices: Collection[int]) -> int:
         completed_indices = set(completed_initializer_indices)
@@ -134,6 +136,17 @@ class ReplPromotionPlan:
             path
             for path, indices in self.scope_region_source_indices.items()
             if any(index <= frontier for index in indices)
+        )
+
+    def completed_use_declaration_ids(
+        self, completed_initializer_indices: Collection[int]
+    ) -> frozenset[int]:
+        """Return use declarations reached before the failed source frontier."""
+        frontier = self._source_frontier(completed_initializer_indices)
+        return frozenset(
+            node_id
+            for node_id, source_index in self.use_declaration_source_indices.items()
+            if source_index <= frontier
         )
 
     def completed_declaration_ids(
@@ -359,6 +372,9 @@ def _promotion_plan(
     leaf_items = tuple(static_items(checked.resolved.program.body.items))
     source_declaration_ids = tuple(_item_declaration_ids(item, checked) for item in leaf_items)
     entry_declaration_ids = frozenset().union(*source_declaration_ids, frozenset())
+    use_declaration_source_indices = {
+        item.node_id: index for index, item in enumerate(leaf_items) if isinstance(item, UseDecl)
+    }
     # A top-level nominal handle promotes with its own source item. Synthetic
     # inline-member records promote with their EnumDef owner instead, so a
     # function mentioning ``E::A`` cannot survive without ``E``.
@@ -423,6 +439,7 @@ def _promotion_plan(
         scope_region_source_indices=MappingProxyType(
             {path: tuple(indices) for path, indices in region_indices.items()}
         ),
+        use_declaration_source_indices=MappingProxyType(use_declaration_source_indices),
     )
 
 

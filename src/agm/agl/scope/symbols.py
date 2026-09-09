@@ -535,6 +535,7 @@ class ImportedUseContribution:
     import environment.
     """
 
+    declaration: UseDecl
     target: ResolvedUseTarget
     refreshes_all_members: bool
     members: Mapping[BareAtom, QName]

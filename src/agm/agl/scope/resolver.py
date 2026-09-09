@@ -2725,6 +2725,7 @@ class _Resolver:
             contribute(exposed, source)
         scope.imported_use_contributions.append(
             ImportedUseContribution(
+                declaration=decl,
                 target=self._use_targets[decl.node_id],
                 refreshes_all_members=decl.tail == (),
                 members=dict(selected),

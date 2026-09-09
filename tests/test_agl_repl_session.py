@@ -3353,6 +3353,21 @@ class TestFailureEffects:
         assert result.ok
         assert result.value == IntValue(1)
 
+    def test_runtime_failure_does_not_promote_unreached_use_in_retained_scope(self) -> None:
+        session = open_session(default_stdlib=False)
+        assert session.eval_entry(
+            "scope Source\n  def leaked() -> int = 1\nend Source\n\nscope Outer\nend Outer"
+        ).ok
+
+        failed = session.eval_entry(
+            "scope Outer\nend Outer\n\n"
+            "let z: decimal = 1 / 0\n\n"
+            "scope Outer\n  use Source::*\nend Outer"
+        )
+
+        assert not failed.ok
+        assert not session.eval_entry("def Outer::call() -> int = leaked()").ok
+
     def test_runtime_failure_scope_frontier_ignores_retained_source_offsets(
         self, tmp_path: Path
     ) -> None:

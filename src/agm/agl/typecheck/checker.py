@@ -4607,15 +4607,7 @@ class _Checker:
 
         receiver = obj_type if method_receiver is None else method_receiver
         candidate_levels = self._env.type_table.method_candidates(receiver, name)
-        visible_levels = tuple(
-            tuple(
-                method
-                for method in candidates
-                if (method.module_id, method.scope_path, method.name)
-                in self._resolved.reachable_declarations
-            )
-            for candidates in candidate_levels
-        )
+        visible_levels = self._visible_method_levels(candidate_levels)
         visible_methods = tuple(method for level in visible_levels for method in level)
         if field_type is not None and visible_methods:
             declarations = ", ".join(_method_declaration_name(method) for method in visible_methods)
@@ -4643,6 +4635,20 @@ class _Checker:
                 f"Method '{name}' exists for '{obj_type!r}' but is not visible here.", span=span
             )
         raise _no_member(obj_type, name, span)
+
+    def _visible_method_levels(
+        self, candidate_levels: tuple[tuple[MethodDef, ...], ...]
+    ) -> tuple[tuple[MethodDef, ...], ...]:
+        """Filter method candidates through declarations reachable by this module."""
+        return tuple(
+            tuple(
+                method
+                for method in candidates
+                if (method.module_id, method.scope_path, method.name)
+                in self._resolved.reachable_declarations
+            )
+            for candidates in candidate_levels
+        )
 
     def _method_declaration_related(
         self, methods: Sequence[MethodDef]
@@ -4680,8 +4686,9 @@ class _Checker:
         return qualified_decl_name(owner)
 
     def _option_member_method_receiver(self, obj_type: RecordType, name: str) -> Type:
-        """Return Option's method owner when an Option member has no own method."""
-        if any(self._env.type_table.method_candidates(obj_type, name)):
+        """Return Option's method owner when an Option member has no visible own method."""
+        direct = self._env.type_table.method_candidates(obj_type, name)
+        if any(self._visible_method_levels(direct)):
             return obj_type
         enum_owners = self._env.type_table.enum_owners_for_member(obj_type)
         if len(enum_owners) == 1 and is_standard_option_enum(enum_owners[0]):
@@ -4703,21 +4710,24 @@ class _Checker:
                 raise _no_type_var_members(obj_type, "fields or methods", node.span)
 
             method_receiver: Type = obj_type
-            direct_candidates = self._env.type_table.method_candidates(obj_type, node.field)
             if isinstance(obj_type, RecordType):
                 method_receiver = self._option_member_method_receiver(obj_type, node.field)
-            if (
-                method_receiver is obj_type
-                and node.field in {"ask", "ask-request"}
-                and isinstance(obj_type, RecordType)
-                and not any(direct_candidates)
-            ):
-                builtin_agent = self._env.type_table.builtin_declaration("Agent")
-                if builtin_agent is not None and any(
-                    owner.decl_id == builtin_agent.decl_node_id
-                    for owner in self._env.type_table.enum_owners_for_member(obj_type)
+                direct = self._env.type_table.method_candidates(obj_type, node.field)
+                if (
+                    method_receiver is obj_type
+                    and node.field in {"ask", "ask-request"}
+                    and not any(self._visible_method_levels(direct))
                 ):
-                    return _SelectedBuiltinMethod(name=node.field, receiver_type=obj_type)
+                    builtin_agent = self._env.type_table.builtin_declaration("Agent")
+                    if builtin_agent is not None:
+                        method_receiver = next(
+                            (
+                                owner
+                                for owner in self._env.type_table.enum_owners_for_member(obj_type)
+                                if owner.decl_id == builtin_agent.decl_node_id
+                            ),
+                            obj_type,
+                        )
 
             selected = self._select_member(
                 obj_type, node.field, node.span, method_receiver=method_receiver

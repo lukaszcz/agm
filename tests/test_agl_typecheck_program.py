@@ -4447,6 +4447,35 @@ def test_option_member_fallback_selects_a_visible_orphan_method(tmp_path: Path) 
         )
 
 
+def test_option_member_fallback_ignores_an_unreachable_direct_method(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "direct": 'def Option::Some::describe[T](self) -> text = "some"\n',
+            "bridge": "import direct\n",
+            "fallback": 'def Option::describe[T](self) -> text = "option"\n',
+            "entry": (
+                "import bridge\nimport fallback\nlet description = Some(value = 1).describe()\n"
+            ),
+        },
+    )
+
+    assert _binding_value_type(checked, ENTRY_ID, "description") == TextType()
+
+
+def test_hidden_agent_member_method_is_not_synthesized(tmp_path: Path) -> None:
+    with pytest.raises(AglTypeError):
+        _check_program(
+            tmp_path,
+            {
+                "entry": (
+                    "import std/prelude::* hiding Agent::ask\n"
+                    'AgentCommand(command = "worker").ask("hello")\n'
+                ),
+            },
+        )
+
+
 def test_orphan_method_requires_its_declaring_module_to_be_reachable(tmp_path: Path) -> None:
     modules = {
         "shapes": (

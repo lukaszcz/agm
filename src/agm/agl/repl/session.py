@@ -1445,6 +1445,15 @@ class ReplSession:
                 entry_binding_node_ids - promoted_binding_node_ids,
                 unpromoted_function_names,
             )
+            new_type_env.type_table.restore_methods_from(
+                previous_type_env.type_table,
+                {
+                    item.node_id
+                    for item in entry_declarations
+                    if isinstance(item, FuncDef)
+                    and item.node_id not in promoted_declaration_ids
+                },
+            )
             new_type_env.seal()
             self._type_env = new_type_env
 

@@ -3303,6 +3303,30 @@ class TestFailureEffects:
         assert "needs-value" not in failed.installed
         assert not session.eval_entry("needs-value()").ok
 
+    def test_runtime_failure_restores_replaced_builtin_receiver_method(self) -> None:
+        session = open_session()
+        assert session.eval_entry("def int::m(self) -> int = 1").ok
+
+        failed = session.eval_entry(
+            'let value: int = raise Abort(message = "stop")\n'
+            "def int::m(self) -> int = value"
+        )
+
+        assert not failed.ok
+        result = session.eval_entry("(0).m()")
+        assert result.ok
+        assert result.value == IntValue(1)
+
+    def test_runtime_failure_does_not_retain_a_later_scope_region(self) -> None:
+        session = open_session(default_stdlib=False)
+
+        failed = session.eval_entry(
+            "let z: decimal = 1 / 0\n\nscope Ghost\nend Ghost"
+        )
+
+        assert not failed.ok
+        assert not session.eval_entry("def Ghost::int::m(self) -> int = self").ok
+
     def test_runtime_failure_excludes_function_with_unpromoted_nominal_dependency(self) -> None:
         session = open_session()
 

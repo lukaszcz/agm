@@ -351,7 +351,6 @@ class _Resolver:
         ]
         | None = None,
         cross_module_constructible_types: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
-        cross_module_type_scopes: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
         cross_module_type_owners: Mapping[QName, ReceiverOwner] | None = None,
         program_import_envs: Mapping[ModuleId, ImportEnv] | None = None,
         allow_root_statements: bool = False,
@@ -411,9 +410,8 @@ class _Resolver:
                         (declaration_module_id, member.node_id)
                     ] = constructor
         self._cross_module_constructible_types = cross_module_constructible_types
-        # Public type declarations and inline enum members establish scope
+        # Public nominal declarations and inline enum members establish scope
         # paths even when they have no separately public child members.
-        self._cross_module_type_scopes = cross_module_type_scopes
         self._cross_module_type_owners = dict(cross_module_type_owners or {})
         # Whole-program public-type table, used to follow a type alias's
         # target across an import when deciding whether the alias has a
@@ -2148,7 +2146,7 @@ class _Resolver:
             )
             imported_member = any(
                 (qname := members.get(member)) is not None
-                and qname not in self._cross_module_type_scopes
+                and qname not in self._cross_module_type_owners
                 for _route, members in parent.imported
             )
             if local_member or imported_member:
@@ -2336,7 +2334,7 @@ class _Resolver:
         for atom, qname in members.items():
             path = _bare_path(atom)
             if path == target:
-                exists = exists or qname in self._cross_module_type_scopes
+                exists = exists or qname in self._cross_module_type_owners
             elif path[: len(target)] == target:
                 exists = True
                 relative_members[_bare_atom(path[len(target) :])] = qname
@@ -2401,7 +2399,7 @@ class _Resolver:
                     selected = (origin,) if origin in qnames else ()
                     if not selected or (
                         not relative
-                        and not any(qname in self._cross_module_type_scopes for qname in selected)
+                        and not any(qname in self._cross_module_type_owners for qname in selected)
                     ):
                         continue
                     members = members_by_route.setdefault(
@@ -4158,7 +4156,7 @@ class _Resolver:
         for segment in qualifier.segments[1:]:
             cumulative = (*cumulative, segment.name)
             if segment.type_args is not None and not any(
-                members.get(_bare_atom(cumulative)) in self._cross_module_type_scopes
+                members.get(_bare_atom(cumulative)) in self._cross_module_type_owners
                 and members.get(_bare_atom(atom_path)) is not None
                 for _, members in route_members
             ):

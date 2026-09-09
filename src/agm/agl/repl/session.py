@@ -1310,12 +1310,12 @@ class ReplSession:
         # install a child below a missing parent and rewrite a prior enum's
         # members after a failed redeclaration.
         for path, node in checked.resolved.scope_nodes.items():
-            if (
-                not path
-                or path in self._session_scope_nodes
-                or is_unpromoted_type_scope(path)
-                or is_retired_member_scope(path)
-            ):
+            session_node = self._session_scope_nodes.get(path)
+            if session_node is not None:
+                if node.is_scope_region:
+                    session_node.is_scope_region = True
+                continue
+            if not path or is_unpromoted_type_scope(path) or is_retired_member_scope(path):
                 continue
             self._session_scope_nodes[path] = ScopeNode(
                 node_id=node.node_id,
@@ -1323,10 +1323,6 @@ class ReplSession:
                 scope_path=path,
                 is_scope_region=node.is_scope_region,
             )
-        for path, node in checked.resolved.scope_nodes.items():
-            session_node = self._session_scope_nodes.get(path)
-            if session_node is not None and node.is_scope_region:
-                session_node.is_scope_region = True
 
         promoted_type_paths = {(*path, name) for path, name in promoted_type_name_paths}
         for path in promoted_type_paths:

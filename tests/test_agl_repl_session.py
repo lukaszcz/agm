@@ -3384,7 +3384,7 @@ class TestFailureEffects:
         session = open_session(default_stdlib=False)
 
         failed = session.eval_entry(
-            "use Source::*\nlet z: decimal = 1 / 0\nscope Source\n  let unavailable = 1\nend Source"
+            "use Source::*\nlet z: decimal = 1 / 0\n\nscope Source\n  let unavailable = 1\nend Source"
         )
 
         assert not failed.ok

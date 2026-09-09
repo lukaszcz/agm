@@ -3353,6 +3353,21 @@ class TestFailureEffects:
         assert result.ok
         assert result.value == IntValue(1)
 
+    def test_runtime_failure_scope_frontier_ignores_retained_source_offsets(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "lib.agl").write_text("let value = 1\n", encoding="utf-8")
+        session = ReplSession(cwd=tmp_path)
+        assert not session.open()
+        assert session.eval_entry(
+            f"# {'padding' * 30}\nscope Kept\n  import lib::*\nend Kept"
+        ).ok
+
+        failed = session.eval_entry("let z: decimal = 1 / 0\n\nscope Ghost\nend Ghost")
+
+        assert not failed.ok
+        assert not session.eval_entry("def Ghost::int::m(self) -> int = self").ok
+
     def test_runtime_failure_does_not_retain_a_later_scope_region(self) -> None:
         session = open_session(default_stdlib=False)
 

@@ -8,8 +8,8 @@ stage image. Restored stages anchor their provenance to the current compilation.
 
 Checked modules publish closed type and function interfaces for importers.
 Capabilities distinguish checked artifacts and IR; the lowerer adds its resource
-and contract context. Entry modules and library cycles reaching the entry are
-never retained. Runtime state and companion callables are never cached here.
+and contract context. Entry modules are never retained; non-entry cycle members may be retained
+against the exact entry source. Runtime state and companion callables are never cached here.
 """
 
 from __future__ import annotations
@@ -141,8 +141,6 @@ def retained_module_sources(graph: ModuleGraph) -> dict[ModuleId, Sources]:
         if loaded.path is None or module_id == graph.entry_id:
             continue
         reachable = _reachable(graph, module_id)
-        if graph.entry_id in reachable:
-            continue
         sources[module_id] = tuple(
             graph.modules[reached]
             for reached in sorted(reachable, key=_ordering_key)
@@ -288,7 +286,9 @@ def _anchors(
 ) -> tuple[object, ...]:
     anchors: list[object] = [module.program for module in sources]
     for module in sources:
-        retained = retainable[module.module_id]
+        retained = retainable.get(module.module_id)
+        if retained is None:
+            continue
         if kind == "checked":
             resolved = _RESOLVED.get((module.module_id,), retained)
             if resolved is not None:

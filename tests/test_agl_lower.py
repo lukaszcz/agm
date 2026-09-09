@@ -1890,6 +1890,20 @@ class TestLowerFunctions:
         ]
         assert len(indirect_binds) == 1
 
+    def test_builtin_named_function_field_call_lowers_to_indirect_call(self) -> None:
+        source = (
+            "record Holder(print: (text) -> text)\n"
+            'let result = Holder(print = fn(value: text) -> text => value).print("ok")\n'
+            "()"
+        )
+
+        program = _lower(source, default_stdlib=False)
+        result = _let_root_capture(program.modules[program.entry_module].initializers[0])
+
+        assert isinstance(result.value, IrIndirectCall)
+        assert isinstance(result.value.callee, IrField)
+        assert result.value.callee.field == "print"
+
 
 class TestScanCapturesLambdaBoundary:
     """Behavioral test for lambda-capture boundary detection in _scan_captures."""

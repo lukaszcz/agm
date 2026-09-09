@@ -3340,6 +3340,18 @@ class TestFailureEffects:
         assert session.eval_entry("import geometry::{X}").ok
         assert not session.eval_entry("call-m(X())").ok
 
+    def test_runtime_failure_restores_replaced_nominal_receiver_method(self) -> None:
+        session = open_session()
+        assert session.eval_entry("record R()").ok
+        assert session.eval_entry("def R::m(self) -> int = 1").ok
+
+        failed = session.eval_entry(
+            'let value: int = raise Abort(message = "stop")\ndef R::m(self) -> int = value'
+        )
+
+        assert not failed.ok
+        assert session.eval_entry("R().m()").value == IntValue(1)
+
     def test_runtime_failure_restores_replaced_builtin_receiver_method(self) -> None:
         session = open_session()
         assert session.eval_entry("def int::m(self) -> int = 1").ok
@@ -3367,6 +3379,18 @@ class TestFailureEffects:
 
         assert not failed.ok
         assert not session.eval_entry("def Outer::call() -> int = leaked()").ok
+
+    def test_reached_use_does_not_promote_its_unreached_local_source(self) -> None:
+        session = open_session(default_stdlib=False)
+
+        failed = session.eval_entry(
+            "use Source::*\n"
+            "let z: decimal = 1 / 0\n"
+            "scope Source\n  let unavailable = 1\nend Source"
+        )
+
+        assert not failed.ok
+        assert not session.eval_entry("unavailable").ok
 
     def test_runtime_failure_scope_frontier_ignores_retained_source_offsets(
         self, tmp_path: Path

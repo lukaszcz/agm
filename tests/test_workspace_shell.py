@@ -133,6 +133,34 @@ class TestEnsureWorkspaceShell:
         text = wrapper.read_text(encoding="utf-8")
         assert 'export AGM_USER_ZDOTDIR="${ZDOTDIR:-$HOME}"' in text
 
+    def test_rc_files_restore_explicit_workspace_identity_before_config_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._setup(tmp_path, monkeypatch)
+        project_dir = tmp_path / "project dir"
+        workspace_dir = project_dir / "worktrees" / "feat"
+
+        ensure_workspace_shell(
+            "s",
+            project_dir=project_dir,
+            workspace_dir=workspace_dir,
+            env={"SHELL": "/bin/bash"},
+        )
+
+        shell_dir = workspace_shell_dir("s")
+        for rc_path in (
+            shell_dir / "zsh" / ".zshrc",
+            shell_dir / "bash" / "bashrc",
+            shell_dir / "sh" / "shrc",
+        ):
+            text = rc_path.read_text(encoding="utf-8")
+            project_export = f"export PROJ_DIR='{project_dir}'"
+            workspace_export = f"export REPO_DIR='{workspace_dir}'"
+            assert project_export in text
+            assert workspace_export in text
+            assert text.index(project_export) < text.index('eval "$(agm config env)"')
+            assert text.index(workspace_export) < text.index('eval "$(agm config env)"')
+
     def test_wrapper_self_heal_heredoc_writes_rc_files(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -158,6 +186,23 @@ class TestRegenerateWorkspaceShell:
         assert (shell_dir / "bash" / "bashrc").is_file()
         assert (shell_dir / "sh" / "shrc").is_file()
         assert (shell_dir / WRAPPER_NAME).is_file()
+
+    def test_preserves_current_workspace_identity(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        project_dir = tmp_path / "project dir"
+        workspace_dir = project_dir / "repo"
+        monkeypatch.setenv("PROJ_DIR", str(project_dir))
+        monkeypatch.setenv("REPO_DIR", str(workspace_dir))
+        shell_dir = workspace_shell_dir("s")
+        shell_dir.mkdir(parents=True)
+
+        regenerate_workspace_shell(shell_dir)
+
+        bashrc = (shell_dir / "bash" / "bashrc").read_text(encoding="utf-8")
+        assert f"export PROJ_DIR='{project_dir}'" in bashrc
+        assert f"export REPO_DIR='{workspace_dir}'" in bashrc
 
     def test_uses_agm_real_shell_when_set(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

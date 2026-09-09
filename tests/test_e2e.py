@@ -6939,7 +6939,9 @@ class TestOpen:
 
         branch_cfg = project / "config" / "mybranch"
         branch_cfg.mkdir(parents=True)
-        (branch_cfg / "env.sh").write_text(f'touch "{project}/branch-env-sourced"\n')
+        (branch_cfg / "env.sh").write_text(
+            f'touch "{project}/branch-env-sourced"\nexport BRANCH_ENV=loaded\n'
+        )
 
         clone = tmp_path / "tmp-clone"
         _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
@@ -6948,6 +6950,21 @@ class TestOpen:
         run_agm(["open", "mybranch"], env=env, cwd=str(project))
 
         assert (project / "branch-env-sourced").exists()
+        workspace = project / "worktrees" / "mybranch"
+        stale_env = _agm_env(env)
+        stale_env["PROJ_DIR"] = str(project)
+        stale_env["REPO_DIR"] = str(project / "repo")
+        result = subprocess.run(
+            [str(_workspace_shell_path(env, "proj/mybranch"))],
+            input='printf "branch:%s repo:%s\\n" "$BRANCH_ENV" "$REPO_DIR"\nexit\n',
+            cwd=workspace,
+            env=stale_env,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+        assert f"branch:loaded repo:{workspace}" in result.stdout
 
     def test_dotenv_files_are_applied_before_env_sh_with_branch_precedence(
         self, tmp_path: Path, env: dict[str, str]

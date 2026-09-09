@@ -80,7 +80,7 @@ config, workspace config, dependency environment, setup scripts, and tmux sessio
 
 `agm workspace open` session shell:
 
-- each workspace tmux session runs the user's real interactive shell (`zsh`/`bash`/`sh`) through a small wrapper that first sources `~/.zshrc`/`~/.bashrc`/`~/.shrc` (so keybindings, prompts, completions and aliases are preserved) and then appends `eval "$(agm config env)"` so the workspace environment wins over the user's rc
+- each workspace tmux session runs the user's real interactive shell (`zsh`/`bash`/`sh`) through a small wrapper that first sources `~/.zshrc`/`~/.bashrc`/`~/.shrc` (so keybindings, prompts, completions and aliases are preserved), restores the project and workspace paths selected by `agm workspace open`, and then runs `eval "$(agm config env)"` so the workspace environment wins over the user's rc and inherited tmux state
 - the wrapper and its rc files live under `$XDG_CACHE_HOME/agm/shell/<key>/` (defaulting to `~/.cache/agm/shell/<key>/`), keyed by session name; nothing is written under the project's `.agent-files/`
 - `agm workspace open` recreates the per-session dir fresh (cleaning any stale files); `agm workspace close` removes it
 - `agm workspace shell-regen SHELL_DIR` rewrites the wrapper and rc files into an existing per-session dir (used for manual recovery)

@@ -2,9 +2,10 @@
 
 The wrapper launches the user's real interactive shell (``zsh``/``bash``/``sh``)
 so that ``~/.zshrc``/``~/.bashrc``/``~/.shrc`` run normally — preserving the
-user's keybindings, prompt, completions and aliases.  After the user's rc file
-has been sourced, the wrapper appends ``eval "$(agm config env)"`` so the
-workspace environment wins over anything the user's rc set.
+user's keybindings, prompt, completions and aliases. After the user's rc file
+has been sourced, the wrapper restores the workspace identity fixed by
+``agm workspace open`` and appends ``eval "$(agm config env)"`` so the
+workspace environment wins over the user's rc and inherited tmux state.
 
 Nothing is written under the project's ``.agent-files/``.  The wrapper and its
 rc files live under ``$XDG_CACHE_HOME/agm/shell/<key>/`` (defaulting to
@@ -110,7 +111,30 @@ def _zshenv_body() -> str:
     )
 
 
-def _zshrc_body() -> str:
+def _workspace_env_refresh_lines(
+    *,
+    project_dir: Path | None,
+    workspace_dir: Path | None,
+) -> list[str]:
+    """Return shell lines that restore workspace identity and refresh its environment."""
+
+    lines: list[str] = []
+    if project_dir is not None and workspace_dir is not None:
+        lines.extend(
+            [
+                f"export PROJ_DIR={shlex_quote(str(project_dir))}",
+                f"export REPO_DIR={shlex_quote(str(workspace_dir))}",
+            ]
+        )
+    lines.append('eval "$(agm config env)"')
+    return lines
+
+
+def _zshrc_body(
+    *,
+    project_dir: Path | None = None,
+    workspace_dir: Path | None = None,
+) -> str:
     # Run the user's real ~/.zshrc with ZDOTDIR restored to $HOME (normal
     # behavior), so oh-my-zsh, bindkey maps, prompts and completions load.
     # Then append the agm workspace env so agm-set vars override the user's.
@@ -127,28 +151,42 @@ def _zshrc_body() -> str:
             "fi",
             'ZDOTDIR="$_agm_saved_zdotdir"',
             "unset _agm_saved_zdotdir",
-            'eval "$(agm config env)"',
+            *_workspace_env_refresh_lines(
+                project_dir=project_dir,
+                workspace_dir=workspace_dir,
+            ),
             'export SHELL="$AGM_WORKSPACE_SHELL"',
             "",
         ]
     )
 
 
-def _bashrc_body() -> str:
+def _bashrc_body(
+    *,
+    project_dir: Path | None = None,
+    workspace_dir: Path | None = None,
+) -> str:
     return "\n".join(
         [
             "# agm workspace shell: source the user's ~/.bashrc, then apply agm env",
             'if [ -f "$HOME/.bashrc" ]; then',
             '  . "$HOME/.bashrc"',
             "fi",
-            'eval "$(agm config env)"',
+            *_workspace_env_refresh_lines(
+                project_dir=project_dir,
+                workspace_dir=workspace_dir,
+            ),
             'export SHELL="$AGM_WORKSPACE_SHELL"',
             "",
         ]
     )
 
 
-def _shrc_body() -> str:
+def _shrc_body(
+    *,
+    project_dir: Path | None = None,
+    workspace_dir: Path | None = None,
+) -> str:
     # Replay the user's original $ENV startup file, captured by the wrapper as
     # $AGM_USER_ENV before it overwrote $ENV to point at this file.  Sourcing
     # $ENV here would source this file recursively (it now points at itself),
@@ -162,7 +200,10 @@ def _shrc_body() -> str:
             'if [ -f "$HOME/.shrc" ]; then',
             '  . "$HOME/.shrc"',
             "fi",
-            'eval "$(agm config env)"',
+            *_workspace_env_refresh_lines(
+                project_dir=project_dir,
+                workspace_dir=workspace_dir,
+            ),
             'export SHELL="$AGM_WORKSPACE_SHELL"',
             "",
         ]
@@ -191,6 +232,8 @@ def _wrapper_content(
     shell_dir: Path,
     wrapper_path: Path,
     real_shell: str,
+    project_dir: Path | None,
+    workspace_dir: Path | None,
 ) -> str:
     # Self-heal: if any rc file is missing (e.g. a partial deletion of the
     # cache dir), regenerate it inline before exec'ing the real shell.  The
@@ -205,9 +248,9 @@ def _wrapper_content(
         ),
     ]
     zshenv_body = _zshenv_body()
-    zshrc_body = _zshrc_body()
-    bashrc_body = _bashrc_body()
-    shrc_body = _shrc_body()
+    zshrc_body = _zshrc_body(project_dir=project_dir, workspace_dir=workspace_dir)
+    bashrc_body = _bashrc_body(project_dir=project_dir, workspace_dir=workspace_dir)
+    shrc_body = _shrc_body(project_dir=project_dir, workspace_dir=workspace_dir)
     self_heal_lines += _heredoc_lines('"$AGM_WORKSPACE_SHELL_DIR/zsh/.zshenv"', zshenv_body)
     self_heal_lines += _heredoc_lines('"$AGM_WORKSPACE_SHELL_DIR/zsh/.zshrc"', zshrc_body)
     self_heal_lines += _heredoc_lines('"$AGM_WORKSPACE_SHELL_DIR/bash/bashrc"', bashrc_body)
@@ -264,6 +307,8 @@ def _write_shell_files(
     shell_dir: Path,
     wrapper_path: Path,
     real_shell: str,
+    project_dir: Path | None,
+    workspace_dir: Path | None,
 ) -> None:
     zsh_dir = shell_dir / "zsh"
     bash_dir = shell_dir / "bash"
@@ -272,12 +317,27 @@ def _write_shell_files(
     mkdir(bash_dir, parents=True, exist_ok=True)
     mkdir(sh_dir, parents=True, exist_ok=True)
     write_text(zsh_dir / ".zshenv", _zshenv_body())
-    write_text(zsh_dir / ".zshrc", _zshrc_body())
-    write_text(bash_dir / "bashrc", _bashrc_body())
-    write_text(sh_dir / "shrc", _shrc_body())
+    write_text(
+        zsh_dir / ".zshrc",
+        _zshrc_body(project_dir=project_dir, workspace_dir=workspace_dir),
+    )
+    write_text(
+        bash_dir / "bashrc",
+        _bashrc_body(project_dir=project_dir, workspace_dir=workspace_dir),
+    )
+    write_text(
+        sh_dir / "shrc",
+        _shrc_body(project_dir=project_dir, workspace_dir=workspace_dir),
+    )
     write_text(
         wrapper_path,
-        _wrapper_content(shell_dir=shell_dir, wrapper_path=wrapper_path, real_shell=real_shell),
+        _wrapper_content(
+            shell_dir=shell_dir,
+            wrapper_path=wrapper_path,
+            real_shell=real_shell,
+            project_dir=project_dir,
+            workspace_dir=workspace_dir,
+        ),
     )
     chmod(wrapper_path, 0o755)
 
@@ -285,32 +345,38 @@ def _write_shell_files(
 def regenerate_workspace_shell(shell_dir: Path) -> None:
     """Rewrite the rc files and wrapper into an existing *shell_dir*.
 
-    Used by ``agm workspace shell-regen`` for manual recovery.  The content is
-    session-independent, so the directory alone is enough; the real shell is
-    read from ``$AGM_REAL_SHELL`` (set by the wrapper) or ``$SHELL``.
+    Used by ``agm workspace shell-regen`` for manual recovery. The real shell
+    and workspace identity are read from the current environment when available.
     """
 
     if not shell_dir.is_dir():
         raise SystemExit(f"error: not a directory: {shell_dir}")
     real_shell = _real_shell(env=None)
     wrapper_path = shell_dir / WRAPPER_NAME
+    raw_project_dir = os.environ.get("PROJ_DIR")
+    raw_workspace_dir = os.environ.get("REPO_DIR")
     _write_shell_files(
         shell_dir=shell_dir,
         wrapper_path=wrapper_path,
         real_shell=real_shell,
+        project_dir=Path(raw_project_dir) if raw_project_dir else None,
+        workspace_dir=Path(raw_workspace_dir) if raw_workspace_dir else None,
     )
 
 
 def ensure_workspace_shell(
     session_name: str,
     *,
+    project_dir: Path | None = None,
+    workspace_dir: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> Path:
     """Create (or recreate) the per-session shell wrapper and return its path.
 
     Cleans any existing per-session dir first so stale files from a prior open
-    cannot linger, then writes the wrapper and rc files fresh.  Returns the
-    path to the executable wrapper script.
+    cannot linger, then writes the wrapper and rc files fresh. When project and
+    workspace paths are supplied, each rc restores them before refreshing the
+    config environment. Returns the path to the executable wrapper script.
     """
 
     shell_dir = workspace_shell_dir(session_name)
@@ -323,6 +389,8 @@ def ensure_workspace_shell(
         shell_dir=shell_dir,
         wrapper_path=wrapper_path,
         real_shell=real_shell,
+        project_dir=project_dir,
+        workspace_dir=workspace_dir,
     )
     return wrapper_path
 

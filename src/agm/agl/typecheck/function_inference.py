@@ -60,6 +60,7 @@ if TYPE_CHECKING:
         ModuleResolution,
         ReceiverOwner,
     )
+    from agm.agl.typecheck.checker import _Checker
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TYPE_PARAMETER_WILDCARD, TypeExpr
 from agm.agl.typecheck.env import (
@@ -349,6 +350,7 @@ def _references_tainted_binding(
     item: object,
     tainted: set[int],
     candidate_methods: Mapping[str, Sequence[int]],
+    checker: "_Checker",
 ) -> bool:
     """Whether a top-level binding reads a declaration whose type is not yet fixed."""
     found = False
@@ -362,9 +364,30 @@ def _references_tainted_binding(
         elif isinstance(node, FieldAccess) and any(
             declaration_id in tainted for declaration_id in candidate_methods.get(node.field, ())
         ):
-            # Member selection happens during checking. Conservatively defer a
-            # field access that could select a same-named provisional method.
-            found = True
+            if _references_tainted_binding(
+                module, node.obj, tainted, candidate_methods, checker
+            ):
+                found = True
+                return
+            try:
+                receiver_type = checker._check_expr(node.obj, expected=None)
+            except AglTypeError:
+                found = True
+                return
+            fields = (
+                checker._env.type_table.exception_fields(receiver_type)
+                if isinstance(receiver_type, ExceptionType)
+                else (
+                    checker._env.type_table.record_fields(receiver_type)
+                    if isinstance(receiver_type, RecordType)
+                    else {}
+                )
+            )
+            # A declared field is selected independently of an unrelated
+            # same-named provisional method. The authoritative check still
+            # diagnoses a real field/method ambiguity if both apply.
+            if node.field not in fields:
+                found = True
 
     walk(item, visit)
     return found
@@ -401,7 +424,9 @@ def _seed_candidate_visible_bindings(
                     module.env.snapshot_binding_types()
                 )
             elif isinstance(item, (LetDecl, VarDecl)):
-                if _references_tainted_binding(module, item, tainted, candidate_methods):
+                if _references_tainted_binding(
+                    module, item, tainted, candidate_methods, checker
+                ):
                     if isinstance(item, LetDecl):
                         # A let site's selected binders are the declaration ids
                         # referenced by later code, not the match-site id.

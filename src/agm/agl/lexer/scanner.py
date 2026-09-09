@@ -33,8 +33,8 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from typing import Iterator
 
 from lark.lexer import Token
 
@@ -725,10 +725,10 @@ class _Scanner:
         """Scan the body of a triple-quoted template, yielding tokens.
 
         Triple-quoted dedent rule:
-        1. Collect the raw content until the closing triple-quote, tracking
+        1. Collect decoded literal runs until the closing triple-quote, tracking
            interpolation holes as opaque segments.
-        2. Apply the dedent rule to the combined literal skeleton (replacing
-           each interpolation hole with a placeholder).
+        2. Measure indentation with holes as nonblank, then dedent the combined
+           literal text and map its segment boundaries to the output.
         3. Emit tokens: STRING_FRAGMENT for each literal segment, with
            INTERP_START/inner-tokens/INTERP_END around each hole.
 
@@ -745,6 +745,7 @@ class _Scanner:
         # lit-last), retaining literal starts and positioned hole tokens.
         segments: list[_LitSeg | _InterpSeg] = []
         current_lit: list[str] = []
+        run_start = self._pos
         lit_start_pos = self._pos
         lit_start_line = self._line
         lit_start_col = self._col
@@ -759,6 +760,7 @@ class _Scanner:
                 close_pos = self._pos
                 close_line = self._line
                 close_col = self._col
+                current_lit.append(self._src[run_start:close_pos])
                 self._advance()
                 self._advance()
                 self._advance()
@@ -767,8 +769,11 @@ class _Scanner:
                 )
                 break
             if ch == "\\":
+                current_lit.append(self._src[run_start : self._pos])
                 current_lit.append(self._decode_template_escape())
+                run_start = self._pos
             elif (interpolation := self._template_interpolation()) is not None:
+                current_lit.append(self._src[run_start : self._pos])
                 segments.append(
                     _LitSeg("".join(current_lit), lit_start_pos, lit_start_line, lit_start_col)
                 )
@@ -777,10 +782,10 @@ class _Scanner:
                 lit_start_pos = self._pos
                 lit_start_line = self._line
                 lit_start_col = self._col
+                run_start = self._pos
             else:
                 # Literal string content: a TAB here is allowed (not advised).
                 self._advance(in_string=True)
-                current_lit.append(ch)
 
         # Build combined literal text (literals only — holes contribute zero
         # chars) and record where each literal segment boundary falls within it.
@@ -797,32 +802,13 @@ class _Scanner:
             boundaries.append(offset)
             offset += len(seg.text)
 
-        # Build an indent probe for hole-aware min-indent measurement.
-        # Each interpolation hole is replaced by a single non-whitespace
-        # placeholder ("X") so that a line whose only non-whitespace content
-        # is a hole (e.g. "  %{x}") is treated as non-blank.  The probe is
-        # used ONLY for measuring indentation — never for reassembly — so a
-        # placeholder collision with literal content is irrelevant.
-        indent_probe = "".join(seg.text if isinstance(seg, _LitSeg) else "X" for seg in segments)
-        # Apply the same step-1 (leading-newline drop) that
-        # _apply_triple_dedent_with_map applies, so the line split matches.
-        probe_body = indent_probe[1:] if indent_probe.startswith("\n") else indent_probe
-        probe_min_indent = _compute_min_indent(probe_body.split("\n"))
-
-        dedented, pos_map = _apply_triple_dedent_with_map(combined, probe_min_indent)
-
-        # Use the position map to find where each literal segment starts in dedented.
-        def _mapped(pre: int) -> int:
-            """Map a pre-dedent offset to its post-dedent offset."""
-            return pos_map[pre] if pre < len(pos_map) else len(dedented)
+        boundaries.append(offset)
+        min_indent = _compute_min_indent(_template_lines(segments))
+        dedented, mapped = _apply_triple_dedent(combined, min_indent, boundaries)
 
         # Emit STRING_FRAGMENT (+ INTERP_START / inner tokens / INTERP_END) per part.
         for part_idx, lit_seg in enumerate(lit_segs):
-            seg_start = _mapped(boundaries[part_idx])
-            # End of this literal segment = start of next segment's boundary.
-            next_boundary = boundaries[part_idx + 1] if part_idx + 1 < len(boundaries) else offset
-            seg_end = _mapped(next_boundary)
-            lit_text = dedented[seg_start:seg_end]
+            lit_text = dedented[mapped[part_idx] : mapped[part_idx + 1]]
             yield Token(
                 STRING_FRAGMENT,
                 lit_text,
@@ -1331,7 +1317,22 @@ class _Scanner:
 # ---------------------------------------------------------------------------
 
 
-def _compute_min_indent(lines: list[str]) -> int:
+def _template_lines(segments: list[_LitSeg | _InterpSeg]) -> Iterator[str]:
+    """Yield indentation-probe lines, treating each hole as non-whitespace."""
+    parts: list[str] = []
+    for seg in segments:
+        text = seg.text if isinstance(seg, _LitSeg) else "X"
+        start = 0
+        while (end := text.find("\n", start)) != -1:
+            parts.append(text[start:end])
+            yield "".join(parts)
+            parts.clear()
+            start = end + 1
+        parts.append(text[start:])
+    yield "".join(parts)
+
+
+def _compute_min_indent(lines: Iterable[str]) -> int:
     """Return the minimum leading whitespace count of non-blank lines."""
     min_ind: int | None = None
     for line in lines:
@@ -1343,69 +1344,39 @@ def _compute_min_indent(lines: list[str]) -> int:
     return min_ind if min_ind is not None else 0
 
 
-def _apply_triple_dedent_with_map(text: str, min_indent: int) -> tuple[str, list[int]]:
-    """Apply the triple-quoted dedent rule and return a position map.
+def _apply_triple_dedent(
+    text: str, min_indent: int, boundaries: list[int]
+) -> tuple[str, list[int]]:
+    """Dedent literal text and map its ordered segment boundaries to output.
 
-    Rule:
-    1. Remove one leading ``\\n`` if present.
-    2. Strip the minimum common indentation of all non-blank lines.
-    3. Remove one trailing ``\\n`` if present (after dedent).
-
-    This order (dedent after leading-strip, trailing-strip after dedent)
-    produces the natural result for the common pattern where the closing
-    delimiter's indentation defines the common indent level.
-
-    *min_indent* is supplied by the triple-template scanner as a hole-aware
-    value measured from a probe string that treats each interpolation hole as
-    a non-whitespace character, preventing hole-only lines from being
-    classified as blank (it must NOT be computed from *text*, which has the
-    holes removed).
-
-    Returns ``(dedented, pos_map)`` where ``pos_map[i]`` is the index in
-    *dedented* that corresponds to position *i* in *text*.  The map has
-    length ``len(text) + 1``; the extra entry maps the past-the-end position.
-    Removed positions map to the output index of the next kept character, so
-    callers can locate boundaries from the original string within the result
-    without relying on any in-band sentinel marker.
+    Drop one leading newline, remove the hole-aware minimum indentation from
+    each literal line, then drop one trailing newline. Holes have zero width
+    here; the caller measures indentation separately with holes as nonblank.
+    Removed positions map to the next retained character, including duplicate
+    boundaries around adjacent holes. Only requested offsets are recorded.
     """
-    kept = [True] * len(text)
-
-    # Step 1: drop one leading newline.
-    pre_start = 0
-    if text.startswith("\n"):
-        kept[0] = False
-        pre_start = 1
-
-    # Step 2: strip the minimum common indentation.  Every character in
-    # line[:min_indent] is whitespace: non-blank lines carry at least
-    # min_indent leading whitespace by construction, and blank lines are
-    # whitespace throughout.  When *min_indent* is supplied by the caller
-    # (hole-aware measurement), a hole line's literal prefix in *text* may
-    # be shorter than min_indent (the hole consumed part of the line); the
-    # ``min(min_indent, len(line))`` guard already handles that safely.
-    lines = text[pre_start:].split("\n")
-    pos = pre_start
-    for line in lines:
-        for offset in range(min(min_indent, len(line))):
-            kept[pos + offset] = False
-        pos += len(line) + 1  # +1 for the '\n' separator (or past-end)
-
-    # Step 3: drop one trailing newline (after dedent normalises the content).
-    kept_indices = [i for i, k in enumerate(kept) if k]
-    if kept_indices and text[kept_indices[-1]] == "\n":
-        kept[kept_indices[-1]] = False
-
-    # Build pos_map: pos_map[i] = output index of input position i.
-    pos_map: list[int] = []
+    parts: list[str] = []
+    mapped: list[int] = []
     out = 0
-    for k in kept:
-        pos_map.append(out)
-        if k:
-            out += 1
-    pos_map.append(out)  # past-the-end entry
+    start = 1 if text.startswith("\n") else 0
+    while True:
+        newline = text.find("\n", start)
+        line_end = len(text) if newline == -1 else newline
+        kept_start = min(start + min_indent, line_end)
+        kept_end = line_end if newline == -1 else line_end + 1
+        while len(mapped) < len(boundaries) and boundaries[len(mapped)] <= kept_end:
+            mapped.append(out + max(0, boundaries[len(mapped)] - kept_start))
+        parts.append(text[kept_start:kept_end])
+        out += kept_end - kept_start
+        if newline == -1:
+            break
+        start = kept_end
 
-    dedented = "".join(ch for i, ch in enumerate(text) if kept[i])
-    return dedented, pos_map
+    dedented = "".join(parts)
+    if dedented.endswith("\n"):
+        dedented = dedented[:-1]
+        mapped = [min(offset, len(dedented)) for offset in mapped]
+    return dedented, mapped
 
 
 # ---------------------------------------------------------------------------

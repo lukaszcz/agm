@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from agm.agl.modules.loader import LoadedModule, load_graph
 from agm.agl.modules.parsed_module_cache import (
     RESERVED_NODE_ID_BASE,
     ModuleDerivationCache,
+    ParsedModuleCache,
     clear_parsed_module_cache,
 )
 from agm.agl.modules.roots import RootSet
@@ -360,6 +362,38 @@ def test_derivation_cache_evicts_least_recently_used_entries(tmp_path: Path) -> 
     cache.get_or_build(module, key="first", build=build("first"))
 
     assert builds == ["first", "second", "first"]
+
+
+def test_parsed_cache_preserves_recent_modules_across_eviction(tmp_path: Path) -> None:
+    for name in ("a", "b", "c"):
+        _write_module(tmp_path, f"lib/{name}", _LIB_SOURCE)
+    graph = load_graph(
+        "import lib/a\nimport lib/b\nimport lib/c\n",
+        roots=_stdlib_roots(tmp_path),
+        entry_path=None,
+        default_stdlib=False,
+    )
+    cache = ParsedModuleCache(capacity=2)
+
+    def cached(name: str) -> LoadedModule:
+        module_id = ModuleId.from_path(f"lib/{name}")
+        module = graph.modules[module_id]
+
+        def build(start_id: int, source_text: str) -> tuple[LoadedModule, int]:
+            return replace(module), max(all_node_ids(module.program)) + 1
+
+        return cache.get_or_build(
+            module_id, tmp_path / f"lib/{name}.agl", default_stdlib=False, build=build
+        )
+
+    first = cached("a")
+    second = cached("b")
+    assert cached("a") is first
+    cached("c")
+    assert cached("a") is first
+    reopened = cached("b")
+    assert reopened is not second
+    assert reopened.program == second.program
 
 
 def test_infix_chain_module_keeps_one_resolved_program_across_compilations(

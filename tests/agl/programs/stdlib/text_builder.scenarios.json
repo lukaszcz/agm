@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "snapshots_unicode_independent_builders_and_reuse",
+      "params": {"mode": 1},
+      "expect": {"stdout": "\né😀\né😀é\né😀é\n\né😀\nindependent\nreused\n", "calls": {}}
+    },
+    {
+      "name": "aliases_and_copies_follow_collection_semantics",
+      "params": {"mode": 2},
+      "expect": {"stdout": "abc\nad\n\nad\n", "calls": {}}
+    },
+    {
+      "name": "many_chunks_are_joined_once",
+      "params": {"mode": 3},
+      "expect": {"stdout": "2000\ntrue\n", "calls": {}}
+    }
+  ]
+}

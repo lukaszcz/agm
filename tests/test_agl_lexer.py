@@ -680,6 +680,23 @@ class TestNestedBracesInInterp:
 
 
 class TestTripleQuotedStrings:
+    @pytest.mark.parametrize(
+        ("body", "fragments"),
+        [
+            ("", [""]),
+            ("%{x}%{y}", ["", "", ""]),
+            ("%{x}\n  a\n  ", ["", "  a\n  "]),
+            ("\n  a\n  %{x}%{y}\n  ", ["a\n", "", ""]),
+            ("\n  %{x}  %{y}end\n  ", ["", "  ", "end"]),
+            ("\n\tfoo\n\t%{x}\n\t", ["foo\n", ""]),
+            ("\n  foo\n\u2003\n  %{x}\n  ", ["foo\n\n", ""]),
+            (r"\n  a\n  %{x}\n  ", ["a\n", ""]),
+        ],
+    )
+    def test_dedent_preserves_fragment_boundaries(self, body: str, fragments: list[str]) -> None:
+        result = tok('"""' + body + '"""')
+        assert [value for kind, value in result if kind == "STRING_FRAGMENT"] == fragments
+
     def test_simple_triple_quoted(self) -> None:
         source = '"""hello"""'
         result = tok(source)

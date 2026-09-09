@@ -2300,12 +2300,7 @@ class TestMethodOrphanRule:
     def test_self_with_no_enclosing_scope_at_all_reports_the_generic_rule(
         self, tmp_path: Path
     ) -> None:
-        """A bare `self` method with no owning scope at all reports the generic rule.
-
-        Regression: the orphan check derives the receiver's bare name from
-        the last segment of its owning scope path, which is empty here (a
-        plain module-root function); it must not index into that empty path.
-        """
+        """A root function with a `self` parameter reports the generic scope rule."""
         graph = _make_graph_from_files(tmp_path, {"entry": "def helper(self) -> int = 1"})
         with pytest.raises(AglScopeError, match="enclosing type scope"):
             resolve_program(graph)
@@ -2313,12 +2308,7 @@ class TestMethodOrphanRule:
     def test_orphan_check_ignores_a_scoped_import_from_an_unrelated_region(
         self, tmp_path: Path
     ) -> None:
-        """A scoped import declared in one region must not reach a `self` method in another.
-
-        Regression: the orphan check's decl_bare reachability walk must skip
-        a declaration whose own region isn't an ancestor of the receiver's
-        region, not just declarations that never import the type at all.
-        """
+        """A scoped import supplies receiver types only in its region and descendants."""
         graph = _make_graph_from_files(
             tmp_path,
             {

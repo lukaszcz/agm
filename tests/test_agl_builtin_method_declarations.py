@@ -182,6 +182,17 @@ def test_unknown_applied_receiver_uses_its_head_name_as_its_scope(tmp_path: Path
     assert tuple(segment.name for segment in declaration.scope_path) == ("bytes",)
 
 
+def test_explicit_builtin_receiver_is_not_shadowed_by_type_alias() -> None:
+    prepared = PipelineDriver.prepare_program(
+        "type array[T] = int\n\ndef array[E]::constant(self) -> int = 1\n",
+        default_stdlib=False,
+    )
+
+    discovery = PipelineDriver().discover_programs(prepared)
+
+    assert discovery.checked is not None, discovery.diagnostics
+
+
 def test_generic_builtin_receiver_binds_its_receiver_slot(tmp_path: Path) -> None:
     prepared = _prepare_stdlib_module(
         tmp_path,

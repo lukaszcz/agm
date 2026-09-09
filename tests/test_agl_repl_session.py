@@ -3303,6 +3303,25 @@ class TestFailureEffects:
         assert "needs-value" not in failed.installed
         assert not session.eval_entry("needs-value()").ok
 
+    def test_runtime_failure_excludes_function_with_unpromoted_method_dependency(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "geometry.agl").write_text("record X()\n", encoding="utf-8")
+        session = ReplSession(cwd=tmp_path)
+        assert not session.open()
+
+        failed = session.eval_entry(
+            "import geometry::{X}\n"
+            'let unavailable: int = raise Abort(message = "stop")\n'
+            "def X::m(self) -> int = unavailable\n"
+            "def call-m(value: X) -> int = value.m()"
+        )
+
+        assert not failed.ok
+        assert "call-m" not in failed.installed
+        assert session.eval_entry("import geometry::{X}").ok
+        assert not session.eval_entry("call-m(X())").ok
+
     def test_runtime_failure_restores_replaced_builtin_receiver_method(self) -> None:
         session = open_session()
         assert session.eval_entry("def int::m(self) -> int = 1").ok

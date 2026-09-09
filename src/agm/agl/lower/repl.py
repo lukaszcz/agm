@@ -274,8 +274,11 @@ def _declaration_dependencies(
             elif binding.module_id in library_module_ids:
                 imported_modules.add(binding.module_id)
         method = checked.method_selection_for(node_id)
-        if method is not None and method.module_id in library_module_ids:
-            imported_modules.add(method.module_id)
+        if method is not None:
+            if method.decl_node_id in entry_declaration_ids:
+                dependencies.add(method.decl_node_id)
+            elif method.module_id in library_module_ids:
+                imported_modules.add(method.module_id)
         constructor = checked.constructor_ref_for(node_id)
         if constructor is not None and constructor.owner_decl_node_id in entry_declaration_ids:
             dependencies.add(constructor.owner_decl_node_id)

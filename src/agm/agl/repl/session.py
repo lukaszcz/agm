@@ -1079,6 +1079,7 @@ class ReplSession:
         partial: bool,
         promoted_declaration_ids: frozenset[int],
         promoted_scope_region_paths: frozenset[tuple[str, ...]],
+        promoted_use_declaration_ids: frozenset[int],
         infix_ambient: Mapping[str, tuple[int, "InfixAssoc"]],
     ) -> tuple[str, ...]:
         """Promote declarations whose IR initialization completed in this entry."""
@@ -1374,9 +1375,12 @@ class ReplSession:
                     and _is_promoted(ref.decl_node_id)
                 ):
                     session_node.register_member(name, ref)
-            current_targets = {
-                contribution.target for contribution in node.imported_use_contributions
-            }
+            promoted_imported_uses = [
+                contribution
+                for contribution in node.imported_use_contributions
+                if contribution.declaration.node_id in promoted_use_declaration_ids
+            ]
+            current_targets = {contribution.target for contribution in promoted_imported_uses}
             for contribution in session_node.imported_use_contributions:
                 for atom, refs in contribution.bindings.items():
                     retained = session_node.bare_contributions.get(atom)
@@ -1395,7 +1399,7 @@ class ReplSession:
                 for contribution in session_node.imported_use_contributions
                 if contribution.target not in current_targets
             ]
-            session_node.imported_use_contributions.extend(node.imported_use_contributions)
+            session_node.imported_use_contributions.extend(promoted_imported_uses)
             for contribution in session_node.imported_use_contributions:
                 for atom, refs in contribution.bindings.items():
                     session_node.bare_contributions.setdefault(atom, set()).update(refs)
@@ -1403,8 +1407,13 @@ class ReplSession:
                     session_node.bare_constructor_contributions.setdefault(atom, set()).update(
                         constructor_refs
                     )
+            promoted_local_uses = [
+                contribution
+                for contribution in node.local_use_contributions
+                if contribution.declaration.node_id in promoted_use_declaration_ids
+            ]
             current_local_targets = {
-                local_contribution.target for local_contribution in node.local_use_contributions
+                local_contribution.target for local_contribution in promoted_local_uses
             }
             for local_contribution in session_node.local_use_contributions:
                 for atom, refs in local_contribution.bindings.items():
@@ -1430,7 +1439,7 @@ class ReplSession:
                 for local_contribution in session_node.local_use_contributions
                 if local_contribution.target not in current_local_targets
             ]
-            for local_contribution in node.local_use_contributions:
+            for local_contribution in promoted_local_uses:
                 source = self._session_scope_nodes.get(local_contribution.source.scope_path)
                 if source is not None:
                     session_node.contribute_local_use(replace(local_contribution, source=source))

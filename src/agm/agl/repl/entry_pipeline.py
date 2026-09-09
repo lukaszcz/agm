@@ -112,6 +112,7 @@ class EntryPipelineCtx(Protocol):
         partial: bool,
         promoted_declaration_ids: frozenset[int],
         promoted_scope_region_paths: frozenset[tuple[str, ...]],
+        promoted_use_declaration_ids: frozenset[int],
         infix_ambient: Mapping[str, tuple[int, InfixAssoc]],
     ) -> tuple[str, ...]: ...
 
@@ -859,6 +860,7 @@ class EntryPipeline:
             partial: bool,
             promoted_declaration_ids: frozenset[int],
             promoted_scope_region_paths: frozenset[tuple[str, ...]],
+            promoted_use_declaration_ids: frozenset[int],
         ) -> tuple[str, ...]:
             return self._ctx._promote_ir_state(
                 text=text,
@@ -868,6 +870,7 @@ class EntryPipeline:
                 partial=partial,
                 promoted_declaration_ids=promoted_declaration_ids,
                 promoted_scope_region_paths=promoted_scope_region_paths,
+                promoted_use_declaration_ids=promoted_use_declaration_ids,
                 infix_ambient=entry_infix_ambient,
             )
 
@@ -898,6 +901,11 @@ class EntryPipeline:
                 partial=True,
                 promoted_declaration_ids=promoted,
                 promoted_scope_region_paths=lowered.promotion_plan.completed_scope_region_paths(
+                    interp.module_completed_initializer_indices.get(
+                        lowered.program.entry_module, set()
+                    )
+                ),
+                promoted_use_declaration_ids=lowered.promotion_plan.completed_use_declaration_ids(
                     interp.module_completed_initializer_indices.get(
                         lowered.program.entry_module, set()
                     )
@@ -963,6 +971,9 @@ class EntryPipeline:
                 checked_program.modules.keys(),
             ),
             promoted_scope_region_paths=lowered.promotion_plan.completed_scope_region_paths(
+                completed_entry_indices
+            ),
+            promoted_use_declaration_ids=lowered.promotion_plan.completed_use_declaration_ids(
                 completed_entry_indices
             ),
         )

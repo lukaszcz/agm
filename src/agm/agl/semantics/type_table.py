@@ -54,7 +54,7 @@ diagnostic (agent output target, cast target, parameter type).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, assert_never, cast
@@ -466,6 +466,42 @@ class TypeTable:
         self._builtin_methods.setdefault(constructor, {}).setdefault(method.name, {})[
             method.declaration_key
         ] = method
+
+    def restore_methods_from(self, previous: TypeTable, declaration_ids: Collection[int]) -> None:
+        """Restore methods replaced by unpromoted declarations from *previous*."""
+        declaration_keys = {
+            method.declaration_key
+            for methods in self._methods.values()
+            for candidates in methods.values()
+            for method in candidates.values()
+            if method.decl_node_id in declaration_ids
+        } | {
+            method.declaration_key
+            for methods in self._builtin_methods.values()
+            for candidates in methods.values()
+            for method in candidates.values()
+            if method.decl_node_id in declaration_ids
+        }
+        if not declaration_keys:
+            return
+        for methods in self._methods.values():
+            for candidates in methods.values():
+                for key in declaration_keys:
+                    candidates.pop(key, None)
+        for methods in self._builtin_methods.values():
+            for candidates in methods.values():
+                for key in declaration_keys:
+                    candidates.pop(key, None)
+        for decl_id, methods in previous._methods.items():
+            for candidates in methods.values():
+                for key, method in candidates.items():
+                    if key in declaration_keys:
+                        self._put_method(decl_id, method)
+        for constructor, methods in previous._builtin_methods.items():
+            for candidates in methods.values():
+                for key, method in candidates.items():
+                    if key in declaration_keys:
+                        self.register_builtin_method(constructor, method)
 
     @staticmethod
     def _builtin_constructor(owner: Type) -> str | None:

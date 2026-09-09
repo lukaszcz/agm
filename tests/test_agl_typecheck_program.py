@@ -303,6 +303,17 @@ def test_candidate_seeding_defers_binding_that_calls_unannotated_orphan_method()
     assert checked.node_types[result.node_id] == IntType()
 
 
+def test_candidate_dependency_flows_through_top_level_binding_to_orphan_method() -> None:
+    checked = resolve_and_check_repl_entry(
+        "record R\n  value: int\nlet x = R(value = 0).m()\ndef f() = x\ndef R::m(self) = 1\nf()",
+        _CAPS,
+    )
+
+    assert checked.function_signatures["f"].result == IntType()
+    result = checked.resolved.program.body.items[-1]
+    assert checked.node_types[result.node_id] == IntType()
+
+
 def test_candidate_seeding_keeps_unrelated_same_named_field_binding() -> None:
     checked = resolve_and_check_repl_entry(
         "record Payload\n"

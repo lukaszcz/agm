@@ -906,14 +906,12 @@ class _Resolver:
             if receiver.name != "self":
                 continue
             owner_path = key[1]
-            _region_path, type_path = self._receiver_region_and_type_path(owner_path)
-            for local_type_path in (owner_path, type_path):
-                alias_target = alias_targets.get(local_type_path)
-                if alias_target is not None:
-                    self._raise_alias_receiver(local_type_path[-1], alias_target, receiver.span)
+            region_path, type_path = self._receiver_region_and_type_path(owner_path)
             owner = self._local_receiver_owner(owner_path, declaration)
             if owner is None:
-                owner = self._local_nominal_receiver_owner(type_path)
+                owner = self._lexical_receiver_owner(
+                    region_path, type_path, alias_targets, receiver.span
+                )
             if owner is None:
                 owner = self._foreign_receiver_owner(owner_path, receiver.span)
             if owner is None:
@@ -962,6 +960,24 @@ class _Resolver:
             or path in self._repl_session_type_paths
         ):
             return ReceiverOwner(self._module_id, path)
+        return None
+
+    def _lexical_receiver_owner(
+        self,
+        region_path: ScopePath,
+        type_path: ScopePath,
+        alias_targets: Mapping[ScopePath, str | TypeAlias],
+        span: SourceSpan,
+    ) -> ReceiverOwner | None:
+        """Resolve a local receiver from the nearest enclosing lexical region."""
+        for length in range(len(region_path), -1, -1):
+            candidate = (*region_path[:length], *type_path)
+            owner = self._local_nominal_receiver_owner(candidate)
+            if owner is not None:
+                return owner
+            alias_target = alias_targets.get(candidate)
+            if alias_target is not None:
+                self._raise_alias_receiver(candidate[-1], alias_target, span)
         return None
 
     def _foreign_receiver_owner(

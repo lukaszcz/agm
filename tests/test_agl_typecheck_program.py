@@ -295,9 +295,7 @@ def test_candidate_inference_reads_a_preceding_destructuring_let_binder() -> Non
 
 def test_candidate_seeding_defers_binding_that_calls_unannotated_orphan_method() -> None:
     checked = resolve_and_check_repl_entry(
-        "let answer: int = Some(value = 1).answer()\n"
-        "def Option::answer[T](self) = 42\n"
-        "answer",
+        "let answer: int = Some(value = 1).answer()\ndef Option::answer[T](self) = 42\nanswer",
         _CAPS,
     )
 

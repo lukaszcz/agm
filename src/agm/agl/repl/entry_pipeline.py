@@ -111,6 +111,7 @@ class EntryPipelineCtx(Protocol):
         next_start_id: int,
         partial: bool,
         promoted_declaration_ids: frozenset[int],
+        promoted_scope_region_paths: frozenset[tuple[str, ...]],
         infix_ambient: Mapping[str, tuple[int, InfixAssoc]],
     ) -> tuple[str, ...]: ...
 
@@ -853,7 +854,12 @@ class EntryPipeline:
                 available.difference_update(incomplete)
             return frozenset(candidates)
 
-        def promote(*, partial: bool, promoted_declaration_ids: frozenset[int]) -> tuple[str, ...]:
+        def promote(
+            *,
+            partial: bool,
+            promoted_declaration_ids: frozenset[int],
+            promoted_scope_region_paths: frozenset[tuple[str, ...]],
+        ) -> tuple[str, ...]:
             return self._ctx._promote_ir_state(
                 text=text,
                 program=orig_program,
@@ -861,6 +867,7 @@ class EntryPipeline:
                 next_start_id=new_next_id,
                 partial=partial,
                 promoted_declaration_ids=promoted_declaration_ids,
+                promoted_scope_region_paths=promoted_scope_region_paths,
                 infix_ambient=entry_infix_ambient,
             )
 
@@ -887,7 +894,15 @@ class EntryPipeline:
                 ),
                 self._ctx._loaded_lib_modules.keys() | completed_module_ids,
             )
-            installed = promote(partial=True, promoted_declaration_ids=promoted)
+            installed = promote(
+                partial=True,
+                promoted_declaration_ids=promoted,
+                promoted_scope_region_paths=lowered.promotion_plan.completed_scope_region_paths(
+                    interp.module_completed_initializer_indices.get(
+                        lowered.program.entry_module, set()
+                    )
+                ),
+            )
             retain_library_state(completed_module_ids)
             kind, name = self._ctx._classify(orig_program)
             return EntryResult(
@@ -938,11 +953,17 @@ class EntryPipeline:
         # Setting writes are ordinary non-transactional mutations: persist all
         # effects that completed, on success or before a later runtime failure.
         self._persist_interpreter_settings(interp, trace)
+        completed_entry_indices = range(
+            len(lowered.program.modules[lowered.program.entry_module].initializers)
+        )
         promote(
             partial=False,
             promoted_declaration_ids=lowered.promotion_plan.completed_declaration_ids(
-                range(len(lowered.program.modules[lowered.program.entry_module].initializers)),
+                completed_entry_indices,
                 checked_program.modules.keys(),
+            ),
+            promoted_scope_region_paths=lowered.promotion_plan.completed_scope_region_paths(
+                completed_entry_indices
             ),
         )
         retain_library_state(

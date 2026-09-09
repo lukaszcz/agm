@@ -971,28 +971,32 @@ class _Resolver:
         region_path, type_path = self._receiver_region_and_type_path(owner_path)
         if not type_path:
             return None
-        candidates = self._receiver_contribution_candidates(
-            self._import_env.unqualified, type_path[0]
-        )
+        candidates = self._receiver_contribution_candidates(self._import_env.unqualified, type_path)
         for _node_id, bare in self._reachable_decl_contributions(
             self._import_env.decl_bare, region_path
         ):
-            candidates.update(self._receiver_contribution_candidates(bare, type_path[0]))
+            candidates.update(self._receiver_contribution_candidates(bare, type_path))
 
         owners: set[ReceiverOwner] = set()
-        for module_id, atom in candidates:
+        for (module_id, atom), exposed_path in candidates:
             declaration = self._all_public_types.get((module_id, atom))
             if isinstance(declaration, TypeAlias):
                 self._raise_alias_receiver(type_path[0], declaration, span)
             owner = self._cross_module_type_owners.get((module_id, atom))
             if owner is None:
                 continue
-            if len(type_path) == 1:
+            if exposed_path == type_path:
                 owners.add(owner)
+                continue
+            if len(type_path) == 1 and exposed_path[-1:] == type_path:
+                parent_atom = _bare_atom(_bare_path(atom)[:-1])
+                if isinstance(self._all_public_types.get((module_id, parent_atom)), EnumDef):
+                    owners.add(owner)
                 continue
             if not isinstance(declaration, EnumDef):
                 continue
-            member_atom = _bare_atom((*_bare_path(atom), *type_path[1:]))
+            remaining_path = type_path[len(exposed_path) :]
+            member_atom = _bare_atom((*_bare_path(atom), *remaining_path))
             member_owner = self._cross_module_type_owners.get((module_id, member_atom))
             if member_owner is not None:
                 owners.add(member_owner)
@@ -1009,13 +1013,16 @@ class _Resolver:
         return None
 
     def _receiver_contribution_candidates(
-        self, contributions: Mapping[NameAtom, frozenset[QName]], name: str
-    ) -> set[QName]:
-        """Return contributions whose bare tail can name a receiver type."""
+        self, contributions: Mapping[NameAtom, frozenset[QName]], path: ScopePath
+    ) -> set[tuple[QName, ScopePath]]:
+        """Return contributions whose exposed path can name a receiver path."""
         return {
-            qname
+            (qname, exposed_path)
             for atom, qnames in contributions.items()
-            if _bare_path(atom)[-1] == name
+            if (
+                path[: len(exposed_path := _bare_path(atom))] == exposed_path
+                or (len(path) == 1 and exposed_path[-1:] == path)
+            )
             for qname in qnames
         }
 

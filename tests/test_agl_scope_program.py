@@ -2102,6 +2102,32 @@ class TestMethodOrphanRule:
             (ENTRY_ID, ("Box",), "get"): ReceiverOwner(shapes_id, ("Box",)),
         }
 
+    def test_scoped_imported_receiver_uses_its_exposed_path(self, tmp_path: Path) -> None:
+        shapes_id = ModuleId.from_path("shapes")
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import shapes::*\n\ndef Geo::Point::tag(self) -> int = self.x",
+                "shapes": "scope Geo\n  record Point\n    x: int\nend Geo",
+            },
+        )
+
+        resolved = resolve_program(graph).modules[ENTRY_ID].resolved
+
+        assert resolved.method_declarations == {
+            (ENTRY_ID, ("Geo", "Point"), "tag"): ReceiverOwner(shapes_id, ("Geo", "Point")),
+        }
+
+        invalid = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import shapes::*\n\ndef Point::tag(self) -> int = self.x",
+                "shapes": "scope Geo\n  record Point\n    x: int\nend Geo",
+            },
+        )
+        with pytest.raises(AglScopeError, match="enclosing type scope"):
+            resolve_program(invalid)
+
     def test_self_on_a_region_scoped_glob_imported_type_resolves_its_owner(
         self, tmp_path: Path
     ) -> None:

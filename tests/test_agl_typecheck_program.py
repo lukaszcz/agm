@@ -4777,6 +4777,23 @@ def test_orphan_method_cannot_collide_with_a_foreign_owner_field(tmp_path: Path)
     assert "field" in str(raised.value).lower()
 
 
+def test_foreign_field_collision_is_reported_at_the_method_file(tmp_path: Path) -> None:
+    with pytest.raises(AglTypeError) as raised:
+        _check_program(
+            tmp_path,
+            {
+                "shapes": "\n" * 30 + "record Point\n  describe: int\n",
+                "methods": ('import shapes::*\ndef Point::describe(self) -> text = "method"\n'),
+                "entry": "import shapes\nimport methods\n()\n",
+            },
+        )
+
+    assert raised.value.span is not None
+    assert raised.value.span.source.label.endswith("methods.agl")
+    assert len(raised.value.related) == 1
+    assert raised.value.related[0][1].source.label.endswith("shapes.agl")
+
+
 def test_base_method_and_derived_field_are_legal_across_modules(tmp_path: Path) -> None:
     checked = _check_program(
         tmp_path,

@@ -364,9 +364,7 @@ def _references_tainted_binding(
         elif isinstance(node, FieldAccess) and any(
             declaration_id in tainted for declaration_id in candidate_methods.get(node.field, ())
         ):
-            if _references_tainted_binding(
-                module, node.obj, tainted, candidate_methods, checker
-            ):
+            if _references_tainted_binding(module, node.obj, tainted, candidate_methods, checker):
                 found = True
                 return
             try:
@@ -424,9 +422,7 @@ def _seed_candidate_visible_bindings(
                     module.env.snapshot_binding_types()
                 )
             elif isinstance(item, (LetDecl, VarDecl)):
-                if _references_tainted_binding(
-                    module, item, tainted, candidate_methods, checker
-                ):
+                if _references_tainted_binding(module, item, tainted, candidate_methods, checker):
                     if isinstance(item, LetDecl):
                         # A let site's selected binders are the declaration ids
                         # referenced by later code, not the match-site id.

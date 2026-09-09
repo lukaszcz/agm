@@ -3384,9 +3384,7 @@ class TestFailureEffects:
         session = open_session(default_stdlib=False)
 
         failed = session.eval_entry(
-            "use Source::*\n"
-            "let z: decimal = 1 / 0\n"
-            "scope Source\n  let unavailable = 1\nend Source"
+            "use Source::*\nlet z: decimal = 1 / 0\nscope Source\n  let unavailable = 1\nend Source"
         )
 
         assert not failed.ok
@@ -3398,9 +3396,7 @@ class TestFailureEffects:
         (tmp_path / "lib.agl").write_text("let value = 1\n", encoding="utf-8")
         session = ReplSession(cwd=tmp_path)
         assert not session.open()
-        assert session.eval_entry(
-            f"# {'padding' * 30}\nscope Kept\n  import lib::*\nend Kept"
-        ).ok
+        assert session.eval_entry(f"# {'padding' * 30}\nscope Kept\n  import lib::*\nend Kept").ok
 
         failed = session.eval_entry("let z: decimal = 1 / 0\n\nscope Ghost\nend Ghost")
 

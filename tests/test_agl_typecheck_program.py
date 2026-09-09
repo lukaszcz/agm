@@ -334,9 +334,7 @@ def test_candidate_seeding_defers_field_whose_receiver_uses_candidate_method() -
 def test_candidate_seeding_defers_invalid_same_named_field_receiver() -> None:
     with pytest.raises(AglTypeError):
         resolve_and_check_repl_entry(
-            "let seed = (1 + true).answer\n"
-            "def Option::answer[T](self) = self.unwrap()\n"
-            "seed",
+            "let seed = (1 + true).answer\ndef Option::answer[T](self) = self.unwrap()\nseed",
             _CAPS,
         )
 

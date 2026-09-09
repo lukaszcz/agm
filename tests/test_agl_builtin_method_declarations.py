@@ -227,6 +227,21 @@ def test_generic_dict_receiver_binds_its_value_slot(tmp_path: Path) -> None:
     assert signature.params[0].type == DictType(TypeVarType("V"))
 
 
+def test_scalar_builtin_receiver_may_be_declared_in_a_named_region() -> None:
+    prepared = PipelineDriver.prepare_program(
+        "scope Ext\n"
+        "  def int::twice(self) -> int = self + self\n"
+        "end Ext\n\n"
+        "program def main() -> unit =\n"
+        "  let _: int = (1).twice()\n",
+        default_stdlib=False,
+    )
+
+    discovery = PipelineDriver().discover_programs(prepared)
+
+    assert discovery.checked is not None, discovery.diagnostics
+
+
 def test_scalar_builtin_receiver_has_its_declared_type(tmp_path: Path) -> None:
     prepared = _prepare_stdlib_module(
         tmp_path,

@@ -943,10 +943,11 @@ class _Resolver:
         nominal_owner = self._local_nominal_receiver_owner(owner_path)
         if nominal_owner is not None:
             return nominal_owner
-        if declaration.receiver_type is not None or (
-            len(owner_path) == 1 and owner_path[0] in BUILTIN_METHOD_RECEIVER_NAMES
-        ):
+        if declaration.receiver_type is not None:
             return ReceiverOwner(self._module_id, owner_path)
+        _region_path, type_path = self._receiver_region_and_type_path(owner_path)
+        if len(type_path) == 1 and type_path[0] in BUILTIN_METHOD_RECEIVER_NAMES:
+            return ReceiverOwner(self._module_id, type_path)
         return None
 
     def _local_nominal_receiver_owner(self, path: ScopePath) -> ReceiverOwner | None:

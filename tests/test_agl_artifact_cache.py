@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from agm.agl import artifact_cache
 from agm.agl.pipeline import PipelineDriver
 from agm.agl.runtime.codec import TextCodec
 from tests._agl_helpers import agl_roots, run_inline_command
+from tests.agl.ir_harness import make_file_graph_from_files
 
 
 @pytest.mark.parametrize(
@@ -103,6 +105,26 @@ def test_discarding_compilation_state_preserves_program_behavior(
 
     assert run_inline_command(runtime, source).ok
     assert capsys.readouterr().out == "6\n"
+
+
+def test_non_entry_cycle_member_is_retained_against_the_entry_source(tmp_path: Path) -> None:
+    graph = make_file_graph_from_files(
+        tmp_path,
+        {"entry": "import helper\n()", "helper": "()"},
+        default_stdlib=False,
+    )
+    entry = graph.modules[graph.entry_id]
+    graph.modules[graph.entry_id] = replace(entry, path=tmp_path / "entry.agl")
+    helper_id = next(module_id for module_id in graph.modules if module_id != graph.entry_id)
+    graph.adjacency[helper_id] = (graph.entry_id,)
+
+    retained = artifact_cache.retained_module_sources(graph)
+
+    assert tuple(module.module_id for module in retained[helper_id]) == (
+        graph.entry_id,
+        helper_id,
+    )
+    assert graph.entry_id not in retained
 
 
 def test_the_image_is_bounded_and_evicts_the_least_recently_used() -> None:

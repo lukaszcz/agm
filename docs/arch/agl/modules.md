@@ -22,7 +22,7 @@ User-operator chains are resolved once the graph is known, using each module's l
 
 ## Compilation Caches
 
-Imported modules are precompiled on demand and reused in memory and across CLI processes. The pipeline retains parsed syntax, resolution, closed type/function interfaces, checked bodies, compiled match sites, and independently lowered module IR. Entry modules and dependency cycles reaching the entry are compiled afresh.
+Imported modules are precompiled on demand and reused in memory and across CLI processes. The pipeline retains parsed syntax, resolution, closed type/function interfaces, checked bodies, compiled match sites, and independently lowered module IR. Entry modules are compiled afresh; non-entry members of cycles reaching the entry may be retained against the exact entry source.
 
 `modules/parsed_module_cache.py` assigns content-addressed node namespaces so unchanged declarations keep their identity across import orders and processes. `artifact_cache.py` validates each stage against the module and its transitive import/export dependencies; checked stages also depend on host capabilities. Modules sharing a dependency closure share a persisted frontend image. Restored artifacts attach to the current compilation's source objects, preserving stage provenance.
 

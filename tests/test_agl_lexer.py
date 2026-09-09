@@ -481,6 +481,49 @@ class TestIndexBracketRemap:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("quote", ['"', '"""'])
+@pytest.mark.parametrize("suffix", ["", "}"])
+def test_malformed_environment_holes_keep_search_work_linear(quote: str, suffix: str) -> None:
+    """Bound searched characters through the public lexer without timing noise."""
+
+    class SearchBudgetText(str):
+        searched: int = 0
+
+        def replace(self, old: str, new: str, count: int = -1) -> SearchBudgetText:
+            return SearchBudgetText(super().replace(old, new, count))
+
+        def find(self, sub: str, start: int = 0, end: int | None = None) -> int:
+            found = super().find(sub, start, end)
+            stop = len(self) if end is None else end
+            self.searched += (stop if found < 0 else found + len(sub)) - start
+            assert self.searched <= 8 * len(self)
+            return found
+
+    body = "${name " * 1_000 + suffix
+    source = SearchBudgetText(quote + body + quote)
+    assert tok(source) == [
+        ("TEMPLATE_START", '"'),
+        ("STRING_FRAGMENT", body),
+        ("TEMPLATE_END", '"'),
+    ]
+
+
+@pytest.mark.parametrize("quote", ['"', '"""'])
+@pytest.mark.parametrize("prefix", ["${", "${bad name}", "${bad", "${}", "${1}"])
+@pytest.mark.parametrize("name", ["HOME", "é", "ask-prompt", "a+b", "price$", 'foo"bar'])
+def test_environment_hole_after_malformed_literal(quote: str, prefix: str, name: str) -> None:
+    tokens = tok(quote + prefix + "${" + name + "}" + quote)
+    assert [value for typ, value in tokens if typ == "STRING_FRAGMENT"] == [prefix, name, ""]
+    assert [value for typ, value in tokens if typ == "INTERP_START"] == ["%{"]
+    assert ("NAME", "getenv") in tokens
+
+
+@pytest.mark.parametrize("source", ['"${', '"""${'])
+def test_environment_opener_at_end_of_unterminated_string(source: str) -> None:
+    with pytest.raises(LexError):
+        tok(source)
+
+
 class TestSimpleTemplates:
     def test_empty_string(self) -> None:
         result = tok('""')
@@ -637,6 +680,23 @@ class TestNestedBracesInInterp:
 
 
 class TestTripleQuotedStrings:
+    @pytest.mark.parametrize(
+        ("body", "fragments"),
+        [
+            ("", [""]),
+            ("%{x}%{y}", ["", "", ""]),
+            ("%{x}\n  a\n  ", ["", "  a\n  "]),
+            ("\n  a\n  %{x}%{y}\n  ", ["a\n", "", ""]),
+            ("\n  %{x}  %{y}end\n  ", ["", "  ", "end"]),
+            ("\n\tfoo\n\t%{x}\n\t", ["foo\n", ""]),
+            ("\n  foo\n\u2003\n  %{x}\n  ", ["foo\n\n", ""]),
+            (r"\n  a\n  %{x}\n  ", ["a\n", ""]),
+        ],
+    )
+    def test_dedent_preserves_fragment_boundaries(self, body: str, fragments: list[str]) -> None:
+        result = tok('"""' + body + '"""')
+        assert [value for kind, value in result if kind == "STRING_FRAGMENT"] == fragments
+
     def test_simple_triple_quoted(self) -> None:
         source = '"""hello"""'
         result = tok(source)

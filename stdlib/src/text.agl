@@ -1,5 +1,21 @@
+import std/array
 import std/option::Option
 import std/errors::IndexError
+
+# Mutable chunk storage for incremental text construction. Aliases share chunks;
+# copy detaches them and shallow-copy shares them, as for other records.
+record TextBuilder(chunks: array[text])
+
+# Each call creates an independent empty builder.
+def builder() -> TextBuilder = TextBuilder(chunks = [])
+
+# Amortized constant time: stores the chunk without copying accumulated text.
+def TextBuilder::append(self, chunk: text) -> unit = self.chunks.append(chunk)
+def TextBuilder::clear(self) -> unit = self.chunks.clear()
+
+# Return an immutable snapshot, retaining chunks for further appends or reuse.
+# Linear in chunk count plus output length; build once after appending in a loop.
+def TextBuilder::build(self) -> text = array::join(self.chunks, "")
 
 extern def interp(template: text, vars: dict[text, text]) -> text
 

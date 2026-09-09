@@ -1,0 +1,43 @@
+import std/text
+
+program def main(mode: int) -> unit =
+  let builder = text::builder()
+  case mode of
+    | 1 =>
+        print(builder.build())
+        builder.append("")
+        builder.append("é")
+        builder.append("😀")
+        let snapshot = builder.build()
+        builder.append("e\u0301")
+        print(snapshot)
+        print(builder.build())
+        print(builder.build())
+        let other = text::builder()
+        other.append("independent")
+        builder.clear()
+        print(builder.build())
+        print(snapshot)
+        print(other.build())
+        builder.append("reused")
+        print(builder.build())
+    | 2 =>
+        builder.append("a")
+        let alias = builder
+        let shallow = shallow-copy(builder)
+        let deep = copy(builder)
+        alias.append("b")
+        shallow.append("c")
+        deep.append("d")
+        print(builder.build())
+        print(deep.build())
+        shallow.clear()
+        print(alias.build())
+        print(deep.build())
+    | _ =>
+        for ch in "x".repeat(1000) do
+          builder.append("é😀")
+        done
+        let result = builder.build()
+        print(result.size())
+        print(result == "é😀".repeat(1000))

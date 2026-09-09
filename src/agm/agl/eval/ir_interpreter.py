@@ -1734,7 +1734,7 @@ class IrInterpreter:
                     # behind those keys may still be mutated.
                     return IteratorValue(elements=tuple(TextValue(k) for k in coll.entries))
                 if isinstance(coll, TextValue):
-                    return IteratorValue(elements=tuple(TextValue(ch) for ch in coll.value))
+                    return IteratorValue(elements=coll.value)
                 raise InvalidIrError(  # pragma: no cover
                     f"IrIterInit: unexpected collection type {type(coll)!r}"
                 )
@@ -1751,7 +1751,7 @@ class IrInterpreter:
                     raise InvalidIrError(f"IrIterNext: expected IteratorValue, got {type(it)!r}")
                 elem = it.elements[it.pos]
                 it.pos += 1
-                return elem
+                return TextValue(elem) if isinstance(elem, str) else elem
 
             case IrMakeClosure(function_id=fn_id, captures=captures):
                 cap_slots: list[tuple[SymbolId, Value | Cell]] = []

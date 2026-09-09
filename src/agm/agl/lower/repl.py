@@ -386,17 +386,17 @@ def _promotion_plan(
                 item.name, frozenset()
             ) | frozenset({item.node_id})
     region_indices: dict[tuple[str, ...], list[int]] = {}
+    source_index = 0
 
     def collect_regions(items: tuple[Item, ...], parent: tuple[str, ...] = ()) -> None:
+        nonlocal source_index
         for item in items:
-            if not isinstance(item, ScopeRegion):
-                continue
-            path = (*parent, item.segment.name)
-            source_index = sum(
-                leaf.span.start_offset < item.span.start_offset for leaf in leaf_items
-            )
-            region_indices.setdefault(path, []).append(source_index)
-            collect_regions(cast(tuple[Item, ...], item.items), path)
+            if isinstance(item, ScopeRegion):
+                path = (*parent, item.segment.name)
+                region_indices.setdefault(path, []).append(source_index)
+                collect_regions(cast(tuple[Item, ...], item.items), path)
+            else:
+                source_index += 1
 
     collect_regions(checked.resolved.program.body.items)
     declaration_dependencies: dict[int, frozenset[int]] = {}

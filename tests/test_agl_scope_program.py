@@ -2152,6 +2152,106 @@ class TestMethodOrphanRule:
             ),
         }
 
+    def test_use_exposes_an_imported_receiver(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "import shapes\nuse shapes::Geo::*\n\ndef Point::tag(self) -> int = self.x"
+                ),
+                "shapes": "scope Geo\n  record Point\n    x: int\nend Geo",
+            },
+        )
+
+        resolved = resolve_program(graph).modules[ENTRY_ID].resolved
+
+        assert resolved.method_declarations == {
+            (ENTRY_ID, ("Point",), "tag"): ReceiverOwner(
+                ModuleId.from_path("shapes"), ("Geo", "Point")
+            )
+        }
+
+    def test_nearest_scoped_import_wins_for_receiver(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "import far::*\n\nscope A\n  import near::*\n\n"
+                    "  def Point::tag(self) -> int = 1\nend A"
+                ),
+                "far": "record Point()",
+                "near": "record Point()",
+            },
+        )
+
+        resolved = resolve_program(graph).modules[ENTRY_ID].resolved
+
+        assert resolved.method_declarations == {
+            (ENTRY_ID, ("A", "Point"), "tag"): ReceiverOwner(ModuleId.from_path("near"), ("Point",))
+        }
+
+    def test_import_inside_receiver_scope_supplies_owner(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "scope Point\n  import shapes::*\n\n  def tag(self) -> int = self.x\nend Point"
+                ),
+                "shapes": "record Point\n  x: int",
+            },
+        )
+
+        resolved = resolve_program(graph).modules[ENTRY_ID].resolved
+
+        assert resolved.method_declarations == {
+            (ENTRY_ID, ("Point",), "tag"): ReceiverOwner(ModuleId.from_path("shapes"), ("Point",))
+        }
+
+    def test_exact_bare_record_ignores_nested_alias(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import owners::*\nimport aliases::*\ndef Point::tag(self) -> int = 1",
+                "owners": "record Point()",
+                "aliases": "scope Geo\n  type Point = int\nend Geo",
+            },
+        )
+
+        resolved = resolve_program(graph).modules[ENTRY_ID].resolved
+
+        assert resolved.method_declarations == {
+            (ENTRY_ID, ("Point",), "tag"): ReceiverOwner(ModuleId.from_path("owners"), ("Point",))
+        }
+
+    def test_exact_bare_record_wins_over_enum_member(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import shapes::*\ndef Node::tag(self) -> int = 1",
+                "shapes": "record Node()\nenum Tree = Node",
+            },
+        )
+
+        resolved = resolve_program(graph).modules[ENTRY_ID].resolved
+
+        assert resolved.method_declarations == {
+            (ENTRY_ID, ("Node",), "tag"): ReceiverOwner(ModuleId.from_path("shapes"), ("Node",))
+        }
+
+    def test_hidden_enum_member_cannot_own_method(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "import shapes::* hiding Tree::Node\ndef Tree::Node::tag(self) -> int = 1"
+                ),
+                "shapes": "enum Tree = Node",
+            },
+        )
+
+        with pytest.raises(AglScopeError):
+            resolve_program(graph)
+
     def test_bare_receiver_uses_nearest_lexical_type(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
             tmp_path,

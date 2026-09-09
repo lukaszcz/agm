@@ -889,7 +889,11 @@ class _Resolver:
         receiver = declaration.params[0]
         owner_path = tuple(segment.name for segment in declaration.scope_path)
         region_path, type_path = self._receiver_region_and_type_path(owner_path)
-        owner = self._lexical_receiver_owner(region_path, type_path, alias_targets, receiver.span)
+        owner = (
+            self._local_receiver_owner(owner_path, declaration)
+            if declaration.receiver_type is not None
+            else self._lexical_receiver_owner(region_path, type_path, alias_targets, receiver.span)
+        )
         if owner is None:
             owner = self._local_receiver_owner(owner_path, declaration)
         if owner is None:

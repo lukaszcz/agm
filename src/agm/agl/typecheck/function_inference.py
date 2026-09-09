@@ -272,30 +272,53 @@ def _candidate_methods_by_name(functions: dict[int, _CandidateFunction]) -> dict
 def _function_dependencies(
     functions: dict[int, _CandidateFunction],
 ) -> dict[int, tuple[int, ...]]:
-    """Collect body references to batch candidates by resolved declaration id."""
+    """Collect candidate references from bodies and their top-level bindings."""
     methods_by_name = _candidate_methods_by_name(functions)
+    binding_values: dict[int, tuple[CandidateModule, object]] = {}
+    modules = {module.module_id: module for module, _ in functions.values()}
+    for module in modules.values():
+        program = module.resolved.program
+        assert isinstance(program, Program)
+        for item in static_items(program.body.items):
+            if isinstance(item, LetDecl):
+                for binding_id in pattern_binding_node_ids(item.pattern):
+                    binding_values[binding_id] = (module, item.value)
+            elif isinstance(item, VarDecl):
+                binding_values[item.node_id] = (module, item.value)
+
     dependencies: dict[int, tuple[int, ...]] = {}
     for declaration_id, (module, node) in functions.items():
         assert node.body is not None
         referenced: set[int] = set()
+        visited_bindings: set[int] = set()
 
-        def visit(item: object) -> None:
-            if isinstance(item, VarRef):
-                reference = module.resolved.resolution.get(item.node_id)
-                if reference is not None and reference.decl_node_id in functions:
-                    referenced.add(reference.decl_node_id)
-            elif isinstance(item, FieldAccess):
-                # A member call's target is only disambiguated from a field
-                # read later, by the checker; over-approximate here with an
-                # edge to every same-named candidate method so a missing edge
-                # never lets an SCC close out of order. Widening an SCC is
-                # safe; missing an edge is the bug this closes.
-                referenced.update(methods_by_name.get(item.field, ()))
+        def visit_from(owner: CandidateModule, value: object) -> None:
+            def visit(item: object) -> None:
+                if isinstance(item, VarRef):
+                    reference = owner.resolved.resolution.get(item.node_id)
+                    if reference is None:
+                        return
+                    if reference.decl_node_id in functions:
+                        referenced.add(reference.decl_node_id)
+                    binding = binding_values.get(reference.decl_node_id)
+                    if binding is not None and reference.decl_node_id not in visited_bindings:
+                        visited_bindings.add(reference.decl_node_id)
+                        visit_from(*binding)
+                elif isinstance(item, FieldAccess):
+                    # A member call's target is only disambiguated from a field
+                    # read later, by the checker; over-approximate here with an
+                    # edge to every same-named candidate method so a missing edge
+                    # never lets an SCC close out of order. Widening an SCC is
+                    # safe; missing an edge is the bug this closes.
+                    referenced.update(methods_by_name.get(item.field, ()))
+
+            walk(value, visit)
 
         # Walking the whole body deliberately includes direct calls, function
-        # values, partial applications, type applications, and member calls.
-        # Defaults are checked only by authoritative validation.
-        walk(node.body, visit)
+        # values, partial applications, type applications, member calls, and
+        # transitively referenced top-level binding initializers. Defaults are
+        # checked only by authoritative validation.
+        visit_from(module, node.body)
 
         def dependency_key(node_id: int) -> tuple[tuple[str, ...], int, int]:
             return _function_key(functions, node_id)

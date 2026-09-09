@@ -907,11 +907,11 @@ class _Resolver:
                 continue
             owner_path = key[1]
             region_path, type_path = self._receiver_region_and_type_path(owner_path)
-            owner = self._local_receiver_owner(owner_path, declaration)
+            owner = self._lexical_receiver_owner(
+                region_path, type_path, alias_targets, receiver.span
+            )
             if owner is None:
-                owner = self._lexical_receiver_owner(
-                    region_path, type_path, alias_targets, receiver.span
-                )
+                owner = self._local_receiver_owner(owner_path, declaration)
             if owner is None:
                 owner = self._foreign_receiver_owner(owner_path, receiver.span)
             if owner is None:
@@ -940,9 +940,6 @@ class _Resolver:
         self, owner_path: ScopePath, declaration: FuncDef
     ) -> ReceiverOwner | None:
         """Return a local nominal or builtin receiver owner, if one is declared."""
-        nominal_owner = self._local_nominal_receiver_owner(owner_path)
-        if nominal_owner is not None:
-            return nominal_owner
         if declaration.receiver_type is not None:
             return ReceiverOwner(self._module_id, owner_path)
         _region_path, type_path = self._receiver_region_and_type_path(owner_path)
@@ -973,12 +970,12 @@ class _Resolver:
         """Resolve a local receiver from the nearest enclosing lexical region."""
         for length in range(len(region_path), -1, -1):
             candidate = (*region_path[:length], *type_path)
-            owner = self._local_nominal_receiver_owner(candidate)
-            if owner is not None:
-                return owner
             alias_target = alias_targets.get(candidate)
             if alias_target is not None:
                 self._raise_alias_receiver(candidate[-1], alias_target, span)
+            owner = self._local_nominal_receiver_owner(candidate)
+            if owner is not None:
+                return owner
         return None
 
     def _foreign_receiver_owner(

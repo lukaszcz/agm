@@ -4463,6 +4463,11 @@ def test_option_member_fallback_ignores_an_unreachable_direct_method(tmp_path: P
     assert _binding_value_type(checked, ENTRY_ID, "description") == TextType()
 
 
+def test_non_agent_record_does_not_gain_agent_methods_without_stdlib() -> None:
+    with pytest.raises(AglTypeError):
+        _check('record Worker()\nWorker().ask("hello")', default_stdlib=False)
+
+
 def test_hidden_agent_member_method_is_not_synthesized(tmp_path: Path) -> None:
     with pytest.raises(AglTypeError):
         _check_program(

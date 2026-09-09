@@ -1828,12 +1828,9 @@ class TypeEnvironment:
         has_bare_import = (
             self._import_env is not None
             and not qualifier.anchored
-            and _type_path_atom((*qualifier.route_segments, name))
-            in self._import_env.unqualified
+            and _type_path_atom((*qualifier.route_segments, name)) in self._import_env.unqualified
         )
-        return self._has_local_scope_prefix(qualifier) and not (
-            has_import_route or has_bare_import
-        )
+        return self._has_local_scope_prefix(qualifier) and not (has_import_route or has_bare_import)
 
     @staticmethod
     def _unknown_scoped_type_message(qualifier: QualifierChain, name: str) -> str:

@@ -989,13 +989,6 @@ class _Resolver:
         elif selected_layer is self._root_scope:
             refs.update(imported_refs)
 
-        # A directly exposed nominal spelling wins over enum members injected
-        # under their terminal constructor name. Keep the latter as the
-        # one-segment fallback used by ordinary bare constructor resolution.
-        exact_refs = {ref for ref in refs if (*ref.scope_path, ref.name) == type_path}
-        if exact_refs:
-            refs = exact_refs
-
         owners: set[ReceiverOwner] = set()
         if not refs and len(type_path) == 1:
             for exposed, qnames in self._import_env.unqualified.items():

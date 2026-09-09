@@ -451,8 +451,18 @@ class TypeTable:
     def _method_level(cls, methods: Mapping[DeclKey, MethodDef]) -> tuple[MethodDef, ...]:
         return tuple(sorted(methods.values(), key=cls._method_sort_key))
 
+    def _remove_method_declaration(self, declaration_key: DeclKey) -> None:
+        """Remove a superseded method declaration from every receiver."""
+        for methods in self._methods.values():
+            for candidates in methods.values():
+                candidates.pop(declaration_key, None)
+        for methods in self._builtin_methods.values():
+            for candidates in methods.values():
+                candidates.pop(declaration_key, None)
+
     def _put_method(self, decl_id: DeclId, method: MethodDef) -> None:
         """Register *method* under its declaration key on *decl_id*."""
+        self._remove_method_declaration(method.declaration_key)
         self._methods.setdefault(decl_id, {}).setdefault(method.name, {})[
             method.declaration_key
         ] = method
@@ -463,6 +473,7 @@ class TypeTable:
 
     def register_builtin_method(self, constructor: str, method: MethodDef) -> None:
         """Register *method* under a built-in receiver type constructor."""
+        self._remove_method_declaration(method.declaration_key)
         self._builtin_methods.setdefault(constructor, {}).setdefault(method.name, {})[
             method.declaration_key
         ] = method

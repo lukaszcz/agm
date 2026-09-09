@@ -298,6 +298,24 @@ class TestPersistence:
 
         assert not session.eval_entry("p.norm()").ok
 
+    def test_redeclaring_method_path_for_different_receiver_replaces_old_member(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "a.agl").write_text("record X()\n", encoding="utf-8")
+        (tmp_path / "b.agl").write_text("record X()\n", encoding="utf-8")
+        session = ReplSession(cwd=tmp_path)
+        assert not session.open()
+        assert session.eval_entry("import a::{X}").ok
+        assert session.eval_entry("def X::m(self) -> int = 1").ok
+        assert session.eval_entry("let old-x = X()").ok
+        assert session.eval_entry("import a hiding X").ok
+        assert session.eval_entry("import b::{X}").ok
+        assert session.eval_entry("def X::m(self) -> int = 2").ok
+
+        assert not session.eval_entry("old-x.m()").ok
+        assert not session.eval_entry("X::m(old-x)").ok
+        assert session.eval_entry("X().m()").value == IntValue(2)
+
     def test_redeclaring_a_method_replaces_its_prior_member_entry(self) -> None:
         session = open_session()
         assert session.eval_entry("record Meter(value: int)").ok

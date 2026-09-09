@@ -277,6 +277,18 @@ def test_candidate_inference_reads_a_preceding_destructuring_let_binder() -> Non
     assert checked.function_signatures["capture"].result == IntType()
 
 
+def test_candidate_seeding_defers_binding_that_calls_unannotated_orphan_method() -> None:
+    checked = resolve_and_check_repl_entry(
+        "let answer: int = Some(value = 1).answer()\n"
+        "def Option::answer[T](self) = 42\n"
+        "answer",
+        _CAPS,
+    )
+
+    result = checked.resolved.program.body.items[-1]
+    assert checked.node_types[result.node_id] == IntType()
+
+
 def test_program_signature_prepass_preserves_builtin_header_metadata(tmp_path: Path) -> None:
     """Builtin declarations receive the same program-header record as ordinary defs."""
     from agm.agl.syntax.nodes import FuncDef

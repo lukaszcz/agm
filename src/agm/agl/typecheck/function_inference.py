@@ -344,16 +344,26 @@ def _register_signature(
     env.set_binding_type(node.node_id, function_type)
 
 
-def _references_tainted_binding(module: CandidateModule, item: object, tainted: set[int]) -> bool:
+def _references_tainted_binding(
+    module: CandidateModule,
+    item: object,
+    tainted: set[int],
+    candidate_methods: Mapping[str, Sequence[int]],
+) -> bool:
     """Whether a top-level binding reads a declaration whose type is not yet fixed."""
     found = False
 
     def visit(node: object) -> None:
         nonlocal found
-        if not isinstance(node, VarRef):
-            return
-        reference = module.resolved.resolution.get(node.node_id)
-        if reference is not None and reference.decl_node_id in tainted:
+        if isinstance(node, VarRef):
+            reference = module.resolved.resolution.get(node.node_id)
+            if reference is not None and reference.decl_node_id in tainted:
+                found = True
+        elif isinstance(node, FieldAccess) and any(
+            declaration_id in tainted for declaration_id in candidate_methods.get(node.field, ())
+        ):
+            # Member selection happens during checking. Conservatively defer a
+            # field access that could select a same-named provisional method.
             found = True
 
     walk(item, visit)
@@ -361,7 +371,9 @@ def _references_tainted_binding(module: CandidateModule, item: object, tainted: 
 
 
 def _seed_candidate_visible_bindings(
-    component: ModuleCandidateComponent, session: CandidateSession
+    component: ModuleCandidateComponent,
+    session: CandidateSession,
+    candidate_methods: Mapping[str, Sequence[int]],
 ) -> None:
     """Capture source-visible top-level value bindings for each function body."""
     from agm.agl.typecheck.checker import _Checker
@@ -389,7 +401,7 @@ def _seed_candidate_visible_bindings(
                     module.env.snapshot_binding_types()
                 )
             elif isinstance(item, (LetDecl, VarDecl)):
-                if _references_tainted_binding(module, item, tainted):
+                if _references_tainted_binding(module, item, tainted, candidate_methods):
                     if isinstance(item, LetDecl):
                         # A let site's selected binders are the declaration ids
                         # referenced by later code, not the match-site id.
@@ -456,8 +468,12 @@ def _infer_function_component(
     session.binding_snapshots = {
         module.module_id: module.env.snapshot_binding_types() for module in component.modules
     }
+    candidate_methods: dict[str, list[int]] = {}
+    for module, node in functions:
+        if module.resolved.receiver_owner_for(module.module_id, node) is not None:
+            candidate_methods.setdefault(node.name, []).append(node.node_id)
     try:
-        _seed_candidate_visible_bindings(component, session)
+        _seed_candidate_visible_bindings(component, session, candidate_methods)
         for module, node, result, signature, _receiver in provisional:
             module.env.restore_binding_types(
                 session.visible_binding_snapshots[(module.module_id, node.node_id)]

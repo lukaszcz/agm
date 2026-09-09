@@ -2152,6 +2152,28 @@ class TestMethodOrphanRule:
             ),
         }
 
+    def test_bare_receiver_uses_nearest_lexical_type(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "type Point = int\n\n"
+                    "scope A\n"
+                    "  record Point()\n\n"
+                    "  scope B\n"
+                    "    def Point::tag(self) -> int = 1\n"
+                    "  end B\n"
+                    "end A"
+                ),
+            },
+        )
+
+        resolved = resolve_program(graph).modules[ENTRY_ID].resolved
+
+        assert resolved.method_declarations == {
+            (ENTRY_ID, ("A", "B", "Point"), "tag"): ReceiverOwner(ENTRY_ID, ("A", "Point")),
+        }
+
     def test_root_local_type_wins_over_a_bare_import_inside_a_plain_region(
         self, tmp_path: Path
     ) -> None:

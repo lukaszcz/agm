@@ -4,7 +4,7 @@
 
 ## Incremental Sessions
 
-`ReplSession` keeps a persistent environment: each entry is compiled and evaluated exactly once against accumulated symbols, types, declarations, and runtime values, so agent calls never replay. Successful declarations, bindings, imports, and `use` declarations persist; a later declaration at the same path supersedes the earlier one with a fresh declaration identity, so values and methods retained from before keep the exact shape they were checked against. A failed entry leaves the prior generation intact. `:reset` clears everything, closes agent sessions, and replaces the extern registry.
+`ReplSession` keeps a persistent environment: each entry is compiled and evaluated exactly once against accumulated symbols, types, declarations, and runtime values, so agent calls never replay. Successful declarations, bindings, imports, and `use` declarations persist; retained imports preserve method routes, and a later declaration at the same path supersedes the earlier one with a fresh declaration identity, so values and methods retained from before keep the exact shape they were checked against. A failed entry leaves the prior generation intact. `:reset` clears everything, closes agent sessions, and replaces the extern state.
 
 Each entry runs in a fresh interpreter. Engine-setting writes persist across entries because they are ordinary statements; the process environment is snapshotted once at startup for `std/env::environ`. Saved transcripts replay their original entry boundaries.
 

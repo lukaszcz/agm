@@ -68,7 +68,6 @@ class _MemberDeclaration:
 
     kind: Literal["field", "method"]
     span: SourceSpan | None
-    is_owner_local: bool = False
 
 
 @dataclass(slots=True)
@@ -85,7 +84,6 @@ class _MemberIndex:
 
     members: dict[DeclId, dict[str, list[_MemberDeclaration]]] = field(default_factory=dict)
     declared: set[DeclId] = field(default_factory=set)
-    source_owners: set[DeclId] = field(default_factory=set)
 
     def members_of(self, owner_id: DeclId) -> Mapping[str, list[_MemberDeclaration]]:
         """Return *owner_id*'s member namespace, empty for an owner never indexed."""
@@ -121,7 +119,6 @@ def _member_declarations(
             decl_owner_id = typedef.decl_node_id
             owner_ids[module_id, (*declared_path, item.name)] = decl_owner_id
             index.declared.add(decl_owner_id)
-            index.source_owners.add(decl_owner_id)
             members = index.members.setdefault(decl_owner_id, {})
             if isinstance(item, (RecordDef, ExceptionDef)):
                 for source_field in item.fields:
@@ -142,8 +139,8 @@ def _member_declarations(
             method_owner_id = owner_ids.get((owner_path.module_id, owner_path.scope_path))
             if method_owner_id is None:
                 # A method on an owner retained from an earlier REPL entry or
-                # another module: its members come from the registry, without
-                # source spans.
+                # another module: its members come from the shared type table,
+                # without source spans.
                 typedef = type_table.get(
                     owner_path.module_id, owner_path.scope_path[-1], owner_path.scope_path[:-1]
                 )
@@ -161,11 +158,7 @@ def _member_declarations(
                 for member in same_named
                 if not (member.kind == "method" and member.span is None)
             ]
-            same_named.append(
-                _MemberDeclaration(
-                    "method", function.span, is_owner_local=owner_path.module_id == module_id
-                )
-            )
+            same_named.append(_MemberDeclaration("method", function.span))
     return index
 
 
@@ -296,12 +289,7 @@ def validate_method_declaration_collisions(
         for ancestor in ancestors:
             _index_registered_owner(index, type_table, ancestor)
         for name, same_named_members in index.members[owner_id].items():
-            for method in (
-                member
-                for member in same_named_members
-                if member.kind == "method"
-                and (member.is_owner_local or owner_id not in index.source_owners)
-            ):
+            for method in (member for member in same_named_members if member.kind == "method"):
                 field = next(
                     (member for member in same_named_members if member.kind == "field"), None
                 )

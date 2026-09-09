@@ -2373,8 +2373,8 @@ class _Lowerer:
         builtin_kind = self._checked.resolved.builtin_calls.get(nid)
         if builtin_kind is not None:
             if isinstance(callee, FieldAccess):
-                method = cast(MethodDef, self._checked.method_selection_for(callee.node_id))
-                if method.is_builtin:
+                method = self._checked.method_selection_for(callee.node_id)
+                if method is not None and method.is_builtin:
                     method_kind = BUILTIN_CALL_NAMES[method.name]
                     receiver = self.lower_expr(callee.obj)
                     if method_kind in {BuiltinKind.ASK, BuiltinKind.ASK_REQUEST}:

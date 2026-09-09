@@ -1078,6 +1078,7 @@ class ReplSession:
         next_start_id: int,
         partial: bool,
         promoted_declaration_ids: frozenset[int],
+        promoted_scope_region_paths: frozenset[tuple[str, ...]],
         infix_ambient: Mapping[str, tuple[int, "InfixAssoc"]],
     ) -> tuple[str, ...]:
         """Promote declarations whose IR initialization completed in this entry."""
@@ -1303,25 +1304,54 @@ class ReplSession:
             else []
         )
 
-        # Named scope paths are namespaces: a region's path is retained whenever
-        # it is not part of an unpromoted type's scope subtree, and its members
-        # are promoted individually below. Inline enum members establish nested
-        # type scopes, so skipping only the enum's own path would both try to
-        # install a child below a missing parent and rewrite a prior enum's
-        # members after a failed redeclaration.
+        # Keep only namespace paths reached by execution or required by a
+        # promoted declaration. A later empty region must not leak through a
+        # failed entry merely because scope checking saw it.
+        required_scope_paths = set(promoted_scope_region_paths)
+        for item in entry_declarations:
+            if item.node_id not in promoted_declaration_ids or not isinstance(
+                item, (EnumDef, ExceptionDef, FuncDef, LetDecl, RecordDef, TypeAlias, VarDecl)
+            ):
+                continue
+            item_path = tuple(segment.name for segment in item.scope_path)
+            if isinstance(item, (EnumDef, ExceptionDef, RecordDef, TypeAlias)):
+                item_path = (*item_path, item.name)
+            required_scope_paths.update(
+                item_path[:length] for length in range(1, len(item_path) + 1)
+            )
+        for path, node in checked.resolved.scope_nodes.items():
+            for name, ref in node.members.items():
+                if not _is_promoted(ref.decl_node_id):
+                    continue
+                member_path = (
+                    (*path, name) if (*path, name) in checked.resolved.scope_nodes else path
+                )
+                required_scope_paths.update(
+                    member_path[:length] for length in range(1, len(member_path) + 1)
+                )
         for path, node in checked.resolved.scope_nodes.items():
             session_node = self._session_scope_nodes.get(path)
+            promoted_region = path in promoted_scope_region_paths or any(
+                declaration_path[: len(path)] == path
+                for declaration_path in required_scope_paths
+                if len(declaration_path) > len(path)
+            )
             if session_node is not None:
-                if node.is_scope_region:
+                if node.is_scope_region and promoted_region:
                     session_node.is_scope_region = True
                 continue
-            if not path or is_unpromoted_type_scope(path) or is_retired_member_scope(path):
+            if (
+                not path
+                or path not in required_scope_paths
+                or is_unpromoted_type_scope(path)
+                or is_retired_member_scope(path)
+            ):
                 continue
             self._session_scope_nodes[path] = ScopeNode(
                 node_id=node.node_id,
                 parent=self._session_scope_nodes[path[:-1]],
                 scope_path=path,
-                is_scope_region=node.is_scope_region,
+                is_scope_region=node.is_scope_region and promoted_region,
             )
 
         promoted_type_paths = {(*path, name) for path, name in promoted_type_name_paths}
@@ -1450,8 +1480,7 @@ class ReplSession:
                 {
                     item.node_id
                     for item in entry_declarations
-                    if isinstance(item, FuncDef)
-                    and item.node_id not in promoted_declaration_ids
+                    if isinstance(item, FuncDef) and item.node_id not in promoted_declaration_ids
                 },
             )
             new_type_env.seal()

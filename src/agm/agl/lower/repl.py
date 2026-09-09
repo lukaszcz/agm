@@ -110,6 +110,31 @@ class ReplPromotionPlan:
     initializers: tuple[InitializerOrigin, ...]
     declaration_dependencies: Mapping[int, frozenset[int]]
     imported_module_dependencies: Mapping[int, frozenset[ModuleId]]
+    scope_region_source_indices: Mapping[tuple[str, ...], tuple[int, ...]] = field(
+        default_factory=dict
+    )
+
+    def _source_frontier(self, completed_initializer_indices: Collection[int]) -> int:
+        completed_indices = set(completed_initializer_indices)
+        return min(
+            (
+                origin.source_index
+                for index, origin in enumerate(self.initializers)
+                if index not in completed_indices and not origin.is_function
+            ),
+            default=len(self.source_declaration_ids),
+        )
+
+    def completed_scope_region_paths(
+        self, completed_initializer_indices: Collection[int]
+    ) -> frozenset[tuple[str, ...]]:
+        """Return explicit regions reached before the failed source frontier."""
+        frontier = self._source_frontier(completed_initializer_indices)
+        return frozenset(
+            path
+            for path, indices in self.scope_region_source_indices.items()
+            if any(index <= frontier for index in indices)
+        )
 
     def completed_declaration_ids(
         self,
@@ -126,14 +151,7 @@ class ReplPromotionPlan:
         completed: set[int] = set()
         for index in sorted(completed_indices):
             completed.update(self.source_declaration_ids[self.initializers[index].source_index])
-        source_frontier = min(
-            (
-                origin.source_index
-                for index, origin in enumerate(self.initializers)
-                if index not in completed_indices and not origin.is_function
-            ),
-            default=len(self.source_declaration_ids),
-        )
+        source_frontier = self._source_frontier(completed_indices)
         for declaration_ids in self.source_declaration_ids[:source_frontier]:
             completed.update(declaration_ids)
 
@@ -364,6 +382,20 @@ def _promotion_plan(
             alias_declaration_ids[item.name] = alias_declaration_ids.get(
                 item.name, frozenset()
             ) | frozenset({item.node_id})
+    region_indices: dict[tuple[str, ...], list[int]] = {}
+
+    def collect_regions(items: tuple[Item, ...], parent: tuple[str, ...] = ()) -> None:
+        for item in items:
+            if not isinstance(item, ScopeRegion):
+                continue
+            path = (*parent, item.segment.name)
+            source_index = sum(
+                leaf.span.start_offset < item.span.start_offset for leaf in leaf_items
+            )
+            region_indices.setdefault(path, []).append(source_index)
+            collect_regions(cast(tuple[Item, ...], item.items), path)
+
+    collect_regions(checked.resolved.program.body.items)
     declaration_dependencies: dict[int, frozenset[int]] = {}
     imported_module_dependencies: dict[int, frozenset[ModuleId]] = {}
     for item, declaration_ids in zip(leaf_items, source_declaration_ids, strict=True):
@@ -385,6 +417,9 @@ def _promotion_plan(
         initializers=initializer_origins,
         declaration_dependencies=MappingProxyType(declaration_dependencies),
         imported_module_dependencies=MappingProxyType(imported_module_dependencies),
+        scope_region_source_indices=MappingProxyType(
+            {path: tuple(indices) for path, indices in region_indices.items()}
+        ),
     )
 
 

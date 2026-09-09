@@ -2395,6 +2395,7 @@ class TestMethodOrphanRule:
         ("module_source", "receiver"),
         (
             ("def Point() -> int = 1", "Point"),
+            ("enum Tree = Node\ndef Tree::Point() -> int = 1", "Point"),
             ("enum Tree = Node", "Tree::Missing"),
             ("record Point()", "Point::Nested"),
         ),

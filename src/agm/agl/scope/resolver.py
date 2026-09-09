@@ -1016,9 +1016,7 @@ class _Resolver:
             declaration = self._all_public_types.get((ref.module_id, source))
             if isinstance(declaration, TypeAlias):
                 self._raise_alias_receiver(type_path[0], declaration, span)
-            owner = self._cross_module_type_owners.get((ref.module_id, source))
-            if owner is not None:
-                owners.add(owner)
+            owners.add(self._cross_module_type_owners[(ref.module_id, source)])
         if len(owners) == 1:
             return next(iter(owners))
         if len(owners) > 1:

@@ -5,7 +5,7 @@
 
 ```text
 agm exec [--strict-json|--no-strict-json]
-         [--max-iters N] [--max-call-depth N] [--agent AGL_LITERAL]
+         [--max-iters N] [--max-call-depth N] [--agent AGENT]
          [--timeout DURATION|--no-timeout] [--dry-run]
          [--log|--log-file PATH|--no-log] [--no-log-file]
          [--no-stdlib]
@@ -99,9 +99,10 @@ either is a static error.
 - `--max-call-depth N`: Override the maximum recursion call depth (CLI >
   `[exec] max-call-depth` config; the canonical default is 256). Exceeding it
   raises `RecursionError`.
-- `--agent AGL_LITERAL`: Seed `std/config::default-agent` with one constant `Agent`
-  expression, for example `AgentClaude("sonnet", "medium")`. The literal is parsed and
-  typechecked before execution; it overrides qualified program-table/`[exec]` configuration. It
+- `--agent AGENT`: Seed `std/config::default-agent` from the host Agent syntax described
+  below. Canonical constructor syntax such as `AgentClaude("sonnet", "medium")` remains
+  accepted. The value is typechecked before execution; it overrides qualified
+  program-table/`[exec]` configuration. It
   selects the value used by `ask` calls that omit `agent`. An `AgentCommand(...)`
   literal's command text is shell-split and validated the same way as `[exec] runner`
   before execution; a malformed command (e.g. an unclosed quote) exits 1 with nothing run.
@@ -157,13 +158,15 @@ to `--x VALUE`:
 | `bool` | `--x` / `--no-x` — a bare flag, no value |
 | `Option[T]` | `--x VALUE` (wraps `Some`) / `--no-x` (`None`); `VALUE` is taken verbatim when `T` is `text`, otherwise parsed as one strict JSON value of `T` |
 | `text` | `--x VALUE`, `VALUE` taken verbatim |
+| `Agent` | `--x VALUE`, using the host Agent syntax below or the canonical tagged JSON shape |
 | every other type | `--x VALUE`, `VALUE` parsed as one strict JSON value and validated against the declared type |
 
 A positional slot has no `--no-x` counterpart, so it never gets the `Option[T]`
 flag's special treatment: a positional token for a `text` parameter is taken
-verbatim, and for every other type — `Option[T]` included — it is parsed as one
-strict JSON value of the parameter's own declared type (e.g. `'{"$case": "Some",
-"value": "hi"}'` for an `Option[text]` positional).
+verbatim, an `Agent` token uses the host syntax below, and every other type —
+`Option[T]` included — is parsed as one strict JSON value of the parameter's own
+declared type (e.g. `'{"$case": "Some", "value": "hi"}'` for an `Option[text]`
+positional).
 
 Supplying the same parameter twice — twice by flag, or once positionally and once
 by `--x` for a standard parameter — is an error reported before any agent runs, as
@@ -272,6 +275,22 @@ unset `VAR` does. An environment fallback therefore cannot deliver an empty
 `text` value — write `""` as the parameter's declared default, or pass
 `--x=""` on the command line.
 
+### Host Agent syntax
+
+Every CLI argument or TOML string whose declared type is the standard `Agent` accepts:
+
+- `claude/MODEL-EFFORT` → `AgentClaude(MODEL, EFFORT)`
+- `codex/MODEL-EFFORT` → `AgentCodex(MODEL, EFFORT)`
+- `pi/PROVIDER/MODEL-EFFORT` → `AgentPi(PROVIDER, MODEL, EFFORT)`
+- any other `PROVIDER/MODEL-EFFORT` → `AgentPi(PROVIDER, MODEL, EFFORT)`
+
+The final hyphen separates the model from an opaque, non-empty effort suffix; AGM does
+not restrict the suffix vocabulary. Exact lowercase `claude/` and `codex/` prefixes
+select those native CLIs before the generic Pi form. Text that does not match a compact
+form is a verbatim `AgentCommand`, so `--agent 'worker --flag'` selects that custom
+command. Agent-typed program parameters also retain their canonical tagged JSON form;
+`--agent` and `default-agent` retain direct AgL constructor syntax for compatibility.
+
 ### Agents
 
 `ask` selects an ordinary typed `Agent` value. Pass one explicitly, or omit
@@ -310,7 +329,7 @@ source `std/config` writes can override:
 
 ```toml
 [exec]
-default-agent = 'AgentClaude("sonnet", "medium")' # typed default Agent value
+default-agent = "claude/sonnet-medium" # native shorthand or custom command
 # runner = "custom-agent --session %{SESSION_ID}" # command must create/resume this id
 strict-json = false         # lenient JSON recovery is the default
 max-iters = 5               # opt into a safety-valve cap for unbounded loops

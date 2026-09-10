@@ -788,45 +788,19 @@ class TestReplRun:
         assert "default-agent" in capsys.readouterr().err
         assert fake_plain_console == []
 
-    def test_malformed_agent_literal_exits_1_before_the_session_builds(
+    @pytest.mark.parametrize("value", ["true", "(", "worker --flag"])
+    def test_non_agent_cli_syntax_opens_with_an_agent_command(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
         fake_plain_console: list[dict[str, object]],
-        capsys: pytest.CaptureFixture[str],
+        value: str,
     ) -> None:
-        """A syntactically valid but wrong-typed ``--agent`` literal exits 1 up front.
-
-        Unlike a blank value, ``"true"`` is a non-empty string, so it becomes a
-        ``SettingOverride`` resolved by the program's own compilation rather
-        than a second throwaway one — but that compilation now runs as part of
-        opening the session, before the console (and its banner) ever starts.
-        """
         _isolated_home(monkeypatch, tmp_path)
 
-        with pytest.raises(SystemExit) as exc_info:
-            repl_command.run(_args(agent="true"))
+        repl_command.run(_args(agent=value))
 
-        assert exc_info.value.code == 1
-        assert "--agent" in capsys.readouterr().err
-        assert fake_plain_console == []
-
-    def test_unparseable_agent_literal_exits_1_before_the_session_builds(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        fake_plain_console: list[dict[str, object]],
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """A ``--agent`` literal that fails to parse as AgL also exits before the banner."""
-        _isolated_home(monkeypatch, tmp_path)
-
-        with pytest.raises(SystemExit) as exc_info:
-            repl_command.run(_args(agent="("))
-
-        assert exc_info.value.code == 1
-        assert "--agent" in capsys.readouterr().err
-        assert fake_plain_console == []
+        assert len(fake_plain_console) == 1
 
     def test_non_constant_agent_literal_exits_1_before_the_session_builds(
         self,
@@ -932,25 +906,20 @@ class TestReplRun:
         assert "default-agent" in error
         assert fake_plain_console == []
 
-    def test_malformed_default_agent_config_literal_exits_1_before_the_session_builds(
+    def test_non_agent_config_syntax_opens_with_an_agent_command(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
         fake_plain_console: list[dict[str, object]],
-        capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """A non-blank but malformed ``[exec] default-agent`` exits 1 up front, naming it."""
         home = _isolated_home(monkeypatch, tmp_path)
         config_dir = home / ".agm"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text('[exec]\ndefault-agent = "not an agent"\n')
 
-        with pytest.raises(SystemExit) as exc_info:
-            repl_command.run(_args())
+        repl_command.run(_args())
 
-        assert exc_info.value.code == 1
-        assert "[exec] default-agent" in capsys.readouterr().err
-        assert fake_plain_console == []
+        assert len(fake_plain_console) == 1
 
     def test_exec_runner_config_seeds_default_agent_as_agent_command(
         self,

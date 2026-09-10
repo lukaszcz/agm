@@ -232,7 +232,9 @@ functions (`def`/`fn`), functions implemented by a co-located Python file (`exte
 structured JSON targets, do-loops with retry/abort policies, control flow (if/case/try), shell
 execution (`exec`), and typed `Agent` values. Free `ask` lazily opens a persistent default agent
 session from `std/config::default-agent`; use `agent.ask(...)` or `Session::open(...)` to select
-an explicit agent or conversation. The selected value determines the invoked command.
+an explicit agent or conversation. The selected value determines the invoked command. Host
+`Agent` arguments accept compact forms such as `claude/sonnet-medium`,
+`codex/o3-high`, and `pi/openai/gpt-5-low`; other text is a custom command.
 
 A file workflow declares one or more `program def` entries: `agm exec` invokes the sole one after
 initialization, or selects one of several with `-p`/`--program PATH` (for example,

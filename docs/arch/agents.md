@@ -6,6 +6,10 @@ AGM runs real coding agents (claude, codex, pi, and custom runner commands) as s
 
 An agent is described by an immutable host *spec* (`agent/spec.py`): one per supported kind, each building its own argv, plus a verbatim custom command. The catalog of specs is what AgL's `Agent` enum decodes into. The runner attaches the prompt the way the spec declares — an interpolated placeholder, an appended `@<path>` argument, or stdin — runs the command with output capture, and enforces an *idle timeout*: a process that produces no output for the configured duration is terminated and that invocation fails, leaving control with the caller. Results carry return code, captured streams, elapsed time, and timeout or spawn-error status. Prompt text and runner arguments interpolate `%{name}` holes from the environment and workflow context under one shared rule set (`util/interp.py`).
 
+## Host Agent Values
+
+Every CLI token or TOML string whose checked type is the standard `Agent` accepts one shared host syntax (`agent/values.py`). `claude/MODEL-EFFORT` and `codex/MODEL-EFFORT` select their native CLIs; `pi/PROVIDER/MODEL-EFFORT` selects Pi explicitly, while an otherwise matching `PROVIDER/MODEL-EFFORT` defaults to Pi. The final hyphen separates an opaque effort suffix. Text matching none of these forms is a verbatim `AgentCommand`; canonical tagged JSON remains available for program arguments, and `--agent`/`default-agent` retain canonical AgL constructor syntax.
+
 ## Sessions
 
 `SessionService` (`agent/session/service.py`) gives every caller one backend-neutral lifecycle for continuing conversations: it owns opaque handles and their backend instances, snapshots agent and transport selection when a session opens, and releases every owned process at the command or interpreter boundary. Two backend families implement the protocol: CLI adapters that translate the lifecycle into each agent CLI's create/continue/compact/fork flags and defer native transcript creation to the first prompt, and a persistent Pi RPC backend that owns one streaming JSONL child process. Which transport an agent uses by default is a property of its spec. AgL reaches the service through `agl/runtime/sessions.py`.
@@ -24,7 +28,7 @@ The `loop` group drives iterative agent work over a set of tasks: a *selector* c
 
 ## Code Entry Points
 
-- `src/agm/agent/spec.py` — host agent specs and the spec catalog; `defaults.py` — the built-in runner floor.
+- `src/agm/agent/spec.py` — host agent specs and the spec catalog; `values.py` — host Agent-value syntax; `defaults.py` — the built-in runner floor.
 - `src/agm/agent/runner.py` — runner parsing, prompt attachment, subprocess execution with idle timeout, run results.
 - `src/agm/agent/session/` — the session protocol, service, CLI adapters, and the Pi RPC backend.
 - `src/agm/agent/prompt.py`, `prompt_source.py`, `response.py`, `output.py` — prompt preparation, source resolution, completion detection, output formatting.

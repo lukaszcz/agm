@@ -977,8 +977,8 @@ def exec_cmd(
     agent: str | None = typer.Option(
         None,
         "--agent",
-        metavar="AGL_LITERAL",
-        help="Seed the free-ask default session from an AgL Agent literal.",
+        metavar="AGENT",
+        help="Seed the free-ask default session from an Agent value or command.",
     ),
     log_file: str | None = typer.Option(
         None,
@@ -1145,8 +1145,8 @@ def repl_cmd(
     agent: str | None = typer.Option(
         None,
         "--agent",
-        metavar="AGL_LITERAL",
-        help="Seed the free-ask default session from an AgL Agent literal.",
+        metavar="AGENT",
+        help="Seed the free-ask default session from an Agent value or command.",
     ),
     confirm_agents: bool = typer.Option(
         False,

@@ -68,6 +68,47 @@ def test_each_engine_key_seed_has_the_same_cli_config_presence_matrix(
 
 
 @pytest.mark.parametrize(
+    ("raw", "expected_source"),
+    [
+        ("claude/sonnet-medium", 'AgentClaude("sonnet", "medium")'),
+        ("codex/o3-high", 'AgentCodex("o3", "high")'),
+        ("pi/openai/gpt-5-low", 'AgentPi("openai", "gpt-5", "low")'),
+        ("anthropic/claude-opus-custom", 'AgentPi("anthropic", "claude-opus", "custom")'),
+        ("worker --flag", 'AgentCommand("worker --flag")'),
+        ('AgentClaude("opus", "high")', 'AgentClaude("opus", "high")'),
+    ],
+)
+def test_cli_agent_values_are_normalized_to_agl_source(raw: str, expected_source: str) -> None:
+    seeds = build_host_engine_seeds(
+        config=_config_for("default-agent", configured=False),
+        primary_table={},
+        cli_values={},
+        agent=raw,
+    )
+
+    assert seeds.overrides["default-agent"].source == expected_source
+
+
+def test_toml_default_agent_uses_the_same_external_syntax() -> None:
+    config = ExecConfig(
+        strict_json=False,
+        timeout=None,
+        log=False,
+        log_file=None,
+        default_agent="claude/sonnet-experimental",
+    )
+
+    seeds = build_host_engine_seeds(
+        config=config,
+        primary_table={"default-agent": config.default_agent},
+        cli_values={},
+        agent=None,
+    )
+
+    assert seeds.overrides["default-agent"].source == 'AgentClaude("sonnet", "experimental")'
+
+
+@pytest.mark.parametrize(
     ("key", "raw_value", "expected_keys"),
     [
         ("max-iters", 0, set()),

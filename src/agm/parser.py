@@ -560,7 +560,7 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "exec": textwrap.dedent("""\
         agm exec [--strict-json|--no-strict-json] [--max-iters N]
-                 [--max-call-depth N] [--agent AGL_LITERAL]
+                 [--max-call-depth N] [--agent AGENT]
                  [--timeout DURATION|--no-timeout] [--dry-run]
                  [--log|--log-file PATH|--no-log] [--no-log-file]
                  [--no-stdlib] [-I DIR]... [-p PATH]
@@ -578,7 +578,7 @@ _HELP_TEXTS: dict[str, str] = {
         surface: a positional-zone parameter fills a positional slot, and a
         name-addressable one becomes its own `--<name>` option (bool as
         `--name/--no-name`; `Option[T]` as `--name VALUE`/`--no-name`; text
-        verbatim; every other type as a JSON string). An `@opt-name`,
+        verbatim; Agent in host syntax; every other type as a JSON string). An `@opt-name`,
         `@opt-short`, `@opt-metavar`, or `@opt-hidden` attribute on a
         parameter shapes that option's spelling and presentation, and `@doc`
         supplies the prose describing the program and each of its options.
@@ -605,7 +605,7 @@ _HELP_TEXTS: dict[str, str] = {
           --max-iters N         Cap unbounded loops; off by default (CLI > config).
           --max-call-depth N    Override the maximum recursion call depth
                                 (CLI > config).
-          --agent AGL_LITERAL   Seed the free-ask default session from an AgL Agent literal.
+          --agent AGENT         Seed the free-ask default session from an Agent value or command.
           --timeout DURATION    Override initial shell-exec and agent idle timeouts;
                                 seed std/config::timeout to Some(DURATION). Mutually
                                 exclusive with --no-timeout.
@@ -642,7 +642,7 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "repl": textwrap.dedent("""\
         agm repl [--strict-json|--no-strict-json] [--max-iters N] [--max-call-depth N]
-                 [--agent AGL_LITERAL] [--confirm-agents] [--dry-run] [--no-stdlib]
+                 [--agent AGENT] [--confirm-agents] [--dry-run] [--no-stdlib]
                  [--quiet] [--log|--log-file PATH|--no-log] [--plain]
 
         Start an interactive read-eval-print loop for AgL.  Each entry is
@@ -677,7 +677,7 @@ _HELP_TEXTS: dict[str, str] = {
                                 (source writes > CLI > config).
           --max-call-depth N    Override the maximum recursion call depth
                                 (CLI > config; source pragmas are not applied in the REPL).
-          --agent AGL_LITERAL   Seed the free-ask default session from an AgL Agent literal.
+          --agent AGENT         Seed the free-ask default session from an Agent value or command.
           --confirm-agents     Confirm each agent prompt before dispatching it
                                 (default: fire agent calls without confirming).
           --quiet               Suppress automatic echoing of entry results.

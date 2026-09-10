@@ -180,8 +180,7 @@ key:
 
 Import `std/config` and read or write a setting through a qualified target
 (`std/config::max-iters`); writing zero disables that safety valve.
-`default-agent` is a typed `Agent` value — its selected member `RecordValue` at runtime — used by `ask` when its `agent` option is omitted. The optional settings (`log-file`, `timeout`) take a
-`Some("…")` or `None` value.
+`default-agent` is a typed `Agent` value — its selected member `RecordValue` at runtime — used by `ask` when its `agent` option is omitted. Host CLI and TOML strings use the shared [Agent syntax](../../commands/exec.md#host-agent-syntax): native shorthand selects Claude, Codex, or Pi, and other text selects `AgentCommand`. The optional settings (`log-file`, `timeout`) take a `Some("…")` or `None` value.
 
 ### Precedence
 

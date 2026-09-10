@@ -169,7 +169,9 @@ parse-retry loop, so its initial invocation is:
 
 An empty provider, model, or thinking field omits its flag. `Agent` values are
 ordinary enum data: they can be stored, passed to functions, rendered,
-inspected, and JSON-encoded like other enum values.
+inspected, and JSON-encoded like other enum values. At a host boundary, a CLI or TOML
+value whose declared type is `Agent` additionally accepts the compact native-agent and
+command forms documented under [`agm exec`](../../commands/exec.md#host-agent-syntax).
 
 Because `Agent` is ordinary enum data, it is also decodable: an `ask` whose
 target type is `Agent`, or a cast of foreign JSON to `Agent`, produces a value

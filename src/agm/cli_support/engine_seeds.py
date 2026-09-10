@@ -20,6 +20,7 @@ from agm.agl.runtime.engine_config import (
 )
 from agm.agl.semantics.engine_keys import get_engine_key_type
 from agm.agl.setting_overrides import SettingOverride
+from agm.cli_support.agent_values import normalize_agent_source
 from agm.config.engine_keys import ENGINE_KEY_NAMES, ENGINE_KEYS, EngineKeyKind, EngineKeySpec
 
 if TYPE_CHECKING:
@@ -40,8 +41,8 @@ class EngineSeeds:
     / ``engine_base``), exactly as every non-agent engine key already works.
 
     ``overrides`` are host-supplied AgL source text for ``std/config`` keys —
-    currently only ``default-agent`` when it comes from an AgL literal
-    (``--agent`` or ``[exec] default-agent``) — meant for
+    currently only a normalized ``default-agent`` from ``--agent`` or
+    ``[exec] default-agent`` — meant for
     ``PipelineDriver.prepare_parsed_entry``'s (or the REPL's) ``setting_overrides``
     seam, so the literal is resolved, type-checked, and constant-checked by the
     program's own compilation rather than a separate throwaway one.
@@ -65,22 +66,16 @@ def check_max_iters(max_iters: int | None) -> None:
         raise SystemExit(1)
 
 
-def _require_agent_literal_text(literal: object, *, source: str) -> str:
-    """Validate that a raw host value is usable as AgL ``Agent`` literal source.
-
-    This is the one check that must happen before the literal is handed to the
-    AgL pipeline at all: a non-string or blank value is a host-shape error, not
-    an AgL question, so it is diagnosed here rather than surfacing as a
-    confusing parse failure downstream.
-    """
-    if not isinstance(literal, str) or not literal.strip():
+def _require_agent_text(value: object, *, source: str) -> str:
+    """Validate and normalize one host-facing Agent value."""
+    if not isinstance(value, str) or not value.strip():
         print(
-            f"Error: invalid default-agent literal from {source}: "
-            f"expected a non-empty AgL Agent literal, got {literal!r}",
+            f"Error: invalid default-agent value from {source}: "
+            f"expected a non-empty Agent value, got {value!r}",
             file=sys.stderr,
         )
         raise SystemExit(1)
-    return literal
+    return normalize_agent_source(value)
 
 
 def _configured_value(
@@ -119,9 +114,10 @@ def build_host_engine_seeds(
     ``default-agent`` precedence, highest first: ``--agent``, then
     the qualified program table/``[exec] default-agent``, then ``[exec] runner``.  Exactly
     one of the three ever supplies the key, and it lands in exactly one of the
-    two result mappings: an AgL literal (``--agent``/``default-agent``) becomes
-    a :class:`~agm.agl.setting_overrides.SettingOverride` in ``overrides`` so
-    the program's own compilation resolves it; a bare host command
+    two result mappings: an Agent value (``--agent``/``default-agent``) is
+    normalized into constructor source and becomes a
+    :class:`~agm.agl.setting_overrides.SettingOverride` in ``overrides`` so the
+    program's own compilation resolves it; a bare host command
     (``[exec] runner``) is decoded directly into an ``AgentCommand`` value in
     ``values``, since it is host text, not AgL source — rendering it as AgL
     source would have to re-escape quotes, backslashes, and ``%{``, which
@@ -131,7 +127,7 @@ def build_host_engine_seeds(
     here, so a malformed command (e.g. an unclosed quote) also exits 1 before
     anything runs rather than surfacing later as a runtime agent-call failure.
 
-    The two AgL-literal sources carry different
+    The two normalized Agent sources carry different
     :attr:`~agm.agl.setting_overrides.SettingOverride.required` provenance:
     ``--agent`` is an explicit per-run request, so it is marked
     ``required=True`` and still produces a diagnostic when the loaded program
@@ -172,12 +168,12 @@ def build_host_engine_seeds(
     overrides: dict[str, SettingOverride] = {}
 
     if agent is not None:
-        literal = _require_agent_literal_text(agent, source="--agent")
+        literal = _require_agent_text(agent, source="--agent")
         overrides["default-agent"] = SettingOverride(
             source=literal, origin="--agent", required=True
         )
     elif config.default_agent is not None:
-        literal = _require_agent_literal_text(config.default_agent, source="[exec] configuration")
+        literal = _require_agent_text(config.default_agent, source="[exec] configuration")
         overrides["default-agent"] = SettingOverride(
             source=literal, origin="[exec] default-agent", required=False
         )

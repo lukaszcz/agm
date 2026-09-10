@@ -155,7 +155,7 @@ def run(args: ReplArgs) -> None:
 
     # Seed only explicit CLI/config controls.  Trace-service fallbacks remain
     # absent so a ``builtin var`` initializer can provide the setting default.
-    # The raw timeout preserves its configured spelling.  An AgL agent literal
+    # The raw timeout preserves its configured spelling. A host Agent value
     # (``--agent``/``[exec] default-agent``) becomes an override spliced into
     # the session's own first-loaded ``std/config`` rather than a seed value.
     cli_values: dict[str, object | None] = {}

@@ -653,7 +653,7 @@ class ExecConfig:
     timeout: float | None
     log: bool
     log_file: str | None
-    # Raw TOML value: only exec/repl may parse it as an AgL Agent literal.
+    # Raw TOML value: only exec/repl may normalize it as a host Agent value.
     default_agent: object | None = None
     # Bare host agent command (e.g. "claude"), the pre-Agent-value spelling of
     # a default agent. Lower precedence than default_agent; decoded into an
@@ -725,9 +725,9 @@ def exec_config_from_merged(
 
     resolved_log = _optional_bool(effective, "log")
     resolved_log_file = _optional_str(effective, "log-file")
-    # Agent values use AgL literal syntax. Keep every explicitly supplied TOML
-    # value raw so exec/repl can diagnose an empty or non-string value at their
-    # AgL host boundary; other commands stay free of AgL imports.
+    # Keep every explicitly supplied Agent value raw so exec/repl can normalize
+    # strings and diagnose empty or non-string values at their AgL host boundary;
+    # other commands stay free of AgL imports.
     resolved_default_agent = effective.get("default-agent")
     # A bare host agent command, not an engine key: read straight from the
     # command's own [exec] table (never overridden per-program).

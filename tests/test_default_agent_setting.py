@@ -341,31 +341,30 @@ def test_exec_default_agent_beats_runner_precedence(
         assert field.value in rendered
 
 
-@pytest.mark.parametrize("literal", ["AgentCommand(", "true", 'AgentCommand("x") + "y"'])
-def test_exec_rejects_invalid_agent_literal_from_cli(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], literal: str
+@pytest.mark.parametrize("value", ["AgentCommand(", "true", 'AgentCommand("x") + "y"'])
+def test_exec_treats_non_agent_syntax_from_cli_as_a_command(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], value: str
 ) -> None:
     program = tmp_path / "program.agl"
-    program.write_text(_file_program('print "not-run"\n'))
+    program.write_text(_file_program('print "ran"\n'))
 
-    with pytest.raises(SystemExit) as exc_info:
+    assert (
         exec_command.run(
             ExecArgs(
                 file=str(program),
                 strict_json=None,
-                agent=literal,
+                agent=value,
                 no_log=True,
                 log_file=None,
             )
         )
+        is None
+    )
+    assert capsys.readouterr().out == "ran\n"
 
-    assert exc_info.value.code == 1
-    error = capsys.readouterr().err
-    assert "--agent" in error
 
-
-@pytest.mark.parametrize("toml_value", ['"AgentCommand("', "7"])
-def test_exec_rejects_invalid_agent_literal_from_config(
+@pytest.mark.parametrize("toml_value", ["7"])
+def test_exec_rejects_non_string_agent_value_from_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -396,6 +395,30 @@ def test_exec_rejects_invalid_agent_literal_from_config(
     assert exc_info.value.code == 1
     error = capsys.readouterr().err
     assert "default-agent" in error
+
+
+def test_exec_treats_non_agent_syntax_from_config_as_a_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    home = tmp_path / "home"
+    config_dir = home / ".agm"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text('[exec]\ndefault-agent = "not an agent"\n')
+    program = tmp_path / "program.agl"
+    program.write_text(_file_program('print "ran"\n'))
+    monkeypatch.setattr(
+        exec_engine,
+        "current_config_context",
+        lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+    )
+
+    assert (
+        exec_command.run(ExecArgs(file=str(program), strict_json=None, no_log=True, log_file=None))
+        is None
+    )
+    assert capsys.readouterr().out == "ran\n"
 
 
 def test_exec_rejects_blank_agent_literal_from_cli(

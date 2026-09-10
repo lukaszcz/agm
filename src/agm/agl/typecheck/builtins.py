@@ -16,7 +16,7 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.ir.reserved_nominals import reserved_nominal_id
 from agm.agl.modules.ids import STD_ENV_ID, spell_declaration
-from agm.agl.scope.symbols import ConstructorRef
+from agm.agl.scope.symbols import BuiltinKind, ConstructorRef
 from agm.agl.semantics.analyses import nominal_references
 from agm.agl.semantics.type_table import DeclId
 from agm.agl.semantics.types import (
@@ -146,6 +146,8 @@ class BuiltinCheckCtx(Protocol):
         self, value_type: Type, target_type: Type, span: SourceSpan, expr: Expr
     ) -> None: ...
 
+    def _assert_assignable(self, value_type: Type, target_type: Type, span: SourceSpan) -> None: ...
+
     def _type_is_wire_serializable(self, typ: Type) -> bool: ...
 
     def _register_builtin_obligation(self, obligation: PendingBuiltinObligation) -> None: ...
@@ -182,6 +184,60 @@ class BuiltinCallChecker:
         # rather than once per site. Only successes are recorded; the first
         # incoherent contract raises.
         self._coherent_contracts: set[DeclId] = set()
+
+    def check_value(
+        self,
+        kind: BuiltinKind,
+        *,
+        node_id: int,
+        target_type: Type,
+        result_type: Type,
+        span: SourceSpan,
+        receiver_type: Type | None = None,
+    ) -> None:
+        """Validate and register a context-specialized builtin function value."""
+        if kind in {BuiltinKind.ASK, BuiltinKind.ASK_REQUEST}:
+            agent_request_type = self._resolve_host_record_contract("AgentRequest", span=span)
+            if kind is BuiltinKind.ASK_REQUEST and receiver_type is not None:
+                expected_agent = self._ctx._env.type_table.record_fields(agent_request_type)[
+                    "agent"
+                ]
+                self._ctx._assert_assignable(receiver_type, expected_agent, span)
+            actual_result = agent_request_type if kind is BuiltinKind.ASK_REQUEST else result_type
+            self._ctx._register_builtin_obligation(
+                PendingBuiltinObligation(
+                    node_id=node_id,
+                    target_type=target_type,
+                    result_type=actual_result,
+                    span=span,
+                    kind=(
+                        BuiltinObligationKind.ASK
+                        if kind is BuiltinKind.ASK
+                        else BuiltinObligationKind.ASK_REQUEST
+                    ),
+                    format_name=None,
+                    strict_json=None,
+                    parse_policy="default",
+                    parse_option_spans=(),
+                )
+            )
+            return
+        if kind is BuiltinKind.EXEC:
+            if not self._ctx._caps.supports_shell_exec:
+                raise AglTypeError("The host does not support 'exec' (shell) calls.", span=span)
+            self._ctx._register_builtin_obligation(
+                PendingBuiltinObligation(
+                    node_id=node_id,
+                    target_type=target_type,
+                    result_type=result_type,
+                    span=span,
+                    kind=BuiltinObligationKind.EXEC,
+                    format_name=None,
+                    strict_json=None,
+                    parse_policy="default",
+                    parse_option_spans=(),
+                )
+            )
 
     # --- print ---
 
@@ -253,7 +309,7 @@ class BuiltinCallChecker:
 
     def check_session_open(self, node: Call) -> Type:
         """Type-check ``Session::open(agent, transport?, name?)``."""
-        session_transport = self._builtin_contract_type("SessionTransport")
+        session_transport = self.contract_type("SessionTransport")
         option = self._ctx._env.type_table.builtin_declaration("Option")
         assert isinstance(session_transport, EnumType)
         assert option is not None
@@ -264,7 +320,7 @@ class BuiltinCallChecker:
             (
                 ParamSpec(
                     name="agent",
-                    type=self._builtin_contract_type("Agent"),
+                    type=self.contract_type("Agent"),
                     kind=ParamZone.STANDARD,
                     has_default=False,
                 ),
@@ -281,7 +337,7 @@ class BuiltinCallChecker:
                     has_default=True,
                 ),
             ),
-            self._builtin_contract_type("Session"),
+            self.contract_type("Session"),
         )
 
     def check_session_default(self, node: Call) -> Type:
@@ -290,7 +346,7 @@ class BuiltinCallChecker:
             node,
             "Session::default",
             (),
-            self._builtin_contract_type("Session"),
+            self.contract_type("Session"),
         )
 
     # --- Session methods ---
@@ -344,7 +400,7 @@ class BuiltinCallChecker:
             node,
             name,
             (),
-            UnitType() if result is None else self._builtin_contract_type(result),
+            UnitType() if result is None else self.contract_type(result),
         )
 
     def _check_static_call(
@@ -645,7 +701,7 @@ class BuiltinCallChecker:
         elif expected is not None:
             target_type = expected
         else:
-            target_type = self._builtin_contract_type("ExecResult")
+            target_type = self.contract_type("ExecResult")
         self._reject_type_var_target(target_type, node.span)
         named = {na.name: na for na in node.named_args}
         for arg_name, na in named.items():
@@ -707,7 +763,7 @@ class BuiltinCallChecker:
         assert isinstance(option, EnumType), "Option's builtin declaration must be an enum"
         return option
 
-    def _builtin_contract_type(self, name: str) -> RecordType | EnumType | ExceptionType:
+    def contract_type(self, name: str) -> RecordType | EnumType | ExceptionType:
         """Return the type this program's own ``builtin`` declaration of *name* names.
 
         The single source of truth every checker-side resolution of a
@@ -737,14 +793,14 @@ class BuiltinCallChecker:
     def _resolve_host_record_contract(self, name: str, *, span: SourceSpan) -> RecordType:
         """Resolve *name*'s host record contract, rejecting it if incoherent.
 
-        Wraps :meth:`_builtin_contract_type` for the two RECORD contracts a
+        Wraps :meth:`contract_type` for the two RECORD contracts a
         host call mints directly (``AgentRequest``, ``ExecResult``) with the
         one coherence check every such resolution needs
         (:meth:`_check_host_contract_coherent`). *name* always names a
         ``builtin record`` in the canonical prelude, so the resolved handle is
         always a ``RecordType``.
         """
-        contract_type = self._builtin_contract_type(name)
+        contract_type = self.contract_type(name)
         assert isinstance(contract_type, RecordType), f"{name!r} is not a builtin record contract"
         self._check_host_contract_coherent(contract_type, span=span)
         return contract_type
@@ -766,7 +822,7 @@ class BuiltinCallChecker:
         the declaration the host actually mints under this bare name — the
         live registered ``builtin`` declaration
         (:meth:`~agm.agl.semantics.type_table.TypeTable.builtin_declaration`),
-        the same resolution :meth:`_builtin_contract_type` and the host's own
+        the same resolution :meth:`contract_type` and the host's own
         minting table (``lower.lowerer.builtin_nominals_from_declarations``)
         both use. A program's own ``builtin exception`` of a reserved name
         shadows the standard declaration for that name everywhere, not only
@@ -1004,9 +1060,9 @@ class BuiltinCallChecker:
         else:
             # ``ExecResult`` is identified as the type the program's own
             # `builtin record ExecResult` declaration names (see
-            # `_builtin_contract_type`), so a scoped declaration is
+            # `contract_type`), so a scoped declaration is
             # recognized at its own path rather than the root canonical one.
-            is_structured = target_type == self._builtin_contract_type("ExecResult")
+            is_structured = target_type == self.contract_type("ExecResult")
             if not is_structured:
                 spec = self._record_parsed_contract(obligation, use="an exec output type")
                 self._append_call_site(obligation, spec.codec_name, obligation.parse_policy)
@@ -1086,7 +1142,7 @@ class BuiltinCallChecker:
 
         A qualified spelling (other than the current-module anchor) must
         instead resolve to the exact constructor of this program's own
-        ``ParsePolicy`` (:meth:`_builtin_contract_type`) that its final
+        ``ParsePolicy`` (:meth:`contract_type`) that its final
         segment names — the bare root ``ParsePolicy::`` prefix when the
         program declares none of its own, or that declaration's own scope
         path (e.g. ``A::ParsePolicy::``) when it does — so a scoped
@@ -1102,7 +1158,7 @@ class BuiltinCallChecker:
             return self._ctx._constructor_ref_for(ref.node_id) is not None
         if any(segment.type_args is not None for segment in chain.segments):
             return False
-        parse_policy_type = self._builtin_contract_type("ParsePolicy")
+        parse_policy_type = self.contract_type("ParsePolicy")
         assert isinstance(parse_policy_type, EnumType), "ParsePolicy is always an enum contract"
         ctor_ref = self._ctx._constructor_ref_for(ref.node_id)
         return ctor_ref is not None and ctor_ref.matches(parse_policy_type, ref.name)

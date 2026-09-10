@@ -1942,6 +1942,158 @@ def test_scoped_builtin_hierarchy_declared_in_the_entry_module_catches_a_host_ra
     assert capsys.readouterr().out == "caught\n"
 
 
+def test_builtin_print_can_be_passed_as_a_function_value(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A builtin reference is an ordinary callable value, not only a direct-call marker."""
+    from agm.agl import PipelineDriver
+
+    source = (
+        "def apply(f: text -> unit, value: text) -> unit = f(value)\n"
+        'program def main() -> unit = apply(print, "hello")\n'
+    )
+
+    result = _run_source_entry(PipelineDriver(), source)
+
+    assert result.ok
+    assert capsys.readouterr().out == "hello\n"
+
+
+def test_scoped_builtin_reference_can_be_called_through_a_value(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from agm.agl import PipelineDriver
+
+    source = (
+        "scope Host\n"
+        "  builtin def render[T](value: T) -> text\n"
+        "end Host\n\n"
+        "program def main() -> unit =\n"
+        "  let show: int -> text = Host::render\n"
+        "  print(show(7))\n"
+    )
+
+    result = _run_source_entry(PipelineDriver(), source)
+
+    assert result.ok
+    assert capsys.readouterr().out == "7\n"
+
+
+def test_render_and_copy_builtins_can_be_called_through_values(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from agm.agl import PipelineDriver
+
+    source = (
+        "program def main() -> unit =\n"
+        "  let show = render::[int]\n"
+        "  let clone: array[int] -> array[int] = copy\n"
+        "  let clone-level: array[int] -> array[int] = shallow-copy\n"
+        "  print(show(clone-level(clone([7]))[0]))\n"
+    )
+
+    result = _run_source_entry(PipelineDriver(), source)
+
+    assert result.ok
+    assert capsys.readouterr().out == "7\n"
+
+
+def test_ask_request_builtin_value_uses_its_default_text_contract(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from agm.agl import PipelineDriver
+
+    source = (
+        "program def main() -> unit =\n"
+        "  let make-request: text -> AgentRequest = ask-request\n"
+        '  print(make-request("Review this").prompt)\n'
+    )
+
+    result = _run_source_entry(PipelineDriver(), source)
+
+    assert result.ok
+    assert capsys.readouterr().out == "Review this\n"
+
+
+def test_builtin_exec_value_uses_ambient_defaults(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from agm.agl import PipelineDriver
+
+    source = (
+        "program def main() -> unit =\n"
+        "  let run: text -> ExecResult = exec\n"
+        '  print(run("answer").stdout)\n'
+    )
+    shell = FakeShell([{"command": "answer", "stdout": "42\n"}])
+
+    with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
+        result = _run_source_entry(PipelineDriver(), source)
+
+    shell.assert_complete()
+    assert result.ok
+    assert capsys.readouterr().out == "42\n"
+
+
+def test_effect_builtin_values_accept_explicit_output_specialization(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from agm.agl import PipelineDriver
+
+    source = (
+        "program def main() -> unit =\n"
+        "  let query = ask::[int]\n"
+        "  let run = exec::[int]\n"
+        '  print(query("first") + run("second"))\n'
+    )
+    shell = FakeShell([{"command": "second", "stdout": "1\n"}])
+
+    with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
+        result = _run_source_entry(PipelineDriver(agent_dispatcher=lambda _request: "41"), source)
+
+    shell.assert_complete()
+    assert result.ok
+    assert capsys.readouterr().out == "42\n"
+
+
+def test_unconstrained_builtin_ask_value_defaults_to_text(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from agm.agl import PipelineDriver
+
+    source = 'program def main() -> unit =\n  let query = ask\n  print(query("Question"))\n'
+
+    result = _run_source_entry(PipelineDriver(agent_dispatcher=lambda _request: "answer"), source)
+
+    assert result.ok
+    assert capsys.readouterr().out == "answer\n"
+
+
+def test_builtin_ask_can_be_passed_as_a_contextually_typed_function_value(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An ask value retains the statically compiled output contract of its occurrence."""
+    from agm.agl import PipelineDriver
+
+    prompts: list[str] = []
+
+    def answer(request: Any) -> str:
+        prompts.append(request.prompt)
+        return "42"
+
+    source = (
+        "def apply(f: text -> int, prompt: text) -> int = f(prompt)\n"
+        'program def main() -> unit = print(apply(ask, "How many?"))\n'
+    )
+
+    result = _run_source_entry(PipelineDriver(agent_dispatcher=answer), source)
+
+    assert result.ok
+    assert len(prompts) == 1
+    assert prompts[0].startswith("How many?\n")
+    assert capsys.readouterr().out == "42\n"
+
+
 def test_program_def_entries_execute_via_agm_exec(tmp_path: Path) -> None:
     """Exec runs a sole program and selects a declaration path among several."""
     from click.testing import CliRunner

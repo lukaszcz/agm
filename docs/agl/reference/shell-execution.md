@@ -13,11 +13,23 @@ let completed: unit = exec "make build" # unit form; raises ExecError on nonzero
 ```
 
 Like `ask`, `exec` is a **contextual keyword**
-([Lexical structure](lexical-structure.md)): in call position it denotes the
-built-in shell executor; it cannot be declared with `let`/`var`, as a
-function, or as a function parameter name; it cannot be bound as a function
-value; it remains legal as a field name. A host may statically disallow shell execution altogether,
-in which case every `exec` call is a static error.
+([Lexical structure](lexical-structure.md)): it cannot be declared with
+`let`/`var`, as a function, or as a function parameter name, but it can be
+referenced as a function value. The value is an eta-expanded `text -> T`
+callable using the ambient spawn defaults; `T` comes from an expected function
+type or explicit `::[T]` and otherwise defaults to `ExecResult`:
+
+```agl
+program def main() -> unit =
+  let run: text -> ExecResult = exec
+  let read = exec::[text]
+  ()
+```
+
+Use an explicit lambda around a direct call to capture non-default spawn or
+parse options. `exec` remains legal as a field name. A host may statically
+disallow shell execution altogether, in which case every `exec` call or value
+is a static error.
 
 ## Spawn parameters
 

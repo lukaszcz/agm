@@ -181,11 +181,19 @@ def test_prelude_session_constructor_spelling_is_rejected_as_an_unknown_static(
     )
 
 
-def test_builtin_static_cannot_be_partially_applied_or_used_as_a_value() -> None:
+def test_builtin_static_cannot_be_partially_applied() -> None:
     partial = _reject("Session::open(?)")
-    value = _reject("let open-session = Session::open\nopen-session")
     assert "partial" in partial.lower()
-    assert "cannot be used as a value" in value.lower()
+
+
+def test_builtin_statics_can_be_called_through_values() -> None:
+    _check(
+        "let open-session: Agent -> Session = Session::open\n"
+        "let current-session: () -> Session = Session::default\n"
+        'let session = open-session(AgentCommand("worker"))\n'
+        "let current = current-session()\n"
+        "()\n"
+    )
 
 
 def test_static_names_remain_ordinary_identifiers() -> None:

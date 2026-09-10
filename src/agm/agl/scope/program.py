@@ -792,7 +792,7 @@ def _decl_to_import_target(decl: ImportDecl | ExportDecl, graph: ModuleGraph) ->
 
 # Maps (module_id, name) → (decl_node_id, decl_span, binder_kind, is_builtin)
 # for building BindingRef values for cross-module references.
-_DeclInfo = dict[QName, tuple[int, SourceSpan, BinderKind, bool]]
+_DeclInfo = dict[QName, tuple[int, SourceSpan, BinderKind, bool, bool]]
 
 
 # ---------------------------------------------------------------------------
@@ -941,7 +941,7 @@ def resolve_program(
     all_public_funcs: dict[QName, FuncDef] = {}
     all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias] = {}
 
-    # decl_info: (mid, name) → (node_id, span, kind) for building BindingRefs
+    # decl_info: declaration metadata for building cross-module BindingRefs
     decl_info: _DeclInfo = {}
 
     for mid, loaded in graph.modules.items():
@@ -956,6 +956,7 @@ def resolve_program(
                     item.span,
                     BinderKind.function_binding,
                     item.is_builtin,
+                    bool(item.params) and item.params[0].name == "self",
                 )
             elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
                 key = (mid, _item_atom(item))
@@ -966,13 +967,14 @@ def resolve_program(
                     or isinstance(item.type_expr, (NameT, AppliedT))
                     else BinderKind.let_binding
                 )
-                decl_info[key] = (item.node_id, item.span, kind, False)
+                decl_info[key] = (item.node_id, item.span, kind, False, False)
             elif isinstance(item, BuiltinVarDecl):
                 key = (mid, _item_atom(item))
                 decl_info[key] = (
                     item.node_id,
                     item.span,
                     BinderKind.builtin_var_binding,
+                    False,
                     False,
                 )
             elif isinstance(item, LetDecl):
@@ -983,6 +985,7 @@ def resolve_program(
                         item.pattern.node_id,
                         item.span,
                         BinderKind.let_binding,
+                        False,
                         False,
                     )
 

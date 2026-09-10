@@ -310,7 +310,7 @@ class _SelectedMember:
 
 @dataclass(frozen=True, slots=True)
 class _SelectedBuiltinMethod:
-    """A call-only host method selected by member access.
+    """A host method selected by member access.
 
     Session and agent methods use receiver-directed host checkers. Other
     source-declared host methods bind their registered signature before
@@ -349,6 +349,9 @@ class _InferenceRegion:
     call_sites_start: int = 0
     warnings_start: int = 0
     return_target_lengths: tuple[int, ...] = ()
+    builtin_defaults: list[tuple[InferenceVarType, Type, SourceSpan, str]] = field(
+        default_factory=list
+    )
 
 
 class _CandidateEvidenceError(AglTypeError):
@@ -1679,6 +1682,18 @@ class _Checker:
         finally:
             self._inference_region = outer_region
 
+    def _apply_builtin_defaults(self, region: _InferenceRegion) -> None:
+        """Apply unresolved builtin defaults after contextual constraints settle."""
+        pending = tuple(
+            item for item in region.builtin_defaults if not region.engine.is_solved(item[0])
+        )
+        for variable, default, span, subject in pending:
+            region.engine.unify(
+                variable,
+                default,
+                region.engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject=subject),
+            )
+
     def _check_expr(self, expr: Expr, *, expected: Type | None) -> Type:
         """Infer/check an expression, finalizing its owning inference region."""
         if self._inference_region is not None:
@@ -1706,6 +1721,7 @@ class _Checker:
             try:
                 typ = self._infer_expr(expr, expected=expected)
                 self._record_node_type(expr.node_id, typ)
+                self._apply_builtin_defaults(region)
                 return region.engine.zonk(typ)
             finally:
                 self._inference_region = None
@@ -1727,6 +1743,7 @@ class _Checker:
                         expr.span, role=ConstraintRole.EXPECTED_RESULT, subject="expression"
                     ),
                 )
+            self._apply_builtin_defaults(region)
             region.engine.check_requirements()
             for obligation in region.finalization_obligations:
                 if isinstance(obligation, PendingBuiltinObligation):
@@ -1878,7 +1895,9 @@ class _Checker:
             return self._check_is_test(expr)
         if isinstance(expr, FieldAccess):
             return self._require_field_access_type(
-                expr, self._check_field_access(expr, expected=expected)
+                expr,
+                self._check_field_access(expr, expected=expected),
+                expected=expected,
             )
         if isinstance(expr, RecordUpdate):
             return self._check_record_update(expr, expected=expected)
@@ -1927,6 +1946,115 @@ class _Checker:
             span=node.span,
         )
 
+    def _builtin_value_template(
+        self, ref: BindingRef, signature: FunctionSignature
+    ) -> FunctionType:
+        """Build a required-parameter signature over the live host contracts."""
+        params = tuple(param.type for param in signature.params if not param.has_default)
+        result = signature.result
+        kind = BUILTIN_CALL_NAMES.get(ref.name)
+        static_kind = builtin_type_static_kind(ref.module_id, ref.scope_path, ref.name)
+        if static_kind is BuiltinStaticKind.SESSION_OPEN:
+            params = (self._builtins.contract_type("Agent"),)
+            result = self._builtins.contract_type("Session")
+        elif static_kind is BuiltinStaticKind.SESSION_DEFAULT:
+            result = self._builtins.contract_type("Session")
+        elif kind is BuiltinKind.ASK_REQUEST:
+            result = self._builtins.contract_type("AgentRequest")
+        elif kind is BuiltinKind.EXEC:
+            result = self._builtins.contract_type("ExecResult")
+
+        if ref.is_method and params:
+            session = self._env.type_table.standard_builtin_declaration("Session")
+            receiver = params[0]
+            if (
+                session is not None
+                and isinstance(receiver, RecordType)
+                and receiver.decl_id == session.decl_node_id
+            ):
+                params = (self._builtins.contract_type("Session"), *params[1:])
+                if ref.name == "fork":
+                    result = params[0]
+                elif ref.name == "stats":
+                    result = self._builtins.contract_type("SessionStats")
+        return FunctionType(params=params, result=result)
+
+    def _builtin_value_type(
+        self,
+        ref: BindingRef,
+        *,
+        node_id: int,
+        span: SourceSpan,
+        expected: Type | None,
+        explicit_target: Type | None = None,
+    ) -> FunctionType:
+        """Specialize a runtime builtin reference as its defaulted eta closure."""
+        kind = BUILTIN_CALL_NAMES.get(ref.name)
+        signature = self._env.get_function_signature_by_node_id(ref.decl_node_id)
+        assert signature is not None
+        template = self._builtin_value_template(ref, signature)
+        engine = self._active_inference_engine()
+
+        target = explicit_target
+        if target is None and kind in {BuiltinKind.ASK, BuiltinKind.EXEC}:
+            target = expected.result if isinstance(expected, FunctionType) else None
+        if target is None and kind is BuiltinKind.ASK_REQUEST:
+            target = TextType()
+        if target is None and kind is BuiltinKind.EXEC:
+            target = engine.fresh("exec result")
+
+        region = self._inference_region
+        assert region is not None
+        if isinstance(target, InferenceVarType):
+            default = TextType() if kind is BuiltinKind.ASK else template.result
+            region.builtin_defaults.append((target, default, span, ref.name))
+
+        if signature.type_params:
+            if target is not None:
+                assert len(signature.type_params) == 1
+                concrete = substitute(template, {signature.type_params[0]: target})
+            else:
+                instantiation = engine.instantiate(signature.type_params, (template,))
+                concrete = instantiation.templates[0]
+                for type_param in signature.type_params:
+                    variable = instantiation.variables[type_param]
+                    if kind is BuiltinKind.ASK:
+                        region.builtin_defaults.append((variable, TextType(), span, ref.name))
+                    engine.require_solved(
+                        variable,
+                        engine.origin(
+                            span,
+                            role=ConstraintRole.EXPECTED_RESULT,
+                            subject=ref.name,
+                            type_param=type_param,
+                        ),
+                    )
+        else:
+            concrete = template
+        assert isinstance(concrete, FunctionType)
+
+        if kind is BuiltinKind.EXEC and target is not None:
+            concrete = FunctionType(params=concrete.params, result=target)
+        if expected is not None:
+            engine.complete_from_context(
+                concrete,
+                expected,
+                engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject=ref.name),
+            )
+
+        if kind is not None:
+            contract_target = target if kind is BuiltinKind.ASK_REQUEST else concrete.result
+            assert contract_target is not None
+            self._builtins.check_value(
+                kind,
+                node_id=node_id,
+                target_type=contract_target,
+                result_type=concrete.result,
+                span=span,
+                receiver_type=concrete.params[0] if ref.is_method else None,
+            )
+        return concrete
+
     def _check_varref(self, node: VarRef, *, expected: Type | None = None) -> Type:
         # Constructor references, qualified or bare, share one scope result.
         if (ctor_ref := self._constructor_ref_for(node.node_id)) is not None:
@@ -1950,6 +2078,13 @@ class _Checker:
                 )
             raise type_name_not_a_value(node.name, node.span)
         typ = self._require_binding_type(ref)
+        if ref.kind is BinderKind.function_binding and ref.is_builtin:
+            return self._builtin_value_type(
+                ref,
+                node_id=node.node_id,
+                span=node.span,
+                expected=expected,
+            )
         # Every generic function occurrence receives fresh flexible variables.
         # They remain local to the enclosing expression region, so a higher-order
         # call can connect this occurrence to evidence from its other arguments.
@@ -2191,6 +2326,8 @@ class _Checker:
             return self._require_field_access_type(
                 node.expr,
                 self._check_specialized_field_access(node.expr, type_args=node.type_args),
+                expected=expected,
+                type_args=node.type_args,
             )
 
         if not isinstance(node.expr, VarRef):
@@ -2208,6 +2345,31 @@ class _Checker:
 
         sig = self._env.get_function_signature_by_node_id(ref.decl_node_id)
         assert sig is not None, f"No candidate signature for '{ref.name}'"
+        builtin_kind = (
+            BUILTIN_CALL_NAMES.get(ref.name)
+            if ref.is_builtin and ref.kind is BinderKind.function_binding
+            else None
+        )
+        if builtin_kind is not None and (sig.type_params or builtin_kind is BuiltinKind.EXEC):
+            if len(node.type_args) != 1:
+                raise AglTypeError(
+                    f"'{ref.name}' requires 1 type argument, but "
+                    f"{len(node.type_args)} were supplied.",
+                    span=node.span,
+                )
+            target = self._env.resolve_type_expr(
+                node.type_args[0], span=node.span, type_vars=self._current_type_vars
+            )
+            self._record_explicit_builtin_target(node.expr.node_id, target)
+            builtin_type = self._builtin_value_type(
+                ref,
+                node_id=node.expr.node_id,
+                span=node.span,
+                expected=expected,
+                explicit_target=target,
+            )
+            self._record_node_type(node.expr.node_id, builtin_type)
+            return builtin_type
         if not sig.type_params:
             raise AglTypeError(
                 f"'{ref.name}' is not a generic function and does not accept type arguments.",
@@ -2964,6 +3126,84 @@ class _Checker:
                 hole_indices=hole_indices,
             )
 
+        # Qualified agent and Session method calls retain their declared named
+        # and optional arguments. The receiver is their first positional operand.
+        if isinstance(node.callee, VarRef) and not hole_indices:
+            callee_ref = self._binding_for(node.callee.node_id)
+            if callee_ref.is_builtin and callee_ref.is_method:
+                signature = self._env.get_function_signature_by_node_id(callee_ref.decl_node_id)
+                assert signature is not None
+                declared_receiver = signature.params[0].type
+                checker: _BuiltinMethodChecker | None = None
+                if isinstance(declared_receiver, (RecordType, EnumType)):
+                    receiver_key = _builtin_method_receiver_key(declared_receiver)
+                    checker = self._builtin_method_checkers.get(receiver_key, {}).get(
+                        callee_ref.name
+                    )
+                    if checker is None:
+                        checker = self._agent_builtin_method_checkers.get(callee_ref.name)
+                if checker is not None and node.args:
+                    receiver_expr = node.args[0]
+                    receiver_type = self._check_expr(receiver_expr, expected=declared_receiver)
+                    self._assert_assignable_from(
+                        receiver_type, declared_receiver, receiver_expr.span, receiver_expr
+                    )
+                    forwarded = replace(node, args=node.args[1:])
+                    return checker(
+                        forwarded,
+                        expected=expected,
+                        receiver_type=receiver_type,
+                    )
+
+        # Other qualified builtin methods are unbound positional function
+        # values. Partial calls use this path for every builtin method.
+        if isinstance(node.callee, VarRef):
+            callee_ref = self._binding_for(node.callee.node_id)
+            if callee_ref.is_builtin and callee_ref.is_method:
+                signature = self._env.get_function_signature_by_node_id(callee_ref.decl_node_id)
+                assert signature is not None
+                explicit_target: Type | None = None
+                if node.type_args:
+                    if len(signature.type_params) != 1 or len(node.type_args) != 1:
+                        raise AglTypeError(
+                            f"'{callee_ref.name}' does not accept these type arguments.",
+                            span=node.span,
+                        )
+                    explicit_target = self._env.resolve_type_expr(
+                        node.type_args[0], span=node.span, type_vars=self._current_type_vars
+                    )
+                    self._record_explicit_builtin_target(node.callee.node_id, explicit_target)
+                result_context = (
+                    expected.result
+                    if hole_indices and isinstance(expected, FunctionType)
+                    else expected
+                )
+                kind = BUILTIN_CALL_NAMES.get(callee_ref.name)
+                callee_expected = (
+                    None
+                    if result_context is None or kind not in {BuiltinKind.ASK, BuiltinKind.EXEC}
+                    else FunctionType(
+                        params=tuple(
+                            param.type for param in signature.params if not param.has_default
+                        ),
+                        result=result_context,
+                    )
+                )
+                callee_type = self._builtin_value_type(
+                    callee_ref,
+                    node_id=node.callee.node_id,
+                    span=node.callee.span,
+                    expected=callee_expected,
+                    explicit_target=explicit_target,
+                )
+                self._record_node_type(node.callee.node_id, callee_type)
+                return self._check_value_call(
+                    node,
+                    expected=expected,
+                    hole_indices=hole_indices,
+                    callee_type=callee_type,
+                )
+
         # Declared functions take the named/default-argument path only when
         # the callee is a bare VarRef that resolves to a top-level ``def``.
         # Let/var-bound function values, parameters, and field accesses use
@@ -3359,7 +3599,11 @@ class _Checker:
     # --- value call (lambda / higher-order) ---
 
     def _check_value_call_head(
-        self, node: Call, *, callee_type: Type | None = None
+        self,
+        node: Call,
+        *,
+        expected: Type | None,
+        callee_type: Type | None = None,
     ) -> FunctionType:
         """Validate a function-value call site and return the callee's function type.
 
@@ -3385,13 +3629,19 @@ class _Checker:
             # ``_check_specialized_field_access`` (see its docstring for why the
             # specialization must be published on the inner node here too).
             if isinstance(node.callee, FieldAccess) and node.type_args:
-                # A partial member call (``p.f::[T](?)``) allocates a bound
-                # closure value, so a selected built-in method is rejected
-                # here exactly as any other non-call use of it would be.
                 callee_type = self._require_field_access_type(
                     node.callee,
                     self._check_specialized_field_access(node.callee, type_args=node.type_args),
+                    expected=expected,
+                    type_args=node.type_args,
                 )
+            elif isinstance(node.callee, FieldAccess):
+                callee_type = self._require_field_access_type(
+                    node.callee,
+                    self._check_field_access(node.callee, expected=None),
+                    expected=expected,
+                )
+                self._record_node_type(node.callee.node_id, callee_type)
             else:
                 callee_type = self._check_expr(node.callee, expected=None)
         with self._frame_direct_candidate_use(exprs=(node.callee,)):
@@ -3416,7 +3666,7 @@ class _Checker:
         hole_indices: Mapping[int, int],
         callee_type: Type | None = None,
     ) -> Type:
-        callee_type = self._check_value_call_head(node, callee_type=callee_type)
+        callee_type = self._check_value_call_head(node, expected=expected, callee_type=callee_type)
         binding: tuple[Expr | None, ...] = node.args
         if hole_indices:
             self._record_partial_call(node, binding, hole_indices, callee_kind="value")
@@ -4467,6 +4717,8 @@ class _Checker:
         type_args: tuple[TypeExpr, ...] | None,
         expected: Type | None,
         span: SourceSpan,
+        required_only: bool = False,
+        explicit_target: Type | None = None,
     ) -> FunctionType:
         """Specialize *method* for *receiver* and remove its receiver parameter."""
         receiver_template = method.signature.params[0]
@@ -4504,13 +4756,35 @@ class _Checker:
         combined: dict[str, Type] = {**substitutions, **own_fresh}
         specialized: Type = substitute(method.signature, combined) if combined else method.signature
         assert isinstance(specialized, FunctionType)
-        bound = FunctionType(params=specialized.params[1:], result=specialized.result)
+        parameter_indices = tuple(range(1, len(specialized.params)))
+        if required_only:
+            signature = self._env.get_function_signature_by_node_id(method.decl_node_id)
+            assert signature is not None
+            parameter_indices = tuple(
+                index for index in parameter_indices if not signature.params[index].has_default
+            )
+        result = specialized.result
+        if method.is_builtin:
+            if method.name == "ask-request":
+                result = self._builtins.contract_type("AgentRequest")
+            elif method.name == "fork":
+                result = receiver
+            elif method.name == "stats":
+                result = self._builtins.contract_type("SessionStats")
+        bound = FunctionType(
+            params=tuple(specialized.params[index] for index in parameter_indices),
+            result=result,
+        )
         if type_args is not None:
-            explicit = self._resolve_explicit_type_args(
-                owner_name=method.name,
-                type_params=own_type_params,
-                type_args=type_args,
-                span=span,
+            explicit = (
+                {own_type_params[0]: explicit_target}
+                if explicit_target is not None and len(own_type_params) == 1
+                else self._resolve_explicit_type_args(
+                    owner_name=method.name,
+                    type_params=own_type_params,
+                    type_args=type_args,
+                    span=span,
+                )
             )
             for name in own_type_params:
                 engine.unify(
@@ -4529,6 +4803,11 @@ class _Checker:
         if not own_type_params:
             return bound
 
+        if required_only and method.is_builtin and method.name in {"ask", "ask-request"}:
+            assert self._inference_region is not None
+            self._inference_region.builtin_defaults.extend(
+                (own_fresh[name], TextType(), span, method.name) for name in own_type_params
+            )
         for name in own_type_params:
             engine.require_solved(
                 own_fresh[name],
@@ -4560,10 +4839,8 @@ class _Checker:
         itself, not only returned to the immediate caller: partial lowering and
         direct-call argument coercion both read the callee's type straight off that
         node rather than off the outer node wrapping it. A selected built-in method
-        publishes nothing here, because neither consumer can observe it: a partial
-        application of one is rejected outright, and its member call lowers through
-        the builtin route (receiver operand plus arguments), never through the
-        value-call route that reads the callee node's type.
+        publishes its type later, when its direct-call or receiver-capturing value
+        route has specialized the host operation.
         """
         typ = self._check_field_access(field_access, type_args=type_args)
         if not isinstance(typ, _SelectedBuiltinMethod):
@@ -4571,20 +4848,54 @@ class _Checker:
         return typ
 
     def _require_field_access_type(
-        self, node: FieldAccess, typ: Type | _SelectedBuiltinMethod
+        self,
+        node: FieldAccess,
+        typ: Type | _SelectedBuiltinMethod,
+        *,
+        expected: Type | None,
+        type_args: tuple[TypeExpr, ...] | None = None,
     ) -> Type:
-        """Narrow a checked field access to a plain ``Type``.
-
-        Every non-call position routes its ``_check_field_access``/
-        ``_check_specialized_field_access`` result through here: a selected
-        built-in method (``ask``/``ask-request``) is call-only, so reaching
-        this helper with one is always an error.
-        """
-        if isinstance(typ, _SelectedBuiltinMethod):
-            raise AglTypeError(
-                f"Built-in function '{typ.name}' cannot be used as a value.", span=node.span
+        """Turn a selected builtin method into a receiver-capturing function value."""
+        if not isinstance(typ, _SelectedBuiltinMethod):
+            return typ
+        method = typ.method
+        assert method is not None
+        explicit_target: Type | None = None
+        own_type_params = method.type_params[method.receiver_type_param_arity :]
+        if type_args and len(type_args) == 1 and len(own_type_params) == 1:
+            explicit_target = self._env.resolve_type_expr(
+                type_args[0], span=node.span, type_vars=self._current_type_vars
             )
-        return typ
+        bound = self._bound_method_type(
+            method,
+            typ.receiver_type,
+            type_args=type_args,
+            expected=expected,
+            span=node.span,
+            required_only=True,
+            explicit_target=explicit_target,
+        )
+        kind = BUILTIN_CALL_NAMES.get(typ.name)
+        if kind is not None:
+            if explicit_target is not None:
+                self._record_explicit_builtin_target(node.node_id, explicit_target)
+            target = (
+                explicit_target
+                if explicit_target is not None
+                else TextType()
+                if kind is BuiltinKind.ASK_REQUEST
+                else bound.result
+            )
+            self._builtins.check_value(
+                kind,
+                node_id=node.node_id,
+                target_type=target,
+                result_type=bound.result,
+                span=node.span,
+                receiver_type=typ.receiver_type,
+            )
+        self._record_node_type(node.node_id, bound)
+        return bound
 
     def _select_member(
         self,

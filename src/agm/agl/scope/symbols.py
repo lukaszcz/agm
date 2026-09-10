@@ -485,6 +485,8 @@ class BindingRef:
     ``is_builtin``
         Whether the referenced function declaration is host-implemented.
         This provenance survives imports, re-exports, and REPL retention.
+    ``is_method``
+        Whether the function declaration has a ``self`` receiver.
     """
 
     name: str
@@ -496,6 +498,7 @@ class BindingRef:
     scope_path: ScopePath = ()
     slot_id: int | None = None
     is_builtin: bool = False
+    is_method: bool = False
 
 
 # ---------------------------------------------------------------------------

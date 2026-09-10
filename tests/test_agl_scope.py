@@ -1443,21 +1443,13 @@ class TestReservedNames:
         assert "ask" in msg
         assert "constructor" in msg.lower()
 
-    def test_bare_ask_varref_rejected(self) -> None:
-        """A bare VarRef to 'ask' (not in call position) is rejected."""
-        err = reject_scope("let f = ask")
-        _, msg = diag(err)
-        assert "ask" in msg
-
-    def test_bare_exec_varref_rejected(self) -> None:
-        err = reject_scope("let f = exec")
-        _, msg = diag(err)
-        assert "exec" in msg
-
-    def test_bare_print_varref_rejected(self) -> None:
-        err = reject_scope("let f = print")
-        _, msg = diag(err)
-        assert "print" in msg
+    @pytest.mark.parametrize("name", ["ask", "exec", "print"])
+    def test_bare_builtin_varref_resolves_as_a_value(self, name: str) -> None:
+        resolved = parse_and_resolve(f"let f = {name}")
+        declaration = resolved.program.body.items[0]
+        assert isinstance(declaration, LetDecl)
+        assert isinstance(declaration.value, VarRef)
+        assert resolved.resolution[declaration.value.node_id].is_builtin
 
 
 # ---------------------------------------------------------------------------
@@ -1576,56 +1568,31 @@ class TestScopedBuiltinDeclarations:
         assert "declared" in message
 
 
-class TestScopedBuiltinUsedAsValueRejected:
-    """A scoped ``builtin def`` referenced as a value (not called) is a clean
-    scope error, matching the root-level guard for a bare unshadowed builtin
-    name. Regression coverage for the reference-classification paths a
-    scoped ``builtin def`` reaches (qualified chain, region-local lexical
-    lookup) that a root ``builtin def`` never does, and that previously had
-    no value-use guard at all."""
+class TestScopedBuiltinUsedAsValue:
+    """Scoped runtime builtins remain ordinary values through every route."""
 
-    def test_qualified_reference_used_as_a_value_is_rejected(self) -> None:
-        err = reject_scope(
+    @pytest.mark.parametrize("reference", ["H::render", "H::render::[json]"])
+    def test_qualified_reference_resolves_as_a_value(self, reference: str) -> None:
+        resolved = parse_and_resolve_file(
             "scope H\n"
             "  builtin def render[T](value: T) -> text\n"
             "end H\n"
             "\n"
-            "let f = H::render\n"
-            "print(f)"
+            f"let f: json -> text = {reference}\n"
         )
-        line, message = diag(err)
-        assert "render" in message
-        assert "value" in message, "rejected for being used as a value, not for being unknown"
-        assert line == 5
+        assert resolved.resolution
 
-    def test_bare_reference_inside_its_own_region_used_as_a_value_is_rejected(self) -> None:
-        err = reject_scope(
+    def test_bare_reference_inside_its_own_region_resolves_as_a_value(self) -> None:
+        resolved = parse_and_resolve_file(
             "scope H\n"
             "  builtin def render[T](value: T) -> text\n"
-            "  let f = render\n"
+            "  let f: json -> text = render\n"
             "end H\n"
-            "\n"
-            "print(H::f)"
         )
-        line, message = diag(err)
-        assert "render" in message
-        assert "value" in message, "rejected for being used as a value, not for being unknown"
-        assert line == 3
-
-    def test_qualified_reference_with_a_type_argument_used_as_a_value_is_rejected(self) -> None:
-        err = reject_scope(
-            "scope H\n  builtin def render[T](value: T) -> text\nend H\n"
-            "\n"
-            "let f = H::render[json]\nprint(f)"
-        )
-        line, message = diag(err)
-        assert "render" in message
-        assert "value" in message, "rejected for being used as a value, not for being unknown"
-        assert line == 5
+        assert resolved.resolution
 
     def test_qualified_call_to_a_scoped_builtin_def_is_unaffected(self) -> None:
-        """The value-use rejection must not reject the legitimate call form
-        it is easy to conflate it with: resolution must still succeed."""
+        """Direct calls retain their ordinary builtin classification."""
         resolved = parse_and_resolve(
             'scope H\n  builtin def render[T](value: T) -> text\nend H\n\nprint(H::render("1"))'
         )
@@ -1727,14 +1694,30 @@ class TestBuiltinCallClassification:
         assert r.resolution[callee.node_id].kind is BinderKind.function_binding
         assert r.resolution[callee.node_id].name == "ask-request"
 
-    def test_ask_request_reserved_as_value(self) -> None:
-        # ``ask-request`` is a reserved contextual keyword: a bare reference
-        # (not in call position) is rejected.
-        with pytest.raises(AglScopeError) as exc_info:
-            parse_and_resolve("let x = ask-request\nx")
-        msg = str(exc_info.value)
-        assert "ask-request" in msg
-        assert "value" in msg, "rejected for being used as a value, not for being unknown"
+    def test_ask_request_resolves_as_value(self) -> None:
+        resolved = parse_and_resolve("let x = ask-request\nx")
+        declaration = resolved.program.body.items[0]
+        assert isinstance(declaration, LetDecl)
+        assert isinstance(declaration.value, VarRef)
+        assert resolved.resolution[declaration.value.node_id].is_builtin
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "let query = Agent::ask\nquery",
+            "import std/agent::{Agent::ask as query}\nlet value = query\nvalue",
+        ),
+        ids=("qualified", "import-alias"),
+    )
+    def test_qualified_builtin_method_resolves_as_a_value(self, source: str) -> None:
+        resolved = parse_and_resolve(source)
+        declaration = next(
+            item for item in resolved.program.body.items if isinstance(item, LetDecl)
+        )
+        assert isinstance(declaration.value, VarRef)
+        ref = resolved.resolution[declaration.value.node_id]
+        assert ref.is_builtin
+        assert ref.is_method
 
     def test_user_def_call_not_classified(self) -> None:
         """A user-defined function call does NOT appear in builtin_calls."""
@@ -3785,10 +3768,12 @@ class TestCastScope:
         assert BuiltinKind.COPY in r.builtin_calls.values()
         assert BuiltinKind.SHALLOW_COPY in r.builtin_calls.values()
 
-    def test_copy_as_value_is_rejected(self) -> None:
-        """A bare reference to 'copy' (not a call) is rejected as a builtin name."""
-        err = reject_scope("let f = copy\nf")
-        assert "copy" in err.to_diagnostic().message
+    def test_copy_resolves_as_value(self) -> None:
+        resolved = parse_and_resolve("let f = copy\nf")
+        declaration = resolved.program.body.items[0]
+        assert isinstance(declaration, LetDecl)
+        assert isinstance(declaration.value, VarRef)
+        assert resolved.resolution[declaration.value.node_id].is_builtin
 
 
 class TestImportDeclScope:

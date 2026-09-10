@@ -10,9 +10,11 @@ from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
 from agm.agl.ir.ids import ContractId, Location, SourceId
 from agm.agl.ir.nodes import (
     IrBind,
+    IrBlock,
     IrConstText,
     IrExpr,
     IrLoad,
+    IrMakeClosure,
     IrMakeRecord,
     IrSessionAsk,
     IrSessionDefault,
@@ -20,7 +22,12 @@ from agm.agl.ir.nodes import (
     IrSessionOpen,
     IrSessionOpKind,
 )
-from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
+from agm.agl.ir.program import (
+    ExecutableModule,
+    ExecutableProgram,
+    IrFunctionBody,
+    SourceFile,
+)
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.lower.lowerer import _Lowerer
 from agm.agl.modules.ids import ENTRY_ID
@@ -105,6 +112,81 @@ def test_session_default_lowers_to_its_dedicated_node() -> None:
     values = _main_let_values("let session = Session::default()\n()")
 
     assert isinstance(values["session"], IrSessionDefault)
+
+
+def test_session_statics_lower_as_callable_values() -> None:
+    program = lower_inline_ir(
+        "let open-session: Agent -> Session = Session::open\n"
+        "let current-session: () -> Session = Session::default\n"
+        "()"
+    )
+    values = {
+        program.symbols[item.symbol].public_name: item.value
+        for item in inline_main_items(program)
+        if isinstance(item, IrBind) and program.symbols[item.symbol].public_name is not None
+    }
+
+    open_closure = values["open-session"]
+    default_closure = values["current-session"]
+    assert isinstance(open_closure, IrMakeClosure)
+    assert isinstance(default_closure, IrMakeClosure)
+    open_descriptor = program.functions[open_closure.function_id]
+    default_descriptor = program.functions[default_closure.function_id]
+    assert isinstance(open_descriptor.impl, IrFunctionBody)
+    assert isinstance(default_descriptor.impl, IrFunctionBody)
+    assert isinstance(open_descriptor.impl.body, IrSessionOpen)
+    assert isinstance(default_descriptor.impl.body, IrSessionDefault)
+
+
+def test_session_methods_lower_as_bound_and_unbound_values() -> None:
+    program = lower_inline_ir(
+        "let session = Session::default()\n"
+        "let rename: text -> unit = session.set-name\n"
+        "let close: Session -> unit = Session::close\n"
+        "let fork-bound: () -> Session = session.fork\n"
+        "let fork-unbound: Session -> Session = Session::fork\n"
+        "let stats-bound: () -> SessionStats = session.stats\n"
+        "let stats-unbound: Session -> SessionStats = Session::stats\n"
+        'Session::compact(session, instructions = "retain decisions")\n'
+        "()"
+    )
+    values = {
+        program.symbols[item.symbol].public_name: item.value
+        for item in inline_main_items(program)
+        if isinstance(item, IrBind) and program.symbols[item.symbol].public_name is not None
+    }
+
+    rename_block = values["rename"]
+    close_closure = values["close"]
+    assert isinstance(rename_block, IrBlock)
+    rename_closure = rename_block.items[-1]
+    assert isinstance(rename_closure, IrMakeClosure)
+    assert isinstance(close_closure, IrMakeClosure)
+    rename_descriptor = program.functions[rename_closure.function_id]
+    close_descriptor = program.functions[close_closure.function_id]
+    assert isinstance(rename_descriptor.impl, IrFunctionBody)
+    assert isinstance(close_descriptor.impl, IrFunctionBody)
+    assert isinstance(rename_descriptor.impl.body, IrSessionOp)
+    assert rename_descriptor.impl.body.op is IrSessionOpKind.SET_NAME
+    assert isinstance(close_descriptor.impl.body, IrSessionOp)
+    assert close_descriptor.impl.body.op is IrSessionOpKind.CLOSE
+
+
+def test_session_ask_lowers_as_a_bound_value() -> None:
+    program = lower_inline_ir(
+        "let session = Session::default()\nlet query: text -> text = session.ask\n()"
+    )
+    query = next(
+        item.value
+        for item in inline_main_items(program)
+        if isinstance(item, IrBind) and program.symbols[item.symbol].public_name == "query"
+    )
+    assert isinstance(query, IrBlock)
+    closure = query.items[-1]
+    assert isinstance(closure, IrMakeClosure)
+    descriptor = program.functions[closure.function_id]
+    assert isinstance(descriptor.impl, IrFunctionBody)
+    assert isinstance(descriptor.impl.body, IrSessionAsk)
 
 
 def test_free_ask_lowers_through_the_default_session() -> None:

@@ -354,8 +354,8 @@ program def main() -> unit =
 exceptions, and `ExecResult`; methods belong to records, enums, exceptions, and
 built-in receiver types. A field projection yields its field value. An ordinary
 or `extern` method projection yields a bound function value whose receiver is
-the value on the left of the dot. A `builtin def` receiver method is call-only:
-`expr.member(...)` is valid, but projecting it as a value is not.
+the value on the left of the dot. A `builtin def` method projection does the
+same, lowering the eventual value call to its host operation.
 
 ```agl
 record Meter
@@ -556,9 +556,10 @@ print res.stdout                       # field-access chain as sugar arg
 ```
 
 `print` raises `CyclicValueError` when its argument contains a reference
-cycle. `print` cannot be bound as a function value (`let f = print` is a static
-error, because built-ins are only valid in call position). An explicit type
-argument (`print::[decimal](5)`) is accepted, requires the argument to be
+cycle. `print` is a generic function value when an expected type or explicit
+type argument fixes its input, for example `let f: text -> unit = print` or
+`let f = print::[text]`. An explicit type argument
+(`print::[decimal](5)`) is accepted, requires the argument to be
 assignable to it, and prints the argument coerced to that type — so
 `print::[json]("hi")` prints the quoted json form `"hi"`, not the bare text
 `hi`.
@@ -586,9 +587,9 @@ program def main() -> unit =
 ```
 
 `render` raises `CyclicValueError` when its argument contains a reference
-cycle. `render` cannot be bound as a function value (`let f = render` is a
-static error, because built-ins are only valid in call position). An explicit type
-argument (`render::[decimal](5)`) is accepted, requires the argument to be
+cycle. `render` is a generic function value when an expected type or explicit
+type argument fixes its input, for example `let f: json -> text = render`. An
+explicit type argument (`render::[decimal](5)`) is accepted, requires the argument to be
 assignable to it, and renders the argument coerced to that type — so
 `render::[json]("hi", quote-strings = false)` renders the quoted json form
 `"hi"`: `quote-strings` controls only a top-level `text` argument, and the

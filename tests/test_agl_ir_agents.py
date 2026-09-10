@@ -69,6 +69,130 @@ request
     )
 
 
+def test_agent_ask_method_can_be_called_through_a_bound_value() -> None:
+    source = """\
+let worker: Agent = AgentCommand("worker")
+let query: text -> text = worker.ask
+let answer = query("Question")
+answer
+"""
+
+    ir = evaluate_ir_with_agents(source, scripts={"worker": ["answer"]})
+
+    assert ir["answer"] == TextValue("answer")
+
+
+def test_agent_ask_method_can_be_called_through_an_unbound_value() -> None:
+    source = """\
+let query: (Agent, text) -> text = Agent::ask
+let worker: Agent = AgentCommand("worker")
+let answer = query(worker, "Question")
+answer
+"""
+
+    ir = evaluate_ir_with_agents(source, scripts={"worker": ["answer"]})
+
+    assert ir["answer"] == TextValue("answer")
+
+
+def test_agent_ask_method_import_alias_preserves_unbound_value_semantics() -> None:
+    source = """\
+import std/agent::{Agent::ask as query}
+let worker: Agent = AgentCommand("worker")
+let answer: text = query(worker, "Question")
+answer
+"""
+
+    ir = evaluate_ir_with_agents(source, scripts={"worker": ["answer"]})
+
+    assert ir["answer"] == TextValue("answer")
+
+
+def test_agent_ask_method_can_be_called_directly_as_an_unbound_value() -> None:
+    source = """\
+let worker: Agent = AgentCommand("worker")
+let answer: text = Agent::ask(worker, "Question")
+answer
+"""
+
+    ir = evaluate_ir_with_agents(source, scripts={"worker": ["answer"]})
+
+    assert ir["answer"] == TextValue("answer")
+
+
+def test_agent_ask_method_direct_unbound_call_retains_named_options() -> None:
+    source = """\
+let worker: Agent = AgentCommand("worker")
+let answer = Agent::ask::[text](worker, "Question", format = "text")
+answer
+"""
+
+    ir = evaluate_ir_with_agents(source, scripts={"worker": ["answer"]})
+
+    assert ir["answer"] == TextValue("answer")
+
+
+def test_agent_ask_method_direct_unbound_call_accepts_explicit_specialization() -> None:
+    source = """\
+let worker: Agent = AgentCommand("worker")
+let answer = Agent::ask::[int](worker, "Question")
+answer
+"""
+
+    ir = evaluate_ir_with_agents(source, scripts={"worker": ["42"]})
+
+    assert ir["answer"] == IntValue(42)
+
+
+def test_agent_ask_method_partial_application_uses_its_bound_value() -> None:
+    source = """\
+let worker: Agent = AgentCommand("worker")
+let query: text -> int = worker.ask(?)
+let answer = query("Question")
+answer
+"""
+
+    ir = evaluate_ir_with_agents(source, scripts={"worker": ["42"]})
+
+    assert ir["answer"] == IntValue(42)
+
+
+def test_agent_ask_request_method_value_defaults_to_text() -> None:
+    source = """\
+let worker: Agent = AgentCommand("worker")
+let make-request = worker.ask-request
+let request = make-request("Describe this")
+request
+"""
+
+    ir = evaluate_ir(source)
+
+    request = ir["request"]
+    assert isinstance(request, RecordValue)
+    target = request.fields["target-type"]
+    assert isinstance(target, RecordValue)
+    assert target.display_name.rsplit("::", maxsplit=1)[-1] == "Some"
+    assert target.fields["value"] == TextValue("text")
+
+
+def test_agent_ask_request_method_value_preserves_explicit_specialization() -> None:
+    source = """\
+let worker: Agent = AgentCommand("worker")
+let make-request = worker.ask-request::[int]
+let request = make-request("Count this")
+request
+"""
+
+    ir = evaluate_ir(source)
+
+    request = ir["request"]
+    assert isinstance(request, RecordValue)
+    target = request.fields["target-type"]
+    assert isinstance(target, RecordValue)
+    assert target.display_name.rsplit("::", maxsplit=1)[-1] == "Some"
+    assert target.fields["value"] == TextValue("int")
+
+
 def test_user_declared_method_named_ask_dispatches_as_an_ordinary_method() -> None:
     """A field access naming ``ask`` is only a *speculative* builtin route.
 
@@ -116,6 +240,23 @@ let echoed = partial("there")
 
     assert ir["greeting"] == TextValue("g: hi")
     assert ir["echoed"] == TextValue("there")
+
+
+def test_first_class_ask_request_preserves_explicit_output_specialization() -> None:
+    source = """\
+let make-request = ask-request::[int]
+let request = make-request("Count this")
+request
+"""
+
+    ir = evaluate_ir(source)
+
+    request = ir["request"]
+    assert isinstance(request, RecordValue)
+    target = request.fields["target-type"]
+    assert isinstance(target, RecordValue)
+    assert target.display_name.rsplit("::", maxsplit=1)[-1] == "Some"
+    assert target.fields["value"] == TextValue("int")
 
 
 # ---------------------------------------------------------------------------

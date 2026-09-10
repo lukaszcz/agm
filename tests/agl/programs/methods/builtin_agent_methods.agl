@@ -1,5 +1,5 @@
-# Builtin Agent methods are call-only methods that select their receiver as the
-# agent. The branches cover typed and defaulted ask calls and the free-function
+# Builtin Agent methods select their receiver as the agent. The branches cover
+# typed and defaulted ask calls and the free-function
 # ask-request form, typed and untyped.
 
 program def main(mode: text) -> unit =

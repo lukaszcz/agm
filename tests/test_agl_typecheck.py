@@ -2002,15 +2002,31 @@ class TestScopedBuiltinTypes:
         )
         assert r.resolved.program is not None
 
-    @pytest.mark.parametrize("method", ("ask",))
-    def test_builtin_agent_method_with_explicit_type_args_cannot_be_a_value(
-        self, method: str
-    ) -> None:
-        err = reject_type(
-            f'let worker: Agent = AgentCommand("worker")\nlet f = worker.{method}::[text]\nf\n'
+    def test_exec_value_uses_the_scoped_live_contract(self) -> None:
+        result = accept_type(
+            f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
+            "let run: text -> A::ExecResult = exec\n"
+            "run\n"
         )
-        assert "built-in" in err.to_diagnostic().message.lower()
-        assert "value" in err.to_diagnostic().message.lower()
+        value = result.resolved.program.body.items[-1]
+        contract = result.type_env.type_table.builtin_declaration("ExecResult")
+        assert contract is not None
+        assert result.node_types[value.node_id] == FunctionType((TextType(),), contract.handle())
+
+    def test_unbound_builtin_agent_method_rejects_too_many_type_args(self) -> None:
+        reject_type(
+            'let worker: Agent = AgentCommand("worker")\n'
+            'Agent::ask::[text, int](worker, "Question")\n'
+        )
+
+    def test_builtin_agent_method_with_explicit_type_args_can_be_a_value(self) -> None:
+        checked = accept_type(
+            'let worker: Agent = AgentCommand("worker")\nlet f = worker.ask::[text]\nf\n'
+        )
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == FunctionType(
+            params=(TextType(),), result=TextType()
+        )
 
     def test_scoped_builtin_agent_method_reroots_its_receiver_and_sibling_types(self) -> None:
         """A scoped Agent method validates after removing its enclosing scope.
@@ -3014,32 +3030,28 @@ _USER_ASK_METHODS = (
 
 
 class TestBuiltinAgentMethodSelection:
-    """A selected built-in Agent method is call-only: every non-call use of the
-    selection is a type error, in each spelling that would otherwise produce a
-    function value. A field-access callee whose field name matches
-    ``ask``/``ask-request`` is only a *speculative* builtin route (the resolver
-    cannot know which meaning it is until the checker selects a method), so an
-    ordinary user-declared method of the same name must still behave as a plain
-    method in every position, value and partial positions included."""
+    """Builtin Agent methods are callable values after receiver selection.
 
-    @pytest.mark.parametrize("method", ("ask",))
+    A matching field name remains only a speculative builtin route until the
+    checker selects a method, so ordinary user methods retain normal behavior.
+    """
+
     @pytest.mark.parametrize(
-        "use",
+        ("use", "expected"),
         (
-            "let f = worker.{method}\nf",
-            "print(worker.{method})",
-            "worker.{method}(?)",
-            "worker.{method}::[text](?)",
+            ("let f = worker.ask\nf", FunctionType((TextType(),), TextType())),
+            ("print(worker.ask)", UnitType()),
+            ("worker.ask(?)", FunctionType((TextType(),), TextType())),
+            ("worker.ask::[text](?)", FunctionType((TextType(),), TextType())),
         ),
         ids=("let-bound", "call-argument", "partial-call", "specialized-partial-call"),
     )
-    def test_non_call_use_of_a_builtin_method_is_rejected(self, use: str, method: str) -> None:
-        err = reject_type(
-            'let worker: Agent = AgentCommand("worker")\n' + use.format(method=method) + "\n"
-        )
-        message = err.to_diagnostic().message.lower()
-        assert "built-in" in message
-        assert "value" in message
+    def test_non_call_use_of_a_builtin_method_is_typed_as_a_value(
+        self, use: str, expected: Type
+    ) -> None:
+        checked = accept_type('let worker: Agent = AgentCommand("worker")\n' + use + "\n")
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == expected
 
     @pytest.mark.parametrize(
         ("use", "expected"),
@@ -3085,6 +3097,10 @@ class TestBuiltinAgentMethodSelection:
 class TestExec:
     def test_exec_rejected_without_shell_support(self) -> None:
         err = reject_type('exec("ls")', capabilities=no_exec_caps())
+        assert "exec" in str(err).lower() or "shell" in str(err).lower()
+
+    def test_exec_value_rejected_without_shell_support(self) -> None:
+        err = reject_type("let run: text -> ExecResult = exec", capabilities=no_exec_caps())
         assert "exec" in str(err).lower() or "shell" in str(err).lower()
 
     def test_exec_text_default(self) -> None:
@@ -8441,6 +8457,17 @@ class TestHostContractBuiltinIdentity:
         assert produced.name == "AgentRequest"
         assert produced.scope_path == ("A",)
 
+    def test_ask_request_value_uses_the_scoped_live_contract(self) -> None:
+        result = accept_type(
+            f"scope A\nbuiltin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}end A\n"
+            "let build: text -> A::AgentRequest = ask-request\n"
+            "build\n"
+        )
+        value = result.resolved.program.body.items[-1]
+        contract = result.type_env.type_table.builtin_declaration("AgentRequest")
+        assert contract is not None
+        assert result.node_types[value.node_id] == FunctionType((TextType(),), contract.handle())
+
     def test_agent_request_declared_without_stdlib_naming_its_own_option_rejected(self) -> None:
         """Without the standard library, a program that declares its own
         ``enum Option[T]`` and its own ``builtin record AgentRequest`` (whose
@@ -8570,6 +8597,19 @@ class TestHostContractBuiltinIdentity:
             "end A\n()\n"
         )
         assert "agent" in err.to_diagnostic().message.lower()
+
+    def test_scoped_agent_receiver_value_rejected_for_ask_request(self) -> None:
+        reject_type(
+            "scope A\n"
+            f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
+            "builtin def Agent::ask-request[T](\n"
+            "  self,\n"
+            f"{_ASK_REQUEST_OPTIONS_TC}"
+            ") -> AgentRequest\n"
+            'let worker: Agent = Agent::AgentCommand("x")\n'
+            "let build = worker.ask-request\n"
+            "end A\n()\n"
+        )
 
     def test_scoped_agent_receiver_accepted_for_ask(self) -> None:
         """The ``ask`` counterpart of the receiver form is *accepted*: unlike
@@ -11019,6 +11059,80 @@ class TestGenerics:
     def test_d3_ask_explicit_too_many_args_error(self) -> None:
         err = reject_type('ask::[int, text]("Q")')
         assert "type argument" in str(err).lower()
+
+    def test_d3_ask_value_explicit_too_many_args_error(self) -> None:
+        err = reject_type("let query = ask::[int, text]\nquery")
+        assert "type argument" in str(err).lower()
+
+    def test_d3_ask_value_defaults_after_unconstrained_generic_context(self) -> None:
+        checked = accept_type(
+            "def identity[T](value: T) -> T = value\nlet query = identity(ask)\nquery"
+        )
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == FunctionType((TextType(),), TextType())
+
+    def test_d3_exec_value_defaults_after_unconstrained_generic_context(self) -> None:
+        checked = accept_type(
+            "def identity[T](value: T) -> T = value\nlet run = identity(exec)\nrun"
+        )
+        result = checked.resolved.program.body.items[-1]
+        exec_result = checked.type_env.type_table.builtin_declaration("ExecResult")
+        assert exec_result is not None
+        assert checked.node_types[result.node_id] == FunctionType(
+            (TextType(),), exec_result.handle()
+        )
+
+    @pytest.mark.parametrize("body", ("ask", "exec"))
+    def test_d3_builtin_defaults_contribute_function_return_evidence(self, body: str) -> None:
+        checked = accept_type(f"def operation() = {body}\noperation")
+        result = checked.resolved.program.body.items[-1]
+        expected_result: Type = TextType()
+        if body == "exec":
+            contract = checked.type_env.type_table.builtin_declaration("ExecResult")
+            assert contract is not None
+            expected_result = contract.handle()
+        assert checked.node_types[result.node_id] == FunctionType(
+            (), FunctionType((TextType(),), expected_result)
+        )
+
+    def test_d3_bound_builtin_default_contributes_function_return_evidence(self) -> None:
+        checked = accept_type("def operation(agent: Agent) = agent.ask\noperation")
+        result = checked.resolved.program.body.items[-1]
+        agent = checked.type_env.type_table.builtin_declaration("Agent")
+        assert agent is not None
+        assert checked.node_types[result.node_id] == FunctionType(
+            (agent.handle(),), FunctionType((TextType(),), TextType())
+        )
+
+    def test_d3_computed_builtin_callee_uses_call_result_context(self) -> None:
+        checked = accept_type('let answer: int = (if true => ask else => ask)("Question")\nanswer')
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == IntType()
+
+    @pytest.mark.parametrize("builtin", ("ask", "exec"))
+    def test_d3_builtin_value_uses_later_array_element_context(self, builtin: str) -> None:
+        checked = accept_type(f"let values = [{builtin}, fn(prompt: text) -> int => 0]\nvalues")
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == ArrayType(
+            FunctionType((TextType(),), IntType())
+        )
+
+    def test_d3_conflicting_builtin_value_defaults_are_rejected(self) -> None:
+        reject_type("let values = [ask, exec]\nvalues")
+
+    def test_d3_ask_value_uses_later_generic_context(self) -> None:
+        checked = accept_type(
+            "def identity[T](value: T) -> T = value\nlet query: text -> int = identity(ask)\nquery"
+        )
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == FunctionType((TextType(),), IntType())
+
+    def test_d3_exec_value_uses_later_generic_context(self) -> None:
+        checked = accept_type(
+            "def identity[T](value: T) -> T = value\nlet run: text -> int = identity(exec)\nrun"
+        )
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == FunctionType((TextType(),), IntType())
 
     def test_d3_exec_with_type_var_rejected(self) -> None:
         err = reject_type("def run[T](cmd: text) -> T = exec::[T](cmd)")

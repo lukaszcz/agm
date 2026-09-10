@@ -243,9 +243,15 @@ Both are generic and identity-typed — `T -> T` — so they compose with any
 value and never change its type. An explicit type argument
 (`copy::[decimal](5)`) is accepted and behaves like passing that value to any
 other declaration expecting the explicit type: the argument must be
-assignable to it. Like `print` and `render`, neither `copy`
-nor `shallow-copy` can be bound as a function value — both are only valid in
-call position.
+assignable to it. Both are first-class generic function values when an expected
+`T -> T` type or explicit type argument fixes `T`:
+
+```agl
+program def main() -> unit =
+  let clone: array[int] -> array[int] = copy
+  let clone-level = shallow-copy::[array[int]]
+  ()
+```
 
 `shallow-copy` rebuilds exactly **one** level: a new array, dict, record,
 enum, or exception holding the *same* element or field references as the
@@ -376,9 +382,11 @@ corrective retries after the initial attempt.
 record types `AgentCommand(command)`, `AgentClaude(model, thinking)`,
 `AgentCodex(model, thinking)`, and `AgentPi(provider, model, thinking)`.
 Like every enum, `Agent` values have equality, rendering, and JSON casts; a
-member record exposes its fields when used at its record type. Its standard-library `ask` and `ask-request` members are call-only builtin
-methods, so `agent.ask(...)` and `agent.ask-request(...)` select that agent
-for the operation; see [Agent calls](agent-calls.md) for dispatch behavior.
+member record exposes its fields when used at its record type. Its
+standard-library `ask` and `ask-request` members are builtin methods, so
+`agent.ask(...)` and `agent.ask-request(...)` select that agent for the
+operation. Projecting either member produces a function value that captures
+that agent; see [Agent calls](agent-calls.md) for dispatch behavior.
 
 ### `AgentRequest`
 
@@ -421,9 +429,12 @@ record Session
 ```
 
 Create one with `Session::open(agent, transport = None, name = "")`, or obtain
-the lazy default conversation with `Session::default()`. Its call-only methods
-are `ask`, `compact`, `reset`, `fork`, `stats`, `set-name`, and `close`; backend
-support for optional lifecycle operations varies. See [Agent calls](agent-calls.md#sessions).
+the lazy default conversation with `Session::default()`. Its methods are `ask`,
+`compact`, `reset`, `fork`, `stats`, `set-name`, and `close`; each can also be
+projected as a receiver-capturing function value. `Session::open`,
+`Session::default`, and qualified method names are function values as well.
+Backend support for optional lifecycle operations varies. See
+[Agent calls](agent-calls.md#sessions).
 
 Source cannot invoke the `Session` constructor. A `Session`, or a nominal or
 container value that transitively contains one, is opaque non-data: it cannot

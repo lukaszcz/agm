@@ -147,6 +147,29 @@ a standard-library builtin at the same scoped name.
 on the line directly above it (the newline after the modifier is
 insignificant).
 
+Runtime built-ins are first-class values. A value occurrence is contextually
+specialized and behaves like an eta-expanded lambda over the declaration's
+required parameters; omitted optional parameters retain their host defaults:
+
+```agl
+program def main() -> unit =
+  let emit: text -> unit = print
+  let query: text -> int = ask
+  let run: text -> ExecResult = exec
+  let open-session: Agent -> Session = Session::open
+  let current-session: () -> Session = Session::default
+  ()
+```
+
+Generic occurrences need an expected function type or explicit type arguments,
+except that an unconstrained `ask` value defaults its result to `text`, like a
+direct `ask` call. `ask-request` similarly defaults its embedded output
+contract to `text`. Configured variants can be expressed with a lambda around a
+direct call. Built-in methods produce receiver-capturing values, and qualified
+method or `Session` static references produce ordinary positional function
+values. `resource` is call-only because its path must be a source literal resolved
+at link time; the nullary `resource-dir` is a function value.
+
 ### Externally implemented functions
 
 `extern def` declares a function implemented by a companion Python file
@@ -293,12 +316,13 @@ to ordinary imports. Ordinary and `extern` builtin-receiver methods use the
 same direct-call, bound-method, and generic-specialization rules as nominal
 methods.
 
-A `builtin def` receiver method is instead a call-only host route. Its name and
-signature must be one of `print`, `render`, `copy`, or `shallow-copy`; each
-takes only `self`. `copy` and `shallow-copy` return the receiver's exact type,
-`print` returns `unit`, and `render` returns `text`. Such a call reuses the
-corresponding bare builtin operation with `self` as its value; it cannot be
-bound or partially applied.
+A `builtin def` receiver method is a host route. Its name and signature must be
+one of `print`, `render`, `copy`, or `shallow-copy`; each takes only `self`.
+`copy` and `shallow-copy` return the receiver's exact type, `print` returns
+`unit`, and `render` returns `text`. Calling it reuses the corresponding bare
+builtin operation with `self` as its value. Projecting it produces a bound
+nullary function value, while a qualified reference includes `self` as its
+first positional parameter.
 
 ```agl
 record Person
@@ -395,9 +419,8 @@ program def main() -> unit =
 identifier and, as an ordinary parameter, requires an annotation. `def` and
 `extern def` may declare methods. A `builtin def` may also declare a host method
 when its signature is a recognized host contract: the standard library declares
-`Agent::ask` and `Agent::ask-request`. These methods use the same selection and
-receiver rules, but are call-only rather than bound function values; see
-[Agent calls](agent-calls.md).
+`Agent::ask` and `Agent::ask-request`. These methods use the same selection,
+bound-function, and specialization rules; see [Agent calls](agent-calls.md).
 
 ### Scope and forward references
 
@@ -868,9 +891,10 @@ Error conditions are reported statically:
 - A placeholder is a partial-application marker only in a parenthesized call;
   forms such as a standalone `?`, `f(? + 1)`, and the single-argument sugar
   `f ?` do not parse.
-- Partial application is not supported by the special built-in calls `print`,
-  `render`, `exec`, `ask`, `ask-request`, `copy`, and
-  `shallow-copy`; for example, `print(?)` is rejected.
+- Placeholder partial application is not supported by free special built-in
+  calls such as `print(?)` or `ask(?)`; referencing the built-in directly
+  produces its defaulted function value instead. Receiver methods first
+  produce a bound value, so forms such as `reviewer.ask::[text](?)` work.
 - Numbered placeholders must be a permutation from `?1` through `?n`; examples
   such as `f(?0)`, `f(?2)`, `f(?1, ?1)`, and `f(?, ?1)` are rejected.
 - Existing argument-binding errors still apply: arity mismatches such as too

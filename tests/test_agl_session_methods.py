@@ -1,4 +1,4 @@
-"""Typechecking tests for call-only ``Session`` built-in methods."""
+"""Typechecking tests for ``Session`` built-in methods."""
 
 from __future__ import annotations
 
@@ -66,6 +66,10 @@ def test_session_ask_infers_targets_like_agent_ask() -> None:
     assert isinstance(text_response, LetDecl)
     assert checked.node_types[text_response.value.node_id] == TextType()
     assert [site.target_type.kind for site in checked.call_sites] == ["text", "int", "bool"]
+
+
+def test_unbound_nongeneric_session_method_rejects_type_arguments() -> None:
+    _reject("let session = Session::default()\nSession::close::[text](session)")
 
 
 def test_session_ask_rejects_an_explicit_agent() -> None:

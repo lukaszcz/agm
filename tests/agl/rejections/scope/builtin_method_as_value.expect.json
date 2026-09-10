@@ -1,9 +1,0 @@
-{
-  "diagnostic": {
-    "line": 3,
-    "message_contains": [
-      "built-in",
-      "value"
-    ]
-  }
-}

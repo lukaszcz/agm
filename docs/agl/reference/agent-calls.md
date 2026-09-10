@@ -28,7 +28,7 @@ ask(prompt: text, agent: Agent = std/config::default-agent,
 where `T` is the **target type** — determined from the calling context (see
 below). All parameters after `prompt` are optional and passed by name.
 
-An `Agent` value also provides the call-only method form:
+An `Agent` value also provides the method form:
 
 ```text
 Agent::ask(self, prompt: text, format: text = "",
@@ -42,17 +42,38 @@ argument instead selects an explicit agent for that one call, as does the
 `reviewer.ask(...)` receiver form. Explicit-agent calls open a short-lived
 session for the call and all of its parse retries, then close it.
 Both forms support contextual and explicit `::[T]` target types and named parse
-options. Built-in methods are call-only; `let f = reviewer.ask` and
-`let f = reviewer.ask::[text]` are static errors.
+options. A method reference captures its receiver and retains only the required
+`prompt` parameter:
+
+```agl
+program def main() -> unit =
+  let reviewer: Agent = AgentCommand("reviewer")
+  let query: text -> int = reviewer.ask
+  let query-text = reviewer.ask::[text]
+  ()
+```
+
+Configured variants still use a lambda around a direct call.
 
 `ask` is a **contextual keyword**: it cannot be declared with `let`, `var`,
-or as a function parameter name; it may not be bound as a function value (`let f = ask` is a static error, because `ask`'s type is
-not a fully expressible monomorphic type). It remains legal as a
-record/enum **field name**.
+or as a function parameter name, but it can be referenced as a function value.
+The value is an eta-expanded `text -> T` callable using the default session;
+its result is fixed by an expected function type or explicit `::[T]`, and
+defaults to `text` when unconstrained:
+
+```agl
+program def main() -> unit =
+  let query: text -> int = ask
+  let query-json = ask::[json]
+  ()
+```
+
+Use an explicit lambda around a direct call to capture a non-default agent or
+parse options. `ask` remains legal as a record/enum **field name**.
 
 ### `Session::ask`
 
-`Session` also has the call-only method form:
+`Session` also has the method form:
 
 ```text
 Session::ask[T](self, prompt: text, format: text = "",
@@ -65,7 +86,8 @@ and transport select the backend; it has no `agent` argument. It uses the same
 contextual or explicit `::[T]` target, concrete-target restriction, parse
 options, and output-contract checking as `ask`. `session.ask$` has the same
 raw-tail spelling rules as `reviewer.ask$`. Parse retries remain in this same
-conversation.
+conversation. A reference such as `let query: text -> Review = session.ask`
+captures the live session.
 
 ### Single-argument sugar
 

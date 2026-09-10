@@ -7,7 +7,16 @@ from pathlib import Path
 import pytest
 
 from agm.agl import PipelineDriver
-from agm.agl.ir.nodes import IrCopyValue, IrDirectCall, IrPrint
+from agm.agl.ir.nodes import (
+    CopyKind,
+    IrBind,
+    IrBlock,
+    IrCopyValue,
+    IrDirectCall,
+    IrMakeClosure,
+    IrPrint,
+    IrRenderValue,
+)
 from agm.agl.ir.program import IrFunctionBody
 from agm.agl.lower.program import lower_program
 from agm.agl.modules.ids import ENTRY_ID, STD_PRELUDE_ID, ModuleId
@@ -191,6 +200,73 @@ def test_builtin_direct_method_calls_lower_as_receiver_first_direct_calls() -> N
     assert isinstance(entry.impl.body, IrPrint)
     assert isinstance(entry.impl.body.value, IrDirectCall)
     assert len(entry.impl.body.value.arguments) == 1
+
+
+def test_builtin_receiver_host_method_values_reuse_core_lowering_routes() -> None:
+    stdlib_root = Path(__file__).parent / "agl" / "program_modules" / "builtin_method_stdlib"
+    prepared = PipelineDriver.prepare_program(
+        "program def main() -> unit =\n"
+        "  let emit = true.print\n"
+        '  let show = "x".render\n'
+        "  let clone = [1].copy\n"
+        "  let shallow = decimal::shallow-copy\n"
+        "  ()\n",
+        roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({stdlib_root})),
+    )
+    discovery = PipelineDriver().discover_programs(prepared)
+
+    assert discovery.compiled is not None, discovery.diagnostics
+    executable = lower_program(discovery.compiled)
+    ((_, entry_function_id),) = executable.program_functions.items()
+    entry = executable.functions[entry_function_id]
+    assert isinstance(entry.impl, IrFunctionBody)
+    assert isinstance(entry.impl.body, IrBlock)
+    closures: list[IrMakeClosure] = []
+    for item in entry.impl.body.items[:-1]:
+        assert isinstance(item, IrBind)
+        value = item.value
+        if isinstance(value, IrBlock):
+            value = value.items[-1]
+        assert isinstance(value, IrMakeClosure)
+        closures.append(value)
+    bodies = []
+    for closure in closures:
+        descriptor = executable.functions[closure.function_id]
+        assert isinstance(descriptor.impl, IrFunctionBody)
+        bodies.append(descriptor.impl.body)
+
+    assert isinstance(bodies[0], IrPrint)
+    assert isinstance(bodies[1], IrRenderValue)
+    assert isinstance(bodies[2], IrCopyValue)
+    assert bodies[2].kind is CopyKind.DEEP
+    assert isinstance(bodies[3], IrCopyValue)
+    assert bodies[3].kind is CopyKind.SHALLOW
+
+
+def test_generic_unbound_builtin_method_calls_infer_or_accept_receiver_type_args() -> None:
+    stdlib_root = Path(__file__).parent / "agl" / "program_modules" / "builtin_method_stdlib"
+    prepared = PipelineDriver.prepare_program(
+        "program def main() -> unit =\n"
+        "  let inferred: array[int] = array::copy([1])\n"
+        "  let explicit = array::copy::[int]([2])\n"
+        "  ()\n",
+        roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({stdlib_root})),
+    )
+    discovery = PipelineDriver().discover_programs(prepared)
+
+    assert discovery.compiled is not None, discovery.diagnostics
+    lower_program(discovery.compiled)
+
+
+def test_generic_unbound_builtin_method_rejects_too_many_type_args() -> None:
+    stdlib_root = Path(__file__).parent / "agl" / "program_modules" / "builtin_method_stdlib"
+    prepared = PipelineDriver.prepare_program(
+        "program def main() -> unit = array::copy::[int, text]([1])\n",
+        roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({stdlib_root})),
+    )
+    discovery = PipelineDriver().discover_programs(prepared)
+
+    assert discovery.compiled is None
 
 
 def test_builtin_receiver_host_method_reuses_its_core_lowering_route() -> None:

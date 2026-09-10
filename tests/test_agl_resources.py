@@ -12,6 +12,7 @@ from agm.agl.ir.ids import Location, SourceId
 from agm.agl.ir.nodes import IrResource
 from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
 from agm.agl.ir.validate import InvalidIrError, validate_ir
+from agm.agl.lower.program import lower_program
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.modules.roots import RootSet
 from agm.agl.repl import ReplSession
@@ -32,6 +33,34 @@ def _run_file(source: str, path: Path, *, roots: RootSet) -> object:
     if discovery.compiled is None:
         return runtime.run_prepared(prepared)
     return runtime.run_prepared(prepared, compiled=discovery.compiled, select_default_program=True)
+
+
+def test_resource_dir_can_be_called_through_a_function_value(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    entry = tmp_path / "main.agl"
+    source = """program def main() -> unit =
+  let locate: () -> path = resource-dir
+  print(locate())
+"""
+
+    result = _run_file(source, entry, roots=agl_roots())
+
+    assert result.ok
+    assert capsys.readouterr().out == f"{tmp_path.resolve()}\n"
+
+
+def test_resource_value_keeps_its_link_time_literal_requirement(tmp_path: Path) -> None:
+    entry = tmp_path / "main.agl"
+    source = """program def main() -> unit =
+  let locate: text -> path = resource
+  print(locate("prompt.md"))
+"""
+
+    result = _run_file(source, entry, roots=agl_roots())
+
+    assert not result.ok
+    assert result.diagnostics
 
 
 def test_resource_is_a_constant_root_initializer_anchored_to_a_loose_module(
@@ -155,6 +184,19 @@ def test_missing_resource_is_a_link_error(tmp_path: Path) -> None:
 
     assert not result.ok
     assert result.diagnostics
+
+
+def test_lowering_attaches_the_call_span_to_a_missing_resource(tmp_path: Path) -> None:
+    entry = tmp_path / "main.agl"
+    source = 'program def main() -> unit = print resource("missing.md")\n'
+    prepared = PipelineDriver.prepare_program(source, entry_path=entry, roots=agl_roots())
+    discovery = PipelineDriver().discover_programs(prepared)
+    assert discovery.compiled is not None
+
+    with pytest.raises(ResourceError) as raised:
+        lower_program(discovery.compiled)
+
+    assert raised.value.span is not None
 
 
 def test_repl_resource_error_is_a_source_diagnostic() -> None:

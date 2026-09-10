@@ -46,3 +46,8 @@ Sandbox settings resolution:
 - later `filesystem.denyRead` and `filesystem.denyWrite` entries remove matching earlier `filesystem.allowRead` and `filesystem.allowWrite` entries
 - `ignoreViolations` replaces the earlier value
 - `enabled` and `enableWeakerNestedSandbox` override when set
+
+The bundled `pi.json` profile sets `network.allowAllUnixSockets` so Pi extensions can create
+local IPC sockets. On Linux, SRT's seccomp filter cannot allow Unix sockets by path, so this
+permission is necessarily all-or-nothing; filesystem policy still controls which socket paths Pi
+can create or access.

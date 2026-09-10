@@ -20,9 +20,11 @@
       "release-assets.githubusercontent.com",
       "raw.githubusercontent.com",
       "gitlab.com",
-      "bitbucket.org"
+      "bitbucket.org",
+      "api.telegram.org"
     ],
-    "deniedDomains": []
+    "deniedDomains": [],
+    "allowAllUnixSockets": true
   },
   "filesystem": {
     "denyRead": [

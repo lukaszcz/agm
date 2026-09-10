@@ -3684,6 +3684,54 @@ class TestProgramValueArguments:
         assert "1" in output
         assert "3" in output
 
+    def test_cli_supplies_agent_argument_with_host_syntax(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            "program def main(worker: Agent) -> unit = print worker\n",
+        )
+
+        assert (
+            exec_command.run(
+                _exec_args_no_log(
+                    agl_file, argument_tokens=["--worker", "claude/sonnet-experimental"]
+                )
+            )
+            is None
+        )
+        output = capsys.readouterr().out
+        assert "AgentClaude" in output
+        assert "sonnet" in output
+        assert "experimental" in output
+
+    def test_config_table_supplies_agent_argument_with_host_syntax(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[prog.main]\nworker = "pi/openai/gpt-5-low"\n')
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            "program def main(worker: Agent) -> unit = print worker\n",
+        )
+
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        output = capsys.readouterr().out
+        assert "AgentPi" in output
+        assert "openai" in output
+        assert "gpt-5" in output
+        assert "low" in output
+
     def test_config_table_supplies_omitted_argument(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:

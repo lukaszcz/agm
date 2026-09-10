@@ -148,15 +148,28 @@ class ProgramSignature:
         return cls(parameters=tuple(parameters), span=span)
 
 
+def agent_raw_value(text: str) -> object:
+    """Convert Agent host text to the raw tagged shape used by AgL decoding."""
+    from agm.agent.values import agent_spec_shape, parse_agent_text
+    from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
+
+    try:
+        parsed = parse_json_strict(text)
+    except StrictJsonParseError:
+        parsed = None
+    return parsed if isinstance(parsed, dict) else agent_spec_shape(parse_agent_text(text))
+
+
 def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
     """Decode a raw host param value against *decoder* into a typed ``Value``.
 
     The single decode path shared by program-argument binding
     (:func:`bind_program_arguments`) and the host engine-config decode path
     (``runtime.engine_config.convert_host_value``). ``text`` params are taken
-    verbatim; every other value crosses the canonical JSON boundary (strict
-    parse, integral-decimal normalization, JSON-Schema validation, then the
-    typeless ``decode_value`` walk).
+    verbatim. Standard ``Agent`` params accept canonical tagged JSON, compact
+    native-agent syntax, or a command string. Every other value crosses the
+    canonical JSON boundary (strict parse, integral-decimal normalization,
+    JSON-Schema validation, then the typeless ``decode_value`` walk).
 
     :raises StrictJsonParseError: if a textual/native value is not strict JSON.
     :raises ValueError: on a type/shape mismatch or schema-validation failure.
@@ -174,6 +187,8 @@ def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
         if not isinstance(raw, str):
             raise ValueError(f"expected a text value (str), got {type(raw).__name__}")
         obj: object = raw
+    elif decoder.agent_text and isinstance(raw, str):
+        obj = agent_raw_value(raw)
     elif isinstance(raw, str):
         obj = parse_json_strict(raw)
     elif _is_json_shaped(raw):

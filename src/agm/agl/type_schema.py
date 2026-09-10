@@ -112,6 +112,7 @@ from agm.agl.semantics.types import (
     Type,
     TypeVarType,
     UnitType,
+    is_standard_agent_enum,
 )
 from agm.util.graph import sccs
 
@@ -840,8 +841,9 @@ def build_param_decoder(typ: Type, type_table: TypeTable) -> ParamDecoder:
     embeds it in each ``IrProgramParam.external_decoder``)
     and the host engine-config decode path
     (:func:`agm.agl.runtime.engine_config.convert_host_value`).  ``text`` params
-    are taken verbatim; every other type round-trips through the canonical JSON
-    boundary (``derive_schema`` for validation, ``build_decode_schema`` for the
+    are taken verbatim; the standard ``Agent`` additionally accepts host agent
+    text syntax; every other type round-trips through the canonical JSON boundary
+    (``derive_schema`` for validation, ``build_decode_schema`` for the
     typeless decode walk).  *type_table* resolves record/enum shapes.
 
     :raises TypeError: if *typ* has no wire schema (unit/exception/…);
@@ -854,6 +856,7 @@ def build_param_decoder(typ: Type, type_table: TypeTable) -> ParamDecoder:
         decode=decode_plan.root,
         defs=decode_plan.defs,
         text_verbatim=isinstance(typ, TextType),
+        agent_text=is_standard_agent_enum(typ),
     )
 
 

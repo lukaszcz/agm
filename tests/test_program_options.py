@@ -16,6 +16,7 @@ from agm.agl.runtime.option import none_value, some_value
 from agm.agl.runtime.types import ProgramDeclInfo, ProgramParamInfo
 from agm.agl.semantics.type_table import create_seeded_type_table
 from agm.agl.semantics.types import (
+    BUILTIN_PRELUDE_TYPES,
     RESERVED_ID,
     ArrayType,
     BoolType,
@@ -38,6 +39,7 @@ from agm.cli_support.program_options import (
     build_program_command,
     engine_key_flags,
     exec_program_name,
+    native_raw_value,
     program_help_requested,
     project_option,
     protect_host_option_values,
@@ -143,12 +145,24 @@ class TestProjectOption:
         assert projected.value_form is ValueForm.OPTION
         assert projected.negative_flags == ("--no-flag",)
 
+    def test_agent_projects_a_host_agent_value(self) -> None:
+        projected = project_option("worker", BUILTIN_PRELUDE_TYPES["Agent"])
+
+        assert projected.negative_flags == ()
+        assert projected.takes_value is True
+        assert projected.value_form is ValueForm.AGENT
+
     def test_every_other_type_projects_a_json_value_with_no_negative(self) -> None:
         for typ in (IntType(), ArrayType(elem=TextType())):
             projected = project_option("count", typ)
             assert projected.negative_flags == ()
             assert projected.takes_value is True
             assert projected.value_form is ValueForm.JSON
+
+    def test_user_enum_named_agent_still_projects_as_json(self) -> None:
+        user_agent = EnumType(name="Agent", module_id=ENTRY_ID, decl_id=next_decl_id())
+
+        assert project_option("worker", user_agent).value_form is ValueForm.JSON
 
     def test_flag_spelling_preserves_the_name_verbatim(self) -> None:
         assert project_option("my-flag", TextType()).flags == ("--my-flag",)
@@ -527,6 +541,32 @@ class TestParseOption:
         args = _command(_param("flag", _option_type(BoolType()))).parse(["--flag", "true"])
         assert args.named == {"flag": {"$case": "Some", "value": True}}
 
+    @pytest.mark.parametrize(
+        ("token", "expected"),
+        [
+            (
+                "claude/sonnet-custom",
+                {
+                    "$case": "AgentClaude",
+                    "model": "sonnet",
+                    "thinking": "custom",
+                },
+            ),
+            (
+                '{"$case":"AgentCommand","command":"worker --flag"}',
+                {"$case": "AgentCommand", "command": "worker --flag"},
+            ),
+        ],
+    )
+    def test_positive_agent_option_accepts_host_syntax_and_tagged_json(
+        self, token: str, expected: dict[str, object]
+    ) -> None:
+        args = _command(_param("worker", _option_type(BUILTIN_PRELUDE_TYPES["Agent"]))).parse(
+            ["--worker", token]
+        )
+
+        assert args.named == {"worker": {"$case": "Some", "value": expected}}
+
     def test_positive_nested_option_json_parses_the_whole_inner_shape(self) -> None:
         args = _command(_param("nested", _option_type(_option_type(IntType())))).parse(
             ["--nested", '{"$case": "Some", "value": 7}']
@@ -753,6 +793,22 @@ _DECODE_SEAM_CASES: tuple[tuple[str, Type, tuple[str, ...], Value], ...] = (
     ),
     ("region", _option_type(TextType()), ("--no-region",), none_value()),
 )
+
+
+class TestNativeRawValue:
+    def test_config_agent_option_accepts_host_syntax(self) -> None:
+        projected = project_option("worker", _option_type(BUILTIN_PRELUDE_TYPES["Agent"]))
+
+        assert native_raw_value(projected, "codex/o3-high") == {
+            "$case": "Some",
+            "value": {"$case": "AgentCodex", "model": "o3", "thinking": "high"},
+        }
+
+    def test_config_agent_option_keeps_a_native_tagged_object(self) -> None:
+        projected = project_option("worker", _option_type(BUILTIN_PRELUDE_TYPES["Agent"]))
+        tagged = {"$case": "AgentCommand", "command": "worker"}
+
+        assert native_raw_value(projected, tagged) == {"$case": "Some", "value": tagged}
 
 
 class TestDecodeSeam:

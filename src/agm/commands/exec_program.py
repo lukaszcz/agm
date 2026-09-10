@@ -28,8 +28,8 @@ Flag notes:
       ``--log-file PATH`` writes to PATH; ``--no-log`` disables it.  At most one
       of these three flags may be given (mutually exclusive).  ``[exec] log =
       true`` in config also enables logging; CLI flags override config.
-    - ``--agent AGL_LITERAL`` seeds ``std/config::default-agent`` from one typed
-      constant Agent expression, taking precedence over the qualified program
+    - ``--agent AGENT`` seeds ``std/config::default-agent`` from host Agent
+      syntax or a canonical constructor, taking precedence over the qualified program
       table/``[exec] default-agent``, which in turn takes precedence over the
       bare host command in ``[exec] runner``.
     - A sole entry-module ``program def`` runs after initializers; when several

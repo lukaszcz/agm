@@ -1014,6 +1014,15 @@ def standard_option_type(inner: Type) -> EnumType:
 OPTION_TEXT_TYPE: EnumType = standard_option_type(TextType())
 
 
+def is_standard_agent_enum(type_: Type) -> TypeGuard[EnumType]:
+    """Return whether *type_* is the standard library's ``Agent`` enum."""
+    return (
+        isinstance(type_, EnumType)
+        and type_.name == "Agent"
+        and (type_.module_id.is_reserved or type_.module_id.is_standard_library)
+    )
+
+
 def is_standard_option_enum(type_: Type) -> TypeGuard[EnumType]:
     """Return whether *type_* is the standard library's ``Option`` enum.
 

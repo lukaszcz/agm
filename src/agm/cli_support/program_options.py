@@ -4,7 +4,8 @@
 ``bool`` becomes a bare ``--x``/``--no-x`` flag pair (no value); ``Option[T]``
 becomes a value-taking ``--x VALUE``/``--no-x`` pair, where ``VALUE`` decodes
 as ``T`` and is wrapped ``Some``, and ``--no-x`` supplies ``None``; ``text``
-takes ``VALUE`` verbatim; every other type takes one strict-JSON ``VALUE``.
+takes ``VALUE`` verbatim; standard ``Agent`` uses host Agent syntax; every
+other type takes one strict-JSON ``VALUE``.
 Whether a type is the standard ``Option`` is decided by nominal provenance
 (``agm.agl.semantics.types.is_standard_option_enum``), not by name, so a
 user-declared ``enum Option[T]`` of its own projects as an ordinary JSON-form
@@ -63,12 +64,13 @@ parameter's own decoder (JSON-form included), so parsing it again here would
 duplicate that step and lose its diagnostic, anchored at the parameter's
 declaration, on a malformed value.
 
-An ``Option[T]`` flag is the one exception. Its raw value is a
+An ``Option[T]`` flag is the one envelope exception. Its raw value is a
 ``{"$case": "Some"/"None", "value": ...}`` envelope, not a bare string —
 ``decode_param_value``'s enum-decode walk needs the ``"value"`` payload to
 already be a native Python object, not JSON text standing for one — so the
-``Some`` payload is built here: verbatim when ``T`` is ``text``, otherwise
-eagerly strict-JSON-parsed. This rule is applied once, uniformly, with no
+``Some`` payload is built here: verbatim when ``T`` is ``text``, through the
+host Agent decoder when ``T`` is ``Agent``, otherwise eagerly strict-JSON-parsed.
+This rule is applied once, uniformly, with no
 further special case, so it also defines nested behavior: ``Option[bool]``'s
 ``VALUE`` is a JSON boolean literal (``--x true`` / ``--x false``; ``--no-x``
 for ``None``), and ``Option[Option[T]]``'s ``VALUE`` is a JSON literal of the
@@ -89,11 +91,16 @@ from typing import TYPE_CHECKING, cast
 import click
 from click.core import ParameterSource
 
-from agm.agl.runtime.arguments import ProgramArguments
+from agm.agl.runtime.arguments import ProgramArguments, agent_raw_value
 from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
 from agm.agl.runtime.serialize import dumps_exact
 from agm.agl.semantics.engine_keys import ENGINE_KEY_TYPES
-from agm.agl.semantics.types import BoolType, TextType, is_standard_option_enum
+from agm.agl.semantics.types import (
+    BoolType,
+    TextType,
+    is_standard_agent_enum,
+    is_standard_option_enum,
+)
 from agm.agl.zones import ParamZone
 
 if TYPE_CHECKING:
@@ -230,6 +237,8 @@ class ValueForm(enum.Enum):
     OPTION = "option"
     #: ``bool``: a native Python bool, no ``VALUE`` token.
     BOOL = "bool"
+    #: Standard ``Agent``: compact syntax, command text, or canonical JSON.
+    AGENT = "agent"
     #: Every other type: one strict-JSON token.
     JSON = "json"
 
@@ -279,6 +288,8 @@ def project_option(name: str, type_: "AglType") -> ProjectedOption:
         form = ValueForm.OPTION
     elif isinstance(type_, TextType):
         form = ValueForm.TEXT
+    elif is_standard_agent_enum(type_):
+        form = ValueForm.AGENT
     else:
         form = ValueForm.JSON
     negated = form in (ValueForm.BOOL, ValueForm.OPTION)
@@ -662,7 +673,8 @@ type ProgramOptionError = ReservedFlagError | DuplicateOptionFlagError
 def _value_from_token(flag: str, inner_type: "AglType", token: str) -> object:
     """Return the raw ``Some`` payload for one ``Option[T]`` flag's ``VALUE`` token.
 
-    Verbatim when ``T`` is ``text``; otherwise strict-JSON-parsed, so a
+    Verbatim when ``T`` is ``text``, normalized when it is ``Agent``, and
+    otherwise strict-JSON-parsed, so a
     nested ``Option``/``bool``/... inner type round-trips through
     ``decode_param_value``'s enum-decode walk, which needs a native Python
     object already, not another string to parse. *flag* names the option in
@@ -670,6 +682,8 @@ def _value_from_token(flag: str, inner_type: "AglType", token: str) -> object:
     """
     if isinstance(inner_type, TextType):
         return token
+    if is_standard_agent_enum(inner_type):
+        return agent_raw_value(token)
     try:
         return parse_json_strict(token)
     except StrictJsonParseError as exc:
@@ -710,6 +724,9 @@ def native_raw_value(projected: ProjectedOption, raw: object) -> object:
     once per host surface.
     """
     if projected.value_form is ValueForm.OPTION:
+        if projected.option_inner is not None and is_standard_agent_enum(projected.option_inner):
+            value = agent_raw_value(raw) if isinstance(raw, str) else raw
+            return option_some_raw(value)
         return option_some_raw(raw)
     if projected.value_form is ValueForm.JSON and isinstance(raw, str):
         return dumps_exact(raw, indent=None)
@@ -799,13 +816,22 @@ def _default_metavar(projected: ProjectedOption) -> str:
     """Return the placeholder standing for a value-taking option's own VALUE.
 
     It names how the token is read rather than the declared type: a ``text``
-    parameter takes its token verbatim, and every other type parses its token
-    as one strict JSON value. An ``Option[T]`` follows ``T``.
+    parameter takes its token verbatim, standard ``Agent`` uses host syntax,
+    and every other type parses one strict JSON value. An ``Option[T]`` follows
+    ``T``.
     """
     form = projected.value_form
     if form is ValueForm.OPTION:
-        return "TEXT" if isinstance(projected.option_inner, TextType) else "JSON"
-    return "TEXT" if form is ValueForm.TEXT else "JSON"
+        if isinstance(projected.option_inner, TextType):
+            return "TEXT"
+        return (
+            "AGENT"
+            if projected.option_inner is not None and is_standard_agent_enum(projected.option_inner)
+            else "JSON"
+        )
+    if form is ValueForm.TEXT:
+        return "TEXT"
+    return "AGENT" if form is ValueForm.AGENT else "JSON"
 
 
 def _click_params(

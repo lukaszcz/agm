@@ -313,6 +313,7 @@ class ParamDecoder:
     decode: DecodeSchema
     defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
     text_verbatim: bool = False
+    agent_text: bool = False
 
 
 # ---------------------------------------------------------------------------

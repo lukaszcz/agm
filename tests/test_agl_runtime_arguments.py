@@ -25,9 +25,9 @@ from agm.agl.runtime.arguments import (
 )
 from agm.agl.runtime.types import ProgramParamInfo
 from agm.agl.semantics.type_table import create_seeded_type_table
-from agm.agl.semantics.types import BoolType, IntType, JsonType, TextType
+from agm.agl.semantics.types import BUILTIN_PRELUDE_TYPES, BoolType, IntType, JsonType, TextType
 from agm.agl.semantics.types import Type as AglType
-from agm.agl.semantics.values import BoolValue, IntValue, JsonValue, TextValue
+from agm.agl.semantics.values import BoolValue, IntValue, JsonValue, RecordValue, TextValue
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import build_param_decoder
 from agm.agl.zones import ParamZone
@@ -385,6 +385,36 @@ class TestDecodeParamValue:
 
     def test_json_from_native_value(self) -> None:
         assert decode_param_value(_decoder(IntType()), 5) == IntValue(5)
+
+    @pytest.mark.parametrize(
+        ("raw", "case", "fields"),
+        [
+            ("claude/sonnet-medium", "AgentClaude", {"model": "sonnet", "thinking": "medium"}),
+            ("codex/o3-high", "AgentCodex", {"model": "o3", "thinking": "high"}),
+            (
+                "pi/openai/gpt-5-low",
+                "AgentPi",
+                {"provider": "openai", "model": "gpt-5", "thinking": "low"},
+            ),
+            ("worker --flag", "AgentCommand", {"command": "worker --flag"}),
+        ],
+    )
+    def test_agent_text_uses_host_syntax(self, raw: str, case: str, fields: dict[str, str]) -> None:
+        value = decode_param_value(_decoder(BUILTIN_PRELUDE_TYPES["Agent"]), raw)
+
+        assert isinstance(value, RecordValue)
+        assert value.display_name.rsplit("::", maxsplit=1)[-1] == case
+        assert value.fields == {name: TextValue(field) for name, field in fields.items()}
+
+    def test_agent_keeps_canonical_json_shape(self) -> None:
+        value = decode_param_value(
+            _decoder(BUILTIN_PRELUDE_TYPES["Agent"]),
+            '{"$case":"AgentClaude","model":"opus","thinking":"custom"}',
+        )
+
+        assert isinstance(value, RecordValue)
+        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentClaude"
+        assert value.fields == {"model": TextValue("opus"), "thinking": TextValue("custom")}
 
     def test_rejects_non_json_shaped_native_value(self) -> None:
         with pytest.raises(ValueError, match="JSON-compatible"):

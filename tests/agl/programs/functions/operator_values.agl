@@ -1,0 +1,20 @@
+# Built-in binary operators as function values: contextual specialization,
+# higher-order use, partial application, widening, and direct calls.
+
+def apply[A, B, C](f: (A, B) -> C, a: A, b: B) -> C = f(a, b)
+
+program def main(values: array[int], words: array[text], limit: int) -> unit =
+  print(values.fold(0, (+)))
+  print(values.fold(1, (*)))
+  print(words.fold("", (+)))
+  print(values.sort((-)))
+  print(values.filter((<)(?, limit)))
+  print(words.map((==)(?, "b")))
+  let scaled: (int, decimal) -> decimal = (*)
+  print(scaled(limit, 0.5))
+  let widened: (int, int) -> decimal = (-)
+  print(widened(limit, 1))
+  print(apply((>=), limit, values.size()))
+  print((!=)(words, ["a"]))
+  let ratio: (int, int) -> decimal = (/)
+  print(ratio(values.size(), limit))

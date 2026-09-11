@@ -156,6 +156,7 @@ from agm.agl.syntax.nodes import (
     Loop,
     NameTarget,
     NullLit,
+    OperatorRef,
     Pattern,
     Placeholder,
     Program,
@@ -352,6 +353,7 @@ class _InferenceRegion:
     builtin_defaults: list[tuple[InferenceVarType, Type, SourceSpan, str]] = field(
         default_factory=list
     )
+    operator_values: list[tuple[OperatorRef, FunctionType]] = field(default_factory=list)
 
 
 class _CandidateEvidenceError(AglTypeError):
@@ -1682,6 +1684,12 @@ class _Checker:
         finally:
             self._inference_region = outer_region
 
+    def _settle_region(self, region: _InferenceRegion, *, final: bool) -> None:
+        """Resolve operator values around builtin defaults; defaults see operator evidence."""
+        self._resolve_operator_values(region)
+        self._apply_builtin_defaults(region)
+        self._resolve_operator_values(region, require=final)
+
     def _apply_builtin_defaults(self, region: _InferenceRegion) -> None:
         """Apply unresolved builtin defaults after contextual constraints settle."""
         pending = tuple(
@@ -1721,7 +1729,7 @@ class _Checker:
             try:
                 typ = self._infer_expr(expr, expected=expected)
                 self._record_node_type(expr.node_id, typ)
-                self._apply_builtin_defaults(region)
+                self._settle_region(region, final=False)
                 return region.engine.zonk(typ)
             finally:
                 self._inference_region = None
@@ -1743,7 +1751,7 @@ class _Checker:
                         expr.span, role=ConstraintRole.EXPECTED_RESULT, subject="expression"
                     ),
                 )
-            self._apply_builtin_defaults(region)
+            self._settle_region(region, final=True)
             region.engine.check_requirements()
             for obligation in region.finalization_obligations:
                 if isinstance(obligation, PendingBuiltinObligation):
@@ -1876,6 +1884,8 @@ class _Checker:
             return BottomType()
         if isinstance(expr, BinaryOp):
             return self._check_binary_op(expr)
+        if isinstance(expr, OperatorRef):
+            return self._check_operator_ref(expr, expected=expected)
         if isinstance(expr, UnaryNot):
             operand_type = self._check_expr(expr.operand, expected=None)
             if self._candidate_operation_can_defer((operand_type,), (BoolType,)):
@@ -3680,6 +3690,8 @@ class _Checker:
                 subject="function value",
                 error_subject="function value call",
             )
+        assert self._inference_region is not None
+        self._resolve_operator_values(self._inference_region)
         params = tuple(
             ParamSpec(
                 name=f"arg{index}",
@@ -4225,13 +4237,97 @@ class _Checker:
         left_type = self._check_expr(node.left, expected=None)
         right_type = self._check_expr(node.right, expected=None)
         try:
-            return self._check_binary_operands(node, left_type, right_type)
+            result = self._check_binary_operands(
+                node.op,
+                left_type,
+                right_type,
+                span=node.span,
+                left_span=node.left.span,
+                right_span=node.right.span,
+            )
         except AglTypeError as exc:
             raise self._frame_inferred_return_error(exc, exprs=(node.left, node.right)) from exc
+        if node.op in (BinOp.ADD, BinOp.SUB, BinOp.MUL):
+            self._set_inferred_return_expr_provenance(
+                node.node_id, self._provenance_for_result(result, (node.left, node.right))
+            )
+        return result
 
-    def _check_binary_operands(self, node: BinaryOp, left_type: Type, right_type: Type) -> Type:
-        op = node.op
+    def _check_operator_ref(self, node: OperatorRef, *, expected: Type | None) -> FunctionType:
+        """Type ``(op)`` as the eta closure over its context's operand types.
 
+        Operands unknown here are selected once the inference region supplies them.
+        """
+        if isinstance(expected, FunctionType) and len(expected.params) == 2:
+            function_type = expected
+        else:
+            engine = self._active_inference_engine()
+            function_type = FunctionType(
+                params=(engine.fresh("left operand"), engine.fresh("right operand")),
+                result=engine.fresh("operator result"),
+            )
+        region = self._inference_region
+        assert region is not None
+        region.operator_values.append((node, function_type))
+        self._resolve_operator_values(region)
+        return function_type
+
+    def _resolve_operator_values(self, region: _InferenceRegion, *, require: bool = False) -> None:
+        """Check pending operator values whose operand types are now known.
+
+        Each selection can solve another value's operands, so iterate to a fixpoint.
+        """
+        engine = region.engine
+        progress = True
+        while progress:
+            progress = False
+            for pending in tuple(region.operator_values):
+                node, function_type = pending
+                left, right = (engine.zonk(param) for param in function_type.params)
+                if contains_inference_var(left) or contains_inference_var(right):
+                    continue
+                region.operator_values.remove(pending)
+                progress = True
+                op_result = self._check_binary_operands(
+                    node.op, left, right, span=node.span, left_span=node.span, right_span=node.span
+                )
+                result = engine.zonk(function_type.result)
+                if not contains_inference_var(result):
+                    self._assert_assignable_from(op_result, result, node.span, node)
+                    continue
+                try:
+                    engine.unify(
+                        result,
+                        op_result,
+                        engine.origin(
+                            node.span,
+                            role=ConstraintRole.EXPECTED_RESULT,
+                            subject=f"'({node.op.value})'",
+                        ),
+                    )
+                except InferenceError as exc:
+                    raise _InferenceConstraintError(
+                        f"Inconsistent result type for '({node.op.value})': {exc}", original=exc
+                    ) from exc
+        if require and region.operator_values:
+            node = region.operator_values[0][0]
+            raise AglTypeError(
+                f"Cannot infer operand types for '({node.op.value})'; "
+                "add a function type annotation.",
+                span=node.span,
+            )
+
+    def _check_binary_operands(
+        self,
+        op: BinOp,
+        left_type: Type,
+        right_type: Type,
+        *,
+        span: SourceSpan,
+        left_span: SourceSpan,
+        right_span: SourceSpan,
+    ) -> Type:
+        """Check ``left op right`` operand types; return the operation's result type."""
         if op in (BinOp.AND, BinOp.OR):
             op_name = "and" if op is BinOp.AND else "or"
             if self._candidate_operation_can_defer((left_type, right_type), (BoolType,)):
@@ -4239,12 +4335,12 @@ class _Checker:
             if not self._is_type_or_bottom(left_type, BoolType):
                 raise AglTypeError(
                     f"'{op_name}' requires bool operands; left operand has type '{left_type!r}'.",
-                    span=node.left.span,
+                    span=left_span,
                 )
             if not self._is_type_or_bottom(right_type, BoolType):
                 raise AglTypeError(
                     f"'{op_name}' requires bool operands; right operand has type '{right_type!r}'.",
-                    span=node.right.span,
+                    span=right_span,
                 )
             return BoolType()
 
@@ -4256,13 +4352,13 @@ class _Checker:
                 raise AglTypeError(
                     f"operation '=' is not permitted on a value of abstract type "
                     f"variable '{left_type.name}'.",
-                    span=node.span,
+                    span=span,
                 )
             if isinstance(right_type, TypeVarType):
                 raise AglTypeError(
                     f"operation '=' is not permitted on a value of abstract type "
                     f"variable '{right_type.name}'.",
-                    span=node.span,
+                    span=span,
                 )
             if not (
                 isinstance(left_type, BottomType)
@@ -4272,7 +4368,7 @@ class _Checker:
                 raise AglTypeError(
                     f"Equality operands must have the same type; "
                     f"got '{left_type!r}' and '{right_type!r}'.",
-                    span=node.span,
+                    span=span,
                 )
             return BoolType()
 
@@ -4286,13 +4382,13 @@ class _Checker:
                 raise AglTypeError(
                     f"ordering operator is not permitted on a value of abstract type "
                     f"variable '{left_type.name}'.",
-                    span=node.span,
+                    span=span,
                 )
             if isinstance(right_type, TypeVarType):
                 raise AglTypeError(
                     f"ordering operator is not permitted on a value of abstract type "
                     f"variable '{right_type.name}'.",
-                    span=node.span,
+                    span=span,
                 )
             numeric_pair = self._is_type_or_bottom(
                 left_type, IntType, DecimalType
@@ -4305,24 +4401,19 @@ class _Checker:
                     f"Ordering operators require both operands to be numeric "
                     f"(int or decimal) or both to be text; "
                     f"got '{left_type!r}' and '{right_type!r}'.",
-                    span=node.span,
+                    span=span,
                 )
             return BoolType()
 
         if op == BinOp.IN:
-            return self._check_in_op(left_type, right_type, node.span)
+            return self._check_in_op(left_type, right_type, span)
 
-        if op in (BinOp.ADD, BinOp.SUB, BinOp.MUL):
-            if op == BinOp.ADD:
-                result = self._check_add(left_type, right_type, node.span)
-            else:
-                result = self._check_numeric_binop(
-                    left_type, right_type, node.span, "-" if op == BinOp.SUB else "*"
-                )
-            self._set_inferred_return_expr_provenance(
-                node.node_id, self._provenance_for_result(result, (node.left, node.right))
+        if op == BinOp.ADD:
+            return self._check_add(left_type, right_type, span)
+        if op in (BinOp.SUB, BinOp.MUL):
+            return self._check_numeric_binop(
+                left_type, right_type, span, "-" if op == BinOp.SUB else "*"
             )
-            return result
 
         if op == BinOp.DIV:
             if self._candidate_operation_can_defer((left_type, right_type), (IntType, DecimalType)):
@@ -4332,13 +4423,13 @@ class _Checker:
                 raise AglTypeError(
                     f"operation '/' is not permitted on a value of abstract type variable "
                     f"'{left_type.name}'.",
-                    span=node.span,
+                    span=span,
                 )
             if isinstance(right_type, TypeVarType):
                 raise AglTypeError(
                     f"operation '/' is not permitted on a value of abstract type variable "
                     f"'{right_type.name}'.",
-                    span=node.span,
+                    span=span,
                 )
             if not (
                 self._is_type_or_bottom(left_type, IntType, DecimalType)
@@ -4346,13 +4437,13 @@ class _Checker:
             ):
                 raise AglTypeError(
                     f"'/' requires numeric operands; got '{left_type!r}' and '{right_type!r}'.",
-                    span=node.span,
+                    span=span,
                 )
             return DecimalType()
 
         raise AglTypeError(  # pragma: no cover
             f"Unknown binary operator: {op!r}",
-            span=node.span,
+            span=span,
         )
 
     def _check_add(self, left_type: Type, right_type: Type, span: SourceSpan) -> Type:

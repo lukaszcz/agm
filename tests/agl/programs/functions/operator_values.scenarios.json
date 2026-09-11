@@ -1,0 +1,40 @@
+{
+  "scenarios": [
+    {
+      "name": "mixed_values",
+      "params": {
+        "values": [3, 1, 2],
+        "words": ["a", "b"],
+        "limit": 2
+      },
+      "expect": {
+        "stdout": "6\n6\nab\n[1, 2, 3]\n[1]\n[false, true]\n1\n1\nfalse\ntrue\n1.5\n"
+      }
+    },
+    {
+      "name": "equal_words_and_nothing_below_limit",
+      "params": {
+        "values": [5, 10],
+        "words": ["a"],
+        "limit": 4
+      },
+      "expect": {
+        "stdout": "15\n50\na\n[5, 10]\n[]\n[false]\n2\n3\ntrue\nfalse\n0.5\n"
+      }
+    },
+    {
+      "name": "division_by_zero",
+      "params": {
+        "values": [],
+        "words": [],
+        "limit": 0
+      },
+      "expect": {
+        "stdout": "0\n1\n\n[]\n[]\n[]\n0\n-1\ntrue\ntrue\n",
+        "raises": {
+          "type": "ArithmeticError"
+        }
+      }
+    }
+  ]
+}

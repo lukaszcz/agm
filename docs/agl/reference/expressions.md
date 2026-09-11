@@ -760,6 +760,36 @@ enum type selects the member; several distinct matching members remain ambiguous
 It does not narrow the static type of the left operand in either branch; cast to
 the member record before accessing that record's fields or methods.
 
+### Operators as function values
+
+A built-in symbolic binary operator written alone in parentheses is a function
+value: `(+)`, `(-)`, `(*)`, `(/)`, `(==)`, `(!=)`, `(<)`, `(<=)`, `(>)`, and
+`(>=)`. It behaves like the lambda `fn(a: L, b: R) => a op b`, whose operand
+types `L` and `R` come from context: an expected function type, the parameter
+of a higher-order function, or the arguments of a direct or partial call.
+
+```agl
+program def main() -> unit =
+  print([1, 2, 3].fold(0, (+)))         # 6
+  print(["a", "b"].fold("", (+)))       # ab
+  print([3, 1, 2].sort((-)))            # [1, 2, 3]
+  print([1, 5, 9].filter((<)(?, 4)))    # [1]
+  let ratio: (int, int) -> decimal = (/)
+  print(ratio(1, 4))                    # 0.25
+```
+
+The operator's typing rules then apply to those operand types, including
+`int → decimal` widening. As for a lambda, a concrete expected result type is
+adopted when the operator's result is assignable to it, so
+`let f: (int, int) -> decimal = (*)` is valid. Operand types that the context
+does not determine are a static error, as in `let f = (+)`; annotate the
+binding instead. Like any function value, an operator value receives both
+operands already evaluated.
+
+`(-)` is subtraction, not negation. The word operators have no operator-value
+form (`(and)` is a parenthesized name); use a lambda instead. A user-defined
+operator is an ordinary function, so `(|>)` names its declaration directly.
+
 ## `case` expressions
 
 A `case` expression selects among pattern branches whose bodies use the

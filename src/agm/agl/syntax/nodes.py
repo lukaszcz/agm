@@ -345,6 +345,15 @@ class BinaryOp:
 
 
 @dataclass(frozen=True, slots=True)
+class OperatorRef:
+    """A built-in binary operator as a function value: ``(op)``."""
+
+    op: BinOp
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
 class UnaryNot:
     """Logical negation: ``not operand``."""
 
@@ -885,6 +894,7 @@ Expr = (
     | Template
     | Placeholder
     | BinaryOp
+    | OperatorRef
     | UnaryNot
     | UnaryNeg
     | Cast

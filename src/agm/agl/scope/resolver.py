@@ -159,6 +159,7 @@ from agm.agl.syntax.nodes import (
     Loop,
     NameTarget,
     NullLit,
+    OperatorRef,
     Pattern,
     Placeholder,
     Program,
@@ -3144,7 +3145,16 @@ class _Resolver:
         else:
             assert isinstance(
                 expr,
-                (IntLit, DecimalLit, BoolLit, NullLit, StringLit, UnitLit, Placeholder),
+                (
+                    IntLit,
+                    DecimalLit,
+                    BoolLit,
+                    NullLit,
+                    StringLit,
+                    UnitLit,
+                    Placeholder,
+                    OperatorRef,
+                ),
             ), f"unhandled expr node: {type(expr)}"  # pragma: no cover
 
     def _resolve_varref(self, node: VarRef, *, is_call_target: bool = False) -> None:

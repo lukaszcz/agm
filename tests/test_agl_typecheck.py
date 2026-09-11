@@ -75,6 +75,7 @@ from agm.agl.syntax.nodes import (
     Lambda,
     LetDecl,
     NamedArg,
+    OperatorRef,
     Param,
     Placeholder,
     Program,
@@ -6072,6 +6073,147 @@ class TestUnaryOps:
     def test_neg_non_numeric_raises(self) -> None:
         err = reject_type('-"hello"')
         assert "numeric" in str(err).lower() or "'-'" in str(err)
+
+
+# ---------------------------------------------------------------------------
+# Operator values
+# ---------------------------------------------------------------------------
+
+
+def _operator_ref_type(checked: CheckedModule) -> Type:
+    """Return the checked type of the single operator value in *checked*."""
+    refs: list[OperatorRef] = []
+    walk(
+        checked.resolved.program,
+        lambda node: refs.append(node) if isinstance(node, OperatorRef) else None,
+    )
+    assert len(refs) == 1
+    return checked.node_types[refs[0].node_id]
+
+
+class TestOperatorValues:
+    @pytest.mark.parametrize(
+        ("source", "expected"),
+        [
+            ("let f: (int, int) -> int = (+)", FunctionType((IntType(), IntType()), IntType())),
+            (
+                "let f: (text, text) -> text = (+)",
+                FunctionType((TextType(), TextType()), TextType()),
+            ),
+            (
+                "let f: (int, decimal) -> decimal = (-)",
+                FunctionType((IntType(), DecimalType()), DecimalType()),
+            ),
+            (
+                "let f: (int, int) -> decimal = (/)",
+                FunctionType((IntType(), IntType()), DecimalType()),
+            ),
+            (
+                "let f: (text, text) -> bool = (<=)",
+                FunctionType((TextType(), TextType()), BoolType()),
+            ),
+            (
+                "let f: (array[int], array[int]) -> bool = (!=)",
+                FunctionType(
+                    (ArrayType(IntType()), ArrayType(IntType())),
+                    BoolType(),
+                ),
+            ),
+        ],
+    )
+    def test_expected_function_type_specializes_operator(self, source: str, expected: Type) -> None:
+        assert _operator_ref_type(accept_type(source)) == expected
+
+    def test_int_result_widens_to_expected_decimal(self) -> None:
+        checked = accept_type("let f: (int, int) -> decimal = (*)")
+        assert _operator_ref_type(checked) == FunctionType((IntType(), IntType()), DecimalType())
+
+    def test_higher_order_argument_takes_operand_types_from_the_call(self) -> None:
+        checked = accept_type("let total = [1, 2, 3].fold(0, (+))\ntotal")
+        assert checked.node_types[checked.resolved.program.body.items[-1].node_id] == IntType()
+        assert _operator_ref_type(checked) == FunctionType((IntType(), IntType()), IntType())
+
+    def test_comparator_argument(self) -> None:
+        checked = accept_type("let sorted = [2, 1].sort((-))\nsorted")
+        assert checked.node_types[checked.resolved.program.body.items[-1].node_id] == ArrayType(
+            IntType()
+        )
+
+    def test_direct_call_infers_operands_from_arguments(self) -> None:
+        checked = accept_type("(*)(2, 1.5)")
+        assert checked.node_types[checked.resolved.program.body.items[0].node_id] == DecimalType()
+        assert _operator_ref_type(checked) == FunctionType(
+            (IntType(), DecimalType()), DecimalType()
+        )
+
+    def test_direct_call_result_is_available_to_the_enclosing_operation(self) -> None:
+        checked = accept_type('(+)("a", "b") + "c"')
+        assert checked.node_types[checked.resolved.program.body.items[0].node_id] == TextType()
+
+    def test_nested_direct_calls_resolve_inside_out(self) -> None:
+        checked = accept_type("let f: (int) -> int = (+)(?, (*)(2, 3))\nf")
+        assert checked.node_types[checked.resolved.program.body.items[-1].node_id] == (
+            FunctionType((IntType(),), IntType())
+        )
+
+    def test_partial_application_infers_remaining_operand(self) -> None:
+        checked = accept_type("let inc: (int) -> int = (+)(?, 1)\ninc")
+        assert _operator_ref_type(checked) == FunctionType((IntType(), IntType()), IntType())
+
+    def test_later_generic_arguments_supply_operand_types(self) -> None:
+        checked = accept_type(
+            "def apply[A, B, C](f: (A, B) -> C, a: A, b: B) -> C = f(a, b)\napply((+), 1, 2.5)"
+        )
+        assert checked.node_types[checked.resolved.program.body.items[-1].node_id] == DecimalType()
+
+    def test_operand_resolution_precedes_builtin_value_defaults(self) -> None:
+        checked = accept_type(
+            "def via[A, B](read: (text) -> A, combine: (B, B) -> A, b: B) -> A = combine(b, b)\n"
+            "via(ask, (+), 1)"
+        )
+        assert checked.node_types[checked.resolved.program.body.items[-1].node_id] == IntType()
+
+    def test_builtin_value_default_can_supply_operands(self) -> None:
+        checked = accept_type(
+            "def join[A, B](read: (text) -> A, combine: (A, A) -> B) -> B =\n"
+            '  combine(read("x"), read("y"))\n'
+            "join(ask, (+))"
+        )
+        assert checked.node_types[checked.resolved.program.body.items[-1].node_id] == TextType()
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "let f = (+)",
+            "let f = (==)",
+            "(<)",
+        ],
+    )
+    def test_operand_types_must_be_inferable(self, source: str) -> None:
+        reject_type(source)
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "let f: (bool, bool) -> bool = (+)",
+            "let f: (int, text) -> text = (+)",
+            "let f: (text, text) -> text = (*)",
+            "let f: (int, int) -> int = (/)",
+            "let f: (int, int) -> int = (<)",
+            "let f: (bool, bool) -> bool = (<)",
+            "let f: (int -> int, int -> int) -> bool = (==)",
+            "let f: (int, text) -> bool = (==)",
+            "let f: (int) -> int = (-)",
+            "let f: (int, int, int) -> int = (+)",
+            "let f: int = (+)",
+            "def g[T](f: (int, int) -> array[T]) -> unit = ()\ng((+))",
+        ],
+    )
+    def test_invalid_specialization_is_rejected(self, source: str) -> None:
+        reject_type(source)
+
+    def test_abstract_type_variable_operands_are_rejected(self) -> None:
+        reject_type("def same[T](a: T, b: T) -> bool = (==)(a, b)\n()")
 
 
 # ---------------------------------------------------------------------------

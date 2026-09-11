@@ -2453,6 +2453,14 @@ class AstBuilder(Transformer):
         """paren_expr_or_unit: LPAR paren_block RPAR — unwrap to the Block."""
         return next(a for a in args if isinstance(a, syntax.Block))
 
+    def operator_ref(self, meta: Meta, args: _Args) -> syntax.OperatorRef:
+        """paren_expr_or_unit: LPAR operator_ref_op RPAR — a built-in operator value."""
+        return syntax.OperatorRef(
+            op=_BUILTIN_INFIX_OPS[str(args[1])],
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
     # ------------------------------------------------------------------
     # Patterns
     # ------------------------------------------------------------------

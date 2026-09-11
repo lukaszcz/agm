@@ -129,7 +129,7 @@ def convert_config_value(
     """Convert a raw scalar or ``Option`` host engine value to its AgL type.
 
     ``default-agent`` is an ``Agent`` value, not a scalar or ``Option`` setting;
-    a host-supplied AgL literal (``--agent``/``[exec] default-agent``) is parsed
+    a host-supplied AgL literal (``--default-agent``/``[exec] default-agent``) is parsed
     separately as an engine-setting override rather than through this helper.
     The one exception is ``[exec] runner``, a bare host command string with no
     AgL syntax of its own: it is decoded here as an ``{"$case":

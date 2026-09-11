@@ -5,7 +5,7 @@
 
 ```text
 agm exec [--strict-json|--no-strict-json]
-         [--max-iters N] [--max-call-depth N] [--agent AGENT]
+         [--max-iters N] [--max-call-depth N] [--default-agent AGENT]
          [--timeout DURATION|--no-timeout] [--dry-run]
          [--log|--log-file PATH|--no-log] [--no-log-file]
          [--no-stdlib]
@@ -99,14 +99,14 @@ either is a static error.
 - `--max-call-depth N`: Override the maximum recursion call depth (CLI >
   `[exec] max-call-depth` config; the canonical default is 256). Exceeding it
   raises `RecursionError`.
-- `--agent AGENT`: Seed `std/config::default-agent` from the host Agent syntax described
+- `--default-agent AGENT`: Seed `std/config::default-agent` from the host Agent syntax described
   below. Canonical constructor syntax such as `AgentClaude("sonnet", "medium")` remains
   accepted. The value is typechecked before execution; it overrides qualified
   program-table/`[exec]` configuration. It
   selects the value used by `ask` calls that omit `agent`. An `AgentCommand(...)`
   literal's command text is shell-split and validated the same way as `[exec] runner`
   before execution; a malformed command (e.g. an unclosed quote) exits 1 with nothing run.
-  Because `--agent` is an explicit request, it still exits 1 when combined with
+  Because `--default-agent` is an explicit request, it still exits 1 when combined with
   `--no-stdlib` on a program that never loads `std/config` — unlike
   qualified program-table/`[exec] default-agent`, which is simply inert (has no effect) in
   that situation.
@@ -183,7 +183,7 @@ counterpart: it fails the program when actually selected for execution, but
 `--help` and shell completion degrade silently, falling back to `agm exec`'s
 own help and offering no completions for that program rather than erroring. For
 `agm exec`, the reserved set is the host's own declared options (`--help`/`-h`, `--program`/`-p`, `--command`/`-c`,
-`--module-path`/`-I`, `--max-call-depth`, `--no-stdlib`, `--dry-run`, `--agent`)
+`--module-path`/`-I`, `--max-call-depth`, `--no-stdlib`, `--dry-run`)
 **union every engine-setting flag in both polarities** — `--default-agent`,
 `--strict-json`/`--no-strict-json`, `--max-iters`, `--timeout`/`--no-timeout`,
 `--log`/`--no-log`, `--log-file`/`--no-log-file` — so a parameter such as
@@ -288,9 +288,10 @@ Every CLI argument or TOML string whose declared type is the standard `Agent` ac
 The final hyphen separates the model from an opaque, non-empty effort suffix; AGM does
 not restrict the suffix vocabulary. Exact lowercase `claude/` and `codex/` prefixes
 select those native CLIs before the generic Pi form. Text that does not match a compact
-form is a verbatim `AgentCommand`, so `--agent 'worker --flag'` selects that custom
+form is a verbatim `AgentCommand`, so `--default-agent 'worker --flag'` selects that custom
 command. Agent-typed program parameters also retain their canonical tagged JSON form;
-`--agent` and `default-agent` retain direct AgL constructor syntax for compatibility.
+`--default-agent` and the `default-agent` config key retain direct AgL constructor syntax for
+compatibility.
 
 ### Agents
 
@@ -344,8 +345,8 @@ log = false                 # trace logging off by default; set true to enable
 set, it seeds `default-agent` as `AgentCommand(runner)`. Continuing free asks require the
 command to consume `%{SESSION_ID}` and use that same ID to create or resume a transcript;
 use a native `AgentClaude`, `AgentCodex`, or `AgentPi` value when possible. It applies only when neither
-`--agent` nor `default-agent` (CLI or config) supplies a value: precedence, highest
-first, is `--agent` > qualified program-table/`[exec] default-agent` > `[exec] runner` > the
+`--default-agent` nor a configured `default-agent` supplies a value: precedence, highest
+first, is `--default-agent` > qualified program-table/`[exec] default-agent` > `[exec] runner` > the
 `std/config` declaration's own default. `runner` is shell-split and validated as soon
 as configuration is read, before the module graph loads; a malformed command exits 1
 with nothing run.

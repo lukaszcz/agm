@@ -851,7 +851,7 @@ class PipelineDriver:
         if setting_overrides:
             # A one-shot compile: whether or not ``std/config`` is in this
             # graph, this is the only chance to apply/validate the overrides,
-            # so a ``required`` override (e.g. ``--agent``) must be validated
+            # so a ``required`` override (e.g. ``--default-agent``) must be validated
             # even when ``std/config`` never loads (``validate_when_absent=True``).
             graph, next_id, override_diagnostics, _newly_loaded_modules = apply_setting_overrides(
                 graph,

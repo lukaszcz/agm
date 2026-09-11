@@ -97,8 +97,10 @@ class TestReplArgsParsing:
         assert getattr(recorded_runs[0], "strict_json") is False
 
     def test_agent_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
-        assert invoke(runner, ["repl", "--agent", 'AgentCommand("echo agent")']).exit_code == 0
-        assert getattr(recorded_runs[0], "agent") == 'AgentCommand("echo agent")'
+        assert (
+            invoke(runner, ["repl", "--default-agent", 'AgentCommand("echo agent")']).exit_code == 0
+        )
+        assert getattr(recorded_runs[0], "default_agent") == 'AgentCommand("echo agent")'
 
     def test_confirm_agents_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         assert invoke(runner, ["repl", "--confirm-agents"]).exit_code == 0
@@ -240,7 +242,7 @@ def _args(
     log: bool = False,
     log_file: str | None = None,
     max_iters: int | None = None,
-    agent: str | None = None,
+    default_agent: str | None = None,
     no_stdlib: bool = False,
     plain: bool = True,
 ) -> ReplArgs:
@@ -259,7 +261,7 @@ def _args(
         log=log,
         log_file=log_file,
         max_iters=max_iters,
-        agent=agent,
+        default_agent=default_agent,
         no_stdlib=no_stdlib,
         plain=plain,
     )
@@ -577,10 +579,10 @@ class TestReplRun:
         from agm.agl.setting_overrides import SettingOverride
 
         _isolated_home(monkeypatch, tmp_path)
-        repl_command.run(_args(agent='AgentCommand("configured")'))
+        repl_command.run(_args(default_agent='AgentCommand("configured")'))
         session: ReplSession = fake_plain_console[0]["session"]
         assert session._setting_overrides["default-agent"] == SettingOverride(
-            source='AgentCommand("configured")', origin="--agent"
+            source='AgentCommand("configured")', origin="--default-agent"
         )
         assert "default-agent" not in session._engine_seed
 
@@ -608,7 +610,7 @@ class TestReplRun:
         from agm.agl.semantics.values import RecordValue, TextValue
 
         _isolated_home(monkeypatch, tmp_path)
-        repl_command.run(_args(agent='AgentCommand("configured")'))
+        repl_command.run(_args(default_agent='AgentCommand("configured")'))
         session: ReplSession = fake_plain_console[0]["session"]
 
         assert session.eval_entry("import std/config").ok
@@ -778,11 +780,11 @@ class TestReplRun:
         fake_plain_console: list[dict[str, object]],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """A blank ``--agent`` value is a host-shape error, rejected before the session builds."""
+        """A blank ``--default-agent`` is a host-shape error, rejected before the session builds."""
         _isolated_home(monkeypatch, tmp_path)
 
         with pytest.raises(SystemExit) as exc_info:
-            repl_command.run(_args(agent=""))
+            repl_command.run(_args(default_agent=""))
 
         assert exc_info.value.code == 1
         assert "default-agent" in capsys.readouterr().err
@@ -798,7 +800,7 @@ class TestReplRun:
     ) -> None:
         _isolated_home(monkeypatch, tmp_path)
 
-        repl_command.run(_args(agent=value))
+        repl_command.run(_args(default_agent=value))
 
         assert len(fake_plain_console) == 1
 
@@ -809,14 +811,14 @@ class TestReplRun:
         fake_plain_console: list[dict[str, object]],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """A well-typed but non-constant ``--agent`` literal also exits before the banner."""
+        """A well-typed but non-constant ``--default-agent`` literal exits before the banner."""
         _isolated_home(monkeypatch, tmp_path)
 
         with pytest.raises(SystemExit) as exc_info:
-            repl_command.run(_args(agent='AgentCommand("not " + "constant")'))
+            repl_command.run(_args(default_agent='AgentCommand("not " + "constant")'))
 
         assert exc_info.value.code == 1
-        assert "--agent" in capsys.readouterr().err
+        assert "--default-agent" in capsys.readouterr().err
         assert fake_plain_console == []
 
     def test_malformed_agent_literal_with_no_stdlib_fails_at_session_open(
@@ -826,17 +828,17 @@ class TestReplRun:
         fake_plain_console: list[dict[str, object]],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """``--no-stdlib`` never loads ``std/config``, but ``--agent`` is still an
+        """``--no-stdlib`` never loads ``std/config``, but ``--default-agent`` is still an
         explicit request the host cannot silently drop: it must still exit 1 at
         session-open time (before the console starts), not be deferred to a
         later entry that happens to import ``std/config`` (or never come)."""
         _isolated_home(monkeypatch, tmp_path)
 
         with pytest.raises(SystemExit) as exc_info:
-            repl_command.run(_args(agent="(", no_stdlib=True))
+            repl_command.run(_args(default_agent="(", no_stdlib=True))
 
         assert exc_info.value.code == 1
-        assert "--agent" in capsys.readouterr().err
+        assert "--default-agent" in capsys.readouterr().err
         assert fake_plain_console == []
 
     def test_config_default_agent_with_no_stdlib_opens_cleanly(

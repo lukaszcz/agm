@@ -245,7 +245,7 @@ class ReplSession:
                     self._builtin_var_seed[key] = value
         self._builtin_var_values = dict(self._builtin_var_seed)
         # Host-supplied AgL source overrides (currently only ``default-agent``
-        # from ``--agent``/``[exec] default-agent``) spliced into the module
+        # from ``--default-agent``/``[exec] default-agent``) spliced into the module
         # graph the FIRST time it loads ``std/config`` (see
         # ``EntryPipeline.eval_entry``), so the override is resolved,
         # type-checked, and constant-checked by that entry's own compilation
@@ -449,7 +449,7 @@ class ReplSession:
         is reported here rather than deferred to whichever entry happens to
         load ``std/config`` first. A graph with no loaded ``std/config`` (e.g.
         ``--no-stdlib`` with no explicit import) is likewise reported here,
-        but only for a ``required`` override (e.g. ``--agent``): an explicit
+        but only for a ``required`` override (e.g. ``--default-agent``): an explicit
         per-run request the host cannot silently drop, validated up front
         (``load_and_check_program``'s ``validate_missing_std_config=True``)
         rather than deferred to a later entry that may never come. A

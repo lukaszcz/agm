@@ -56,7 +56,7 @@ def test_each_engine_key_seed_has_the_same_cli_config_presence_matrix(
         config=_config_for(key, config_given),
         primary_table=primary_table,
         cli_values=cli_values,
-        agent=agent,
+        default_agent=agent,
     )
 
     actual_keys = set(seeds.values) | set(seeds.overrides)
@@ -83,7 +83,7 @@ def test_cli_agent_values_are_normalized_to_agl_source(raw: str, expected_source
         config=_config_for("default-agent", configured=False),
         primary_table={},
         cli_values={},
-        agent=raw,
+        default_agent=raw,
     )
 
     assert seeds.overrides["default-agent"].source == expected_source
@@ -102,7 +102,7 @@ def test_toml_default_agent_uses_the_same_external_syntax() -> None:
         config=config,
         primary_table={"default-agent": config.default_agent},
         cli_values={},
-        agent=None,
+        default_agent=None,
     )
 
     assert seeds.overrides["default-agent"].source == 'AgentClaude("sonnet", "experimental")'
@@ -124,7 +124,7 @@ def test_none_config_values_do_not_suppress_a_builtin_initializer(
         config=_config_for(key, configured=False),
         primary_table={key: raw_value},
         cli_values={},
-        agent=None,
+        default_agent=None,
     )
 
     assert key not in seeds.values
@@ -138,7 +138,7 @@ def test_explicit_empty_option_cli_value_remains_a_seed(key: str) -> None:
         config=_config_for(key, configured=False),
         primary_table={},
         cli_values={key: None},
-        agent=None,
+        default_agent=None,
     )
 
     assert key in seeds.values
@@ -162,7 +162,7 @@ def test_configured_numeric_timeout_is_seeded_from_its_raw_spelling() -> None:
         ),
         primary_table={"timeout": 0.5},
         cli_values={},
-        agent=None,
+        default_agent=None,
     )
 
     assert "timeout" in seeds.values

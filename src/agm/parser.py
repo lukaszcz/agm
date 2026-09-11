@@ -560,7 +560,7 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "exec": textwrap.dedent("""\
         agm exec [--strict-json|--no-strict-json] [--max-iters N]
-                 [--max-call-depth N] [--agent AGENT]
+                 [--max-call-depth N] [--default-agent AGENT]
                  [--timeout DURATION|--no-timeout] [--dry-run]
                  [--log|--log-file PATH|--no-log] [--no-log-file]
                  [--no-stdlib] [-I DIR]... [-p PATH]
@@ -605,7 +605,8 @@ _HELP_TEXTS: dict[str, str] = {
           --max-iters N         Cap unbounded loops; off by default (CLI > config).
           --max-call-depth N    Override the maximum recursion call depth
                                 (CLI > config).
-          --agent AGENT         Seed the free-ask default session from an Agent value or command.
+          --default-agent AGENT Seed the free-ask default session from an Agent value
+                                or command.
           --timeout DURATION    Override initial shell-exec and agent idle timeouts;
                                 seed std/config::timeout to Some(DURATION). Mutually
                                 exclusive with --no-timeout.
@@ -642,7 +643,7 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "repl": textwrap.dedent("""\
         agm repl [--strict-json|--no-strict-json] [--max-iters N] [--max-call-depth N]
-                 [--agent AGENT] [--confirm-agents] [--dry-run] [--no-stdlib]
+                 [--default-agent AGENT] [--confirm-agents] [--dry-run] [--no-stdlib]
                  [--quiet] [--log|--log-file PATH|--no-log] [--plain]
 
         Start an interactive read-eval-print loop for AgL.  Each entry is
@@ -677,7 +678,8 @@ _HELP_TEXTS: dict[str, str] = {
                                 (source writes > CLI > config).
           --max-call-depth N    Override the maximum recursion call depth
                                 (CLI > config; source pragmas are not applied in the REPL).
-          --agent AGENT         Seed the free-ask default session from an Agent value or command.
+          --default-agent AGENT Seed the free-ask default session from an Agent value
+                                or command.
           --confirm-agents     Confirm each agent prompt before dispatching it
                                 (default: fire agent calls without confirming).
           --quiet               Suppress automatic echoing of entry results.

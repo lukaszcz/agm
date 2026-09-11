@@ -28,7 +28,7 @@ Flag notes:
       ``--log-file PATH`` writes to PATH; ``--no-log`` disables it.  At most one
       of these three flags may be given (mutually exclusive).  ``[exec] log =
       true`` in config also enables logging; CLI flags override config.
-    - ``--agent AGENT`` seeds ``std/config::default-agent`` from host Agent
+    - ``--default-agent AGENT`` seeds ``std/config::default-agent`` from host Agent
       syntax or a canonical constructor, taking precedence over the qualified program
       table/``[exec] default-agent``, which in turn takes precedence over the
       bare host command in ``[exec] runner``.
@@ -503,7 +503,7 @@ def run(
     # are not seeds: passing them here would suppress a declared
     # ``builtin var`` initializer.  The shared decoder preserves explicit
     # ``None`` values for Option settings such as --no-timeout.  An AgL agent
-    # literal (``--agent``/``[exec] default-agent``) becomes an override
+    # literal (``--default-agent``/``[exec] default-agent``) becomes an override
     # spliced into the program's own compilation below rather than a seed
     # value; a bad literal exits 1 here, before the module graph is loaded.
     cli_values: dict[str, object | None] = {}
@@ -530,7 +530,7 @@ def run(
         primary_table=engine_program_table,
         fallback_table=toml_dict(merged_config.get("exec")),
         cli_values=cli_values,
-        agent=args.agent,
+        default_agent=args.default_agent,
     )
 
     # Load + scope the graph ONCE, against the module roots assembled above,

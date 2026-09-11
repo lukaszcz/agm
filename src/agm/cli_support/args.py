@@ -265,7 +265,7 @@ class ExecArgs:
     no_timeout: bool = False
     no_log_file: bool = False
     # An AgL ``Agent`` literal used to seed std/config::default-agent.
-    agent: str | None = None
+    default_agent: str | None = None
     # Static artifacts produced only when CLI ambiguity required early discovery.
     pipeline_cache: object | None = field(default=None, repr=False, compare=False)
 
@@ -283,7 +283,7 @@ class ReplArgs:
     max_call_depth: int | None = None
     no_stdlib: bool = False
     # An AgL ``Agent`` literal used to seed std/config::default-agent.
-    agent: str | None = None
+    default_agent: str | None = None
     # Force the plain, non-interactive line front end even on a tty; the
     # auto-detected default (non-tty stdin/stdout, or TERM=dumb) needs no flag.
     plain: bool = False

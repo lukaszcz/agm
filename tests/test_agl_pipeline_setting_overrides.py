@@ -133,7 +133,7 @@ class TestOverrideApplied:
             "import std/config::*\nlet value = std/config::default-agent",
             overrides={
                 "default-agent": SettingOverride(
-                    source='AgentCommand("overridden")', origin="--agent"
+                    source='AgentCommand("overridden")', origin="--default-agent"
                 )
             },
         )
@@ -144,7 +144,7 @@ class TestOverrideApplied:
             roots=_roots(),
             setting_overrides={
                 "default-agent": SettingOverride(
-                    source='AgentCommand("overridden")', origin="--agent"
+                    source='AgentCommand("overridden")', origin="--default-agent"
                 )
             },
         )
@@ -177,7 +177,7 @@ class TestOverrideApplied:
             "import std/config::*\nlet value = std/config::default-agent\nvalue",
             overrides={
                 "default-agent": SettingOverride(
-                    source='AgentCommand("overridden")', origin="--agent"
+                    source='AgentCommand("overridden")', origin="--default-agent"
                 )
             },
         )
@@ -192,7 +192,7 @@ class TestOverrideApplied:
 
 class TestOverrideCheckedByTheProgram:
     def test_type_mismatched_override_is_a_type_error_naming_the_origin(self) -> None:
-        origin = "--agent"
+        origin = "--default-agent"
         driver, prepared = _prepare(
             "()",
             overrides={"default-agent": SettingOverride(source='"not-an-agent"', origin=origin)},
@@ -205,7 +205,7 @@ class TestOverrideCheckedByTheProgram:
         assert origin in format_diagnostic(result.diagnostics[0])
 
     def test_non_constant_override_is_rejected(self) -> None:
-        origin = "--agent"
+        origin = "--default-agent"
         driver, prepared = _prepare(
             "()",
             overrides={
@@ -237,7 +237,7 @@ class TestOverrideApplicationRejections:
         assert origin in _diagnostic_text(prepared)
 
     def test_multi_expression_override_reports_diagnostic_naming_origin(self) -> None:
-        origin = "--agent"
+        origin = "--default-agent"
         _driver, prepared = _prepare(
             "()",
             overrides={
@@ -251,7 +251,7 @@ class TestOverrideApplicationRejections:
         assert origin in _diagnostic_text(prepared)
 
     def test_non_expression_override_reports_diagnostic_naming_origin(self) -> None:
-        origin = "--agent"
+        origin = "--default-agent"
         _driver, prepared = _prepare(
             "()",
             overrides={"default-agent": SettingOverride(source="let x = 1", origin=origin)},
@@ -269,7 +269,7 @@ class TestOverrideApplicationRejections:
         assert origin in _diagnostic_text(prepared)
 
     def test_missing_stdlib_reports_diagnostic_naming_origin(self) -> None:
-        origin = "--agent"
+        origin = "--default-agent"
         _driver, prepared = _prepare(
             "()",
             overrides={
@@ -285,7 +285,7 @@ class TestOverrideApplicationRejections:
     def test_non_required_override_is_inert_when_stdlib_is_missing(self) -> None:
         """Ambient configuration (``required=False``) never blocks a run: with
         no loaded ``std/config``, the key simply does not apply -- unlike a
-        ``required`` override (e.g. ``--agent``, tested above), which still
+        ``required`` override (e.g. ``--default-agent``, tested above), which still
         reports a diagnostic in the same situation.
         """
         _driver, prepared = _prepare(
@@ -331,7 +331,7 @@ class TestMalformedAgentCommandAtConstruction:
     """
 
     def test_unparseable_command_text_is_a_pre_execution_diagnostic(self) -> None:
-        origin = "--agent"
+        origin = "--default-agent"
         driver, prepared = _prepare(
             "()",
             overrides={
@@ -351,7 +351,9 @@ class TestMalformedAgentCommandAtConstruction:
         driver, prepared = _prepare(
             "import std/config::*\nlet value = std/config::default-agent",
             overrides={
-                "default-agent": SettingOverride(source='AgentCommand("echo hi")', origin="--agent")
+                "default-agent": SettingOverride(
+                    source='AgentCommand("echo hi")', origin="--default-agent"
+                )
             },
         )
         result = run_inline_command(
@@ -359,7 +361,9 @@ class TestMalformedAgentCommandAtConstruction:
             "import std/config::*\nlet value = std/config::default-agent",
             roots=_roots(),
             setting_overrides={
-                "default-agent": SettingOverride(source='AgentCommand("echo hi")', origin="--agent")
+                "default-agent": SettingOverride(
+                    source='AgentCommand("echo hi")', origin="--default-agent"
+                )
             },
         )
         assert result.ok, f"expected success but got: {result.diagnostics or result.error!r}"
@@ -424,7 +428,7 @@ class TestStandardLibraryEntry:
     @pytest.mark.parametrize("module", ["config", "math"])
     def test_spliced_override_is_type_checked_for_every_library_entry(self, module: str) -> None:
         """The value really is spliced in as the declaration's default."""
-        origin = "--agent"
+        origin = "--default-agent"
         driver, prepared = self._prepare_file(
             _STDLIB_MODULES / f"{module}.agl",
             {"default-agent": SettingOverride(source='"not-an-agent"', origin=origin)},

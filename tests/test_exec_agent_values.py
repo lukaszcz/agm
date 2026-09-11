@@ -154,7 +154,7 @@ def test_exec_default_agent_precedence_is_config_then_cli_then_source(
     fake_agent_transport.queue(fake_agent_transport.success("done"))
     argv = ["exec", "--no-log"]
     if cli_agent is not None:
-        argv.extend(["--agent", cli_agent])
+        argv.extend(["--default-agent", cli_agent])
     argv.append(str(program))
 
     result = _invoke(CliRunner(), argv)

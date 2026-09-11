@@ -371,6 +371,13 @@ class TestBuildProgramCommand:
 
         assert isinstance(result, ProgramCommand)
 
+    def test_exec_leaves_the_agent_flag_to_the_program(self) -> None:
+        result = build_program_command(
+            _program(_param("agent", BUILTIN_PRELUDE_TYPES["Agent"])), EXEC_RESERVED_FLAGS
+        )
+
+        assert isinstance(result, ProgramCommand)
+
     def test_registered_command_reserves_its_own_dry_run_flag(self) -> None:
         result = build_program_command(
             _program(_param("dry-run", BoolType())), REGISTERED_RESERVED_FLAGS

@@ -8,7 +8,7 @@ An agent is described by an immutable host *spec* (`agent/spec.py`): one per sup
 
 ## Host Agent Values
 
-Every CLI token or TOML string whose checked type is the standard `Agent` accepts one shared host syntax (`agent/values.py`). `claude/MODEL-EFFORT` and `codex/MODEL-EFFORT` select their native CLIs; `pi/PROVIDER/MODEL-EFFORT` selects Pi explicitly, while an otherwise matching `PROVIDER/MODEL-EFFORT` defaults to Pi. The final hyphen separates an opaque effort suffix. Text matching none of these forms is a verbatim `AgentCommand`; canonical tagged JSON remains available for program arguments, and `--agent`/`default-agent` retain canonical AgL constructor syntax.
+Every CLI token or TOML string whose checked type is the standard `Agent` accepts one shared host syntax (`agent/values.py`). `claude/MODEL-EFFORT` and `codex/MODEL-EFFORT` select their native CLIs; `pi/PROVIDER/MODEL-EFFORT` selects Pi explicitly, while an otherwise matching `PROVIDER/MODEL-EFFORT` defaults to Pi. The final hyphen separates an opaque effort suffix. Text matching none of these forms is a verbatim `AgentCommand`; canonical tagged JSON remains available for program arguments, and the `--default-agent` flag and `default-agent` config key retain canonical AgL constructor syntax.
 
 ## Sessions
 

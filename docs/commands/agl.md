@@ -8,7 +8,7 @@ described here. The AgL language itself is documented in the
 
 ```text
 agm repl [--strict-json|--no-strict-json]
-         [--max-iters N] [--max-call-depth N] [--agent AGENT] [--confirm-agents]
+         [--max-iters N] [--max-call-depth N] [--default-agent AGENT] [--confirm-agents]
          [--quiet] [--dry-run] [--no-stdlib] [--log|--log-file PATH|--no-log] [--plain]
 ```
 
@@ -45,9 +45,9 @@ until closed or the REPL exits. `:reset` clears AgL bindings and settings but do
 **not** close host sessions, including the default session used by free `ask`; a later
 free `ask` continues that default conversation. Close unneeded explicit sessions
 yourself. Like `agm exec`, each typed `Agent` value selects its own backend command;
-settings do not select it. `--agent` and `[exec] default-agent` accept the shared
+settings do not select it. `--default-agent` and `[exec] default-agent` accept the shared
 [host Agent syntax](exec.md#host-agent-syntax), including native shorthand and custom
-command text. Like `agm exec`, `--agent` combined with `--no-stdlib`
+command text. Like `agm exec`, `--default-agent` combined with `--no-stdlib`
 still fails — during session initialization, before the prompt appears — if the
 session never loads `std/config`; `[exec] default-agent` is simply inert in that same
 situation.
@@ -150,7 +150,7 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 
 - `--strict-json` / `--no-strict-json`: Set JSON-codec strictness for agent output
   (lenient recovery is the default), as for `agm exec`.
-- `--max-iters N`, `--max-call-depth N`, `--agent AGENT`: As for `agm exec`.
+- `--max-iters N`, `--max-call-depth N`, `--default-agent AGENT`: As for `agm exec`.
 - `--confirm-agents`: Start in confirm mode, asking before each agent call (the default
   is auto; see [Agent-call confirmation](#agent-call-confirmation)).
 - `--quiet`: Suppress the automatic echoing of entry results.
@@ -201,7 +201,7 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 The REPL itself only fails before the loop starts; ordinary per-entry errors are
 reported inline and never exit the process. `std/process::exit(code)` is the
 exception: it terminates the REPL host with its portable `0..255` status after
-finalizing that entry's trace. A blank or non-string `--agent`/`[exec] default-agent`
+finalizing that entry's trace. A blank or non-string `--default-agent`/`[exec] default-agent`
 value is one such pre-loop failure. A recognized direct Agent constructor is spliced into
 `std/config` before the console starts, so wrong arguments or non-constant fields are
 resolved, type-checked, and constant-checked (and any rejection names the flag or config
@@ -216,7 +216,7 @@ the REPL.
 | Code | Meaning |
 |------|---------|
 | `0` | The session ended normally (`:quit`/`:exit` or Ctrl-D) |
-| `1` | Pre-loop setup failure: a blank/non-string or invalid canonical constructor in `[exec] default-agent` or `--agent`, or an unwritable `--log-file` — reported before the prompt appears |
+| `1` | Pre-loop setup failure: a blank/non-string or invalid canonical constructor in `[exec] default-agent` or `--default-agent`, or an unwritable `--log-file` — reported before the prompt appears |
 
 ### Examples
 

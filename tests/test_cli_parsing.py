@@ -2132,7 +2132,13 @@ class TestParserHelpers:
         output = io.StringIO()
         parser_helpers.print_help_for_command_path(["exec"], file=output)
         result = output.getvalue()
-        for option in ("--agent", "--max-iters", "--timeout", "--no-timeout", "--no-log-file"):
+        for option in (
+            "--default-agent",
+            "--max-iters",
+            "--timeout",
+            "--no-timeout",
+            "--no-log-file",
+        ):
             assert option in result
         assert "--runner" not in result
 
@@ -2147,7 +2153,7 @@ class TestParserHelpers:
         parser_helpers.print_help_for_command_path(["repl"], file=output)
         result = output.getvalue()
         assert "--max-iters" in result
-        assert "--agent" in result
+        assert "--default-agent" in result
         assert "--runner" not in result
 
     def test_print_command_help_with_file_param(self) -> None:

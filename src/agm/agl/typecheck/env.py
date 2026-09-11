@@ -9,6 +9,10 @@
 ``AgentCall`` node.
 ``AglTypeError`` is the fatal type error raised by the checker.
 ``EnvironmentFacts`` is the replayable journal of a ``TypeEnvironment``'s own facts.
+``CheckedModuleImage`` is a data-only ``CheckedModule`` for cache persistence;
+:meth:`CheckedModule.image` builds one, :meth:`CheckedModuleImage.rehydrate`
+turns it back into an equivalent ``CheckedModule`` over a freshly prepared
+environment.
 """
 
 from __future__ import annotations
@@ -17,9 +21,10 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 if TYPE_CHECKING:
+    from agm.agl.scope.program import ResolvedModule
     from agm.agl.typecheck.function_inference import FunctionSignatureRecord
 
 from agm.agl.diagnostics import AglError, Diagnostic
@@ -536,6 +541,45 @@ class CheckedModule:
         """Return the resolved nominal owner, distinct from source spelling."""
         return self.pattern_constructor_owners.get(node_id)
 
+    @property
+    def interface(self) -> ModuleTypeInterface:
+        """Closed type metadata this module contributes to importers."""
+        return self.type_env.module_interface()
+
+    def image(self) -> CheckedModuleImage:
+        """Build a data-only image for cache persistence and rehydration.
+
+        Retains every field except ``resolved``/``type_env``/``import_env``/
+        ``source_text`` — recovered from the current ``ResolvedModule`` on
+        rehydration — plus the module's closed type interface and its
+        environment's own-facts journal. Raises if ``type_env`` never started
+        an own-facts journal (the single-module and REPL-seed paths never do).
+        """
+        return CheckedModuleImage(
+            node_types=self.node_types,
+            contract_specs=self.contract_specs,
+            call_sites=self.call_sites,
+            warnings=self.warnings,
+            function_signatures=self.function_signatures,
+            cast_specs=self.cast_specs,
+            argument_bindings=self.argument_bindings,
+            pattern_classifications=self.pattern_classifications,
+            partial_calls=self.partial_calls,
+            interface=self.interface,
+            environment_facts=self.type_env.own_facts(),
+            published_signatures=self.published_signatures,
+            module_id=self.module_id,
+            slot_resolution=self.slot_resolution,
+            slot_constructor_refs=self.slot_constructor_refs,
+            is_test_constructor_refs=self.is_test_constructor_refs,
+            let_matched_types=self.let_matched_types,
+            pattern_binding_refs=self.pattern_binding_refs,
+            pattern_constructor_refs=self.pattern_constructor_refs,
+            pattern_constructor_owners=self.pattern_constructor_owners,
+            method_selections=self.method_selections,
+            explicit_builtin_targets=self.explicit_builtin_targets,
+        )
+
 
 def _assert_checked_types_closed(types: Iterable[Type], *, owner: str) -> None:
     """Reject solver-local types that escape a checked-output boundary."""
@@ -624,6 +668,24 @@ class ModuleTypeInterface:
     constructors: dict[DeclKey, ConstructorSignature]
     field_kinds: dict[DeclKey, tuple[tuple[str, ParamZone], ...]]
     definitions: tuple[TypeDef, ...]
+
+
+class PublishedModuleSurface(Protocol):
+    """Shared surface of ``CheckedModule`` and ``CheckedModuleImage``.
+
+    Exposes a module's published interface and signatures so the
+    whole-program pre-passes (:mod:`agm.agl.typecheck.program`) —
+    ``_build_program_type_table`` and ``_build_program_func_sig_table`` — can
+    read a reused module's closed type interface and published signatures
+    whether it is a live ``CheckedModule`` or a rehydration-ready
+    ``CheckedModuleImage``.
+    """
+
+    @property
+    def interface(self) -> ModuleTypeInterface: ...
+
+    @property
+    def published_signatures(self) -> dict[int, FunctionSignatureRecord] | None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -771,6 +833,89 @@ class EnvironmentFacts:
     """
 
     entries: tuple[EnvironmentFact, ...] = ()
+
+
+# ---------------------------------------------------------------------------
+# CheckedModuleImage — data-only CheckedModule for cache persistence
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class CheckedModuleImage:
+    """Data-only image of a ``CheckedModule``, ready to persist and rehydrate.
+
+    Every ``CheckedModule`` field except ``resolved``, ``type_env``,
+    ``import_env``, and ``source_text`` — those are recovered from the
+    current ``ResolvedModule`` on rehydration — plus ``interface`` (this
+    module's closed type contribution) and ``environment_facts`` (its
+    environment's own-facts journal). Built by :meth:`CheckedModule.image`;
+    turned back into an equivalent ``CheckedModule`` by :meth:`rehydrate`.
+    """
+
+    node_types: dict[int, Type]
+    contract_specs: dict[int, OutputContractSpec]
+    call_sites: tuple[CallSiteRecord, ...]
+    warnings: tuple[Diagnostic, ...]
+    function_signatures: dict[str, FunctionSignature]
+    cast_specs: dict[int, CastSpec]
+    argument_bindings: ArgumentBindings
+    pattern_classifications: dict[int, ConstructorRef | None]
+    partial_calls: dict[int, PartialCallSpec]
+    interface: ModuleTypeInterface
+    environment_facts: EnvironmentFacts
+    published_signatures: dict[int, FunctionSignatureRecord] | None
+    module_id: ModuleId
+    slot_resolution: dict[int, BindingRef]
+    slot_constructor_refs: dict[int, ConstructorRef]
+    is_test_constructor_refs: dict[int, ConstructorRef]
+    let_matched_types: dict[int, Type]
+    pattern_binding_refs: dict[int, BindingRef]
+    pattern_constructor_refs: dict[int, ConstructorRef]
+    pattern_constructor_owners: dict[int, NominalId]
+    method_selections: dict[int, MethodDef]
+    explicit_builtin_targets: dict[int, Type]
+
+    def rehydrate(self, resolved_module: ResolvedModule, env: TypeEnvironment) -> CheckedModule:
+        """Reconstruct an equivalent ``CheckedModule`` over a freshly prepared *env*.
+
+        *env* is a per-module environment the current compilation already
+        prepared by the whole-program pre-passes
+        (:mod:`agm.agl.typecheck.program`): its own program-wide headers and
+        candidates are seeded, but no journal has started yet. Replaying this
+        image's own facts reproduces exactly the mutations the authoritative
+        body-check would have made on it, so ``env.own_facts()`` afterward
+        equals ``environment_facts`` and a later :meth:`CheckedModule.image`
+        of the rehydrated module is complete.
+        """
+        env.begin_own_facts()
+        env.replay(self.environment_facts)
+        env.seal()
+        return CheckedModule(
+            resolved=resolved_module.resolved,
+            node_types=self.node_types,
+            contract_specs=self.contract_specs,
+            call_sites=self.call_sites,
+            warnings=self.warnings,
+            type_env=env,
+            function_signatures=self.function_signatures,
+            cast_specs=self.cast_specs,
+            argument_bindings=self.argument_bindings,
+            pattern_classifications=self.pattern_classifications,
+            partial_calls=self.partial_calls,
+            published_signatures=self.published_signatures,
+            module_id=self.module_id,
+            import_env=resolved_module.import_env,
+            source_text=resolved_module.source_text,
+            slot_resolution=self.slot_resolution,
+            slot_constructor_refs=self.slot_constructor_refs,
+            is_test_constructor_refs=self.is_test_constructor_refs,
+            let_matched_types=self.let_matched_types,
+            pattern_binding_refs=self.pattern_binding_refs,
+            pattern_constructor_refs=self.pattern_constructor_refs,
+            pattern_constructor_owners=self.pattern_constructor_owners,
+            method_selections=self.method_selections,
+            explicit_builtin_targets=self.explicit_builtin_targets,
+        )
 
 
 class TypeEnvironment:
@@ -934,6 +1079,10 @@ class TypeEnvironment:
         # Own-facts journal, active from begin_own_facts() until seal() snapshots it
         # into _own_facts. unregister_name, freeze_alias, restore_*,
         # remove_binding_types and seed_from never run in that window; not journaled.
+        # ``_resolve_name_type`` does write ``_resolved_aliases`` directly (a memo
+        # re-derivable from ``_alias_targets``) on a query path, but every declared
+        # alias is frozen during program preparation, so that write is unreachable
+        # once the journal window opens.
         self._journal: list[EnvironmentFact] | None = None
         self._own_facts: EnvironmentFacts | None = None
         # Memo for the own-type-name enumeration, which rebuilds a whole-namespace

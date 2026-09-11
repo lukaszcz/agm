@@ -50,7 +50,16 @@ Algorithm
 4. **Authoritative per-module type-check** — after every signature is concrete,
    recheck each module body with its module-aware
    :class:`~agm.agl.typecheck.env.TypeEnvironment`. This pass alone publishes
-   checked node types, calls, contracts, bindings, and warnings.
+   checked node types, calls, contracts, bindings, and warnings. Each module's
+   environment starts its own-facts journal
+   (:meth:`~agm.agl.typecheck.env.TypeEnvironment.begin_own_facts`)
+   immediately before this recheck, once phases 1-3 are done mutating it, so
+   the journal records exactly this recheck's mutations
+   (:class:`~agm.agl.typecheck.env.CheckedModuleImage`).
+
+Phases 1-3 live in :func:`_prepare_program`, returning the prepared
+per-module environments and tables in :class:`_PreparedProgram`;
+:func:`check_program` runs phase 4 over that result.
 """
 
 from __future__ import annotations
@@ -111,6 +120,7 @@ from agm.agl.typecheck.env import (
     FunctionSignature,
     GenericAliasDef,
     GenericTypeDef,
+    PublishedModuleSurface,
     TypeEnvironment,
     _assert_checked_types_closed,
     assert_checked_output_closed,
@@ -460,7 +470,7 @@ def _build_program_type_table(
     *,
     type_table: TypeTable | None = None,
     entry_seed_env: TypeEnvironment | None = None,
-    cached_modules: Mapping[ModuleId, CheckedModule] | None = None,
+    cached_modules: Mapping[ModuleId, PublishedModuleSurface] | None = None,
 ) -> tuple[
     dict[DeclKey, Type],
     dict[DeclKey, GenericTypeDef],
@@ -517,7 +527,7 @@ def _build_program_type_table(
         shared_type_table.merge_from(entry_seed_env.type_table)
 
     interfaces = {
-        mid: cm.type_env.module_interface()
+        mid: cm.interface
         for mid, cm in (cached_modules or {}).items()
         if cm.published_signatures is not None
     }
@@ -747,7 +757,7 @@ def _build_program_func_sig_table(
     program_generic_table: dict[DeclKey, GenericTypeDef],
     program_alias_table: dict[DeclKey, GenericAliasDef],
     entry_seed_env: TypeEnvironment | None = None,
-    cached_modules: Mapping[ModuleId, CheckedModule] | None = None,
+    cached_modules: Mapping[ModuleId, PublishedModuleSurface] | None = None,
 ) -> dict[int, FunctionSignatureRecord]:
     """Phase 2: collect explicit top-level function signatures across modules.
 
@@ -1019,63 +1029,45 @@ def _prepare_module_environment(
     return env
 
 
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
+@dataclass(frozen=True, slots=True)
+class _PreparedProgram:
+    """Per-module environments and whole-program tables ready for Phase 4.
+
+    Returned by :func:`_prepare_program`, which runs Phases 1-3: the
+    whole-program type and function-signature pre-passes, per-module
+    environment preparation, and import-SCC candidate inference. Phase 4
+    re-checks each module's own body against its prepared environment; a
+    module named in ``cached_checked_modules`` at that point is reused
+    unchecked instead.
+    """
+
+    module_envs: dict[ModuleId, TypeEnvironment]
+    program_type_table: dict[DeclKey, Type]
+    program_func_sig_table: dict[int, FunctionSignatureRecord]
+    candidate_records: dict[int, FunctionSignatureRecord]
+    ordered_mids: tuple[ModuleId, ...]
+    declaration_spans: dict[DeclarationKey, SourceSpan]
 
 
-def check_program(
+def _prepare_program(
     resolved: ResolvedProgram,
     capabilities: HostCapabilities,
     entry_seed_env: TypeEnvironment | None = None,
     cached_checked_modules: Mapping[ModuleId, CheckedModule] | None = None,
-) -> CheckedProgram:
-    """Run the full type-checking pass over a :class:`ResolvedProgram`.
+) -> _PreparedProgram:
+    """Run Phases 1-3 of :func:`check_program`: prepare, but do not check, every module.
 
-    Parameters
-    ----------
-    resolved:
-        Output of :func:`~agm.agl.scope.program.resolve_program`.
-    capabilities:
-        Immutable host capability catalog (agents, codecs, renderers).
-    entry_seed_env:
-        When given, the entry module's ``TypeEnvironment`` is seeded from this
-        environment before the program type table and function signatures are
-        installed.  Used by the REPL program context to make prior session
-        bindings available in program entries.
-    cached_checked_modules:
-        Checked non-entry modules from an unchanged REPL bootstrap image. Their
-        bodies are immutable and can be reused after this call has rebuilt the
-        whole-program declaration and signature context for the fresh entry.
-        Whatever this leaves uncovered is looked up in the process-global
-        artifact cache, and this pass's own results are retained there for the
-        next compilation -- except under an ``entry_seed_env``, whose session
-        types this call seeds the shared type table from, so its results are
-        not a function of the loaded modules alone.
-
-    Returns
-    -------
-    CheckedProgram
-        Per-module type side tables plus the shared program type table.
-
-    Raises
-    ------
-    AglTypeError
-        On the first static type violation in any module (first-error abort).
+    *cached_checked_modules* supplies checked non-entry modules whose bodies
+    are immutable and can be reused; each is still prepared here like every
+    other module (``prepare_module_headers`` runs for it too, plus an extra
+    cached method-header registration pass), because the environments this
+    returns serve fresh modules and cached ones alike. Only the *cache-free*
+    call (no *cached_checked_modules*) reproduces exactly what a fresh,
+    cache-free compilation would build for every environment -- the seam a
+    test uses to obtain one for
+    :meth:`~agm.agl.typecheck.env.CheckedModuleImage.rehydrate`.
     """
-    # An earlier compilation in this process already checked the modules behind
-    # this program; a caller-supplied image (a REPL session's) wins over it.
-    retainable = retained_module_sources(resolved.graph)
-    reusable: dict[ModuleId, CheckedModule] = dict(
-        retained_checked_modules(retainable, capabilities)
-    )
-    if cached_checked_modules is not None:
-        reusable.update(cached_checked_modules)
-    cached_checked_modules = {
-        mid: cm
-        for mid, cm in reusable.items()
-        if mid in resolved.modules and cm.resolved is resolved.modules[mid].resolved
-    }
+    cached_checked_modules = cached_checked_modules or {}
 
     # One TypeTable shared by every module in this program: the type pre-pass
     # dual-writes into it below, and Phase 4 re-checks each module's own
@@ -1214,10 +1206,97 @@ def check_program(
         ):
             program_func_sig_table[record.declaration_node_id] = record
 
-    # Phase 4: ordinary body checking is the sole source of checked artifacts.
-    # The full program table mixes declared and candidate records; filter to the
-    # candidate subset once and share it across every module check.
+    # The full program table mixes declared and candidate records; filter to
+    # the candidate subset once and share it across every module's Phase 4 check.
     candidate_records = candidate_records_for(program_func_sig_table)
+
+    return _PreparedProgram(
+        module_envs=module_envs,
+        program_type_table=program_type_table,
+        program_func_sig_table=program_func_sig_table,
+        candidate_records=candidate_records,
+        ordered_mids=ordered_mids,
+        declaration_spans=declaration_spans,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+
+
+def check_program(
+    resolved: ResolvedProgram,
+    capabilities: HostCapabilities,
+    entry_seed_env: TypeEnvironment | None = None,
+    cached_checked_modules: Mapping[ModuleId, CheckedModule] | None = None,
+) -> CheckedProgram:
+    """Run the full type-checking pass over a :class:`ResolvedProgram`.
+
+    Parameters
+    ----------
+    resolved:
+        Output of :func:`~agm.agl.scope.program.resolve_program`.
+    capabilities:
+        Immutable host capability catalog (agents, codecs, renderers).
+    entry_seed_env:
+        When given, the entry module's ``TypeEnvironment`` is seeded from this
+        environment before the program type table and function signatures are
+        installed.  Used by the REPL program context to make prior session
+        bindings available in program entries.
+    cached_checked_modules:
+        Checked non-entry modules from an unchanged REPL bootstrap image. Their
+        bodies are immutable and can be reused after this call has rebuilt the
+        whole-program declaration and signature context for the fresh entry.
+        Whatever this leaves uncovered is looked up in the process-global
+        artifact cache, and this pass's own results are retained there for the
+        next compilation -- except under an ``entry_seed_env``, whose session
+        types this call seeds the shared type table from, so its results are
+        not a function of the loaded modules alone.
+
+    Returns
+    -------
+    CheckedProgram
+        Per-module type side tables plus the shared program type table.
+
+    Raises
+    ------
+    AglTypeError
+        On the first static type violation in any module (first-error abort).
+    """
+    # An earlier compilation in this process already checked the modules behind
+    # this program; a caller-supplied image (a REPL session's) wins over it.
+    retainable = retained_module_sources(resolved.graph)
+    reusable: dict[ModuleId, CheckedModule] = dict(
+        retained_checked_modules(retainable, capabilities)
+    )
+    if cached_checked_modules is not None:
+        reusable.update(cached_checked_modules)
+    cached_checked_modules = {
+        mid: cm
+        for mid, cm in reusable.items()
+        if mid in resolved.modules and cm.resolved is resolved.modules[mid].resolved
+    }
+
+    prepared = _prepare_program(
+        resolved,
+        capabilities,
+        entry_seed_env=entry_seed_env,
+        cached_checked_modules=cached_checked_modules,
+    )
+    module_envs = prepared.module_envs
+    program_type_table = prepared.program_type_table
+    program_func_sig_table = prepared.program_func_sig_table
+    candidate_records = prepared.candidate_records
+    ordered_mids = prepared.ordered_mids
+    declaration_spans = prepared.declaration_spans
+
+    # Phase 4: ordinary body checking is the sole source of checked artifacts.
+    # The journal starts here, immediately before each freshly checked module's
+    # own body check, once every environment above is fully prepared: it must
+    # record exactly the mutations _check_prepared_module's body check makes
+    # on an otherwise-complete environment, not the whole-program preparation
+    # above (see agm.agl.typecheck.env.EnvironmentFacts / CheckedModuleImage).
     checked_modules: dict[ModuleId, CheckedModule] = {}
     reused_modules: set[ModuleId] = set()
     for mid in ordered_mids:
@@ -1227,10 +1306,12 @@ def check_program(
             reused_modules.add(mid)
             continue
         rmod = resolved.modules[mid]
+        env = module_envs[mid]
+        env.begin_own_facts()
         cp = _check_prepared_module(
             rmod.resolved,
             capabilities,
-            env=module_envs[mid],
+            env=env,
             module_id=mid,
             prepare_headers=False,
             infer_candidates=False,

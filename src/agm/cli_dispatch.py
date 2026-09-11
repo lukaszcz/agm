@@ -153,13 +153,16 @@ def print_registered_command_help(command_path: Sequence[str]) -> bool:
         return True
     if registration is None or registration.program is None:
         return False
-    from agm.cli_support.program_options import program_command_for
+    from agm.cli_support.program_options import REGISTERED_RESERVED_FLAGS, program_command_for
     from agm.commands.exec_program import registered_program_declaration
 
     program = registered_program_declaration(registration.program, registration.package)
     print(
         registered_command_help(
-            path_name, registration, program=program, command=program_command_for(program)
+            path_name,
+            registration,
+            program=program,
+            command=program_command_for(program, REGISTERED_RESERVED_FLAGS),
         ),
         end="",
     )
@@ -284,6 +287,7 @@ class RegisteredProgramCommand(TyperCommand):
         as it is for ``agm exec``.
         """
         from agm.cli_support.program_options import (
+            REGISTERED_RESERVED_FLAGS,
             option_value_map,
             program_command_for,
             protect_host_option_values,
@@ -298,7 +302,7 @@ class RegisteredProgramCommand(TyperCommand):
         program, pipeline_cache = (
             self._discover_program_with_artifacts() if preview != args else (None, None)
         )
-        program_command = program_command_for(program)
+        program_command = program_command_for(program, REGISTERED_RESERVED_FLAGS)
         protected, replacements = protect_host_option_values(args, program_command, host_options)
         remaining = super().parse_args(ctx, retain_end_of_options(protected, host_options))
         ctx.args[:] = [replacements.get(token, token) for token in ctx.args]
@@ -330,6 +334,7 @@ class RegisteredProgramCommand(TyperCommand):
 
     def invoke(self, ctx: click.Context) -> None:
         from agm.cli_support.program_options import (
+            REGISTERED_RESERVED_FLAGS,
             ProgramHelpRequested,
             contains_help_flag,
             program_command_for,
@@ -346,7 +351,7 @@ class RegisteredProgramCommand(TyperCommand):
                 if cached_program is not None
                 else self._discover_program()
             )
-            command = program_command_for(program)
+            command = program_command_for(program, REGISTERED_RESERVED_FLAGS)
             if program_help_requested(ctx.args, command):
                 print(
                     self._help(program=program, command=command),
@@ -382,7 +387,10 @@ class RegisteredProgramCommand(TyperCommand):
             print(f"error: {exc.message}", file=sys.stderr)
             print(file=sys.stderr)
             print(
-                self._help(program=exc.program, command=program_command_for(exc.program)),
+                self._help(
+                    program=exc.program,
+                    command=program_command_for(exc.program, REGISTERED_RESERVED_FLAGS),
+                ),
                 end="",
                 file=sys.stderr,
             )

@@ -264,7 +264,7 @@ def registered_command_param_completion(
     ``registered_command_help`` renders.
     """
     from agm.cli_dispatch import load_command_index, resolve_registered_command
-    from agm.cli_support.program_options import program_command_for
+    from agm.cli_support.program_options import REGISTERED_RESERVED_FLAGS, program_command_for
     from agm.commands.exec_program import registered_program_declaration
 
     context = current_config_context()
@@ -277,7 +277,7 @@ def registered_command_param_completion(
     declaration = registered_program_declaration(
         resolution.registration.program, resolution.registration.package, context=context
     )
-    program_command = program_command_for(declaration)
+    program_command = program_command_for(declaration, REGISTERED_RESERVED_FLAGS)
     flags = (
         "--dry-run",
         *(() if program_command is None else program_command.option_spellings()),
@@ -479,9 +479,9 @@ def _program_argument_completion_items(
     so completion never disagrees with help about which program's flags apply.
     Degrades silently to ``[]``.
     """
-    from agm.cli_support.program_options import program_command_for
+    from agm.cli_support.program_options import EXEC_RESERVED_FLAGS, program_command_for
 
-    program_command = program_command_for(program)
+    program_command = program_command_for(program, EXEC_RESERVED_FLAGS)
     if program_command is None:
         return []
     return [
@@ -524,6 +524,7 @@ class ExecCommand(TyperCommand):
         """
         from agm.cli_support.program_discovery import ExecProgramDiscovery
         from agm.cli_support.program_options import (
+            EXEC_RESERVED_FLAGS,
             option_value_map,
             program_command_for,
             protect_host_option_values,
@@ -568,7 +569,7 @@ class ExecCommand(TyperCommand):
             ),
         )
         program_command = (
-            program_command_for(discovery.selection(selected.file).selected)
+            program_command_for(discovery.selection(selected.file).selected, EXEC_RESERVED_FLAGS)
             if preview_args != args
             else None
         )

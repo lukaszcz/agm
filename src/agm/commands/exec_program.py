@@ -90,6 +90,8 @@ from agm.cli_support.program_discovery import (
     unmatched_program_message,
 )
 from agm.cli_support.program_options import (
+    EXEC_RESERVED_FLAGS,
+    REGISTERED_RESERVED_FLAGS,
     DuplicateOptionFlagError,
     ProgramCommand,
     ProgramHelpRequested,
@@ -333,8 +335,13 @@ def run(
     args: ExecArgs,
     *,
     entry_module_segments: tuple[str, ...] | None = None,
+    reserved_flags: frozenset[str] = EXEC_RESERVED_FLAGS,
 ) -> None:
-    """Run an AgL program selected by an exec argument container."""
+    """Run an AgL program selected by an exec argument container.
+
+    *reserved_flags* is the invoking surface's flag inventory, which the
+    selected program's parameters may not claim.
+    """
     # The program source comes either from an inline ``-c/--command`` argument
     # or from a file.  The CLI layer guarantees exactly one is provided; the
     # defensive ``else`` keeps ``run`` safe when called directly.
@@ -598,7 +605,7 @@ def run(
     # parameter's own flag) is reported unconditionally.
     program_command: ProgramCommand | None = None
     if selected_program is not None:
-        command_result = build_program_command(selected_program)
+        command_result = build_program_command(selected_program, reserved_flags)
         if isinstance(command_result, ProgramCommand):
             program_command = command_result
         else:
@@ -809,7 +816,8 @@ def run_registered(
     active (and project-pinned) package manifest before execution. Direct
     ``agm exec PACKAGE/MODULE::PROGRAM`` references have no command-path
     restriction, but still require that their module is owned by the selected
-    active package.
+    active package, and reserve ``agm exec``'s flags rather than a registered
+    command's.
     """
     if (package is None) != (command_path is None):
         print("Error: incomplete registered package command metadata.", file=sys.stderr)
@@ -872,4 +880,5 @@ def run_registered(
             ),
         ),
         entry_module_segments=target.module_id.segments,
+        reserved_flags=(EXEC_RESERVED_FLAGS if command_path is None else REGISTERED_RESERVED_FLAGS),
     )

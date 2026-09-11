@@ -181,8 +181,8 @@ one flag and config namespace. A parameter whose projected flag would otherwise
 collide with a reserved flag is instead a host-level check with no static
 counterpart: it fails the program when actually selected for execution, but
 `--help` and shell completion degrade silently, falling back to `agm exec`'s
-own help and offering no completions for that program rather than erroring. The
-reserved set is the host's own declared options (`--help`/`-h`, `--program`/`-p`, `--command`/`-c`,
+own help and offering no completions for that program rather than erroring. For
+`agm exec`, the reserved set is the host's own declared options (`--help`/`-h`, `--program`/`-p`, `--command`/`-c`,
 `--module-path`/`-I`, `--max-call-depth`, `--no-stdlib`, `--dry-run`, `--agent`)
 **union every engine-setting flag in both polarities** — `--default-agent`,
 `--strict-json`/`--no-strict-json`, `--max-iters`, `--timeout`/`--no-timeout`,
@@ -190,7 +190,8 @@ reserved set is the host's own declared options (`--help`/`-h`, `--program`/`-p`
 `no-log: text` collides even though `no-log` itself names no engine setting. It
 also includes another parameter's own projected flag, such as a `cache: bool`
 parameter's negative flag colliding with a `no-cache: bool` parameter's positive
-one.
+one. A [registered package command](pkg.md#registered-commands) reserves only `--dry-run` and
+`-h`/`--help`.
 
 That degradation also changes how an unrecognized flag beside a help flag is
 answered: `agm exec FILE --nope -h` is a usage error (exit 1) when the program's

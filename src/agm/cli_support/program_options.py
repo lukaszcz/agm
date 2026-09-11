@@ -11,15 +11,15 @@ Whether a type is the standard ``Option`` is decided by nominal provenance
 user-declared ``enum Option[T]`` of its own projects as an ordinary JSON-form
 value, never as the ``Option`` shape. This is the single derivation shared by
 an engine key's CLI flags (:func:`engine_key_flags`, folded into
-:data:`RESERVED_FLAGS`) and a program parameter's own flags
+:data:`EXEC_RESERVED_FLAGS`) and a program parameter's own flags
 (:class:`ProgramCommand`), so the reserved set and the parameter flags can
 never disagree.
 
 :func:`build_program_command` builds a whole program's CLI surface from its
 declaration: one ``click.Command`` carrying a catch-all positional argument
 and one option per name-addressable parameter, plus a reservation check
-against the host's flag inventory and against every other parameter's own
-spellings. Click owns every token convention — short options, bundling,
+against the invoking surface's flag inventory and against every other
+parameter's own spellings. Click owns every token convention — short options, bundling,
 attached values, ``--x=V``, the ``--`` end-of-options marker, and
 ``-h``/``--help`` — while zone pairing, missing required arguments and excess
 positionals stay with the shared binder in ``agm.agl.runtime.arguments``, the
@@ -44,10 +44,13 @@ the qualified config key, completion and the undeclared-config-key warning.
 The external name stops here: :meth:`ProgramCommand.parse` maps it back to
 the declared name, so the shared binder only ever sees declared names.
 
-``RESERVED_FLAGS`` is the host's own flag inventory: the flags ``agm exec``
-declares itself (``--help``, ``-p``, ``--program``, ``--agent``, …) union
-every engine-key flag. A program parameter can never be projected onto one
-of these — :func:`build_program_command` reports the collision instead.
+Each surface a program runs under reserves its own flag inventory.
+``EXEC_RESERVED_FLAGS`` is ``agm exec``'s: the flags it declares itself
+(``--help``, ``-p``, ``--program``, ``--agent``, …) union every engine-key
+flag. ``REGISTERED_RESERVED_FLAGS`` is a package-registered command's: only
+``--dry-run`` beside the help flags every program command owns. A program
+parameter can never be projected onto its surface's reserved flags —
+:func:`build_program_command` reports the collision instead.
 
 The same inventory decides which tail token is ``agm exec``'s FILE argument
 and which belong to the program: :func:`split_exec_tail` is the one place
@@ -110,12 +113,13 @@ if TYPE_CHECKING:
 __all__ = [
     "DuplicateOptionFlagError",
     "END_OF_OPTIONS",
+    "EXEC_RESERVED_FLAGS",
     "ExecTail",
     "ProgramCommand",
     "ProgramHelpRequested",
     "ProgramOptionError",
     "ProjectedOption",
-    "RESERVED_FLAGS",
+    "REGISTERED_RESERVED_FLAGS",
     "ReservedFlagError",
     "ValueForm",
     "build_program_command",
@@ -306,7 +310,7 @@ def engine_key_flags() -> frozenset[str]:
 
     Every engine key runs through :func:`project_option` against its AgL
     type, exactly like a program parameter — the single derivation shared
-    with :data:`RESERVED_FLAGS`, so the two can never disagree. Iterates
+    with :data:`EXEC_RESERVED_FLAGS`, so the two can never disagree. Iterates
     ``semantics.engine_keys.ENGINE_KEY_TYPES``, whose keys are exactly the
     engine-key names, so the lookup is total by construction.
     """
@@ -350,10 +354,16 @@ _BUILTIN_EXEC_FLAGS: frozenset[str] = frozenset(
     }
 )
 
-# Reserved flag strings: declared built-ins UNION engine-key flags (both
-# polarities). Collision checking is verbatim — no underscore/hyphen
-# normalisation.
-RESERVED_FLAGS: frozenset[str] = _BUILTIN_EXEC_FLAGS | engine_key_flags()
+# ``agm exec``'s reserved flag strings: declared built-ins UNION engine-key
+# flags (both polarities). Collision checking is verbatim — no
+# underscore/hyphen normalisation.
+EXEC_RESERVED_FLAGS: frozenset[str] = _BUILTIN_EXEC_FLAGS | engine_key_flags()
+
+# A package-registered command's reserved flag strings. It declares only
+# ``--dry-run`` (``agm.cli_dispatch``, a layer above this one, so mirrored
+# here like ``_BUILTIN_EXEC_FLAGS``) and takes no engine-key flags, so its
+# program may claim ``agm exec``'s other spellings.
+REGISTERED_RESERVED_FLAGS: frozenset[str] = frozenset({*HELP_FLAGS, "--dry-run"})
 
 # The end-of-options marker. ``agm exec`` consumes one only when it is what
 # names the FILE; any other marker belongs to the program and reaches it.
@@ -1219,19 +1229,19 @@ class ProgramCommand:
 
 def _check_reservation(
     options: "tuple[tuple[ProgramParamInfo, ProjectedOption], ...]",
+    reserved_flags: frozenset[str],
 ) -> ProgramOptionError | None:
     """Return the first flag collision among *options*, or ``None`` when there is none.
 
     Every spelling a parameter claims — its ``--name``, the derived
     ``--no-name`` of a negatable form, and its ``-x`` short — is checked
-    against :data:`RESERVED_FLAGS` (the host's full inventory, engine-key
-    flags included) and against every other parameter's own spellings, in
-    declaration order.
+    against *reserved_flags* (the invoking surface's inventory) and against
+    every other parameter's own spellings, in declaration order.
     """
     seen: dict[str, str] = {}
     for param, projected in options:
         for flag in _spellings(param, projected):
-            if flag in RESERVED_FLAGS:
+            if flag in reserved_flags:
                 return ReservedFlagError(parameter=param.name, flag=flag)
             if flag in seen:
                 return DuplicateOptionFlagError(
@@ -1242,12 +1252,13 @@ def _check_reservation(
 
 
 def build_program_command(
-    program: "ProgramDeclInfo",
+    program: "ProgramDeclInfo", reserved_flags: frozenset[str]
 ) -> "ProgramCommand | ProgramOptionError":
     """Build *program*'s Click command, checking flag reservation first.
 
-    A program parameter can never shadow an engine key or a built-in host
-    option (``--help``, ``--program``, ``-p``, ``--agent``, …), nor another
+    *reserved_flags* is the invoking surface's inventory —
+    :data:`EXEC_RESERVED_FLAGS` or :data:`REGISTERED_RESERVED_FLAGS`. A
+    program parameter can never shadow one of those, nor another
     parameter's own spelling — so one parameter's ``--no-<name>`` negation
     can never silently steal a different parameter literally named
     ``no-<name>``, and two parameters can never claim the same short.
@@ -1267,7 +1278,7 @@ def build_program_command(
         for p in signature
         if p.kind in _NAME_ADDRESSABLE_ZONES
     )
-    collision = _check_reservation(options)
+    collision = _check_reservation(options, reserved_flags)
     if collision is not None:
         return collision
     params: list[click.Parameter] = [_positional_argument()]
@@ -1287,7 +1298,9 @@ def build_program_command(
     )
 
 
-def program_command_for(program: "ProgramDeclInfo | None") -> "ProgramCommand | None":
+def program_command_for(
+    program: "ProgramDeclInfo | None", reserved_flags: frozenset[str]
+) -> "ProgramCommand | None":
     """Build *program*'s command, degrading a missing program or a collision to ``None``.
 
     For the advisory surfaces (help, completion, ``-h`` disambiguation), which
@@ -1297,7 +1310,7 @@ def program_command_for(program: "ProgramDeclInfo | None") -> "ProgramCommand | 
     """
     if program is None:
         return None
-    result = build_program_command(program)
+    result = build_program_command(program, reserved_flags)
     return result if isinstance(result, ProgramCommand) else None
 
 

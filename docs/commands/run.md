@@ -22,9 +22,9 @@
 
 `agm run` options:
 
-- `--no-sandbox`: run the command directly without `srt`; skips sandbox settings discovery and patching
+- `--no-sandbox`: run directly without `srt`, skipping sandbox settings discovery and patching
 - `-f`, `--file SETTINGS`: use one settings file directly instead of discovered settings
-- `--memory LIMIT`: set `MemoryMax=LIMIT` in the delegated `systemd-run --user --scope`; the bootstrap exports `SANDBOX_CGROUP` and enables the memory controller for descendant cgroups; defaults to `32G` in sandbox mode; `0` means a zero memory limit; `unlimited` means no memory cap
+- `--memory LIMIT`: set `MemoryMax=LIMIT` in the delegated `systemd-run --user --scope` (the bootstrap exports `SANDBOX_CGROUP` and enables the memory controller for descendant cgroups); defaults to `32G` in sandbox mode; `0` means a zero memory limit; `unlimited` means no memory cap
 - `--swap LIMIT`: set `MemorySwapMax=LIMIT` in the delegated scope; defaults to `0` in sandbox mode; `unlimited` means no swap cap
 - `--no-memory-limit`: do not set `MemoryMax`
 - `--no-swap-limit`: do not set `MemorySwapMax`
@@ -32,22 +32,13 @@
 
 Sandbox settings resolution:
 
-- for each config directory, AGM prefers `<command>.json`
-- if that file does not exist there, AGM tries the aliased command name's settings file
-- if neither exists, AGM falls back to `default.json`
-- AGM merges matching files in this order:
+- per config directory: prefer `<command>.json`, else the aliased command's settings file, else `default.json`
+- merge matching files in this order (later over earlier):
   1. `<AGM-home>/sandbox/`, using the same runtime-home selection described above
   2. the project sandbox config directory
   3. `./.sandbox/`
-- later files are merged over earlier ones
-- `network` and `filesystem` are merged by key
-- list-valued `network` and `filesystem` keys are appended and deduplicated in precedence order
-- later `network.deniedDomains` entries remove matching earlier `network.allowedDomains` entries
-- later `filesystem.denyRead` and `filesystem.denyWrite` entries remove matching earlier `filesystem.allowRead` and `filesystem.allowWrite` entries
-- `ignoreViolations` replaces the earlier value
-- `enabled` and `enableWeakerNestedSandbox` override when set
+- `network` and `filesystem` are merged by key; their list-valued keys are appended and deduplicated in precedence order
+- later `network.deniedDomains` entries remove matching earlier `network.allowedDomains` entries; later `filesystem.denyRead` and `filesystem.denyWrite` entries remove matching earlier `filesystem.allowRead` and `filesystem.allowWrite` entries
+- `ignoreViolations` replaces the earlier value; `enabled` and `enableWeakerNestedSandbox` override when set
 
-The bundled `pi.json` profile sets `network.allowAllUnixSockets` so Pi extensions can create
-local IPC sockets. On Linux, SRT's seccomp filter cannot allow Unix sockets by path, so this
-permission is necessarily all-or-nothing; filesystem policy still controls which socket paths Pi
-can create or access.
+The bundled `pi.json` profile sets `network.allowAllUnixSockets` so Pi extensions can create local IPC sockets. On Linux, SRT's seccomp filter cannot allow Unix sockets by path, so this permission is necessarily all-or-nothing; filesystem policy still controls which socket paths Pi can create or access.

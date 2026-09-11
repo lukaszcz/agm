@@ -11,8 +11,8 @@
 
 `agm worktree new` options:
 
-- `-d`, `--dir DIR`: use `agm worktree new --dir DIR BRANCH` to create the worktree under `DIR` instead of the project's default worktrees directory
+- `-d`, `--dir DIR`: create the worktree under `DIR` instead of the project's default worktrees directory
 
 `agm worktree remove` options:
 
-- `-f`, `--force`: use `agm worktree remove --force BRANCH` to force removal even when git reports uncommitted or locked state
+- `-f`, `--force`: force removal even when git reports uncommitted or locked state

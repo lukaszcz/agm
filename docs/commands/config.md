@@ -8,35 +8,36 @@
 | `agm config update` | Create missing config.toml files and commit generated changes |
 
 `agm config copy` copies dot-prefixed files and directories from the shared project
-config directory into an existing target directory. When run from a branch
-worktree, AGM first copies shared dot entries, then copies matching entries from
-the workspace config subdirectory so workspace entries override shared entries.
-For `.env` and `.env.local`, AGM writes merged dotenv values using the same
-precedence as `agm config env`: shared `.env`, shared `.env.local`, workspace
-`.env`, then workspace `.env.local`.
+config directory. From a branch worktree, it copies shared dot entries first, then
+matching workspace config entries, so workspace overrides shared. For `.env` and
+`.env.local` it merges dotenv values with `agm config env`'s precedence: shared
+`.env`, shared `.env.local`, workspace `.env`, workspace `.env.local`.
 
-`agm config env` uses the same environment resolution as `agm workspace open`: project and workspace
-`config.toml` `[deps]` tables first, then project `.env`, project `.env.local`, project
-`env.sh`, and matching workspace config files when the current workspace is a branch workspace.
-Dotenv `${VAR}` references use the current workspace environment and earlier assignments,
-including values from preceding file layers. `${VAR:-default}` supplies a default for an
-undefined variable. Apply the printed shell statements with:
+`agm config env` resolves the environment like `agm workspace open`: project/workspace
+`config.toml` `[deps]` tables first, then project `.env`, `.env.local`, `env.sh`, then
+matching workspace config files (branch workspaces only). Dotenv `${VAR}` references
+resolve against the current workspace environment plus earlier assignments, including
+prior layers; `${VAR:-default}` defaults an undefined variable. Apply with:
 
 ```bash
 eval "$(agm config env)"
 ```
 
-`agm config update` creates missing project and workspace `config.toml` files under the project
-config directory, updates dependency configuration entries, and commits any generated
-changes to the config repository's git history with a `chore: update config` commit message.
+`agm config update` creates missing project and workspace `config.toml` files under
+the project config directory, updates dependency config entries, and commits generated
+changes to the config repo with message `chore: update config`.
 
 ## Path-valued settings
 
-Path-valued `config.toml` fields, including `[modules] lib_root` and `roots`, expand `%{VAR}` from the process environment and support a leading `~`. This interpolation is deliberately lenient: unresolved or malformed holes remain verbatim. One config file serves every command, so an irrelevant broken path must not stop it loading; any resulting failure follows the consuming command's normal path semantics.
+Path-valued `config.toml` fields (e.g. `[modules] lib_root`, `roots`) expand `%{VAR}`
+from the process environment and support a leading `~`. Interpolation is deliberately
+lenient: unresolved or malformed holes stay verbatim — one config file serves every
+command, so an irrelevant broken path must not block loading; any resulting failure
+follows the consuming command's normal path semantics.
 
-When the config directory is a git repository, AGM automatically commits changes it makes to
-the config directory. In addition to `agm config update`, this covers `agm init`,
-`agm open`, `agm close`, `agm dep new`, `agm dep switch`, and `agm worktree new`, each of
-which commits the config it adds, updates, or removes for the affected workspace. Pass
-`agm init --no-git-init` (or `--no-config-git`) to opt out of creating the config git
-repository, which disables these automatic commits.
+When the config directory is a git repository, AGM auto-commits changes it makes
+there — covering `agm config update`, `agm init`, `agm open`, `agm close`,
+`agm dep new`, `agm dep switch`, and `agm worktree new`, each committing the config it
+adds, updates, or removes for the affected workspace. `agm init --no-git-init` (or
+`--no-config-git`) opts out of creating the config git repo, disabling these
+auto-commits.

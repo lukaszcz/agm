@@ -434,11 +434,7 @@ enum Shape
   | Empty
 ```
 
-See [Attributes](grammar.md#attributes) for the declarations an attribute may
-prefix, the arguments it admits, and the errors an unknown, misplaced, repeated,
-or contradicted attribute raises; [Functions](functions.md#parameters) and
-[Types](types.md#record-types) describe the zone semantics `@arg-pos`,
-`@arg-std`, and `@arg-named` carry.
+Catalog and semantics: [Attributes](attributes.md).
 
 ## Operator precedence
 

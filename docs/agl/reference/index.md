@@ -72,7 +72,8 @@ program def main(spec: text) -> unit =
 | Chapter | Contents |
 | ------- | -------- |
 | [Lexical structure](lexical-structure.md) | Source text, comments, indentation and layout, keywords, tokens, declaration attributes, operator precedence |
-| [Program structure](program-structure.md) | Programs, blocks, items, binders, inline forms |
+| [Program structure](program-structure.md) | Modules, `program def` entry points and their parameters, items, binders, inline forms |
+| [Attributes](attributes.md) | `@name` declaration attributes: placement, catalog, zones, `@doc`, `@extern-name`, program parameter options |
 | [Modules](modules.md) | File-based module system: module identity, import forms, qualified access, visibility, cyclic imports, REPL imports, the standard-library module inventory |
 | [Packages](packages.md) | Package module trees and identity, package-qualified paths, import visibility, programs as commands, params and qualified configuration keys, resources and companions |
 | [Named scopes](scopes.md) | Nestable declaration namespaces, qualifier paths, visibility, and `use` |

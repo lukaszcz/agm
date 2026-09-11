@@ -517,7 +517,7 @@ let named = Issue(
 ```
 
 **Zone attributes** constrain fields to positional-only or named-only zones. An
-[attribute](grammar.md#attributes) in front of a field zones that field; one in front
+[attribute](attributes.md#zone-attributes) in front of a field zones that field; one in front
 of the declaration zones every field that does not carry its own:
 
 ```agl

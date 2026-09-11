@@ -136,7 +136,7 @@ the applied type and constructor; it does not accept `OP_NAME` there.
 **Per-type field zones.** Record fields, inline enum-member fields, and an
 exception's own fields default to the **standard** zone (positional or named),
 regardless of the number of fields. The `@arg-pos`, `@arg-std`, and
-`@arg-named` [attributes](grammar.md#attributes) constrain fields to a
+`@arg-named` [attributes](attributes.md#zone-attributes) constrain fields to a
 different zone. An exception's inherited `message` field
 is named-only.
 

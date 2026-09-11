@@ -176,7 +176,7 @@ through the same chain, so a scoped constructor is written with its exact path
   means `x = x`. It is valid only when `x` names a named-only field.
 
 A field's zone is the one named by its own `@arg-pos`, `@arg-std`, or
-`@arg-named` [attribute](grammar.md#attributes), or by the attribute on its
+`@arg-named` [attribute](attributes.md#zone-attributes), or by the attribute on its
 declaration, or the standard default ([Types](types.md#record-types)). The same
 zones therefore shape destructuring and construction: a positional-only field
 is reached only by position, and a named-only field only by a named

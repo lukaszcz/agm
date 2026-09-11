@@ -456,7 +456,7 @@ From loosest to tightest binding (the bottom binds tightest):
 | 8 | `-` (unary prefix) | — |
 | 9 | function application (single-arg sugar) | **non-chaining** |
 | 10 | `.field` access, `[index]`, `( args )` call | left |
-| 11 | atoms: literals, names, `( expr )`, `()` unit, templates, `break`, `continue` | — |
+| 11 | atoms: literals, names, `( expr )`, `(op)` operator values, `()` unit, templates, `break`, `continue` | — |
 
 The record-update operator `with` binds looser than every level in the table,
 on both sides; see
@@ -505,7 +505,9 @@ postfix call can be the single sugar argument, so `f g(x)` parses as
 
 Because `OP_NAME` after an expression is parsed as an infix operator position,
 an operator-name value used as an argument should be parenthesized:
-`print(>>)`, not `print >>`.
+`print(>>)`, not `print >>`. A built-in symbolic operator is a value only in
+parentheses of its own, such as `(+)`; see
+[Operators as function values](expressions.md#operators-as-function-values).
 
 **Calls with parentheses (level 10)** are left-associative postfix and
 support multiple arguments: `f(a, b)`.

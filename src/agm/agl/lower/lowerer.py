@@ -240,6 +240,7 @@ from agm.agl.syntax.nodes import (
     NamedArg,
     NameTarget,
     NullLit,
+    OperatorRef,
     Param,
     Pattern,
     Placeholder,
@@ -456,6 +457,15 @@ class _LinkState:
     # re-classifying source items; the entry mapping is overwritten before
     # promotion consumes it on each REPL entry.
     initializer_origins: dict[ModuleId, tuple[InitializerOrigin, ...]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class _Operand:
+    """A lowered binary-operator operand with its checked type and location."""
+
+    ir: IrExpr
+    type: Type
+    location: Location
 
 
 _ARITH_OP_MAP: dict[BinOp, ArithOp] = {
@@ -856,7 +866,7 @@ class _Lowerer:
             case Return():
                 if node.value is not None:
                     self._scan_captures(node.value, local_ids, captured)
-            case Break() | Continue() | Placeholder():
+            case Break() | Continue() | Placeholder() | OperatorRef():
                 pass  # leaf — no captures
             case UnitLit() | IntLit() | DecimalLit() | BoolLit() | NullLit() | StringLit():
                 pass
@@ -1325,6 +1335,9 @@ class _Lowerer:
             # ----------------------------------------------------------
             case BinaryOp(op=op, left=left_expr, right=right_expr, span=span):
                 return self._lower_binary_op(op, left_expr, right_expr, span)
+
+            case OperatorRef():
+                return self._lower_operator_ref(node)
 
             case UnaryNot(operand=operand_expr, span=span):
                 return IrUnary(
@@ -2004,119 +2017,135 @@ class _Lowerer:
         left_type = self._node_type(left.node_id)
         if isinstance(left_type, BottomType):
             return self.lower_expr(left)
+        lhs = _Operand(self.lower_expr(left), left_type, self._loc(left.span))
+        rhs = _Operand(
+            self.lower_expr(right), self._node_type(right.node_id), self._loc(right.span)
+        )
+        if isinstance(rhs.type, BottomType) and op is not BinOp.AND and op is not BinOp.OR:
+            return IrSequence(location=loc, items=(lhs.ir, rhs.ir))
+        return self._lower_binary_operands(op, lhs, rhs, loc)[0]
 
+    def _lower_operator_ref(self, node: OperatorRef) -> IrMakeClosure:
+        """Eta-expand ``(op)`` into a closure over its checked operand types."""
+        function_type = self._node_type(node.node_id)
+        assert isinstance(function_type, FunctionType)
+        loc = self._loc(node.span)
+
+        def build_body(param_symbols: tuple[SymbolId, ...]) -> IrExpr:
+            lhs, rhs = (
+                _Operand(IrLoad(location=loc, symbol=symbol), typ, loc)
+                for symbol, typ in zip(param_symbols, function_type.params, strict=True)
+            )
+            body, body_type = self._lower_binary_operands(node.op, lhs, rhs, loc)
+            return self._coerce_ir(body, body_type, function_type.result, loc)
+
+        return self._make_partial_closure(function_type, node.span, (), build_body)
+
+    def _lower_binary_operands(
+        self, op: BinOp, lhs: _Operand, rhs: _Operand, loc: Location
+    ) -> tuple[IrExpr, Type]:
+        """Lower a checked binary operation over lowered operands; return it with its type."""
         if op is BinOp.AND:
-            return IrAnd(location=loc, lhs=self.lower_expr(left), rhs=self.lower_expr(right))
+            return IrAnd(location=loc, lhs=lhs.ir, rhs=rhs.ir), BoolType()
         if op is BinOp.OR:
-            return IrOr(location=loc, lhs=self.lower_expr(left), rhs=self.lower_expr(right))
-
-        right_type = self._node_type(right.node_id)
-        if isinstance(right_type, BottomType):
-            return IrSequence(location=loc, items=(self.lower_expr(left), self.lower_expr(right)))
+            return IrOr(location=loc, lhs=lhs.ir, rhs=rhs.ir), BoolType()
         if op is BinOp.IN:
-            return self._lower_in_op(left, right, loc)
+            return self._lower_in_op(lhs, rhs, loc), BoolType()
         if op is BinOp.ADD or op is BinOp.SUB or op is BinOp.MUL:
-            return self._lower_arith(op, left, right, loc)
+            return self._lower_arith(op, lhs, rhs, loc)
         if op is BinOp.DIV:
-            return self._lower_div(left, right, loc)
+            return self._lower_div(lhs, rhs, loc), DecimalType()
         if op is BinOp.EQ or op is BinOp.NEQ:
-            return self._lower_equality(op, left, right, loc)
+            return self._lower_equality(op, lhs, rhs, loc), BoolType()
         if op is BinOp.LT or op is BinOp.LE or op is BinOp.GT or op is BinOp.GE:
-            return self._lower_ordering(op, left, right, loc)
+            return self._lower_ordering(op, lhs, rhs, loc), BoolType()
         assert_never(op)  # pragma: no cover
 
-    def _lower_arith(self, op: BinOp, left: Expr, right: Expr, loc: Location) -> IrArith:
-        """Lower an arithmetic binary op (ADD/SUB/MUL)."""
-        left_type = self._node_type(left.node_id)
-        right_type = self._node_type(right.node_id)
-        if isinstance(left_type, TextType) and isinstance(right_type, TextType):
+    def _coerce_operand(self, operand: _Operand, expected: Type) -> IrExpr:
+        """Wrap a lowered operand in the coercion its checked type needs for *expected*."""
+        return self._coerce_ir(operand.ir, operand.type, expected, operand.location)
+
+    def _lower_arith(
+        self, op: BinOp, lhs: _Operand, rhs: _Operand, loc: Location
+    ) -> tuple[IrArith, Type]:
+        """Lower an arithmetic binary op (ADD/SUB/MUL); return it with its common type."""
+        if isinstance(lhs.type, TextType) and isinstance(rhs.type, TextType):
             common: Type = TextType()
             kind = ArithKind.TEXT
-        elif isinstance(left_type, DecimalType) or isinstance(right_type, DecimalType):
+        elif isinstance(lhs.type, DecimalType) or isinstance(rhs.type, DecimalType):
             common = DecimalType()
             kind = ArithKind.DECIMAL
         else:
             common = IntType()
             kind = ArithKind.INT
-        arith_op = _ARITH_OP_MAP[op]
-        return IrArith(
+        arith = IrArith(
             location=loc,
-            op=arith_op,
+            op=_ARITH_OP_MAP[op],
             kind=kind,
-            lhs=self.lower_coerced(left, common),
-            rhs=self.lower_coerced(right, common),
+            lhs=self._coerce_operand(lhs, common),
+            rhs=self._coerce_operand(rhs, common),
         )
+        return arith, common
 
-    def _lower_div(self, left: Expr, right: Expr, loc: Location) -> IrArith:
+    def _lower_div(self, lhs: _Operand, rhs: _Operand, loc: Location) -> IrArith:
         """Lower a DIV op: always coerce both operands to decimal."""
         common: Type = DecimalType()
         return IrArith(
             location=loc,
             op=ArithOp.DIV,
             kind=ArithKind.DECIMAL,
-            lhs=self.lower_coerced(left, common),
-            rhs=self.lower_coerced(right, common),
+            lhs=self._coerce_operand(lhs, common),
+            rhs=self._coerce_operand(rhs, common),
         )
 
-    def _lower_equality(self, op: BinOp, left: Expr, right: Expr, loc: Location) -> IrCompare:
+    def _lower_equality(self, op: BinOp, lhs: _Operand, rhs: _Operand, loc: Location) -> IrCompare:
         """Lower EQ/NEQ: use STRUCTURAL kind with numeric widening if needed."""
-        left_type = self._node_type(left.node_id)
-        right_type = self._node_type(right.node_id)
-        if isinstance(left_type, DecimalType) or isinstance(right_type, DecimalType):
+        if isinstance(lhs.type, DecimalType) or isinstance(rhs.type, DecimalType):
             common: Type = DecimalType()
         else:
-            common = left_type
-        cmp_op = CmpOp.EQ if op is BinOp.EQ else CmpOp.NEQ
+            common = lhs.type
         return IrCompare(
             location=loc,
-            op=cmp_op,
+            op=CmpOp.EQ if op is BinOp.EQ else CmpOp.NEQ,
             kind=CompareKind.STRUCTURAL,
-            lhs=self.lower_coerced(left, common),
-            rhs=self.lower_coerced(right, common),
+            lhs=self._coerce_operand(lhs, common),
+            rhs=self._coerce_operand(rhs, common),
         )
 
-    def _lower_ordering(self, op: BinOp, left: Expr, right: Expr, loc: Location) -> IrCompare:
+    def _lower_ordering(self, op: BinOp, lhs: _Operand, rhs: _Operand, loc: Location) -> IrCompare:
         """Lower LT/LE/GT/GE with kind based on operand types."""
-        left_type = self._node_type(left.node_id)
-        right_type = self._node_type(right.node_id)
-        if isinstance(left_type, TextType) and isinstance(right_type, TextType):
+        if isinstance(lhs.type, TextType) and isinstance(rhs.type, TextType):
             common: Type = TextType()
             kind = CompareKind.TEXT
-        elif isinstance(left_type, DecimalType) or isinstance(right_type, DecimalType):
+        elif isinstance(lhs.type, DecimalType) or isinstance(rhs.type, DecimalType):
             common = DecimalType()
             kind = CompareKind.DECIMAL
         else:
             common = IntType()
             kind = CompareKind.INT
-        cmp_op = _CMP_OP_MAP[op]
         return IrCompare(
             location=loc,
-            op=cmp_op,
+            op=_CMP_OP_MAP[op],
             kind=kind,
-            lhs=self.lower_coerced(left, common),
-            rhs=self.lower_coerced(right, common),
+            lhs=self._coerce_operand(lhs, common),
+            rhs=self._coerce_operand(rhs, common),
         )
 
-    def _lower_in_op(self, item: Expr, container: Expr, loc: Location) -> IrContains:
+    def _lower_in_op(self, item: _Operand, container: _Operand, loc: Location) -> IrContains:
         """Lower the IN operator based on container type."""
-        container_type = self._node_type(container.node_id)
+        container_type = container.type
         if isinstance(container_type, ArrayType):
             kind = ContainsKind.ARRAY
-            item_ir = self.lower_coerced(item, container_type.elem)
+            item_ir = self._coerce_operand(item, container_type.elem)
         elif isinstance(container_type, DictType):
             kind = ContainsKind.DICT
-            item_ir = self.lower_expr(item)
+            item_ir = item.ir
         elif isinstance(container_type, TextType):
             kind = ContainsKind.TEXT
-            item_ir = self.lower_expr(item)
+            item_ir = item.ir
         else:  # pragma: no cover
             raise AssertionError(f"compiler bug: IN on non-container type {container_type!r}")
-        return IrContains(
-            location=loc,
-            kind=kind,
-            item=item_ir,
-            container=self.lower_expr(container),
-        )
+        return IrContains(location=loc, kind=kind, item=item_ir, container=container.ir)
 
     # ------------------------------------------------------------------
     # Constructor lowering helpers
@@ -2970,7 +2999,7 @@ class _Lowerer:
         captures: tuple[IrCapture, ...],
         build_body: Callable[[tuple[SymbolId, ...]], IrExpr],
     ) -> IrMakeClosure:
-        """Create the closure shared by ordinary and bound-method partial applications."""
+        """Create a synthetic closure for partial applications and operator values."""
         fn_id = self._alloc_fn()
         fn_sym = self._alloc_synthetic_sym(mutable=False, owner=fn_id)
         params = tuple(

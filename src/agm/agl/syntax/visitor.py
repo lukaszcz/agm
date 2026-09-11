@@ -73,6 +73,7 @@ from agm.agl.syntax.nodes import (
     NamedArg,
     NameTarget,
     NullLit,
+    OperatorRef,
     Param,
     PatternField,
     Placeholder,
@@ -228,6 +229,7 @@ class Visitor:
     def visit_NamedArg(self, node: NamedArg) -> None: ...
     def visit_Placeholder(self, node: Placeholder) -> None: ...
     def visit_BinaryOp(self, node: BinaryOp) -> None: ...
+    def visit_OperatorRef(self, node: OperatorRef) -> None: ...
     def visit_UnaryNot(self, node: UnaryNot) -> None: ...
     def visit_UnaryNeg(self, node: UnaryNeg) -> None: ...
     def visit_Cast(self, node: Cast) -> None: ...
@@ -338,6 +340,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         NamedArg,
         Placeholder,
         BinaryOp,
+        OperatorRef,
         UnaryNot,
         UnaryNeg,
         Cast,
@@ -614,7 +617,7 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, NamedArg):
         walk(node.value, callback)
 
-    elif isinstance(node, Placeholder):
+    elif isinstance(node, (Placeholder, OperatorRef)):
         pass
 
     elif isinstance(node, BinaryOp):

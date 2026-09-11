@@ -13,6 +13,7 @@ Single- and triple-quoted templates share hole recognition and token emission; r
 The AST records source structure faithfully so later passes never reconstruct spellings:
 
 - User-operator chains cross the parser unresolved as raw infix-chain nodes; module-graph assembly rewrites them into ordinary applications once import-visible fixities are known ([modules.md](../modules.md)). Scope and later passes see only resolved applications.
+- A parenthesized built-in symbolic operator, `(+)`, is its own operator-value node carrying the operator; a user operator in parentheses stays an ordinary name reference.
 - Qualified expressions, types, patterns, and `is` tests share one qualifier-chain node with per-segment spans and type arguments.
 - Declarations and scope-region items carry canonical scope paths; enum members record whether they were declared inline or reference an existing record; `var` field markers, complete `let` patterns, and assignment-target shapes (name, index, field) are all retained.
 - A function header may carry an applied builtin receiver (`array[E]::map`) beside its `self` parameter; its declaration path uses the receiver constructor's plain scope (`array`), while the receiver retains its type arguments for scope and typecheck classification.

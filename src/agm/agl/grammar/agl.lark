@@ -713,9 +713,14 @@ continue_expr : "continue"
 
 // Parenthesized expression, parenthesized block, or unit literal.
 // `()` is BOTH the unit literal and the empty argument list.
+// A lone built-in binary operator in parentheses is that operator as a
+// function value; user operators are OP_NAME names reached through `expr`.
 paren_expr_or_unit: LPAR RPAR              -> unit_lit
                   | LPAR expr RPAR         -> paren_expr
                   | LPAR paren_block RPAR  -> paren_block_expr
+                  | LPAR operator_ref_op RPAR -> operator_ref
+
+?operator_ref_op: PLUS | MINUS | STAR | SLASH | EQ_EQ | NEQ | LT | LE | GT | GE
 
 // paren_block: the same marked-body sequence. `)` is the one terminator no
 // item form can consume, so a final let/var binder is permitted. This covers

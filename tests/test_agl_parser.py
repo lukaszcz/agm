@@ -85,6 +85,7 @@ from agm.agl.syntax import (
     NamedArg,
     NameTarget,
     NullLit,
+    OperatorRef,
     Param,
     PatternField,
     Placeholder,
@@ -2403,6 +2404,57 @@ class TestBinaryOperators:
         """Chained comparisons are non-associative in AgL."""
         with pytest.raises(AglSyntaxError, match="non-associative"):
             parse(src)
+
+
+class TestOperatorRefs:
+    @pytest.mark.parametrize(
+        ("src", "op"),
+        [
+            ("(+)", BinOp.ADD),
+            ("(-)", BinOp.SUB),
+            ("(*)", BinOp.MUL),
+            ("(/)", BinOp.DIV),
+            ("(==)", BinOp.EQ),
+            ("(!=)", BinOp.NEQ),
+            ("(<)", BinOp.LT),
+            ("(<=)", BinOp.LE),
+            ("(>)", BinOp.GT),
+            ("(>=)", BinOp.GE),
+            ("( + )", BinOp.ADD),
+        ],
+    )
+    def test_parenthesized_builtin_operator_is_a_value(self, src: str, op: BinOp) -> None:
+        expr = first(parse(src))
+        assert isinstance(expr, OperatorRef)
+        assert expr.op is op
+
+    def test_operator_value_as_call_argument(self) -> None:
+        call = first(parse("array::fold(xs, 0, (+))"))
+        assert isinstance(call, Call)
+        assert isinstance(call.args[2], OperatorRef)
+
+    def test_operator_value_called_directly(self) -> None:
+        call = first(parse("(*)(2, 3)"))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, OperatorRef)
+        assert call.callee.op is BinOp.MUL
+
+    def test_operator_value_partially_applied(self) -> None:
+        call = first(parse("(-)(?, 1)"))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, OperatorRef)
+        assert isinstance(call.args[0], Placeholder)
+
+    @pytest.mark.parametrize("src", ["(-x)", "(- 1)"])
+    def test_parenthesized_negation_is_not_an_operator_value(self, src: str) -> None:
+        expr = first(parse(src))
+        assert isinstance(expr, UnaryNeg)
+
+    @pytest.mark.parametrize("src", ["(and)", "(or)", "(in)"])
+    def test_parenthesized_operator_word_remains_a_name(self, src: str) -> None:
+        expr = first(parse(src))
+        assert isinstance(expr, VarRef)
+        assert expr.name == src[1:-1]
 
 
 # ---------------------------------------------------------------------------

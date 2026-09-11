@@ -683,8 +683,11 @@ atom           ::= INT | DECIMAL | "true" | "false" | "null"
                | template
                | "(" expr ")"                      (* parenthesized expr *)
                | "(" paren_block ")"               (* parenthesized block *)
+               | "(" builtin_op ")"                (* operator as a function value *)
                | break_expr
                | continue_expr
+
+builtin_op     ::= "+" | "-" | "*" | "/" | "==" | "!=" | "<" | "<=" | ">" | ">="
 
 paren_block    ::= (marked_item ";")+ marked_item
                  | inline_assign

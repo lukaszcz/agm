@@ -14,7 +14,7 @@ from typing import cast
 
 from immutables import Map
 
-from agm.agl.modules.disk_cache import artifact_entry, read_payload, write_payload
+from agm.agl.artifact_storage import artifact_entry, read_payload, write_payload
 
 # These mutable compiler tables contain data, never host callbacks. All other
 # permitted globals must be dataclasses or enums in the compiler's data layers.

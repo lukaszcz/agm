@@ -1,8 +1,9 @@
-"""Behavior tests for dry-run-aware filesystem copy and write primitives."""
+"""Behavior tests for dry-run-aware filesystem primitives and the file identity stamp."""
 
 from __future__ import annotations
 
 import stat
+import time
 from collections.abc import Callable, Generator
 from pathlib import Path
 
@@ -162,3 +163,24 @@ def test_copy_primitives_log_and_do_not_write_when_dry_run_is_enabled(
 
     assert not destination.exists()
     assert capsys.readouterr().out == f"dry-run: agm {operation} {source} {destination}\n"
+
+
+def test_identity_stamp_is_settled_for_an_mtime_well_before_the_observed_instant() -> None:
+    observed = time.time_ns()
+    stamp = (observed - 3_600_000_000_000, 0, 0)
+
+    assert fs.identity_stamp_is_settled(stamp, observed)
+
+
+def test_identity_stamp_is_settled_false_for_an_mtime_at_the_observed_instant() -> None:
+    observed = time.time_ns()
+    stamp = (observed, 0, 0)
+
+    assert not fs.identity_stamp_is_settled(stamp, observed)
+
+
+def test_identity_stamp_is_settled_false_for_an_mtime_after_the_observed_instant() -> None:
+    observed = time.time_ns()
+    stamp = (observed + 3_600_000_000_000, 0, 0)
+
+    assert not fs.identity_stamp_is_settled(stamp, observed)

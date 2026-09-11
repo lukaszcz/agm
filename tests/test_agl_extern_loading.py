@@ -20,10 +20,13 @@ from __future__ import annotations
 import os
 import py_compile
 import sys
+import time
 from pathlib import Path
+from types import CodeType
 
 import pytest
 
+from agm.agl import artifact_storage
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.errors import MissingExternCompanion
@@ -31,11 +34,18 @@ from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver, _wire_extern_registry
-from agm.agl.runtime.externs import ExternImportError, ExternRegistry, ExternResolutionError
+from agm.agl.runtime import externs
+from agm.agl.runtime.externs import (
+    ExternImportError,
+    ExternRegistry,
+    ExternResolutionError,
+    _CompanionBytecodeLoader,
+)
 from agm.agl.scope.program import resolve_program
 from agm.agl.typecheck.program import CheckedProgram, check_program
+from agm.core import fs
 from tests._agl_helpers import file_program, prepare_inline_command
-from tests.agl.ir_harness import write_companion_file, write_module_file
+from tests.agl.ir_harness import age_file, write_companion_file, write_module_file
 
 _CAPS = HostCapabilities(
     supports_shell_exec=True,
@@ -449,6 +459,289 @@ class TestExternRegistryLoadAndResolve:
 
         registry.load_companion(mid, new_path)
         assert registry.resolve(mid, "f")(None) == "new"
+
+
+# ---------------------------------------------------------------------------
+# Companion bytecode cache: read/write of the AgL artifact cache
+# ---------------------------------------------------------------------------
+
+
+def _count_source_to_code(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Patch the loader to delegate to its real compiler while counting calls."""
+    original = _CompanionBytecodeLoader.source_to_code
+    counts = [0]
+
+    def _tracking(loader: _CompanionBytecodeLoader, data: bytes, path: str) -> CodeType:
+        counts[0] += 1
+        return original(loader, data, path)
+
+    monkeypatch.setattr(_CompanionBytecodeLoader, "source_to_code", _tracking)
+    return counts
+
+
+class TestCompanionBytecodeCache:
+    def test_second_load_from_a_fresh_registry_is_served_from_the_bytecode_cache(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fresh registry (a new process, in effect) skips compilation on a hit."""
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("def f(x):\n    return x + 1\n")
+        age_file(py_path)
+        mid = ModuleId.from_path("lib/mod")
+        ExternRegistry().load_companion(mid, py_path)
+
+        def _unexpected(loader: _CompanionBytecodeLoader, data: bytes, path: str) -> CodeType:
+            raise AssertionError("companion should be served from the bytecode cache")
+
+        monkeypatch.setattr(_CompanionBytecodeLoader, "source_to_code", _unexpected)
+
+        registry = ExternRegistry()
+        registry.load_companion(mid, py_path)
+        assert registry.resolve(mid, "f")(1) == 2
+
+    def test_companion_edited_in_place_without_changing_its_stamp_keeps_serving_cached_code(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The stamp, not the source, defines cache validity: this is that contract.
+
+        An edit that preserves size, mtime, and inode (written in place, with the
+        mtime restored) is indistinguishable from no edit at all, so a fresh
+        registry -- a new process, in effect -- keeps serving the code cached
+        under that stamp.
+        """
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("def f(x):\n    return x + 1\n")
+        age_file(py_path)
+        mid = ModuleId.from_path("lib/mod")
+        ExternRegistry().load_companion(mid, py_path)
+        stamp_before = fs.identity_stamp(py_path)
+
+        replacement = "def f(x):\n    return x + 9\n"
+        assert len(replacement) == len("def f(x):\n    return x + 1\n")
+        py_path.write_text(replacement)
+        os.utime(py_path, ns=(stamp_before[0], stamp_before[0]))
+        assert fs.identity_stamp(py_path) == stamp_before
+
+        registry = ExternRegistry()
+        registry.load_companion(mid, py_path)
+        assert registry.resolve(mid, "f")(1) == 2
+
+    def test_damaged_pyc_cache_entry_falls_back_to_compiling(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cache = tmp_path / "cache"
+        monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("def f(x):\n    return x + 1\n")
+        age_file(py_path)
+        mid = ModuleId.from_path("lib/mod")
+        ExternRegistry().load_companion(mid, py_path)
+
+        entries = list((cache / "agm" / "agl").glob("*.pyc"))
+        assert entries
+        for entry in entries:
+            entry.write_bytes(b"damaged")
+
+        registry = ExternRegistry()
+        registry.load_companion(mid, py_path)
+        assert registry.resolve(mid, "f")(1) == 2
+
+    def test_pyc_entry_that_fails_to_unmarshal_falls_back_to_compiling(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A payload passing the storage envelope's integrity check but not marshalled code.
+
+        Only the ``marshal.loads`` guard catches this kind of miss.
+        """
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("def f(x):\n    return x + 1\n")
+        age_file(py_path)
+        mid = ModuleId.from_path("lib/mod")
+
+        monkeypatch.setattr(externs, "read_payload", lambda entry, identity: b"not marshalled code")
+        counts = _count_source_to_code(monkeypatch)
+
+        registry = ExternRegistry()
+        registry.load_companion(mid, py_path)
+
+        assert counts[0] == 1
+        assert registry.resolve(mid, "f")(1) == 2
+
+    def test_unwritable_cache_home_falls_back_to_compiling(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cache = tmp_path / "cache"
+        cache.write_text("a file cannot hold a cache directory")
+        monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("def f(x):\n    return x + 1\n")
+        age_file(py_path)
+        mid = ModuleId.from_path("lib/mod")
+        registry = ExternRegistry()
+        registry.load_companion(mid, py_path)
+        assert registry.resolve(mid, "f")(1) == 2
+
+    def test_entry_written_under_a_different_compiler_digest_is_a_miss(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("def f(x):\n    return x + 1\n")
+        age_file(py_path)
+        mid = ModuleId.from_path("lib/mod")
+        ExternRegistry().load_companion(mid, py_path)
+
+        monkeypatch.setattr(artifact_storage, "_COMPILER_DIGEST", b"\x00" * 32)
+        counts = _count_source_to_code(monkeypatch)
+
+        registry = ExternRegistry()
+        registry.load_companion(mid, py_path)
+        assert counts[0] == 1
+        assert registry.resolve(mid, "f")(1) == 2
+
+    def test_bytecode_cached_at_one_optimize_level_is_not_served_at_another(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The cache key covers ``-O``, so one level's cached code never serves another."""
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("def f(x):\n    return x + 1\n")
+        age_file(py_path)
+        mid = ModuleId.from_path("lib/mod")
+
+        monkeypatch.setattr(externs, "_optimize_level", lambda: 0)
+        ExternRegistry().load_companion(mid, py_path)
+
+        monkeypatch.setattr(externs, "_optimize_level", lambda: 2)
+        counts = _count_source_to_code(monkeypatch)
+        registry = ExternRegistry()
+        registry.load_companion(mid, py_path)
+
+        assert counts[0] == 1
+        assert registry.resolve(mid, "f")(1) == 2
+
+    def test_reimport_after_a_changed_stamp_keeps_one_bytecode_entry_per_companion(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The slot is stable per companion: a stamp change overwrites it, not duplicates it."""
+        cache = tmp_path / "cache"
+        monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("def f(x):\n    return x + 1\n")
+        age_file(py_path)
+        mid = ModuleId.from_path("lib/mod")
+        registry = ExternRegistry()
+        registry.load_companion(mid, py_path)
+
+        # Aged to a distinctly different offset than the first version, so the
+        # two stamps differ even on a filesystem with coarse mtime granularity.
+        py_path.write_text("def f(x):\n    return x + 9\n")
+        age_file(py_path, seconds=7200)
+        registry.load_companion(mid, py_path)
+
+        assert registry.resolve(mid, "f")(1) == 10
+        assert len(list((cache / "agm" / "agl").glob("*.pyc"))) == 1
+
+    def test_freshly_written_companion_is_compiled_but_not_cached(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A stamp that could still collide with a same-tick edit is never published.
+
+        The mtime is pinned to the future rather than left at "now": that
+        keeps the assertion true regardless of how long compiling this test's
+        companion takes, instead of racing the 2-second settle window.
+        """
+        cache = tmp_path / "cache"
+        monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("def f(x):\n    return x + 1\n")
+        future = time.time_ns() + 3_600_000_000_000
+        os.utime(py_path, ns=(future, future))
+        mid = ModuleId.from_path("lib/mod")
+
+        registry = ExternRegistry()
+        registry.load_companion(mid, py_path)
+
+        assert registry.resolve(mid, "f")(1) == 2
+        assert not list((cache / "agm" / "agl").glob("*.pyc"))
+
+    def test_companion_changed_between_the_registry_stamp_and_the_read_is_not_cached_stale(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A file that moves on between the registry's stamp and the compile is never published.
+
+        The registry stamps the file, then the loader reads it -- an edit
+        landing in that window must not let code compiled from the new source
+        be published under the stamp taken before it.
+        """
+        cache = tmp_path / "cache"
+        monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("def f(x):\n    return x + 1\n")
+        age_file(py_path)
+        mid = ModuleId.from_path("lib/mod")
+
+        original_get_data = _CompanionBytecodeLoader.get_data
+
+        def _mutate_before_read(loader: _CompanionBytecodeLoader, path: str) -> bytes:
+            py_path.write_text("def f(x):\n    return x + 999\n")
+            age_file(py_path)
+            return original_get_data(loader, path)
+
+        monkeypatch.setattr(_CompanionBytecodeLoader, "get_data", _mutate_before_read)
+
+        registry = ExternRegistry()
+        registry.load_companion(mid, py_path)
+
+        assert registry.resolve(mid, "f")(1) == 1000
+        assert not list((cache / "agm" / "agl").glob("*.pyc"))
+
+    def test_companion_removed_after_compiling_still_loads_and_is_not_cached(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The cache must never be the reason an import fails.
+
+        A companion that vanishes between the compile and the post-compile
+        re-stat must still load and run -- the write is simply skipped.
+        """
+        cache = tmp_path / "cache"
+        monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("def f(x):\n    return x + 1\n")
+        age_file(py_path)
+        mid = ModuleId.from_path("lib/mod")
+
+        original_get_data = _CompanionBytecodeLoader.get_data
+
+        def _vanish_after_read(loader: _CompanionBytecodeLoader, path: str) -> bytes:
+            data = original_get_data(loader, path)
+            py_path.unlink()
+            return data
+
+        monkeypatch.setattr(_CompanionBytecodeLoader, "get_data", _vanish_after_read)
+
+        registry = ExternRegistry()
+        registry.load_companion(mid, py_path)
+
+        assert registry.resolve(mid, "f")(1) == 2
+        assert not list((cache / "agm" / "agl").glob("*.pyc"))
+
+    def test_companion_under_a_non_utf8_directory_name_loads_and_runs(self, tmp_path: Path) -> None:
+        """A cache key built from a non-UTF-8 path must not crash a loadable companion."""
+        try:
+            bad_dir = tmp_path / os.fsdecode(b"bad\xffdir")
+            bad_dir.mkdir()
+        except OSError:
+            pytest.skip("filesystem rejects a non-UTF-8 directory name")
+        py_path = bad_dir / "mod.py"
+        py_path.write_text("def f(x):\n    return x + 1\n")
+        mid = ModuleId.from_path("lib/mod")
+        registry = ExternRegistry()
+        registry.load_companion(mid, py_path)
+        assert registry.resolve(mid, "f")(1) == 2
 
 
 # ---------------------------------------------------------------------------

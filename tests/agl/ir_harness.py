@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import time
 import unittest.mock
 from collections.abc import Callable
 from pathlib import Path
@@ -318,6 +319,12 @@ def write_companion_file(root: Path, module_path: str, source: str = "") -> Path
     py_path.parent.mkdir(parents=True, exist_ok=True)
     py_path.write_text(source)
     return py_path
+
+
+def age_file(path: Path, *, seconds: int = 3600) -> None:
+    """Back-date *path*'s mtime *seconds* before now, well past the write-settledness window."""
+    stamp = time.time_ns() - seconds * 1_000_000_000
+    os.utime(path, ns=(stamp, stamp))
 
 
 def _prepare_extern_program(

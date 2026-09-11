@@ -28,12 +28,13 @@ Imported modules are precompiled on demand and reused in memory and across CLI p
 
 `lower/module.py` persists module bodies and linkable symbol/function/contract tables. Linking assembles them in the current graph's initialization order and rebuilds whole-program metadata. Resource paths are revalidated, and host-materialized contracts distinguish IR variants. Python companions, configuration, module initializers, and mutable runtime state remain invocation-specific.
 
-`modules/disk_cache.py` stores artifacts under `$XDG_CACHE_HOME/agm/agl` (default `~/.cache/agm/agl`). Source contents, compiler contents, Python and compiler-dependency versions validate reuse; timestamps alone are insufficient. Writes are atomic. `artifact_serialization.py` accepts compiler data classes and source anchors, never arbitrary constructors or host callables. Missing, incompatible, damaged, or inaccessible entries trigger ordinary compilation.
+`artifact_storage.py` is the shared storage envelope: it locates a versioned slot under `$XDG_CACHE_HOME/agm/agl` (default `~/.cache/agm/agl`), validates entries against a compiler digest, and writes atomically. `modules/disk_cache.py` persists parsed modules over that envelope, additionally validating source contents, the node-id base, and the default-stdlib flag; timestamps alone are insufficient. `artifact_serialization.py` accepts compiler data classes and source anchors, never arbitrary constructors or host callables. Missing, incompatible, damaged, or inaccessible entries trigger ordinary compilation. Companion bytecode (the `pyc` kind) is the exception to source validation: it is keyed by canonical path and the interpreter's optimization level, validated by the companion's file identity stamp rather than its content, mirroring the reimport rule `runtime/externs.py` applies in memory ([execution/ffi.md](execution/ffi.md)).
 
 ## Code Entry Points
 
 - `src/agm/agl/modules/` — module ids, root assembly, path resolution, graph loading, the parsed-module cache.
 - `src/agm/agl/artifact_cache.py` — the cross-compilation artifact cache.
+- `src/agm/agl/artifact_storage.py` — the shared disk-cache storage envelope.
 - `src/agm/config/module_roots.py`, `src/agm/packages/` — configured and package-mounted roots.
 - `stdlib/src/` — the standard library.
 - Tests: `tests/test_agl_modules_*.py`, `test_agl_multifile.py`, `test_agl_parsed_module_cache.py`, `test_agl_artifact_cache.py`, `test_agl_precompilation.py`, `test_agl_stdlib*.py`.

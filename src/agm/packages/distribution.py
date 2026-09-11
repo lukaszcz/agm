@@ -44,9 +44,8 @@ def is_cache_or_vcs_path(path: str) -> bool:
     """Whether a relative path is tool-cache or VCS content no package distributes.
 
     Package trees never record such content, so the store may still acquire it
-    after publication -- a companion import writes ``__pycache__`` beside its
-    source -- and removal has to recognize it as residue rather than package
-    content.
+    after publication -- tools run in the store tree may write ``__pycache__``
+    -- and removal has to recognize it as residue rather than package content.
     """
 
     return any(

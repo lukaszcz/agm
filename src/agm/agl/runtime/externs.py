@@ -13,14 +13,18 @@ import contextvars
 import decimal
 import importlib.machinery
 import importlib.util
+import marshal
+import os
 import sys
 import threading
+import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
 from types import CodeType, ModuleType
 from typing import Protocol, cast
 
+from agm.agl.artifact_storage import artifact_entry, read_payload, write_payload
 from agm.agl.diagnostics import AglError
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
 from agm.agl.ir.ids import NominalId
@@ -121,23 +125,59 @@ class ExternResolutionError(AglError):
         self.name = name
 
 
-class _SourceOnlyLoader(importlib.machinery.SourceFileLoader):
-    """A source-only loader that never reads or writes a bytecode cache.
+def _optimize_level() -> int:
+    """Return the interpreter's ``-O`` level; compiled bytecode differs per level."""
+    return sys.flags.optimize
+
+
+class _CompanionBytecodeLoader(importlib.machinery.SourceFileLoader):
+    """A source-authoritative loader caching bytecode outside ``__pycache__``.
 
     CPython's source loader caches compiled bytecode in a ``__pycache__``
     directory next to the module it imports.  A companion is imported from
     wherever its AgL module lives, including an installed package's immutable
     store tree, which AGM must never write into: unrecorded files there are
-    not part of the package and would strand its removal.  Discarding the
-    write keeps that tree intact. Compiling the current source directly also
-    prevents a timestamp-valid stale cache from defeating the registry's
-    nanosecond file-identity check after a rapid same-size edit.
+    not part of the package and would strand its removal.  This loader instead
+    reads and writes the AgL artifact cache, keyed by compiler digest,
+    canonical path, optimization level, and the file identity stamp the
+    registry already validated before choosing to import, so a stamp-changing
+    edit never serves bytecode compiled from the earlier version. An entry is
+    written only once that stamp is settled (:func:`agm.core.fs.identity_stamp_is_settled`).
     """
 
+    def __init__(self, fullname: str, path: str, stamp: fs.IdentityStamp) -> None:
+        super().__init__(fullname, path)
+        self._stamp = stamp
+
     def get_code(self, fullname: str) -> CodeType:
-        """Compile *fullname* directly from its current source bytes."""
+        """Return *fullname*'s code from the bytecode cache, else compile and cache it."""
+        path = Path(self.path)
+        key = repr((os.fsencode(path), _optimize_level())).encode()
+        entry, identity = artifact_entry(key, "pyc", validator=repr(self._stamp).encode())
+        payload = read_payload(entry, identity)
+        if payload is not None:
+            try:
+                cached = cast(object, marshal.loads(payload))
+            except (ValueError, EOFError, TypeError):
+                cached = None
+            if isinstance(cached, CodeType):
+                return cached
+
         source_path = self.get_filename(fullname)
-        return self.source_to_code(self.get_data(source_path), source_path)
+        observed_ns = time.time_ns()
+        code = self.source_to_code(self.get_data(source_path), source_path)
+        # Publish only if the file still has the registry's stamp and that stamp
+        # predates the read by the settle window (git's racy-entry rule); a
+        # vanished file just skips the write.
+        try:
+            current_stamp = fs.identity_stamp(path)
+        except OSError:
+            return code
+        if current_stamp == self._stamp and fs.identity_stamp_is_settled(
+            current_stamp, observed_ns
+        ):
+            write_payload(entry, identity, marshal.dumps(code))
+        return code
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +426,9 @@ class ExternRegistry:
             f"__{len(self._by_path)}"
         )
         spec = importlib.util.spec_from_file_location(
-            synthetic_name, canonical, loader=_SourceOnlyLoader(synthetic_name, str(canonical))
+            synthetic_name,
+            canonical,
+            loader=_CompanionBytecodeLoader(synthetic_name, str(canonical), stamp),
         )
         # A supplied source-file loader always yields a spec; ``None`` would
         # mean the location carries a suffix no loader recognizes.

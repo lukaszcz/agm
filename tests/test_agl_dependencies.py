@@ -12,17 +12,23 @@ SRC_ROOT = AGL_ROOT.parents[1]
 
 
 def _agl_imports(package: str) -> list[tuple[Path, str]]:
+    """Return every ``agm.agl`` dependency the package declares, relatives resolved.
+
+    A bare ``from agm.agl import x`` (or a relative resolving to the same
+    package) names the submodule ``agm.agl.x``, not the package ``agm.agl``
+    itself, so it is reported qualified with each imported name.
+    """
     imports: list[tuple[Path, str]] = []
     for path in sorted((AGL_ROOT / package).rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module is not None:
-                if node.module.startswith("agm.agl."):
-                    imports.append((path, node.module))
-            elif isinstance(node, ast.Import):
-                imports.extend(
-                    (path, alias.name) for alias in node.names if alias.name.startswith("agm.agl.")
-                )
+            if not isinstance(node, (ast.Import, ast.ImportFrom)):
+                continue
+            for module in _imported_modules(path, node):
+                if isinstance(node, ast.ImportFrom) and module == "agm.agl":
+                    imports.extend((path, f"agm.agl.{alias.name}") for alias in node.names)
+                elif module.startswith("agm.agl."):
+                    imports.append((path, module))
     return imports
 
 
@@ -38,7 +44,7 @@ def _imported_modules(path: Path, node: ast.Import | ast.ImportFrom) -> tuple[st
     if not node.level:
         return () if node.module is None else (node.module,)
     module_parts = path.relative_to(SRC_ROOT).with_suffix("").parts
-    package_parts = module_parts if path.name == "__init__.py" else module_parts[:-1]
+    package_parts = module_parts[:-1]
     keep = len(package_parts) - (node.level - 1)
     imported_parts = () if node.module is None else tuple(node.module.split("."))
     return (".".join((*package_parts[:keep], *imported_parts)),)
@@ -73,6 +79,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
             "lower",
             (
                 "agm.agl.artifact_cache",
+                "agm.agl.artifact_serialization",
                 "agm.agl.ir",
                 "agm.agl.lower",
                 "agm.agl.matchcompile",
@@ -158,6 +165,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
         (
             "runtime",
             (
+                "agm.agl.artifact_storage",
                 "agm.agl.attributes",
                 "agm.agl.capabilities",
                 "agm.agl.diagnostics",
@@ -178,8 +186,8 @@ def test_execution_package_dependency_contract(package: str, allowed: tuple[str,
     """Keep each pass on the layers below it.
 
     ``agm.agl.artifact_cache`` is admitted into the scope and type-check passes
-    because it is a leaf: it imports nothing at run time, so consulting it
-    couples a pass to no other layer.
+    because it is a leaf: it reaches only data leaves and the storage envelope,
+    never another pass, so consulting it couples a pass to no other layer.
     """
     violations = [
         f"{path.relative_to(AGL_ROOT)} imports {module}"
@@ -207,14 +215,17 @@ def _agm_imports_of_file(path: Path) -> list[str]:
     [
         ("zones.py", ()),
         ("attributes.py", ("agm.agl.zones",)),
+        ("artifact_storage.py", ()),
     ],
 )
-def test_vocabulary_leaves_sit_below_every_pass(leaf: str, allowed: tuple[str, ...]) -> None:
-    """Keep the shared vocabulary modules importable from every layer.
+def test_shared_leaves_sit_below_every_pass(leaf: str, allowed: tuple[str, ...]) -> None:
+    """Keep the shared vocabulary modules, plus the storage envelope leaf, below every pass.
 
     ``zones`` is the bottom leaf and imports nothing under ``agm``;
     ``attributes`` names the zones its ``@arg-*`` entries select and so may
-    import that one module, and nothing else.
+    import that one module, and nothing else; ``artifact_storage`` is the disk
+    envelope every disk cache writes through and, like ``zones``, imports
+    nothing under ``agm``.
     """
     violations = [
         f"{leaf} imports {module}"

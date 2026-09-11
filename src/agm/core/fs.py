@@ -15,6 +15,10 @@ from agm.core.path import display_path
 # (modification time, size, inode) -- see :func:`identity_stamp`.
 IdentityStamp = tuple[int, int, int]
 
+# Coarsest common mtime granularity (FAT, some SMB/NFS mounts): a stamp inside
+# this window of "now" could still collide with an edit made moments later.
+_SETTLE_WINDOW_NS = 2_000_000_000
+
 
 def exists(path: Path) -> bool:
     """Return whether *path* exists."""
@@ -95,6 +99,13 @@ def identity_stamp(path: Path) -> IdentityStamp:
 
     info = stat(path)
     return (info.st_mtime_ns, info.st_size, info.st_ino)
+
+
+def identity_stamp_is_settled(stamp: IdentityStamp, observed_ns: int) -> bool:
+    """Return whether *stamp*'s mtime predates *observed_ns* by at least the settle window."""
+
+    mtime_ns, _size, _inode = stamp
+    return mtime_ns <= observed_ns - _SETTLE_WINDOW_NS
 
 
 def iterdir(path: Path) -> list[Path]:

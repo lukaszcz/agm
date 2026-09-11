@@ -19,12 +19,7 @@ from agm.agl.scope.imports import (
 )
 from agm.agl.scope.symbols import AglScopeError
 from agm.agl.syntax.nodes import ImportDecl, ImportItem
-from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
-
-
-def _span() -> SourceSpan:
-    return SourceSpan(1, 1, 1, 1, 0, 0, UNKNOWN_SOURCE)
-
+from tests._agl_helpers import dummy_span
 
 _next_node_id = 0
 
@@ -48,13 +43,13 @@ def _decl(
         alias=alias,
         tail=tail,
         hidden=hidden,
-        span=_span(),
+        span=dummy_span(),
         node_id=_node_id(),
     )
 
 
 def _item(name: str, rename: str | None = None) -> ImportItem:
-    return ImportItem(name, rename, _span(), _node_id())
+    return ImportItem(name, rename, dummy_span(), _node_id())
 
 
 def _module(path: str) -> ModuleId:

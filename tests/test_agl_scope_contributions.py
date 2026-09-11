@@ -20,11 +20,7 @@ from agm.agl.scope.symbols import (
     resolve_bare_contribution_layer,
 )
 from agm.agl.syntax.nodes import ImportDecl, ImportItem, ScopeSegment
-from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
-
-
-def _span() -> SourceSpan:
-    return SourceSpan(1, 1, 1, 1, 0, 0, UNKNOWN_SOURCE)
+from tests._agl_helpers import dummy_span
 
 
 def resolve_bare_contribution(scope: ScopeNode, name: NameAtom) -> set[BindingRef] | None:
@@ -57,18 +53,18 @@ def _decl(
         alias=alias,
         tail=tail,
         hidden=hidden,
-        span=_span(),
+        span=dummy_span(),
         node_id=_node_id(),
         scope_path=scope_path,
     )
 
 
 def _item(name: str, rename: str | None = None) -> ImportItem:
-    return ImportItem(name, rename, _span(), _node_id())
+    return ImportItem(name, rename, dummy_span(), _node_id())
 
 
 def _region(name: str) -> tuple[ScopeSegment, ...]:
-    return (ScopeSegment(name, _span(), _node_id()),)
+    return (ScopeSegment(name, dummy_span(), _node_id()),)
 
 
 def _module(path: str) -> ModuleId:
@@ -175,7 +171,7 @@ def test_regional_tail_bare_contributions_narrow_at_the_scope_seam() -> None:
                     BindingRef(
                         binding_name,
                         False,
-                        _span(),
+                        dummy_span(),
                         decl.node_id,
                         BinderKind.function_binding,
                         module,
@@ -200,7 +196,7 @@ def test_import_tail_and_use_route_of_the_same_origin_are_not_ambiguous() -> Non
         BindingRef(
             "selected",
             False,
-            _span(),
+            dummy_span(),
             decl.node_id,
             BinderKind.function_binding,
             module,

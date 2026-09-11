@@ -34,6 +34,9 @@ participates in ``RecordType``/``EnumType``/``ExceptionType`` equality.
 ``agent_value`` builds a runtime ``std/prelude::Agent`` enum value directly, for
 tests that need one as an expected value, a seeded host setting, or a request
 payload without going through source parsing.
+
+``dummy_span`` returns a fixed placeholder ``SourceSpan`` for tests that must
+supply one but don't assert on its content.
 """
 
 from __future__ import annotations
@@ -87,11 +90,17 @@ from agm.agl.syntax import (
     VarDecl,
 )
 from agm.agl.syntax.nodes import Program
+from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 
 # Declaration identities for ad-hoc test TypeDefs, distinct from real AST node
 # ids (which start at 0) and from every reserved identity (<= -2, see
 # ir.reserved_nominals) so an ad-hoc type never collides with either.
 _decl_ids = itertools.count(900_000)
+
+
+def dummy_span() -> SourceSpan:
+    """Return a fixed placeholder span for tests that need one but don't inspect it."""
+    return SourceSpan(1, 1, 1, 1, 0, 0, UNKNOWN_SOURCE)
 
 
 def file_program(source: str) -> str:

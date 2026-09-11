@@ -8,6 +8,7 @@
 ``OutputContractSpec`` records the statically derived codec + target type per
 ``AgentCall`` node.
 ``AglTypeError`` is the fatal type error raised by the checker.
+``EnvironmentFacts`` is the replayable journal of a ``TypeEnvironment``'s own facts.
 """
 
 from __future__ import annotations
@@ -625,6 +626,153 @@ class ModuleTypeInterface:
     definitions: tuple[TypeDef, ...]
 
 
+# ---------------------------------------------------------------------------
+# EnvironmentFacts — TypeEnvironment's own-facts journal
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class BindingTypeFact:
+    """Journaled :meth:`TypeEnvironment.set_binding_type` call."""
+
+    node_id: int
+    typ: Type
+
+    def apply(self, env: TypeEnvironment) -> None:
+        env.set_binding_type(node_id=self.node_id, typ=self.typ)
+
+
+@dataclass(frozen=True, slots=True)
+class FunctionSignatureFact:
+    """Journaled :meth:`TypeEnvironment.register_function_signature` call."""
+
+    name: str
+    sig: FunctionSignature
+    scope_path: ScopePath
+
+    def apply(self, env: TypeEnvironment) -> None:
+        env.register_function_signature(name=self.name, sig=self.sig, scope_path=self.scope_path)
+
+
+@dataclass(frozen=True, slots=True)
+class FunctionSignatureByNodeIdFact:
+    """Journaled :meth:`TypeEnvironment.register_function_signature_by_node_id` call."""
+
+    node_id: int
+    sig: FunctionSignature
+
+    def apply(self, env: TypeEnvironment) -> None:
+        env.register_function_signature_by_node_id(node_id=self.node_id, sig=self.sig)
+
+
+@dataclass(frozen=True, slots=True)
+class ExternNodeIdFact:
+    """Journaled :meth:`TypeEnvironment.register_extern_node_id` call."""
+
+    node_id: int
+
+    def apply(self, env: TypeEnvironment) -> None:
+        env.register_extern_node_id(node_id=self.node_id)
+
+
+@dataclass(frozen=True, slots=True)
+class TypeFact:
+    """Journaled :meth:`TypeEnvironment.register_type` call."""
+
+    name: str
+    typ: Type
+
+    def apply(self, env: TypeEnvironment) -> None:
+        env.register_type(name=self.name, typ=self.typ)
+
+
+@dataclass(frozen=True, slots=True)
+class GenericTypeFact:
+    """Journaled :meth:`TypeEnvironment.register_generic_type` call."""
+
+    name: str
+    gdef: GenericTypeDef
+
+    def apply(self, env: TypeEnvironment) -> None:
+        env.register_generic_type(name=self.name, gdef=self.gdef)
+
+
+@dataclass(frozen=True, slots=True)
+class AliasFact:
+    """Journaled :meth:`TypeEnvironment.register_alias` call."""
+
+    name: str
+    target_expr: object
+    type_params: tuple[str, ...]
+
+    def apply(self, env: TypeEnvironment) -> None:
+        # Structural == on syntax type nodes: skipping an identical one keeps a frozen alias.
+        if env.has_alias_registration(self.name, self.target_expr, self.type_params):
+            return
+        env.register_alias(
+            name=self.name, target_expr=self.target_expr, type_params=self.type_params
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ConstructorSignatureFact:
+    """Journaled :meth:`TypeEnvironment.register_constructor_signature` call."""
+
+    sig: ConstructorSignature
+
+    def apply(self, env: TypeEnvironment) -> None:
+        env.register_constructor_signature(sig=self.sig)
+
+
+@dataclass(frozen=True, slots=True)
+class ConstructorFieldKindsFact:
+    """Journaled :meth:`TypeEnvironment.register_constructor_field_kinds` call.
+
+    ``module_id`` is always the resolved owner module (never ``None``), so
+    replay never re-derives it from the replaying environment.
+    """
+
+    owner_name: str
+    fields: tuple[tuple[str, ParamZone], ...]
+    scope_path: ScopePath
+    module_id: ModuleId
+    decl_id: int | None
+
+    def apply(self, env: TypeEnvironment) -> None:
+        env.register_constructor_field_kinds(
+            owner_name=self.owner_name,
+            fields=self.fields,
+            scope_path=self.scope_path,
+            module_id=self.module_id,
+            decl_id=self.decl_id,
+        )
+
+
+EnvironmentFact = (
+    BindingTypeFact
+    | FunctionSignatureFact
+    | FunctionSignatureByNodeIdFact
+    | ExternNodeIdFact
+    | TypeFact
+    | GenericTypeFact
+    | AliasFact
+    | ConstructorSignatureFact
+    | ConstructorFieldKindsFact
+)
+
+
+@dataclass(frozen=True, slots=True)
+class EnvironmentFacts:
+    """Ordered journal of a ``TypeEnvironment``'s own-facts mutator calls.
+
+    Data only, so it serializes under the artifact allow-list.
+    :meth:`TypeEnvironment.replay` applies each entry in order to reproduce
+    the recorded mutations on another environment.
+    """
+
+    entries: tuple[EnvironmentFact, ...] = ()
+
+
 class TypeEnvironment:
     """Mutable type environment used during the type-checking pass.
 
@@ -783,6 +931,11 @@ class TypeEnvironment:
         # full path; this frame only maps a bare source spelling to that path.
         self._type_scope: tuple[str, ...] = ()
         self._sealed = False
+        # Own-facts journal, active from begin_own_facts() until seal() snapshots it
+        # into _own_facts. unregister_name, freeze_alias, restore_*,
+        # remove_binding_types and seed_from never run in that window; not journaled.
+        self._journal: list[EnvironmentFact] | None = None
+        self._own_facts: EnvironmentFacts | None = None
         # Memo for the own-type-name enumeration, which rebuilds a whole-namespace
         # answer and is asked for repeatedly (once per owner-form resolution).  It
         # is populated only once ``seal`` has frozen the declaration namespace, so
@@ -863,11 +1016,64 @@ class TypeEnvironment:
 
         Validates the environment first when self-validation is enabled; sealing
         itself — the functional state that gates further mutation and memoization
-        (see :attr:`is_sealed`) — always happens, regardless of the flag.
+        (see :attr:`is_sealed`) — always happens, regardless of the flag. Closes
+        an active journal into a stable snapshot :meth:`own_facts` returns.
         """
         if self_validation_enabled():
             self.assert_closed()
+        if self._journal is not None:
+            self._own_facts = EnvironmentFacts(tuple(self._journal))
+            self._journal = None
         self._sealed = True
+
+    # --- Own-facts journal ---
+
+    def begin_own_facts(self) -> None:
+        """Start recording this environment's own mutator calls into a journal."""
+        self._assert_mutable()
+        if self._journal is not None:
+            raise AssertionError("own-facts journal already active")
+        self._journal = []
+
+    def own_facts(self) -> EnvironmentFacts:
+        """Return this environment's own-facts journal.
+
+        The sealed snapshot once :meth:`seal` has run, else the active
+        journal. Raises if :meth:`begin_own_facts` was never called: such an
+        environment (module path, REPL seed) never journaled anything and has
+        no own facts to persist.
+        """
+        if self._own_facts is not None:
+            return self._own_facts
+        if self._journal is not None:
+            return EnvironmentFacts(tuple(self._journal))
+        raise AssertionError("own-facts journal was never started")
+
+    def has_alias_registration(
+        self, name: str, target_expr: object, type_params: tuple[str, ...]
+    ) -> bool:
+        """Whether *name* is registered as an alias of *target_expr* with *type_params*."""
+        return (
+            name in self._alias_targets
+            and self._alias_targets[name] == target_expr
+            and self._alias_type_params.get(name, ()) == type_params
+        )
+
+    def replay(self, facts: EnvironmentFacts) -> None:
+        """Apply *facts* in order through the journaled mutators.
+
+        Recording is suspended while applying; an active journal is then
+        extended with *facts* verbatim, so a skipped identical alias is kept.
+        """
+        self._assert_mutable()
+        journal, self._journal = self._journal, None
+        try:
+            for fact in facts.entries:
+                fact.apply(self)
+        finally:
+            self._journal = journal
+        if journal is not None:
+            journal.extend(facts.entries)
 
     # --- Type namespace queries ---
 
@@ -1016,6 +1222,8 @@ class TypeEnvironment:
     def register_type(self, name: str, typ: Type) -> None:
         self._assert_mutable()
         self._types[name] = typ
+        if self._journal is not None:
+            self._journal.append(TypeFact(name=name, typ=typ))
 
     def unregister_name(self, name: str) -> None:
         """Remove a user *name* from the tables that only ever expose ONE definition.
@@ -1082,6 +1290,10 @@ class TypeEnvironment:
         self._alias_targets[name] = target_expr
         self._resolved_aliases.pop(name, None)
         self._alias_type_params[name] = type_params
+        if self._journal is not None:
+            self._journal.append(
+                AliasFact(name=name, target_expr=target_expr, type_params=type_params)
+            )
 
     def freeze_alias(self, name: str, template: Type, *, type_params: tuple[str, ...] = ()) -> None:
         """Preserve an alias's resolved template under its declaring identities."""
@@ -1098,6 +1310,8 @@ class TypeEnvironment:
         """Register a generic type definition under *name*."""
         self._assert_mutable()
         self._generic_types[name] = gdef
+        if self._journal is not None:
+            self._journal.append(GenericTypeFact(name=name, gdef=gdef))
 
     def get_generic_type(self, name: str) -> GenericTypeDef | None:
         """Return the ``GenericTypeDef`` for *name*, or ``None`` if unknown."""
@@ -1216,6 +1430,8 @@ class TypeEnvironment:
         assert isinstance(result, (RecordType, EnumType))
         key = self._constructor_key(result.module_id, result.name, result.scope_path)
         self._constructor_sigs[key] = sig
+        if self._journal is not None:
+            self._journal.append(ConstructorSignatureFact(sig=sig))
 
     def get_constructor_signature(
         self, owner_name: str, *, scope_path: ScopePath = ()
@@ -1344,6 +1560,8 @@ class TypeEnvironment:
         self._function_signatures_by_path[(scope_path, name)] = sig
         if not scope_path:
             self._function_signatures[name] = sig
+        if self._journal is not None:
+            self._journal.append(FunctionSignatureFact(name=name, sig=sig, scope_path=scope_path))
 
     def get_function_signature(
         self, name: str, *, scope_path: ScopePath = ()
@@ -1367,6 +1585,8 @@ class TypeEnvironment:
         """
         self._assert_mutable()
         self._function_signatures_by_node_id[node_id] = sig
+        if self._journal is not None:
+            self._journal.append(FunctionSignatureByNodeIdFact(node_id=node_id, sig=sig))
 
     def get_function_signature_by_node_id(self, node_id: int) -> FunctionSignature | None:
         """Return the function signature for a callee's declaration ``node_id``.
@@ -1395,6 +1615,8 @@ class TypeEnvironment:
         """
         self._assert_mutable()
         self._extern_node_ids.add(node_id)
+        if self._journal is not None:
+            self._journal.append(ExternNodeIdFact(node_id=node_id))
 
     def is_extern_node_id(self, node_id: int) -> bool:
         """Return ``True`` if *node_id* names a declared ``extern def``."""
@@ -1405,6 +1627,8 @@ class TypeEnvironment:
     def set_binding_type(self, node_id: int, typ: Type) -> None:
         self._assert_mutable()
         self._binding_types[node_id] = typ
+        if self._journal is not None:
+            self._journal.append(BindingTypeFact(node_id=node_id, typ=typ))
 
     def snapshot_binding_types(self) -> PersistentDict[int, Type]:
         """Return a restorable snapshot of transient binding-type metadata."""
@@ -2667,6 +2891,16 @@ class TypeEnvironment:
         self._constructor_field_kinds[key] = fields
         if decl_id is not None:
             self._constructor_field_kinds_by_decl_id[decl_id] = fields
+        if self._journal is not None:
+            self._journal.append(
+                ConstructorFieldKindsFact(
+                    owner_name=owner_name,
+                    fields=fields,
+                    scope_path=scope_path,
+                    module_id=owner_module_id,
+                    decl_id=decl_id,
+                )
+            )
 
     def get_constructor_field_kinds(
         self,

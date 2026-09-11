@@ -326,9 +326,9 @@ class ExecProgramDiscovery:
         candidate tokens; ``None`` means the token does not name one usable,
         selected program.
         """
-        from agm.cli_support.program_options import program_command_for
+        from agm.cli_support.program_options import EXEC_RESERVED_FLAGS, program_command_for
 
-        return program_command_for(self.selection(file).selected)
+        return program_command_for(self.selection(file).selected, EXEC_RESERVED_FLAGS)
 
 
 def unmatched_program_message(

@@ -35,10 +35,13 @@ def registered_help(
     path_name: str, registration: CommandRegistration, *, program: "ProgramDeclInfo | None"
 ) -> str:
     """Render one registered command's help from an already-discovered program."""
-    from agm.cli_support.program_options import program_command_for
+    from agm.cli_support.program_options import REGISTERED_RESERVED_FLAGS, program_command_for
 
     return dispatch.registered_command_help(
-        path_name, registration, program=program, command=program_command_for(program)
+        path_name,
+        registration,
+        program=program,
+        command=program_command_for(program, REGISTERED_RESERVED_FLAGS),
     )
 
 
@@ -679,6 +682,42 @@ def test_registered_command_reaches_the_programs_end_of_options_marker(
 
     assert result.exit_code == 0
     assert result.stdout == expected
+
+
+def test_registered_command_program_may_claim_exec_only_flags(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A registered command reserves only the flags it declares itself, not
+    ``agm exec``'s: parameters spelled ``--agent`` or ``-p`` bind, and its help
+    lists them.
+    """
+    home = tmp_path / "home"
+    write_installed_package(
+        home,
+        "tools",
+        source=(
+            'program def main(agent: text = "a", @opt-short("p") path: text = "b") -> unit =\n'
+            '  print "%{agent}|%{path}"\n'
+        ),
+        commands={"tools run": "tools/main::main"},
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(
+        dispatch,
+        "load_command_index",
+        lambda **_: ActivationIndex(
+            commands={"tools run": CommandRegistration("tools", "tools/main::main")}
+        ),
+    )
+
+    result = invoke(CliRunner(), ["tools", "run", "--agent", "codex", "-p", "src"])
+    help_result = invoke(CliRunner(), ["tools", "run", "--help"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "codex|src\n"
+    assert help_result.exit_code == 0
+    assert "--agent" in help_result.output
+    assert "-p" in help_result.output
 
 
 def test_registered_command_help_returns_false_when_index_is_unavailable(

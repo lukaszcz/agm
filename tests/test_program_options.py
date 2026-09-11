@@ -30,6 +30,8 @@ from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import build_param_decoder
 from agm.agl.zones import ParamZone
 from agm.cli_support.program_options import (
+    EXEC_RESERVED_FLAGS,
+    REGISTERED_RESERVED_FLAGS,
     DuplicateOptionFlagError,
     ExecTail,
     ProgramCommand,
@@ -104,7 +106,7 @@ def _program(*params: ProgramParamInfo, doc: str | None = None) -> ProgramDeclIn
 
 
 def _command(*params: ProgramParamInfo, doc: str | None = None) -> ProgramCommand:
-    result = build_program_command(_program(*params, doc=doc))
+    result = build_program_command(_program(*params, doc=doc), EXEC_RESERVED_FLAGS)
     assert isinstance(result, ProgramCommand)
     return result
 
@@ -208,10 +210,8 @@ class TestEngineKeyFlags:
         assert "--default-agent" in flags
         assert "--no-default-agent" not in flags
 
-    def test_reserved_flags_includes_every_engine_key_flag(self) -> None:
-        from agm.cli_support.program_options import RESERVED_FLAGS
-
-        assert engine_key_flags() <= RESERVED_FLAGS
+    def test_exec_reserves_every_engine_key_flag(self) -> None:
+        assert engine_key_flags() <= EXEC_RESERVED_FLAGS
 
     def test_every_flag_the_exec_command_declares_is_reserved(self) -> None:
         """The reserved set is derived from ``agm exec``'s own declarations,
@@ -221,7 +221,6 @@ class TestEngineKeyFlags:
         import typer.main
 
         from agm import cli
-        from agm.cli_support.program_options import RESERVED_FLAGS
 
         group = typer.main.get_command(cli.app)
         assert isinstance(group, click.Group)
@@ -233,7 +232,24 @@ class TestEngineKeyFlags:
             for flag in (*param.opts, *param.secondary_opts)
         }
 
-        assert declared <= RESERVED_FLAGS
+        assert declared <= EXEC_RESERVED_FLAGS
+
+    def test_every_flag_a_registered_command_declares_is_reserved(self) -> None:
+        """Derived from the registered command's own declarations, as for ``agm exec``."""
+        from agm.cli_dispatch import RegisteredProgramCommand
+        from agm.packages.activation import CommandRegistration
+
+        command = RegisteredProgramCommand(
+            "tools run", CommandRegistration("tools", "tools/run::main")
+        )
+        declared = {
+            flag
+            for param in command.params
+            if isinstance(param, click.Option)
+            for flag in (*param.opts, *param.secondary_opts)
+        }
+
+        assert declared <= REGISTERED_RESERVED_FLAGS
 
 
 # ---------------------------------------------------------------------------
@@ -268,30 +284,33 @@ class TestBuildProgramCommand:
 
     def test_positional_only_param_is_never_reserved_checked(self) -> None:
         assert isinstance(
-            build_program_command(_program(_param("help", TextType(), ParamZone.POSITIONAL_ONLY))),
+            build_program_command(
+                _program(_param("help", TextType(), ParamZone.POSITIONAL_ONLY)), EXEC_RESERVED_FLAGS
+            ),
             ProgramCommand,
         )
 
     def test_named_param_colliding_with_a_builtin_flag_is_rejected(self) -> None:
-        result = build_program_command(_program(_param("help", TextType())))
+        result = build_program_command(_program(_param("help", TextType())), EXEC_RESERVED_FLAGS)
 
         assert result == ReservedFlagError(parameter="help", flag="--help")
 
     def test_named_param_colliding_with_an_engine_key_is_rejected(self) -> None:
-        result = build_program_command(_program(_param("timeout", TextType())))
+        result = build_program_command(_program(_param("timeout", TextType())), EXEC_RESERVED_FLAGS)
 
         assert result == ReservedFlagError(parameter="timeout", flag="--timeout")
 
     def test_bool_param_colliding_only_via_its_negative_flag_is_rejected(self) -> None:
         # ``--no-stdlib`` is a reserved built-in host flag with no paired
         # ``--stdlib``, so only a bool param's negative form collides.
-        result = build_program_command(_program(_param("stdlib", BoolType())))
+        result = build_program_command(_program(_param("stdlib", BoolType())), EXEC_RESERVED_FLAGS)
 
         assert result == ReservedFlagError(parameter="stdlib", flag="--no-stdlib")
 
     def test_bool_negative_colliding_with_another_params_positive_flag_is_rejected(self) -> None:
         result = build_program_command(
-            _program(_param("cache", BoolType()), _param("no-cache", BoolType()))
+            _program(_param("cache", BoolType()), _param("no-cache", BoolType())),
+            EXEC_RESERVED_FLAGS,
         )
 
         assert result == DuplicateOptionFlagError(
@@ -305,7 +324,8 @@ class TestBuildProgramCommand:
             _program(
                 _param("region", _option_type(TextType())),
                 _param("no-region", BoolType()),
-            )
+            ),
+            EXEC_RESERVED_FLAGS,
         )
 
         assert result == DuplicateOptionFlagError(
@@ -313,7 +333,9 @@ class TestBuildProgramCommand:
         )
 
     def test_external_name_is_what_the_reservation_check_sees(self) -> None:
-        result = build_program_command(_program(_param("tag", TextType(), external="help")))
+        result = build_program_command(
+            _program(_param("tag", TextType(), external="help")), EXEC_RESERVED_FLAGS
+        )
 
         assert result == ReservedFlagError(parameter="tag", flag="--help")
 
@@ -322,7 +344,8 @@ class TestBuildProgramCommand:
             _program(
                 _param("first", TextType(), external="shared"),
                 _param("second", TextType(), external="shared"),
-            )
+            ),
+            EXEC_RESERVED_FLAGS,
         )
 
         assert result == DuplicateOptionFlagError(
@@ -330,16 +353,44 @@ class TestBuildProgramCommand:
         )
 
     def test_short_option_colliding_with_a_reserved_host_short_is_rejected(self) -> None:
-        result = build_program_command(_program(_param("path", TextType(), short="p")))
+        result = build_program_command(
+            _program(_param("path", TextType(), short="p")), EXEC_RESERVED_FLAGS
+        )
 
         assert result == ReservedFlagError(parameter="path", flag="-p")
+
+    def test_exec_only_flags_are_free_on_a_registered_command(self) -> None:
+        result = build_program_command(
+            _program(
+                _param("agent", BUILTIN_PRELUDE_TYPES["Agent"]),
+                _param("stdlib", BoolType()),
+                _param("path", TextType(), short="p"),
+            ),
+            REGISTERED_RESERVED_FLAGS,
+        )
+
+        assert isinstance(result, ProgramCommand)
+
+    def test_registered_command_reserves_its_own_dry_run_flag(self) -> None:
+        result = build_program_command(
+            _program(_param("dry-run", BoolType())), REGISTERED_RESERVED_FLAGS
+        )
+
+        assert result == ReservedFlagError(parameter="dry-run", flag="--dry-run")
+
+    @pytest.mark.parametrize("reserved", [EXEC_RESERVED_FLAGS, REGISTERED_RESERVED_FLAGS])
+    def test_help_flags_are_reserved_on_every_surface(self, reserved: frozenset[str]) -> None:
+        result = build_program_command(_program(_param("tag", TextType(), short="h")), reserved)
+
+        assert result == ReservedFlagError(parameter="tag", flag="-h")
 
     def test_short_option_colliding_with_another_params_short_is_rejected(self) -> None:
         result = build_program_command(
             _program(
                 _param("alpha", TextType(), short="a"),
                 _param("author", TextType(), short="a"),
-            )
+            ),
+            EXEC_RESERVED_FLAGS,
         )
 
         assert result == DuplicateOptionFlagError(
@@ -1098,7 +1149,7 @@ class TestProgramCommandFor:
     def test_returns_the_built_command_for_a_valid_signature(self) -> None:
         from agm.cli_support.program_options import program_command_for
 
-        command = program_command_for(_program(_param("name", TextType())))
+        command = program_command_for(_program(_param("name", TextType())), EXEC_RESERVED_FLAGS)
 
         assert isinstance(command, ProgramCommand)
         assert "--name" in command.option_spellings()
@@ -1106,12 +1157,14 @@ class TestProgramCommandFor:
     def test_degrades_to_none_on_a_reservation_collision(self) -> None:
         from agm.cli_support.program_options import program_command_for
 
-        assert program_command_for(_program(_param("help", TextType()))) is None
+        assert (
+            program_command_for(_program(_param("help", TextType())), EXEC_RESERVED_FLAGS) is None
+        )
 
     def test_no_program_is_none(self) -> None:
         from agm.cli_support.program_options import program_command_for
 
-        assert program_command_for(None) is None
+        assert program_command_for(None, EXEC_RESERVED_FLAGS) is None
 
 
 class TestHostLookingProgramValues:

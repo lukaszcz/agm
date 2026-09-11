@@ -903,6 +903,7 @@ def _exec_print_help(
     """
     from agm.cli_support.program_discovery import unmatched_program_message
     from agm.cli_support.program_options import (
+        EXEC_RESERVED_FLAGS,
         contains_help_flag,
         exec_program_help,
         program_command_for,
@@ -915,7 +916,7 @@ def _exec_print_help(
         print_help_for_command_path(["exec"])
         return True
     selection = discovery.selection(file)
-    program_command = program_command_for(selection.selected)
+    program_command = program_command_for(selection.selected, EXEC_RESERVED_FLAGS)
     if not program_help_requested(tokens, program_command):
         return False
     if program_command is None:

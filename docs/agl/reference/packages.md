@@ -93,7 +93,7 @@ program def main() -> unit =
 A registered command runs its program exactly as a directly executed program
 does: the selected `program def`'s own value parameters become flags, and
 configuration is read by qualified key. Its parameters carry the same
-[presentation attributes](host-environment.md#presentation-attributes) as any
+[presentation attributes](attributes.md#program-parameter-attributes) as any
 other program's, so the flags, one-letter spellings, environment fallbacks, and
 `@doc` prose a program declares are what its registered command presents. A
 manifest may also supply a short command description and additional `help` prose;

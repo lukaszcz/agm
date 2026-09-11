@@ -190,7 +190,7 @@ three **zones** that determine how arguments at the call site are matched:
 | **Standard** | Positional or named | `@arg-std` |
 | **Named-only** | Named argument only (or bare-name shorthand) | `@arg-named` |
 
-An [attribute](grammar.md#attributes) in front of a parameter puts that
+An [attribute](attributes.md#zone-attributes) in front of a parameter puts that
 parameter in the zone it names. The same attribute in front of the declaration
 sets the zone of every parameter that does not name one itself.
 

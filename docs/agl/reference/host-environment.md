@@ -113,42 +113,9 @@ restriction as an agent output type or cast target — see [Generics](generics.m
 
 ### Presentation attributes
 
-Five attributes shape how one value parameter of a `program def` is addressed
-and presented on the host's command line. Each takes a single text literal,
-except `@opt-hidden`, which takes none, and each may prefix only a `program
-def`'s own value parameter — nowhere else does a parameter face a command
-line. `@doc` ([Attributes](grammar.md#attributes)) belongs with them.
-
-| Attribute | Effect |
-| --------- | ------ |
-| `@opt-name("flag-word")` | Replaces the declared name as the parameter's external spelling — its flag, the derived `--no-` negation, its config-table key, and its completion. The argument is one flag word of ASCII letters, digits, and single interior hyphens. |
-| `@opt-short("c")` | Adds a one-letter alternative spelling `-c` alongside the long flag. |
-| `@opt-env("VAR")` | Names an environment variable read when no CLI token supplies the parameter. |
-| `@opt-metavar("PLACEHOLDER")` | Replaces the placeholder standing for the value in usage and help text. |
-| `@opt-hidden` | Omits the parameter's `--name` entry from help and completion; a positional-capable parameter keeps its usage slot, and the parameter binds normally when supplied. |
-
-A positional-only parameter is never addressed by name, so `@opt-name`,
-`@opt-short`, `@opt-env`, and `@opt-hidden` on one are static errors.
-`@opt-metavar` applies to it, naming the slot it fills in usage text. `@doc`
-may prefix it as it may prefix any declaration, but a host lists prose only
-for the parameters it addresses by name.
-
-```agl
-@doc("Publish one artifact.")
-program def main(
-  @doc("Artifact to publish.") @opt-metavar("PATH") @arg-pos artifact: text,
-  @doc("Where to publish it.") @opt-short("t") @opt-env("PUBLISH_TARGET") target: text = "staging",
-  @opt-hidden trace-id: text = "",
-) -> unit =
-  print "%{artifact} -> %{target}"
-```
-
-A parameter carrying `@opt-env` reads its named environment variable when no
-CLI token supplies it. A variable that is unset, and a variable set to the
-empty text, are indistinguishable here: both supply nothing, and resolution
-falls through to the config table and then the declared default. An
-environment fallback therefore cannot deliver an empty `text`; write the empty
-value as the declared default, or supply it explicitly on the command line.
+`@opt-name`, `@opt-short`, `@opt-env`, `@opt-metavar`, `@opt-hidden`, and
+`@doc` shape how a value parameter is addressed and described on the command
+line; see [Attributes](attributes.md#program-parameter-attributes).
 
 ### Help
 

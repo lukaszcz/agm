@@ -2,15 +2,14 @@
 
 [← Index](index.md)
 
-## Programs
+## Modules and programs
 
-An AgL program is a module block. A file-backed module root is static: it
-holds declarations and constant `let`/`var` initializers, while bare
-expressions, assignments, and a program's own value parameters belong to a
-`program def` signature and body. Items are
-separated by newlines or semicolons. There is no syntactic distinction between
-*statements* and *expressions*: every item is an expression with a well-defined
-type, and executable bodies are expression-oriented sequences.
+A source file is a **module**. Its root is static: it holds declarations and
+constant `let`/`var` initializers. Executable code — bare expressions,
+assignments, loops, agent calls — lives in function bodies, and a run starts
+in a [`program def`](#program-definitions). Items are separated by newlines
+or semicolons. There is no syntactic distinction between *statements* and
+*expressions*: every item is an expression with a well-defined type.
 
 The module block is the only block that may be empty. A source file holding no
 items — blank, or nothing but comments — is a legal module that declares and
@@ -40,6 +39,64 @@ item          ::= import_decl                     (* header position only *)
 builtin_modifier ::= "builtin" NEWLINE?
 ```
 
+## Program definitions
+
+`program def` declares an **entry point**: a function the host can run.
+
+```agl
+@doc("Publish one artifact.")
+program def main(
+  @doc("Artifact to publish.") @arg-pos artifact: text,
+  @doc("Target environment.") @opt-short("t") target: text = "staging",
+) -> unit =
+  print "%{artifact} -> %{target}"
+```
+
+Rules:
+
+- The result is `unit`, written or inferred; any other result is a static error.
+- It declares no type parameters and cannot be `builtin`, `extern`, or a
+  method (no `self` receiver).
+- It is legal at the module root or as a member of a named scope region, never
+  in a nested block.
+- It is addressed by its declaration path: `main`, `review::main`, or, in a
+  package, `review-tools/review::main` ([Packages](packages.md#programs-and-commands)).
+- Otherwise it is an ordinary function: callable from any code, first-class,
+  and subject to the usual [function](functions.md) rules.
+
+### Entry selection
+
+A host runs one **selected** program from the entry module: its only
+`program def` implicitly, or one chosen by path when several exist
+(`agm exec FILE -p review::main`). Modules reached through imports contribute
+no entries; their `program def`s stay ordinary functions. A run initializes
+every module's static bindings, then calls the selected program.
+
+Inline `-c` source without a `program def` is wrapped in a synthetic
+parameterless `program def main`. The REPL has no entry: a `program def`
+declared there is an ordinary function.
+
+### Parameters
+
+The selected program's value parameters are its **external inputs**. The
+parameter list defaults to the **named-only** zone: a plain `name: text`
+parameter is addressed by `--name`. `@arg-pos` opens a positional slot;
+`@arg-std` accepts both. Presentation attributes (`@doc`, `@opt-name`,
+`@opt-short`, `@opt-env`, `@opt-metavar`, `@opt-hidden`) shape the flag; see
+[Attributes](attributes.md#program-parameter-attributes).
+
+Each parameter resolves as CLI token > `@opt-env` variable > qualified config
+table > declared default. A required parameter with no external value is a
+host invocation error, reported before anything executes. Parameter types
+must be JSON-wire-serializable: `text` crosses verbatim, every other type is
+parsed strictly from JSON; `unit` and function types are rejected. A
+name-addressable parameter cannot spell an
+[engine setting](#engine-settings) name, since both share one flag and config
+namespace. Full resolution and help rules:
+[Host environment](host-environment.md#program-arguments).
+
+## Module items
+
 ### Import declarations
 
 `import`, `use`, and `export` declarations are **header-only**: they must
@@ -63,7 +120,7 @@ region.
 
 Every declaration that defines a name — the type, function, and binding forms
 below, along with their parameters and fields — may carry an
-[attribute](grammar.md#attributes) prefix. `import`, `use`, `export`, and
+[attribute](attributes.md) prefix. `import`, `use`, `export`, and
 `infix` declarations may not.
 
 - **Type declarations** (`record`, `enum`, `exception`, `type`) — valid at the
@@ -84,22 +141,9 @@ below, along with their parameters and fields — may carry an
   stays module-wide. A scoped export re-roots its forwarded atoms under the
   region's path. See [Named scopes](scopes.md#import-and-export) and
   [Modules](modules.md#imports-and-use-inside-a-scope-region).
-- **`program def` declaration** — marks a non-generic, `unit`-returning
-  ordinary function as an executable entry point. It cannot be a
-  builtin, extern, or method. It may appear at the module root or as a non-method
-  member of a named scope region (never in an ordinary nested block or as a type
-  method), remains callable like any other function, and is addressed by its
-  declaration path (`main`, `review::main`). Its value parameters are the
-  program's own external inputs: the host supplies them from CLI options and
-  qualified config, falling back to their declared defaults. They are named-only
-  unless a zone attribute places one elsewhere; see
-  [Host environment](host-environment.md#program-arguments). A standard or
-  named-only parameter, being name-addressable, cannot spell an engine
-  setting's name ([Host environment](host-environment.md#engine-settings)),
-  since program arguments and engine settings share one flag and config
-  namespace; a positional-only parameter is exempt, as it never becomes a flag
-  or config key. `agm exec` selects declarations from its file entry module;
-  declarations reached through imports remain ordinary callable functions.
+- **`program def` declaration** — an entry point; legal at the module root or
+  as a non-method member of a named scope region. See
+  [Program definitions](#program-definitions).
 - **`builtin var` declarations** — body-less host-backed mutable bindings.
   A module whose path identity lies under `std` may declare one, whether it is
   the entry program or one of its imports; no other module may. A declaration

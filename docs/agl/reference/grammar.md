@@ -228,30 +228,10 @@ own and take no attribute.
 [Lexical structure](lexical-structure.md#attributes) gives the placements an
 attribute may take.
 
-An attribute's arguments are an ordinary `arg_list`, so both positional and
-named arguments are admitted syntactically. Every built-in attribute takes only
-literal constants, positionally — `@doc("Prints a greeting")` — so a computed
-or named argument to one is a static error.
-
-Each attribute has its own meaning and its own set of declarations it may
-prefix; an unknown attribute name, a misplaced, repeated, or contradicted
-attribute, and an argument list its meaning does not admit are static errors.
-`@arg-pos`, `@arg-std`, and `@arg-named` place parameters and fields in
-[zones](functions.md#parameters).
-
-`@doc(text)` carries one text literal of human-readable prose about the
-declaration it prefixes. It is the one attribute every defining declaration
-admits, and it never changes a declaration's meaning: the prose describes the
-declaration, and nothing in the program can read it. A host surfaces it where
-it shows a declaration to a person — the prose on a `program def` describes
-that program, and the prose on one of its value parameters describes that
-parameter ([Host environment](host-environment.md#program-arguments)).
-
-`@extern-name` names an `extern def`'s companion function
-([Python FFI](ffi.md#declarations-and-companions)). `@opt-name`, `@opt-short`,
-`@opt-env`, `@opt-metavar`, and `@opt-hidden` shape how a `program def`'s value
-parameter is addressed and presented externally
-([Host environment](host-environment.md#program-arguments)).
+An attribute's arguments are an ordinary `arg_list`; every built-in attribute
+takes literal constants only, positionally. The catalog, per-attribute
+semantics, and the errors an unknown, misplaced, repeated, or contradicted
+attribute raises: [Attributes](attributes.md).
 
 ## Type declarations
 

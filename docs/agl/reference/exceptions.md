@@ -201,7 +201,7 @@ raise Abort(message = "Cannot continue without repository access.")
 
 An exception's own fields are **standard by default** and may be supplied
 positionally or by name. The `@arg-pos`, `@arg-std`, and `@arg-named`
-[attributes](grammar.md#attributes) constrain them: in front of a field the
+[attributes](attributes.md#zone-attributes) constrain them: in front of a field the
 attribute zones that field, and in front of the declaration it zones every
 field carrying none of its own. The inherited `message` field is named-only, so
 it is supplied by name when constructing an exception with fields:

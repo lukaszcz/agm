@@ -1,0 +1,123 @@
+# Code review, revision and refinement workflows
+
+import std/config
+import std/fs
+
+enum Severity = LOW | MEDIUM | HIGH | CRITICAL
+
+record Issue
+  severity: Severity
+  @doc("location - file, lines, columns")
+  location: text
+  description: text
+
+record Review
+  issues: array[Issue]
+
+def Agent::review(self, scope: text, aspects: text) -> Review =
+  let prompt: text = """
+  Review %{scope} for %{aspects}.
+
+  Reply with a list of issues classified by severity: LOW, MEDIUM, HIGH, CRITICAL.
+  """
+  self.ask prompt
+
+enum ReviseIssueResponse
+  | Valid(fix-description: text)
+  | Invalid(reason: text)
+
+def Agent::revise-issue(self, issue: Issue) -> ReviseIssueResponse =
+  let prompt: text = """
+  Check if the following issue is still valid — if so, understand the root cause and fix it. Keep changes minimal and validate. Commit after fixing the issue.
+
+  ## Issue
+
+  %{issue}
+
+  ## Response
+
+  - If the issue was valid, respond with `Valid` and the fix description.
+  - If the issue wasn't valid, respond with `Invalid` and the reason for invalidity.
+  """
+  self.ask prompt
+
+# Returns `true` if there was at least one valid HIGH or CRITICAL issue.
+def Agent::revise-review(self, review: Review, quiet: bool) -> bool =
+  var ct: bool = false
+  for issue in review.issues do
+    let r = self.revise-issue(issue)
+    if not quiet =>
+      print r
+    if r is Valid and (issue.severity is HIGH or issue.severity is CRITICAL) =>
+      ct := true
+  done
+  ct
+
+def Agent::revise-review-text(self, review: text) -> bool =
+  let prompt: text = """
+  Read the following review. For each listed issue, check if the issue is valid — if so, understand the root cause and fix it. Fix only still-valid issues, skip the rest, keep changes minimal, and validate.
+
+  Fix the root cause of ALL valid issues. Commit after fixing each valid issue.
+
+  ## Review
+
+  ```
+  %{review}
+  ```
+
+  ## Response
+
+  After fixing ALL valid issues, respond with the following.
+
+  - If at least one HIGH or CRITICAL issue was valid, return `true`.
+  - If no HIGH or CRITICAL issue was valid, return `false`.
+  """
+  self.ask prompt
+
+def refine(scope: text, aspects: text, review-agent: Agent, revise-agent: Agent, max-steps: int, quiet: bool) -> unit =
+  var n: int = 1
+  do[max-steps]
+    if not quiet =>
+      print "-------------------------------------------------"
+      print "Step %{n}"
+      print "-------------------------------------------------"
+    n := n + 1
+    let review = review-agent.review(scope, aspects)
+    let ct = revise-agent.revise-review(review, quiet)
+  until not ct
+
+let default-aspects = "correctness, maintainability, efficency, non-duplication, adherence to relevant AGENTS.md files"
+
+program def review-main(
+  scope: text,
+  aspects: text = default-aspects,
+  extra-aspects: text = "",
+  agent: Agent = config::default-agent)
+  -> unit =
+  let sep = if extra-aspects == "" => "" else => ", "
+  print <| agent.review(scope, aspects + sep + extra-aspects)
+
+program def revise-main(
+  file: path,
+  agent: Agent = config::default-agent,
+  @opt-short("q")
+  quiet: bool = false)
+  -> unit =
+  let txt: text = fs::read(file)
+  if txt as? Review =>
+    print <| agent.revise-review(txt as Review, quiet)
+  else =>
+    print <| agent.revise-review-text(txt)
+
+program def refine-main(
+  scope: text,
+  aspects: text = default-aspects,
+  extra-aspects: text = "",
+  review-agent: Agent = config::default-agent,
+  revise-agent: Agent = config::default-agent,
+  max-steps: int = 8,
+  @opt-short("q")
+  quiet: bool = false)
+  -> unit =
+  let sep = if extra-aspects == "" => "" else => ", "
+  print <| refine(scope, aspects + sep + extra-aspects, review-agent, revise-agent, max-steps, quiet)

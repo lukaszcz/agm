@@ -33,7 +33,7 @@ extern def array[E]::filter!(self, predicate: (E) -> bool) -> unit
 extern def array[E]::each(self, function: (E) -> unit) -> unit
 extern def array[E]::fold[B](self, initial: B, function: (B, E) -> B) -> B
 @extern-name("fold_right")
-extern def array[E]::fold-right[B](self, initial: B, function: (B, E) -> B) -> B
+extern def array[E]::foldr[B](self, initial: B, function: (B, E) -> B) -> B
 extern def array[E]::any(self, predicate: (E) -> bool) -> bool
 extern def array[E]::all(self, predicate: (E) -> bool) -> bool
 extern def array[E]::find(self, predicate: (E) -> bool) -> Option[E]
@@ -58,3 +58,6 @@ extern def flatten[T](values: array[array[T]]) -> array[T]
 extern def unzip[A, B](values: array[Pair[A, B]]) -> Pair[array[A], array[B]]
 extern def repeat[T](value: T, count: int) -> array[T]
 extern def range(start: int, end: int) -> array[int]
+
+def array[E]::foldl[B](self, initial: B, function: (B, E) -> B) -> B =
+  self.fold(initial, function)

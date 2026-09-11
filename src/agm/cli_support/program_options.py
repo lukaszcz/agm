@@ -46,7 +46,7 @@ the declared name, so the shared binder only ever sees declared names.
 
 Each surface a program runs under reserves its own flag inventory.
 ``EXEC_RESERVED_FLAGS`` is ``agm exec``'s: the flags it declares itself
-(``--help``, ``-p``, ``--program``, ``--agent``, …) union every engine-key
+(``--help``, ``-p``, ``--program``, …) union every engine-key
 flag. ``REGISTERED_RESERVED_FLAGS`` is a package-registered command's: only
 ``--dry-run`` beside the help flags every program command owns. A program
 parameter can never be projected onto its surface's reserved flags —
@@ -349,8 +349,6 @@ _BUILTIN_EXEC_FLAGS: frozenset[str] = frozenset(
         "-h",
         "--dry-run",
         "--no-stdlib",
-        # The CLI spelling of the ``default-agent`` engine key.
-        "--agent",
     }
 )
 

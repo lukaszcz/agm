@@ -7784,7 +7784,7 @@ class TestSessionOpen:
             stdlib_root=stdlib,
             setting_overrides={
                 "default-agent": SettingOverride(
-                    source='AgentCommand("overridden")', origin="--agent"
+                    source='AgentCommand("overridden")', origin="--default-agent"
                 )
             },
         )
@@ -7823,7 +7823,7 @@ class TestSessionOpen:
         s = ReplSession(
             setting_overrides={
                 "default-agent": SettingOverride(
-                    source='AgentCommand("preloaded")', origin="--agent"
+                    source='AgentCommand("preloaded")', origin="--default-agent"
                 )
             }
         )
@@ -7839,13 +7839,15 @@ class TestSessionOpen:
         from agm.agl.setting_overrides import SettingOverride
 
         s = ReplSession(
-            setting_overrides={"default-agent": SettingOverride(source="(", origin="--agent")}
+            setting_overrides={
+                "default-agent": SettingOverride(source="(", origin="--default-agent")
+            }
         )
         diagnostics = s.open()
         assert diagnostics
         from agm.agl.diagnostics import format_diagnostic
 
-        assert any("--agent" in format_diagnostic(d) for d in diagnostics)
+        assert any("--default-agent" in format_diagnostic(d) for d in diagnostics)
         # A rejected override promotes nothing, so the session is left exactly
         # as constructed rather than with a half-applied initial image.
         assert s._loaded_lib_modules == {}
@@ -7856,14 +7858,14 @@ class TestSessionOpen:
 
         s = ReplSession(
             setting_overrides={
-                "default-agent": SettingOverride(source='"not-an-agent"', origin="--agent")
+                "default-agent": SettingOverride(source='"not-an-agent"', origin="--default-agent")
             }
         )
         diagnostics = s.open()
         assert diagnostics
         from agm.agl.diagnostics import format_diagnostic
 
-        assert any("--agent" in format_diagnostic(d) for d in diagnostics)
+        assert any("--default-agent" in format_diagnostic(d) for d in diagnostics)
 
     def test_open_rejects_a_non_constant_override_naming_its_origin(self) -> None:
         from agm.agl.setting_overrides import SettingOverride
@@ -7871,7 +7873,7 @@ class TestSessionOpen:
         s = ReplSession(
             setting_overrides={
                 "default-agent": SettingOverride(
-                    source='AgentCommand("not " + "constant")', origin="--agent"
+                    source='AgentCommand("not " + "constant")', origin="--default-agent"
                 )
             }
         )
@@ -7879,7 +7881,7 @@ class TestSessionOpen:
         assert diagnostics
         from agm.agl.diagnostics import format_diagnostic
 
-        assert any("--agent" in format_diagnostic(d) for d in diagnostics)
+        assert any("--default-agent" in format_diagnostic(d) for d in diagnostics)
 
     def test_reset_leaves_the_override_in_force(self) -> None:
         from agm.agl.semantics.values import RecordValue, TextValue
@@ -7888,7 +7890,7 @@ class TestSessionOpen:
         s = ReplSession(
             setting_overrides={
                 "default-agent": SettingOverride(
-                    source='AgentCommand("preloaded")', origin="--agent"
+                    source='AgentCommand("preloaded")', origin="--default-agent"
                 )
             }
         )
@@ -7931,7 +7933,7 @@ class TestSessionOpen:
         s = ReplSession(
             setting_overrides={
                 "default-agent": SettingOverride(
-                    source='AgentCommand("preloaded")', origin="--agent"
+                    source='AgentCommand("preloaded")', origin="--default-agent"
                 )
             }
         )
@@ -7945,7 +7947,7 @@ class TestSessionOpen:
 
     def test_open_rejects_a_required_override_when_std_config_never_loads(self) -> None:
         """``--no-stdlib`` never loads ``std/config``, but a ``required`` override
-        (the default; mirrors a CLI ``--agent`` flag) is a request the host
+        (the default; mirrors a CLI ``--default-agent`` flag) is a request the host
         cannot silently drop -- it still fails ``open()`` up front, rather than
         being deferred to whichever entry, if any, first imports ``std/config``.
         """
@@ -7955,12 +7957,14 @@ class TestSessionOpen:
         s = ReplSession(
             default_stdlib=False,
             setting_overrides={
-                "default-agent": SettingOverride(source='AgentCommand("x")', origin="--agent")
+                "default-agent": SettingOverride(
+                    source='AgentCommand("x")', origin="--default-agent"
+                )
             },
         )
         diagnostics = s.open()
         assert diagnostics
-        assert any("--agent" in format_diagnostic(d) for d in diagnostics)
+        assert any("--default-agent" in format_diagnostic(d) for d in diagnostics)
         assert s._loaded_lib_modules == {}
 
     def test_open_with_non_required_override_and_no_stdlib_is_a_harmless_no_op(self) -> None:

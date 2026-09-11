@@ -2,7 +2,7 @@
 
 Covers:
 - CLI wires FILE argument and params, --strict-json/--no-strict-json,
-  --max-iters, --agent, --log-file, --no-log flags into ExecArgs
+  --max-iters, --default-agent, --log-file, --no-log flags into ExecArgs
 - Missing file exits with code 1 and prints to stderr
 - Unreadable file exits with code 1 and prints error to stderr
 - Valid programs execute through the program pipeline; static failures and uncaught
@@ -337,16 +337,18 @@ class TestExecArgsParsing:
         args = recorded_runs[0]
         assert getattr(args, "max_iters") == 10
 
-    def test_exec_agent_flag(
+    def test_exec_default_agent_flag(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
         write_file_program(agl_file, "let x = 1\n")
 
-        result = invoke(runner, ["exec", "--agent", 'AgentCommand("echo agent")', str(agl_file)])
+        result = invoke(
+            runner, ["exec", "--default-agent", 'AgentCommand("echo agent")', str(agl_file)]
+        )
         assert result.exit_code == 0
 
-        assert getattr(recorded_runs[0], "agent") == 'AgentCommand("echo agent")'
+        assert getattr(recorded_runs[0], "default_agent") == 'AgentCommand("echo agent")'
 
     def test_exec_log_file_flag(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
@@ -3879,6 +3881,18 @@ class TestProgramValueArguments:
         assert exc_info.value.code == 1
         assert capsys.readouterr().err.startswith("Error:")
 
+    def test_an_agent_parameter_claims_the_agent_flag(self, tmp_path: Path) -> None:
+        """``agm exec`` spells the default agent ``--default-agent``, leaving
+        ``--agent`` to the program.
+        """
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, "program def main(agent: text) -> unit = print agent\n")
+
+        result = invoke(CliRunner(), ["exec", "--no-log", str(agl_file), "--agent", "codex"])
+
+        assert result.exit_code == 0
+        assert result.stdout == "codex\n"
+
     def test_duplicate_flag_projection_is_a_host_diagnostic(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -4744,11 +4758,11 @@ class TestSettingOverrideProvenanceWithNoStdlib:
     """``--no-stdlib`` interacts differently with a CLI flag vs. ambient config.
 
     A ``default-agent`` override reaching the engine as AgL literal source
-    (``--agent`` or ``[exec]``/qualified program-table ``default-agent``) can only be
+    (``--default-agent`` or ``[exec]``/qualified program-table ``default-agent``) can only be
     spliced into ``std/config``'s own declaration when that module is loaded.
     ``--no-stdlib`` on a program that never explicitly imports ``std/config``
     means it never is. An ambient config value is then simply inert (the key
-    does not apply to this run); an explicit ``--agent`` flag is a request the
+    does not apply to this run); an explicit ``--default-agent`` flag is a request the
     host cannot silently drop, so it still fails the run.
     """
 
@@ -4791,17 +4805,17 @@ class TestSettingOverrideProvenanceWithNoStdlib:
     def test_agent_flag_still_fails_without_stdlib(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """An explicit ``--agent`` literal is a request, not ambient config: it
+        """An explicit ``--default-agent`` literal is a request, not ambient config: it
         must still fail (rather than be silently dropped) when the program
         never loads ``std/config``."""
         agl_file = tmp_path / "plain.agl"
         write_file_program(agl_file, "let x = 1\nprogram def main() -> unit = ()\n")
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file, no_stdlib=True, agent="("))
+            exec_command.run(_exec_args_no_log(agl_file, no_stdlib=True, default_agent="("))
 
         assert exc_info.value.code == 1
-        assert "--agent" in capsys.readouterr().err
+        assert "--default-agent" in capsys.readouterr().err
 
 
 class TestExecProcessEnvironment:

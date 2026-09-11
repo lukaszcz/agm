@@ -688,16 +688,17 @@ def test_registered_command_program_may_claim_exec_only_flags(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A registered command reserves only the flags it declares itself, not
-    ``agm exec``'s: parameters spelled ``--agent`` or ``-p`` bind, and its help
-    lists them.
+    ``agm exec``'s: parameters spelled ``--module-path`` or ``-p`` bind, and its
+    help lists them.
     """
     home = tmp_path / "home"
     write_installed_package(
         home,
         "tools",
         source=(
-            'program def main(agent: text = "a", @opt-short("p") path: text = "b") -> unit =\n'
-            '  print "%{agent}|%{path}"\n'
+            'program def main(module-path: text = "a", @opt-short("p") path: text = "b")\n'
+            "  -> unit =\n"
+            '  print "%{module-path}|%{path}"\n'
         ),
         commands={"tools run": "tools/main::main"},
     )
@@ -710,13 +711,13 @@ def test_registered_command_program_may_claim_exec_only_flags(
         ),
     )
 
-    result = invoke(CliRunner(), ["tools", "run", "--agent", "codex", "-p", "src"])
+    result = invoke(CliRunner(), ["tools", "run", "--module-path", "lib", "-p", "src"])
     help_result = invoke(CliRunner(), ["tools", "run", "--help"])
 
     assert result.exit_code == 0
-    assert result.stdout == "codex|src\n"
+    assert result.stdout == "lib|src\n"
     assert help_result.exit_code == 0
-    assert "--agent" in help_result.output
+    assert "--module-path" in help_result.output
     assert "-p" in help_result.output
 
 
@@ -850,7 +851,7 @@ def test_exec_installed_reference_preserves_all_file_options(
         timeout="5s",
         no_timeout=True,
         no_log_file=True,
-        agent='AgentCommand("fake")',
+        default_agent='AgentCommand("fake")',
     )
 
     exec_command.run(args)

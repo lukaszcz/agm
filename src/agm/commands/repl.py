@@ -156,7 +156,7 @@ def run(args: ReplArgs) -> None:
     # Seed only explicit CLI/config controls.  Trace-service fallbacks remain
     # absent so a ``builtin var`` initializer can provide the setting default.
     # The raw timeout preserves its configured spelling. A host Agent value
-    # (``--agent``/``[exec] default-agent``) becomes an override spliced into
+    # (``--default-agent``/``[exec] default-agent``) becomes an override spliced into
     # the session's own first-loaded ``std/config`` rather than a seed value.
     cli_values: dict[str, object | None] = {}
     if args.strict_json is not None:
@@ -174,7 +174,7 @@ def run(args: ReplArgs) -> None:
         config=config,
         primary_table=toml_dict(merged_config.get("exec")),
         cli_values=cli_values,
-        agent=args.agent,
+        default_agent=args.default_agent,
     )
 
     process_environment = dict(os.environ)
@@ -200,7 +200,7 @@ def run(args: ReplArgs) -> None:
         )
 
         # Load and check the session's initial library image now, so a rejected
-        # ``--agent``/``[exec] default-agent`` override (or any other startup
+        # ``--default-agent``/``[exec] default-agent`` override (or any other startup
         # failure loading the standard library) exits before the console opens
         # and prints its banner, rather than surfacing only once the first entry
         # happens to load ``std/config``.

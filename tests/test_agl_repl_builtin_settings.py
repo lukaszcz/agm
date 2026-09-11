@@ -287,7 +287,7 @@ def _host_seeded_session(
     into the same ``_engine_seed`` entry.  ``default_agent`` is the raw
     ``AgentCommand`` command text (not AgL source) — a host-seeded ``Value``,
     like ``[exec] runner`` builds in production, rather than the AgL-literal
-    ``SettingOverride`` path ``--agent``/``[exec] default-agent`` use.
+    ``SettingOverride`` path ``--default-agent``/``[exec] default-agent`` use.
     """
     raw: dict[str, object] = {}
     if strict_json is not None:
@@ -842,7 +842,7 @@ def test_reset_uses_declared_live_engine_defaults(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Host-supplied AgL setting overrides (--agent / [exec] default-agent)
+# Host-supplied AgL setting overrides (--default-agent / [exec] default-agent)
 # ---------------------------------------------------------------------------
 
 
@@ -861,7 +861,7 @@ class TestSettingOverrideThreading:
         s = _unopened_session(
             setting_overrides={
                 "default-agent": SettingOverride(
-                    source='AgentCommand("overridden")', origin="--agent"
+                    source='AgentCommand("overridden")', origin="--default-agent"
                 )
             }
         )
@@ -875,7 +875,7 @@ class TestSettingOverrideThreading:
         s = _unopened_session(
             setting_overrides={
                 "default-agent": SettingOverride(
-                    source='AgentCommand("overridden")', origin="--agent"
+                    source='AgentCommand("overridden")', origin="--default-agent"
                 )
             }
         )
@@ -904,7 +904,7 @@ class TestSettingOverrideThreading:
             stdlib_root=_STDLIB_ROOT,
             default_stdlib=False,
             setting_overrides={
-                "default-agent": SettingOverride(source='"not-an-agent"', origin="--agent")
+                "default-agent": SettingOverride(source='"not-an-agent"', origin="--default-agent")
             },
         )
         assert _ok(s, "1 + 1").value == IntValue(2)
@@ -912,7 +912,7 @@ class TestSettingOverrideThreading:
         result = s.eval_entry("import std/config")
         assert not result.ok
         assert result.diagnostics
-        assert any("--agent" in format_diagnostic(diag) for diag in result.diagnostics)
+        assert any("--default-agent" in format_diagnostic(diag) for diag in result.diagnostics)
 
         # Nothing from the rejected entry was promoted or persisted.
         assert _ok(s, "1 + 1").value == IntValue(2)
@@ -934,14 +934,16 @@ class TestSettingOverrideThreading:
         s = ReplSession(
             stdlib_root=_STDLIB_ROOT,
             default_stdlib=False,
-            setting_overrides={"default-agent": SettingOverride(source="(", origin="--agent")},
+            setting_overrides={
+                "default-agent": SettingOverride(source="(", origin="--default-agent")
+            },
         )
         assert _ok(s, "1 + 1").value == IntValue(2)
 
         result = s.eval_entry("import std/config")
         assert not result.ok
         assert result.diagnostics
-        assert any("--agent" in format_diagnostic(diag) for diag in result.diagnostics)
+        assert any("--default-agent" in format_diagnostic(diag) for diag in result.diagnostics)
 
         # Nothing from the rejected entry was promoted or persisted.
         assert _ok(s, "1 + 1").value == IntValue(2)
@@ -962,7 +964,7 @@ class TestSettingOverrideThreading:
             default_stdlib=False,
             setting_overrides={
                 "default-agent": SettingOverride(
-                    source='AgentCommand("nonexistent-bin -p \'oops")', origin="--agent"
+                    source='AgentCommand("nonexistent-bin -p \'oops")', origin="--default-agent"
                 )
             },
         )
@@ -987,7 +989,7 @@ class TestSettingOverrideThreading:
         s = _unopened_session(
             setting_overrides={
                 "default-agent": SettingOverride(
-                    source='AgentCommand("overridden")', origin="--agent"
+                    source='AgentCommand("overridden")', origin="--default-agent"
                 )
             }
         )
@@ -1001,7 +1003,7 @@ class TestSettingOverrideThreading:
         s = _unopened_session(
             setting_overrides={
                 "default-agent": SettingOverride(
-                    source='AgentCommand("overridden")', origin="--agent"
+                    source='AgentCommand("overridden")', origin="--default-agent"
                 )
             }
         )
@@ -1044,7 +1046,7 @@ class TestSettingOverrideThreading:
         s = _unopened_session(
             setting_overrides={
                 "default-agent": SettingOverride(
-                    source='AgentCommand("overridden")', origin="--agent"
+                    source='AgentCommand("overridden")', origin="--default-agent"
                 )
             }
         )

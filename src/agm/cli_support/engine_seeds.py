@@ -41,7 +41,7 @@ class EngineSeeds:
     / ``engine_base``), exactly as every non-agent engine key already works.
 
     ``overrides`` are host-supplied AgL source text for ``std/config`` keys —
-    currently only a normalized ``default-agent`` from ``--agent`` or
+    currently only a normalized ``default-agent`` from ``--default-agent`` or
     ``[exec] default-agent`` — meant for
     ``PipelineDriver.prepare_parsed_entry``'s (or the REPL's) ``setting_overrides``
     seam, so the literal is resolved, type-checked, and constant-checked by the
@@ -100,7 +100,7 @@ def build_host_engine_seeds(
     primary_table: "Mapping[str, object]",
     fallback_table: "Mapping[str, object] | None" = None,
     cli_values: "Mapping[str, object | None]",
-    agent: str | None,
+    default_agent: str | None,
 ) -> EngineSeeds:
     """Decode the engine settings the host explicitly controls into seed values.
 
@@ -111,11 +111,11 @@ def build_host_engine_seeds(
     explicit empty ``Option``. CLI values win over configuration tables, which
     are consulted in *primary_table* then *fallback_table* order.
 
-    ``default-agent`` precedence, highest first: ``--agent``, then
+    ``default-agent`` precedence, highest first: ``--default-agent``, then
     the qualified program table/``[exec] default-agent``, then ``[exec] runner``.  Exactly
     one of the three ever supplies the key, and it lands in exactly one of the
-    two result mappings: an Agent value (``--agent``/``default-agent``) is
-    normalized into constructor source and becomes a
+    two result mappings: an Agent value (the ``--default-agent`` flag or a
+    configured ``default-agent``) is normalized into constructor source and becomes a
     :class:`~agm.agl.setting_overrides.SettingOverride` in ``overrides`` so the
     program's own compilation resolves it; a bare host command
     (``[exec] runner``) is decoded directly into an ``AgentCommand`` value in
@@ -129,7 +129,7 @@ def build_host_engine_seeds(
 
     The two normalized Agent sources carry different
     :attr:`~agm.agl.setting_overrides.SettingOverride.required` provenance:
-    ``--agent`` is an explicit per-run request, so it is marked
+    ``--default-agent`` is an explicit per-run request, so it is marked
     ``required=True`` and still produces a diagnostic when the loaded program
     never brings in ``std/config`` (e.g. ``--no-stdlib``); ``[exec]``/
     qualified program-table ``default-agent`` is ambient configuration, marked
@@ -167,10 +167,10 @@ def build_host_engine_seeds(
     seeds = build_engine_config_seeds(seed_raw)
     overrides: dict[str, SettingOverride] = {}
 
-    if agent is not None:
-        literal = _require_agent_text(agent, source="--agent")
+    if default_agent is not None:
+        literal = _require_agent_text(default_agent, source="--default-agent")
         overrides["default-agent"] = SettingOverride(
-            source=literal, origin="--agent", required=True
+            source=literal, origin="--default-agent", required=True
         )
     elif config.default_agent is not None:
         literal = _require_agent_text(config.default_agent, source="[exec] configuration")

@@ -194,7 +194,7 @@ class EntryPipeline:
         resolving and type-checking the result.
 
         ``validate_missing_std_config`` is ``False`` for an ordinary entry
-        (:meth:`eval_entry`): a ``required`` override (e.g. ``--agent``) that
+        (:meth:`eval_entry`): a ``required`` override (e.g. ``--default-agent``) that
         ``std/config`` never loads for stays unvalidated until whichever
         later entry, if any, first loads it, matching how a non-``required``
         override already behaves. ``ReplSession.open`` passes ``True``

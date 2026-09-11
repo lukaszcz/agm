@@ -975,9 +975,9 @@ def exec_cmd(
         "--max-call-depth",
         help="Override the maximum recursion call depth (CLI > config).",
     ),
-    agent: str | None = typer.Option(
+    default_agent: str | None = typer.Option(
         None,
-        "--agent",
+        "--default-agent",
         metavar="AGENT",
         help="Seed the free-ask default session from an Agent value or command.",
     ),
@@ -1112,7 +1112,7 @@ def exec_cmd(
             strict_json=strict_json,
             max_iters=max_iters,
             max_call_depth=max_call_depth,
-            agent=agent,
+            default_agent=default_agent,
             no_log=no_log,
             log_file=log_file,
             log=log,
@@ -1143,9 +1143,9 @@ def repl_cmd(
         "--max-call-depth",
         help="Override the maximum recursion call depth (CLI > config).",
     ),
-    agent: str | None = typer.Option(
+    default_agent: str | None = typer.Option(
         None,
-        "--agent",
+        "--default-agent",
         metavar="AGENT",
         help="Seed the free-ask default session from an Agent value or command.",
     ),
@@ -1210,7 +1210,7 @@ def repl_cmd(
             strict_json=strict_json,
             max_iters=max_iters,
             max_call_depth=max_call_depth,
-            agent=agent,
+            default_agent=default_agent,
             confirm_agents=confirm_agents,
             quiet=quiet,
             no_log=no_log,

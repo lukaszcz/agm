@@ -235,7 +235,7 @@ def test_exec_agent_source_cli_and_config_precedence(
             ExecArgs(
                 file=str(program),
                 strict_json=None,
-                agent=cli_literal,
+                default_agent=cli_literal,
                 no_log=True,
                 log_file=None,
             )
@@ -353,7 +353,7 @@ def test_exec_treats_non_agent_syntax_from_cli_as_a_command(
             ExecArgs(
                 file=str(program),
                 strict_json=None,
-                agent=value,
+                default_agent=value,
                 no_log=True,
                 log_file=None,
             )
@@ -424,19 +424,21 @@ def test_exec_treats_non_agent_syntax_from_config_as_a_command(
 def test_exec_rejects_blank_agent_literal_from_cli(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A blank ``--agent`` is a host-shape error, diagnosed before any AgL parsing."""
+    """A blank ``--default-agent`` is a host-shape error, diagnosed before any AgL parsing."""
     program = tmp_path / "program.agl"
     program.write_text(_file_program('print "not-run"\n'))
 
     with pytest.raises(SystemExit) as exc_info:
         exec_command.run(
-            ExecArgs(file=str(program), strict_json=None, agent="", no_log=True, log_file=None)
+            ExecArgs(
+                file=str(program), strict_json=None, default_agent="", no_log=True, log_file=None
+            )
         )
 
     assert exc_info.value.code == 1
     error = capsys.readouterr().err
     assert "default-agent" in error
-    assert "--agent" in error
+    assert "--default-agent" in error
 
 
 def test_exec_rejects_malformed_exec_runner_before_any_module_loads(
@@ -491,7 +493,7 @@ def test_exec_rejects_malformed_agent_command_literal_from_cli(
             ExecArgs(
                 file=str(program),
                 strict_json=None,
-                agent='AgentCommand("nonexistent-bin -p \'oops")',
+                default_agent='AgentCommand("nonexistent-bin -p \'oops")',
                 no_log=True,
                 log_file=None,
             )
@@ -516,7 +518,7 @@ def test_exec_allows_well_formed_agent_command_literal_from_cli(
             ExecArgs(
                 file=str(program),
                 strict_json=None,
-                agent='AgentCommand("echo hi")',
+                default_agent='AgentCommand("echo hi")',
                 no_log=True,
                 log_file=None,
             )

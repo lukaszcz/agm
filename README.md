@@ -274,7 +274,7 @@ agm check workflow.agl
 agm check lib/*.agl              # library modules, no `program def` required
 ```
 
-See `agm help check` and [docs/commands/check.md](docs/commands/check.md) for options and
+See `agm help check` and [docs/commands/agl.md](docs/commands/agl.md#agm-check) for options and
 exit codes. This is distinct from [`agm pkg check`](docs/commands/pkg.md), which validates
 a package directory's manifest and module-tree discipline.
 
@@ -297,7 +297,7 @@ agm repl --confirm-agents       # confirm each agent call before dispatching it
 agl> let n = 21 * 2             # bindings persist across entries → "n : int = 42"
 ```
 
-See `agm help repl` and [docs/commands/index.md](docs/commands/index.md) for the full reference, and the
+See `agm help repl` and [docs/commands/agl.md](docs/commands/agl.md#agm-repl) for the full reference, and the
 [AgL language reference](docs/agl/reference/index.md) for the language.
 
 ### `agm review`

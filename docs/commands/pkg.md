@@ -156,14 +156,14 @@ in `agm help` and shell completion and support `--help`.
 - **Arguments.** The program's value parameters project onto the command's CLI exactly as for
   `agm exec`: positional-capable parameters fill trailing words in order, name-addressable ones
   take `--name VALUE` (`--name`/`--no-name` for `bool`). See
-  [Program arguments](exec.md#program-arguments). A registered command reserves only `--dry-run`
+  [Program arguments](agl.md#program-arguments). A registered command reserves only `--dry-run`
   and `-h`/`--help`, so its parameters may use spellings `agm exec` reserves for itself, such as
   `--module-path` or `-p`; running that program through `agm exec` instead still rejects them.
 - **Configuration.** Omitted arguments and engine settings come from the program's qualified table,
   e.g. `[review-tools.main.review]` for `review-tools/main::review`, or from the registered command
   path itself: `[pr-review]`, and `[dev.review]` for a command registered as `dev review`. Both
   address the same program, so either spelling applies however it is run, and setting one key
-  through both in one config layer is an error. See [Configuration](exec.md#configuration).
+  through both in one config layer is an error. See [Configuration](agl.md#configuration).
 - **`--dry-run`**, before or after the command path, runs the static pipeline and argument
   validation without executing.
 - **Conflicts.** Two active packages cannot own the same command path; install the later one with

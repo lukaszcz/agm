@@ -12,13 +12,13 @@
 
 `agm dep new` options:
 
-- `-b`, `--branch BRANCH`: use `agm dep new --branch BRANCH REPO_URL` to clone the dependency's initial checkout from `BRANCH` instead of the dependency's default branch
+- `-b`, `--branch BRANCH`: clone the dependency's initial checkout from `BRANCH` instead of its default branch
 
 `agm dep switch` options:
 
-- `-b`, `--branch`: use `agm dep switch --branch DEP BRANCH` to create `DEP`'s `BRANCH` from the dependency's default branch before adding the new worktree; without this flag, `BRANCH` must already exist
+- `-b`, `--branch`: create `DEP`'s `BRANCH` from the dependency's default branch before adding the worktree; without this flag, `BRANCH` must already exist
 
-Dependency commands track selected dependency checkout names in config `config.toml` `[deps]` tables. Environment loading turns those entries into dependency path variables ending in `_DIR`, so `[deps].vyper-automation = "feat/app"` provides `VYPER_AUTOMATION_DIR=/path/to/proj/deps/vyper-automation/feat/app` before `.env` and `env.sh` are loaded. Opening a branch materializes only dependencies inherited from that branch's parent or the main config; dependency checkouts present on disk are not added to unrelated branch configs unless they are declared there.
+Dependency commands track selected checkout names in `config.toml`'s `[deps]` table. Environment loading turns each entry into a `_DIR` path variable before `.env` and `env.sh` load, e.g. `[deps].vyper-automation = "feat/app"` provides `VYPER_AUTOMATION_DIR=/path/to/proj/deps/vyper-automation/feat/app`. Opening a branch materializes only dependencies inherited from that branch's parent or the main config; checkouts present on disk aren't added to unrelated branch configs unless declared there.
 
 `agm dep list` options:
 
@@ -33,6 +33,6 @@ Dependency commands track selected dependency checkout names in config `config.t
 
 `agm dep rm` options:
 
-- `--all DEP`: use `agm dep rm --all DEP` to remove the entire dependency directory, including the main dependency checkout and any linked worktrees
+- `--all DEP`: remove the entire dependency directory, including the main checkout and any linked worktrees
 
 Removal targets must be relative paths without `.` or `..` components. A dependency must resolve below `deps/`, and its worktrees below that dependency's directory. With `--all`, AGM checks every linked worktree before removing any; a detached worktree or one outside the dependency stops removal.

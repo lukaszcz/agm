@@ -4,9 +4,6 @@ AGM is an Agent Project Management CLI. A single `agm` executable manages
 agent-oriented project directories — workspaces, dependencies, sandboxing, git worktrees, and tmux sessions — and runs agent review/revise/refine and loop
 workflows on them, including programs written in the AgL workflow DSL.
 
-This reference describes each command's behavior and options from an end-user
-perspective.
-
 ## Global usage
 
 ```text
@@ -19,8 +16,8 @@ Global options:
 - `--install-completion`
 - `--show-completion`
 
-`agm help` prints the command overview, and `agm help <command>` prints detailed
-help for a single command or command group. Each command also accepts `--help`.
+`agm help` prints the command overview; `agm help <command>` prints detailed help
+for a single command or command group. Each command also accepts `--help`.
 
 ## Chapters
 

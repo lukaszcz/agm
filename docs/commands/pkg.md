@@ -1,8 +1,8 @@
 # Packages
 
-A package is a portable, versioned collection of AgL modules that can register its own `agm`
-commands. See also the [AgL package reference](../agl/reference/packages.md) for what a package
-means to AgL source.
+A package is a portable, versioned collection of AgL modules that can register `agm` commands.
+See the [AgL package reference](../agl/reference/packages.md) for what a package means to AgL
+source.
 
 | Command | Description |
 |---|---|
@@ -23,8 +23,8 @@ agm pkg init review-tools
 # creates review-tools/package.toml and review-tools/src/main.agl
 ```
 
-Replace the starter program in `review-tools/src/main.agl` (any module in the
-`review-tools/src/` module tree works) and register it in `review-tools/package.toml`:
+Replace the starter program in `review-tools/src/main.agl` (any module under `review-tools/src/`
+works) and register it in `review-tools/package.toml`:
 
 ```agl
 program def review(target: text, strict: bool = false) -> unit =
@@ -35,8 +35,6 @@ program def review(target: text, strict: bool = false) -> unit =
 [commands]
 pr-review = { program = "review-tools/main::review", description = "Review a change" }
 ```
-
-Then validate, install, and run it:
 
 ```sh
 agm pkg check review-tools
@@ -76,8 +74,8 @@ repository = "https://example.test/review-tools"
 keywords = ["review", "workflow"]
 ```
 
-Only `name` and `version` are required. A package identity is the complete version, build
-metadata included: `1.0.0+linux` and `1.0.0+macos` are distinct packages.
+A package identity is the complete version, build metadata included: `1.0.0+linux` and
+`1.0.0+macos` are distinct packages.
 
 ### `[dependencies]`
 
@@ -103,17 +101,18 @@ pr-review = { program = "review-tools/main::review", description = "Review a cha
 "pr-review batch" = { program = "review-tools/main::batch" }   # multi-word command path
 ```
 
-- A key is a one- or multi-word command path. It cannot start with a built-in command or root
+- A key is a one- or multi-word command path that cannot start with a built-in command or root
   alias (`wsp`, `wt`).
-- `program` names the `program def` to run as `<module>::<program>`, e.g., `review-tools/main::review` is the program `review` in module `review-tools/main`, the file `review-tools/src/main.agl`. The program must belong to this package, take no type parameters, and return unit. Its arguments become the command's arguments.
+- `program` names the `program def` to run as `<module>::<program>`: `review-tools/main::review` is
+  program `review` in module `review-tools/main`, file `review-tools/src/main.agl`. Must belong to
+  this package, take no type parameters, return unit; its arguments become the command's.
 - `description` is an optional short summary shown in command listings.
-- `help` is optional longer guidance; TOML multiline strings work for examples and paragraphs.
-  Command help includes the description, the program's source `@doc`, and this additional help,
-  omitting identical blocks. Parameter `@doc` attributes describe their options.
-- Omit `program` to describe a command group. A group must have descendant commands. Undeclared
-  parent groups work automatically, with generated help listing their available descendants.
-  Listings use each command's description, help, or source `@doc`, falling back to a generated
-  summary when none is available.
+- `help` is optional longer guidance (TOML multiline strings work). Command help combines the
+  description, the program's source `@doc`, and this help, omitting identical blocks. Parameter
+  `@doc` attributes describe their options.
+- Omit `program` for a command group (must have descendant commands). Undeclared parent groups
+  work automatically, with generated help listing their descendants. Listings use each command's
+  description, help, or source `@doc`, falling back to a generated summary when none is available.
 
 ```toml
 [commands.devel]
@@ -136,34 +135,34 @@ so authored help is optional.
 
 ### `[aliases]`
 
-Each key is an alternate command path; its string value names a canonical command or group in
-this package. Aliases target canonical paths, not other aliases. The same path restrictions as
-commands apply, and an alias cannot overwrite another command or alias. Group aliases expose
-all canonical descendants: the example supports both `agm dev review` and `agm rev`.
-Aliases participate in activation conflicts, project pins, help, and completion like commands.
+Each key is an alternate command path (same restrictions as commands) naming a canonical command
+or group in this package, never another alias; an alias cannot overwrite another command or
+alias. Group aliases expose all canonical descendants: the example supports both `agm dev review`
+and `agm rev`. Aliases participate in activation conflicts, project pins, help, and completion
+like commands.
 
-Config tables use dots between path words. `[rev]`, `[dev.review]`, and `[devel.review]` all
-address the same program, for both arguments and engine settings, even when it runs through
-`agm exec`. Different keys in these tables combine. Setting the same key through multiple
-spellings in one layer is an ambiguity error; a later config layer overrides an earlier one.
-CLI flags still take precedence. Group tables themselves do not supply inherited defaults.
+Config tables use dots between path words: `[rev]`, `[dev.review]`, and `[devel.review]` all
+address the same program (arguments and engine settings), even via `agm exec`. Different keys in
+these tables combine; setting the same key through multiple spellings in one layer is an
+ambiguity error, and a later config layer overrides an earlier one. CLI flags still take
+precedence. Group tables do not supply inherited defaults.
 
 ## Registered commands
 
-An active package's commands run as `agm COMMAND ...`; the longest matching path wins. They appear
-in `agm help` and shell completion and support `--help`.
+An active package's commands run as `agm COMMAND ...` (longest matching path wins), appear in
+`agm help` and shell completion, and support `--help`.
 
-- **Arguments.** The program's value parameters project onto the command's CLI exactly as for
-  `agm exec`: positional-capable parameters fill trailing words in order, name-addressable ones
-  take `--name VALUE` (`--name`/`--no-name` for `bool`). See
+- **Arguments.** Value parameters project onto the command's CLI as for `agm exec`:
+  positional-capable parameters fill trailing words in order, name-addressable ones take
+  `--name VALUE` (`--name`/`--no-name` for `bool`). See
   [Program arguments](agl.md#program-arguments). A registered command reserves only `--dry-run`
-  and `-h`/`--help`, so its parameters may use spellings `agm exec` reserves for itself, such as
+  and `-h`/`--help`, so its parameters may reuse spellings `agm exec` itself reserves, such as
   `--module-path` or `-p`; running that program through `agm exec` instead still rejects them.
-- **Configuration.** Omitted arguments and engine settings come from the program's qualified table,
-  e.g. `[review-tools.main.review]` for `review-tools/main::review`, or from the registered command
-  path itself: `[pr-review]`, and `[dev.review]` for a command registered as `dev review`. Both
-  address the same program, so either spelling applies however it is run, and setting one key
-  through both in one config layer is an error. See [Configuration](agl.md#configuration).
+- **Configuration.** Omitted arguments and engine settings come from the program's qualified table
+  (e.g. `[review-tools.main.review]` for `review-tools/main::review`) or the registered command
+  path (`[pr-review]`, or `[dev.review]` for command `dev review`). Both name the same program
+  regardless of how it runs, so setting one key through both in one config layer is an error.
+  See [Configuration](agl.md#configuration).
 - **`--dry-run`**, before or after the command path, runs the static pipeline and argument
   validation without executing.
 - **Conflicts.** Two active packages cannot own the same command path; install the later one with
@@ -176,7 +175,7 @@ in `agm help` and shell completion and support `--help`.
 
 **`init`** creates `DIR` when missing and writes `package.toml` (name from the directory, version
 `0.1.0`, no dependencies, commented dependency guidance) plus a starter `src/main.agl` unless one
-exists. It refuses a directory that already holds a manifest.
+exists; refuses a directory that already holds a manifest.
 
 **`check`** validates the manifest, the `src/` module tree, `[commands]` program references, literal
 `resource` targets, import visibility, and dependency satisfiability without modifying anything.
@@ -193,9 +192,9 @@ version or `url` first.
 the distribution in `<AGM-home>/packages/<name>/<version>/` with a SHA-256 `RECORD`. Activation is
 published atomically only after the resulting selection validates; a failed install leaves nothing
 active. Dependencies resolve from the store first, then a declared `path` (installed alongside),
-then a `url` (fetched and hash-verified; never in `--dry-run`). Versions are kept side by side;
-`1.0.0+linux` and `1.0.0+macos` are distinct identities. `--editable` activates the source directory
-in place: no copy, no `RECORD`, edits visible immediately.
+then a `url` (fetched and hash-verified; never in `--dry-run`). Versions are kept side by side, one
+per identity (build metadata included, as above). `--editable` activates the source directory in
+place: no copy, no `RECORD`, edits visible immediately.
 
 **`uninstall`** verifies the `RECORD`, validates the remaining selection, deactivates, and removes
 the recorded files (plus cache and VCS residue). An editable package is only deactivated. Command

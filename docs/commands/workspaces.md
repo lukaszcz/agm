@@ -21,8 +21,8 @@
 | `agm sync fetch` | Prune stale worktrees, fetch the main repo and checked-out dependencies, then create missing tracking branches |
 | `agm sync pull` | Run `agm sync fetch`, then run `git merge` in every dependency, main workspace, and branch workspace |
 
-An AGM workspace may be the main repo or a linked Git worktree, interpreted with AGM project
-config, workspace config, dependency environment, setup scripts, and tmux session lifecycle.
+An AGM workspace is the main repo or a linked Git worktree, combined with AGM project config,
+workspace config, dependency environment, setup scripts, and tmux session lifecycle.
 
 `agm workspace open` behavior:
 
@@ -30,10 +30,10 @@ config, workspace config, dependency environment, setup scripts, and tmux sessio
 - the branch currently checked out in the main workspace also opens the main workspace
 - an existing branch workspace opens its tmux session
 - an existing branch without a workspace is checked out into a Git worktree and then opened
-- a branch that exists only on a remote is checked out as a tracking branch of that remote, whichever remote carries it; a branch carried by several remotes is ambiguous and is rejected
+- a branch that exists only on a remote is checked out as a tracking branch of whichever remote carries it; one carried by several remotes is ambiguous and rejected
 - a missing branch is created from `--parent` or the main workspace's current branch and then opened
-- with `--parent`, an existing target branch produces a warning because `--parent` only bases new branches; an existing target workspace is an error
-- a workspace whose tmux session is already running is reported as an error rather than opened again, and nothing is created; attach to the running session instead
+- with `--parent`, an existing target branch warns (`--parent` only bases new branches); an existing target workspace errors
+- a workspace whose tmux session is already running errors instead of reopening, and nothing is created; attach to the running session instead
 
 `agm workspace open` options:
 
@@ -50,8 +50,7 @@ config, workspace config, dependency environment, setup scripts, and tmux sessio
 
 `agm workspace close` notes:
 
-- closes only branch workspaces
-- `repo` and the main workspace branch cannot be removed with `agm workspace close`
+- closes only branch workspaces: `repo` and the main workspace branch cannot be removed
 
 `agm sync fetch` notes:
 
@@ -59,8 +58,7 @@ config, workspace config, dependency environment, setup scripts, and tmux sessio
 
 `agm sync pull` notes:
 
-- runs the same prune, fetch, and tracking-branch sync as `agm sync fetch` first
-- runs `git merge` in each dependency checkout/worktree, the main workspace, and each branch workspace
+- runs `agm sync fetch`'s prune, fetch, and tracking-branch sync first, then `git merge` in each dependency checkout/worktree, the main workspace, and each branch workspace
 - relies on each Git worktree's current branch upstream, matching plain `git merge`
 
 `agm workspace list` options:
@@ -80,7 +78,7 @@ config, workspace config, dependency environment, setup scripts, and tmux sessio
 
 `agm workspace open` session shell:
 
-- each workspace tmux session runs the user's real interactive shell (`zsh`/`bash`/`sh`) through a small wrapper that first sources `~/.zshrc`/`~/.bashrc`/`~/.shrc` (so keybindings, prompts, completions and aliases are preserved), restores the project and workspace paths selected by `agm workspace open`, and then runs `eval "$(agm config env)"` so the workspace environment wins over the user's rc and inherited tmux state
+- each session runs the user's real interactive shell (`zsh`/`bash`/`sh`) through a wrapper: it sources `~/.zshrc`/`~/.bashrc`/`~/.shrc` (preserving keybindings, prompts, completions, aliases), restores the project and workspace paths selected by `agm workspace open`, then runs `eval "$(agm config env)"` so the workspace environment wins over the user's rc and inherited tmux state
 - the wrapper and its rc files live under `$XDG_CACHE_HOME/agm/shell/<key>/` (defaulting to `~/.cache/agm/shell/<key>/`), keyed by session name; nothing is written under the project's `.agent-files/`
 - `agm workspace open` recreates the per-session dir fresh (cleaning any stale files); `agm workspace close` removes it
 - `agm workspace shell-regen SHELL_DIR` rewrites the wrapper and rc files into an existing per-session dir (used for manual recovery)
@@ -98,20 +96,14 @@ config, workspace config, dependency environment, setup scripts, and tmux sessio
 
 `agm init` layout selection:
 
-- with `REPO_URL`, the default is the split layout unless `--embedded` is provided
-- without `REPO_URL`, AGM chooses the embedded layout only when the target project directory is a git repo
-- otherwise it chooses the split layout
-- without `PROJECT_NAME`, AGM initializes the current directory
-- with `PROJECT_NAME`, AGM initializes a child directory with that name
-- with `--clone REPO_URL`, AGM initializes a child directory derived from the URL
+- with `REPO_URL`, split layout by default unless `--embedded`; without `REPO_URL`, embedded layout only when the target project directory is a git repo, otherwise split
+- initializes the current directory by default, a child directory named `PROJECT_NAME` when given, or a `REPO_URL`-derived child directory with `--clone`
 - when an embedded repository has no commits, AGM creates its initial commit containing the
   generated `.gitignore`
 
 `agm init` split layout notes:
 
 - without `REPO_URL`, AGM initializes `repo/` as an empty git repository
-- AGM writes a `.agent-files` entry into `repo/.gitignore` and into the repository's
-  `info/exclude`, leaving the tracked tree untouched. The `info/exclude` copy is what
-  every branch worktree inherits, so agent artifacts never make a workspace look dirty
-- `--no-repo-git` skips the empty `repo/` git repository initialization
-- `--no-git-init` includes `--no-repo-git`, `--no-config-git`, and `--no-notes-git`
+- AGM writes a `.agent-files` entry into `repo/.gitignore` and the repository's `info/exclude`,
+  leaving the tracked tree untouched; every branch worktree inherits the `info/exclude` copy, so
+  agent artifacts never make a workspace look dirty

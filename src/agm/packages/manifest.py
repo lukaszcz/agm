@@ -170,9 +170,11 @@ def load_manifest(path: Path, *, commands_complete: bool = True) -> PackageManif
     register further commands through ``@command`` programs that have not
     been merged into the manifest yet; the caller must run that validation
     itself once they have (see
-    :func:`agm.packages.source_commands.package_with_source_commands`). A
-    manifest that is already complete — a store tree's, an archive's — must
-    load with the default so a corrupt one is still caught here.
+    :func:`agm.packages.source_commands.package_with_source_commands`) — as
+    must a caller that reads only a live tree's identity and never its
+    command table. A manifest that is already complete — a store tree's, an
+    archive's — must load with the default so a corrupt one is still caught
+    here.
     """
 
     try:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from typing import cast
@@ -22,6 +22,7 @@ from agm.packages.manifest import (
     PackageManifest,
     expanded_commands,
     load_manifest,
+    validate_command_set,
     validate_package_name,
 )
 from agm.packages.model import (
@@ -69,7 +70,9 @@ def active_package_version(active: ActivePackage) -> semver.Version:
 
     if active.editable is None:
         return active.version
-    return load_manifest(active.editable / "package.toml").version
+    # Live source: only the version is read, so its command table may still
+    # be waiting on the commands its own programs register.
+    return load_manifest(active.editable / "package.toml", commands_complete=False).version
 
 
 @dataclass(frozen=True, slots=True)
@@ -935,7 +938,8 @@ def resolve_active_package(
 
     if active.editable is not None:
         root = active.editable
-        package = _checked_active_package(name, active, root, _load_installed_manifest(root))
+        manifest = _load_installed_manifest(root, commands_complete=False)
+        package = _checked_active_package(name, active, root, manifest)
         return _with_editable_source_commands(
             package, fallback_to_manifest_commands=fallback_to_manifest_commands
         )
@@ -957,11 +961,15 @@ def _with_editable_source_commands(
     ``fallback_to_manifest_commands`` set, any ``DisciplineError`` (an
     unreadable, undecodable, or unparsable module, a missing module tree, two
     programs claiming one path, or a discovered path conflicting with the
-    manifest) falls back to *package* unchanged instead of failing — the
-    right behavior for a read of activation state, never for an operation
-    that persists a decision based on the command set. Without it, the same
-    error is raised as ``PackageActivationError``. ``agm pkg check`` validates
-    source discipline; this call site must not.
+    manifest) falls back to the commands the manifest declares on its own
+    instead of failing — the right behavior for a read of activation state,
+    never for an operation that persists a decision based on the command set.
+    Those commands stand only if they are consistent without the
+    registrations that failed to arrive: a manifest group or alias whose
+    leaves live only in source leaves the package with no commands at all,
+    since half a command tree is worse than none. Without the flag, the
+    discovery error is raised as ``PackageActivationError``. ``agm pkg check``
+    validates source discipline; this call site must not.
     """
     # Imported lazily so ordinary activation stays independent of the AgL
     # parser unless a caller actually resolves an editable selection.
@@ -971,11 +979,15 @@ def _with_editable_source_commands(
     try:
         return package_with_source_commands(package)
     except DisciplineError as exc:
-        if fallback_to_manifest_commands:
-            return package
-        raise PackageActivationError(
-            f"cannot derive commands for editable package {package.manifest.name!r}: {exc}"
-        ) from exc
+        if not fallback_to_manifest_commands:
+            raise PackageActivationError(
+                f"cannot derive commands for editable package {package.manifest.name!r}: {exc}"
+            ) from exc
+    try:
+        validate_command_set(package.manifest)
+    except ManifestError:
+        return replace(package, manifest=replace(package.manifest, commands={}, aliases={}))
+    return package
 
 
 def _checked_active_package(
@@ -1053,9 +1065,17 @@ def resolve_indexed_packages(
     return tuple(packages)
 
 
-def _load_installed_manifest(root: Path) -> PackageManifest:
+def _load_installed_manifest(root: Path, *, commands_complete: bool = True) -> PackageManifest:
+    """Load an active package's manifest.
+
+    A store tree's command table is complete, baked in at install time. An
+    editable root's is not — its groups and aliases may be satisfied only by
+    the commands its own source registers — so it loads with
+    ``commands_complete=False`` and :func:`_with_editable_source_commands`
+    validates the command set once that merge has happened.
+    """
     try:
-        return load_manifest(root / "package.toml")
+        return load_manifest(root / "package.toml", commands_complete=commands_complete)
     except ManifestError as exc:
         raise PackageActivationError(f"cannot load active package at {root}: {exc}") from exc
 

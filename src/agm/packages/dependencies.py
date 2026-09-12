@@ -129,7 +129,9 @@ def _path_package(
     if root.is_symlink():
         raise DependencyError(f"cannot use symbolic-link package dependency {root}")
     try:
-        selected = PackageInfo(root.resolve(), load_manifest(root / "package.toml"))
+        # A path source is live source, satisfied on identity and structure.
+        manifest = load_manifest(root / "package.toml", commands_complete=False)
+        selected = PackageInfo(root.resolve(), manifest)
         validate_package_structure(selected)
     except (DisciplineError, ManifestError) as exc:
         raise DependencyError(f"cannot validate path dependency {name!r}: {exc}") from exc

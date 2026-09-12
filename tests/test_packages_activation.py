@@ -1699,3 +1699,56 @@ def test_effective_exec_roots_mounts_nothing_when_the_stdlib_root_is_not_a_std_p
     # Mounted once, by development discovery — the standard-library seam added
     # nothing, because the selected root does not declare the ``std`` package.
     assert tuple(package.root for package in roots.packages) == (alpha.root,)
+
+
+def _write_editable_group_package(root: Path) -> None:
+    """Write an editable package whose only group leaf is registered in source."""
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (root / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+        '[commands.devel]\ndescription = "Development workflows"\n\n'
+        '[aliases]\nrev = "devel review"\n',
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        '@command("devel review")\nprogram def review() -> unit =\n  print "reviewed"\n',
+        encoding="utf-8",
+    )
+
+
+def test_editable_package_completes_a_manifest_group_from_its_source_commands(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "agm-home"
+    root = tmp_path / "editable"
+    _write_editable_group_package(root)
+    env = {"AGM_HOME": str(home)}
+    index = ActivationIndex({"alpha": ActivePackage(semver.Version.parse("1.0.0"), editable=root)})
+    write_activation_index(index, home=home, env=env)
+
+    commands = effective_command_index(home=home, proj_dir=None, cwd=tmp_path, env=env).commands
+
+    assert commands["devel review"] == CommandRegistration("alpha", "alpha/main::review")
+    assert commands["rev"] == CommandRegistration("alpha", "alpha/main::review")
+
+
+def test_editable_package_with_broken_source_drops_an_unsatisfiable_command_set(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "agm-home"
+    root = tmp_path / "editable"
+    _write_editable_group_package(root)
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text("program def (", encoding="utf-8")
+    env = {"AGM_HOME": str(home)}
+    index = ActivationIndex({"alpha": ActivePackage(semver.Version.parse("1.0.0"), editable=root)})
+    write_activation_index(index, home=home, env=env)
+
+    commands = effective_command_index(
+        home=home,
+        proj_dir=None,
+        cwd=tmp_path,
+        env=env,
+        fallback_to_manifest_commands=True,
+    ).commands
+
+    assert commands == {}

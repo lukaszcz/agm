@@ -1,4 +1,11 @@
-"""Discovery of package roots from a development directory."""
+"""Discovery of package roots from a development directory.
+
+A development tree is live source, so its manifest's command table is
+incomplete until the commands its own programs register are merged in
+(:mod:`agm.packages.source_commands`). Discovery loads manifests with
+``commands_complete=False`` for that reason; it mounts module roots and
+resolves dependencies, and never reads the command table.
+"""
 
 from __future__ import annotations
 
@@ -26,7 +33,7 @@ def containing_development_package(
     if package_root is None:
         return None
     canonical_root = package_root.resolve()
-    manifest = load_manifest(canonical_root / "package.toml")
+    manifest = load_manifest(canonical_root / "package.toml", commands_complete=False)
     if home is not None and is_package_store_root(
         canonical_root, manifest.name, manifest.version, home=home, env=env
     ):
@@ -88,7 +95,7 @@ def discover_development_packages(
 def _declared_dependency(root: Path, name: str, minimum: semver.Version) -> PackageInfo:
     """Load the package at a declared path source, checking identity and floor."""
 
-    manifest = load_manifest(root / "package.toml")
+    manifest = load_manifest(root / "package.toml", commands_complete=False)
     if manifest.name != name:
         raise ValueError(f"development dependency {name!r} resolves package {manifest.name!r}")
     if manifest.version < minimum:

@@ -216,3 +216,20 @@ def test_containing_development_package_leaves_a_store_tree_to_activation(tmp_pa
 
     assert containing_development_package(stored / "bravo", home=home) is None
     assert containing_development_package(stored / "bravo") is not None
+
+
+def test_containing_development_package_accepts_a_group_completed_by_source(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "alpha"
+    _write_package(root, "alpha")
+    (root / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+        '[commands.devel]\ndescription = "Development workflows"\n',
+        encoding="utf-8",
+    )
+
+    package = containing_development_package(root)
+
+    assert package is not None
+    assert package.manifest.name == "alpha"

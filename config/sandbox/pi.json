@@ -36,6 +36,7 @@
       ".",
       "/tmp",
       "~/.cache",
+      "~/.config",
       "~/.pi"
     ],
     "denyWrite": [".env", ".env.*", "*.pem", "*.key"]

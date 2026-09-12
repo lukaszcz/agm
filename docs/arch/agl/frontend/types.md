@@ -26,7 +26,7 @@ The checker selects the concrete behavior the evaluator relies on and publishes 
 - **Blocks** take their last item's type; earlier items are checked in unit context, so only unit or bottom may be discarded. `_` is an explicit discard binder.
 - **`extern def`** shares the body-less signature path plus extern-only checks ([execution/ffi.md](../execution/ffi.md)).
 
-Checked artifacts hold concrete types and no solver state; that closure invariant is a self-check gated by the self-validation toggle ([testing.md](../../testing.md)). The type environment is sealed once module checking finishes, which licenses memoized namespace-wide queries downstream.
+Checked artifacts hold concrete types and no solver state; that closure invariant is a self-check gated by the self-validation toggle ([testing.md](../../testing.md)). While a module is checked, its own declarations are journaled as replayable facts, separable from the whole-program environment they land in; that journal is what lets a checked module persist and rehydrate onto a later compilation's environment. The type environment is sealed once module checking finishes, which licenses memoized namespace-wide queries downstream.
 
 ## Code Entry Points
 

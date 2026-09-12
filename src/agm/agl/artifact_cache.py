@@ -285,6 +285,11 @@ def _served[V](
     *expected* is the store's disk form, which a payload must be an instance
     of to be admitted -- the decoding half of the contract whose encoding half
     is :func:`_retain`'s ``disk_form``.
+
+    Admission checks shape (``isinstance``) and provenance (``_disk_key``'s
+    content digest, mixed with ``_compiler_digest()``'s code fingerprint at
+    ``artifact_entry``), never the fields inside an admitted object: the
+    cache directory is the user's own disposable store, not untrusted input.
     """
     for group in _groups(retainable):
         sources = retainable[group[0]]
@@ -322,7 +327,11 @@ def _retain[V](
     Memory always keeps *artifacts* themselves; *disk_form*, keyed by module
     id rather than by value, lets a caller persist a smaller, data-only
     stand-in instead (checked modules persist their ``CheckedModuleImage``,
-    see :func:`retain_checked_modules`).
+    see :func:`retain_checked_modules`). It belongs on the call, not on the
+    store: a store-level disk type erases the concrete *expected* type
+    :func:`_served`'s ``isinstance`` narrowing depends on, and a callable
+    keyed by module id keeps each caller's mapping visible to the coverage
+    gate.
     """
     for group in _groups(retainable):
         sources = retainable[group[0]]
@@ -350,8 +359,13 @@ def _anchors(
     entry-ness moves a module's node ids between the reserved band and
     ordinary allocation (`modules/parsed_module_cache.py`), so any change to
     group membership breaks `_disk_key` first. Were a shorter tuple ever to
-    reach a load regardless, an overrun persistent id just returns `None`
-    from `_Reader.persistent_load` -- a miss, never a wrong lowering.
+    reach a load regardless, an out-of-range persistent id makes
+    `_Reader.persistent_load` raise and the load reports a miss. An in-range
+    id shifted onto the wrong anchor is the hazard this table cannot rule
+    out itself. For `matches` the identity gate downstream does --
+    `compile_program_matches`'s `cached.owner is checked_module` check. For
+    `checked` it is the layout argument above: the anchored objects are the
+    retained `ResolvedModule`s of the very group `_disk_key` keys on.
     """
     from agm.agl.typecheck.env import CheckedModule
 

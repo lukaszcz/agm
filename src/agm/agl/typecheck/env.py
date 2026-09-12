@@ -90,6 +90,7 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.syntax.nodes import Expr, Pattern, QualifierAnchor, QualifierChain
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.syntax.types import TypeExpr
 from agm.agl.zones import ParamZone
 
 #: Every built-in name a module's type namespace carries a reserved fallback
@@ -764,7 +765,7 @@ class AliasFact:
     """Journaled :meth:`TypeEnvironment.register_alias` call."""
 
     name: str
-    target_expr: object
+    target_expr: TypeExpr
     type_params: tuple[str, ...]
 
     def apply(self, env: TypeEnvironment) -> None:
@@ -985,7 +986,7 @@ class TypeEnvironment:
         # Alias syntax is retained for diagnostics and cycle detection, while the
         # resolved template preserves the nominal identities selected when the
         # alias was declared (including across REPL supersession).
-        self._alias_targets: dict[str, object] = {}
+        self._alias_targets: dict[str, TypeExpr] = {}
         self._resolved_aliases: dict[str, GenericAliasDef] = {}
         # Binding node_id → Type (populated as declarations are checked).
         self._binding_types: PersistentDict[int, Type] = PersistentDict()
@@ -1199,7 +1200,7 @@ class TypeEnvironment:
         raise AssertionError("own-facts journal was never started")
 
     def has_alias_registration(
-        self, name: str, target_expr: object, type_params: tuple[str, ...]
+        self, name: str, target_expr: TypeExpr, type_params: tuple[str, ...]
     ) -> bool:
         """Whether *name* is registered as an alias of *target_expr* with *type_params*."""
         return (
@@ -1428,7 +1429,7 @@ class TypeEnvironment:
         self._alias_type_params.pop(name, None)
 
     def register_alias(
-        self, name: str, target_expr: object, *, type_params: tuple[str, ...] = ()
+        self, name: str, target_expr: TypeExpr, *, type_params: tuple[str, ...] = ()
     ) -> None:
         """Store the raw TypeExpr for *name*; resolved lazily by resolve_type_expr.
 

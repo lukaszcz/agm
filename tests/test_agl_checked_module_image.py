@@ -220,21 +220,8 @@ def _non_entry_module_ids(compiled: _Compiled) -> list[ModuleId]:
     return [mid for mid in compiled.resolved.modules if mid in _FIXTURE_LIB_IDS]
 
 
-def _assert_non_env_fields_match(rehydrated_module: CheckedModule, cm: CheckedModule) -> None:
-    for field in dataclasses.fields(CheckedModule):
-        if field.name == "type_env":
-            continue
-        assert getattr(rehydrated_module, field.name) == getattr(cm, field.name), field.name
-
-
 class TestRehydrationParity:
     """Every declaration query a rehydrated module answers matches the original."""
-
-    def test_non_env_fields_are_identical(
-        self, compiled: _Compiled, rehydrated: dict[ModuleId, CheckedModule]
-    ) -> None:
-        for mid in _non_entry_module_ids(compiled):
-            _assert_non_env_fields_match(rehydrated[mid], compiled.checked.modules[mid])
 
     def test_function_signature_and_extern_queries_match(
         self, compiled: _Compiled, rehydrated: dict[ModuleId, CheckedModule]

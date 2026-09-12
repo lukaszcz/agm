@@ -9,6 +9,8 @@ import pytest
 
 from agm.agl import artifact_cache, artifact_storage
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.lower.program import lower_program
+from agm.agl.matchcompile import compile_program_matches
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import build_repl_graph
 from agm.agl.modules.parsed_module_cache import clear_parsed_module_cache
@@ -381,6 +383,63 @@ def test_prepared_environments_match_cache_free_across_every_module(tmp_path: Pa
             if _normalize_env_value(fresh_value) != _normalize_env_value(cached_value):
                 diffs.append(f"{mid.path_str()}.{name}")
     assert not diffs, f"cached vs cache-free preparation diverged: {diffs}"
+
+
+def test_check_program_lowers_identically_after_rehydrating_disk_checked_images(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``check_program`` itself, serving and rehydrating ``checked`` images off
+    disk, lowers to the same program as a from-scratch compile.
+
+    Image/rehydrate parity is proven elsewhere over a hand-reassembled
+    ``CheckedProgram``; this drives the production path instead: one compile
+    warms the disk cache, ``clear_retained_artifacts()`` drops only the
+    in-memory retention, and the second compile must serve images from disk --
+    which a spy on ``retained_checked_modules`` asserts actually happened, so
+    an accidentally all-fresh second compile cannot pass.
+    """
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    modules = {
+        "entry": (
+            "import lib_a::*\nimport lib_b::*\ndef summarize() -> int = double(3) + quadruple(2)\n"
+        ),
+        "lib_a": "def double(x: int) -> int = x * 2\n",
+        "lib_b": "import lib_a::*\ndef quadruple(x: int) -> int = double(double(x))\n",
+    }
+
+    def _resolved() -> ResolvedProgram:
+        clear_parsed_module_cache()
+        graph = make_inline_graph_from_files(tmp_path, modules, default_stdlib=False)
+        return resolve_program(graph)
+
+    caps = base_caps()
+    artifact_cache.clear_retained_artifacts()
+    warm_checked = check_program(_resolved(), caps)  # populates the disk-backed "checked" entries
+    original_executable = lower_program(compile_program_matches(warm_checked).compiled)
+
+    artifact_cache.clear_retained_artifacts()  # drop memory only; disk persists
+
+    from agm.agl.typecheck import program as program_module
+
+    original_served = program_module.retained_checked_modules
+    served_images: list[ModuleId] = []
+
+    def spied(
+        retainable: artifact_cache.RetainedSources, capabilities: HostCapabilities
+    ) -> dict[ModuleId, CheckedModule | CheckedModuleImage]:
+        served = original_served(retainable, capabilities)
+        served_images.extend(
+            mid for mid, module in served.items() if isinstance(module, CheckedModuleImage)
+        )
+        return served
+
+    monkeypatch.setattr(program_module, "retained_checked_modules", spied)
+
+    rehydrated_checked = check_program(_resolved(), caps)
+    rehydrated_executable = lower_program(compile_program_matches(rehydrated_checked).compiled)
+
+    assert served_images, "expected check_program to serve at least one disk-rehydrated image"
+    assert rehydrated_executable == original_executable
 
 
 def test_a_corrupted_binding_replay_fails_a_rehydrated_module_via_env_assert_closed(

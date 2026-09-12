@@ -1,10 +1,10 @@
 # Package Store and Installation
 
-Installed packages live in a store under the AGM home ([config.md](config.md)). An *immutable* installation is a content-hashed tree copied into the store; an *editable* installation mounts a live source tree. An activation index selects one version of each package globally and caches the registered commands; dependency installation and validation share the same store-or-editable selection rule. Project `[packages]` pins override that selection per invocation.
+Installed packages live in a store under the AGM home ([config.md](config.md)). An *immutable* installation is a content-hashed tree copied into the store; an *editable* installation mounts a live source tree. An activation index selects one version of each package globally and records the registered commands, though every invocation rebuilds the registry it uses from the selected manifests; dependency installation and validation share the same store-or-editable selection rule. Project `[packages]` pins override that selection per invocation.
 
 ## Distribution
 
-A package source directory is stored and shipped as its *distribution*: the normalized manifest plus the files that survive gitignore rules and the dotfile, VCS, cache, and archive exclusions. One module owns that selection, so archive creation, store staging, and the content hash that identifies an installed version all agree — the same source installs identically from a directory and from an archive of it.
+A package source directory is stored and shipped as its *distribution*: the normalized manifest plus the files that survive gitignore rules and the dotfile, VCS, cache, and archive exclusions. One module owns that selection, so archive creation, store staging, and the content hash that identifies an installed version all agree — the same source installs identically from a directory and from an archive of it. The normalized manifest is rendered from the manifest dataclass, so the commands a directory's own programs register ([packages.md](packages.md)) are merged in before anything is staged, hashed, or archived: an immutable installation carries one complete command table and is never rescanned. An editable installation has a manifest but no baked table to trust: it re-derives its commands from live source on every invocation that needs them, so an edited `@command` applies without reinstalling ([packages.md](packages.md) covers what happens when that source cannot be read).
 
 ## Install and Uninstall
 

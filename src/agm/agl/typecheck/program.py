@@ -132,7 +132,9 @@ from agm.agl.typecheck.function_inference import (
     FunctionSignatureRecord,
     ModuleCandidateComponent,
     candidate_records_for,
+    declared_records_for,
     infer_module_component_candidates,
+    publish_candidate_signature,
     register_method_header,
     resolve_function_header,
 )
@@ -941,7 +943,7 @@ def _prepare_module_environment(
     resolved: ModuleResolution,
     program_type_table: dict[DeclKey, Type],
     import_env_map: Mapping[ModuleId, object],
-    program_func_sig_table: dict[int, FunctionSignatureRecord],
+    declared_func_sig_table: dict[int, FunctionSignatureRecord],
     program_generic_table: dict[DeclKey, GenericTypeDef],
     program_alias_table: dict[DeclKey, GenericAliasDef],
     program_ctor_sig_table: dict[DeclKey, ConstructorSignature],
@@ -954,11 +956,16 @@ def _prepare_module_environment(
     The env is seeded with:
     - The module's own types (from ``program_type_table``).
     - The program table + import env for cross-module lookups.
-    - Explicit function signatures from the whole-program pre-pass
-      (``program_func_sig_table``), seeded before any body is checked. Their
-      globally unique ``node_id`` keys make declared cross-module calls
-      independent of per-module checking order. The candidate-inference SCC
-      coordinator adds unannotated signatures after their dependency SCCs close.
+    - Explicitly declared function signatures from the whole-program pre-pass
+      (``declared_func_sig_table``: ``program_func_sig_table`` filtered to
+      ``FunctionReturnSource.DECLARED``), seeded before any body is checked.
+      Their globally unique ``node_id`` keys make declared cross-module calls
+      independent of per-module checking order. Candidate (unannotated-function)
+      records are deliberately excluded here: the import-SCC coordinator
+      publishes each one, by the narrower rule ``publish_candidate_signature``
+      enforces, only after its dependency SCC closes -- for both a freshly
+      inferred candidate and one restored from a cached module's
+      ``published_signatures``.
     - ``type_table``: the single ``TypeTable`` instance shared by every module
       in this program (the same one built and dual-written in the type pre-pass),
       so this module's own re-check dual-writes into the same table.
@@ -1002,25 +1009,26 @@ def _prepare_module_environment(
             env.register_generic_type("::".join((*scope_path, g_name)), gdef)
 
     # Seed explicit binding types from the whole-program header collection.
-    # The candidate coordinator installs only concrete signatures after their
-    # function dependency SCCs close.
+    # Only DECLARED records reach this loop (see ``declared_func_sig_table``
+    # above); a candidate is published later, once its dependency SCC closes,
+    # by the narrower rule ``publish_candidate_signature`` shares with the
+    # import-SCC loop's fully-cached branch below.
     #
-    # Three tables are seeded:
-    # - _binding_types (node_id-keyed, globally unique): used by _check_varref to
-    #   look up the callee type when the callee VarRef resolves to a cross-module
-    #   FuncDef's decl_node_id.  Seeding the entire pre-pass table is safe because
-    #   node_ids are globally unique.
-    # - _function_signatures_by_node_id (node_id-keyed, globally unique): used by
-    #   _check_declared_name_call to look up the CORRECT signature for any callee
-    #   by its globally-unique decl_node_id.  Unlike the name-keyed table below,
-    #   this table never suffers from same-name collisions across modules.
-    # - _function_signatures (name-keyed): used as a fallback by
-    #   _check_declared_name_call when no node-id lookup is available (single-
-    #   program path).  Same-named functions from different modules may collide
-    #   here; the current module's own signatures always win because
-    #   builder.collect() → _preregister_funcdef re-registers them AFTER this
-    #   seeding step, overwriting any cross-module collision for bare-name calls.
-    for node_id, record in program_func_sig_table.items():
+    # Three tables are seeded, each keyed globally uniquely by node_id except
+    # the name-keyed one:
+    # - _binding_types: used by _check_varref to look up the callee type when
+    #   the callee VarRef resolves to a cross-module FuncDef's decl_node_id.
+    # - _function_signatures_by_node_id: used by _check_declared_name_call to
+    #   look up the correct signature for any callee by its globally-unique
+    #   decl_node_id, so same-name collisions across modules never matter here.
+    # - _function_signatures (name-keyed, root scope only): every module's
+    #   declared signatures land here under a shared bare name; nothing looks
+    #   this table up by name (``get_function_signature`` has no caller outside
+    #   ``env.py`` itself), so a same-name collision across modules is inert --
+    #   Phase 4's own re-check still calls ``register_function_signature`` for
+    #   this module's own declarations, but only to keep the table live for
+    #   ``all_function_signatures()``, not because a later lookup depends on it.
+    for node_id, record in declared_func_sig_table.items():
         env.set_binding_type(node_id, record.function_type)
         env.register_function_signature_by_node_id(node_id, record.signature)
         env.register_function_signature(record.name, record.signature, scope_path=record.scope_path)
@@ -1112,7 +1120,12 @@ def _prepare_program(
 
     # Phase 3: build every module environment before candidate inference. The
     # completed explicit headers are present in every environment, while each
-    # dependency SCC later adds only its closed candidates.
+    # dependency SCC later adds only its closed candidates. ``program_func_sig_table``
+    # may already carry restored candidate records here (merged in from a cached
+    # module's ``published_signatures`` by Phase 2), so bulk seeding is filtered
+    # down to the declared subset -- a candidate publishes only through the
+    # import-SCC loop below, whichever path (fresh or cached) produced it.
+    declared_func_sig_table = declared_records_for(program_func_sig_table)
     inference_sccs = resolved.graph.sccs
     ordered_mids = tuple(mid for inference_scc in inference_sccs for mid in inference_scc)
     module_envs: dict[ModuleId, TypeEnvironment] = {}
@@ -1122,7 +1135,7 @@ def _prepare_program(
             resolved.modules[mid].resolved,
             program_type_table,
             import_env_map,
-            program_func_sig_table,
+            declared_func_sig_table,
             program_generic_table,
             program_alias_table,
             program_ctor_sig_table,
@@ -1190,11 +1203,33 @@ def _prepare_program(
     # SCCs (their potential importers); earlier SCCs are dependencies that
     # cannot reference it, so registering there would be wasted work.
     for index, inference_scc in enumerate(inference_sccs):
+        publication_envs = tuple(
+            module_envs[mid] for later_scc in inference_sccs[index:] for mid in later_scc
+        )
         if all(
             mid in cached_checked_modules
             and cached_checked_modules[mid].published_signatures is not None
             for mid in inference_scc
         ):
+            # Every module in this SCC was served from cache, so none of its
+            # candidates are (re)inferred here -- but a restored candidate still
+            # publishes through the same rule a freshly inferred one would
+            # (``publish_candidate_signature``), into this SCC's own declaring
+            # env by name and into this same ``publication_envs`` by node id.
+            for mid in inference_scc:
+                declaring_env = module_envs[mid]
+                published = cached_checked_modules[mid].published_signatures or {}
+                for record in candidate_records_for(published).values():
+                    for env in publication_envs:
+                        publish_candidate_signature(
+                            env,
+                            declaring_env=declaring_env,
+                            declaration_node_id=record.declaration_node_id,
+                            name=record.name,
+                            scope_path=record.scope_path,
+                            signature=record.signature,
+                            function_type=record.function_type,
+                        )
             continue
         candidates = tuple(
             CandidateModule(
@@ -1205,9 +1240,6 @@ def _prepare_program(
                 declaration_spans,
             )
             for mid in inference_scc
-        )
-        publication_envs = tuple(
-            module_envs[mid] for later_scc in inference_sccs[index:] for mid in later_scc
         )
         for record in infer_module_component_candidates(
             ModuleCandidateComponent(candidates, publication_envs)
@@ -1322,7 +1354,7 @@ def check_program(
     checked_modules: dict[ModuleId, CheckedModule] = {}
     reused_modules: set[ModuleId] = set()
     for mid in ordered_mids:
-        cached = cached_checked_modules.get(mid) if cached_checked_modules is not None else None
+        cached = cached_checked_modules.get(mid)
         if isinstance(cached, CheckedModule) and cached.resolved is resolved.modules[mid].resolved:
             checked_modules[mid] = cached
             reused_modules.add(mid)

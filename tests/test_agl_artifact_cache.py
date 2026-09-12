@@ -294,6 +294,95 @@ def test_rehydration_onto_a_cached_preparation_matches_a_cache_free_compile(
     assert rehydrated.type_env.all_generic_types() == cm.type_env.all_generic_types()
 
 
+_CANDIDATE_CALLEE_SRC = "def factorial(n: int) = if n <= 1 => 1 else => n * factorial(n - 1)\n"
+_CANDIDATE_CONSUMER_SRC = (
+    "import lib_candidate_callee::*\ndef increment-factorial(n: int) -> int = factorial(n) + 1\n"
+)
+_UNRELATED_SRC = "def unrelated-value() -> int = 5\n"
+_ENTRY_SRC = (
+    "import lib_candidate_consumer::*\n"
+    "import lib_unrelated::*\n"
+    "def summarize() -> int = increment-factorial(3) + unrelated-value()\n"
+)
+
+
+def _normalize_env_value(value: object) -> object:
+    """Make a ``TypeEnvironment`` attribute value comparable across two preparations.
+
+    A ``TypeTable`` has no ``__eq__`` (identity equality), yet the two
+    preparations under comparison legitimately build distinct instances with
+    the same content, so it is compared by its sorted entry reprs instead.
+    Bound methods/functions stored as attribute values are never meaningfully
+    comparable across instances, so they are treated as always equal.
+    """
+    from agm.agl.semantics.type_table import TypeTable
+
+    if isinstance(value, TypeTable):
+        return ("TypeTable", sorted(repr(entry) for entry in value.entries()))
+    if callable(value) and not isinstance(value, type):
+        return "<callable>"
+    return value
+
+
+def test_prepared_environments_match_cache_free_across_every_module(tmp_path: Path) -> None:
+    """A cached preparation must reproduce a cache-free one for EVERY module's
+    ``TypeEnvironment``, not just the cached module's own declarations.
+
+    Regression test: ``_prepare_module_environment``'s bulk seeding step used
+    to seed the whole ``program_func_sig_table`` -- including candidate
+    (unannotated-function) records restored from ``cached_checked_modules``
+    -- into every module environment, name-keyed as well as node-id-keyed. A
+    freshly inferred candidate is published far more narrowly (by
+    ``function_inference._register_signature``): by name only into its own
+    declaring module, by node id only into its own import SCC and later ones.
+    So supplying a cache-served image for ``lib_candidate_callee`` (whose
+    ``factorial`` is unannotated, hence a candidate) used to leak
+    ``factorial`` into ``lib_unrelated``'s environment, even though
+    ``lib_unrelated`` neither imports nor is imported by it.
+
+    Table contents are compared by reading ``TypeEnvironment`` instance
+    attributes directly (via ``vars()``), because several of the tables this
+    bug touches (``_binding_types``, ``_function_signatures_by_path``,
+    ``_function_signatures_by_node_id``) have no public enumeration accessor
+    -- only single-key lookups (``get_binding_type``, ``get_function_signature``,
+    ``get_function_signature_by_node_id``) -- and ``all_function_signatures()``
+    exposes only the root-scope name-keyed table, not the other three.
+    ``_import_env``/``_scope_nodes`` are excluded: both preparations share the
+    identical input objects for them by construction, so they carry no
+    information about this bug. Every module is compared, the entry included.
+    """
+    graph = make_inline_graph_from_files(
+        tmp_path,
+        {
+            "entry": _ENTRY_SRC,
+            "lib_candidate_callee": _CANDIDATE_CALLEE_SRC,
+            "lib_candidate_consumer": _CANDIDATE_CONSUMER_SRC,
+            "lib_unrelated": _UNRELATED_SRC,
+        },
+        default_stdlib=False,
+    )
+    caps = base_caps()
+    resolved = resolve_program(graph)
+    checked = check_program(resolved, caps)
+    callee_id = next(mid for mid in resolved.modules if mid.path_str() == "lib_candidate_callee")
+    image = checked.modules[callee_id].image()
+
+    fresh = _prepare_program(resolved, caps)
+    cached = _prepare_program(resolved, caps, cached_checked_modules={callee_id: image})
+
+    ignored_attrs = {"_import_env", "_scope_nodes"}
+    diffs: list[str] = []
+    for mid, fresh_env in fresh.module_envs.items():
+        cached_env = cached.module_envs[mid]
+        for name, fresh_value in vars(fresh_env).items():
+            if name in ignored_attrs:
+                continue
+            cached_value = vars(cached_env).get(name, "<missing>")
+            if _normalize_env_value(fresh_value) != _normalize_env_value(cached_value):
+                diffs.append(f"{mid.path_str()}.{name}")
+    assert not diffs, f"cached vs cache-free preparation diverged: {diffs}"
+
+
 def test_a_corrupted_binding_replay_fails_a_rehydrated_module_via_env_assert_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

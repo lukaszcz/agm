@@ -221,6 +221,24 @@ def candidate_records_for(
     }
 
 
+def declared_records_for(
+    records: Mapping[int, FunctionSignatureRecord],
+) -> dict[int, FunctionSignatureRecord]:
+    """Return only the explicitly declared records, keyed by declaration id.
+
+    Complement of :func:`candidate_records_for`. Bulk environment seeding
+    (``_prepare_module_environment``) must seed only this subset: a candidate
+    record -- whether freshly inferred or restored from a cached module's
+    ``published_signatures`` -- is published solely through
+    :func:`publish_candidate_signature`'s narrower per-SCC rule.
+    """
+    return {
+        declaration_id: record
+        for declaration_id, record in records.items()
+        if record.return_source is FunctionReturnSource.DECLARED
+    }
+
+
 def _declaration_key(node: FuncDef) -> tuple[int, int]:
     """Return the stable source order for a top-level function declaration."""
     return (node.span.start_offset, node.node_id)
@@ -353,6 +371,35 @@ def infer_module_component_candidates(
     return tuple(records)
 
 
+def publish_candidate_signature(
+    env: TypeEnvironment,
+    *,
+    declaring_env: TypeEnvironment,
+    declaration_node_id: int,
+    name: str,
+    scope_path: tuple[str, ...],
+    signature: FunctionSignature,
+    function_type: FunctionType,
+) -> None:
+    """Install one candidate function signature into *env*, by the one shared rule.
+
+    By name: only into the signature's own declaring module environment
+    (``env is declaring_env``) -- same-name collisions across modules never
+    leak into the bare-name table. By node id
+    (``register_function_signature_by_node_id`` plus ``set_binding_type``):
+    into whatever environment the caller passes, typically its own import SCC
+    plus every later one. A freshly inferred candidate
+    (:func:`_register_signature`) and a candidate restored from a cached
+    module's ``published_signatures`` (the import-SCC loop's fully-cached
+    branch in ``program.py``) both publish through this one rule, so a
+    rehydrated compile seeds exactly what a fresh one would have.
+    """
+    if env is declaring_env:
+        env.register_function_signature(name, signature, scope_path=scope_path)
+    env.register_function_signature_by_node_id(declaration_node_id, signature)
+    env.set_binding_type(declaration_node_id, function_type)
+
+
 def _register_signature(
     env: TypeEnvironment,
     module: CandidateModule,
@@ -360,12 +407,16 @@ def _register_signature(
     signature: FunctionSignature,
     function_type: FunctionType,
 ) -> None:
-    """Install a declaration-id- and path-keyed signature without changing visibility."""
-    scope_path = tuple(segment.name for segment in node.scope_path)
-    if env is module.env:
-        env.register_function_signature(node.name, signature, scope_path=scope_path)
-    env.register_function_signature_by_node_id(node.node_id, signature)
-    env.set_binding_type(node.node_id, function_type)
+    """Install a freshly inferred candidate's signature via :func:`publish_candidate_signature`."""
+    publish_candidate_signature(
+        env,
+        declaring_env=module.env,
+        declaration_node_id=node.node_id,
+        name=node.name,
+        scope_path=tuple(segment.name for segment in node.scope_path),
+        signature=signature,
+        function_type=function_type,
+    )
 
 
 def _references_tainted_binding(

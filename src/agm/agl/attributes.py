@@ -8,12 +8,14 @@ other attributes it excludes. Everything here is data — the diagnostics for an
 unknown, misplaced, malformed, duplicate, or conflicting attribute belong to
 the pass that consults the catalog. The typed shapes an attribute's meaning
 takes — :class:`ProgramOptionSpec`, the command-line presentation the
-``@opt-*`` attributes describe — live here too, so a host reads one without
-reaching into a pass.
+``@opt-*`` attributes describe, and :class:`ProgramCommandSpec`, the package
+command registration the ``@command`` family describes — live here too, so a
+host reads one without reaching into a pass.
 
-It is a top-level leaf sitting directly on ``zones``, whose ``ParamZone`` the
-``@arg-*`` attributes name, and on nothing else, so any layer may name an
-attribute without pulling a pass in with it.
+It is a top-level leaf sitting on ``zones``, whose ``ParamZone`` the ``@arg-*``
+attributes name, and on the pure command catalog, whose command-path rule
+``@command`` shares with a package manifest, and on nothing else, so any layer
+may name an attribute without pulling a pass in with it.
 """
 
 from __future__ import annotations
@@ -25,11 +27,16 @@ from dataclasses import dataclass
 from types import MappingProxyType
 
 from agm.agl.zones import ParamZone
+from agm.command_catalog import invalid_command_path
 
 __all__ = [
     "BUILTIN_ATTRIBUTES",
+    "COMMAND_ATTRIBUTE",
+    "COMMAND_PROSE_ATTRIBUTES",
+    "DESCRIPTION_ATTRIBUTE",
     "DOC_ATTRIBUTE",
     "EXTERN_NAME_ATTRIBUTE",
+    "HELP_ATTRIBUTE",
     "NAME_ADDRESSED_OPTION_ATTRIBUTES",
     "OPTION_ENV_ATTRIBUTE",
     "OPTION_HIDDEN_ATTRIBUTE",
@@ -42,7 +49,9 @@ __all__ = [
     "AttributeArguments",
     "AttributeSpec",
     "AttributeTarget",
+    "ProgramCommandSpec",
     "ProgramOptionSpec",
+    "invalid_program_command_path",
 ]
 
 
@@ -140,6 +149,19 @@ EXTERN_NAME_ATTRIBUTE = "extern-name"
 #: its own, and every host surface showing documentation reads that table.
 DOC_ATTRIBUTE = "doc"
 
+#: The attributes registering a ``program def`` as a package command. The path
+#: ``@command`` names is the command a reader invokes; ``@description`` and
+#: ``@help`` are the prose the registration carries, the namesake fields of a
+#: package manifest's command table. The prose attributes describe a
+#: registration rather than a program, so neither means anything without
+#: ``@command`` beside it.
+COMMAND_ATTRIBUTE = "command"
+DESCRIPTION_ATTRIBUTE = "description"
+HELP_ATTRIBUTE = "help"
+
+#: The command attributes carrying prose: legal only beside ``@command``.
+COMMAND_PROSE_ATTRIBUTES: tuple[str, ...] = (DESCRIPTION_ATTRIBUTE, HELP_ATTRIBUTE)
+
 #: The attributes shaping how a ``program def`` parameter appears on a host's
 #: command line.
 OPTION_NAME_ATTRIBUTE = "opt-name"
@@ -201,6 +223,40 @@ class ProgramOptionSpec:
     doc: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ProgramCommandSpec:
+    """The package command one ``program def`` registers itself as.
+
+    ``path`` is the command a reader invokes, in the space-separated spelling a
+    package manifest uses. ``description`` and ``help`` are the registration's
+    prose, absent unless their attribute supplies them; they are distinct from
+    the program's own ``@doc``, which describes the program wherever it is run.
+    """
+
+    path: str
+    description: str | None = None
+    help: str | None = None
+
+
+def invalid_program_command_path(path: str) -> str | None:
+    """Describe why *path* cannot name a registered command, or ``None``.
+
+    A ``@command`` path extends the same command tree a package manifest
+    registers into, so it answers to the same rule; this wrapper is the name
+    the passes reach it by, so no pass imports the command catalog itself.
+    """
+
+    return invalid_command_path(path)
+
+
+def _program_spec(name: str) -> AttributeSpec:
+    return AttributeSpec(
+        name=name,
+        targets=frozenset({AttributeTarget.PROGRAM}),
+        arguments=AttributeArguments.ONE_TEXT,
+    )
+
+
 def _zone_spec(name: str) -> AttributeSpec:
     return AttributeSpec(
         name=name,
@@ -248,6 +304,8 @@ _SPECS: tuple[AttributeSpec, ...] = (
     _option_spec(OPTION_ENV_ATTRIBUTE, AttributeArguments.ONE_TEXT),
     _option_spec(OPTION_METAVAR_ATTRIBUTE, AttributeArguments.ONE_TEXT),
     _option_spec(OPTION_HIDDEN_ATTRIBUTE, AttributeArguments.NONE),
+    _program_spec(COMMAND_ATTRIBUTE),
+    *(_program_spec(name) for name in COMMAND_PROSE_ATTRIBUTES),
     AttributeSpec(
         name=DOC_ATTRIBUTE,
         targets=_EVERY_TARGET,

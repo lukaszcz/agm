@@ -1,0 +1,4 @@
+@command("devel review")
+def helper() -> unit = ()
+
+program def main() -> unit = helper()

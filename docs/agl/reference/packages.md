@@ -85,10 +85,21 @@ parameters; its result is unit like that of any `program def`, whether written
 or left to inference. It remains an ordinary callable function inside the
 package.
 
+A program registers itself as a command by carrying
+[`@command`](attributes.md#command-attributes), whose argument is the command
+path a reader invokes; `@description` and `@help` supply that command's prose.
+A package's commands are therefore declared where its programs are, and the
+manifest need name only the commands no program claims.
+
 ```agl
+@command("dev review")
+@description("Review changes")
 program def main() -> unit =
   print("review loop")
 ```
+
+Declaring one command path twice — in a manifest `[commands]` entry and on a
+program — is an error; each path has one declaration.
 
 A registered command runs its program exactly as a directly executed program
 does: the selected `program def`'s own value parameters become flags, and

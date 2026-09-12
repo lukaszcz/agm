@@ -1,0 +1,2 @@
+@command("exec review")
+program def main() -> unit = ()

@@ -7,12 +7,13 @@ admitted target, the arguments match the declared schema, the attribute is not
 repeated or contradicted — and turns the surviving attributes into typed
 side-table entries.
 
-Four facts are built: a parameter's zone, from the ``@arg-*`` attribute an
+Five facts are built: a parameter's zone, from the ``@arg-*`` attribute an
 entry or its owning declaration carries; an ``extern def``'s Python companion
 name, from ``@extern-name`` — the walk sees every extern of a module, so it is
 also where their companion names are held apart; a ``program def`` parameter's
-command-line presentation, from the ``@opt-*`` attributes; and a declaration's
-documentation text, from ``@doc``. The walk is the seam a further attribute
+command-line presentation, from the ``@opt-*`` attributes; the package command
+a ``program def`` registers itself as, from ``@command`` and its prose; and a
+declaration's documentation text, from ``@doc``. The walk is the seam a further attribute
 meaning joins through — a new fact reads the attributes the walk already hands
 it and fills a table of its own, so it costs one more builder, never one more
 traversal.
@@ -26,8 +27,12 @@ from dataclasses import dataclass
 
 from agm.agl.attributes import (
     BUILTIN_ATTRIBUTES,
+    COMMAND_ATTRIBUTE,
+    COMMAND_PROSE_ATTRIBUTES,
+    DESCRIPTION_ATTRIBUTE,
     DOC_ATTRIBUTE,
     EXTERN_NAME_ATTRIBUTE,
+    HELP_ATTRIBUTE,
     NAME_ADDRESSED_OPTION_ATTRIBUTES,
     OPTION_ENV_ATTRIBUTE,
     OPTION_HIDDEN_ATTRIBUTE,
@@ -38,7 +43,9 @@ from agm.agl.attributes import (
     AttributeArguments,
     AttributeSpec,
     AttributeTarget,
+    ProgramCommandSpec,
     ProgramOptionSpec,
+    invalid_program_command_path,
 )
 from agm.agl.scope.symbols import AglScopeError, AttributeFacts
 from agm.agl.syntax.nodes import (
@@ -154,6 +161,7 @@ def recognize_attributes(
         param_zones=recognizer.param_zones,
         extern_names=recognizer.extern_names,
         program_options=recognizer.program_options,
+        command_registrations=recognizer.command_registrations,
         docs=recognizer.docs,
     )
 
@@ -166,6 +174,7 @@ class _Recognizer:
         self.param_zones: dict[int, ParamZone] = {}
         self.extern_names: dict[int, str] = {}
         self.program_options: dict[int, ProgramOptionSpec] = {}
+        self.command_registrations: dict[int, ProgramCommandSpec] = {}
         self.docs: dict[int, str] = {}
         self._companion_owners: dict[str, str] = {}
 
@@ -175,6 +184,8 @@ class _Recognizer:
             recognized = self._check(node.attributes, _function_target(node), node.node_id)
             if node.is_extern:
                 self._extern_name(node, recognized)
+            if node.is_program:
+                self._command_registration(node, recognized)
             self._entries(
                 node.params,
                 _zone_attribute(recognized),
@@ -285,6 +296,45 @@ class _Recognizer:
             )
         self._companion_owners[name] = node.name
         self.extern_names[node.node_id] = name
+
+    # ------------------------------------------------------------------
+    # Fact builder: package command registrations
+    # ------------------------------------------------------------------
+
+    def _command_registration(self, node: FuncDef, recognized: _Recognized) -> None:
+        """Record the package command one ``program def`` registers itself as.
+
+        Only a program carrying ``@command`` registers anything, so the prose
+        attributes — which describe a registration rather than a program — are
+        rejected without it rather than silently dropped. The path is held to
+        the rule a package manifest's command paths answer to, since both
+        register into the same command tree; whether the path reaches a CLI at
+        all is a package fact, so a program outside a package is simply never
+        asked for its registration.
+        """
+        command = recognized.nodes.get(COMMAND_ATTRIBUTE)
+        if command is None:
+            for name in COMMAND_PROSE_ATTRIBUTES:
+                attribute = recognized.nodes.get(name)
+                if attribute is not None:
+                    raise AglScopeError(
+                        f"Attribute '@{name}' describes a command registration, so program "
+                        f"{node.name!r} needs a '@{COMMAND_ATTRIBUTE}' attribute beside it.",
+                        span=attribute.span,
+                    )
+            return
+        path = recognized.texts[COMMAND_ATTRIBUTE]
+        invalid = invalid_program_command_path(path)
+        if invalid is not None:
+            raise AglScopeError(
+                f"Command path {path!r} {invalid}.",
+                span=command.span,
+            )
+        self.command_registrations[node.node_id] = ProgramCommandSpec(
+            path=path,
+            description=recognized.text_of(DESCRIPTION_ATTRIBUTE),
+            help=recognized.text_of(HELP_ATTRIBUTE),
+        )
 
     # ------------------------------------------------------------------
     # Fact builder: parameter zones

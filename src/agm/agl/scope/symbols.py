@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeAlias as TypingTypeAlias
 
-from agm.agl.attributes import ProgramOptionSpec
+from agm.agl.attributes import ProgramCommandSpec, ProgramOptionSpec
 from agm.agl.diagnostics import AglError
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.types import EnumType, RecordType, TypeVarType
@@ -685,6 +685,11 @@ class AttributeFacts:
         keyed by ``Param.node_id``, as its ``@opt-*`` attributes describe it.
         Every program parameter has an entry; the host builds a program's CLI
         from these rather than from declared names.
+    ``command_registrations``
+        The package command every ``program def`` registers itself as, keyed
+        by ``FuncDef.node_id``, as its ``@command``/``@description``/``@help``
+        attributes describe it. Only a program carrying ``@command`` has an
+        entry; the package domain merges these into a manifest's command table.
     ``docs``
         The ``@doc`` text of every declaration carrying one, parameters and
         fields included, keyed by that declaration's node id.
@@ -693,6 +698,7 @@ class AttributeFacts:
     param_zones: dict[int, ParamZone] = field(default_factory=dict)
     extern_names: dict[int, str] = field(default_factory=dict)
     program_options: dict[int, ProgramOptionSpec] = field(default_factory=dict)
+    command_registrations: dict[int, ProgramCommandSpec] = field(default_factory=dict)
     docs: dict[int, str] = field(default_factory=dict)
 
 

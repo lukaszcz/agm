@@ -74,6 +74,55 @@ The layout rules:
        -> unit
        = print (describe "ok")
    ```
+5. **Operator continuation.** A line break is ignored wherever it would
+   separate an operator from its operand. This holds for every operator —
+   built-in, word (`and`, `or`, `not`, `is`, `in`, `to`, `downto`, `step`,
+   `with`, `as`), and user-defined — as well as for `.`, `:=`, and a
+   signature's `->`.
+
+   A line ending with an operator that still awaits its operand is unfinished,
+   so the next line continues it whatever its indentation:
+
+   ```agl
+   program def main() -> unit =
+     let scaled = [1, 2, 3].map(fn v => v * 2) |>
+     .fold(0, fn (total, v) => total + v)
+     let wide = 1 +
+         2
+     print (scaled + wide)
+   ```
+
+   A line that is **more indented** than its block and opens with an operator
+   continues the line before it instead of opening one:
+
+   ```agl
+   program def main() -> unit =
+     let report = [1, 2, 3]
+       .filter(fn v => v > 1)
+       .map(fn v => v * 2)
+       |> .fold(0, fn (total, v) => total + v)
+     print report
+   ```
+
+   The indentation is what makes the second form a continuation. At its block's
+   own level a line opening with `.`, `-`, or `not` is an item in its own right,
+   so a block ending in a leading-dot method value or a negation keeps its
+   meaning:
+
+   ```agl
+   record Box(value: int)
+
+   def Box::scale(self, factor: int) -> Box = Box(value = self.value * factor)
+
+   def doubler() -> (Box) -> Box =
+     let factor = 2
+     .scale(factor)
+
+   program def main() -> unit = print (doubler()(Box(value = 3)).value)
+   ```
+
+   Neither form applies to a module header, which spells a path rather than an
+   expression.
 
 A semicolon `;` also separates items in a block; see
 [Program structure](program-structure.md).

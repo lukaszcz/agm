@@ -20,6 +20,14 @@ Key rules
   markers and loop terminators align with the construct that owns them, and
   what lets a signature's return type or a body's ``=`` wrap onto its own
   line.
+- Operator continuation: a line break is suppressed outright when it would
+  separate an operator from its operand — when the line ends with an operator
+  still awaiting one (its indentation is then unmeasured, as inside brackets),
+  or when a *more indented* line opens with one.  The indentation requirement on
+  the second form is what keeps a block's own item — ``-x``, ``not ready``,
+  ``.map(f)`` — a statement of its own.  Operator position is decided by
+  :func:`agm.agl.lexer.operators.stands_as_operator`, the predicate soft-keyword
+  promotion later reads, so the two passes cannot disagree.
 - At EOF: unwind remaining indent levels with ``_DEDENT`` s.
 - Template tokens never produce ``_NEWLINE`` s (the scanner does not emit them
   inside templates).
@@ -44,8 +52,18 @@ from typing import Iterator
 from lark.lexer import Token
 
 from agm.agl.diagnostics import SourceSpan
-from agm.agl.keywords import KW_CATCH, KW_DO, KW_DONE, KW_ELSE, KW_UNTIL
+from agm.agl.keywords import (
+    KW_CATCH,
+    KW_DO,
+    KW_DONE,
+    KW_ELSE,
+    KW_EXPORT,
+    KW_IMPORT,
+    KW_UNTIL,
+    KW_USE,
+)
 from agm.agl.lexer.errors import LexError
+from agm.agl.lexer.operators import stands_as_operator
 from agm.agl.lexer.tokens import (
     ARROW,
     DEDENT,
@@ -82,6 +100,13 @@ _CONTINUATION = {
     ARROW,
     EQ,
 }
+
+
+# Words that open a module header.  A header spells a path, not an expression,
+# so the operator-continuation rules below leave its line alone: the `/*` tail of
+# a wildcard header is an operator name that closes an operand, and would
+# otherwise read as a dangling operator.
+_HEADER_WORDS = frozenset({KW_IMPORT, KW_USE, KW_EXPORT})
 
 
 def _synthetic(typ: str, value: str, ref: Token) -> Token:
@@ -153,12 +178,14 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
         except StopIteration:
             return None
 
-    def _peek_next() -> Token | None:
-        """Peek at the next token without consuming it."""
-        tok = _next()
-        if tok is not None:
-            buffered.insert(0, tok)
-        return tok
+    def _peek_pair() -> tuple[Token | None, Token | None]:
+        """Peek at the next two tokens without consuming either."""
+        first = _next()
+        second = _next() if first is not None else None
+        for token in (second, first):
+            if token is not None:
+                buffered.insert(0, token)
+        return first, second
 
     def _pop_level(ref: Token, triggering_tok: Token | None) -> Iterator[Token]:
         """Pop one indent level, emit _DEDENT, and inject synthetic DONE if needed.
@@ -188,8 +215,13 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
             if not is_explicit_terminator:
                 yield _synthetic(KW_DONE, KW_DONE, ref)
 
-    # Reference token for EOF dedents
+    # Reference token for EOF dedents, and its predecessor: the operator-position
+    # test reads the token on either side of a line break.
     last_real: Token | None = None
+    prev_real: Token | None = None
+    # First significant token of the current logical line, kept across every
+    # suppressed newline and cleared when a line break is actually emitted.
+    line_start: Token | None = None
 
     while True:
         tok = _next()
@@ -199,7 +231,8 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
         # Track bracket/template depth
         if tok.type in _OPEN_BRACKETS:
             paren_level += 1
-            last_real = tok
+            prev_real, last_real = last_real, tok
+            line_start = line_start if line_start is not None else tok
             if _pending_loop_body and _do_bound_paren_level == -1:
                 # First open bracket on the `do` line (before any body token).
                 if tok.type == LSQB:
@@ -220,7 +253,8 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
                     # the next significant token determines inline vs suite.
                     _do_bound_paren_level = -1
                 paren_level -= 1
-            last_real = tok
+            prev_real, last_real = last_real, tok
+            line_start = line_start if line_start is not None else tok
             yield tok
             continue
 
@@ -236,7 +270,8 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
                 # A significant token appeared on the `do` line after the bound
                 # (or without a bound) → body is inline, clear pending.
                 _pending_loop_body = False
-            last_real = tok
+            prev_real, last_real = last_real, tok
+            line_start = line_start if line_start is not None else tok
             yield tok
             continue
 
@@ -252,8 +287,25 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
         # The _INDENT will push the new level tagged with do_col.
         indent_width = int(str(tok))
 
-        # Peek at the next token to check for the continuation rule.
-        sig = _peek_next()
+        # Peek at the next two tokens: the first for the continuation rules, the
+        # second for the operator-position test the leading one applies to it.
+        sig, after_sig = _peek_pair()
+
+        in_header = line_start is not None and str(line_start) in _HEADER_WORDS
+
+        # Dangling-operator rule: the line ended with an operator still awaiting
+        # its operand, so it is unfinished.  Suppress the _NEWLINE and let the
+        # next line continue it at any indentation, exactly as brackets do.
+        if (
+            not in_header
+            and last_real is not None
+            and stands_as_operator(
+                last_real,
+                prev_real.type if prev_real is not None else None,
+                sig.type if sig is not None else None,
+            )
+        ):
+            continue
 
         if sig is not None and sig.type in _CONTINUATION:
             # Continuation rule: suppress the _NEWLINE and emit only the DEDENTs
@@ -273,16 +325,32 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
         current_level = indent_stack[-1]
 
         if indent_width > current_level:
+            # Leading-operator rule: a more indented line opening with an
+            # operator continues the line before it instead of opening a block.
+            # Requiring the indentation is what keeps a block's own item — `-x`,
+            # `not ready`, `.map(f)` — a statement of its own.
+            if (
+                not in_header
+                and sig is not None
+                and stands_as_operator(
+                    sig,
+                    last_real.type if last_real is not None else None,
+                    after_sig.type if after_sig is not None else None,
+                )
+            ):
+                continue
             # Indent: push new level, emit _INDENT.
             # Tag this level with the enclosing indent level if a loop body is being opened.
             indent_stack.append(indent_width)
             tag = current_level if _pending_loop_body else None
             loop_body_enclosing.append(tag)
             _pending_loop_body = False
+            line_start = None
             yield _synthetic(INDENT, "", tok)
         elif indent_width == current_level:
             # Same level: emit _NEWLINE as-is
             _pending_loop_body = False
+            line_start = None
             yield tok
         else:
             # Dedent: pop levels and emit _DEDENT for each
@@ -312,6 +380,7 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
                 )
             # Emit _NEWLINE at the restored level
             _pending_loop_body = False
+            line_start = None
             yield tok
 
     # EOF: unwind remaining indent levels with _DEDENT tokens.  ``last_real`` is

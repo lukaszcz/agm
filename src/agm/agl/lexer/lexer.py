@@ -46,101 +46,43 @@ from agm.agl.keywords import (
     KW_SCOPE,
     KW_USE,
     OPERATOR_SOFT_KEYWORDS,
-    PREFIX_SOFT_KEYWORDS,
 )
 from agm.agl.lexer.errors import LexError
 from agm.agl.lexer.layout import layout
+from agm.agl.lexer.operators import (
+    EXPRESSION_END_TYPES,
+    INFIX_OPERAND_START_TYPES,
+    SLASH_LEFT_OPERAND_TYPES,
+    promotes_as_operator,
+    scanner_token_type,
+)
 from agm.agl.lexer.scanner import _Scanner
 from agm.agl.lexer.tokens import (
     CALL_LBRACE,
-    COLON,
     DCOLON,
-    DECIMAL,
     DO_LSQB,
-    DOT,
     END,
-    EQ,
     EXPORT,
     GRAMMAR_TOKEN_REMAP,
     HIDING,
     IMPORT,
     INDEX_LSQB,
-    INT,
     LBRACE,
-    LPAR,
     LSQB,
-    MINUS,
     MODPATH,
     MODQUAL,
     NAME,
-    NOT,
     OP_NAME,
-    RBRACE,
-    RPAR,
     RSQB,
     SCOPE,
     SLASH,
     STAR,
-    TEMPLATE_END,
-    TEMPLATE_START,
     TYPEARG_LSQB,
     USE,
     WILDCARD,
 )
 from agm.agl.syntax.advisories import SpacedQualifier
 from agm.util.scoping import ScopedVar
-
-_GRAMMAR_TOKEN_UNMAP = {
-    grammar_type: scanner_type for scanner_type, grammar_type in GRAMMAR_TOKEN_REMAP.items()
-}
-
-
-def _scanner_token_type(token_type: str) -> str:
-    """Return the public scanner spelling for a possibly parser-remapped token type."""
-    return _GRAMMAR_TOKEN_UNMAP.get(token_type, token_type)
-
-
-# Canonical scanner token types that delimit closed expressions and begin infix
-# operands. Keeping these sets in scanner form lets both the public tokenizer's
-# lowercase keywords and the Lark stream's remapped keywords use one inventory.
-_EXPRESSION_END_TYPES = frozenset(
-    {
-        NAME,
-        OP_NAME,
-        INT,
-        DECIMAL,
-        "true",
-        "false",
-        "null",
-        TEMPLATE_END,
-        RPAR,
-        RSQB,
-        RBRACE,
-        "break",
-        "continue",
-    }
-)
-_INFIX_OPERAND_START_TYPES = frozenset(
-    {
-        NAME,
-        OP_NAME,
-        INT,
-        DECIMAL,
-        "true",
-        "false",
-        "null",
-        TEMPLATE_START,
-        LPAR,
-        LSQB,
-        LBRACE,
-        MODQUAL,
-        DCOLON,
-        "break",
-        "continue",
-        NOT,
-        MINUS,
-    }
-)
 
 # Ambient sink for TAB advisories produced during a Lark-driven parse.  The
 # lexer scans the source exactly once (no separate TAB pass); when a sink is
@@ -206,46 +148,8 @@ def _remap(tokens: Iterator[Token]) -> Iterator[Token]:
 
 _ITEM_START_TYPES = frozenset({"_NEWLINE", "_INDENT", "_DEDENT", "SEMICOLON"})
 
-# Token types that close an operand, and so put the next token in operator
-# position.  An operator name does not close one (it expects an operand of its
-# own), and neither do `break`/`continue`, which end a statement rather than a
-# value.
-_OPERAND_END_TYPES = _EXPRESSION_END_TYPES - {OP_NAME, "break", "continue"}
-
-# A soft operator word followed by one of these spells a name: `=` opens a
-# named argument or a default, `:` a field or parameter type.  No operand
-# starts with either.
-_NAME_MARKER_TYPES = frozenset({EQ, COLON})
-
-# Positions where only a name can stand, whatever an operand could otherwise
-# do there.  Infix words are excluded from these anyway (none closes an
-# operand); the prefix word `not` needs them spelled out.
-_NAME_ONLY_PREV_TYPES = frozenset({DOT, DCOLON, "def", "record", "enum", "exception", "type", "as"})
-
 # The three header keywords whose clause a hiding promotion can terminate.
 _HEADER_TYPES = frozenset({IMPORT, USE, EXPORT})
-
-
-def _promotes_as_operator(word: str, prev_type: str | None, next_type: str | None) -> bool:
-    """Whether an operator word stands in operator position rather than naming a member.
-
-    An infix word is an operator exactly when it follows an operand; the prefix
-    word ``not`` exactly when it precedes one.  Either way a following ``=`` or
-    ``:`` marks a name, and a preceding ``.``, ``::`` or declaration keyword
-    means only a name can stand there.
-
-    The neighbours are compared in scanner form: this pass runs after the
-    parser path has remapped reserved keywords to their grammar spellings, and
-    the token inventories above are canonical scanner types.
-    """
-    prev = _scanner_token_type(prev_type) if prev_type is not None else None
-    if next_type is not None and _scanner_token_type(next_type) in _NAME_MARKER_TYPES:
-        return False
-    if prev in _NAME_ONLY_PREV_TYPES:
-        return False
-    if word in PREFIX_SOFT_KEYWORDS:
-        return prev not in _OPERAND_END_TYPES
-    return prev in _OPERAND_END_TYPES
 
 
 def _retype(tok: Token, new_type: str) -> Token:
@@ -293,7 +197,7 @@ def _is_scope_closer(tokens: list[Token], index: int) -> bool:
 
 def _is_as(token: Token) -> bool:
     """Whether *token* is ``as`` before or after parser keyword remapping."""
-    return _scanner_token_type(token.type) == KW_AS
+    return scanner_token_type(token.type) == KW_AS
 
 
 # Token types that can spell one selected member of a ``use`` header.
@@ -393,7 +297,7 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
             ):
                 tok = _retype(tok, END)
                 scope_layouts.pop()
-            elif tv in OPERATOR_SOFT_KEYWORDS and _promotes_as_operator(
+            elif tv in OPERATOR_SOFT_KEYWORDS and promotes_as_operator(
                 tv, prev_type, tokens[index + 1].type if index + 1 < len(tokens) else None
             ):
                 tok = _retype(tok, tv.upper())
@@ -729,7 +633,6 @@ def _merge_modqual(tokens: list[Token], source: str) -> list[Token]:
 
 # A merged qualifier is not itself an expression, but a following slash still
 # clings to a path operand that failed to acquire its final name.
-_SLASH_LEFT_OPERAND_TYPES = _EXPRESSION_END_TYPES | {MODQUAL}
 
 
 def _reaches_a_spaced_dcolon(tokens: list[Token], slash_index: int) -> bool:
@@ -771,12 +674,12 @@ def _reject_clinging_slash(tokens: list[Token]) -> list[Token]:
         next_tok = tokens[index + 1] if index + 1 < len(tokens) else None
         tight_left = (
             prev_tok is not None
-            and _scanner_token_type(prev_tok.type) in _SLASH_LEFT_OPERAND_TYPES
+            and scanner_token_type(prev_tok.type) in SLASH_LEFT_OPERAND_TYPES
             and prev_tok.end_pos == tok.start_pos
         )
         tight_right = (
             next_tok is not None
-            and _scanner_token_type(next_tok.type) in _INFIX_OPERAND_START_TYPES
+            and scanner_token_type(next_tok.type) in INFIX_OPERAND_START_TYPES
             and tok.end_pos == next_tok.start_pos
         )
         if tight_left or tight_right:
@@ -835,14 +738,14 @@ def _remap_adjacent_brackets(tokens: list[Token]) -> list[Token]:
         elif (
             tok.type == LSQB
             and previous is not None
-            and _scanner_token_type(previous.type) in _EXPRESSION_END_TYPES
+            and scanner_token_type(previous.type) in EXPRESSION_END_TYPES
             and previous.end_pos == tok.start_pos
         ):
             tok = _retype(tok, INDEX_LSQB)
         elif (
             tok.type == LBRACE
             and previous is not None
-            and _scanner_token_type(previous.type) in _EXPRESSION_END_TYPES
+            and scanner_token_type(previous.type) in EXPRESSION_END_TYPES
             and previous.end_pos == tok.start_pos
         ):
             tok = _retype(tok, CALL_LBRACE)

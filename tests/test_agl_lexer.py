@@ -1532,6 +1532,108 @@ class TestSignatureContinuation:
 
 
 # ---------------------------------------------------------------------------
+# Operator continuation (a line break between an operator and its operand)
+# ---------------------------------------------------------------------------
+
+
+def layout_tokens(source: str) -> list[str]:
+    """Return the layout token types of *source*, in order."""
+    return [t for t, _ in tok(source) if t in ("_NEWLINE", "_INDENT", "_DEDENT")]
+
+
+class TestDanglingOperatorContinuation:
+    """A line ending with an operator awaiting its operand continues onto the next."""
+
+    def test_user_operator_joins_the_next_line(self) -> None:
+        source = "let a = xs |>\n.fold(0, f)"
+        assert layout_tokens(source) == []
+
+    def test_user_operator_ignores_the_continuation_indentation(self) -> None:
+        source = "let a = xs |>\n    .fold(0, f)"
+        assert layout_tokens(source) == []
+
+    def test_builtin_operator_joins_the_next_line(self) -> None:
+        assert layout_tokens("let a = 1 +\n  2") == []
+
+    def test_operator_word_joins_the_next_line(self) -> None:
+        source = "let ok = a and\n  b"
+        assert layout_tokens(source) == []
+        assert ("AND", "and") in tok(source)
+
+    def test_dot_joins_the_next_line(self) -> None:
+        assert layout_tokens("let a = xs.\n  map(f)") == []
+
+    def test_assignment_joins_the_next_line(self) -> None:
+        assert layout_tokens("count :=\n  count + 1") == []
+
+    def test_return_type_arrow_joins_the_next_line(self) -> None:
+        assert layout_tokens("def f(x: int) ->\n  int = x") == []
+
+    def test_cast_keyword_joins_the_next_line(self) -> None:
+        assert layout_tokens("let a = x as\n  text") == []
+
+    def test_a_later_line_still_closes_the_block_it_opened(self) -> None:
+        # The continuation joins one logical line; the block around it is
+        # unaffected, so `print` still dedents out of the suite.
+        source = "def f() =\n  let a = 1 +\n  2\n  print a\nprint 3"
+        assert layout_tokens(source) == ["_INDENT", "_NEWLINE", "_DEDENT", "_NEWLINE"]
+
+    def test_operator_name_as_a_value_ends_its_line(self) -> None:
+        # `|>` here is the operator's value, not an operator awaiting an operand.
+        assert layout_tokens("let f = |>\nprint f") == ["_NEWLINE"]
+
+    def test_wildcard_import_ends_its_line(self) -> None:
+        # The `*` of a wildcard header is not an operator: its `/` closes no operand.
+        assert layout_tokens("import foo/*\nlet a = 1") == ["_NEWLINE"]
+
+    def test_trailing_comma_of_an_inline_record_body_ends_its_line(self) -> None:
+        assert layout_tokens("record R = a: int,\nlet x = 1") == ["_NEWLINE"]
+
+    def test_body_equals_still_opens_a_suite(self) -> None:
+        assert layout_tokens("def f() =\n  print 1") == ["_INDENT", "_DEDENT"]
+
+    def test_branch_arrow_still_opens_a_suite(self) -> None:
+        assert layout_tokens("if c =>\n  print 1") == ["_INDENT", "_DEDENT"]
+
+
+class TestLeadingOperatorContinuation:
+    """A more indented line opening with an operator continues the line before it."""
+
+    def test_more_indented_user_operator_joins_the_line_before(self) -> None:
+        assert layout_tokens("let a = xs\n  |> f") == []
+
+    def test_more_indented_dot_joins_the_line_before(self) -> None:
+        assert layout_tokens("let a = xs\n  .map(f)") == []
+
+    def test_more_indented_operator_word_joins_the_line_before(self) -> None:
+        source = "let ok = a\n  and b"
+        assert layout_tokens(source) == []
+        assert ("AND", "and") in tok(source)
+
+    def test_successive_continuation_lines_join_one_logical_line(self) -> None:
+        source = "let a = xs\n  |> f\n  |> g\nprint a"
+        assert layout_tokens(source) == ["_NEWLINE"]
+
+    def test_operator_at_the_block_level_starts_a_new_item(self) -> None:
+        # A block's own final item may open with `.`: the indentation
+        # requirement is what keeps it a statement of its own.
+        source = "def compose() =\n  let g = h\n  .map(g)"
+        assert layout_tokens(source) == ["_INDENT", "_NEWLINE", "_DEDENT"]
+
+    def test_negation_at_the_block_level_starts_a_new_item(self) -> None:
+        source = "def f() =\n  let a = 1\n  -a"
+        assert layout_tokens(source) == ["_INDENT", "_NEWLINE", "_DEDENT"]
+
+    def test_more_indented_field_named_as_an_operator_word_opens_a_record_body(self) -> None:
+        source = "record R\n  and: int"
+        assert layout_tokens(source) == ["_INDENT", "_DEDENT"]
+        assert ("NAME", "and") in tok(source)
+
+    def test_more_indented_name_still_opens_a_suite(self) -> None:
+        assert layout_tokens("def f() =\n  print 1") == ["_INDENT", "_DEDENT"]
+
+
+# ---------------------------------------------------------------------------
 # _NEWLINE token value (indentation width)
 # ---------------------------------------------------------------------------
 

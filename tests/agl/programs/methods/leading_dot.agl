@@ -1,0 +1,21 @@
+record Box[T]
+  value: T
+
+def Box::map[T, U](self, function: (T) -> U) -> Box[U] =
+  Box(value = function(self.value))
+
+def Box::describe[T](self, prefix: text = "value") -> text =
+  "%{prefix}=%{self.value}"
+
+program def main(mode: text) -> unit =
+  if mode == "array" =>
+    let values = [1, 2, 3, 4]
+    let mapped = values |> .map(fn(value: int) => value * 2) |> .filter(fn(value: int) => value > 3)
+    let nested = [[1, 2], [3]].map(.map(fn(value: int) => value + 1))
+    print(mapped)
+    print(nested)
+  else =>
+    let box = Box(value = 7)
+    let stringify: Box[int] -> Box[text] = .map(fn(value: int) => "n%{value}")
+    print(stringify(box).value)
+    print(box |> .describe(prefix = "box"))

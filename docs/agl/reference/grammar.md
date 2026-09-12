@@ -654,6 +654,7 @@ applied_type_qualified_constructor ::= qualifier_chain NAME "[" type_expr ("," t
                                            (* `[` is byte-adjacent to the preceding NAME *)
 
 atom           ::= INT | DECIMAL | "true" | "false" | "null"
+               | leading_dot_expr
                | "(" ")"                           (* unit literal *)
                | array_literal
                | dict_literal
@@ -685,7 +686,13 @@ raise_expr     ::= "raise" or_expr
 return_expr    ::= "return" or_expr?
 break_expr     ::= "break"
 continue_expr  ::= "continue"
+leading_dot_expr ::= "." field_name value_type_args? "(" arg_list? ")"
 ```
+
+A leading-dot invocation is a unary function whose omitted receiver type is
+inferred from a concrete function context: `.f(args)` behaves like a lambda
+that calls `self.f(args)`. It supports explicit method type arguments but
+always requires the parenthesized invocation.
 
 A bare name atom is resolved by scope and position: it may name a variable, a
 record constructor, an injected enum-member constructor, or a generic

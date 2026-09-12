@@ -694,7 +694,8 @@ juxt_var_ref: NAME -> var_ref
 // NOTE: lambda_expr is NOT here — it is a top-level expr form (see design note D).
 // ---------------------------------------------------------------------------
 
-?atom: lit_int
+?atom: leading_dot_expr
+     | lit_int
      | lit_decimal
      | lit_true
      | lit_false
@@ -710,6 +711,10 @@ juxt_var_ref: NAME -> var_ref
 
 break_expr    : "break"
 continue_expr : "continue"
+
+// A leading-dot method invocation is a unary function whose receiver is
+// supplied by its function context: `.map(f)` = `fn(self) => self.map(f)`.
+leading_dot_expr: DOT field_name type_args? LPAR arg_list? RPAR
 
 // Parenthesized expression, parenthesized block, or unit literal.
 // `()` is BOTH the unit literal and the empty argument list.

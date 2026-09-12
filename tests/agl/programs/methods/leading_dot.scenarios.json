@@ -1,0 +1,20 @@
+{
+  "scenarios": [
+    {
+      "name": "builtin_receiver_pipeline_and_nested_callback",
+      "params": {"mode": "array"},
+      "expect": {
+        "stdout": "[4, 6, 8]\n[[2, 3], [4]]\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "generic_nominal_annotation_and_named_argument",
+      "params": {"mode": "box"},
+      "expect": {
+        "stdout": "n7\nbox=7\n",
+        "calls": {}
+      }
+    }
+  ]
+}

@@ -2098,6 +2098,30 @@ class TestFieldAccessAndConstructors:
         assert isinstance(fa.obj, FieldAccess)
         assert fa.obj.field == "b"
 
+    def test_leading_dot_invocation_desugars_to_contextual_self_lambda(self) -> None:
+        section = first(parse(".map::[text](f, label = x)"))
+        assert isinstance(section, Lambda)
+        assert section.implicit_self
+        assert len(section.params) == 1
+        assert section.params[0].name == "self"
+        assert section.params[0].type_expr is None
+        assert isinstance(section.body, Call)
+        assert len(section.body.type_args) == 1
+        assert isinstance(section.body.type_args[0], TextT)
+        assert len(section.body.args) == 1
+        assert len(section.body.named_args) == 1
+        assert isinstance(section.body.callee, FieldAccess)
+        assert section.body.callee.field == "map"
+        assert isinstance(section.body.callee.obj, VarRef)
+        assert section.body.callee.obj.name == "self"
+
+    def test_leading_dot_invocation_accepts_no_method_arguments(self) -> None:
+        section = first(parse(".size()"))
+        assert isinstance(section, Lambda)
+        assert isinstance(section.body, Call)
+        assert section.body.args == ()
+        assert section.body.named_args == ()
+
     def test_constructor_bare(self) -> None:
         c = first(parse("Pass"))
         assert isinstance(c, VarRef)

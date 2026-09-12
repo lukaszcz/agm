@@ -1446,6 +1446,43 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
+    def leading_dot_expr(self, meta: Meta, args: _Args) -> syntax.Lambda:
+        """Desugar ``.method(args)`` to a unary lambda over contextual ``self``."""
+        span = self._span_from_meta(meta)
+        name_token = _find_name_token(args)
+        self_span = self._span_from_token(name_token)
+        param = syntax.Param(
+            name="self",
+            type_expr=None,
+            default=None,
+            span=self_span,
+            node_id=self._next_id(),
+        )
+        receiver = syntax.VarRef(name="self", span=self_span, node_id=self._next_id())
+        member = syntax.FieldAccess(
+            obj=receiver,
+            field=str(name_token),
+            span=span,
+            node_id=self._next_id(),
+        )
+        pos_args, named_args = self._call_args_from_children(args, span)
+        body = syntax.Call(
+            callee=member,
+            args=pos_args,
+            named_args=named_args,
+            span=span,
+            node_id=self._next_id(),
+            type_args=_find_type_args(args),
+        )
+        return syntax.Lambda(
+            params=(param,),
+            return_type=None,
+            body=body,
+            span=span,
+            node_id=self._next_id(),
+            implicit_self=True,
+        )
+
     # ------------------------------------------------------------------
     # Literals
     # ------------------------------------------------------------------
@@ -1492,22 +1529,21 @@ class AstBuilder(Transformer):
     # Postfix: call / field_access / index_access
     # ------------------------------------------------------------------
 
+    def _call_args_from_children(
+        self, args: _Args, span: SourceSpan
+    ) -> tuple[tuple[syntax.Expr, ...], tuple[syntax.NamedArg, ...]]:
+        """Finalize the optional argument list among one call-like rule's children."""
+        for arg in args:
+            if isinstance(arg, tuple) and len(arg) == 2 and isinstance(arg[0], list):
+                raw_pos, raw_named = cast(_RawArgLists, arg)
+                return self._finalize_call_args(raw_pos, raw_named, call_span=span)
+        return (), ()
+
     def call(self, meta: Meta, args: _Args) -> syntax.Call:
         """postfix LPAR arg_list? RPAR → Call node."""
         callee, type_args = _split_type_apply(cast(syntax.Expr, args[0]))
-        raw_pos_args: list[_RawPosArg] = []
-        raw_named_args: list[_RawNamed] = []
-        for a in args[1:]:
-            if isinstance(a, tuple) and len(a) == 2 and isinstance(a[0], list):
-                pa, na = cast(_RawArgLists, a)
-                raw_pos_args = pa
-                raw_named_args = na
-            # Tokens (LPAR, RPAR) and None are skipped
-
         span = self._span_from_meta(meta)
-        pos_args, named_args = self._finalize_call_args(
-            raw_pos_args, raw_named_args, call_span=span
-        )
+        pos_args, named_args = self._call_args_from_children(args[1:], span)
         return syntax.Call(
             callee=callee,
             args=pos_args,

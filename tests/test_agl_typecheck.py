@@ -6217,6 +6217,40 @@ class TestOperatorValues:
 
 
 # ---------------------------------------------------------------------------
+# Leading-dot method invocation
+# ---------------------------------------------------------------------------
+
+
+class TestLeadingDotMethodInvocation:
+    def test_receiver_type_comes_from_annotated_function_context(self) -> None:
+        checked = accept_type(
+            "let transform: (array[int]) -> array[text] = "
+            '.map::[text](fn(value: int) => "%{value}")\n'
+            "transform"
+        )
+        declaration = checked.resolved.program.body.items[0]
+        assert isinstance(declaration, LetDecl)
+        assert isinstance(declaration.value, Lambda)
+        assert checked.node_types[declaration.value.node_id] == FunctionType(
+            (ArrayType(IntType()),), ArrayType(TextType())
+        )
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            ".map(fn(value: int) => value)",
+            "let bad: (array[int], int) -> array[int] = .map(fn(value: int) => value)",
+            "def retain[A, B](callback: (A) -> B) -> unit = ()\n"
+            "retain(.map(fn(value: int) => value))",
+        ),
+        ids=("absent", "non-unary", "unresolved"),
+    )
+    def test_receiver_requires_concrete_unary_function_context(self, source: str) -> None:
+        error = reject_type(source)
+        assert "self" in str(error).lower() and "context" in str(error).lower()
+
+
+# ---------------------------------------------------------------------------
 # Field access
 # ---------------------------------------------------------------------------
 

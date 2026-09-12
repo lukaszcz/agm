@@ -501,10 +501,12 @@ class FuncDef(GenericDeclaration):
 
 @dataclass(frozen=True, slots=True)
 class Lambda:
-    """``fn(params) (-> R)? => body`` — an anonymous function expression.
+    """An anonymous function expression or desugared leading-dot invocation.
 
     ``return_type`` is ``None`` when omitted (inferred from the body).
-    Lambda parameter types are always required in AgL.
+    Source lambda parameter types are required. ``implicit_self`` marks the
+    parser-generated unary lambda for ``.method(args)``, whose receiver type
+    comes from its function context.
     """
 
     params: tuple[Param, ...]
@@ -512,6 +514,7 @@ class Lambda:
     body: Expr
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    implicit_self: bool = False
 
 
 @dataclass(frozen=True, slots=True)

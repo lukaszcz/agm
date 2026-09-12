@@ -3741,15 +3741,33 @@ class _Checker:
 
     def _check_lambda(self, node: Lambda, *, expected: Type | None) -> Type:
         validate_required_after_defaulted(node.params, self._resolved.attributes.param_zones)
+        # A leading-dot invocation is represented as a unary lambda whose
+        # generated receiver has no source annotation. Its concrete type must
+        # already be available from the surrounding function context.
+        if node.implicit_self:
+            engine = self._active_inference_engine()
+            expected = engine.zonk(expected) if expected is not None else None
+            if (
+                not isinstance(expected, FunctionType)
+                or len(expected.params) != 1
+                or contains_inference_var(expected.params[0])
+            ):
+                raise AglTypeError(
+                    "Cannot infer type of 'self' for leading-dot method invocation; "
+                    "a concrete unary function context is required.",
+                    span=node.span,
+                )
+
         # Lambda annotations may reference the rigid type variables of an
         # enclosing generic ``def`` body (the body is checked with them in scope).
         type_vars = self._current_type_vars
         param_types: list[Type] = []
-        for p in node.params:
-            # A lambda has no receiver, so scope has already rejected a bare
-            # ``self`` among its params.
-            assert p.type_expr is not None
-            pt = self._env.resolve_type_expr(p.type_expr, span=p.span, type_vars=type_vars)
+        for index, p in enumerate(node.params):
+            if p.type_expr is None:
+                assert node.implicit_self and isinstance(expected, FunctionType)
+                pt = expected.params[index]
+            else:
+                pt = self._env.resolve_type_expr(p.type_expr, span=p.span, type_vars=type_vars)
             param_types.append(pt)
             self._env.set_binding_type(p.node_id, pt)
 

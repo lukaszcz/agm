@@ -400,6 +400,30 @@ that has captured its receiver and has parameters only for the remaining
 method parameters. It can be stored, passed to another function, or partially
 applied like any other function value.
 
+A **leading-dot method invocation** omits the receiver and produces a unary
+function that accepts it:
+
+```ebnf
+leading_dot_expr ::= "." field_name value_type_args? "(" arg_list? ")"
+```
+
+`.map(f)` is equivalent to `fn(self: ContextType) => self.map(f)`, except that
+`ContextType` is inferred rather than written. The surrounding expression must
+provide a concrete unary function type; otherwise the receiver type cannot be
+inferred and the expression is rejected. Method selection still uses that
+receiver's static type, with the same visibility and ambiguity rules as an
+ordinary member call. Explicit method type arguments and named arguments are
+supported.
+
+```agl
+program def main() -> unit =
+  let numbers = [1, 2, 3]
+  let incremented = numbers |> .map(fn(value: int) => value + 1)
+  let stringify: (array[int]) -> array[text] = .map::[text](fn(value: int) => "%{value}")
+  print(incremented)
+  print(stringify(numbers))
+```
+
 ```agl
 record Meter
   value: int

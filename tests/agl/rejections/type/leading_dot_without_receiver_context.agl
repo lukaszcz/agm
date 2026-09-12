@@ -1,0 +1,3 @@
+program def main() -> unit =
+  let transform = .map(fn(value: int) => value + 1)
+  print(transform)

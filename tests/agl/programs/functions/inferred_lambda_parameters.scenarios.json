@@ -1,0 +1,24 @@
+{
+  "scenarios": [
+    {
+      "name": "map_and_fold_nonempty_array",
+      "params": {
+        "values": [1, 2, 3],
+        "offset": 1
+      },
+      "expect": {
+        "stdout": "[2, 3, 4]\n9\n9\n9\n[\"n=2\", \"n=3\", \"n=4\"]\n"
+      }
+    },
+    {
+      "name": "map_and_fold_empty_array",
+      "params": {
+        "values": [],
+        "offset": -2
+      },
+      "expect": {
+        "stdout": "[]\n0\n0\n0\n[]\n"
+      }
+    }
+  ]
+}

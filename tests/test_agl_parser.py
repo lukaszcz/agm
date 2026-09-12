@@ -1663,6 +1663,28 @@ class TestLambda:
         assert isinstance(lam, Lambda)
         assert len(lam.params) == 2
 
+    def test_lambda_bare_unary_param_may_omit_type(self) -> None:
+        lam = first(parse("fn value => value"))
+        assert isinstance(lam, Lambda)
+        assert len(lam.params) == 1
+        assert lam.params[0].name == "value"
+        assert lam.params[0].type_expr is None
+
+    @pytest.mark.parametrize(
+        ("source", "omitted"),
+        (("fn (x, y: int) => x", [True, False]), ("fn (x: int, y) => y", [False, True])),
+    )
+    def test_lambda_may_mix_annotated_and_unannotated_params(
+        self, source: str, omitted: list[bool]
+    ) -> None:
+        lam = first(parse(source))
+        assert isinstance(lam, Lambda)
+        assert [param.type_expr is None for param in lam.params] == omitted
+
+    def test_named_function_param_still_requires_type(self) -> None:
+        with pytest.raises(AglSyntaxError, match="type annotation"):
+            parse("def identity(value) = value")
+
     def test_lambda_as_call_arg(self) -> None:
         """Lambda as argument must be parenthesized."""
         src = "let r = map(fn(x: int) -> int => x, xs)"

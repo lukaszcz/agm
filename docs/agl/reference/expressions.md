@@ -971,6 +971,7 @@ An expected type propagates top-down where it helps:
 | `case` / `if` expression with outer expectation | into every branch |
 | `ask` / typed `exec` | becomes the call's target type |
 | Function call | each parameter type into the corresponding argument |
+| Lambda with omitted parameter annotations | matching function parameter types into the omissions |
 | Function body | `-> RetType` propagated in |
 
 After scope has resolved an unqualified enum-member constructor (`let r: Review = Pass`),

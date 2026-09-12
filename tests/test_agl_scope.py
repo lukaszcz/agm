@@ -2133,12 +2133,10 @@ class TestMethodReceiverClassification:
         assert resolved.method_declarations == {}
         assert _ref(resolved, "self").kind is BinderKind.param_binding
 
-    def test_unannotated_self_in_a_lambda_is_rejected(self) -> None:
-        err = reject_scope("let helper = fn(self) -> int => 1")
+    def test_unannotated_self_in_a_lambda_is_an_ordinary_parameter(self) -> None:
+        resolved = parse_and_resolve("let helper: int -> int = fn(self) -> int => self")
 
-        _, message = diag(err)
-        assert "self" in message
-        assert "lambda" in message
+        assert _ref(resolved, "self").kind is BinderKind.param_binding
 
 
 class TestLambdaScoping:

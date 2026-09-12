@@ -341,8 +341,9 @@ param_list      ::= param ("," param)* ","?
 param           ::= attributes? field_name [":" type_expr] ("=" or_expr)?
 ```
 
-A parameter annotation may be omitted only for `self` as the first parameter of
-a method; every other parameter requires an annotation.
+In a function declaration, a parameter annotation may be omitted only for
+`self` as the first parameter of a method; every other parameter requires an
+annotation. Lambda parameters have the contextual rule below.
 
 An inline `def` body after `=` is exactly one expression. It ends at the next
 block separator — a newline or `;` — which starts the next block item, so an
@@ -716,11 +717,15 @@ always runtime field access; constructor qualification uses `::`. See
 ## Lambda expressions
 
 ```ebnf
-lambda_expr ::= "fn" "(" param_list? ")" ("->" type_expr)? "=>" expr
+lambda_expr      ::= "fn" lambda_params ("->" type_expr)? "=>" expr
+lambda_params    ::= field_name | "(" param_list? ")"
 ```
 
-The return type annotation is optional; when omitted, it is inferred from
-the body. Parameter types are always required.
+A bare parameter form declares exactly one parameter; zero or multiple
+parameters use parentheses. The return type annotation is optional; when
+omitted, it is inferred from the body. A lambda parameter may omit its type
+annotation when the corresponding type is supplied by a matching expected
+function type. Annotated and unannotated parameters may be mixed.
 
 ## Calls
 

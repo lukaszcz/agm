@@ -4471,14 +4471,6 @@ class _Resolver:
         inside its own body — non-self-recursive).  Then a child scope is
         opened for the params + body.
         """
-        # An unannotated receiver is valid only in the parser-generated lambda
-        # that implements a leading-dot method invocation. Source lambdas still
-        # require every parameter type.
-        if node.params and node.params[0].type_expr is None and not node.implicit_self:
-            raise AglScopeError(
-                "'self' requires an enclosing type scope; lambdas cannot declare methods.",
-                span=node.params[0].span,
-            )
         # Defaults are resolved in the current (enclosing) scope.
         self._resolve_params_and_body(node)
 

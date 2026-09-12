@@ -138,6 +138,7 @@ class RunArgs:
     no_memory_limit: bool
     no_swap_limit: bool
     settings_file: str | None
+    pty: bool | None = None
 
 
 @dataclass(slots=True)

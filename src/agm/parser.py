@@ -478,8 +478,9 @@ _HELP_TEXTS: dict[str, str] = {
         to [devel.review]. See docs/commands/pkg.md for the manifest reference.
     """),
     "run": textwrap.dedent("""\
-        agm run [--no-sandbox] [--no-patch] [--memory LIMIT] [--swap LIMIT]
-        [--no-memory-limit] [--no-swap-limit] [-f|--file SETTINGS] COMMAND [ARGS...]
+        agm run [--no-sandbox] [--no-patch] [--pty|--no-pty]
+        [--memory LIMIT] [--swap LIMIT] [--no-memory-limit] [--no-swap-limit]
+        [-f|--file SETTINGS] COMMAND [ARGS...]
 
         Run a command inside an Anthropic Sandbox Runtime container.
 
@@ -498,6 +499,10 @@ _HELP_TEXTS: dict[str, str] = {
           -f, --file SETTINGS
                        Use this settings file directly instead of discovering
                        and combining the default sandbox settings files.
+          --pty, --no-pty
+                       Enable or disable a controlling pseudo-terminal for
+                       interactive commands. Enabled by default and only
+                       allocated when stdin and stdout are terminals.
           --memory LIMIT
                        Wrap COMMAND in a delegated systemd-run --user --scope
                        with MemoryMax=LIMIT, optional MemorySwapMax, and

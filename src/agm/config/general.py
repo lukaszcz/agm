@@ -208,6 +208,8 @@ class RunConfig:
     command_memory_limits: dict[str, str]
     default_swap_limit: str | None
     command_swap_limits: dict[str, str]
+    default_pty: bool
+    command_ptys: dict[str, bool]
 
     def alias_for(self, command_name: str) -> str | None:
         return self.aliases.get(command_name)
@@ -217,6 +219,9 @@ class RunConfig:
 
     def swap_limit_for(self, command_name: str) -> str | None:
         return self.command_swap_limits.get(command_name, self.default_swap_limit)
+
+    def pty_for(self, command_name: str) -> bool:
+        return self.command_ptys.get(command_name, self.default_pty)
 
 
 @dataclass(frozen=True)
@@ -414,12 +419,14 @@ def load_run_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> RunConfi
     aliases: dict[str, str] = {}
     command_memory_limits: dict[str, str] = {}
     command_swap_limits: dict[str, str] = {}
+    command_ptys: dict[str, bool] = {}
     default_memory = run_table.get("memory")
     default_memory_limit = (
         default_memory if isinstance(default_memory, str) and default_memory else None
     )
     default_swap = run_table.get("swap")
     default_swap_limit = default_swap if isinstance(default_swap, str) and default_swap else None
+    default_pty = _optional_bool(run_table, "pty", default=True)
     for command_name, command_config in run_table.items():
         config = toml_dict(command_config)
         alias = config.get("alias")
@@ -431,12 +438,17 @@ def load_run_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> RunConfi
         swap = config.get("swap")
         if isinstance(swap, str) and swap:
             command_swap_limits[command_name] = swap
+        pty = config.get("pty")
+        if isinstance(pty, bool):
+            command_ptys[command_name] = pty
     return RunConfig(
         aliases=aliases,
         default_memory_limit=default_memory_limit,
         command_memory_limits=command_memory_limits,
         default_swap_limit=default_swap_limit,
         command_swap_limits=command_swap_limits,
+        default_pty=default_pty,
+        command_ptys=command_ptys,
     )
 
 

@@ -1993,6 +1993,11 @@ def run(
         False, "--no-sandbox", help="Run the command directly without srt sandboxing."
     ),
     no_patch: bool = typer.Option(False, "--no-patch", help="Skip filesystem allowWrite patching."),
+    pty: bool | None = typer.Option(
+        None,
+        "--pty/--no-pty",
+        help="Allocate a controlling terminal for interactive commands.",
+    ),
     settings_file: Path | None = typer.Option(
         None,
         "-f",
@@ -2040,6 +2045,7 @@ def run(
         run_command=command,
         no_sandbox=no_sandbox,
         no_patch=no_patch,
+        pty=pty,
         memory=memory,
         swap=swap,
         no_memory_limit=no_memory_limit,

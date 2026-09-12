@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,8 @@ def _make_run_config(
     swap_limit: str | None = None,
     command_memory_limits: dict[str, str] | None = None,
     command_swap_limits: dict[str, str] | None = None,
+    pty: bool = True,
+    command_ptys: dict[str, bool] | None = None,
 ) -> RunConfig:
     """Build a :class:`RunConfig` with everything the caller did not name empty."""
 
@@ -30,6 +33,8 @@ def _make_run_config(
         command_memory_limits=command_memory_limits or {},
         default_swap_limit=swap_limit,
         command_swap_limits=command_swap_limits or {},
+        default_pty=pty,
+        command_ptys=command_ptys or {},
     )
 
 
@@ -126,6 +131,51 @@ def test_run_delegates_sandbox_execution_to_srt(
     assert 'echo $$ > "${CG}/init/cgroup.procs"' in bootstrap_script
     assert 'echo "+memory" > "${CG}/cgroup.subtree_control"' in bootstrap_script
     assert 'export SANDBOX_CGROUP="$CG"' in bootstrap_script
+
+
+@pytest.mark.parametrize(
+    ("pty_override", "interactive", "wrapped"),
+    [(None, True, True), (False, True, False), (True, False, False)],
+)
+def test_run_allocates_pty_only_for_enabled_interactive_runs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    pty_override: bool | None,
+    interactive: bool,
+    wrapped: bool,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(run_command.Path, "cwd", staticmethod(lambda: tmp_path / "work"))
+    monkeypatch.setattr(os, "environ", {"HOME": str(home), "PATH": "/bin"})
+    monkeypatch.setattr(run_command.os, "isatty", lambda _fd: interactive)
+    monkeypatch.setattr(run_command, "load_run_config", lambda **_: _make_run_config())
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        run_command.srt,
+        "run_sandboxed",
+        lambda **kwargs: captured.update(kwargs),
+    )
+
+    run_command.run(
+        RunArgs(
+            run_command=["echo", "hi"],
+            no_sandbox=False,
+            no_patch=False,
+            memory=None,
+            swap=None,
+            no_memory_limit=True,
+            no_swap_limit=True,
+            settings_file=None,
+            pty=pty_override,
+        )
+    )
+
+    expected = (
+        [sys.executable, "-m", "agm.sandbox.pty", "--", "echo", "hi"] if wrapped else ["echo", "hi"]
+    )
+    assert captured["command"] == expected
 
 
 def test_run_patches_sandbox_when_project_is_discovered(

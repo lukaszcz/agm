@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shlex
 import shutil
 import sys
@@ -140,6 +141,9 @@ def run(args: RunArgs) -> None:
     command_alias = run_config.alias_for(command_name)
     configured_memory_limit = run_config.memory_limit_for(command_name)
     configured_swap_limit = run_config.swap_limit_for(command_name)
+    configured_pty = run_config.pty_for(command_name)
+    effective_pty = configured_pty if run_args.pty is None else run_args.pty
+    allocate_pty = effective_pty and os.isatty(0) and os.isatty(1)
     if run_args.no_memory_limit:
         effective_memory_limit = None
     elif run_args.no_sandbox:
@@ -156,6 +160,14 @@ def run(args: RunArgs) -> None:
     if command_alias is not None:
         alias_parts = shlex.split(command_alias)
         effective_run_command = [*alias_parts, *effective_run_command[1:]]
+    if allocate_pty:
+        effective_run_command = [
+            sys.executable,
+            "-m",
+            "agm.sandbox.pty",
+            "--",
+            *effective_run_command,
+        ]
     process_prefix, interrupt_cleanup_cmd = _resource_limit_run_context(
         resolved_env, effective_memory_limit, effective_swap_limit
     )
@@ -166,6 +178,10 @@ def run(args: RunArgs) -> None:
         dry_run.print_detail("patch proj dir", "disabled" if run_args.no_patch else "enabled")
         dry_run.print_detail("command name", command_name)
         dry_run.print_detail("alias command", command_alias or "disabled")
+        dry_run.print_detail(
+            "pty",
+            "enabled" if allocate_pty else "disabled" if not effective_pty else "not a terminal",
+        )
         dry_run.print_detail(
             "memory limit",
             effective_memory_limit if effective_memory_limit is not None else "disabled",

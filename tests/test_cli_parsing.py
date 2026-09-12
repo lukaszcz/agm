@@ -1120,6 +1120,7 @@ class TestRun:
         assert len(calls) == 1
         assert calls[0].run_command == ["npm", "test"]
         assert calls[0].no_patch is False
+        assert calls[0].pty is None
         assert calls[0].memory is None
         assert calls[0].settings_file is None
 
@@ -1153,6 +1154,21 @@ class TestRun:
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].no_sandbox is True
+        assert calls[0].run_command == ["echo", "hi"]
+
+    @pytest.mark.parametrize(("option", "enabled"), [("--pty", True), ("--no-pty", False)])
+    def test_run_pty_option(
+        self,
+        runner: CliRunner,
+        monkeypatch: pytest.MonkeyPatch,
+        option: str,
+        enabled: bool,
+    ) -> None:
+        calls = make_recorder(monkeypatch, run_command)
+        result = invoke(runner, ["run", option, "echo", "hi"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].pty is enabled
         assert calls[0].run_command == ["echo", "hi"]
 
     def test_run_with_memory(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -15,6 +15,7 @@ from agm.packages.discipline import (
 )
 from agm.packages.manifest import ManifestError, load_manifest
 from agm.packages.model import PackageInfo
+from agm.packages.source_commands import package_with_source_commands
 
 
 def run(args: PkgCheckArgs) -> None:
@@ -22,8 +23,10 @@ def run(args: PkgCheckArgs) -> None:
 
     root = Path.cwd() if args.directory is None else Path(args.directory)
     try:
-        package = PackageInfo(root=root, manifest=load_manifest(root / "package.toml"))
+        manifest = load_manifest(root / "package.toml", commands_complete=False)
+        package = PackageInfo(root=root, manifest=manifest)
         validate_package_structure(package)
+        package = package_with_source_commands(package)
         dependencies = validate_dependencies(package, home=current_config_context().home)
         validate_package(package, dependency_packages=dependencies)
     except (DependencyError, DisciplineError, ManifestError) as exc:

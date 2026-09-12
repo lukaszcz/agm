@@ -67,7 +67,7 @@ from agm.agl.syntax.nodes import (
 from agm.agl.syntax.visitor import walk
 from agm.agl.zones import ParamZone
 
-__all__ = ["AttributeFacts", "recognize_attributes"]
+__all__ = ["AttributeFacts", "recognize_attributes", "recognize_program_command"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +146,19 @@ def _function_target(node: FuncDef) -> AttributeTarget:
     return AttributeTarget.FUNCTION
 
 
+def recognize_program_command(node: FuncDef) -> ProgramCommandSpec | None:
+    """Return the package command a ``program def`` registers, or ``None``.
+
+    Validates *node*'s attribute prefix against the catalog exactly as the
+    scope walk does — this is the one place both share, so a parse-only
+    caller (package command discovery) and the full scope pass raise the
+    same diagnostics for the same source. The caller is responsible for
+    passing a ``program def``; this function trusts that and does not check it.
+    """
+    recognized = _validate_attribute_prefix(node.attributes, AttributeTarget.PROGRAM)
+    return _program_command_spec(node, recognized)
+
+
 def recognize_attributes(
     program: Program, *, declares_receiver: Callable[[FuncDef], bool]
 ) -> AttributeFacts:
@@ -215,40 +228,11 @@ class _Recognizer:
     ) -> _Recognized:
         """Validate the whole attribute prefix of the declaration *node_id*.
 
-        Returns every attribute the declaration carries and the text argument
-        of those whose schema takes one, keyed by attribute name, so a fact
-        builder reads an already-validated argument instead of re-inspecting
-        the raw node.
-        Documentation text, admitted on every declaration kind, is filed here
-        rather than in a builder of its own.
+        Delegates to :func:`_validate_attribute_prefix` and additionally files
+        ``@doc`` text, admitted on every declaration kind, since documentation
+        has no fact builder of its own.
         """
-        nodes: dict[str, Attribute] = {}
-        texts: dict[str, str] = {}
-        for attribute in attributes:
-            spec = BUILTIN_ATTRIBUTES.get(attribute.name)
-            if spec is None:
-                raise AglScopeError(f"Unknown attribute '@{attribute.name}'.", span=attribute.span)
-            if target not in spec.targets:
-                raise AglScopeError(
-                    f"Attribute '@{attribute.name}' cannot be attached to a "
-                    f"{_TARGET_LABEL[target]}.",
-                    span=attribute.span,
-                )
-            if attribute.name in nodes:
-                raise AglScopeError(
-                    f"Attribute '@{attribute.name}' cannot be repeated.", span=attribute.span
-                )
-            for other in spec.conflicts:
-                if other in nodes:
-                    raise AglScopeError(
-                        f"Attribute '@{attribute.name}' conflicts with '@{other}'.",
-                        span=attribute.span,
-                    )
-            text = _check_arguments(attribute, spec)
-            if text is not None:
-                texts[attribute.name] = text
-            nodes[attribute.name] = attribute
-        recognized = _Recognized(nodes=nodes, texts=texts)
+        recognized = _validate_attribute_prefix(attributes, target)
         documentation = recognized.text_of(DOC_ATTRIBUTE)
         if documentation is not None:
             self.docs[node_id] = documentation
@@ -302,39 +286,10 @@ class _Recognizer:
     # ------------------------------------------------------------------
 
     def _command_registration(self, node: FuncDef, recognized: _Recognized) -> None:
-        """Record the package command one ``program def`` registers itself as.
-
-        Only a program carrying ``@command`` registers anything, so the prose
-        attributes — which describe a registration rather than a program — are
-        rejected without it rather than silently dropped. The path is held to
-        the rule a package manifest's command paths answer to, since both
-        register into the same command tree; whether the path reaches a CLI at
-        all is a package fact, so a program outside a package is simply never
-        asked for its registration.
-        """
-        command = recognized.nodes.get(COMMAND_ATTRIBUTE)
-        if command is None:
-            for name in COMMAND_PROSE_ATTRIBUTES:
-                attribute = recognized.nodes.get(name)
-                if attribute is not None:
-                    raise AglScopeError(
-                        f"Attribute '@{name}' describes a command registration, so program "
-                        f"{node.name!r} needs a '@{COMMAND_ATTRIBUTE}' attribute beside it.",
-                        span=attribute.span,
-                    )
-            return
-        path = recognized.texts[COMMAND_ATTRIBUTE]
-        invalid = invalid_program_command_path(path)
-        if invalid is not None:
-            raise AglScopeError(
-                f"Command path {path!r} {invalid}.",
-                span=command.span,
-            )
-        self.command_registrations[node.node_id] = ProgramCommandSpec(
-            path=path,
-            description=recognized.text_of(DESCRIPTION_ATTRIBUTE),
-            help=recognized.text_of(HELP_ATTRIBUTE),
-        )
+        """Record the package command one ``program def`` registers itself as."""
+        spec = _program_command_spec(node, recognized)
+        if spec is not None:
+            self.command_registrations[node.node_id] = spec
 
     # ------------------------------------------------------------------
     # Fact builder: parameter zones
@@ -422,6 +377,81 @@ class _Recognizer:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _validate_attribute_prefix(
+    attributes: tuple[Attribute, ...], target: AttributeTarget
+) -> _Recognized:
+    """Validate one declaration's whole attribute prefix against the catalog.
+
+    Checks that each attribute is known, admits *target*, is not repeated,
+    conflicts with nothing else present, and carries an argument matching its
+    schema. This is the one place both the full scope walk (:meth:`_Recognizer._check`)
+    and a parse-only caller (:func:`recognize_program_command`) validate an
+    attribute prefix, so both raise the same diagnostics for the same source.
+    """
+    nodes: dict[str, Attribute] = {}
+    texts: dict[str, str] = {}
+    for attribute in attributes:
+        spec = BUILTIN_ATTRIBUTES.get(attribute.name)
+        if spec is None:
+            raise AglScopeError(f"Unknown attribute '@{attribute.name}'.", span=attribute.span)
+        if target not in spec.targets:
+            raise AglScopeError(
+                f"Attribute '@{attribute.name}' cannot be attached to a {_TARGET_LABEL[target]}.",
+                span=attribute.span,
+            )
+        if attribute.name in nodes:
+            raise AglScopeError(
+                f"Attribute '@{attribute.name}' cannot be repeated.", span=attribute.span
+            )
+        for other in spec.conflicts:
+            if other in nodes:
+                raise AglScopeError(
+                    f"Attribute '@{attribute.name}' conflicts with '@{other}'.",
+                    span=attribute.span,
+                )
+        text = _check_arguments(attribute, spec)
+        if text is not None:
+            texts[attribute.name] = text
+        nodes[attribute.name] = attribute
+    return _Recognized(nodes=nodes, texts=texts)
+
+
+def _program_command_spec(node: FuncDef, recognized: _Recognized) -> ProgramCommandSpec | None:
+    """Return the package command *node* registers via its attribute prefix, or ``None``.
+
+    Only a program carrying ``@command`` registers anything, so the prose
+    attributes — which describe a registration rather than a program — are
+    rejected without it rather than silently dropped. The path is held to
+    the rule a package manifest's command paths answer to, since both
+    register into the same command tree; whether the path reaches a CLI at
+    all is a package fact, so a program outside a package is simply never
+    asked for its registration.
+    """
+    command = recognized.nodes.get(COMMAND_ATTRIBUTE)
+    if command is None:
+        for name in COMMAND_PROSE_ATTRIBUTES:
+            attribute = recognized.nodes.get(name)
+            if attribute is not None:
+                raise AglScopeError(
+                    f"Attribute '@{name}' describes a command registration, so program "
+                    f"{node.name!r} needs a '@{COMMAND_ATTRIBUTE}' attribute beside it.",
+                    span=attribute.span,
+                )
+        return None
+    path = recognized.texts[COMMAND_ATTRIBUTE]
+    invalid = invalid_program_command_path(path)
+    if invalid is not None:
+        raise AglScopeError(
+            f"Command path {path!r} {invalid}.",
+            span=command.span,
+        )
+    return ProgramCommandSpec(
+        path=path,
+        description=recognized.text_of(DESCRIPTION_ATTRIBUTE),
+        help=recognized.text_of(HELP_ATTRIBUTE),
+    )
 
 
 def _check_arguments(attribute: Attribute, spec: AttributeSpec) -> str | None:

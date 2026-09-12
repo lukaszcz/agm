@@ -400,15 +400,24 @@ def _uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None =
 
 
 def _validated_directory_package(source: Path) -> PackageInfo:
-    """Load and validate one package source directory."""
+    """Load and validate one package source directory.
+
+    The returned manifest's commands already include the package's own
+    source-declared registrations (:mod:`agm.packages.source_commands`), so
+    every caller downstream — staging, hashing, activation — reads one
+    complete command table.
+    """
     from agm.packages.discipline import validate_package_structure
+    from agm.packages.source_commands import package_with_source_commands
 
     if source.is_symlink():
         raise PackageInstallError(f"cannot install symbolic-link package root {source}")
     root = source.resolve()
     try:
-        package = PackageInfo(root, load_manifest(root / "package.toml"))
+        manifest = load_manifest(root / "package.toml", commands_complete=False)
+        package = PackageInfo(root, manifest)
         validate_package_structure(package)
+        package = package_with_source_commands(package)
     except (ManifestError, DisciplineError) as exc:
         raise PackageInstallError(f"cannot install package from {source}: {exc}") from exc
     return package

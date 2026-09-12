@@ -31,11 +31,18 @@ class RegisteredCommandResolution:
 
 
 def load_command_index(*, home: Path, proj_dir: Path | None, cwd: Path) -> ActivationIndex:
-    """Load the command index for the project-selected packages."""
+    """Load the command index for the project-selected packages.
+
+    Dispatch is a read of activation state: an editable package's source
+    failing discovery falls back to its manifest's own commands rather than
+    breaking every ``agm`` command.
+    """
 
     from agm.packages import activation
 
-    return activation.effective_command_index(home=home, proj_dir=proj_dir, cwd=cwd)
+    return activation.effective_command_index(
+        home=home, proj_dir=proj_dir, cwd=cwd, fallback_to_manifest_commands=True
+    )
 
 
 def set_dry_run(ctx: object, param: object, value: bool) -> None:

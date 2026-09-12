@@ -98,8 +98,9 @@ program def main() -> unit =
   print("review loop")
 ```
 
-Declaring one command path twice — in a manifest `[commands]` entry and on a
-program — is an error; each path has one declaration.
+Declaring one command path in both places — a manifest `[commands]` entry and a
+program's `@command` — is an error whenever the two declarations differ; each
+path has one declaration.
 
 A registered command runs its program exactly as a directly executed program
 does: the selected `program def`'s own value parameters become flags, and
@@ -107,9 +108,11 @@ configuration is read by qualified key. Its parameters carry the same
 [presentation attributes](attributes.md#program-parameter-attributes) as any
 other program's, so the flags, one-letter spellings, environment fallbacks, and
 `@doc` prose a program declares are what its registered command presents. A
-manifest may also supply a short command description and additional `help` prose;
-these appear alongside the program's own `@doc`. Command groups and aliases are
-defined in the [package manifest](../../commands/pkg.md#commands).
+command the manifest registers takes its description and `help` prose from that
+entry, and a program's own registration takes them from `@description` and
+`@help`; either appears alongside the program's `@doc`. Command groups and
+aliases are defined in the [package manifest](../../commands/pkg.md#commands),
+and either may name a command a program registers.
 
 ## Program parameters and configuration keys
 

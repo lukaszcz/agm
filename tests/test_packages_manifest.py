@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -9,10 +10,13 @@ import semver
 
 from agm.agl.keywords import KEYWORDS
 from agm.packages.manifest import (
+    CommandSpec,
     ManifestError,
     distribution_manifest,
+    expanded_commands,
     load_manifest,
     load_manifest_text,
+    validate_command_set,
 )
 
 FIXTURES = Path(__file__).parent / "agl" / "packages"
@@ -433,3 +437,84 @@ program = "review_tools/main::review"
     ) -> None:
         with pytest.raises(ManifestError):
             load_manifest(_write_manifest(tmp_path, manifest))
+
+    _LONELY_GROUP = (
+        '[package]\nname = "review_tools"\nversion = "1.2.3"\n\n'
+        '[commands.devel]\ndescription = "Development workflows"\n'
+    )
+    _ALIAS_TO_UNKNOWN = (
+        '[package]\nname = "review_tools"\nversion = "1.2.3"\n\n[aliases]\nrev = "devel review"\n'
+    )
+
+    def test_a_complete_manifest_with_a_lonely_group_is_still_rejected_at_load(
+        self, tmp_path: Path
+    ) -> None:
+        with pytest.raises(ManifestError, match="devel"):
+            load_manifest(_write_manifest(tmp_path, self._LONELY_GROUP))
+
+    def test_a_complete_manifest_with_an_alias_to_nothing_is_still_rejected_at_load(
+        self, tmp_path: Path
+    ) -> None:
+        with pytest.raises(ManifestError, match="rev"):
+            load_manifest(_write_manifest(tmp_path, self._ALIAS_TO_UNKNOWN))
+
+    def test_commands_complete_false_defers_the_lonely_group_check(self, tmp_path: Path) -> None:
+        manifest = load_manifest(
+            _write_manifest(tmp_path, self._LONELY_GROUP), commands_complete=False
+        )
+
+        assert manifest.commands["devel"].program is None
+        with pytest.raises(ManifestError, match="devel"):
+            validate_command_set(manifest)
+
+    def test_commands_complete_false_defers_the_unknown_alias_target_check(
+        self, tmp_path: Path
+    ) -> None:
+        manifest = load_manifest(
+            _write_manifest(tmp_path, self._ALIAS_TO_UNKNOWN), commands_complete=False
+        )
+
+        assert manifest.aliases["rev"] == "devel review"
+        with pytest.raises(ManifestError, match="rev"):
+            validate_command_set(manifest)
+
+    def test_a_deferred_manifest_passes_once_a_descendant_is_merged_in(
+        self, tmp_path: Path
+    ) -> None:
+        manifest = load_manifest(
+            _write_manifest(tmp_path, self._LONELY_GROUP), commands_complete=False
+        )
+
+        merged = replace(
+            manifest,
+            commands={
+                **manifest.commands,
+                "devel review": CommandSpec(program="review_tools/main::review"),
+            },
+        )
+
+        validate_command_set(merged)
+
+    def test_a_deferred_alias_resolves_once_its_target_is_merged_in(self, tmp_path: Path) -> None:
+        manifest = load_manifest(
+            _write_manifest(tmp_path, self._ALIAS_TO_UNKNOWN), commands_complete=False
+        )
+
+        merged = replace(
+            manifest,
+            commands={"devel review": CommandSpec(program="review_tools/main::review")},
+        )
+
+        validate_command_set(merged)
+        assert expanded_commands(merged)["rev"].program == "review_tools/main::review"
+
+    def test_commands_complete_false_still_validates_alias_path_syntax_at_load(
+        self, tmp_path: Path
+    ) -> None:
+        manifest = (
+            '[package]\nname = "review_tools"\nversion = "1.2.3"\n\n'
+            '[aliases]\n"bad  path" = "devel review"\n'
+        )
+
+        with pytest.raises(ManifestError):
+            load_manifest(_write_manifest(tmp_path, manifest), commands_complete=False)

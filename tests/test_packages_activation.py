@@ -25,13 +25,14 @@ from agm.packages.activation import (
     merge_package_commands,
     package_provenance_path,
     rebuild_activation_index,
+    resolve_active_package,
     select_active_packages,
     select_package_roots,
     write_activation_index,
     write_package_provenance,
 )
 from agm.packages.layout import MODULE_TREE_DIRNAME
-from agm.packages.manifest import load_manifest
+from agm.packages.manifest import CommandSpec, load_manifest
 from agm.packages.model import PackageInfo
 from agm.packages.record import write_record
 from agm.version import AGM_VERSION
@@ -290,7 +291,7 @@ def test_effective_command_index_reuses_a_preresolved_index(tmp_path: Path) -> N
 def test_effective_command_index_uses_live_editable_manifest_commands(tmp_path: Path) -> None:
     home = tmp_path / "agm-home"
     root = tmp_path / "editable"
-    (root / "alpha").mkdir(parents=True)
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
     (root / "package.toml").write_text(
         '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
         '[commands]\nlaunch = { program = "alpha/main::current" }\n',
@@ -320,7 +321,7 @@ def test_effective_command_index_rejects_a_live_editable_command_conflict_withou
     )
     write_record(alpha)
     bravo = tmp_path / "editable"
-    (bravo / "bravo").mkdir(parents=True)
+    (bravo / MODULE_TREE_DIRNAME).mkdir(parents=True)
     (bravo / "package.toml").write_text(
         '[package]\nname = "bravo"\nversion = "1.0.0"\n\n'
         '[commands]\ninspect = { program = "bravo/main::main" }\n',
@@ -372,7 +373,7 @@ def test_effective_command_index_uses_pinned_version_provenance_without_losing_a
         write_record(root)
     if active_kind == "editable":
         bravo = tmp_path / "editable"
-        (bravo / "bravo").mkdir(parents=True)
+        (bravo / MODULE_TREE_DIRNAME).mkdir(parents=True)
         (bravo / "package.toml").write_text(
             '[package]\nname = "bravo"\nversion = "1.0.0"\n\n'
             '[commands]\nlaunch = { program = "bravo/main::main" }\n',
@@ -1299,7 +1300,7 @@ def test_editable_package_resolves_to_its_live_root(tmp_path: Path) -> None:
 def test_editable_package_uses_its_live_manifest_for_requirement_checks(tmp_path: Path) -> None:
     home = tmp_path / "agm-home"
     editable = tmp_path / "editable"
-    (editable / "alpha").mkdir(parents=True)
+    (editable / MODULE_TREE_DIRNAME).mkdir(parents=True)
     (editable / "package.toml").write_text(
         '[package]\nname = "alpha"\nversion = "2.0.0"\n\n[dependencies]\nbravo = "1.0"\n',
         encoding="utf-8",
@@ -1320,6 +1321,146 @@ def test_editable_package_uses_its_live_manifest_for_requirement_checks(tmp_path
     packages = select_active_packages(home=home, proj_dir=None, cwd=tmp_path, env=env)
 
     assert tuple(package.root for package in packages) == (editable.resolve(), bravo.resolve())
+
+
+def test_editable_package_resolves_its_own_source_declared_commands(tmp_path: Path) -> None:
+    home = tmp_path / "agm-home"
+    editable = tmp_path / "editable"
+    (editable / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (editable / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    (editable / MODULE_TREE_DIRNAME / "review.agl").write_text(
+        '@command("alpha review")\nprogram def main() -> unit = ()\n', encoding="utf-8"
+    )
+    env = {"AGM_HOME": str(home)}
+    write_activation_index(
+        ActivationIndex({"alpha": ActivePackage(semver.Version.parse("1.0.0"), editable=editable)}),
+        home=home,
+        env=env,
+    )
+
+    (package,) = select_active_packages(home=home, proj_dir=None, cwd=tmp_path, env=env)
+
+    assert "alpha review" in package.manifest.commands
+
+
+def test_editable_package_source_command_conflict_falls_back_to_manifest_commands(
+    tmp_path: Path,
+) -> None:
+    """Discovery is best-effort *for a read*: a conflicting source registration is dropped
+    rather than failing, leaving the manifest's own declared commands in force."""
+    home = tmp_path / "agm-home"
+    editable = tmp_path / "editable"
+    (editable / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (editable / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+        '[commands]\nreview = { program = "alpha/other::main" }\n',
+        encoding="utf-8",
+    )
+    (editable / MODULE_TREE_DIRNAME / "other.agl").write_text(
+        "program def main() -> unit = ()\n", encoding="utf-8"
+    )
+    (editable / MODULE_TREE_DIRNAME / "review.agl").write_text(
+        '@command("review")\nprogram def main() -> unit = ()\n', encoding="utf-8"
+    )
+    env = {"AGM_HOME": str(home)}
+    write_activation_index(
+        ActivationIndex({"alpha": ActivePackage(semver.Version.parse("1.0.0"), editable=editable)}),
+        home=home,
+        env=env,
+    )
+
+    (package,) = select_active_packages(
+        home=home, proj_dir=None, cwd=tmp_path, env=env, fallback_to_manifest_commands=True
+    )
+
+    assert package.manifest.commands == {"review": CommandSpec("alpha/other::main")}
+
+
+def test_editable_package_with_an_unparsable_module_falls_back_to_manifest_commands(
+    tmp_path: Path,
+) -> None:
+    """A half-written module is an editable package's normal transient state, so a read of
+    activation state must not fail because one module cannot be parsed."""
+    home = tmp_path / "agm-home"
+    editable = tmp_path / "editable"
+    (editable / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (editable / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+        '[commands]\nlaunch = { program = "alpha/main::main" }\n',
+        encoding="utf-8",
+    )
+    (editable / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "program def main() -> unit = ()\n", encoding="utf-8"
+    )
+    (editable / MODULE_TREE_DIRNAME / "review.agl").write_text(
+        '@command("review")\nprogram def main() -> unit = ()\n', encoding="utf-8"
+    )
+    (editable / MODULE_TREE_DIRNAME / "broken.agl").write_text(
+        "program def main( -> unit = ()\n", encoding="utf-8"
+    )
+    env = {"AGM_HOME": str(home)}
+    write_activation_index(
+        ActivationIndex({"alpha": ActivePackage(semver.Version.parse("1.0.0"), editable=editable)}),
+        home=home,
+        env=env,
+    )
+
+    (package,) = select_active_packages(
+        home=home, proj_dir=None, cwd=tmp_path, env=env, fallback_to_manifest_commands=True
+    )
+
+    assert package.manifest.commands == {"launch": CommandSpec("alpha/main::main")}
+
+
+def test_resolve_active_package_strict_default_rejects_broken_editable_source(
+    tmp_path: Path,
+) -> None:
+    """Mutating activation must see the true command set: with the strict default, a module
+    that fails discovery raises rather than silently falling back to the manifest."""
+    editable = tmp_path / "editable"
+    (editable / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (editable / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+        '[commands]\nlaunch = { program = "alpha/main::main" }\n',
+        encoding="utf-8",
+    )
+    (editable / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "program def main() -> unit = ()\n", encoding="utf-8"
+    )
+    (editable / MODULE_TREE_DIRNAME / "broken.agl").write_text(
+        "program def main( -> unit = ()\n", encoding="utf-8"
+    )
+    active = ActivePackage(semver.Version.parse("1.0.0"), editable=editable)
+
+    with pytest.raises(PackageActivationError, match="alpha"):
+        resolve_active_package("alpha", active, home=tmp_path / "agm-home", env={})
+
+
+def test_resolve_active_package_tolerant_flag_returns_manifest_commands(tmp_path: Path) -> None:
+    """The same broken-source input succeeds and keeps the manifest's own commands when the
+    caller opts into the read-path fallback."""
+    editable = tmp_path / "editable"
+    (editable / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (editable / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+        '[commands]\nlaunch = { program = "alpha/main::main" }\n',
+        encoding="utf-8",
+    )
+    (editable / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "program def main() -> unit = ()\n", encoding="utf-8"
+    )
+    (editable / MODULE_TREE_DIRNAME / "broken.agl").write_text(
+        "program def main( -> unit = ()\n", encoding="utf-8"
+    )
+    active = ActivePackage(semver.Version.parse("1.0.0"), editable=editable)
+
+    package = resolve_active_package(
+        "alpha", active, home=tmp_path / "agm-home", env={}, fallback_to_manifest_commands=True
+    )
+
+    assert package.manifest.commands == {"launch": CommandSpec("alpha/main::main")}
 
 
 def test_requirements_must_name_an_active_package(tmp_path: Path) -> None:

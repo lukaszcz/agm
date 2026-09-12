@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import re
 import shutil
 import zipfile
@@ -31,7 +32,7 @@ from agm.packages.activation import (
     rebuild_activation_index,
     write_activation_index,
 )
-from agm.packages.archive import write_archive
+from agm.packages.archive import extract_archive, write_archive
 from agm.packages.install import (
     PackageInstallError,
     install_archive,
@@ -43,11 +44,18 @@ from agm.packages.install import (
     uninstall_package,
 )
 from agm.packages.layout import MODULE_TREE_DIRNAME
-from agm.packages.manifest import PackageManifest
+from agm.packages.manifest import CommandSpec, PackageManifest, expanded_commands
 from agm.packages.model import PackageInfo
-from agm.packages.record import content_hash, read_record, verify_record, write_record
+from agm.packages.record import (
+    RecordEntry,
+    content_hash,
+    read_record,
+    serialize_record,
+    verify_record,
+    write_record,
+)
 from agm.version import AGM_VERSION
-from tests._package_helpers import older_incompatible_std_requirement
+from tests._package_helpers import archive_contents, older_incompatible_std_requirement, write_zip
 
 
 @pytest.fixture(autouse=True)
@@ -512,6 +520,79 @@ def test_install_copies_package_writes_record_and_activates_it(tmp_path: Path) -
     assert verify_record(installed.root)
     active = load_activation_index(home=home, env={}).packages["alpha"]
     assert active.version == installed.manifest.version
+
+
+def test_install_accepts_a_manifest_group_satisfied_only_by_a_program_registered_descendant(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "package"
+    root.mkdir()
+    (root / MODULE_TREE_DIRNAME).mkdir()
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
+        '[commands.devel]\ndescription = "Development workflows"\n',
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        '@command("devel review")\nprogram def review() -> unit = ()\n', encoding="utf-8"
+    )
+
+    installed = install_directory(root, home=tmp_path / "home", env={})
+
+    assert installed.manifest.commands["devel"].program is None
+    assert installed.manifest.commands["devel review"].program == "tools/main::review"
+
+
+def test_install_accepts_an_alias_targeting_a_program_registered_command(tmp_path: Path) -> None:
+    root = tmp_path / "package"
+    root.mkdir()
+    (root / MODULE_TREE_DIRNAME).mkdir()
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
+        '[commands.devel]\ndescription = "Development workflows"\n\n'
+        '[aliases]\nrev = "devel review"\n',
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        '@command("devel review")\nprogram def review() -> unit = ()\n', encoding="utf-8"
+    )
+
+    installed = install_directory(root, home=tmp_path / "home", env={})
+
+    assert expanded_commands(installed.manifest)["rev"].program == "tools/main::review"
+
+
+def test_install_rejects_a_genuinely_empty_command_group(tmp_path: Path) -> None:
+    root = tmp_path / "package"
+    root.mkdir()
+    (root / MODULE_TREE_DIRNAME).mkdir()
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
+        '[commands.devel]\ndescription = "Development workflows"\n',
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "program def main() -> unit = ()\n", encoding="utf-8"
+    )
+
+    with pytest.raises(PackageInstallError, match="devel"):
+        install_directory(root, home=tmp_path / "home", env={})
+
+
+def test_install_rejects_an_alias_naming_nothing(tmp_path: Path) -> None:
+    root = tmp_path / "package"
+    root.mkdir()
+    (root / MODULE_TREE_DIRNAME).mkdir()
+    (root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n\n[aliases]\nrev = "devel review"\n',
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "program def main() -> unit = ()\n", encoding="utf-8"
+    )
+
+    with pytest.raises(PackageInstallError, match="rev"):
+        install_directory(root, home=tmp_path / "home", env={})
 
 
 def test_install_keeps_provenance_separate_from_colliding_version_names(tmp_path: Path) -> None:
@@ -987,6 +1068,122 @@ def test_install_merges_commands_and_unregisters_them_on_uninstall(
     uninstall_package("alpha", home=home, env={})
 
     assert load_activation_index(home=home, env={}).commands == {}
+
+
+def test_install_bakes_a_source_declared_command_into_the_store_manifest(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    (source / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (source / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    (source / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        '@command("launch")\n@description("Launch alpha")\nprogram def main() -> unit = ()\n',
+        encoding="utf-8",
+    )
+    home = tmp_path / "home"
+
+    installed = install_directory(source, home=home, env={})
+
+    assert installed.manifest.commands == {
+        "launch": CommandSpec(program="alpha/main::main", description="Launch alpha")
+    }
+    index = load_activation_index(home=home, env={})
+    assert index.commands == {
+        "launch": CommandRegistration("alpha", "alpha/main::main", "Launch alpha")
+    }
+
+    uninstall_package("alpha", home=home, env={})
+
+    assert load_activation_index(home=home, env={}).commands == {}
+
+
+def test_editable_install_rejects_an_alias_colliding_with_a_source_declared_command(
+    tmp_path: Path,
+) -> None:
+    """A merged manifest is validated like any other, so a baked-in alias conflict is
+    reported here rather than shipping a package that can never be installed."""
+    source = tmp_path / "source"
+    (source / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (source / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+        '[commands]\nbuild = { program = "alpha/b::main" }\n\n'
+        '[aliases]\nshipit = "build"\n',
+        encoding="utf-8",
+    )
+    (source / MODULE_TREE_DIRNAME / "b.agl").write_text(
+        "program def main() -> unit = ()\n", encoding="utf-8"
+    )
+    (source / MODULE_TREE_DIRNAME / "ship.agl").write_text(
+        '@command("shipit")\nprogram def main() -> unit = ()\n', encoding="utf-8"
+    )
+
+    with pytest.raises(PackageInstallError, match="shipit"):
+        install_directory(source, home=tmp_path / "home", env={}, editable=True)
+
+
+def test_archive_round_trip_reinstall_keeps_the_baked_command_registration(
+    tmp_path: Path,
+) -> None:
+    """Extracting a baked archive and reinstalling it must not re-conflict with its own
+    source: the extracted manifest already records exactly what the source declares."""
+    source = tmp_path / "source"
+    (source / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (source / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    (source / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        '@command("launch")\nprogram def main() -> unit = ()\n', encoding="utf-8"
+    )
+    archive = tmp_path / "alpha.agmpkg"
+    write_archive(source, archive)
+    extracted = tmp_path / "extracted"
+    extracted.mkdir()
+    extract_archive(archive, extracted)
+
+    from_source = install_directory(source, home=tmp_path / "source-home", env={})
+    from_extracted = install_directory(extracted, home=tmp_path / "extracted-home", env={})
+
+    assert from_extracted.manifest.commands == from_source.manifest.commands
+    assert _stored_content_hash(from_extracted.root) == _stored_content_hash(from_source.root)
+
+
+def test_reinstalling_a_store_tree_keeps_the_baked_command_registration(tmp_path: Path) -> None:
+    """Installing an already-installed store tree as a source must not re-conflict with
+    its own module tree either."""
+    source = tmp_path / "source"
+    (source / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (source / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    (source / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        '@command("launch")\nprogram def main() -> unit = ()\n', encoding="utf-8"
+    )
+    installed = install_directory(source, home=tmp_path / "home", env={})
+
+    reinstalled = install_directory(installed.root, home=tmp_path / "other-home", env={})
+
+    assert reinstalled.manifest.commands == installed.manifest.commands
+    assert _stored_content_hash(reinstalled.root) == _stored_content_hash(installed.root)
+
+
+def test_installing_a_source_declared_command_package_twice_keeps_one_content_hash(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    (source / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (source / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    (source / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        '@command("launch")\nprogram def main() -> unit = ()\n', encoding="utf-8"
+    )
+
+    first = install_directory(source, home=tmp_path / "first-home", env={})
+    second = install_directory(source, home=tmp_path / "second-home", env={})
+
+    assert _stored_content_hash(first.root) == _stored_content_hash(second.root)
 
 
 @pytest.mark.parametrize("command_path", ("exec launch", "wsp launch"))
@@ -2306,14 +2503,30 @@ def test_dry_run_archive_install_rejects_an_archive_changed_during_validation(
         install_archive(archive, home=tmp_path / "home", env={})
 
 
+def _rewrite_archive(archive: Path, prefix: str, contents: dict[str, bytes]) -> None:
+    """Replace *archive*'s content, rebuilding its ``RECORD`` to match."""
+    entries = tuple(
+        RecordEntry(name.removeprefix(prefix), hashlib.sha256(value).hexdigest())
+        for name, value in sorted(contents.items())
+        if name != prefix + "RECORD"
+    )
+    contents[prefix + "RECORD"] = serialize_record(entries).encode()
+    write_zip(archive, list(contents.items()))
+
+
 def test_dry_run_archive_install_rejects_a_missing_module_tree_without_writing(
     tmp_path: Path,
 ) -> None:
+    # A well-formed source tree produces the archive: an archive whose own
+    # module tree is missing can no longer be built directly, since command
+    # discovery must walk that tree, so the defect is grafted on afterward.
     source = _package(tmp_path / "source", "alpha", "1.0.0")
-    (source / MODULE_TREE_DIRNAME / "main.agl").unlink()
-    (source / MODULE_TREE_DIRNAME).rmdir()
     archive = tmp_path / "alpha.agmpkg"
     write_archive(source, archive)
+    prefix = "alpha-1.0.0/"
+    contents = archive_contents(archive)
+    del contents[prefix + f"{MODULE_TREE_DIRNAME}/main.agl"]
+    _rewrite_archive(archive, prefix, contents)
     dry_run.set_enabled(True)
 
     with pytest.raises(PackageInstallError, match="module tree"):
@@ -2326,11 +2539,14 @@ def test_dry_run_archive_install_rejects_an_invalid_module_path_without_writing(
     tmp_path: Path,
 ) -> None:
     source = _package(tmp_path / "source", "alpha", "1.0.0")
-    (source / MODULE_TREE_DIRNAME / "1invalid.agl").write_text(
-        "program def invalid() -> unit = ()\n", encoding="utf-8"
-    )
     archive = tmp_path / "alpha.agmpkg"
     write_archive(source, archive)
+    prefix = "alpha-1.0.0/"
+    contents = archive_contents(archive)
+    contents[prefix + f"{MODULE_TREE_DIRNAME}/1invalid.agl"] = contents.pop(
+        prefix + f"{MODULE_TREE_DIRNAME}/main.agl"
+    )
+    _rewrite_archive(archive, prefix, contents)
     dry_run.set_enabled(True)
 
     with pytest.raises(PackageInstallError, match="invalid module path"):

@@ -79,31 +79,74 @@ def expanded_commands(manifest: PackageManifest) -> dict[str, CommandSpec]:
 
     Alias targets always name the package's own canonical tree. This keeps
     expansion finite and independent of declaration or activation order.
+    Assumes *manifest* already satisfies :func:`validate_command_set` — every
+    complete manifest does by the time it is loaded or merged, so this only
+    builds the expansion rather than re-checking it.
     """
     commands = dict(manifest.commands)
     if not manifest.aliases:
         return commands
-    canonical_paths = set(commands)
-    for path in commands:
-        words = path.split()
-        canonical_paths.update(" ".join(words[:length]) for length in range(1, len(words)))
     for alias, target in manifest.aliases.items():
-        invalid = invalid_command_path(alias)
-        if invalid is not None:
-            raise ManifestError(f"alias path {alias!r} {invalid}")
-        if target not in canonical_paths:
-            raise ManifestError(f"alias {alias!r} names unknown canonical command {target!r}")
         additions = {alias: manifest.commands.get(target, CommandSpec())}
         additions.update(
             (alias + path[len(target) :], spec)
             for path, spec in manifest.commands.items()
             if path.startswith(target + " ")
         )
-        for path, spec in additions.items():
-            if path in canonical_paths or path in commands:
-                raise ManifestError(f"alias {alias!r} conflicts with command {path!r}")
-            commands[path] = spec
+        commands.update(additions)
     return commands
+
+
+def validate_command_set(manifest: PackageManifest) -> None:
+    """Validate the cross-entry invariants of a finished manifest's command set.
+
+    A command group requiring subcommands, and an alias naming a known,
+    non-colliding canonical command, can only be checked once every
+    ``@command`` program a package's own source declares has merged into the
+    manifest's command table — a manifest's ``[commands]``/``[aliases]``
+    tables are otherwise validated per-entry at load time, before those
+    registrations are known. A complete manifest (a store tree's, an
+    archive's) validates this as part of :func:`load_manifest`; a source
+    tree loaded with ``commands_complete=False`` must call this once its
+    programs' commands are merged in — see
+    :func:`agm.packages.source_commands.package_with_source_commands`.
+    """
+    commands = manifest.commands
+    for path, spec in commands.items():
+        if spec.program is None and not any(child.startswith(path + " ") for child in commands):
+            raise ManifestError(f"command group {path!r} requires subcommands")
+    if not manifest.aliases:
+        return
+    canonical_paths = _canonical_paths(commands)
+    added: set[str] = set()
+    for alias, target in manifest.aliases.items():
+        if target not in canonical_paths:
+            raise ManifestError(f"alias {alias!r} names unknown canonical command {target!r}")
+        additions = {
+            alias,
+            *(alias + path[len(target) :] for path in commands if path.startswith(target + " ")),
+        }
+        for path in additions:
+            if path in canonical_paths or path in added:
+                raise ManifestError(f"alias {alias!r} conflicts with command {path!r}")
+            added.add(path)
+
+
+def _canonical_paths(commands: dict[str, CommandSpec]) -> set[str]:
+    """Return every command path plus each of its ancestor group prefixes."""
+    canonical_paths = set(commands)
+    for path in commands:
+        words = path.split()
+        canonical_paths.update(" ".join(words[:length]) for length in range(1, len(words)))
+    return canonical_paths
+
+
+def _validate_alias_syntax(aliases: dict[str, str]) -> None:
+    """Validate each alias's own path syntax, independent of the command table."""
+    for alias in aliases:
+        invalid = invalid_command_path(alias)
+        if invalid is not None:
+            raise ManifestError(f"alias path {alias!r} {invalid}")
 
 
 def distribution_manifest(manifest: PackageManifest) -> PackageManifest:
@@ -119,27 +162,40 @@ def distribution_manifest(manifest: PackageManifest) -> PackageManifest:
     return replace(manifest, dependencies=dependencies)
 
 
-def load_manifest(path: Path) -> PackageManifest:
-    """Load and validate the ``package.toml`` at *path*."""
+def load_manifest(path: Path, *, commands_complete: bool = True) -> PackageManifest:
+    """Load and validate the ``package.toml`` at *path*.
+
+    ``commands_complete=False`` defers :func:`validate_command_set`'s
+    cross-entry invariants for a source-tree caller whose package may
+    register further commands through ``@command`` programs that have not
+    been merged into the manifest yet; the caller must run that validation
+    itself once they have (see
+    :func:`agm.packages.source_commands.package_with_source_commands`). A
+    manifest that is already complete — a store tree's, an archive's — must
+    load with the default so a corrupt one is still caught here.
+    """
 
     try:
         raw = load_toml_file(path)
     except (OSError, TOMLKitError, UnicodeDecodeError) as exc:
         raise ManifestError(f"cannot load package manifest {path}: {exc}") from exc
-    return _parse_manifest(raw)
+    return _parse_manifest(raw, commands_complete=commands_complete)
 
 
-def load_manifest_text(content: str) -> PackageManifest:
-    """Parse and validate package-manifest text without reading a filesystem path."""
+def load_manifest_text(content: str, *, commands_complete: bool = True) -> PackageManifest:
+    """Parse and validate package-manifest text without reading a filesystem path.
+
+    See :func:`load_manifest` for ``commands_complete``.
+    """
 
     try:
         raw = toml_dict(tomlkit.load(StringIO(content)).unwrap())
     except TOMLKitError as exc:
         raise ManifestError(f"cannot parse package manifest: {exc}") from exc
-    return _parse_manifest(raw)
+    return _parse_manifest(raw, commands_complete=commands_complete)
 
 
-def _parse_manifest(raw: TomlDict) -> PackageManifest:
+def _parse_manifest(raw: TomlDict, *, commands_complete: bool = True) -> PackageManifest:
     _only_keys(raw, {"package", "dependencies", "commands", "aliases"}, "manifest")
     package = _required_table(raw, "package")
     _only_keys(
@@ -149,6 +205,8 @@ def _parse_manifest(raw: TomlDict) -> PackageManifest:
     )
     name = validate_package_name(_required_str(package, "name", "package"))
     aliases = _optional_table(raw, "aliases")
+    alias_map = {path: _required_str(aliases, path, "aliases") for path in aliases}
+    _validate_alias_syntax(alias_map)
     manifest = PackageManifest(
         name=name,
         version=_version(_required_str(package, "version", "package"), "package version"),
@@ -159,9 +217,10 @@ def _parse_manifest(raw: TomlDict) -> PackageManifest:
         keywords=_optional_str_list(package, "keywords", "package"),
         dependencies=_dependencies(_optional_table(raw, "dependencies")),
         commands=_commands(_optional_table(raw, "commands")),
-        aliases={path: _required_str(aliases, path, "aliases") for path in aliases},
+        aliases=alias_map,
     )
-    expanded_commands(manifest)
+    if commands_complete:
+        validate_command_set(manifest)
     return manifest
 
 
@@ -242,9 +301,6 @@ def parse_sha256(value: str) -> str | None:
 def _commands(raw: TomlDict) -> dict[str, CommandSpec]:
     commands: dict[str, CommandSpec] = {}
     _collect_commands(raw, prefix="", commands=commands)
-    for path, spec in commands.items():
-        if spec.program is None and not any(child.startswith(path + " ") for child in commands):
-            raise ManifestError(f"command group {path!r} requires subcommands")
     return commands
 
 

@@ -11,10 +11,14 @@ Public API
 - :class:`BuiltinKind` — enum classifying contextual built-in Call nodes.
 - :class:`AglScopeError` — fatal scope error (span-aware ``AglError``
   subclass).
+- :func:`recognize_program_command` — parse-only recognition of the package
+  command one ``program def`` registers, for callers that scan source
+  without a full resolve (package command discovery).
 """
 
 from __future__ import annotations
 
+from agm.agl.scope.attributes import recognize_program_command
 from agm.agl.scope.program import ResolvedModule, ResolvedProgram, resolve_program
 from agm.agl.scope.symbols import (
     AglScopeError,
@@ -32,5 +36,6 @@ __all__ = [
     "ResolvedModule",
     "ResolvedProgram",
     "ScopeNode",
+    "recognize_program_command",
     "resolve_program",
 ]

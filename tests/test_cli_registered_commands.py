@@ -22,6 +22,8 @@ from agm.packages.activation import (
     PackageActivationError,
     write_activation_index,
 )
+from agm.packages.install import install_directory
+from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.manifest import CommandSpec, PackageManifest
 from agm.packages.model import PackageInfo
 from agm.packages.record import write_record
@@ -969,6 +971,265 @@ def test_exec_runs_an_installed_reference(monkeypatch: pytest.MonkeyPatch, tmp_p
 
     assert result.exit_code == 0
     assert result.stdout == "set\n"
+
+
+def test_installed_package_dispatches_its_own_source_declared_command(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A non-editable install bakes ``@command`` registrations into the store manifest."""
+    source = tmp_path / "source"
+    (source / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (source / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    (source / MODULE_TREE_DIRNAME / "review.agl").write_text(
+        '@command("tools review")\n'
+        '@description("Review changes")\n'
+        "program def main(level: text) -> unit = print level\n",
+        encoding="utf-8",
+    )
+    home = tmp_path / "home"
+
+    install_directory(source, home=home, env={})
+    monkeypatch.setenv("HOME", str(home))
+
+    result = invoke(CliRunner(), ["tools", "review", "--level", "set"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "set\n"
+
+
+def test_editable_package_dispatches_its_own_source_declared_command(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An editable install rescans the live source, so its own ``@command`` dispatches."""
+    source = tmp_path / "source"
+    (source / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (source / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    (source / MODULE_TREE_DIRNAME / "review.agl").write_text(
+        '@command("tools review")\n'
+        '@description("Review changes")\n'
+        "program def main(level: text) -> unit = print level\n",
+        encoding="utf-8",
+    )
+    home = tmp_path / "home"
+
+    install_directory(source, home=home, env={}, editable=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    result = invoke(CliRunner(), ["tools", "review", "--level", "set"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "set\n"
+
+
+def test_editing_an_editable_packages_source_command_path_takes_effect_without_reinstalling(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Editable dispatch re-derives from the live source, so an edited ``@command`` path
+    changes the dispatchable command set on the next invocation without reinstalling."""
+    source = tmp_path / "source"
+    (source / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (source / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    module = source / MODULE_TREE_DIRNAME / "review.agl"
+    module.write_text(
+        '@command("tools review")\nprogram def main(level: text) -> unit = print level\n',
+        encoding="utf-8",
+    )
+    home = tmp_path / "home"
+
+    install_directory(source, home=home, env={}, editable=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    before = invoke(CliRunner(), ["tools", "review", "--level", "set"])
+    assert before.exit_code == 0
+
+    module.write_text(
+        '@command("tools inspect")\nprogram def main(level: text) -> unit = print level\n',
+        encoding="utf-8",
+    )
+
+    after_old_path = invoke(CliRunner(), ["tools", "review", "--level", "set"])
+    after_new_path = invoke(CliRunner(), ["tools", "inspect", "--level", "set"])
+
+    assert after_old_path.exit_code != 0
+    assert after_new_path.exit_code == 0
+    assert after_new_path.stdout == "set\n"
+
+
+def test_a_non_editable_install_does_not_pick_up_a_source_edit_made_after_installation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A non-editable install bakes the manifest at install time, so it never rescans the
+    original source directory again."""
+    source = tmp_path / "source"
+    (source / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (source / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    (source / MODULE_TREE_DIRNAME / "review.agl").write_text(
+        "program def main(level: text) -> unit = print level\n", encoding="utf-8"
+    )
+    home = tmp_path / "home"
+
+    install_directory(source, home=home, env={})
+    monkeypatch.setenv("HOME", str(home))
+
+    (source / MODULE_TREE_DIRNAME / "review.agl").write_text(
+        '@command("tools review")\nprogram def main(level: text) -> unit = print level\n',
+        encoding="utf-8",
+    )
+
+    result = invoke(CliRunner(), ["tools", "review", "--level", "set"])
+
+    assert result.exit_code != 0
+
+
+def test_conflicting_install_is_rejected_while_an_editable_packages_unrelated_module_is_broken(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Install-time conflict gating must see the true command set: a transient source
+    discovery failure in an unrelated module of an editable package must not let a
+    colliding install through and wedge the package CLI."""
+    pa_source = tmp_path / "pa"
+    (pa_source / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (pa_source / "package.toml").write_text(
+        '[package]\nname = "pa"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    (pa_source / MODULE_TREE_DIRNAME / "zap.agl").write_text(
+        '@command("zap")\nprogram def main() -> unit = print "pa-zap"\n', encoding="utf-8"
+    )
+    home = tmp_path / "home"
+
+    install_directory(pa_source, home=home, env={}, editable=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    (pa_source / MODULE_TREE_DIRNAME / "broken.agl").write_text(
+        "program def main( -> unit = ()\n", encoding="utf-8"
+    )
+
+    pb_source = tmp_path / "pb"
+    (pb_source / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (pb_source / "package.toml").write_text(
+        '[package]\nname = "pb"\nversion = "1.0.0"\n\n'
+        '[commands]\nzap = { program = "pb/main::main" }\n',
+        encoding="utf-8",
+    )
+    (pb_source / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        'program def main() -> unit = print "pb-zap"\n', encoding="utf-8"
+    )
+
+    result = invoke(CliRunner(), ["pkg", "install", str(pb_source)])
+
+    assert result.exit_code != 0
+
+    listing = invoke(CliRunner(), ["pkg", "list"])
+    assert listing.exit_code == 0
+    assert "pb" not in listing.output
+
+    (pa_source / MODULE_TREE_DIRNAME / "broken.agl").unlink()
+
+    dispatched = invoke(CliRunner(), ["zap"])
+    assert dispatched.exit_code == 0
+    assert dispatched.stdout == "pa-zap\n"
+
+
+def test_pkg_list_survives_an_unparsable_module_in_an_editable_package(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A syntax error in one module is an editable package's normal, transient state while
+    it is being edited; that must never make an unrelated built-in command fail."""
+    source = tmp_path / "source"
+    (source / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (source / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    (source / MODULE_TREE_DIRNAME / "review.agl").write_text(
+        '@command("tools review")\nprogram def main() -> unit = ()\n', encoding="utf-8"
+    )
+    home = tmp_path / "home"
+
+    install_directory(source, home=home, env={}, editable=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    (source / MODULE_TREE_DIRNAME / "broken.agl").write_text(
+        "program def main( -> unit = ()\n", encoding="utf-8"
+    )
+
+    result = invoke(CliRunner(), ["pkg", "list"])
+
+    assert result.exit_code == 0
+    assert "tools" in result.output
+
+
+def test_dispatch_and_unrelated_commands_survive_a_broken_module_in_an_editable_package(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The tolerance is for reads only, but it must actually cover every read: a broken,
+    unrelated module in one editable package must not stop another package's registered
+    command from dispatching, nor a built-in command that never touches that package."""
+    tools_source = tmp_path / "tools"
+    (tools_source / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (tools_source / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    (tools_source / MODULE_TREE_DIRNAME / "review.agl").write_text(
+        '@command("tools review")\nprogram def main() -> unit = ()\n', encoding="utf-8"
+    )
+    helper_source = tmp_path / "helper"
+    (helper_source / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (helper_source / "package.toml").write_text(
+        '[package]\nname = "helper"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    (helper_source / MODULE_TREE_DIRNAME / "run.agl").write_text(
+        '@command("helper run")\nprogram def main() -> unit = print "ran"\n', encoding="utf-8"
+    )
+    home = tmp_path / "home"
+
+    install_directory(tools_source, home=home, env={}, editable=True)
+    install_directory(helper_source, home=home, env={}, editable=False)
+    monkeypatch.setenv("HOME", str(home))
+
+    (tools_source / MODULE_TREE_DIRNAME / "broken.agl").write_text(
+        "program def main( -> unit = ()\n", encoding="utf-8"
+    )
+
+    dispatched = invoke(CliRunner(), ["helper", "run"])
+    assert dispatched.exit_code == 0
+    assert dispatched.stdout == "ran\n"
+
+    # A built-in command that resolves only a single, non-editable package
+    # never reaches source discovery, so it is unaffected either way.
+    info = invoke(CliRunner(), ["pkg", "info", "helper"])
+    assert info.exit_code == 0
+    assert "helper" in info.output
+
+
+def test_pkg_check_still_reports_an_unparsable_module_in_an_editable_package(
+    tmp_path: Path,
+) -> None:
+    """Validation stays exactly as strict as it was: ``pkg check`` is where source discipline
+    is enforced, so it must still fail loudly on the module activation now tolerates."""
+    source = tmp_path / "source"
+    (source / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (source / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    (source / MODULE_TREE_DIRNAME / "review.agl").write_text(
+        '@command("tools review")\nprogram def main() -> unit = ()\n', encoding="utf-8"
+    )
+    (source / MODULE_TREE_DIRNAME / "broken.agl").write_text(
+        "program def main( -> unit = ()\n", encoding="utf-8"
+    )
+
+    result = invoke(CliRunner(), ["pkg", "check", str(source)])
+
+    assert result.exit_code != 0
+    assert "broken.agl" in result.output
 
 
 def test_exec_help_for_an_installed_reference_includes_program_arguments(

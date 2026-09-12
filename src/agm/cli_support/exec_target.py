@@ -80,6 +80,10 @@ def resolve_installed_reference(
     its cached package name so a stale registration is reported against the
     package it was cached against rather than whatever the reference happens
     to name.
+
+    This is a read of activation state, not a mutation, so an editable
+    package's source failing discovery falls back to its manifest's own
+    commands rather than failing resolution.
     """
     module_path, separator, declaration_path = reference.partition("::")
     if not separator or not declaration_path:
@@ -89,7 +93,9 @@ def resolve_installed_reference(
     except ValueError as exc:
         return ExecTargetError(f"invalid installed program reference {reference!r}: {exc}")
     try:
-        packages = select_active_packages(home=home, proj_dir=proj_dir, cwd=cwd)
+        packages = select_active_packages(
+            home=home, proj_dir=proj_dir, cwd=cwd, fallback_to_manifest_commands=True
+        )
     except ValueError as exc:
         return ExecTargetError(f"cannot resolve active packages: {exc}")
     name = module_id.segments[0] if package_name is None else package_name

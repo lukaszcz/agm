@@ -66,7 +66,7 @@ def validate_package_structure(package: PackageInfo) -> dict[ModuleId, Path]:
 
     validate_unreserved_package_name(package.manifest.name)
     _validate_command_paths(package.manifest)
-    return _module_files(package)
+    return package_module_files(package)
 
 
 def _resolve_package_modules(
@@ -257,7 +257,8 @@ def validate_unreserved_package_name(name: str) -> None:
         raise DisciplineError(f"package name {name!r} is reserved by AGM")
 
 
-def _module_files(package: PackageInfo) -> dict[ModuleId, Path]:
+def package_module_files(package: PackageInfo) -> dict[ModuleId, Path]:
+    """Return every ``.agl`` file under *package*'s module tree, keyed by module id."""
     module_root = package.module_root
     if not module_root.is_relative_to(package.root):
         raise DisciplineError(

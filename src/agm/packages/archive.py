@@ -141,8 +141,9 @@ def validate_archive_source(
     root = _package_root(package_root)
     _reject_source_links(root)
     manifest, _, contents = _archive_distribution(root)
-    # Import lazily so ordinary archive creation stays independent of the AgL
-    # parser; callers that request package creation explicitly need discipline.
+    # Imported lazily so agm.packages.archive stays importable without the AgL
+    # parser for manifest/metadata reads that never call _archive_distribution;
+    # validating an archive's discipline needs it here.
     from agm.packages.discipline import DisciplineError, validate_archive_package
 
     try:
@@ -596,11 +597,27 @@ def _validate_destination(root: Path, destination: Path) -> None:
 
 
 def _archive_distribution(root: Path) -> tuple[PackageManifest, str, dict[str, bytes]]:
-    """Build the manifest and selected content set for a portable archive."""
+    """Build the manifest and selected content set for a portable archive.
+
+    The manifest's commands already include the package's own source-declared
+    registrations, so an archive carries the same complete command table an
+    installed store package does.
+    """
     try:
-        source_manifest = load_manifest(root / MANIFEST_NAME)
+        source_manifest = load_manifest(root / MANIFEST_NAME, commands_complete=False)
     except ManifestError as exc:
         raise ArchiveError(f"cannot load package manifest from {root}: {exc}") from exc
+    # Imported lazily so agm.packages.archive stays importable without the AgL
+    # parser for operations that never call _archive_distribution; building an
+    # archive's distribution always needs it to bake in source-declared commands.
+    from agm.packages.discipline import DisciplineError
+    from agm.packages.model import PackageInfo
+    from agm.packages.source_commands import package_with_source_commands
+
+    try:
+        source_manifest = package_with_source_commands(PackageInfo(root, source_manifest)).manifest
+    except DisciplineError as exc:
+        raise ArchiveError(f"package at {root} violates discipline: {exc}") from exc
     manifest = distribution_manifest(source_manifest)
     prefix = _entry_prefix(manifest)
     _archive_path(prefix + MANIFEST_NAME)

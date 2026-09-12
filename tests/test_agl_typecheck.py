@@ -130,6 +130,7 @@ from agm.agl.typecheck import (
 )
 from agm.agl.typecheck.builder import _TypeBuilder
 from agm.agl.typecheck.env import (
+    CheckedModuleImage,
     ConstructorSignature,
     GenericAliasDef,
     GenericTypeDef,
@@ -188,7 +189,7 @@ def share_retained_checked_modules() -> Iterator[None]:
         resolved: ResolvedProgram,
         capabilities: HostCapabilities,
         entry_seed_env: TypeEnvironment | None = None,
-        cached_checked_modules: Mapping[ModuleId, CheckedModule] | None = None,
+        cached_checked_modules: Mapping[ModuleId, CheckedModule | CheckedModuleImage] | None = None,
     ) -> CheckedProgram:
         key = _capability_key(capabilities)
         checked = real_check_program(

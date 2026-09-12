@@ -7,11 +7,29 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl import artifact_cache
+from agm.agl import artifact_cache, artifact_storage
+from agm.agl.capabilities import HostCapabilities
+from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.loader import build_repl_graph
+from agm.agl.modules.parsed_module_cache import clear_parsed_module_cache
 from agm.agl.pipeline import PipelineDriver
 from agm.agl.runtime.codec import TextCodec
-from tests._agl_helpers import agl_roots, run_inline_command
-from tests.agl.ir_harness import make_file_graph_from_files
+from agm.agl.scope.program import ResolvedProgram, resolve_program
+from agm.agl.syntax.nodes import static_function_items, static_type_items
+from agm.agl.typecheck.env import (
+    CheckedModule,
+    CheckedModuleImage,
+    EnvironmentFacts,
+    TypeEnvironment,
+)
+from agm.agl.typecheck.program import _prepare_program, check_program
+from tests._agl_helpers import agl_roots, parse_inline_command, run_inline_command
+from tests.agl.ir_harness import (
+    base_caps,
+    make_file_graph_from_files,
+    make_inline_graph_from_files,
+    write_module_file,
+)
 
 
 @pytest.mark.parametrize(
@@ -125,6 +143,305 @@ def test_non_entry_cycle_member_is_retained_against_the_entry_source(tmp_path: P
         helper_id,
     )
     assert graph.entry_id not in retained
+
+
+def _persisted_checked_entry_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario: str, imports: tuple[str, ...]
+) -> int:
+    """Compile a library importing *imports* stdlib modules and size its ``checked`` entry."""
+    root = tmp_path / scenario / "root"
+    root.mkdir(parents=True)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / scenario / "cache"))
+    library_source = "".join(f"import std/{name}::*\n" for name in imports) + (
+        'def greet() -> text = "hi"\n'
+    )
+    write_module_file(root, "library", library_source)
+    clear_parsed_module_cache()
+    artifact_cache.clear_retained_artifacts()
+    program, next_node_id, _wrapped = parse_inline_command("import library::*\ngreet()")
+    graph, _next_id, _new_modules = build_repl_graph(
+        program,
+        next_node_id,
+        path=None,
+        cached={},
+        roots=agl_roots(root, include_stdlib=True),
+        default_stdlib=False,
+        source_text="import library::*\ngreet()",
+    )
+    caps = base_caps()
+    resolved = resolve_program(graph)
+    check_program(resolved, caps)
+    library_id = next(mid for mid in graph.modules if mid.path_str() == "library")
+    retainable = artifact_cache.retained_module_sources(graph)
+    key = artifact_cache._disk_key(
+        retainable[library_id], (artifact_cache.capability_signature(caps),)
+    )
+    path, _identity = artifact_storage.artifact_entry(key, "checked")
+    return path.stat().st_size
+
+
+def test_a_persisted_checked_entry_stays_small_regardless_of_import_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The disk artifact holds only a module's own facts, not the program's type environment.
+
+    Before rehydration, a persisted ``checked`` entry embedded a copy of the
+    whole-program type environment, so its size scaled with everything the
+    module could see -- not with what it declares. ``assert one < budget`` is
+    the assertion with real teeth: importing even one stdlib module used to
+    pull that module's whole-program environment onto disk, well past this
+    budget. The other two assertions only tighten the bound: importing twelve
+    stdlib modules must not cost dramatically more to persist than one.
+    """
+    twelve_modules = (
+        "text",
+        "array",
+        "dict",
+        "math",
+        "option",
+        "pair",
+        "either",
+        "result",
+        "time",
+        "random",
+        "json",
+        "toml",
+    )
+    one = _persisted_checked_entry_size(tmp_path, monkeypatch, "one", ("text",))
+    twelve = _persisted_checked_entry_size(tmp_path, monkeypatch, "twelve", twelve_modules)
+
+    # This fixture is a single-member dependency group (one library, one
+    # entry importing it): a multi-member group's shared entry can legitimately
+    # persist larger, since all members' facts share one disk entry.
+    budget = 32 * 1024
+    assert one < budget
+    assert twelve < budget
+    assert twelve < one * 4
+
+
+def test_rehydration_onto_a_cached_preparation_matches_a_cache_free_compile(
+    tmp_path: Path,
+) -> None:
+    """Rehydrating onto an environment prepared with ``cached_checked_modules`` still
+    reproduces every declaration query the spec enumerates for a checked module.
+
+    ``cached_checked_modules`` short-circuits per-module body checking for the
+    library, so its own preparation (the method-header registration loop) must
+    read the unannotated method's and function's inferred signature -- recorded
+    only via candidate inference, never journaled -- identically whether the
+    library is a live object or a disk-served image. This reproduces a real
+    regression where that loop read ``.resolved`` off the image and crashed
+    with an ``AttributeError``, because a ``CheckedModuleImage`` carries no
+    ``resolved``. Beyond function signatures and binding types, this also
+    checks the whole-module queries (own-facts journal, closed interface,
+    named-type/template resolution, enum forms, generic types) that a
+    body-check-skipping preparation could equally leave stale.
+    """
+    graph = make_inline_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import lib::*\nincrement(Box(value = 1).double())",
+            "lib": (
+                "record Box(value: int)\n"
+                "def Box::double(self) = self.value * 2\n"
+                "def increment(x: int) = x + 1\n"
+                "def triple(x: int) = x * 3\n"
+                "record Pair[A, B](first: A, second: B)\n"
+                "enum Shape\n"
+                "  | circle(radius: int)\n"
+                "  | square(side: int)\n"
+            ),
+        },
+        default_stdlib=False,
+    )
+    caps = base_caps()
+    resolved = resolve_program(graph)
+    checked = check_program(resolved, caps)
+    lib_id = next(mid for mid in resolved.modules if mid.path_str() == "lib")
+    cm = checked.modules[lib_id]
+    image = cm.image()
+
+    prepared = _prepare_program(resolved, caps, cached_checked_modules={lib_id: image})
+    rehydrated = image.rehydrate(resolved.modules[lib_id], prepared.module_envs[lib_id])
+
+    for item in static_function_items(cm.resolved.program.body.items):
+        assert rehydrated.type_env.get_function_signature_by_node_id(
+            item.node_id
+        ) == cm.type_env.get_function_signature_by_node_id(item.node_id)
+        for param in item.params:
+            assert rehydrated.type_env.get_binding_type(
+                param.node_id
+            ) == cm.type_env.get_binding_type(param.node_id)
+
+    # own_facts / interface: whole-environment summaries a stale header loop
+    # could leave desynchronized from the image they were meant to reproduce.
+    assert rehydrated.type_env.own_facts() == image.environment_facts
+    assert rehydrated.interface == image.interface
+
+    for item in static_type_items(cm.resolved.program.body.items):
+        scope_path = tuple(segment.name for segment in item.scope_path)
+        with rehydrated.type_env.type_scope(scope_path):
+            re_named = rehydrated.type_env.resolve_named_type(item.name)
+        with cm.type_env.type_scope(scope_path):
+            cm_named = cm.type_env.resolve_named_type(item.name)
+        assert re_named == cm_named
+        assert rehydrated.type_env.source_type_template_qname(
+            lib_id, item.name, scope_path=scope_path
+        ) == cm.type_env.source_type_template_qname(lib_id, item.name, scope_path=scope_path)
+
+    # enum forms / generic types: registries populated by the same header loop.
+    assert rehydrated.type_env.enum_owner_forms() == cm.type_env.enum_owner_forms()
+    assert rehydrated.type_env.all_generic_types() == cm.type_env.all_generic_types()
+
+
+def test_a_corrupted_binding_replay_fails_a_rehydrated_module_via_env_assert_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``TypeEnvironment.assert_closed()`` catches a broken-journal binding leak.
+
+    A rehydrated module is never added to ``check_program``'s
+    ``reused_modules``, so ``assert_checked_module_closed`` validates it like a
+    freshly checked one -- specifically, the ``module.type_env.assert_closed()``
+    half of that check, since ``set_binding_type`` mutates the type
+    environment, not any of the ``CheckedModule`` fields
+    ``assert_checked_output_closed`` inspects. Corrupting
+    ``TypeEnvironment.replay`` to leak a stray inference variable simulates a
+    broken own-facts journal and must make this assertion fire on the next
+    compilation that rehydrates the disk-served image (see the sibling test
+    below for the ``assert_checked_output_closed`` half, which this corruption
+    does not exercise).
+    """
+    from agm.agl.semantics.types import InferenceVarType
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    library_source = "def value() -> int = 1\n"
+
+    def _resolved() -> ResolvedProgram:
+        clear_parsed_module_cache()
+        graph = make_inline_graph_from_files(
+            tmp_path,
+            {"entry": "import lib::*\nvalue()", "lib": library_source},
+            default_stdlib=False,
+        )
+        return resolve_program(graph)
+
+    caps = base_caps()
+    artifact_cache.clear_retained_artifacts()
+    check_program(_resolved(), caps)  # populates the disk-backed "checked" entry
+
+    artifact_cache.clear_retained_artifacts()  # drop memory only; disk persists
+
+    original_replay = TypeEnvironment.replay
+
+    def broken_replay(self: TypeEnvironment, facts: EnvironmentFacts) -> None:
+        original_replay(self, facts)
+        self.set_binding_type(node_id=-1, typ=InferenceVarType())
+
+    monkeypatch.setattr(TypeEnvironment, "replay", broken_replay)
+
+    with pytest.raises(AssertionError):
+        check_program(_resolved(), caps)
+
+
+def test_a_corrupted_node_types_entry_fails_a_rehydrated_module_via_output_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``assert_checked_output_closed`` catches a corrupted ``node_types`` entry.
+
+    ``node_types`` lives on ``CheckedModuleImage``/``CheckedModule`` directly,
+    outside the type environment ``TypeEnvironment.assert_closed()`` walks --
+    the sibling test above corrupts a binding instead, which that other check
+    alone catches. Wrapping ``retained_checked_modules`` to inject a stray
+    inference variable into a served image's ``node_types`` proves the two
+    checks ``_assert_checked_module_closed`` runs cover disjoint data: this
+    corruption is invisible to ``env.assert_closed()`` and is caught only by
+    ``assert_checked_output_closed``.
+    """
+    from agm.agl.semantics.types import InferenceVarType
+    from agm.agl.typecheck import program as program_module
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    library_source = "def value() -> int = 1\n"
+
+    def _resolved() -> ResolvedProgram:
+        clear_parsed_module_cache()
+        graph = make_inline_graph_from_files(
+            tmp_path,
+            {"entry": "import lib::*\nvalue()", "lib": library_source},
+            default_stdlib=False,
+        )
+        return resolve_program(graph)
+
+    caps = base_caps()
+    artifact_cache.clear_retained_artifacts()
+    check_program(_resolved(), caps)  # populates the disk-backed "checked" entry
+
+    artifact_cache.clear_retained_artifacts()  # drop memory only; disk persists
+
+    original = program_module.retained_checked_modules
+
+    def corrupted(
+        retainable: artifact_cache.RetainedSources, capabilities: HostCapabilities
+    ) -> dict[ModuleId, CheckedModule | CheckedModuleImage]:
+        served = original(retainable, capabilities)
+        return {
+            mid: (
+                replace(module, node_types={**module.node_types, -1: InferenceVarType()})
+                if isinstance(module, CheckedModuleImage)
+                else module
+            )
+            for mid, module in served.items()
+        }
+
+    monkeypatch.setattr(program_module, "retained_checked_modules", corrupted)
+
+    with pytest.raises(AssertionError):
+        check_program(_resolved(), caps)
+
+
+def test_an_in_memory_reused_module_skips_closure_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A module reused verbatim from memory is trusted, not re-validated.
+
+    It is the very object an earlier ``check_program`` call already sealed and
+    validated; re-walking it on every subsequent compilation that imports it
+    would be pure waste. Only a rehydrated or freshly checked module reaches
+    ``_assert_checked_module_closed``.
+    """
+    calls: list[ModuleId] = []
+    from agm.agl.typecheck import program as program_module
+
+    original = program_module._assert_checked_module_closed
+
+    def spied_assert_checked_module_closed(module: CheckedModule) -> None:
+        calls.append(module.module_id)
+        original(module)
+
+    monkeypatch.setattr(
+        program_module, "_assert_checked_module_closed", spied_assert_checked_module_closed
+    )
+
+    graph = make_inline_graph_from_files(
+        tmp_path,
+        {"entry": "import lib::*\nvalue()", "lib": "def value() -> int = 1\n"},
+        default_stdlib=False,
+    )
+    caps = base_caps()
+    resolved = resolve_program(graph)
+    checked = check_program(resolved, caps)
+    lib_id = next(mid for mid in resolved.modules if mid.path_str() == "lib")
+    assert lib_id in calls
+    calls.clear()
+
+    # Same `resolved` object, same in-memory `CheckedModule`: the identity gate
+    # in `check_program`'s reuse filter accepts it without rechecking its body.
+    second = check_program(resolved, caps)
+
+    assert lib_id not in calls
+    # Trusted, not just present: reuse must be the identical object, not a
+    # coincidentally-equal recheck that skipped validation for some other reason.
+    assert second.modules[lib_id] is checked.modules[lib_id]
 
 
 def test_the_image_is_bounded_and_evicts_the_least_recently_used() -> None:

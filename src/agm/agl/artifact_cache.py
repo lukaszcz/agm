@@ -4,7 +4,7 @@ Resolution, checking, and match compilation retain each module alongside its
 transitive import/export dependencies. Memory hits
 require identical loaded sources; disk hits validate source-derived identities
 and the compiler version. Modules sharing a dependency closure share a persisted
-stage image. Restored stages anchor their provenance to the current compilation.
+stage artifact. Restored stages anchor their provenance to the current compilation.
 
 Checked modules publish closed type and function interfaces for importers.
 Capabilities distinguish checked artifacts and IR; the lowerer adds its resource
@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import threading
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
 
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from agm.agl.matchcompile import CachedModuleSites
     from agm.agl.modules.loader import LoadedModule, ModuleGraph
     from agm.agl.scope.program import ResolvedModule
-    from agm.agl.typecheck.env import CheckedModule
+    from agm.agl.typecheck.env import CheckedModule, CheckedModuleImage
 
 # One entry per module per distinct set of sources a process compiles against.
 # A standard library is a few dozen modules and a project rarely many more, so
@@ -66,7 +66,14 @@ class _Entry[V]:
 
 
 class _ArtifactStore[V]:
-    """A bounded, least-recently-used store of one pass's artifacts."""
+    """A bounded, least-recently-used store of one pass's artifacts.
+
+    A store's memory form and its disk form need not coincide: the ``expected``
+    type :func:`_served` validates a restored payload against, and the
+    ``disk_form`` :func:`_retain` writes, are the two halves of one contract
+    each owning function states together (see :func:`retained_checked_modules`
+    and :func:`retain_checked_modules`, whose disk form is a data-only image).
+    """
 
     def __init__(self, *, capacity: int = _CAPACITY, kind: str = "") -> None:
         self.kind = kind
@@ -105,11 +112,15 @@ def _same_sources(retained: Sources, current: Sources) -> bool:
 
 
 # What one compilation's retainable modules were derived from, computed once by
-# the pass that both consults and refreshes the image.
+# the pass that both consults and refreshes the retained artifacts.
 RetainedSources = Mapping["ModuleId", Sources]
 
+
 _RESOLVED: _ArtifactStore["ResolvedModule"] = _ArtifactStore(kind="scope")
-_CHECKED: _ArtifactStore["CheckedModule"] = _ArtifactStore(kind="checked")
+# Holds full CheckedModule objects for in-process reuse; a disk-served entry
+# is a data-only CheckedModuleImage until check_program rehydrates and retains
+# the full object (see retained_checked_modules / retain_checked_modules).
+_CHECKED: _ArtifactStore["CheckedModule | CheckedModuleImage"] = _ArtifactStore(kind="checked")
 _SITES: _ArtifactStore["CachedModuleSites"] = _ArtifactStore(kind="matches")
 
 
@@ -133,8 +144,8 @@ def retained_module_sources(graph: ModuleGraph) -> dict[ModuleId, Sources]:
     through the graph's dependency edges, whose exports decide what its imports
     name.
 
-    A pass derives this once and uses it twice -- to look the image up, and to
-    refresh it with what the pass produced.
+    A pass derives this once and uses it twice -- to look up what is
+    retained, and to refresh it with what the pass produced.
     """
     sources: dict[ModuleId, Sources] = {}
     for module_id, loaded in graph.modules.items():
@@ -182,16 +193,31 @@ def retain_resolved_modules(
 
 def retained_checked_modules(
     retainable: RetainedSources, capabilities: HostCapabilities
-) -> dict[ModuleId, CheckedModule]:
-    """Return the checked modules retained for these sources."""
-    from agm.agl.typecheck.env import CheckedModule
+) -> dict[ModuleId, CheckedModule | CheckedModuleImage]:
+    """Return the checked modules retained for these sources.
 
-    served = _served(_CHECKED, retainable, (capability_signature(capabilities),), CheckedModule)
+    A module is a full ``CheckedModule`` iff some compilation in this process
+    checked it, or rehydrated and retained it; it is a data-only
+    ``CheckedModuleImage`` while it has only ever come off disk in this
+    process (every ``entry_seed_env``/REPL compilation skips retention, so an
+    image can outlive many compilations). ``check_program`` rehydrates an
+    image onto the environment its own preparation phases build.
+    """
+    from agm.agl.typecheck.env import CheckedModule, CheckedModuleImage
+
+    signature = capability_signature(capabilities)
+    # Disk holds only images; a full object in `served` came from memory.
+    served = _served(_CHECKED, retainable, (signature,), CheckedModuleImage)
     for mid, module in served.items():
+        # An image has no `resolved` to refresh: it is not yet a CheckedModule,
+        # and rehydration always attaches the current compilation's resolved
+        # module directly (see CheckedModuleImage.rehydrate).
+        if not isinstance(module, CheckedModule):
+            continue
         resolved = _RESOLVED.get((mid,), retainable[mid])
         if resolved is not None and module.resolved is not resolved.resolved:
             served[mid] = replace(module, resolved=resolved.resolved)
-            _CHECKED.put((mid, capability_signature(capabilities)), retainable[mid], served[mid])
+            _CHECKED.put((mid, signature), retainable[mid], served[mid])
     return served
 
 
@@ -200,8 +226,24 @@ def retain_checked_modules(
     capabilities: HostCapabilities,
     modules: Mapping[ModuleId, CheckedModule],
 ) -> None:
-    """Retain a compilation's checked modules for the next one."""
-    _retain(_CHECKED, retainable, (capability_signature(capabilities),), modules)
+    """Retain a compilation's checked modules for the next one.
+
+    Memory keeps the full objects; disk keeps only their data-only images, so
+    a restored artifact costs a replay of the module's own facts rather than a
+    copy of the whole-program type environment.
+    """
+    # `.image()` calls `own_facts()`, which raises if no own-facts journal was
+    # ever started. Unreachable here: every member of `modules` is freshly
+    # checked (Phase 4 opens a journal before its body check), rehydrated
+    # (`rehydrate` replays into a fresh journal), or an in-process journaled
+    # object carried over from an earlier compilation.
+    _retain(
+        _CHECKED,
+        retainable,
+        (capability_signature(capabilities),),
+        modules,
+        disk_form=lambda mid: modules[mid].image(),
+    )
 
 
 def retained_match_sites(
@@ -209,12 +251,15 @@ def retained_match_sites(
 ) -> dict[ModuleId, CachedModuleSites]:
     """Return the compiled match sites retained for these sources."""
     from agm.agl.matchcompile import CachedModuleSites
+    from agm.agl.typecheck.env import CheckedModule
 
     signature = capability_signature(capabilities)
     served = _served(_SITES, retainable, (signature,), CachedModuleSites)
     for mid, sites in served.items():
         checked = _CHECKED.get((mid, signature), retainable[mid])
-        if checked is not None and sites.owner is not checked:
+        # A stale or bare-image `checked` just misses `compile_program_matches`'s
+        # `cached.owner is checked_module` identity gate -- never a wrong reuse.
+        if isinstance(checked, CheckedModule) and sites.owner is not checked:
             served[mid] = replace(sites, owner=checked)
             _SITES.put((mid, signature), retainable[mid], served[mid])
     return served
@@ -235,7 +280,12 @@ def _served[V](
     discriminator: tuple[object, ...],
     expected: type[V],
 ) -> dict[ModuleId, V]:
-    """Collect every artifact these modules still qualify for."""
+    """Collect every artifact these modules still qualify for.
+
+    *expected* is the store's disk form, which a payload must be an instance
+    of to be admitted -- the decoding half of the contract whose encoding half
+    is :func:`_retain`'s ``disk_form``.
+    """
     for group in _groups(retainable):
         sources = retainable[group[0]]
         if all(store.get((mid, *discriminator), retainable[mid]) is not None for mid in group):
@@ -264,8 +314,16 @@ def _retain[V](
     retainable: RetainedSources,
     discriminator: tuple[object, ...],
     artifacts: Mapping[ModuleId, V],
+    *,
+    disk_form: Callable[[ModuleId], object] | None = None,
 ) -> None:
-    """Retain every artifact belonging to one of these modules."""
+    """Retain every artifact belonging to one of these modules.
+
+    Memory always keeps *artifacts* themselves; *disk_form*, keyed by module
+    id rather than by value, lets a caller persist a smaller, data-only
+    stand-in instead (checked modules persist their ``CheckedModuleImage``,
+    see :func:`retain_checked_modules`).
+    """
     for group in _groups(retainable):
         sources = retainable[group[0]]
         members = {mid: artifacts[mid] for mid in group if mid in artifacts}
@@ -276,7 +334,7 @@ def _retain[V](
             artifact_serialization.save(
                 _disk_key(sources, discriminator),
                 store.kind,
-                members,
+                {mid: (members[mid] if disk_form is None else disk_form(mid)) for mid in members},
                 _anchors(store.kind, sources, discriminator, retainable),
             )
 
@@ -284,6 +342,19 @@ def _retain[V](
 def _anchors(
     kind: str, sources: Sources, discriminator: tuple[object, ...], retainable: RetainedSources
 ) -> tuple[object, ...]:
+    """Return this stage's positional anchor table, indexed by persistent id.
+
+    The layout cannot differ between a save and a later load of the same
+    entry: `retain_resolved_modules` populates `_RESOLVED` for every
+    retainable module before any `checked` anchor build runs here, and
+    entry-ness moves a module's node ids between the reserved band and
+    ordinary allocation (`modules/parsed_module_cache.py`), so any change to
+    group membership breaks `_disk_key` first. Were a shorter tuple ever to
+    reach a load regardless, an overrun persistent id just returns `None`
+    from `_Reader.persistent_load` -- a miss, never a wrong lowering.
+    """
+    from agm.agl.typecheck.env import CheckedModule
+
     anchors: list[object] = [module.program for module in sources]
     for module in sources:
         retained = retainable.get(module.module_id)
@@ -295,7 +366,9 @@ def _anchors(
                 anchors.append(resolved.resolved)
         elif kind == "matches":
             checked = _CHECKED.get((module.module_id, *discriminator), retained)
-            if checked is not None:
+            # A stale or bare-image `checked` just misses the same identity
+            # gate `retained_match_sites` relies on -- never a wrong reuse.
+            if isinstance(checked, CheckedModule):
                 anchors.extend((checked, checked.type_env.type_table))
     return tuple(anchors)
 

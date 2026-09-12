@@ -19,9 +19,22 @@ from agm.agl.pipeline import PipelineDriver, RunResult
 from tests._agl_helpers import run_inline_command
 
 
-def _run(root: Path, source: str) -> subprocess.CompletedProcess[str]:
+def _run(root: Path, source: str, *, dry_run: bool = False) -> subprocess.CompletedProcess[str]:
+    cli = ["--dry-run"] if dry_run else []
+    cmd = [
+        sys.executable,
+        "-m",
+        "agm.cli",
+        *cli,
+        "exec",
+        "--no-stdlib",
+        "-I",
+        str(root),
+        "-c",
+        source,
+    ]
     return subprocess.run(
-        [sys.executable, "-m", "agm.cli", "exec", "--no-stdlib", "-I", str(root), "-c", source],
+        cmd,
         env={**os.environ, "XDG_CACHE_HOME": str(root / "cache")},
         capture_output=True,
         text=True,
@@ -60,6 +73,47 @@ def test_dependency_interface_edits_recompile_importers(tmp_path: Path) -> None:
     assert second.stdout == "updated\n"
 
 
+def test_rehydrated_library_matches_a_fresh_compile_across_processes(tmp_path: Path) -> None:
+    """A checked module restored from disk in a fresh process behaves identically.
+
+    The library imports ``std/agent`` and calls its ``ask`` method. Nothing
+    else in this test's own source runs before the inventory pair, so its
+    first run is a genuine fresh compile (the disk cache starts empty) and its
+    second run genuinely rehydrates -- proven directly by the persisted
+    ``checked`` entries' mtimes, not just by matching output. The ``--dry-run``
+    static call-site inventory and the executed output must each agree between
+    the compile that populates the cache and the one that only rehydrates it.
+    """
+    (tmp_path / "library.agl").write_text(
+        "import std/agent::*\n"
+        "def double(value: int) -> int = value * 2\n"
+        'def helper(task: text) -> text = AgentCommand("impl").ask(task)\n'
+    )
+    inventory_source = 'import library::*\nbuiltin def print[T](value: T) -> unit\nhelper("do it")'
+    first_inventory = _run(tmp_path, inventory_source, dry_run=True)
+    assert first_inventory.returncode == 0, first_inventory.stderr
+    assert "call-sites:" in first_inventory.stdout
+
+    checked_entries = {
+        path: path.stat().st_mtime_ns for path in (tmp_path / "cache").rglob("*.checked")
+    }
+    assert checked_entries  # the fresh compile above must have persisted a "checked" entry
+
+    second_inventory = _run(tmp_path, inventory_source, dry_run=True)
+    assert second_inventory.returncode == 0, second_inventory.stderr
+    assert second_inventory.stdout == first_inventory.stdout
+    # A cache hit rehydrates rather than recompiling: the persisted entries this
+    # second, separate process reads are untouched by it.
+    assert {
+        path: path.stat().st_mtime_ns for path in (tmp_path / "cache").rglob("*.checked")
+    } == checked_entries
+
+    program = "import library::*\nbuiltin def print[T](value: T) -> unit\nprint(double(21))"
+    executed = _run(tmp_path, program)
+    assert executed.returncode == 0, executed.stderr
+    assert executed.stdout == "42\n"
+
+
 @pytest.fixture
 def compile_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[[str], RunResult]:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
@@ -75,6 +129,40 @@ def compile_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[[
         )
 
     return run
+
+
+def test_a_shared_cyclic_dependency_reattaches_to_fresh_resolved_modules_under_a_different_entry(
+    tmp_path: Path,
+    compile_again: Callable[[str], RunResult],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A checked artifact shared by a cyclic-import group reattaches to a fresh entry.
+
+    ``left`` and ``right`` import each other and share one persisted checked
+    artifact, keyed off their own content -- neither is part of the entry's
+    own dependency cycle, so the same artifact is reused regardless of which
+    entry imports them. A second compilation that reaches them through a
+    different entry, and through the other member of the cycle, must still
+    reattach the shared artifact's cross-references to its OWN fresh resolved
+    modules rather than the first compilation's now-discarded ones.
+    """
+    (tmp_path / "left.agl").write_text(
+        "import right::*\ndef via_left() -> int = 1\ndef via_right() -> int = right_value()\n"
+    )
+    (tmp_path / "right.agl").write_text(
+        "import left::*\ndef right_value() -> int = via_left() + 2\n"
+    )
+    first = compile_again(
+        "import left::*\nbuiltin def print[T](value: T) -> unit\nprint(via_right() + via_left())"
+    )
+    assert first.ok, first.diagnostics
+    assert capsys.readouterr().out == "4\n"
+
+    second = compile_again(
+        "import right::*\nbuiltin def print[T](value: T) -> unit\nprint(right_value() * 10)"
+    )
+    assert second.ok, second.diagnostics
+    assert capsys.readouterr().out == "30\n"
 
 
 @pytest.mark.parametrize(

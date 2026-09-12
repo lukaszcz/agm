@@ -116,6 +116,7 @@ from agm.agl.typecheck.declaration_validation import (
 from agm.agl.typecheck.env import (
     AglTypeError,
     CheckedModule,
+    CheckedModuleImage,
     ConstructorSignature,
     FunctionSignature,
     GenericAliasDef,
@@ -1053,7 +1054,7 @@ def _prepare_program(
     resolved: ResolvedProgram,
     capabilities: HostCapabilities,
     entry_seed_env: TypeEnvironment | None = None,
-    cached_checked_modules: Mapping[ModuleId, CheckedModule] | None = None,
+    cached_checked_modules: Mapping[ModuleId, CheckedModule | CheckedModuleImage] | None = None,
 ) -> _PreparedProgram:
     """Run Phases 1-3 of :func:`check_program`: prepare, but do not check, every module.
 
@@ -1157,8 +1158,15 @@ def _prepare_program(
 
     for mid, retained in cached_checked_modules.items():
         env = module_envs[mid]
-        for item in static_function_items(retained.resolved.program.body.items):
-            owner = retained.resolved.receiver_owner_for(mid, item)
+        # `retained` may be a `CheckedModuleImage`, which carries no `resolved`
+        # (see the module docstring's rehydration seam). This program's own
+        # `resolved.modules[mid].resolved` is the identical object for a full
+        # `CheckedModule` too, by the identity gate `check_program` applies
+        # before including it here -- so reading it uniformly needs no
+        # instance check.
+        rmod = resolved.modules[mid].resolved
+        for item in static_function_items(rmod.program.body.items):
+            owner = rmod.receiver_owner_for(mid, item)
             record = (retained.published_signatures or {}).get(item.node_id)
             if item.return_type is not None or owner is None or record is None:
                 continue
@@ -1167,7 +1175,7 @@ def _prepare_program(
                     env,
                     item,
                     result_type=record.signature.result,
-                    param_zones=retained.resolved.attributes.param_zones,
+                    param_zones=rmod.attributes.param_zones,
                     receiver_owner=owner,
                 )
             register_method_header(env, item, signature, receiver, mid)
@@ -1229,7 +1237,7 @@ def check_program(
     resolved: ResolvedProgram,
     capabilities: HostCapabilities,
     entry_seed_env: TypeEnvironment | None = None,
-    cached_checked_modules: Mapping[ModuleId, CheckedModule] | None = None,
+    cached_checked_modules: Mapping[ModuleId, CheckedModule | CheckedModuleImage] | None = None,
 ) -> CheckedProgram:
     """Run the full type-checking pass over a :class:`ResolvedProgram`.
 
@@ -1245,14 +1253,16 @@ def check_program(
         installed.  Used by the REPL program context to make prior session
         bindings available in program entries.
     cached_checked_modules:
-        Checked non-entry modules from an unchanged REPL bootstrap image. Their
+        Checked non-entry modules from an unchanged REPL bootstrap snapshot. Their
         bodies are immutable and can be reused after this call has rebuilt the
         whole-program declaration and signature context for the fresh entry.
         Whatever this leaves uncovered is looked up in the process-global
-        artifact cache, and this pass's own results are retained there for the
-        next compilation -- except under an ``entry_seed_env``, whose session
-        types this call seeds the shared type table from, so its results are
-        not a function of the loaded modules alone.
+        artifact cache, which may answer with a full ``CheckedModule`` (reused
+        as-is) or a ``CheckedModuleImage`` (rehydrated onto this call's own
+        prepared environment) -- and this pass's own results are retained
+        there for the next compilation -- except under an ``entry_seed_env``,
+        whose session types this call seeds the shared type table from, so its
+        results are not a function of the loaded modules alone.
 
     Returns
     -------
@@ -1267,15 +1277,27 @@ def check_program(
     # An earlier compilation in this process already checked the modules behind
     # this program; a caller-supplied image (a REPL session's) wins over it.
     retainable = retained_module_sources(resolved.graph)
-    reusable: dict[ModuleId, CheckedModule] = dict(
+    reusable: dict[ModuleId, CheckedModule | CheckedModuleImage] = dict(
         retained_checked_modules(retainable, capabilities)
     )
     if cached_checked_modules is not None:
+        # A REPL full object supersedes an artifact-cache image by design: if
+        # it later fails the identity gate below, the module is re-checked in
+        # full even though a valid image was available -- correct, since a
+        # superseded REPL module should be re-checked, not restored stale.
         reusable.update(cached_checked_modules)
+    # A full object must be the exact current `ResolvedModule` -- an in-process
+    # identity check. An image carries no `resolved` to compare against: it
+    # reaches `reusable` only through `_served`'s own source-identity (memory)
+    # or `_disk_key`'s content digest over the module and its transitive
+    # import/export closure (disk), which is sound because node ids are
+    # content-derived (`modules/parsed_module_cache.py`) -- membership in
+    # `resolved.modules` is the only condition an image still needs here.
     cached_checked_modules = {
         mid: cm
         for mid, cm in reusable.items()
-        if mid in resolved.modules and cm.resolved is resolved.modules[mid].resolved
+        if mid in resolved.modules
+        and (not isinstance(cm, CheckedModule) or cm.resolved is resolved.modules[mid].resolved)
     }
 
     prepared = _prepare_program(
@@ -1301,9 +1323,17 @@ def check_program(
     reused_modules: set[ModuleId] = set()
     for mid in ordered_mids:
         cached = cached_checked_modules.get(mid) if cached_checked_modules is not None else None
-        if cached is not None and cached.resolved is resolved.modules[mid].resolved:
+        if isinstance(cached, CheckedModule) and cached.resolved is resolved.modules[mid].resolved:
             checked_modules[mid] = cached
             reused_modules.add(mid)
+            continue
+        if isinstance(cached, CheckedModuleImage):
+            # Rehydrated, not reused: left out of `reused_modules` so
+            # self-validation below covers it like a freshly checked module.
+            # Storing the full object here lets `retain_checked_modules`
+            # restore `_CHECKED`'s in-memory entry to a full `CheckedModule`,
+            # which `retained_match_sites`'s `matches`-kind anchors need.
+            checked_modules[mid] = cached.rehydrate(resolved.modules[mid], module_envs[mid])
             continue
         rmod = resolved.modules[mid]
         env = module_envs[mid]

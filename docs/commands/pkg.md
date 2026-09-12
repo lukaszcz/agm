@@ -98,11 +98,14 @@ remote = { version = "2.0.0", url = "https://example.test/remote.agmpkg", hash =
 ```toml
 [commands]
 pr-review = { program = "review-tools/main::review", description = "Review a change" }
-"pr-review batch" = { program = "review-tools/main::batch" }   # multi-word command path
+
+[commands.pr-review.batch] # multi-level command: agm pr-review batch
+program = "review-tools/main::batch"
 ```
 
-- A key is a one- or multi-word command path that cannot start with a built-in command or root
-  alias (`wsp`, `wt`).
+- Nested table components become command words: `[commands.devel.review]` registers `devel
+  review`. The equivalent quoted flat form, `[commands."devel review"]`, is also accepted. A path
+  cannot start with a built-in command or root alias (`wsp`, `wt`).
 - `program` names the `program def` to run as `<module>::<program>`: `review-tools/main::review` is
   program `review` in module `review-tools/main`, file `review-tools/src/main.agl`. Must belong to
   this package, take no type parameters, return unit; its arguments become the command's.
@@ -119,7 +122,7 @@ pr-review = { program = "review-tools/main::review", description = "Review a cha
 description = "Development workflows"
 help = "Choose review to inspect changes before publishing."
 
-[commands."devel review"]
+[commands.devel.review]
 program = "review-tools/main::review"
 description = "Review changes"
 help = "Run this workflow before opening a pull request."

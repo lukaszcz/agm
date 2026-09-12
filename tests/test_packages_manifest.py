@@ -8,7 +8,12 @@ import pytest
 import semver
 
 from agm.agl.keywords import KEYWORDS
-from agm.packages.manifest import ManifestError, distribution_manifest, load_manifest
+from agm.packages.manifest import (
+    ManifestError,
+    distribution_manifest,
+    load_manifest,
+    load_manifest_text,
+)
 
 FIXTURES = Path(__file__).parent / "agl" / "packages"
 URL = "https://example.test/tools.agmpkg"
@@ -302,6 +307,63 @@ charlie = { version = "3", url = "https://example.test/charlie.agmpkg", hash = "
 
         with pytest.raises(ManifestError):
             load_manifest(path)
+
+    def test_nested_command_tables_match_space_separated_paths(self) -> None:
+        package = '[package]\nname = "review_tools"\nversion = "1.2.3"\n\n'
+        nested = load_manifest_text(
+            package
+            + """[commands.devel]
+description = "Development workflows"
+
+[commands.devel.review]
+program = "review_tools/main::review"
+
+[commands.devel.quality.lint]
+program = "review_tools/main::lint"
+"""
+        )
+        space_separated = load_manifest_text(
+            package
+            + """[commands.devel]
+description = "Development workflows"
+
+[commands."devel review"]
+program = "review_tools/main::review"
+
+[commands."devel quality lint"]
+program = "review_tools/main::lint"
+"""
+        )
+
+        assert nested.commands == space_separated.commands
+
+    def test_nested_command_tables_allow_metadata_names_as_path_components(self) -> None:
+        manifest = load_manifest_text(
+            """[package]
+name = "review_tools"
+version = "1.2.3"
+
+[commands.devel.program]
+program = "review_tools/main::review"
+"""
+        )
+
+        assert manifest.commands["devel program"].program == "review_tools/main::review"
+
+    def test_rejects_command_paths_defined_by_both_nested_and_quoted_tables(self) -> None:
+        manifest = """[package]
+name = "review_tools"
+version = "1.2.3"
+
+[commands."devel review"]
+program = "review_tools/main::review"
+
+[commands.devel.review]
+program = "review_tools/main::review"
+"""
+
+        with pytest.raises(ManifestError):
+            load_manifest_text(manifest)
 
     @pytest.mark.parametrize(
         "commands",

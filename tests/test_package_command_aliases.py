@@ -14,12 +14,14 @@ MANIFEST = """[package]
 name = "tools"
 version = "1.0.0"
 [commands]
-devel = { description = "Development tasks", help = "Choose a development workflow." }
 "devel nested check" = { program = "tools/main::main" }
 "devel nested inspect" = { program = "tools/main::main" }
 "devel releases" = {}
 "devel releases inspect" = { program = "tools/main::main" }
-[commands."devel review"]
+[commands.devel]
+description = "Development tasks"
+help = "Choose a development workflow."
+[commands.devel.review]
 program = "tools/main::main"
 description = "Review changes"
 help = "Inspect changes before publishing."

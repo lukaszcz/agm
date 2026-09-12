@@ -16,6 +16,7 @@ from agm.command_catalog import invalid_command_path
 from agm.core.toml import TomlDict, load_toml_file, toml_dict
 
 _SHA256_PREFIXES = ("sha256=", "sha256:", "sha256-")
+_COMMAND_FIELDS = frozenset({"program", "description", "help"})
 
 
 class ManifestError(ValueError):
@@ -240,20 +241,44 @@ def parse_sha256(value: str) -> str | None:
 
 def _commands(raw: TomlDict) -> dict[str, CommandSpec]:
     commands: dict[str, CommandSpec] = {}
-    for path, value in raw.items():
-        if not isinstance(value, dict):
-            raise ManifestError(f"command {path!r} must be a table")
-        command = toml_dict(value)
-        _only_keys(command, {"program", "description", "help"}, f"command {path!r}")
-        commands[path] = CommandSpec(
-            program=_optional_str(command, "program", f"command {path!r}"),
-            description=_optional_str(command, "description", f"command {path!r}"),
-            help=_optional_str(command, "help", f"command {path!r}"),
-        )
+    _collect_commands(raw, prefix="", commands=commands)
     for path, spec in commands.items():
         if spec.program is None and not any(child.startswith(path + " ") for child in commands):
             raise ManifestError(f"command group {path!r} requires subcommands")
     return commands
+
+
+def _collect_commands(raw: TomlDict, *, prefix: str, commands: dict[str, CommandSpec]) -> None:
+    """Flatten nested TOML command tables into space-separated CLI paths."""
+
+    for name, value in raw.items():
+        path = f"{prefix} {name}" if prefix else name
+        if not isinstance(value, dict):
+            raise ManifestError(f"command {path!r} must be a table")
+        command = toml_dict(value)
+        metadata = {
+            key: field
+            for key, field in command.items()
+            if key in _COMMAND_FIELDS and not isinstance(field, dict)
+        }
+        children = {
+            key: child
+            for key, child in command.items()
+            if key not in _COMMAND_FIELDS or isinstance(child, dict)
+        }
+        unsupported = {key for key, child in children.items() if not isinstance(child, dict)}
+        if unsupported:
+            names = ", ".join(sorted(unsupported))
+            raise ManifestError(f"command {path!r} has unsupported fields: {names}")
+        if not children or metadata:
+            if path in commands:
+                raise ManifestError(f"command {path!r} is defined more than once")
+            commands[path] = CommandSpec(
+                program=_optional_str(metadata, "program", f"command {path!r}"),
+                description=_optional_str(metadata, "description", f"command {path!r}"),
+                help=_optional_str(metadata, "help", f"command {path!r}"),
+            )
+        _collect_commands(children, prefix=path, commands=commands)
 
 
 def _version(value: str, label: str) -> semver.Version:

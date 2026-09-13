@@ -1,4 +1,3 @@
 record P(x: int, y: int)
 let p = P(1, 2)
 let q = p with
-print q.x

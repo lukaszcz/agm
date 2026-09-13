@@ -2,7 +2,7 @@
 
 | Command | Description |
 |---|---|
-| `agm run [--no-sandbox] [--no-patch] [--memory LIMIT] [--swap LIMIT] [--no-memory-limit] [--no-swap-limit] [-f\|--file SETTINGS] COMMAND [ARGS...]` | Run a command directly or in an Anthropic Sandbox Runtime container |
+| `agm run [--no-sandbox] [--no-patch] [--pty\|--no-pty] [--memory LIMIT] [--swap LIMIT] [--no-memory-limit] [--no-swap-limit] [-f\|--file SETTINGS] COMMAND [ARGS...]` | Run a command directly or in an Anthropic Sandbox Runtime container |
 
 `agm run` config lookup merges all matching layers in order (later layers override earlier ones):
 
@@ -16,13 +16,16 @@
 
 - `[run].memory`: default `MemoryMax` for sandboxed runs
 - `[run].swap`: default `MemorySwapMax` for sandboxed runs
+- `[run].pty`: whether interactive runs receive a controlling pseudo-terminal; defaults to `true`
 - `[run.<command>].memory`: per-command `MemoryMax` override
 - `[run.<command>].swap`: per-command `MemorySwapMax` override
+- `[run.<command>].pty`: per-command pseudo-terminal override
 - `[run.<command>].alias`: replace the invoked command name before execution
 
 `agm run` options:
 
 - `--no-sandbox`: run directly without `srt`, skipping sandbox settings discovery and patching
+- `--pty` / `--no-pty`: enable or disable the controlling pseudo-terminal; enabled by default and allocated only when stdin and stdout are terminals
 - `-f`, `--file SETTINGS`: use one settings file directly instead of discovered settings
 - `--memory LIMIT`: set `MemoryMax=LIMIT` in the delegated `systemd-run --user --scope` (the bootstrap exports `SANDBOX_CGROUP` and enables the memory controller for descendant cgroups); defaults to `32G` in sandbox mode; `0` means a zero memory limit; `unlimited` means no memory cap
 - `--swap LIMIT`: set `MemorySwapMax=LIMIT` in the delegated scope; defaults to `0` in sandbox mode; `unlimited` means no swap cap
@@ -40,3 +43,5 @@ Sandbox settings resolution:
 - `network` and `filesystem` are merged by key; their list-valued keys are appended and deduplicated in precedence order
 - later `network.deniedDomains` entries remove matching earlier `network.allowedDomains` entries; later `filesystem.denyRead` and `filesystem.denyWrite` entries remove matching earlier `filesystem.allowRead` and `filesystem.allowWrite` entries
 - `ignoreViolations` replaces the earlier value; `enabled` and `enableWeakerNestedSandbox` override when set
+
+The bundled `pi.json` profile sets `network.allowAllUnixSockets` so Pi extensions can create local IPC sockets. On Linux, SRT's seccomp filter cannot allow Unix sockets by path, so this permission is necessarily all-or-nothing; filesystem policy still controls which socket paths Pi can create or access.

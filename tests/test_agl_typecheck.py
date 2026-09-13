@@ -5182,6 +5182,55 @@ class TestLambda:
         t = r.node_types[lam.node_id]
         assert t == FunctionType(params=(IntType(),), result=IntType())
 
+    @pytest.mark.parametrize(
+        "lambda_source",
+        ("fn (x, y: int) => x + y", "fn (x: int, y) => x + y"),
+    )
+    def test_lambda_param_types_are_inferred_from_function_context(
+        self, lambda_source: str
+    ) -> None:
+        r = accept_type(f"let add: (int, int) -> int = {lambda_source}\nadd(2, 3)")
+        lam = r.resolved.program.body.items[0]
+        assert isinstance(lam, LetDecl)
+        assert isinstance(lam.value, Lambda)
+        assert r.node_types[lam.value.node_id] == FunctionType(
+            params=(IntType(), IntType()), result=IntType()
+        )
+
+    def test_bare_unary_lambda_param_type_is_inferred(self) -> None:
+        r = accept_type("let increment: int -> int = fn value => value + 1\nincrement(2)")
+        binding = r.resolved.program.body.items[0]
+        assert isinstance(binding, LetDecl)
+        assert isinstance(binding.value, Lambda)
+        assert r.node_types[binding.value.node_id] == FunctionType(
+            params=(IntType(),), result=IntType()
+        )
+
+    def test_contextual_lambda_is_checked_after_generic_sibling_evidence(self) -> None:
+        r = accept_type(
+            "def apply[T](function: T -> T, value: T) -> T = function(value)\n"
+            "apply(fn item => item + 1, 2)"
+        )
+        assert r.node_types[r.resolved.program.body.items[1].node_id] == IntType()
+
+    def test_contextual_lambda_return_conflict_is_rejected(self) -> None:
+        err = reject_type(
+            "def invoke[T](seed: T, callback: (int) -> Option[T]) -> Option[T] = callback(1)\n"
+            'invoke(1, fn(value: int) => Option::Some(value = "bad"))'
+        )
+        assert "inconsistent" in str(err).lower()
+        assert "lambda return" in str(err).lower()
+
+    def test_unannotated_lambda_param_without_context_is_rejected(self) -> None:
+        err = reject_type("let identity = fn value => value\nidentity")
+        assert "infer" in str(err).lower()
+        assert "value" in str(err)
+
+    def test_unannotated_lambda_param_requires_matching_arity(self) -> None:
+        err = reject_type("let bad: (int, int) -> int = fn value => value")
+        assert "infer" in str(err).lower()
+        assert "context" in str(err).lower()
+
     def test_lambda_body_type_mismatch(self) -> None:
         err = reject_type("fn(x: int) -> text => x")
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
@@ -6215,6 +6264,40 @@ class TestOperatorValues:
 
     def test_abstract_type_variable_operands_are_rejected(self) -> None:
         reject_type("def same[T](a: T, b: T) -> bool = (==)(a, b)\n()")
+
+
+# ---------------------------------------------------------------------------
+# Leading-dot method invocation
+# ---------------------------------------------------------------------------
+
+
+class TestLeadingDotMethodInvocation:
+    def test_receiver_type_comes_from_annotated_function_context(self) -> None:
+        checked = accept_type(
+            "let transform: (array[int]) -> array[text] = "
+            '.map::[text](fn(value: int) => "%{value}")\n'
+            "transform"
+        )
+        declaration = checked.resolved.program.body.items[0]
+        assert isinstance(declaration, LetDecl)
+        assert isinstance(declaration.value, Lambda)
+        assert checked.node_types[declaration.value.node_id] == FunctionType(
+            (ArrayType(IntType()),), ArrayType(TextType())
+        )
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            ".map(fn(value: int) => value)",
+            "let bad: (array[int], int) -> array[int] = .map(fn(value: int) => value)",
+            "def retain[A, B](callback: (A) -> B) -> unit = ()\n"
+            "retain(.map(fn(value: int) => value))",
+        ),
+        ids=("absent", "non-unary", "unresolved"),
+    )
+    def test_receiver_requires_concrete_unary_function_context(self, source: str) -> None:
+        error = reject_type(source)
+        assert "self" in str(error).lower() and "context" in str(error).lower()
 
 
 # ---------------------------------------------------------------------------

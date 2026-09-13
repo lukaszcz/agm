@@ -3925,7 +3925,7 @@ class TestSandbox:
         (sandbox_dir / "npm.json").write_text(json.dumps(_settings(enabled=True)))
 
         result = run_agm(
-            ["run", "npm", "test", "--coverage"],
+            ["run", "--no-pty", "npm", "test", "--coverage"],
             env=env,
             cwd=str(work),
         )
@@ -3954,7 +3954,7 @@ class TestSandbox:
         sandbox_dir.mkdir()
         (sandbox_dir / "echo.json").write_text(json.dumps(_settings(enabled=True)))
 
-        result = run_agm(["run", "--memory", "2G", "echo", "hi"], env=env, cwd=str(work))
+        result = run_agm(["run", "--pty", "--memory", "2G", "echo", "hi"], env=env, cwd=str(work))
         assert result.returncode == 0
         _assert_systemd_run_command(
             result,

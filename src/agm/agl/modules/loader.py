@@ -960,6 +960,20 @@ def _tarjan_sccs(
     return _compute_sccs(graph, key=_mid_sort_key)
 
 
+def load_parsed_module(
+    module_id: ModuleId, path: Path, *, default_stdlib: bool = True
+) -> LoadedModule:
+    """Serve one module's parse from the shared cache, parsing only on a miss.
+
+    The single entry point for a caller that needs a module's AST without
+    building a graph around it — package command discovery is one. It keys the
+    same cache the graph loader keys, so a module parsed here is reused there
+    and the reverse, and neither parses source the other already has.
+    """
+    build = partial(_parse_imported_module, module_id, path, default_stdlib=default_stdlib)
+    return cached_parsed_module(module_id, path, default_stdlib=default_stdlib, build=build)
+
+
 def _parse_imported_module(
     module_id: ModuleId,
     path: Path,

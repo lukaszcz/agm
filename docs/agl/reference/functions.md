@@ -400,6 +400,30 @@ that has captured its receiver and has parameters only for the remaining
 method parameters. It can be stored, passed to another function, or partially
 applied like any other function value.
 
+A **leading-dot method invocation** omits the receiver and produces a unary
+function that accepts it:
+
+```ebnf
+leading_dot_expr ::= "." field_name value_type_args? "(" arg_list? ")"
+```
+
+`.map(f)` is equivalent to `fn(self: ContextType) => self.map(f)`, except that
+`ContextType` is inferred rather than written. The surrounding expression must
+provide a concrete unary function type; otherwise the receiver type cannot be
+inferred and the expression is rejected. Method selection still uses that
+receiver's static type, with the same visibility and ambiguity rules as an
+ordinary member call. Explicit method type arguments and named arguments are
+supported.
+
+```agl
+program def main() -> unit =
+  let numbers = [1, 2, 3]
+  let incremented = numbers |> .map(fn(value: int) => value + 1)
+  let stringify: (array[int]) -> array[text] = .map::[text](fn(value: int) => "%{value}")
+  print(incremented)
+  print(stringify(numbers))
+```
+
 ```agl
 record Meter
   value: int
@@ -443,22 +467,36 @@ nested in a block.
 ## `fn` — anonymous functions (lambdas)
 
 ```ebnf
-lambda_expr ::= "fn" "(" param_list? ")" ("->" type_expr)? "=>" expr
-param_list  ::= param ("," param)* ","?
-param       ::= attributes? field_name ":" type_expr ("=" or_expr)?
+lambda_expr  ::= "fn" lambda_params ("->" type_expr)? "=>" expr
+lambda_params ::= field_name | "(" lambda_param_list? ")"
+lambda_param_list ::= lambda_param ("," lambda_param)* ","?
+lambda_param ::= attributes? field_name [":" type_expr] ("=" or_expr)?
 ```
 
-`fn` produces a function value. The return type annotation is **optional**:
-when omitted it is inferred from the body, unless a concrete expected function
-type checks the body against its result type. Parameter types are always
-required.
+`fn` produces a function value. A unary lambda may omit its parameter
+parentheses. The return type annotation is **optional**: when omitted it is
+inferred from the body, unless a concrete expected function type checks the
+body against its result type.
+
+A parameter annotation may also be omitted when the lambda has a matching
+function context. Each omitted type comes from the corresponding parameter of
+that function type; annotations may be omitted independently. A function-typed
+binding and a higher-order function or method parameter provide such context:
 
 ```agl
 program def main() -> unit =
   let double = fn(x: int) => x * 2
-  let add    = fn(x: int, y: int) -> int => x + y
-  let greet  = fn(name: text) -> text => "Hello, %{name}!"
+  let increment: int -> int = fn x => x + 1
+  let add: (int, int) -> int = fn (x, y) => x + y
+  let add-left: (int, int) -> int = fn (x: int, y) => x + y
+  let add-right: (int, int) -> int = fn (x, y: int) => x + y
+  let greet = fn(name: text) -> text => "Hello, %{name}!"
 ```
+
+An omitted parameter type without a matching context, or with a context of a
+different arity, is a static error. When generic argument inference supplies
+the context, concrete sibling arguments are considered before the contextual
+lambda.
 
 A lambda is an ordinary expression and may appear anywhere an expression is
 accepted — in a binding, as a call argument, or in an array:

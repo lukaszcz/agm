@@ -7,12 +7,13 @@ admitted target, the arguments match the declared schema, the attribute is not
 repeated or contradicted — and turns the surviving attributes into typed
 side-table entries.
 
-Four facts are built: a parameter's zone, from the ``@arg-*`` attribute an
+Five facts are built: a parameter's zone, from the ``@arg-*`` attribute an
 entry or its owning declaration carries; an ``extern def``'s Python companion
 name, from ``@extern-name`` — the walk sees every extern of a module, so it is
 also where their companion names are held apart; a ``program def`` parameter's
-command-line presentation, from the ``@opt-*`` attributes; and a declaration's
-documentation text, from ``@doc``. The walk is the seam a further attribute
+command-line presentation, from the ``@opt-*`` attributes; the package command
+a ``program def`` registers itself as, from ``@command`` and its prose; and a
+declaration's documentation text, from ``@doc``. The walk is the seam a further attribute
 meaning joins through — a new fact reads the attributes the walk already hands
 it and fills a table of its own, so it costs one more builder, never one more
 traversal.
@@ -26,8 +27,12 @@ from dataclasses import dataclass
 
 from agm.agl.attributes import (
     BUILTIN_ATTRIBUTES,
+    COMMAND_ATTRIBUTE,
+    COMMAND_PROSE_ATTRIBUTES,
+    DESCRIPTION_ATTRIBUTE,
     DOC_ATTRIBUTE,
     EXTERN_NAME_ATTRIBUTE,
+    HELP_ATTRIBUTE,
     NAME_ADDRESSED_OPTION_ATTRIBUTES,
     OPTION_ENV_ATTRIBUTE,
     OPTION_HIDDEN_ATTRIBUTE,
@@ -38,7 +43,9 @@ from agm.agl.attributes import (
     AttributeArguments,
     AttributeSpec,
     AttributeTarget,
+    ProgramCommandSpec,
     ProgramOptionSpec,
+    invalid_program_command_path,
 )
 from agm.agl.scope.symbols import AglScopeError, AttributeFacts
 from agm.agl.syntax.nodes import (
@@ -60,7 +67,7 @@ from agm.agl.syntax.nodes import (
 from agm.agl.syntax.visitor import walk
 from agm.agl.zones import ParamZone
 
-__all__ = ["AttributeFacts", "recognize_attributes"]
+__all__ = ["AttributeFacts", "recognize_attributes", "recognize_program_command"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +146,19 @@ def _function_target(node: FuncDef) -> AttributeTarget:
     return AttributeTarget.FUNCTION
 
 
+def recognize_program_command(node: FuncDef) -> ProgramCommandSpec | None:
+    """Return the package command a ``program def`` registers, or ``None``.
+
+    Validates *node*'s attribute prefix against the catalog exactly as the
+    scope walk does — this is the one place both share, so a parse-only
+    caller (package command discovery) and the full scope pass raise the
+    same diagnostics for the same source. The caller is responsible for
+    passing a ``program def``; this function trusts that and does not check it.
+    """
+    recognized = _validate_attribute_prefix(node.attributes, AttributeTarget.PROGRAM)
+    return _program_command_spec(node, recognized)
+
+
 def recognize_attributes(
     program: Program, *, declares_receiver: Callable[[FuncDef], bool]
 ) -> AttributeFacts:
@@ -154,6 +174,7 @@ def recognize_attributes(
         param_zones=recognizer.param_zones,
         extern_names=recognizer.extern_names,
         program_options=recognizer.program_options,
+        command_registrations=recognizer.command_registrations,
         docs=recognizer.docs,
     )
 
@@ -166,6 +187,7 @@ class _Recognizer:
         self.param_zones: dict[int, ParamZone] = {}
         self.extern_names: dict[int, str] = {}
         self.program_options: dict[int, ProgramOptionSpec] = {}
+        self.command_registrations: dict[int, ProgramCommandSpec] = {}
         self.docs: dict[int, str] = {}
         self._companion_owners: dict[str, str] = {}
 
@@ -175,6 +197,8 @@ class _Recognizer:
             recognized = self._check(node.attributes, _function_target(node), node.node_id)
             if node.is_extern:
                 self._extern_name(node, recognized)
+            if node.is_program:
+                self._command_registration(node, recognized)
             self._entries(
                 node.params,
                 _zone_attribute(recognized),
@@ -204,40 +228,11 @@ class _Recognizer:
     ) -> _Recognized:
         """Validate the whole attribute prefix of the declaration *node_id*.
 
-        Returns every attribute the declaration carries and the text argument
-        of those whose schema takes one, keyed by attribute name, so a fact
-        builder reads an already-validated argument instead of re-inspecting
-        the raw node.
-        Documentation text, admitted on every declaration kind, is filed here
-        rather than in a builder of its own.
+        Delegates to :func:`_validate_attribute_prefix` and additionally files
+        ``@doc`` text, admitted on every declaration kind, since documentation
+        has no fact builder of its own.
         """
-        nodes: dict[str, Attribute] = {}
-        texts: dict[str, str] = {}
-        for attribute in attributes:
-            spec = BUILTIN_ATTRIBUTES.get(attribute.name)
-            if spec is None:
-                raise AglScopeError(f"Unknown attribute '@{attribute.name}'.", span=attribute.span)
-            if target not in spec.targets:
-                raise AglScopeError(
-                    f"Attribute '@{attribute.name}' cannot be attached to a "
-                    f"{_TARGET_LABEL[target]}.",
-                    span=attribute.span,
-                )
-            if attribute.name in nodes:
-                raise AglScopeError(
-                    f"Attribute '@{attribute.name}' cannot be repeated.", span=attribute.span
-                )
-            for other in spec.conflicts:
-                if other in nodes:
-                    raise AglScopeError(
-                        f"Attribute '@{attribute.name}' conflicts with '@{other}'.",
-                        span=attribute.span,
-                    )
-            text = _check_arguments(attribute, spec)
-            if text is not None:
-                texts[attribute.name] = text
-            nodes[attribute.name] = attribute
-        recognized = _Recognized(nodes=nodes, texts=texts)
+        recognized = _validate_attribute_prefix(attributes, target)
         documentation = recognized.text_of(DOC_ATTRIBUTE)
         if documentation is not None:
             self.docs[node_id] = documentation
@@ -285,6 +280,16 @@ class _Recognizer:
             )
         self._companion_owners[name] = node.name
         self.extern_names[node.node_id] = name
+
+    # ------------------------------------------------------------------
+    # Fact builder: package command registrations
+    # ------------------------------------------------------------------
+
+    def _command_registration(self, node: FuncDef, recognized: _Recognized) -> None:
+        """Record the package command one ``program def`` registers itself as."""
+        spec = _program_command_spec(node, recognized)
+        if spec is not None:
+            self.command_registrations[node.node_id] = spec
 
     # ------------------------------------------------------------------
     # Fact builder: parameter zones
@@ -372,6 +377,81 @@ class _Recognizer:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _validate_attribute_prefix(
+    attributes: tuple[Attribute, ...], target: AttributeTarget
+) -> _Recognized:
+    """Validate one declaration's whole attribute prefix against the catalog.
+
+    Checks that each attribute is known, admits *target*, is not repeated,
+    conflicts with nothing else present, and carries an argument matching its
+    schema. This is the one place both the full scope walk (:meth:`_Recognizer._check`)
+    and a parse-only caller (:func:`recognize_program_command`) validate an
+    attribute prefix, so both raise the same diagnostics for the same source.
+    """
+    nodes: dict[str, Attribute] = {}
+    texts: dict[str, str] = {}
+    for attribute in attributes:
+        spec = BUILTIN_ATTRIBUTES.get(attribute.name)
+        if spec is None:
+            raise AglScopeError(f"Unknown attribute '@{attribute.name}'.", span=attribute.span)
+        if target not in spec.targets:
+            raise AglScopeError(
+                f"Attribute '@{attribute.name}' cannot be attached to a {_TARGET_LABEL[target]}.",
+                span=attribute.span,
+            )
+        if attribute.name in nodes:
+            raise AglScopeError(
+                f"Attribute '@{attribute.name}' cannot be repeated.", span=attribute.span
+            )
+        for other in spec.conflicts:
+            if other in nodes:
+                raise AglScopeError(
+                    f"Attribute '@{attribute.name}' conflicts with '@{other}'.",
+                    span=attribute.span,
+                )
+        text = _check_arguments(attribute, spec)
+        if text is not None:
+            texts[attribute.name] = text
+        nodes[attribute.name] = attribute
+    return _Recognized(nodes=nodes, texts=texts)
+
+
+def _program_command_spec(node: FuncDef, recognized: _Recognized) -> ProgramCommandSpec | None:
+    """Return the package command *node* registers via its attribute prefix, or ``None``.
+
+    Only a program carrying ``@command`` registers anything, so the prose
+    attributes — which describe a registration rather than a program — are
+    rejected without it rather than silently dropped. The path is held to
+    the rule a package manifest's command paths answer to, since both
+    register into the same command tree; whether the path reaches a CLI at
+    all is a package fact, so a program outside a package is simply never
+    asked for its registration.
+    """
+    command = recognized.nodes.get(COMMAND_ATTRIBUTE)
+    if command is None:
+        for name in COMMAND_PROSE_ATTRIBUTES:
+            attribute = recognized.nodes.get(name)
+            if attribute is not None:
+                raise AglScopeError(
+                    f"Attribute '@{name}' describes a command registration, so program "
+                    f"{node.name!r} needs a '@{COMMAND_ATTRIBUTE}' attribute beside it.",
+                    span=attribute.span,
+                )
+        return None
+    path = recognized.texts[COMMAND_ATTRIBUTE]
+    invalid = invalid_program_command_path(path)
+    if invalid is not None:
+        raise AglScopeError(
+            f"Command path {path!r} {invalid}.",
+            span=command.span,
+        )
+    return ProgramCommandSpec(
+        path=path,
+        description=recognized.text_of(DESCRIPTION_ATTRIBUTE),
+        help=recognized.text_of(HELP_ATTRIBUTE),
+    )
 
 
 def _check_arguments(attribute: Attribute, spec: AttributeSpec) -> str | None:

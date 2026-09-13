@@ -16,8 +16,15 @@ from agm.packages.discipline import (
     validate_package,
 )
 from agm.packages.layout import MODULE_TREE_DIRNAME
-from agm.packages.manifest import CommandSpec, DependencySpec, PackageManifest, load_manifest
+from agm.packages.manifest import (
+    CommandSpec,
+    DependencySpec,
+    PackageManifest,
+    expanded_commands,
+    load_manifest,
+)
 from agm.packages.model import PackageInfo, owning_package
+from agm.packages.source_commands import package_with_source_commands
 from tests._timeouts import fail_if_slow
 
 FIXTURES = Path(__file__).parent / "agl" / "packages"
@@ -625,6 +632,121 @@ class TestPackageCheckCommand:
         self._use_temp_home(monkeypatch, tmp_path)
 
         check_command.run(PkgCheckArgs(directory=str(root)))
+
+    def test_accepts_a_source_declared_command(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "package"
+        (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+        (root / "package.toml").write_text(
+            '[package]\nname = "custom"\nversion = "1.0.0"\n', encoding="utf-8"
+        )
+        (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+            '@command("launch")\nprogram def main() -> unit = ()\n', encoding="utf-8"
+        )
+        self._use_temp_home(monkeypatch, tmp_path)
+
+        check_command.run(PkgCheckArgs(directory=str(root)))
+
+    def test_accepts_a_manifest_group_satisfied_only_by_a_program_registered_descendant(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "package"
+        (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+        (root / "package.toml").write_text(
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands.devel]\ndescription = "Development workflows"\n',
+            encoding="utf-8",
+        )
+        (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+            '@command("devel review")\nprogram def review() -> unit = ()\n', encoding="utf-8"
+        )
+        self._use_temp_home(monkeypatch, tmp_path)
+
+        check_command.run(PkgCheckArgs(directory=str(root)))
+
+    def test_accepts_an_alias_targeting_a_program_registered_command(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "package"
+        (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+        (root / "package.toml").write_text(
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands.devel]\ndescription = "Development workflows"\n\n'
+            '[aliases]\nrev = "devel review"\n',
+            encoding="utf-8",
+        )
+        (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+            '@command("devel review")\nprogram def review() -> unit = ()\n', encoding="utf-8"
+        )
+        self._use_temp_home(monkeypatch, tmp_path)
+
+        check_command.run(PkgCheckArgs(directory=str(root)))
+
+        package = PackageInfo(
+            root=root, manifest=load_manifest(root / "package.toml", commands_complete=False)
+        )
+        merged = package_with_source_commands(package)
+        assert expanded_commands(merged.manifest)["rev"].program == "custom/main::review"
+
+    def test_rejects_a_genuinely_empty_command_group(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "package"
+        (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+        (root / "package.toml").write_text(
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands.devel]\ndescription = "Development workflows"\n',
+            encoding="utf-8",
+        )
+        (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+            "program def main() -> unit = ()\n", encoding="utf-8"
+        )
+        self._use_temp_home(monkeypatch, tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            check_command.run(PkgCheckArgs(directory=str(root)))
+
+        assert exc_info.value.code == 1
+
+    def test_rejects_an_alias_naming_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "package"
+        (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+        (root / "package.toml").write_text(
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n[aliases]\nrev = "devel review"\n',
+            encoding="utf-8",
+        )
+        (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+            "program def main() -> unit = ()\n", encoding="utf-8"
+        )
+        self._use_temp_home(monkeypatch, tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            check_command.run(PkgCheckArgs(directory=str(root)))
+
+        assert exc_info.value.code == 1
+
+    def test_rejects_a_command_path_declared_by_both_manifest_and_source(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "package"
+        (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+        (root / "package.toml").write_text(
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\nlaunch = { program = "custom/other::main" }\n',
+            encoding="utf-8",
+        )
+        (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+            '@command("launch")\nprogram def main() -> unit = ()\n', encoding="utf-8"
+        )
+        self._use_temp_home(monkeypatch, tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            check_command.run(PkgCheckArgs(directory=str(root)))
+
+        assert exc_info.value.code == 1
 
     def test_rejects_a_command_program_the_package_does_not_define(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

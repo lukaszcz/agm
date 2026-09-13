@@ -31,11 +31,13 @@ def test_load_run_config_merges_global_and_local_sections(tmp_path: Path) -> Non
                 "[run]",
                 'memory = "20G"',
                 'swap = "1G"',
+                "pty = false",
                 "",
                 "[run.echo]",
                 'alias = "printf"',
                 'memory = "10G"',
                 'swap = "2G"',
+                "pty = true",
                 "",
                 "[run.keep]",
                 'alias = "cat"',
@@ -75,6 +77,18 @@ def test_load_run_config_merges_global_and_local_sections(tmp_path: Path) -> Non
     assert config.swap_limit_for("keep") == "1G"
     assert config.swap_limit_for("local") == "1G"
     assert config.swap_limit_for("missing") == "1G"
+    assert config.pty_for("echo") is True
+    assert config.pty_for("keep") is False
+    assert config.pty_for("missing") is False
+
+
+def test_load_run_config_enables_pty_by_default(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+
+    config = load_run_config(home=home, proj_dir=None, cwd=tmp_path / "work")
+
+    assert config.pty_for("anything") is True
 
 
 def test_load_run_config_prefers_dot_agm_config_after_project_config(tmp_path: Path) -> None:

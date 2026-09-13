@@ -341,8 +341,9 @@ param_list      ::= param ("," param)* ","?
 param           ::= attributes? field_name [":" type_expr] ("=" or_expr)?
 ```
 
-A parameter annotation may be omitted only for `self` as the first parameter of
-a method; every other parameter requires an annotation.
+In a function declaration, a parameter annotation may be omitted only for
+`self` as the first parameter of a method; every other parameter requires an
+annotation. Lambda parameters have the contextual rule below.
 
 An inline `def` body after `=` is exactly one expression. It ends at the next
 block separator — a newline or `;` — which starts the next block item, so an
@@ -654,6 +655,7 @@ applied_type_qualified_constructor ::= qualifier_chain NAME "[" type_expr ("," t
                                            (* `[` is byte-adjacent to the preceding NAME *)
 
 atom           ::= INT | DECIMAL | "true" | "false" | "null"
+               | leading_dot_expr
                | "(" ")"                           (* unit literal *)
                | array_literal
                | dict_literal
@@ -685,7 +687,13 @@ raise_expr     ::= "raise" or_expr
 return_expr    ::= "return" or_expr?
 break_expr     ::= "break"
 continue_expr  ::= "continue"
+leading_dot_expr ::= "." field_name value_type_args? "(" arg_list? ")"
 ```
+
+A leading-dot invocation is a unary function whose omitted receiver type is
+inferred from a concrete function context: `.f(args)` behaves like a lambda
+that calls `self.f(args)`. It supports explicit method type arguments but
+always requires the parenthesized invocation.
 
 A bare name atom is resolved by scope and position: it may name a variable, a
 record constructor, an injected enum-member constructor, or a generic
@@ -709,11 +717,15 @@ always runtime field access; constructor qualification uses `::`. See
 ## Lambda expressions
 
 ```ebnf
-lambda_expr ::= "fn" "(" param_list? ")" ("->" type_expr)? "=>" expr
+lambda_expr      ::= "fn" lambda_params ("->" type_expr)? "=>" expr
+lambda_params    ::= field_name | "(" param_list? ")"
 ```
 
-The return type annotation is optional; when omitted, it is inferred from
-the body. Parameter types are always required.
+A bare parameter form declares exactly one parameter; zero or multiple
+parameters use parentheses. The return type annotation is optional; when
+omitted, it is inferred from the body. A lambda parameter may omit its type
+annotation when the corresponding type is supplied by a matching expected
+function type. Annotated and unannotated parameters may be mixed.
 
 ## Calls
 

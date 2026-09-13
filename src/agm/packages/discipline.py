@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import TypeVar
@@ -27,37 +28,130 @@ from agm.packages.manifest import PackageManifest, distribution_manifest
 from agm.packages.model import PackageInfo, is_std_package_name
 from agm.stdlib_locator import shipped_stdlib_root
 from agm.util.ident import is_identifier
+from agm.util.text import normalize_newlines
 
 T = TypeVar("T")
 _ModuleResolutions = Mapping[ModuleId, ModuleResolution]
 
 
+@dataclass(frozen=True, slots=True)
+class PackageResolution:
+    """One name resolution of a package's module tree, reusable by later checks.
+
+    Validating what a package *ships* needs the same names as validating the
+    tree it ships from, so the resolution is handed on rather than recomputed:
+    a distribution is that tree minus excluded files, and no module in it is
+    ever loaded or resolved twice.
+    """
+
+    package: PackageInfo
+    modules: Mapping[ModuleId, Path] = field(default_factory=dict)
+    resolutions: _ModuleResolutions = field(default_factory=dict)
+    adjacency: Mapping[ModuleId, tuple[ModuleId, ...]] = field(default_factory=dict)
+    digests: Mapping[ModuleId, str] = field(default_factory=dict)
+
+
 def validate_package(
     package: PackageInfo, *, dependency_packages: Iterable[PackageInfo] = ()
-) -> None:
-    """Validate a package's module tree, commands, imports, resources, and references."""
+) -> PackageResolution:
+    """Validate a package's module tree, commands, imports, resources, and references.
+
+    The resolution it performed is returned so a caller that goes on to check
+    this package's distribution reuses it.
+    """
 
     modules = validate_package_structure(package)
-    resolutions = _resolve_package_modules(
+    resolution = _resolve_package_modules(
         package, modules, dependency_packages=tuple(dependency_packages)
     )
-    _validate_command_programs(package.manifest, resolutions)
+    _validate_command_programs(package.manifest, resolution.resolutions)
     _validate_resources(
-        modules, resolutions, exists=lambda relative: _resource_exists(package.root, relative)
+        modules,
+        resolution.resolutions,
+        exists=lambda relative: _resource_exists(package.root, relative),
+    )
+    return resolution
+
+
+def validate_package_distribution(resolution: PackageResolution) -> None:
+    """Validate the filtered distribution produced by a directory package."""
+
+    files = dict(distribution_files(resolution.package.root))
+    validate_distribution_view(
+        resolution,
+        distribution_manifest(resolution.package.manifest),
+        distribution_paths=(MANIFEST_NAME, *files),
     )
 
 
-def validate_package_distribution(
-    package: PackageInfo, *, dependency_packages: Iterable[PackageInfo] = ()
-) -> None:
-    """Validate the filtered distribution produced by a directory package."""
+def validate_staged_distribution(resolution: PackageResolution, staged: PackageInfo) -> None:
+    """Validate a staged distribution against the source resolution it came from.
 
-    files = dict(distribution_files(package.root))
-    validate_archive_package(
-        distribution_manifest(package.manifest),
-        archive_paths=(MANIFEST_NAME, *files),
-        read_module=lambda path: files[path].read_text(encoding="utf-8"),
-        dependency_packages=dependency_packages,
+    Staging copies a validated source tree, so what has to be established is
+    that the copy is of what was validated rather than of a tree that changed
+    underneath it — a content question, answered by comparing digests, not by
+    resolving the same modules again.
+    """
+
+    files = [path.relative_to(staged.root).as_posix() for path in staged.root.rglob("*")]
+    validate_distribution_view(resolution, staged.manifest, distribution_paths=files)
+    for module_id, digest in resolution.digests.items():
+        # Addressed by the place staging copied it to, not by the staged
+        # manifest's own name, which the copy may disagree about.
+        relative = resolution.modules[module_id].relative_to(resolution.package.root)
+        staged_path = staged.root / relative
+        if not staged_path.is_file():
+            continue
+        if _digest(normalize_newlines(fs.read_text(staged_path))) != digest:
+            raise DisciplineError(
+                f"staged package module {staged_path} differs from the validated "
+                f"source {resolution.modules[module_id]}"
+            )
+
+
+def validate_distribution_view(
+    resolution: PackageResolution,
+    manifest: PackageManifest,
+    *,
+    distribution_paths: Iterable[str],
+) -> None:
+    """Validate what a package ships against the resolution of the tree it ships from.
+
+    Every module a distribution keeps is one *resolution* already covers, so
+    nothing here parses or resolves. What the exclusion filter can break is
+    what is checked: the module tree must survive it, a retained module may not
+    import an excluded one, a referenced resource must ship, and the manifest
+    the distribution carries must name programs that ship.
+    """
+
+    validate_unreserved_package_name(manifest.name)
+    _validate_command_paths(manifest)
+    paths = frozenset(distribution_paths)
+    module_root = MODULE_TREE_DIRNAME + "/"
+    if not any(path.startswith(module_root) for path in paths):
+        raise DisciplineError(
+            f"package {manifest.name!r} requires module tree {MODULE_TREE_DIRNAME!r}"
+        )
+    root = resolution.package.root
+    retained = {
+        module_id: path
+        for module_id, path in resolution.modules.items()
+        if path.relative_to(root).as_posix() in paths
+    }
+    for module_id, path in retained.items():
+        for target in resolution.adjacency.get(module_id, ()):
+            if target in resolution.modules and target not in retained:
+                raise DisciplineError(
+                    f"module {resolution.modules[target]} imported by {path} "
+                    "is excluded from the package distribution"
+                )
+    _validate_command_programs(
+        manifest, {module_id: resolution.resolutions[module_id] for module_id in retained}
+    )
+    _validate_resources(
+        retained,
+        resolution.resolutions,
+        exists=lambda relative: _archive_resource_exists(relative, paths),
     )
 
 
@@ -66,7 +160,7 @@ def validate_package_structure(package: PackageInfo) -> dict[ModuleId, Path]:
 
     validate_unreserved_package_name(package.manifest.name)
     _validate_command_paths(package.manifest)
-    return _module_files(package)
+    return package_module_files(package)
 
 
 def _resolve_package_modules(
@@ -74,7 +168,7 @@ def _resolve_package_modules(
     modules: Mapping[ModuleId, Path],
     *,
     dependency_packages: tuple[PackageInfo, ...],
-) -> dict[ModuleId, ModuleResolution]:
+) -> PackageResolution:
     """Load and name-resolve a package under runtime package-visibility rules.
 
     A synthetic wildcard entry pulls the whole module tree into one graph, so
@@ -83,7 +177,7 @@ def _resolve_package_modules(
     """
 
     if not modules:
-        return {}
+        return PackageResolution(package)
     stdlib_root = (
         package.root
         if is_std_package_name(package.manifest.name)
@@ -108,7 +202,19 @@ def _resolve_package_modules(
         resolved = resolve_program(graph)
     except (AglError, OSError, UnicodeDecodeError) as exc:
         raise DisciplineError(f"cannot resolve package {package.manifest.name!r}: {exc}") from exc
-    return {module_id: resolved.modules[module_id].resolved for module_id in modules}
+    return PackageResolution(
+        package,
+        modules=dict(modules),
+        resolutions={module_id: resolved.modules[module_id].resolved for module_id in modules},
+        adjacency=dict(graph.adjacency),
+        digests={module_id: _digest(graph.modules[module_id].source_text) for module_id in modules},
+    )
+
+
+def _digest(source_text: str) -> str:
+    """Digest one module's normalized source, the form the loader resolved."""
+
+    return hashlib.sha256(source_text.encode()).hexdigest()
 
 
 def _package_graph_entry(package_name: str) -> tuple[Program, int]:
@@ -182,15 +288,15 @@ def _validate_archive_content(
                 if companion_path in archive_paths:
                     module_path.with_suffix(".py").write_text("", encoding="utf-8")
                 materialized[module_id] = module_path
-            resolutions = _resolve_package_modules(
+            resolution = _resolve_package_modules(
                 package, materialized, dependency_packages=dependency_packages
             )
     except (OSError, UnicodeDecodeError) as exc:
         raise DisciplineError(f"cannot load archive package {manifest.name!r}: {exc}") from exc
-    _validate_command_programs(manifest, resolutions)
+    _validate_command_programs(manifest, resolution.resolutions)
     _validate_resources(
         modules,
-        resolutions,
+        resolution.resolutions,
         exists=lambda relative: _archive_resource_exists(relative, archive_paths),
     )
 
@@ -257,7 +363,8 @@ def validate_unreserved_package_name(name: str) -> None:
         raise DisciplineError(f"package name {name!r} is reserved by AGM")
 
 
-def _module_files(package: PackageInfo) -> dict[ModuleId, Path]:
+def package_module_files(package: PackageInfo) -> dict[ModuleId, Path]:
+    """Return every ``.agl`` file under *package*'s module tree, keyed by module id."""
     module_root = package.module_root
     if not module_root.is_relative_to(package.root):
         raise DisciplineError(

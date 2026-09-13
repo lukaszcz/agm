@@ -279,6 +279,18 @@ class TestPlainMultiline:
         drive_plain('if true =>\n  print("done")\n')
         assert capsys.readouterr().out.split() == ["done"]
 
+    def test_dangling_operator_entry_continues_and_evaluates(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # A line ending with an operator leaves the entry incomplete, so the
+        # REPL prompts for more — and the continuation it invited must lex.
+        output = drive_plain(
+            "print ([1, 2, 3].map(fn v => v + 1) |>\n.fold(0, fn (t, v) => t + v))\n"
+        )
+        assert "...> " in output
+        assert "error" not in output.lower()
+        assert capsys.readouterr().out.split() == ["9"]
+
     def test_multiline_string_continues_through_blank_lines(self) -> None:
         # A blank line inside an open triple-quoted string must not force-submit
         # the still-open entry (unlike a blank line outside a string).

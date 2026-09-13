@@ -1,0 +1,37 @@
+{
+  "scenarios": [
+    {
+      "name": "positive_operands",
+      "params": {
+        "a": 2,
+        "b": 3,
+        "tag": "hi"
+      },
+      "expect": {
+        "stdout": "13\n5\ntrue\n20\nhi/both\n1\n4\n-1\n"
+      }
+    },
+    {
+      "name": "negative_operand_filtered_out",
+      "params": {
+        "a": -1,
+        "b": 4,
+        "tag": "t"
+      },
+      "expect": {
+        "stdout": "9\n3\nfalse\n14\nt/mixed\n-2\n5\n2\n"
+      }
+    },
+    {
+      "name": "zero_operands",
+      "params": {
+        "a": 0,
+        "b": 0,
+        "tag": "zero"
+      },
+      "expect": {
+        "stdout": "3\n0\nfalse\n0\nzero/mixed\n-1\n1\n1\n"
+      }
+    }
+  ]
+}

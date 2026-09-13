@@ -7,6 +7,7 @@ import io
 import os
 import tempfile
 import zipfile
+from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
 from typing import IO, cast
@@ -26,7 +27,10 @@ from agm.packages.archive import (
     write_archive,
 )
 from agm.packages.layout import MODULE_TREE_DIRNAME
+from agm.packages.manifest import CommandSpec, expanded_commands
 from agm.packages.record import RecordEntry, serialize_record
+from tests._package_helpers import archive_contents, write_zip
+from tests._parse_counts import parse_counts
 
 
 def _package_tree(tmp_path: Path) -> Path:
@@ -108,6 +112,125 @@ def test_archive_discipline_resolves_resources_relative_to_the_package_root(
     assert verify_archive_discipline(archive_path) == metadata
 
 
+def test_write_archive_bakes_a_source_declared_command_into_the_manifest(tmp_path: Path) -> None:
+    root = _package_tree(tmp_path)
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        '@command("tools launch")\n@description("Launch review")\n'
+        "program def main() -> unit = ()\n",
+        encoding="utf-8",
+    )
+    archive_path = tmp_path / "package.agmpkg"
+
+    metadata = write_archive(root, archive_path)
+
+    expected = {
+        "tools launch": CommandSpec(program="review_tools/main::main", description="Launch review")
+    }
+    assert metadata.manifest.commands == expected
+    assert read_archive_manifest(archive_path).commands == expected
+
+
+def test_validate_archive_source_reports_overlapping_manifest_and_source_commands(
+    tmp_path: Path,
+) -> None:
+    root = _package_tree(tmp_path)
+    (root / "package.toml").write_text(
+        '[package]\nversion = "1.2.3"\nname = "review_tools"\n\n'
+        '[commands]\n"tools launch" = { program = "review_tools/other::main" }\n',
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        '@command("tools launch")\nprogram def main() -> unit = ()\n', encoding="utf-8"
+    )
+
+    with pytest.raises(ArchiveError, match="tools launch"):
+        validate_archive_source(root)
+
+
+def test_validate_archive_source_reports_an_alias_colliding_with_a_source_declared_command(
+    tmp_path: Path,
+) -> None:
+    root = _package_tree(tmp_path)
+    (root / "package.toml").write_text(
+        '[package]\nversion = "1.2.3"\nname = "review_tools"\n\n'
+        '[commands]\nbuild = { program = "review_tools/b::main" }\n\n'
+        '[aliases]\nshipit = "build"\n',
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "b.agl").write_text(
+        "program def main() -> unit = ()\n", encoding="utf-8"
+    )
+    (root / MODULE_TREE_DIRNAME / "ship.agl").write_text(
+        '@command("shipit")\nprogram def main() -> unit = ()\n', encoding="utf-8"
+    )
+
+    with pytest.raises(ArchiveError, match="shipit"):
+        validate_archive_source(root)
+
+
+def test_write_archive_accepts_a_manifest_group_satisfied_only_by_a_program_registered_descendant(
+    tmp_path: Path,
+) -> None:
+    root = _package_tree(tmp_path)
+    (root / "package.toml").write_text(
+        '[package]\nversion = "1.2.3"\nname = "review_tools"\n\n'
+        '[commands.devel]\ndescription = "Development workflows"\n',
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        '@command("devel review")\nprogram def review() -> unit = ()\n', encoding="utf-8"
+    )
+    archive_path = tmp_path / "package.agmpkg"
+
+    metadata = write_archive(root, archive_path)
+
+    assert metadata.manifest.commands["devel"].program is None
+    assert metadata.manifest.commands["devel review"].program == "review_tools/main::review"
+
+
+def test_write_archive_accepts_an_alias_targeting_a_program_registered_command(
+    tmp_path: Path,
+) -> None:
+    root = _package_tree(tmp_path)
+    (root / "package.toml").write_text(
+        '[package]\nversion = "1.2.3"\nname = "review_tools"\n\n'
+        '[commands.devel]\ndescription = "Development workflows"\n\n'
+        '[aliases]\nrev = "devel review"\n',
+        encoding="utf-8",
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        '@command("devel review")\nprogram def review() -> unit = ()\n', encoding="utf-8"
+    )
+    archive_path = tmp_path / "package.agmpkg"
+
+    metadata = write_archive(root, archive_path)
+
+    assert expanded_commands(metadata.manifest)["rev"].program == "review_tools/main::review"
+
+
+def test_write_archive_rejects_a_genuinely_empty_command_group(tmp_path: Path) -> None:
+    root = _package_tree(tmp_path)
+    (root / "package.toml").write_text(
+        '[package]\nversion = "1.2.3"\nname = "review_tools"\n\n'
+        '[commands.devel]\ndescription = "Development workflows"\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ArchiveError, match="devel"):
+        write_archive(root, tmp_path / "package.agmpkg")
+
+
+def test_write_archive_rejects_an_alias_naming_nothing(tmp_path: Path) -> None:
+    root = _package_tree(tmp_path)
+    (root / "package.toml").write_text(
+        '[package]\nversion = "1.2.3"\nname = "review_tools"\n\n[aliases]\nrev = "devel review"\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ArchiveError, match="rev"):
+        write_archive(root, tmp_path / "package.agmpkg")
+
+
 def test_archive_discipline_accepts_a_nonempty_directory_resource(tmp_path: Path) -> None:
     root = _package_tree(tmp_path)
     (root / "assets").mkdir()
@@ -176,21 +299,10 @@ def test_verify_archive_rejects_a_record_that_does_not_match_its_contents(tmp_pa
     with zipfile.ZipFile(archive_path) as source:
         contents = {info.filename: source.read(info) for info in source.infolist()}
     contents[prefix + "src/main.agl"] = b"changed"
-    _write_zip(archive_path, list(contents.items()))
+    write_zip(archive_path, list(contents.items()))
 
     with pytest.raises(ArchiveError, match="RECORD"):
         verify_archive(archive_path)
-
-
-def _archive_contents(path: Path) -> dict[str, bytes]:
-    with zipfile.ZipFile(path) as archive:
-        return {info.filename: archive.read(info) for info in archive.infolist()}
-
-
-def _write_zip(path: Path, contents: list[tuple[str, bytes]]) -> None:
-    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-        for name, content in contents:
-            archive.writestr(package_archive._zip_info(name), content)
 
 
 def test_write_archive_refuses_destinations_inside_the_source_tree(tmp_path: Path) -> None:
@@ -415,12 +527,12 @@ def test_write_archive_rejects_source_root_rebound_to_publication_parent_after_c
     root = _package_tree(tmp_path)
     destination_parent = tmp_path / "output"
     destination = destination_parent / "package.agmpkg"
-    archive_contents = package_archive._archive_contents
+    original_archive_contents = package_archive._archive_contents
 
     def collect_then_rebind_source(
         source_root: Path, manifest: package_archive.PackageManifest
     ) -> dict[str, bytes]:
-        contents = archive_contents(source_root, manifest)
+        contents = original_archive_contents(source_root, manifest)
         source_root.rename(destination_parent)
         root.mkdir()
         return contents
@@ -442,12 +554,12 @@ def test_write_archive_rejects_parent_moved_into_source_after_initial_check(
     destination_parent = tmp_path / "output"
     destination_parent.mkdir()
     destination = destination_parent / "package.agmpkg"
-    write_zip = package_archive._write_zip
+    original_write_zip = package_archive._write_zip
 
     def write_then_move_parent_into_source(
         file: IO[bytes], prefix: str, contents: dict[str, bytes]
     ) -> None:
-        write_zip(file, prefix, contents)
+        original_write_zip(file, prefix, contents)
         destination_parent.rename(root / "output")
 
     monkeypatch.setattr(package_archive, "_write_zip", write_then_move_parent_into_source)
@@ -725,8 +837,10 @@ def test_write_archive_retains_the_write_error_when_temporary_cleanup_fails(
     destination = tmp_path / "package.agmpkg"
     unlink = os.unlink
 
-    def fail_temporary_unlink(path: str, *, dir_fd: int | None = None) -> None:
-        if path.startswith(".package.agmpkg."):
+    # Patching os.unlink reaches every caller in the process, not just the
+    # archive writer, so only the archive's own temporary fails here.
+    def fail_temporary_unlink(path: str | Path, *, dir_fd: int | None = None) -> None:
+        if str(path).startswith(".package.agmpkg."):
             raise OSError("denied")
         unlink(path, dir_fd=dir_fd)
 
@@ -888,7 +1002,7 @@ quick = { program = "review_tools/main::main" }
     archive_path = tmp_path / "package.agmpkg"
     write_archive(root, archive_path)
 
-    contents = _archive_contents(archive_path)
+    contents = archive_contents(archive_path)
     prefix = "review_tools-1.2.3/"
     assert 'path = "../tools"' in (root / "package.toml").read_text(encoding="utf-8")
     assert prefix + "nested/ignored.txt" not in contents
@@ -931,7 +1045,7 @@ version = "1.2.3"
 
     metadata = write_archive(root, archive_path)
 
-    contents = _archive_contents(archive_path)
+    contents = archive_contents(archive_path)
     assert (
         b'"caf\xc3\xa9" = { program = "review_tools/main::main" }'
         in contents["review_tools-1.2.3/package.toml"]
@@ -960,7 +1074,7 @@ def test_nested_gitignore_preserves_basename_wildcard_and_negation_semantics(
     archive_path = tmp_path / "package.agmpkg"
     write_archive(root, archive_path)
 
-    names = _archive_contents(archive_path)
+    names = archive_contents(archive_path)
     prefix = "review_tools-1.2.3/nested/"
     assert prefix + "drop.tmp" not in names
     assert prefix + "deeper/drop.tmp" not in names
@@ -981,7 +1095,7 @@ def test_nested_gitignore_cannot_reinclude_a_file_in_an_ignored_parent(tmp_path:
     archive_path = tmp_path / "package.agmpkg"
     write_archive(root, archive_path)
 
-    assert "review_tools-1.2.3/nested/kept.txt" not in _archive_contents(archive_path)
+    assert "review_tools-1.2.3/nested/kept.txt" not in archive_contents(archive_path)
 
 
 def test_gitignore_pattern_prefixing_handles_comments_empty_and_negation() -> None:
@@ -1025,7 +1139,7 @@ def test_read_archive_metadata_rejects_unsafe_layouts(
     tmp_path: Path, contents: list[tuple[str, bytes]]
 ) -> None:
     archive_path = tmp_path / "invalid.agmpkg"
-    _write_zip(archive_path, contents)
+    write_zip(archive_path, contents)
 
     with pytest.raises(ArchiveError):
         read_archive_metadata(archive_path)
@@ -1035,7 +1149,7 @@ def test_read_archive_metadata_rejects_a_current_directory_entry(tmp_path: Path)
     """A ``"."`` entry names no path component, so it has no directory prefix."""
 
     archive_path = tmp_path / "dot.agmpkg"
-    _write_zip(archive_path, [(".", b"")])
+    write_zip(archive_path, [(".", b"")])
 
     with pytest.raises(ArchiveError):
         read_archive_metadata(archive_path)
@@ -1043,7 +1157,7 @@ def test_read_archive_metadata_rejects_a_current_directory_entry(tmp_path: Path)
 
 def test_read_archive_metadata_rejects_file_descendant_conflicts(tmp_path: Path) -> None:
     archive_path = tmp_path / "conflict.agmpkg"
-    _write_zip(
+    write_zip(
         archive_path,
         [
             ("review_tools-1.2.3/RECORD", b""),
@@ -1060,7 +1174,7 @@ def test_read_archive_metadata_rejects_file_descendant_conflicts(tmp_path: Path)
 def test_read_archive_metadata_rejects_repeated_entries(tmp_path: Path) -> None:
     archive_path = tmp_path / "duplicate.agmpkg"
     with pytest.warns(UserWarning, match="Duplicate name"):
-        _write_zip(
+        write_zip(
             archive_path,
             [
                 ("review_tools-1.2.3/RECORD", b""),
@@ -1098,25 +1212,25 @@ def test_archive_reader_rejects_manifest_prefix_and_record_errors(tmp_path: Path
     root = _package_tree(tmp_path)
     archive_path = tmp_path / "package.agmpkg"
     write_archive(root, archive_path)
-    contents = _archive_contents(archive_path)
+    contents = archive_contents(archive_path)
     prefix = "review_tools-1.2.3/"
 
     contents[prefix + "package.toml"] = b"[package\n"
-    _write_zip(archive_path, list(contents.items()))
+    write_zip(archive_path, list(contents.items()))
     with pytest.raises(ArchiveError, match="manifest"):
         read_archive_metadata(archive_path)
 
     write_archive(root, archive_path)
-    contents = _archive_contents(archive_path)
+    contents = archive_contents(archive_path)
     contents[prefix + "RECORD"] = b"\xff"
-    _write_zip(archive_path, list(contents.items()))
+    write_zip(archive_path, list(contents.items()))
     with pytest.raises(ArchiveError, match="RECORD"):
         read_archive_metadata(archive_path)
 
     write_archive(root, archive_path)
-    contents = _archive_contents(archive_path)
+    contents = archive_contents(archive_path)
     contents[prefix + "RECORD"] = contents[prefix + "RECORD"].replace(b"\n", b"\r\n")
-    _write_zip(archive_path, list(contents.items()))
+    write_zip(archive_path, list(contents.items()))
     with pytest.raises(ArchiveError, match="canonical"):
         read_archive_metadata(archive_path)
 
@@ -1125,18 +1239,18 @@ def test_archive_reader_rejects_unsorted_record_and_mismatched_prefix(tmp_path: 
     root = _package_tree(tmp_path)
     archive_path = tmp_path / "package.agmpkg"
     write_archive(root, archive_path)
-    contents = _archive_contents(archive_path)
+    contents = archive_contents(archive_path)
     prefix = "review_tools-1.2.3/"
     record = contents[prefix + "RECORD"].decode().splitlines()
     contents[prefix + "RECORD"] = ("\n".join(reversed(record)) + "\n").encode()
-    _write_zip(archive_path, list(contents.items()))
+    write_zip(archive_path, list(contents.items()))
     with pytest.raises(ArchiveError, match="sorted"):
         read_archive_metadata(archive_path)
 
     write_archive(root, archive_path)
-    contents = _archive_contents(archive_path)
+    contents = archive_contents(archive_path)
     renamed = {name.replace(prefix, "other-1.2.3/"): value for name, value in contents.items()}
-    _write_zip(archive_path, list(renamed.items()))
+    write_zip(archive_path, list(renamed.items()))
     with pytest.raises(ArchiveError, match="prefix"):
         read_archive_metadata(archive_path)
 
@@ -1169,9 +1283,9 @@ def test_archive_readers_reject_noncanonical_zip_entry_metadata_and_flags(tmp_pa
     root = _package_tree(tmp_path)
     archive_path = tmp_path / "package.agmpkg"
     write_archive(root, archive_path)
-    contents = _archive_contents(archive_path)
+    contents = archive_contents(archive_path)
 
-    _write_zip(archive_path, list(contents.items()))
+    write_zip(archive_path, list(contents.items()))
     raw = bytearray(archive_path.read_bytes())
     central_directory = raw.index(b"PK\x01\x02")
     raw[central_directory + 8] |= 0x01
@@ -1196,18 +1310,18 @@ def test_archive_readers_reject_windows_invalid_names_and_record_paths(tmp_path:
     root = _package_tree(tmp_path)
     archive_path = tmp_path / "package.agmpkg"
     write_archive(root, archive_path)
-    contents = _archive_contents(archive_path)
+    contents = archive_contents(archive_path)
     prefix = "review_tools-1.2.3/"
     contents[prefix + "CON"] = b"invalid"
-    _write_zip(archive_path, list(contents.items()))
+    write_zip(archive_path, list(contents.items()))
 
     with pytest.raises(ArchiveError, match="component"):
         read_archive_metadata(archive_path)
 
     write_archive(root, archive_path)
-    contents = _archive_contents(archive_path)
+    contents = archive_contents(archive_path)
     contents[prefix + "RECORD"] = ("CON,sha256=" + "0" * 64 + "\n").encode()
-    _write_zip(archive_path, list(contents.items()))
+    write_zip(archive_path, list(contents.items()))
 
     with pytest.raises(ArchiveError, match="component"):
         read_archive_metadata(archive_path)
@@ -1440,7 +1554,7 @@ def test_verify_archive_rejects_a_non_normalized_manifest_with_a_matching_record
     root = _package_tree(tmp_path)
     archive_path = tmp_path / "package.agmpkg"
     write_archive(root, archive_path)
-    contents = _archive_contents(archive_path)
+    contents = archive_contents(archive_path)
     prefix = "review_tools-1.2.3/"
     manifest_name = prefix + "package.toml"
     contents[manifest_name] = b'[package]\nversion = "1.2.3"\nname = "review_tools"\n'
@@ -1450,7 +1564,7 @@ def test_verify_archive_rejects_a_non_normalized_manifest_with_a_matching_record
         if name != prefix + "RECORD"
     )
     contents[prefix + "RECORD"] = serialize_record(entries).encode()
-    _write_zip(archive_path, list(contents.items()))
+    write_zip(archive_path, list(contents.items()))
 
     with pytest.raises(ArchiveError, match="not normalized"):
         verify_archive(archive_path)
@@ -1569,3 +1683,75 @@ def test_archive_path_depth_limit_admits_exactly_the_deepest_component_count(
     with pytest.raises(ArchiveError):
         write_archive(root, rejected)
     assert not rejected.exists()
+
+
+def test_validate_archive_source_rejects_a_resource_the_distribution_excludes(
+    tmp_path: Path,
+) -> None:
+    """A resource present in the source tree but ignored out of the distribution.
+
+    Source-tree validation passes — the file is there — so only the archive
+    view catches that the shipped package would reach for a file it does not
+    carry.
+    """
+    root = _package_tree(tmp_path)
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        'program def main() -> unit =\n  print(resource("prompts/review.md"))\n',
+        encoding="utf-8",
+    )
+    prompts = root / "prompts"
+    prompts.mkdir()
+    (prompts / "review.md").write_text("review", encoding="utf-8")
+    (root / ".gitignore").write_text("prompts/\n", encoding="utf-8")
+
+    with pytest.raises(ArchiveError, match="discipline"):
+        validate_archive_source(root)
+
+
+def test_validate_archive_source_parses_each_module_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The source tree and its distribution share one resolution.
+
+    A distribution is its source tree minus excluded files, so validating it
+    reuses the names already resolved for the tree rather than resolving a
+    copy of the same modules again.
+    """
+    root = _package_tree(tmp_path)
+    (root / MODULE_TREE_DIRNAME / "helper.agl").write_text(
+        "def twice(x: int) -> int = x + x\n", encoding="utf-8"
+    )
+
+    with parse_counts(monkeypatch) as counts:
+        validate_archive_source(root)
+
+    # By file name, so a second parse of a copy staged elsewhere counts too.
+    by_name: Counter[str] = Counter()
+    for path, count in counts.items():
+        by_name[Path(path).name] += count
+    assert by_name["main.agl"] == 1
+    assert by_name["helper.agl"] == 1
+
+
+def test_validate_archive_source_rejects_a_module_the_distribution_excludes(tmp_path: Path) -> None:
+    """An ignored module still imported by one that ships."""
+    root = _package_tree(tmp_path)
+    (root / MODULE_TREE_DIRNAME / "helper.agl").write_text(
+        "def twice(x: int) -> int = x + x\n", encoding="utf-8"
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "import review_tools/helper\nprogram def main() -> unit = ()\n", encoding="utf-8"
+    )
+    (root / ".gitignore").write_text("helper.agl\n", encoding="utf-8")
+
+    with pytest.raises(ArchiveError, match="discipline"):
+        validate_archive_source(root)
+
+
+def test_validate_archive_source_rejects_an_excluded_module_tree(tmp_path: Path) -> None:
+    """A distribution that ships no module tree at all."""
+    root = _package_tree(tmp_path)
+    (root / ".gitignore").write_text(f"{MODULE_TREE_DIRNAME}/\n", encoding="utf-8")
+
+    with pytest.raises(ArchiveError, match="discipline"):
+        validate_archive_source(root)

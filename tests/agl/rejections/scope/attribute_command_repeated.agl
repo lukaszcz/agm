@@ -1,0 +1,3 @@
+@command("devel review")
+@command("devel audit")
+program def main() -> unit = ()

@@ -1014,6 +1014,7 @@ class AstBuilder(Transformer):
         """
         name, scope_path, receiver_type = self._function_declaration_head(args)
         params, return_type, body = self._split_params_type_body(args)
+        _check_function_param_annotations(params)
         assert body is not None or return_type is not None, "func def: no body and no return type"
         return syntax.FuncDef(
             name=name,
@@ -1087,12 +1088,6 @@ class AstBuilder(Transformer):
         name_tok = _find_name_token(rest)
         name = str(name_tok)
         type_expr, default = _extract_ann_and_optional_expr(rest[1:])
-        if type_expr is None:
-            if name != "self":
-                raise AglSyntaxError(
-                    f"Parameter {name!r} has no type annotation.",
-                    span=self._span_from_token(name_tok),
-                )
         return syntax.Param(
             name=name,
             type_expr=type_expr,
@@ -1425,7 +1420,6 @@ class AstBuilder(Transformer):
                 pass  # type_params / this declaration's attribute prefix — skip
             elif _is_field_tuple(a):
                 params = cast(tuple[syntax.Param, ...], a)
-                _check_bare_self_leads(params)
             elif isinstance(a, _ALL_TYPE_EXPRS):
                 return_type = a
             elif a is not None and not isinstance(
@@ -1434,8 +1428,25 @@ class AstBuilder(Transformer):
                 body = cast(syntax.Expr, a)
         return params, return_type, body
 
+    def parenthesized_lambda_params(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
+        """Return the optional parameter list inside a lambda's parentheses."""
+        return cast(tuple[syntax.Param, ...], next((a for a in args if _is_field_tuple(a)), ()))
+
+    def unary_lambda_param(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
+        """Build the unannotated parameter of a bare unary lambda."""
+        name_token = _find_name_token(args)
+        return (
+            syntax.Param(
+                name=str(name_token),
+                type_expr=None,
+                default=None,
+                span=self._span_from_meta(meta),
+                node_id=self._next_id(),
+            ),
+        )
+
     def lambda_expr(self, meta: Meta, args: _Args) -> syntax.Lambda:
-        """lambda_expr: "fn" LPAR param_list? RPAR (THIN_ARROW type_expr)? ARROW expr"""
+        """Build an anonymous function with parenthesized or bare unary parameters."""
         params, return_type, body = self._split_params_type_body(args)
         assert body is not None, "lambda_expr: no body"
         return syntax.Lambda(
@@ -1444,6 +1455,43 @@ class AstBuilder(Transformer):
             body=body,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
+        )
+
+    def leading_dot_expr(self, meta: Meta, args: _Args) -> syntax.Lambda:
+        """Desugar ``.method(args)`` to a unary lambda over contextual ``self``."""
+        span = self._span_from_meta(meta)
+        name_token = _find_name_token(args)
+        self_span = self._span_from_token(name_token)
+        param = syntax.Param(
+            name="self",
+            type_expr=None,
+            default=None,
+            span=self_span,
+            node_id=self._next_id(),
+        )
+        receiver = syntax.VarRef(name="self", span=self_span, node_id=self._next_id())
+        member = syntax.FieldAccess(
+            obj=receiver,
+            field=str(name_token),
+            span=span,
+            node_id=self._next_id(),
+        )
+        pos_args, named_args = self._call_args_from_children(args, span)
+        body = syntax.Call(
+            callee=member,
+            args=pos_args,
+            named_args=named_args,
+            span=span,
+            node_id=self._next_id(),
+            type_args=_find_type_args(args),
+        )
+        return syntax.Lambda(
+            params=(param,),
+            return_type=None,
+            body=body,
+            span=span,
+            node_id=self._next_id(),
+            implicit_self=True,
         )
 
     # ------------------------------------------------------------------
@@ -1492,22 +1540,21 @@ class AstBuilder(Transformer):
     # Postfix: call / field_access / index_access
     # ------------------------------------------------------------------
 
+    def _call_args_from_children(
+        self, args: _Args, span: SourceSpan
+    ) -> tuple[tuple[syntax.Expr, ...], tuple[syntax.NamedArg, ...]]:
+        """Finalize the optional argument list among one call-like rule's children."""
+        for arg in args:
+            if isinstance(arg, tuple) and len(arg) == 2 and isinstance(arg[0], list):
+                raw_pos, raw_named = cast(_RawArgLists, arg)
+                return self._finalize_call_args(raw_pos, raw_named, call_span=span)
+        return (), ()
+
     def call(self, meta: Meta, args: _Args) -> syntax.Call:
         """postfix LPAR arg_list? RPAR → Call node."""
         callee, type_args = _split_type_apply(cast(syntax.Expr, args[0]))
-        raw_pos_args: list[_RawPosArg] = []
-        raw_named_args: list[_RawNamed] = []
-        for a in args[1:]:
-            if isinstance(a, tuple) and len(a) == 2 and isinstance(a[0], list):
-                pa, na = cast(_RawArgLists, a)
-                raw_pos_args = pa
-                raw_named_args = na
-            # Tokens (LPAR, RPAR) and None are skipped
-
         span = self._span_from_meta(meta)
-        pos_args, named_args = self._finalize_call_args(
-            raw_pos_args, raw_named_args, call_span=span
-        )
+        pos_args, named_args = self._call_args_from_children(args[1:], span)
         return syntax.Call(
             callee=callee,
             args=pos_args,
@@ -3451,19 +3498,15 @@ def _find_field_tuple(args: _Args) -> tuple[syntax.Param, ...]:
     return cast(tuple[syntax.Param, ...], result)
 
 
-def _check_bare_self_leads(entries: tuple[syntax.Param, ...]) -> None:
-    """Reject an unannotated entry that is not the list's leading ``self``.
-
-    Only a method's ``self`` receiver may go without a type annotation, and it
-    has to lead the parameter list.
-    """
-    for entry in entries[1:]:
-        if entry.type_expr is None:
-            raise AglSyntaxError(
-                f"Parameter {entry.name!r} has no type annotation; "
-                "a bare 'self' must be the first parameter.",
-                span=entry.span,
-            )
+def _check_function_param_annotations(entries: tuple[syntax.Param, ...]) -> None:
+    """Require annotations on named-function parameters except a leading ``self``."""
+    for index, entry in enumerate(entries):
+        if entry.type_expr is not None or (index == 0 and entry.name == "self"):
+            continue
+        message = f"Parameter {entry.name!r} has no type annotation."
+        if entry.name == "self":
+            message += " A bare 'self' must be the first parameter."
+        raise AglSyntaxError(message, span=entry.span)
 
 
 def _is_member_tuple(a: object) -> bool:

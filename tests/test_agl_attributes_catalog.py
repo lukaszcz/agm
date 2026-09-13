@@ -22,6 +22,7 @@ from agm.agl.attributes import (
 
 ZONE_ATTRIBUTES = ("arg-pos", "arg-std", "arg-named")
 OPTION_ATTRIBUTES = ("opt-short", "opt-name", "opt-env", "opt-metavar", "opt-hidden")
+COMMAND_ATTRIBUTES = ("command", "description", "help")
 
 
 class TestCatalogContents:
@@ -29,6 +30,7 @@ class TestCatalogContents:
         assert set(BUILTIN_ATTRIBUTES) == {
             *ZONE_ATTRIBUTES,
             *OPTION_ATTRIBUTES,
+            *COMMAND_ATTRIBUTES,
             "extern-name",
             "doc",
         }
@@ -97,6 +99,18 @@ class TestExternAndOptionAttributes:
         for name, spec in BUILTIN_ATTRIBUTES.items():
             if name not in ZONE_ATTRIBUTES:
                 assert spec.conflicts == ()
+
+
+class TestCommandAttributes:
+    """The attributes registering a program as a package command."""
+
+    @pytest.mark.parametrize("name", COMMAND_ATTRIBUTES)
+    def test_command_attributes_sit_on_programs_only(self, name: str) -> None:
+        assert BUILTIN_ATTRIBUTES[name].targets == frozenset({AttributeTarget.PROGRAM})
+
+    @pytest.mark.parametrize("name", COMMAND_ATTRIBUTES)
+    def test_command_attributes_take_one_text(self, name: str) -> None:
+        assert BUILTIN_ATTRIBUTES[name].arguments is AttributeArguments.ONE_TEXT
 
 
 class TestDocAttribute:

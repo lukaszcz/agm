@@ -4,7 +4,7 @@
 
 ## Sandbox Runtime
 
-Isolation is delegated to SRT, the external sandbox-runtime tool; AGM implements none itself. `agm run` resolves a merged settings file, invokes SRT with it, and passes the target command through. The sandbox can be bypassed explicitly for commands that need full access.
+Isolation is delegated to SRT, the external sandbox-runtime tool; AGM implements none itself. `agm run` resolves a merged settings file, invokes SRT with it, and passes the target command through. Interactive commands run through AGM's PTY relay by default, giving applications a controlling terminal inside SRT's detached session; redirected commands remain unwrapped. The sandbox and PTY can each be bypassed explicitly.
 
 ## Settings Resolution
 
@@ -18,4 +18,5 @@ Memory and swap limits are enforced through `systemd-run`, which places the sand
 
 - `src/agm/commands/run.py` — the `agm run` command: alias remapping, limit flags, sandbox invocation.
 - `src/agm/sandbox/srt.py` — SRT settings resolution, the merge chain, project write-path patching, artifact cleanup.
+- `src/agm/sandbox/pty.py` — controlling-terminal allocation and terminal I/O relay.
 - `src/agm/config/sandbox/` — sandbox settings discovery and merging.

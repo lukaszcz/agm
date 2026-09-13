@@ -55,6 +55,9 @@ static errors.
 | `@opt-env("VAR")` | variable name | `program def` parameter | Environment fallback when no CLI token supplies the value. |
 | `@opt-metavar("…")` | placeholder | `program def` parameter | Value placeholder in usage and help. |
 | `@opt-hidden` | none | `program def` parameter | Omits the flag from help and completion; the parameter still binds. |
+| `@command("…")` | command path | `program def` | Registers the program as that package command. |
+| `@description("…")` | prose | `program def` | The registered command's one-line description. |
+| `@help("…")` | prose | `program def` | Further prose the registered command's help shows. |
 
 ## Zone attributes
 
@@ -79,6 +82,34 @@ parameter's `@doc` as that parameter's help ([Host environment](host-environment
 
 Names the Python companion function of an `extern def` when it differs from
 the declared AgL name ([Python FFI](ffi.md#declarations-and-companions)).
+
+## Command attributes
+
+`@command` registers a `program def` as a command of the package that owns its
+module ([Packages](packages.md#commands)). Its argument is a command path:
+space-separated words naming the command a reader invokes, so
+`@command("devel review")` is invoked as `devel review`. A path whose first
+word is one of the host's own commands, or any word of which looks like an
+option, is a static error.
+
+`@description` and `@help` are the registered command's prose. They describe
+the registration, not the program, so each is a static error without
+`@command` beside it; a program's own prose is `@doc`, which describes it
+wherever it runs.
+
+Each of the three appears at most once on a declaration, and all three are
+legal on a `program def` alone.
+
+```agl
+@command("devel review")
+@description("Review changes")
+@help("This program reviews changes")
+@doc("Change review")
+program def main(@arg-pos subject: text) -> unit =
+  print "reviewing %{subject}"
+```
+
+A program outside a package registers nothing: nothing reads its `@command`.
 
 ## Program parameter attributes
 

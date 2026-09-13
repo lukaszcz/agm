@@ -28,6 +28,7 @@
       ".",
       "/tmp",
       "~/.cache",
+      "~/.config",
       "~/.codex"
     ],
     "denyWrite": [".env", ".env.*", "*.pem", "*.key"]

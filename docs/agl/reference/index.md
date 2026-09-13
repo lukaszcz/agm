@@ -73,22 +73,22 @@ program def main(spec: text) -> unit =
 | ------- | -------- |
 | [Lexical structure](lexical-structure.md) | Source text, comments, indentation and layout, keywords, tokens, declaration attributes, operator precedence |
 | [Program structure](program-structure.md) | Modules, `program def` entry points and their parameters, items, binders, inline forms |
-| [Attributes](attributes.md) | `@name` declaration attributes: placement, catalog, zones, `@doc`, `@extern-name`, program parameter options |
-| [Modules](modules.md) | File-based module system: module identity, import forms, qualified access, visibility, cyclic imports, REPL imports, the standard-library module inventory |
-| [Packages](packages.md) | Package module trees and identity, package-qualified paths, import visibility, programs as commands, params and qualified configuration keys, resources and companions |
-| [Named scopes](scopes.md) | Nestable declaration namespaces, qualifier paths, visibility, and `use` |
 | [Types](types.md) | Built-in types (`unit`, `text`, `int`, `decimal`, `bool`, `json`, function types), `record`/`enum`/`type` declarations, the library types the language itself names (`ExecResult`, `ParsePolicy`, `Agent`, `AgentRequest`, `SessionTransport`, `Session`, `SessionStats`), assignability, casts and convertibility (`as`/`as?`), mutable record fields and reference semantics, cycles, and copying (`copy`/`shallow-copy`) |
 | [Bindings and scope](bindings-and-scope.md) | `let`, `var`, `:=`, `builtin var`, `def`, lexical scoping, shadowing |
 | [Expressions](expressions.md) | Literals, constructors, calls, operators, `as`/`as?` cast operators, `render`, JSON parsing, `case`/`if` expressions, `unit`-typed forms, expected-type propagation |
+| [Strings and interpolation](strings-and-interpolation.md) | Templates, escapes, `%{…}` interpolation, uniform rendering rules |
 | [Functions](functions.md) | `def` declarations, `fn` lambdas, optional/named arguments, function types, first-class values, recursion and depth limit |
+| [Control flow](control-flow.md) | `if`, `case`, unified loops (`for`/`while`/`do`/`until`/`done`), `break`, `continue` |
 | [Pattern matching](pattern-matching.md) | Patterns, source priority, exhaustiveness, redundancy |
 | [Generics](generics.md) | Type parameters on `def`/`record`/`enum`/`type`, type application, inference and `::[…]` override, generic constructor values, strict parametricity, invariance, erasure |
-| [Control flow](control-flow.md) | `if`, `case`, unified loops (`for`/`while`/`do`/`until`/`done`), `break`, `continue` |
-| [Strings and interpolation](strings-and-interpolation.md) | Templates, escapes, `%{…}` interpolation, uniform rendering rules |
 | [Agent calls](agent-calls.md) | `ask`, agents as values, call options, output contracts, the JSON wire format, parse policies and retries |
 | [Shell execution](shell-execution.md) | `exec`, the `ExecResult` structured form vs the parsed form, `ExecError` |
-| [Python FFI](ffi.md) | `extern def`, the companion Python file, value mapping across the boundary, `ExternError` |
 | [Exceptions](exceptions.md) | The exception model, `try`/`catch`/`raise`, the built-in exception catalog |
+| [Attributes](attributes.md) | `@name` declaration attributes: placement, catalog, zones, `@doc`, `@extern-name`, command registration, program parameter options |
+| [Modules](modules.md) | File-based module system: module identity, import forms, qualified access, visibility, cyclic imports, REPL imports, the standard-library module inventory |
+| [Named scopes](scopes.md) | Nestable declaration namespaces, qualifier paths, visibility, and `use` |
+| [Packages](packages.md) | Package module trees and identity, package-qualified paths, import visibility, programs as commands, params and qualified configuration keys, resources and companions |
+| [Python FFI](ffi.md) | `extern def`, the companion Python file, value mapping across the boundary, `ExternError` |
 | [Host environment](host-environment.md) | Agents, program arguments, host defaults, capability checking, tracing |
 | [Grammar](grammar.md) | The collected grammar |
 

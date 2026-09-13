@@ -127,31 +127,53 @@ def write_archive(package_root: Path, destination: Path) -> ArchiveMetadata:
         os.close(source_root.fd)
 
 
+def archive_source_manifest(package_root: Path) -> PackageManifest:
+    """Return the manifest an archive of *package_root* would carry.
+
+    The distribution view of the source manifest, with the commands the
+    package's own programs register already merged in. This reads the manifest
+    and the module tree's declarations and validates neither, so a caller that
+    needs the identity before it validates does not pay for a validation it is
+    about to run anyway.
+    """
+    root = _package_root(package_root)
+    _source, manifest, _prefix = _source_distribution_manifest(root)
+    return manifest
+
+
 def validate_archive_source(
     package_root: Path, *, dependency_packages: Iterable[PackageInfo] = ()
 ) -> PackageManifest:
     """Validate the portable archive view of a package without writing it.
 
-    This applies package discipline to the files selected for an archive, using
-    resolved dependency modules for resource re-exports, so ignored or otherwise
-    excluded resources cannot pass source-tree validation and then disappear from
-    the distribution.
+    The source tree is validated once, and the files selected for an archive are
+    then checked against that same resolution, using resolved dependency modules
+    for resource re-exports — so ignored or otherwise excluded resources cannot
+    pass source-tree validation and then disappear from the distribution, and no
+    module is resolved a second time to find that out.
     """
 
     root = _package_root(package_root)
     _reject_source_links(root)
-    manifest, _, contents = _archive_distribution(root)
-    # Import lazily so ordinary archive creation stays independent of the AgL
-    # parser; callers that request package creation explicitly need discipline.
-    from agm.packages.discipline import DisciplineError, validate_archive_package
+    source_manifest, manifest, prefix = _source_distribution_manifest(root)
+    _archive_path(prefix + MANIFEST_NAME)
+    contents = _archive_contents(root, manifest)
+    _validate_content_paths(prefix, contents)
+    # Imported lazily so agm.packages.archive stays importable without the AgL
+    # parser for manifest/metadata reads that never resolve a module tree;
+    # validating an archive's discipline needs it here.
+    from agm.packages.discipline import (
+        DisciplineError,
+        validate_distribution_view,
+        validate_package,
+    )
+    from agm.packages.model import PackageInfo
 
     try:
-        validate_archive_package(
-            manifest,
-            archive_paths=contents,
-            read_module=lambda path: contents[path].decode(),
-            dependency_packages=dependency_packages,
+        resolution = validate_package(
+            PackageInfo(root, source_manifest), dependency_packages=dependency_packages
         )
+        validate_distribution_view(resolution, manifest, distribution_paths=contents)
     except DisciplineError as exc:
         raise ArchiveError(f"archive package violates discipline: {exc}") from exc
     return manifest
@@ -595,14 +617,35 @@ def _validate_destination(root: Path, destination: Path) -> None:
             raise ArchiveError(f"package archive destination aliases package source {source}")
 
 
-def _archive_distribution(root: Path) -> tuple[PackageManifest, str, dict[str, bytes]]:
-    """Build the manifest and selected content set for a portable archive."""
+def _source_distribution_manifest(root: Path) -> tuple[PackageManifest, PackageManifest, str]:
+    """Build a source tree's own and distributed manifests and its entry prefix.
+
+    Both manifests' commands already include the package's own source-declared
+    registrations, so an archive carries the same complete command table an
+    installed store package does.
+    """
     try:
-        source_manifest = load_manifest(root / MANIFEST_NAME)
+        source_manifest = load_manifest(root / MANIFEST_NAME, commands_complete=False)
     except ManifestError as exc:
         raise ArchiveError(f"cannot load package manifest from {root}: {exc}") from exc
+    # Imported lazily so agm.packages.archive stays importable without the AgL
+    # parser for operations that never read a source tree's manifest; baking in
+    # source-declared commands always needs it.
+    from agm.packages.discipline import DisciplineError
+    from agm.packages.model import PackageInfo
+    from agm.packages.source_commands import package_with_source_commands
+
+    try:
+        source_manifest = package_with_source_commands(PackageInfo(root, source_manifest)).manifest
+    except DisciplineError as exc:
+        raise ArchiveError(f"package at {root} violates discipline: {exc}") from exc
     manifest = distribution_manifest(source_manifest)
-    prefix = _entry_prefix(manifest)
+    return source_manifest, manifest, _entry_prefix(manifest)
+
+
+def _archive_distribution(root: Path) -> tuple[PackageManifest, str, dict[str, bytes]]:
+    """Build the manifest and selected content set for a portable archive."""
+    _source, manifest, prefix = _source_distribution_manifest(root)
     _archive_path(prefix + MANIFEST_NAME)
     contents = _archive_contents(root, manifest)
     _validate_content_paths(prefix, contents)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from typing import cast
@@ -22,6 +22,7 @@ from agm.packages.manifest import (
     PackageManifest,
     expanded_commands,
     load_manifest,
+    validate_command_set,
     validate_package_name,
 )
 from agm.packages.model import (
@@ -69,7 +70,9 @@ def active_package_version(active: ActivePackage) -> semver.Version:
 
     if active.editable is None:
         return active.version
-    return load_manifest(active.editable / "package.toml").version
+    # Live source: only the version is read, so its command table may still
+    # be waiting on the commands its own programs register.
+    return load_manifest(active.editable / "package.toml", commands_complete=False).version
 
 
 @dataclass(frozen=True, slots=True)
@@ -372,15 +375,25 @@ def select_active_packages(
     cwd: Path,
     env: Mapping[str, str] | None = None,
     index: ActivationIndex | None = None,
+    fallback_to_manifest_commands: bool = False,
 ) -> tuple[PackageInfo, ...]:
     """Return globally active packages with project pins overlaid and checked.
 
     ``index`` lets a caller that already loaded the activation index reuse it
-    instead of reloading it here.
+    instead of reloading it here. ``fallback_to_manifest_commands`` is strict
+    by default; pass it for a read of activation state rather than an
+    operation that persists a decision based on the resolved command set —
+    see :func:`resolve_active_package`.
     """
 
     packages = _selected_active_packages(
-        home=home, proj_dir=proj_dir, cwd=cwd, excluded_names=set(), env=env, index=index
+        home=home,
+        proj_dir=proj_dir,
+        cwd=cwd,
+        excluded_names=set(),
+        env=env,
+        index=index,
+        fallback_to_manifest_commands=fallback_to_manifest_commands,
     )
     _validate_requirements(packages)
     return packages
@@ -393,6 +406,7 @@ def effective_command_index(
     cwd: Path,
     env: Mapping[str, str] | None = None,
     index: ActivationIndex | None = None,
+    fallback_to_manifest_commands: bool = False,
 ) -> ActivationIndex:
     """Return selected-package commands with project pins applied.
 
@@ -401,6 +415,9 @@ def effective_command_index(
     the selected manifests and the persisted registration priority of each
     selected immutable version. ``index`` lets a caller that already loaded
     the activation index reuse it instead of reloading it here.
+    ``fallback_to_manifest_commands`` is strict by default; pass it for a read
+    of activation state rather than an operation that persists a decision
+    based on the resolved command set — see :func:`resolve_active_package`.
     """
 
     if index is None:
@@ -414,6 +431,7 @@ def effective_command_index(
         env=env,
         index=index,
         pins=pins,
+        fallback_to_manifest_commands=fallback_to_manifest_commands,
     )
     _validate_requirements(packages)
     # Without pins the selection is exactly the index, so the cached command
@@ -472,6 +490,12 @@ def select_package_roots(
     are resolved, so a valid development root shadows stale store state.
     ``index`` lets a caller that already loaded the activation index reuse it
     instead of reloading it here.
+
+    This mounts module roots for running code (``agm exec``, ``agm check``,
+    ``agm repl``); it never persists a decision, so like the command-registry
+    read path it tolerates an editable package's source failing discovery
+    rather than failing every invocation over one half-written module — see
+    :func:`resolve_active_package`.
     """
 
     development = tuple(
@@ -490,6 +514,7 @@ def select_package_roots(
         excluded_names=excluded_names,
         env=env,
         index=index,
+        fallback_to_manifest_commands=True,
     )
     selected = (
         *development,
@@ -508,6 +533,7 @@ def _selected_active_packages(
     env: Mapping[str, str] | None,
     index: ActivationIndex | None = None,
     pins: Mapping[str, semver.Version] | None = None,
+    fallback_to_manifest_commands: bool = False,
 ) -> tuple[PackageInfo, ...]:
     """Load global selections with pins, excluding development names before resolution."""
 
@@ -520,7 +546,12 @@ def _selected_active_packages(
         selections[name] = ActivePackage(version)
     for name in excluded_names:
         selections.pop(name, None)
-    return resolve_indexed_packages(ActivationIndex(selections), home=home, env=env)
+    return resolve_indexed_packages(
+        ActivationIndex(selections),
+        home=home,
+        env=env,
+        fallback_to_manifest_commands=fallback_to_manifest_commands,
+    )
 
 
 def validate_package_command_conflicts(
@@ -879,6 +910,7 @@ def resolve_active_package(
     *,
     home: Path,
     env: Mapping[str, str] | None = None,
+    fallback_to_manifest_commands: bool = False,
 ) -> PackageInfo:
     """Resolve one activation selection into its root and installed manifest.
 
@@ -886,18 +918,76 @@ def resolve_active_package(
     resolve inside the store, and its installed manifest must agree with the
     activated identity. The read path does not verify tree contents against
     ``RECORD``; installation and archive verification own that check.
+
+    An editable root is live, unbuilt source, so its manifest is extended
+    here with its own source-declared commands on every resolution — an edit
+    to a ``@command`` attribute takes effect without reinstalling. An
+    immutable store or archive manifest already has these baked in at
+    install time and is never rescanned.
+
+    ``fallback_to_manifest_commands`` governs what happens when that
+    discovery fails: pass it for a *read* of the activation state (dispatch,
+    listing) where an editable package being actively edited is expected to
+    have a half-written module, and discovery falling back to the manifest's
+    own declared commands must not break every ``agm`` command. Leave it at
+    its strict default for anything that *writes* activation state — an
+    install must see the true command set, since it persists decisions based
+    on it. A package's syntactic and command-discipline health is
+    ``agm pkg check``'s job either way.
     """
 
     if active.editable is not None:
         root = active.editable
-    else:
-        try:
-            root = canonical_package_store_path(name, active.version, home=home, env=env)
-        except ValueError as exc:
-            raise PackageActivationError(
-                f"active package {name!r} resolves outside the package store root"
-            ) from exc
+        manifest = _load_installed_manifest(root, commands_complete=False)
+        package = _checked_active_package(name, active, root, manifest)
+        return _with_editable_source_commands(
+            package, fallback_to_manifest_commands=fallback_to_manifest_commands
+        )
+    try:
+        root = canonical_package_store_path(name, active.version, home=home, env=env)
+    except ValueError as exc:
+        raise PackageActivationError(
+            f"active package {name!r} resolves outside the package store root"
+        ) from exc
     return _checked_active_package(name, active, root, _load_installed_manifest(root))
+
+
+def _with_editable_source_commands(
+    package: PackageInfo, *, fallback_to_manifest_commands: bool
+) -> PackageInfo:
+    """Extend a live editable package's manifest with its own source-declared commands.
+
+    Discovery reads unbuilt source that may be mid-edit. With
+    ``fallback_to_manifest_commands`` set, any ``DisciplineError`` (an
+    unreadable, undecodable, or unparsable module, a missing module tree, two
+    programs claiming one path, or a discovered path conflicting with the
+    manifest) falls back to the commands the manifest declares on its own
+    instead of failing — the right behavior for a read of activation state,
+    never for an operation that persists a decision based on the command set.
+    Those commands stand only if they are consistent without the
+    registrations that failed to arrive: a manifest group or alias whose
+    leaves live only in source leaves the package with no commands at all,
+    since half a command tree is worse than none. Without the flag, the
+    discovery error is raised as ``PackageActivationError``. ``agm pkg check``
+    validates source discipline; this call site must not.
+    """
+    # Imported lazily so ordinary activation stays independent of the AgL
+    # parser unless a caller actually resolves an editable selection.
+    from agm.packages.discipline import DisciplineError
+    from agm.packages.source_commands import package_with_source_commands
+
+    try:
+        return package_with_source_commands(package)
+    except DisciplineError as exc:
+        if not fallback_to_manifest_commands:
+            raise PackageActivationError(
+                f"cannot derive commands for editable package {package.manifest.name!r}: {exc}"
+            ) from exc
+    try:
+        validate_command_set(package.manifest)
+    except ManifestError:
+        return replace(package, manifest=replace(package.manifest, commands={}, aliases={}))
+    return package
 
 
 def _checked_active_package(
@@ -939,19 +1029,35 @@ def resolve_indexed_packages(
     home: Path,
     env: Mapping[str, str] | None = None,
     transient_packages: Mapping[str, PackageInfo] | None = None,
+    fallback_to_manifest_commands: bool = False,
 ) -> tuple[PackageInfo, ...]:
     """Resolve and verify every activation selection in *index* into a package.
 
     ``transient_packages`` supplies validated manifests for selections an
     install has planned but not yet written to the immutable store, standing
     in for a store manifest lookup for just those names.
+
+    ``fallback_to_manifest_commands`` is strict by default because this is
+    the function install-time gating calls to see the true command set
+    before persisting a decision based on it; pass it only for a read of
+    activation state, where an editable package's source failing discovery
+    should fall back to its manifest's own commands instead of failing the
+    caller. See :func:`resolve_active_package`.
     """
 
     packages: list[PackageInfo] = []
     for name, active in sorted(index.packages.items()):
         transient = None if transient_packages is None else transient_packages.get(name)
         if transient is None:
-            packages.append(resolve_active_package(name, active, home=home, env=env))
+            packages.append(
+                resolve_active_package(
+                    name,
+                    active,
+                    home=home,
+                    env=env,
+                    fallback_to_manifest_commands=fallback_to_manifest_commands,
+                )
+            )
         else:
             packages.append(
                 _checked_active_package(name, active, transient.root, transient.manifest)
@@ -959,9 +1065,17 @@ def resolve_indexed_packages(
     return tuple(packages)
 
 
-def _load_installed_manifest(root: Path) -> PackageManifest:
+def _load_installed_manifest(root: Path, *, commands_complete: bool = True) -> PackageManifest:
+    """Load an active package's manifest.
+
+    A store tree's command table is complete, baked in at install time. An
+    editable root's is not — its groups and aliases may be satisfied only by
+    the commands its own source registers — so it loads with
+    ``commands_complete=False`` and :func:`_with_editable_source_commands`
+    validates the command set once that merge has happened.
+    """
     try:
-        return load_manifest(root / "package.toml")
+        return load_manifest(root / "package.toml", commands_complete=commands_complete)
     except ManifestError as exc:
         raise PackageActivationError(f"cannot load active package at {root}: {exc}") from exc
 

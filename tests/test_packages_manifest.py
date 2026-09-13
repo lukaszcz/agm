@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 import semver
 
 from agm.agl.keywords import KEYWORDS
-from agm.packages.manifest import ManifestError, distribution_manifest, load_manifest
+from agm.packages.manifest import (
+    CommandSpec,
+    ManifestError,
+    distribution_manifest,
+    expanded_commands,
+    load_manifest,
+    load_manifest_text,
+    validate_command_set,
+)
 
 FIXTURES = Path(__file__).parent / "agl" / "packages"
 URL = "https://example.test/tools.agmpkg"
@@ -303,6 +312,63 @@ charlie = { version = "3", url = "https://example.test/charlie.agmpkg", hash = "
         with pytest.raises(ManifestError):
             load_manifest(path)
 
+    def test_nested_command_tables_match_space_separated_paths(self) -> None:
+        package = '[package]\nname = "review_tools"\nversion = "1.2.3"\n\n'
+        nested = load_manifest_text(
+            package
+            + """[commands.devel]
+description = "Development workflows"
+
+[commands.devel.review]
+program = "review_tools/main::review"
+
+[commands.devel.quality.lint]
+program = "review_tools/main::lint"
+"""
+        )
+        space_separated = load_manifest_text(
+            package
+            + """[commands.devel]
+description = "Development workflows"
+
+[commands."devel review"]
+program = "review_tools/main::review"
+
+[commands."devel quality lint"]
+program = "review_tools/main::lint"
+"""
+        )
+
+        assert nested.commands == space_separated.commands
+
+    def test_nested_command_tables_allow_metadata_names_as_path_components(self) -> None:
+        manifest = load_manifest_text(
+            """[package]
+name = "review_tools"
+version = "1.2.3"
+
+[commands.devel.program]
+program = "review_tools/main::review"
+"""
+        )
+
+        assert manifest.commands["devel program"].program == "review_tools/main::review"
+
+    def test_rejects_command_paths_defined_by_both_nested_and_quoted_tables(self) -> None:
+        manifest = """[package]
+name = "review_tools"
+version = "1.2.3"
+
+[commands."devel review"]
+program = "review_tools/main::review"
+
+[commands.devel.review]
+program = "review_tools/main::review"
+"""
+
+        with pytest.raises(ManifestError):
+            load_manifest_text(manifest)
+
     @pytest.mark.parametrize(
         "commands",
         (
@@ -371,3 +437,84 @@ charlie = { version = "3", url = "https://example.test/charlie.agmpkg", hash = "
     ) -> None:
         with pytest.raises(ManifestError):
             load_manifest(_write_manifest(tmp_path, manifest))
+
+    _LONELY_GROUP = (
+        '[package]\nname = "review_tools"\nversion = "1.2.3"\n\n'
+        '[commands.devel]\ndescription = "Development workflows"\n'
+    )
+    _ALIAS_TO_UNKNOWN = (
+        '[package]\nname = "review_tools"\nversion = "1.2.3"\n\n[aliases]\nrev = "devel review"\n'
+    )
+
+    def test_a_complete_manifest_with_a_lonely_group_is_still_rejected_at_load(
+        self, tmp_path: Path
+    ) -> None:
+        with pytest.raises(ManifestError, match="devel"):
+            load_manifest(_write_manifest(tmp_path, self._LONELY_GROUP))
+
+    def test_a_complete_manifest_with_an_alias_to_nothing_is_still_rejected_at_load(
+        self, tmp_path: Path
+    ) -> None:
+        with pytest.raises(ManifestError, match="rev"):
+            load_manifest(_write_manifest(tmp_path, self._ALIAS_TO_UNKNOWN))
+
+    def test_commands_complete_false_defers_the_lonely_group_check(self, tmp_path: Path) -> None:
+        manifest = load_manifest(
+            _write_manifest(tmp_path, self._LONELY_GROUP), commands_complete=False
+        )
+
+        assert manifest.commands["devel"].program is None
+        with pytest.raises(ManifestError, match="devel"):
+            validate_command_set(manifest)
+
+    def test_commands_complete_false_defers_the_unknown_alias_target_check(
+        self, tmp_path: Path
+    ) -> None:
+        manifest = load_manifest(
+            _write_manifest(tmp_path, self._ALIAS_TO_UNKNOWN), commands_complete=False
+        )
+
+        assert manifest.aliases["rev"] == "devel review"
+        with pytest.raises(ManifestError, match="rev"):
+            validate_command_set(manifest)
+
+    def test_a_deferred_manifest_passes_once_a_descendant_is_merged_in(
+        self, tmp_path: Path
+    ) -> None:
+        manifest = load_manifest(
+            _write_manifest(tmp_path, self._LONELY_GROUP), commands_complete=False
+        )
+
+        merged = replace(
+            manifest,
+            commands={
+                **manifest.commands,
+                "devel review": CommandSpec(program="review_tools/main::review"),
+            },
+        )
+
+        validate_command_set(merged)
+
+    def test_a_deferred_alias_resolves_once_its_target_is_merged_in(self, tmp_path: Path) -> None:
+        manifest = load_manifest(
+            _write_manifest(tmp_path, self._ALIAS_TO_UNKNOWN), commands_complete=False
+        )
+
+        merged = replace(
+            manifest,
+            commands={"devel review": CommandSpec(program="review_tools/main::review")},
+        )
+
+        validate_command_set(merged)
+        assert expanded_commands(merged)["rev"].program == "review_tools/main::review"
+
+    def test_commands_complete_false_still_validates_alias_path_syntax_at_load(
+        self, tmp_path: Path
+    ) -> None:
+        manifest = (
+            '[package]\nname = "review_tools"\nversion = "1.2.3"\n\n'
+            '[aliases]\n"bad  path" = "devel review"\n'
+        )
+
+        with pytest.raises(ManifestError):
+            load_manifest(_write_manifest(tmp_path, manifest), commands_complete=False)

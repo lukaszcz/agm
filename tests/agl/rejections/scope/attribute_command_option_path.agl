@@ -1,0 +1,2 @@
+@command("devel --review")
+program def main() -> unit = ()

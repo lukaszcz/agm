@@ -98,11 +98,14 @@ remote = { version = "2.0.0", url = "https://example.test/remote.agmpkg", hash =
 ```toml
 [commands]
 pr-review = { program = "review-tools/main::review", description = "Review a change" }
-"pr-review batch" = { program = "review-tools/main::batch" }   # multi-word command path
+
+[commands.pr-review.batch] # multi-level command: agm pr-review batch
+program = "review-tools/main::batch"
 ```
 
-- A key is a one- or multi-word command path that cannot start with a built-in command or root
-  alias (`wsp`, `wt`).
+- Nested table components become command words: `[commands.devel.review]` registers `devel
+  review`. The equivalent quoted flat form, `[commands."devel review"]`, is also accepted. A path
+  cannot start with a built-in command or root alias (`wsp`, `wt`).
 - `program` names the `program def` to run as `<module>::<program>`: `review-tools/main::review` is
   program `review` in module `review-tools/main`, file `review-tools/src/main.agl`. Must belong to
   this package, take no type parameters, return unit; its arguments become the command's.
@@ -119,7 +122,7 @@ pr-review = { program = "review-tools/main::review", description = "Review a cha
 description = "Development workflows"
 help = "Choose review to inspect changes before publishing."
 
-[commands."devel review"]
+[commands.devel.review]
 program = "review-tools/main::review"
 description = "Review changes"
 help = "Run this workflow before opening a pull request."
@@ -133,13 +136,29 @@ rev = "devel review"
 subcommand listing. Leaf commands generate usage and option help from their program signatures,
 so authored help is optional.
 
+A program may register its own command instead, via
+[`@command`](../agl/reference/attributes.md#command-attributes), `@description`, and `@help`
+attributes on the `program def`
+([Programs and commands](../agl/reference/packages.md#programs-and-commands)). The following
+replaces the `[commands.devel.review]` entry above; the manifest needs entries only for commands
+no program claims. Declaring one path in both places is an error whenever the two declarations
+differ, as is two programs claiming the same path.
+
+```agl
+@command("devel review")
+@description("Review changes")
+program def review(target: text) -> unit =
+  print "reviewing %{target}"
+```
+
 ### `[aliases]`
 
-Each key is an alternate command path (same restrictions as commands) naming a canonical command
-or group in this package, never another alias; an alias cannot overwrite another command or
-alias. Group aliases expose all canonical descendants: the example supports both `agm dev review`
-and `agm rev`. Aliases participate in activation conflicts, project pins, help, and completion
-like commands.
+`[aliases]` and command groups are always manifest-declared, never via program attributes. Each
+key is an alternate command path (same restrictions as commands) naming a canonical command or
+group in this package, never another alias; an alias cannot overwrite another command or alias,
+but may target a command a program registers via `@command`. Group aliases expose all canonical
+descendants: the example supports both `agm dev review` and `agm rev`. Aliases participate in
+activation conflicts, project pins, help, and completion like commands.
 
 Config tables use dots between path words: `[rev]`, `[dev.review]`, and `[devel.review]` all
 address the same program (arguments and engine settings), even via `agm exec`. Different keys in
@@ -150,7 +169,8 @@ precedence. Group tables do not supply inherited defaults.
 ## Registered commands
 
 An active package's commands run as `agm COMMAND ...` (longest matching path wins), appear in
-`agm help` and shell completion, and support `--help`.
+`agm help` and shell completion, and support `--help`. A command comes from the manifest's
+`[commands]` table, a program's own `@command` attribute, or both merged.
 
 - **Arguments.** Value parameters project onto the command's CLI as for `agm exec`:
   positional-capable parameters fill trailing words in order, name-addressable ones take
@@ -168,8 +188,14 @@ An active package's commands run as `agm COMMAND ...` (longest matching path win
 - **Conflicts.** Two active packages cannot own the same command path; install the later one with
   `--shadow` to make it the owner. Shadowing is recorded per store tree, so a rebuilt activation
   index preserves it.
-- **Editable packages** re-read their manifest on dispatch, so command edits apply without
-  reinstalling. A package activated without `--shadow` cannot acquire a conflicting command later.
+- **Editable packages** re-scan the module tree and re-read the manifest on every dispatch, so
+  command edits — including a program's `@command` — apply without reinstalling. The scan is
+  best-effort: a module that cannot be parsed, or a registration that conflicts with another in
+  the same package, registers nothing and leaves the manifest's own commands standing, so a
+  mid-edit module does not break the rest of the CLI. `check` reports those errors. A command path
+  that collides with another active package's is still a conflict, resolved as below. An installed store package or an archive instead carries
+  one complete command table, merged at `install` or `create` time; nothing rescans it afterwards.
+  A package activated without `--shadow` cannot acquire a conflicting command later.
 
 ## Commands
 
@@ -177,24 +203,30 @@ An active package's commands run as `agm COMMAND ...` (longest matching path win
 `0.1.0`, no dependencies, commented dependency guidance) plus a starter `src/main.agl` unless one
 exists; refuses a directory that already holds a manifest.
 
-**`check`** validates the manifest, the `src/` module tree, `[commands]` program references, literal
-`resource` targets, import visibility, and dependency satisfiability without modifying anything.
-The `std` floor is checked against the running AGM; other dependencies resolve from the store,
-then a `path`; a `url` counts as satisfiable and is not fetched.
+**`check`** scans the module tree for `@command`-registered programs, merges them with
+`[commands]`, then validates the manifest, the `src/` module tree, command program references,
+literal `resource` targets, import visibility, and dependency satisfiability without modifying
+anything — the same diagnostics `install` reports. The `std` floor is checked against the running
+AGM; other dependencies resolve from the store, then a `path`; a `url` counts as satisfiable and
+is not fetched.
 
-**`create`** runs the same validation on the *distribution*, then writes a deterministic archive
-beside `DIR` (or at `-o FILE`). The distribution excludes hidden paths, VCS and cache directories,
-`.agmpkg` files, and anything matched by `.gitignore` files; a resource excluded this way fails
-creation. The archived manifest drops `path` sources, so every path-only dependency needs a stored
-version or `url` first.
+**`create`** runs the same validation on the *distribution*, after merging the module tree's
+`@command` registrations into the manifest, then writes a deterministic archive beside `DIR` (or
+at `-o FILE`) whose manifest already carries that merged command table. The distribution excludes
+hidden paths, VCS and cache directories, `.agmpkg` files, and anything matched by `.gitignore`
+files; a resource excluded this way fails creation. The archived manifest drops `path` sources, so
+every path-only dependency needs a stored version or `url` first.
 
 **`install`** takes a directory or archive, resolves the dependency closure, validates, and stores
-the distribution in `<AGM-home>/packages/<name>/<version>/` with a SHA-256 `RECORD`. Activation is
-published atomically only after the resulting selection validates; a failed install leaves nothing
-active. Dependencies resolve from the store first, then a declared `path` (installed alongside),
-then a `url` (fetched and hash-verified; never in `--dry-run`). Versions are kept side by side, one
-per identity (build metadata included, as above). `--editable` activates the source directory in
-place: no copy, no `RECORD`, edits visible immediately.
+the distribution in `<AGM-home>/packages/<name>/<version>/` with a SHA-256 `RECORD`. From a
+directory source it first merges the module tree's `@command` registrations into the manifest, so
+the stored package carries one complete command table. Activation is published atomically only
+after the resulting selection validates; a failed install leaves nothing active. Dependencies
+resolve from the store first, then a declared `path` (installed alongside), then a `url` (fetched
+and hash-verified; never in `--dry-run`). Versions are kept side by side, one per identity (build
+metadata included, as above). `--editable` activates the source directory in place: no copy, no
+`RECORD`, edits visible immediately, and its command table is re-derived from source on each
+dispatch.
 
 **`uninstall`** verifies the `RECORD`, validates the remaining selection, deactivates, and removes
 the recorded files (plus cache and VCS residue). An editable package is only deactivated. Command

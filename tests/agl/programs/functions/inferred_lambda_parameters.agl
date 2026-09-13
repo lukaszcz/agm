@@ -1,0 +1,13 @@
+# Anonymous function parameter types flow from their function context.
+program def main(values: array[int], offset: int) -> unit =
+  let increment: int -> int = fn value => value + offset
+  let mapped = values.map(fn value => increment(value))
+  let total = mapped.fold(0, fn (sum, value) => sum + value)
+  let total-right = mapped.fold(0, fn (sum, value: int) => sum + value)
+  let total-left = mapped.fold(0, fn (sum: int, value) => sum + value)
+  let labels = values.map(fn (value) => "n=%{value + offset}")
+  print(mapped)
+  print(total)
+  print(total-right)
+  print(total-left)
+  print(labels)

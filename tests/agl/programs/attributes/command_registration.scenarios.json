@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "registered_program_runs_like_any_other",
+      "positional": ["diff"],
+      "params": {},
+      "expect": {
+        "stdout": "reviewing diff\n"
+      }
+    },
+    {
+      "name": "registration_leaves_parameters_alone",
+      "positional": ["branch"],
+      "params": {
+        "strict": true
+      },
+      "expect": {
+        "stdout": "reviewing branch\nstrict\n"
+      }
+    }
+  ]
+}

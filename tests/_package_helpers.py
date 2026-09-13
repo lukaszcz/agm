@@ -8,15 +8,21 @@ layout production code reads.
 ``older_incompatible_std_requirement`` and ``std_compatibility_bound`` derive
 ``std`` requirements and bounds from the running AGM version, so release-line
 tests keep testing the rule rather than one release's literals.
+
+``archive_contents`` and ``write_zip`` read and rewrite a ``.agmpkg`` archive's
+raw ZIP entries, so tests can graft tampered or hand-built content onto an
+otherwise valid archive.
 """
 
 from __future__ import annotations
 
+import zipfile
 from collections.abc import Mapping
 from pathlib import Path
 
 import semver
 
+import agm.packages.archive as package_archive
 from agm.packages.activation import ActivationIndex, ActivePackage, write_activation_index
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.record import write_record
@@ -76,3 +82,20 @@ def write_installed_package(
         ActivationIndex({name: ActivePackage(semver.Version.parse("1.0.0"))}), home=home
     )
     return module
+
+
+def archive_contents(path: Path) -> dict[str, bytes]:
+    """Read every entry of the ``.agmpkg`` archive at *path* by name."""
+    with zipfile.ZipFile(path) as archive:
+        return {info.filename: archive.read(info) for info in archive.infolist()}
+
+
+def write_zip(path: Path, contents: list[tuple[str, bytes]]) -> None:
+    """Write a canonical-metadata ZIP at *path* from ``(name, content)`` pairs.
+
+    Tests use this to graft tampered or hand-built entries onto an archive,
+    reusing the same per-entry metadata :mod:`agm.packages.archive` writes.
+    """
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+        for name, content in contents:
+            archive.writestr(package_archive._zip_info(name), content)

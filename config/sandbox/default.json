@@ -6,7 +6,8 @@
       "api.github.com",
       "raw.githubusercontent.com"
     ],
-    "deniedDomains": []
+    "deniedDomains": [],
+    "allowAllUnixSockets": true
   },
   "filesystem": {
     "denyRead": [
@@ -17,7 +18,8 @@
     "allowWrite": [
       ".",
       "/tmp",
-      "~/.cache"
+      "~/.cache",
+      "~/.config"
     ],
     "denyWrite": [".env", ".env.*", "*.pem", "*.key"]
   }

@@ -33,7 +33,12 @@ def run(args: PkgListArgs) -> None:
         raise SystemExit(1) from exc
     try:
         packages = installed_packages(home=context.home)
-        active_packages = resolve_indexed_packages(index, home=context.home)
+        # A read of activation state: an editable package's source failing
+        # discovery falls back to its manifest's own commands rather than
+        # breaking the listing.
+        active_packages = resolve_indexed_packages(
+            index, home=context.home, fallback_to_manifest_commands=True
+        )
         index = reconcile_package_commands(index, home=context.home, packages=active_packages)
         shadows = command_shadow_diagnostics(index, home=context.home, packages=active_packages)
         editable_versions = {

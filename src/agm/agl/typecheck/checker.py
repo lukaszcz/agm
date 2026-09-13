@@ -3272,12 +3272,27 @@ class _Checker:
             context_desc=f"call to '{func_name}'",
         )
 
+    @staticmethod
+    def _argument_check_order(binding: Sequence[Expr | None]) -> tuple[int, ...]:
+        """Check context-dependent lambdas after sibling argument evidence."""
+        ordinary: list[int] = []
+        contextual: list[int] = []
+        for index, argument in enumerate(binding):
+            target = (
+                contextual
+                if isinstance(argument, Lambda)
+                and any(param.type_expr is None for param in argument.params)
+                else ordinary
+            )
+            target.append(index)
+        return (*ordinary, *contextual)
+
     def _check_bound_call_args(
         self,
         params: tuple[ParamSpec, ...],
         binding: tuple[Expr | None, ...],
     ) -> None:
-        for spec, bound_expr in zip(params, binding):
+        for spec, bound_expr in zip(params, binding, strict=True):
             if bound_expr is None or isinstance(bound_expr, Placeholder):
                 continue
             at = self._check_expr(bound_expr, expected=spec.type)
@@ -3384,7 +3399,9 @@ class _Checker:
             expr for expr in binding if expr is not None and not isinstance(expr, Placeholder)
         )
         try:
-            for param, bound_expr in zip(params, binding, strict=True):
+            for index in self._argument_check_order(binding):
+                param = params[index]
+                bound_expr = binding[index]
                 if bound_expr is None or isinstance(bound_expr, Placeholder):
                     continue
                 self._constrain_argument(
@@ -3582,7 +3599,9 @@ class _Checker:
         # check cannot solve those; only ``_constrain_argument`` unifies a
         # flexible slot with its argument's type, exactly like the generic
         # declared-call path does for a plain function.
-        for param, bound_expr in zip(params, binding):
+        for index in self._argument_check_order(binding):
+            param = params[index]
+            bound_expr = binding[index]
             if bound_expr is None or isinstance(bound_expr, Placeholder):
                 continue
             self._constrain_argument(
@@ -3680,7 +3699,9 @@ class _Checker:
         binding: tuple[Expr | None, ...] = node.args
         if hole_indices:
             self._record_partial_call(node, binding, hole_indices, callee_kind="value")
-        for arg, ptype in zip(node.args, callee_type.params, strict=True):
+        for index in self._argument_check_order(node.args):
+            arg = node.args[index]
+            ptype = callee_type.params[index]
             if isinstance(arg, Placeholder):
                 continue
             self._constrain_argument(
@@ -3741,15 +3762,52 @@ class _Checker:
 
     def _check_lambda(self, node: Lambda, *, expected: Type | None) -> Type:
         validate_required_after_defaulted(node.params, self._resolved.attributes.param_zones)
+        omitted = tuple(index for index, param in enumerate(node.params) if param.type_expr is None)
+        if expected is not None and (node.implicit_self or omitted):
+            expected = self._active_inference_engine().zonk(expected)
+        # A leading-dot invocation is represented as a unary lambda whose
+        # generated receiver has no source annotation. Its concrete type must
+        # already be available from the surrounding function context.
+        if node.implicit_self and (
+            not isinstance(expected, FunctionType)
+            or len(expected.params) != 1
+            or contains_inference_var(expected.params[0])
+        ):
+            raise AglTypeError(
+                "Cannot infer type of 'self' for leading-dot method invocation; "
+                "a concrete unary function context is required.",
+                span=node.span,
+            )
+
+        if omitted and (
+            not isinstance(expected, FunctionType) or len(expected.params) != len(node.params)
+        ):
+            param = node.params[omitted[0]]
+            raise AglTypeError(
+                f"Cannot infer type of lambda parameter '{param.name}'; "
+                "a matching function context is required.",
+                span=param.span,
+            )
+        if isinstance(expected, FunctionType):
+            for index in omitted:
+                if contains_inference_var(expected.params[index]):
+                    param = node.params[index]
+                    raise AglTypeError(
+                        f"Cannot infer type of lambda parameter '{param.name}'; "
+                        "a concrete function context is required.",
+                        span=param.span,
+                    )
+
         # Lambda annotations may reference the rigid type variables of an
         # enclosing generic ``def`` body (the body is checked with them in scope).
         type_vars = self._current_type_vars
         param_types: list[Type] = []
-        for p in node.params:
-            # A lambda has no receiver, so scope has already rejected a bare
-            # ``self`` among its params.
-            assert p.type_expr is not None
-            pt = self._env.resolve_type_expr(p.type_expr, span=p.span, type_vars=type_vars)
+        for index, p in enumerate(node.params):
+            if p.type_expr is None:
+                assert isinstance(expected, FunctionType)
+                pt = expected.params[index]
+            else:
+                pt = self._env.resolve_type_expr(p.type_expr, span=p.span, type_vars=type_vars)
             param_types.append(pt)
             self._env.set_binding_type(p.node_id, pt)
 

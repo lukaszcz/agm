@@ -85,10 +85,22 @@ parameters; its result is unit like that of any `program def`, whether written
 or left to inference. It remains an ordinary callable function inside the
 package.
 
+A program registers itself as a command by carrying
+[`@command`](attributes.md#command-attributes), whose argument is the command
+path a reader invokes; `@description` and `@help` supply that command's prose.
+A package's commands are therefore declared where its programs are, and the
+manifest need name only the commands no program claims.
+
 ```agl
+@command("dev review")
+@description("Review changes")
 program def main() -> unit =
   print("review loop")
 ```
+
+Declaring one command path in both places — a manifest `[commands]` entry and a
+program's `@command` — is an error whenever the two declarations differ; each
+path has one declaration.
 
 A registered command runs its program exactly as a directly executed program
 does: the selected `program def`'s own value parameters become flags, and
@@ -96,9 +108,11 @@ configuration is read by qualified key. Its parameters carry the same
 [presentation attributes](attributes.md#program-parameter-attributes) as any
 other program's, so the flags, one-letter spellings, environment fallbacks, and
 `@doc` prose a program declares are what its registered command presents. A
-manifest may also supply a short command description and additional `help` prose;
-these appear alongside the program's own `@doc`. Command groups and aliases are
-defined in the [package manifest](../../commands/pkg.md#commands).
+command the manifest registers takes its description and `help` prose from that
+entry, and a program's own registration takes them from `@description` and
+`@help`; either appears alongside the program's `@doc`. Command groups and
+aliases are defined in the [package manifest](../../commands/pkg.md#commands),
+and either may name a command a program registers.
 
 ## Program parameters and configuration keys
 

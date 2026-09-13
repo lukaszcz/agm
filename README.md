@@ -351,7 +351,8 @@ See `agm help loop` for selector/no-selector mode, prompt options, timeout, and 
 
 ### `agm run`
 
-Run a command directly or inside an Anthropic Sandbox Runtime container.
+Run a command directly or inside an Anthropic Sandbox Runtime container. Interactive runs receive a
+controlling pseudo-terminal by default; use `--no-pty` to disable it.
 
 ```bash
 agm run pytest -q

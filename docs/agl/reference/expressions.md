@@ -376,6 +376,10 @@ program def main() -> unit =
 
 Thus `meter.add(3)` calls the method with `meter` as its receiver, while
 `meter.add` can be stored, passed to another function, or partially applied.
+A leading-dot invocation such as `.add(3)` instead produces a unary function;
+its receiver type comes from the surrounding function context. This supports
+forms such as `meters |> .map(.add(3))`. See
+[Methods](functions.md#methods) for its contextual typing rules.
 Method selection uses the receiver's static type and the declaration routes
 visible in this module. A same-named field and visible method are ambiguous,
 including as an assignment target. Arrays and dictionaries have no fields; use
@@ -967,6 +971,7 @@ An expected type propagates top-down where it helps:
 | `case` / `if` expression with outer expectation | into every branch |
 | `ask` / typed `exec` | becomes the call's target type |
 | Function call | each parameter type into the corresponding argument |
+| Lambda with omitted parameter annotations | matching function parameter types into the omissions |
 | Function body | `-> RetType` propagated in |
 
 After scope has resolved an unqualified enum-member constructor (`let r: Review = Pass`),

@@ -214,7 +214,7 @@ def _agm_imports_of_file(path: Path) -> list[str]:
     ("leaf", "allowed"),
     [
         ("zones.py", ()),
-        ("attributes.py", ("agm.agl.zones",)),
+        ("attributes.py", ("agm.agl.zones", "agm.command_catalog")),
         ("artifact_storage.py", ()),
     ],
 )
@@ -222,8 +222,9 @@ def test_shared_leaves_sit_below_every_pass(leaf: str, allowed: tuple[str, ...])
     """Keep the shared vocabulary modules, plus the storage envelope leaf, below every pass.
 
     ``zones`` is the bottom leaf and imports nothing under ``agm``;
-    ``attributes`` names the zones its ``@arg-*`` entries select and so may
-    import that one module, and nothing else; ``artifact_storage`` is the disk
+    ``attributes`` names the zones its ``@arg-*`` entries select and the
+    command-path rule its ``@command`` entry shares with a package manifest,
+    both pure data leaves, and nothing else; ``artifact_storage`` is the disk
     envelope every disk cache writes through and, like ``zones``, imports
     nothing under ``agm``.
     """

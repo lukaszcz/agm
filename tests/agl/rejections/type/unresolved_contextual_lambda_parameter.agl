@@ -1,0 +1,5 @@
+def invoke[T](function: T -> int) -> int = 1
+
+program def main() -> unit =
+  let _ = invoke(fn value => 1)
+  ()

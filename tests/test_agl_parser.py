@@ -1663,6 +1663,28 @@ class TestLambda:
         assert isinstance(lam, Lambda)
         assert len(lam.params) == 2
 
+    def test_lambda_bare_unary_param_may_omit_type(self) -> None:
+        lam = first(parse("fn value => value"))
+        assert isinstance(lam, Lambda)
+        assert len(lam.params) == 1
+        assert lam.params[0].name == "value"
+        assert lam.params[0].type_expr is None
+
+    @pytest.mark.parametrize(
+        ("source", "omitted"),
+        (("fn (x, y: int) => x", [True, False]), ("fn (x: int, y) => y", [False, True])),
+    )
+    def test_lambda_may_mix_annotated_and_unannotated_params(
+        self, source: str, omitted: list[bool]
+    ) -> None:
+        lam = first(parse(source))
+        assert isinstance(lam, Lambda)
+        assert [param.type_expr is None for param in lam.params] == omitted
+
+    def test_named_function_param_still_requires_type(self) -> None:
+        with pytest.raises(AglSyntaxError, match="type annotation"):
+            parse("def identity(value) = value")
+
     def test_lambda_as_call_arg(self) -> None:
         """Lambda as argument must be parenthesized."""
         src = "let r = map(fn(x: int) -> int => x, xs)"
@@ -2097,6 +2119,30 @@ class TestFieldAccessAndConstructors:
         assert fa.field == "c"
         assert isinstance(fa.obj, FieldAccess)
         assert fa.obj.field == "b"
+
+    def test_leading_dot_invocation_desugars_to_contextual_self_lambda(self) -> None:
+        section = first(parse(".map::[text](f, label = x)"))
+        assert isinstance(section, Lambda)
+        assert section.implicit_self
+        assert len(section.params) == 1
+        assert section.params[0].name == "self"
+        assert section.params[0].type_expr is None
+        assert isinstance(section.body, Call)
+        assert len(section.body.type_args) == 1
+        assert isinstance(section.body.type_args[0], TextT)
+        assert len(section.body.args) == 1
+        assert len(section.body.named_args) == 1
+        assert isinstance(section.body.callee, FieldAccess)
+        assert section.body.callee.field == "map"
+        assert isinstance(section.body.callee.obj, VarRef)
+        assert section.body.callee.obj.name == "self"
+
+    def test_leading_dot_invocation_accepts_no_method_arguments(self) -> None:
+        section = first(parse(".size()"))
+        assert isinstance(section, Lambda)
+        assert isinstance(section.body, Call)
+        assert section.body.args == ()
+        assert section.body.named_args == ()
 
     def test_constructor_bare(self) -> None:
         c = first(parse("Pass"))

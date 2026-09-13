@@ -635,7 +635,8 @@ def test_close_terminates_rpc_process_descendants(
         "import os, subprocess, sys, time\n"
         f"path = {str(descendant_file)!r}\n"
         "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
-        "open(path, 'w').write(str(child.pid))\n"
+        "with open(path + '.tmp', 'w') as file: file.write(str(child.pid))\n"
+        "os.replace(path + '.tmp', path)\n"
         "while True: time.sleep(1)\n"
     )
     pi.chmod(0o755)

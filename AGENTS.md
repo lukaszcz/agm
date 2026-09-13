@@ -70,7 +70,7 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 ## Instructions
 
 - NEVER duplicate code. Abstract common logic into parameterized functions and separate modules.
-- NEVER run the parsing / scoping / typechecking / compilation pipeline twice. Earlier pipeline stages should be reused when available, not recomputed.
+- NEVER re-run AgL pipeline stages on the same source. Reuse earlier results, and compile host-generated code with the program, not in a second pipeline.
 - Do NOT create new worktrees - edit the current worktree directly.
 - Do NOT try to circumvent static analysis tools. Adapt the code to pass `just check` properly - do not ignore checks or suppress rules. If you absolutely need to bypass a static analysis tool, ALWAYS ask the user for approval and explain why this is necessary.
 - Be concise and precise in your responses, comments, docs, and explanations.

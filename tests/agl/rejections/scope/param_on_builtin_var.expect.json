@@ -1,0 +1,4 @@
+{
+  "stdlib_root": "program_modules/param_on_builtin_var_stdlib",
+  "diagnostic": {"line": 1, "message_contains": ["param", "builtin var"]}
+}

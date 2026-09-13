@@ -1,0 +1,5 @@
+def helper() -> int =
+  @param let count = 1
+  count
+
+program def main() -> unit = print helper()

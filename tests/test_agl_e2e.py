@@ -76,6 +76,21 @@ def _load_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"), parse_float=Decimal)
 
 
+def _fixture_roots(spec: dict[str, Any]) -> Any | None:
+    """Build the module roots selected by one scenario or rejection fixture."""
+    module_root_paths = [(AGL_DIR / str(root)).resolve() for root in spec.get("module_roots", [])]
+    if "stdlib_root" in spec:
+        from agm.agl.modules.roots import RootSet
+
+        return RootSet(
+            roots=frozenset(module_root_paths),
+            stdlib_roots=frozenset({(AGL_DIR / str(spec["stdlib_root"])).resolve()}),
+        )
+    if module_root_paths:
+        return agl_roots(*module_root_paths)
+    return None
+
+
 @dataclass
 class _ScriptedSession:
     """One deterministic session observation owned by a scripted agent."""
@@ -824,24 +839,12 @@ def _run_program(
     if agents:
         runtime_options["session_host"] = _ScenarioSessionHost(agents)
     runtime = PipelineDriver(**runtime_options)
-    module_roots = scenario.get("module_roots", [])
     default_stdlib = not scenario.get("no_stdlib", False)
-    module_root_paths = [(AGL_DIR / str(root)).resolve() for root in module_roots]
     entry_path: Path | None = None
-    roots: Any | None = None
-    if "stdlib_root" in scenario:
-        # A scenario-supplied standard library replaces the repository one, so
-        # its tree is the only place ``std/...`` resolves.
-        from agm.agl.modules.roots import RootSet
-
-        roots = RootSet(
-            roots=frozenset(module_root_paths),
-            stdlib_roots=frozenset({(AGL_DIR / str(scenario["stdlib_root"])).resolve()}),
-        )
-    elif module_roots:
-        roots = agl_roots(*module_root_paths)
-    elif program.is_relative_to(EXTERNS_PROGRAMS_DIR) or program.is_relative_to(
-        RESOURCE_PROGRAMS_DIR
+    roots = _fixture_roots(scenario)
+    if roots is None and (
+        program.is_relative_to(EXTERNS_PROGRAMS_DIR)
+        or program.is_relative_to(RESOURCE_PROGRAMS_DIR)
     ):
         entry_path = program
         roots = agl_roots(program.parent.resolve())
@@ -1546,10 +1549,7 @@ def test_static_rejection(program: Path) -> None:
 
     spec = _load_json(program.with_name(program.stem + ".expect.json"))
     expect = spec["diagnostic"]
-    module_roots = spec.get("module_roots", [])
-    roots = None
-    if module_roots:
-        roots = agl_roots(*((AGL_DIR / str(root)).resolve() for root in module_roots))
+    roots = _fixture_roots(spec)
     result = _run_source_entry(PipelineDriver(), program.read_text(encoding="utf-8"), roots=roots)
     assert not result.ok, "expected the program to be rejected statically"
     assert result.error is None, "static rejection must happen before execution"

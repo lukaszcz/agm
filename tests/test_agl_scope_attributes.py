@@ -3,20 +3,25 @@
 Every attribute a declaration carries is validated against the built-in
 attribute catalog while names are resolved, and the surviving attributes are
 turned into the resolved program's fact tables: ``param_zones`` from the
-``@arg-*`` attributes, ``program_options`` from the ``@opt-*`` ones, and
-``docs`` from ``@doc``. These tests assert on those tables' contents and pin
-the phase the rejections come from; the rejection fixtures under
+``@arg-*`` attributes, ``program_options`` and ``params`` from the host-facing
+parameter attributes, and ``docs`` from ``@doc``. These tests assert on those
+tables' contents and pin the phase the rejections come from; the rejection fixtures under
 ``tests/agl/rejections/scope/`` cover the same diagnostics as whole programs.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 
 from agm.agl.attributes import ProgramCommandSpec, ProgramOptionSpec
 from agm.agl.parser.parser import parse_program_seeded
 from agm.agl.scope import AglScopeError, ModuleResolution, recognize_program_command
+from agm.agl.scope.attributes import recognize_attributes
 from agm.agl.syntax.nodes import (
+    Attribute,
+    BuiltinVarDecl,
     EnumDef,
     ExceptionDef,
     FuncDef,
@@ -24,8 +29,11 @@ from agm.agl.syntax.nodes import (
     LetDecl,
     Param,
     RecordDef,
+    ScopeRegion,
     TypeAlias,
+    VarDecl,
     VariantDef,
+    VarPattern,
     static_function_items,
 )
 from agm.agl.syntax.visitor import walk
@@ -35,6 +43,7 @@ from tests.agl.module_graph import resolve_entry
 POSITIONAL_ONLY = ParamZone.POSITIONAL_ONLY
 STANDARD = ParamZone.STANDARD
 NAMED_ONLY = ParamZone.NAMED_ONLY
+AGL_FIXTURES = Path(__file__).parent / "agl"
 
 
 def _entries(resolution: ModuleResolution, owner_name: str) -> tuple[Param, ...]:
@@ -90,6 +99,30 @@ def _option(resolution: ModuleResolution, owner_name: str, param_name: str) -> P
     """Return the option spec recognized for one program parameter."""
     entries = {entry.name: entry for entry in _entries(resolution, owner_name)}
     return resolution.attributes.program_options[entries[param_name].node_id]
+
+
+def _static_binding(resolution: ModuleResolution, name: str) -> LetDecl | VarDecl:
+    """Return the uniquely named static binding, including scope-region members."""
+    found: list[LetDecl | VarDecl] = []
+
+    def visit_items(items: tuple[object, ...]) -> None:
+        for item in items:
+            if isinstance(item, ScopeRegion):
+                visit_items(item.items)
+            elif isinstance(item, VarDecl) and item.name == name:
+                found.append(item)
+            elif isinstance(item, LetDecl) and isinstance(item.pattern, VarPattern):
+                if item.pattern.name == name:
+                    found.append(item)
+
+    visit_items(resolution.program.body.items)
+    assert len(found) == 1, f"expected exactly one static binding named {name!r}"
+    return found[0]
+
+
+def _binding_node_id(binding: LetDecl | VarDecl) -> int:
+    """Return the static binding identity used by scope and typecheck."""
+    return binding.pattern.node_id if isinstance(binding, LetDecl) else binding.node_id
 
 
 class TestParameterZones:
@@ -224,6 +257,63 @@ class TestAttributeDiagnostics:
         assert len(lets) == 1
         assert resolution.attributes.docs[lets[0].node_id] == "the answer"
 
+    def test_a_builtin_var_admits_a_doc_attribute(self) -> None:
+        program, _next_id = parse_program_seeded(
+            '@doc("the setting")\nbuiltin var setting: int = 1\n',
+            start_id=0,
+            resolve_infix=False,
+        )
+        declaration = program.body.items[0]
+        assert isinstance(declaration, BuiltinVarDecl)
+
+        facts = recognize_attributes(program, declares_receiver=lambda _node: False)
+
+        assert facts.docs[declaration.node_id] == "the setting"
+
+    @pytest.mark.parametrize(
+        ("fixture", "attribute_name", "occurrence"),
+        [
+            ("rejections/scope/param_nested_binder.agl", "param", 0),
+            ("rejections/scope/param_destructuring.agl", "param", 0),
+            ("rejections/scope/param_wildcard.agl", "param", 0),
+            (
+                "program_modules/param_on_builtin_var_stdlib/src/prelude.agl",
+                "param",
+                0,
+            ),
+            ("rejections/scope/opt_name_without_param.agl", "opt-name", 0),
+            ("rejections/scope/param_duplicate_attribute.agl", "param", 1),
+        ],
+        ids=(
+            "nested-binder",
+            "destructuring",
+            "wildcard",
+            "builtin-var",
+            "option-without-param",
+            "duplicate-param",
+        ),
+    )
+    def test_param_rejections_point_at_the_exact_attribute_span(
+        self,
+        fixture: str,
+        attribute_name: str,
+        occurrence: int,
+    ) -> None:
+        source = (AGL_FIXTURES / fixture).read_text(encoding="utf-8")
+        program, _next_id = parse_program_seeded(source, start_id=0, resolve_infix=False)
+        attributes: list[Attribute] = []
+
+        def collect(node: object) -> None:
+            if isinstance(node, Attribute) and node.name == attribute_name:
+                attributes.append(node)
+
+        walk(program, collect)
+
+        with pytest.raises(AglScopeError) as raised:
+            recognize_attributes(program, declares_receiver=lambda _node: False)
+
+        assert raised.value.span == attributes[occurrence].span
+
     def test_a_zone_attribute_on_a_binding_is_rejected(self) -> None:
         with pytest.raises(AglScopeError, match="arg-pos"):
             resolve_entry("@arg-pos\nlet answer = 42\n")
@@ -342,6 +432,64 @@ class TestProgramOptions:
         )
 
         assert resolution.attributes.program_options == {}
+
+
+class TestParamBindings:
+    """Host presentation facts for static bindings carrying ``@param``."""
+
+    def test_a_param_defaults_to_its_declared_name(self) -> None:
+        resolution = resolve_entry("@param let count = 1\n")
+        binding = _static_binding(resolution, "count")
+
+        assert resolution.attributes.params[_binding_node_id(binding)] == ProgramOptionSpec(
+            name="count"
+        )
+
+    def test_every_presentation_attribute_reaches_the_param_spec(self) -> None:
+        resolution = resolve_entry(
+            '@param @doc("how many runs") @opt-name("total-runs") '
+            '@opt-short("r") @opt-env("TOTAL_RUNS") @opt-metavar("N") '
+            "@opt-hidden let runs = 0\n"
+        )
+        binding = _static_binding(resolution, "runs")
+
+        assert resolution.attributes.params[_binding_node_id(binding)] == ProgramOptionSpec(
+            name="total-runs",
+            short="r",
+            env="TOTAL_RUNS",
+            metavar="N",
+            hidden=True,
+            doc="how many runs",
+        )
+        assert resolution.attributes.docs[binding.node_id] == "how many runs"
+
+    def test_a_scope_region_param_is_recorded(self) -> None:
+        resolution = resolve_entry(
+            "scope logging\n"
+            "\n"
+            "  scope debug\n"
+            "    @param let trace = false\n"
+            "  end debug\n"
+            "end logging\n"
+        )
+        binding = _static_binding(resolution, "trace")
+
+        assert resolution.attributes.params[_binding_node_id(binding)] == ProgramOptionSpec(
+            name="trace"
+        )
+
+    def test_a_var_param_is_recorded(self) -> None:
+        resolution = resolve_entry("@param var level = 1\n")
+        binding = _static_binding(resolution, "level")
+
+        assert resolution.attributes.params[_binding_node_id(binding)] == ProgramOptionSpec(
+            name="level"
+        )
+
+    def test_an_ordinary_binding_has_no_param_fact(self) -> None:
+        resolution = resolve_entry("let count = 1\n")
+
+        assert resolution.attributes.params == {}
 
 
 class TestDocumentationTexts:

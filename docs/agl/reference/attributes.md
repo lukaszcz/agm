@@ -50,11 +50,12 @@ static errors.
 | `@arg-std` | none | same | Standard zone (positional or named). |
 | `@arg-named` | none | same | Named-only zone. |
 | `@extern-name("…")` | Python identifier | `extern def` | Names the companion function. |
-| `@opt-name("…")` | flag word | `program def` parameter | External spelling: flag, `--no-` negation, config key, completion. |
-| `@opt-short("c")` | one ASCII letter | `program def` parameter | One-letter flag `-c`. |
-| `@opt-env("VAR")` | variable name | `program def` parameter | Environment fallback when no CLI token supplies the value. |
-| `@opt-metavar("…")` | placeholder | `program def` parameter | Value placeholder in usage and help. |
-| `@opt-hidden` | none | `program def` parameter | Omits the flag from help and completion; the parameter still binds. |
+| `@param` | none | module-root or scope-region `let`/`var` binding | Exposes the binding as a host parameter. |
+| `@opt-name("…")` | flag word | `program def` parameter or `@param` binding | External spelling: flag, `--no-` negation, config key, completion. |
+| `@opt-short("c")` | one ASCII letter | `program def` parameter or `@param` binding | One-letter flag `-c`. |
+| `@opt-env("VAR")` | variable name | `program def` parameter or `@param` binding | Environment fallback when no CLI token supplies the value. |
+| `@opt-metavar("…")` | placeholder | `program def` parameter or `@param` binding | Value placeholder in usage and help. |
+| `@opt-hidden` | none | `program def` parameter or `@param` binding | Omits the flag from help and completion; the parameter still binds. |
 | `@command("…")` | command path | `program def` | Registers the program as that package command. |
 | `@description("…")` | prose | `program def` | The registered command's one-line description. |
 | `@help("…")` | prose | `program def` | Further prose the registered command's help shows. |
@@ -75,7 +76,7 @@ standard. Zone semantics: [Functions](functions.md#parameters),
 ## `@doc`
 
 One text literal of prose. It never changes a declaration's meaning. A host
-shows a `program def`'s `@doc` as the program's description and each value
+shows a `program def`'s `@doc` as the program's description and each host-facing
 parameter's `@doc` as that parameter's help ([Host environment](host-environment.md#help)).
 
 ## `@extern-name`
@@ -111,12 +112,34 @@ program def main(@arg-pos subject: text) -> unit =
 
 A program outside a package registers nothing: nothing reads its `@command`.
 
-## Program parameter attributes
+## Module parameters
+
+`@param` exposes an ordinary static `let` or `var` binding as a module
+parameter. The binding must be at module root or directly in a scope region,
+must bind exactly one name rather than `_` or a destructuring pattern, and must
+have an initializer. Its type annotation is optional.
+
+The presentation attributes `@opt-name`, `@opt-short`, `@opt-env`,
+`@opt-metavar`, `@opt-hidden`, and `@doc` apply to the binding. Without
+`@opt-name`, its external name is its declared name.
+
+Host command-line and configuration channels use the module parameter's
+presentation; see [Host environment](host-environment.md).
+
+```agl
+@param @doc("Log level") @opt-short("l") var level: int = 1
+
+scope debug
+  @param @opt-name("trace") let tracing = false
+end debug
+```
+
+## Host parameter attributes
 
 `@opt-name`, `@opt-short`, `@opt-env`, `@opt-metavar`, and `@opt-hidden`
-shape how a `program def`'s value parameter is addressed on the host's command
-line ([Program definitions](program-structure.md#program-definitions)). They
-are legal nowhere else.
+shape how a `program def` value parameter or `@param` binding is addressed by
+the host. Program parameters are described under
+[Program definitions](program-structure.md#program-definitions).
 
 - `@opt-name` takes a flag word: ASCII letters and digits with single interior
   hyphens, so both `--word` and `--no-word` can be formed. It replaces the
@@ -127,7 +150,7 @@ are legal nowhere else.
   through to the config table and then the declared default.
 - `@opt-hidden` keeps a positional-capable parameter's usage slot.
 
-A positional-only parameter is never addressed by name, so `@opt-name`,
+A positional-only program parameter is never addressed by name, so `@opt-name`,
 `@opt-short`, `@opt-env`, and `@opt-hidden` on one are static errors.
 `@opt-metavar` and `@doc` still apply to it.
 

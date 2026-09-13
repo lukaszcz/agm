@@ -15,6 +15,7 @@ import pytest
 
 from agm.agl.attributes import (
     BUILTIN_ATTRIBUTES,
+    PARAM_ATTRIBUTE,
     AttributeArguments,
     AttributeSpec,
     AttributeTarget,
@@ -32,6 +33,7 @@ class TestCatalogContents:
             *OPTION_ATTRIBUTES,
             *COMMAND_ATTRIBUTES,
             "extern-name",
+            PARAM_ATTRIBUTE,
             "doc",
         }
 
@@ -85,8 +87,10 @@ class TestExternAndOptionAttributes:
         assert spec.arguments is AttributeArguments.ONE_TEXT
 
     @pytest.mark.parametrize("name", OPTION_ATTRIBUTES)
-    def test_option_attributes_sit_on_program_parameters_only(self, name: str) -> None:
-        assert BUILTIN_ATTRIBUTES[name].targets == frozenset({AttributeTarget.PROGRAM_PARAMETER})
+    def test_option_attributes_sit_on_host_facing_parameters(self, name: str) -> None:
+        assert BUILTIN_ATTRIBUTES[name].targets == frozenset(
+            {AttributeTarget.PROGRAM_PARAMETER, AttributeTarget.PARAM_BINDING}
+        )
 
     @pytest.mark.parametrize("name", ("opt-short", "opt-name", "opt-env", "opt-metavar"))
     def test_valued_option_attributes_take_one_text(self, name: str) -> None:
@@ -99,6 +103,14 @@ class TestExternAndOptionAttributes:
         for name, spec in BUILTIN_ATTRIBUTES.items():
             if name not in ZONE_ATTRIBUTES:
                 assert spec.conflicts == ()
+
+
+class TestParamAttribute:
+    def test_param_is_a_bare_marker_on_bindings_only(self) -> None:
+        spec = BUILTIN_ATTRIBUTES[PARAM_ATTRIBUTE]
+
+        assert spec.targets == frozenset({AttributeTarget.BINDING})
+        assert spec.arguments is AttributeArguments.NONE
 
 
 class TestCommandAttributes:

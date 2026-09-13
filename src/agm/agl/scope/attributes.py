@@ -7,11 +7,11 @@ admitted target, the arguments match the declared schema, the attribute is not
 repeated or contradicted — and turns the surviving attributes into typed
 side-table entries.
 
-Five facts are built: a parameter's zone, from the ``@arg-*`` attribute an
+Six facts are built: a parameter's zone, from the ``@arg-*`` attribute an
 entry or its owning declaration carries; an ``extern def``'s Python companion
 name, from ``@extern-name`` — the walk sees every extern of a module, so it is
-also where their companion names are held apart; a ``program def`` parameter's
-command-line presentation, from the ``@opt-*`` attributes; the package command
+also where their companion names are held apart; host-facing parameters'
+presentation, from ``@param`` and the ``@opt-*`` attributes; the package command
 a ``program def`` registers itself as, from ``@command`` and its prose; and a
 declaration's documentation text, from ``@doc``. The walk is the seam a further attribute
 meaning joins through — a new fact reads the attributes the walk already hands
@@ -39,6 +39,7 @@ from agm.agl.attributes import (
     OPTION_METAVAR_ATTRIBUTE,
     OPTION_NAME_ATTRIBUTE,
     OPTION_SHORT_ATTRIBUTE,
+    PARAM_ATTRIBUTE,
     ZONE_ATTRIBUTES,
     AttributeArguments,
     AttributeSpec,
@@ -63,6 +64,8 @@ from agm.agl.syntax.nodes import (
     TypeAlias,
     VarDecl,
     VariantDef,
+    simple_let_pattern_name,
+    static_items,
 )
 from agm.agl.syntax.visitor import walk
 from agm.agl.zones import ParamZone
@@ -105,9 +108,6 @@ _FIELD_OWNERS: Mapping[type[object], AttributeTarget] = {
 _PLAIN_TARGETS: Mapping[type[object], AttributeTarget] = {
     EnumDef: AttributeTarget.ENUM,
     TypeAlias: AttributeTarget.TYPE_ALIAS,
-    LetDecl: AttributeTarget.BINDING,
-    VarDecl: AttributeTarget.BINDING,
-    BuiltinVarDecl: AttributeTarget.BINDING,
 }
 
 #: How each zone is named in a diagnostic.
@@ -129,6 +129,8 @@ _TARGET_LABEL: Mapping[AttributeTarget, str] = {
     AttributeTarget.EXCEPTION: "exception declaration",
     AttributeTarget.TYPE_ALIAS: "type alias",
     AttributeTarget.BINDING: "binding",
+    AttributeTarget.PARAM_BINDING: "parameter binding",
+    AttributeTarget.BUILTIN_VAR: "builtin var",
     AttributeTarget.PARAMETER: "parameter",
     AttributeTarget.FIELD: "field",
     AttributeTarget.PROGRAM_PARAMETER: "program parameter",
@@ -168,12 +170,18 @@ def recognize_attributes(
     a classified method's first parameter is its ``self`` receiver, which is
     positional-only and admits no zone attribute of its own.
     """
-    recognizer = _Recognizer(declares_receiver)
+    static_binding_ids = frozenset(
+        item.node_id
+        for item in static_items(program.body.items)
+        if isinstance(item, (LetDecl, VarDecl))
+    )
+    recognizer = _Recognizer(declares_receiver, static_binding_ids)
     walk(program, recognizer.visit)
     return AttributeFacts(
         param_zones=recognizer.param_zones,
         extern_names=recognizer.extern_names,
         program_options=recognizer.program_options,
+        params=recognizer.params,
         command_registrations=recognizer.command_registrations,
         docs=recognizer.docs,
     )
@@ -182,11 +190,17 @@ def recognize_attributes(
 class _Recognizer:
     """One module's attribute walk, accumulating facts as it goes."""
 
-    def __init__(self, declares_receiver: Callable[[FuncDef], bool]) -> None:
+    def __init__(
+        self,
+        declares_receiver: Callable[[FuncDef], bool],
+        static_binding_ids: frozenset[int],
+    ) -> None:
         self._declares_receiver = declares_receiver
+        self._static_binding_ids = static_binding_ids
         self.param_zones: dict[int, ParamZone] = {}
         self.extern_names: dict[int, str] = {}
         self.program_options: dict[int, ProgramOptionSpec] = {}
+        self.params: dict[int, ProgramOptionSpec] = {}
         self.command_registrations: dict[int, ProgramCommandSpec] = {}
         self.docs: dict[int, str] = {}
         self._companion_owners: dict[str, str] = {}
@@ -216,7 +230,11 @@ class _Recognizer:
         elif isinstance(node, (RecordDef, ExceptionDef, VariantDef)):
             recognized = self._check(node.attributes, _FIELD_OWNERS[type(node)], node.node_id)
             self._entries(node.fields, _zone_attribute(recognized), target=AttributeTarget.FIELD)
-        elif isinstance(node, (EnumDef, TypeAlias, LetDecl, VarDecl, BuiltinVarDecl)):
+        elif isinstance(node, (LetDecl, VarDecl)):
+            self._binding(node)
+        elif isinstance(node, BuiltinVarDecl):
+            self._check(node.attributes, AttributeTarget.BUILTIN_VAR, node.node_id)
+        elif isinstance(node, (EnumDef, TypeAlias)):
             self._check(node.attributes, _PLAIN_TARGETS[type(node)], node.node_id)
 
     # ------------------------------------------------------------------
@@ -224,7 +242,12 @@ class _Recognizer:
     # ------------------------------------------------------------------
 
     def _check(
-        self, attributes: tuple[Attribute, ...], target: AttributeTarget, node_id: int
+        self,
+        attributes: tuple[Attribute, ...],
+        target: AttributeTarget,
+        node_id: int,
+        *,
+        param_allowed: bool = False,
     ) -> _Recognized:
         """Validate the whole attribute prefix of the declaration *node_id*.
 
@@ -232,11 +255,45 @@ class _Recognizer:
         ``@doc`` text, admitted on every declaration kind, since documentation
         has no fact builder of its own.
         """
+        param = next((item for item in attributes if item.name == PARAM_ATTRIBUTE), None)
+        if target is AttributeTarget.BINDING and param is not None:
+            if not param_allowed:
+                raise AglScopeError(
+                    "Attribute '@param' can only be attached to a static binding at module "
+                    "root or in a scope region.",
+                    span=param.span,
+                )
+            target = AttributeTarget.PARAM_BINDING
         recognized = _validate_attribute_prefix(attributes, target)
         documentation = recognized.text_of(DOC_ATTRIBUTE)
         if documentation is not None:
             self.docs[node_id] = documentation
         return recognized
+
+    # ------------------------------------------------------------------
+    # Fact builder: static host parameters
+    # ------------------------------------------------------------------
+
+    def _binding(self, node: LetDecl | VarDecl) -> None:
+        """Recognize one static or nested binding's attributes."""
+        is_static = node.node_id in self._static_binding_ids
+        recognized = self._check(
+            node.attributes,
+            AttributeTarget.BINDING,
+            node.node_id,
+            param_allowed=is_static,
+        )
+        marker = recognized.nodes.get(PARAM_ATTRIBUTE)
+        if marker is None:
+            return
+        name = node.name if isinstance(node, VarDecl) else simple_let_pattern_name(node.pattern)
+        if name is None or name == "_":
+            raise AglScopeError(
+                "Attribute '@param' requires a binding with a single name.",
+                span=marker.span,
+            )
+        binding_node_id = node.node_id if isinstance(node, VarDecl) else node.pattern.node_id
+        self.params[binding_node_id] = _option_spec(name, recognized)
 
     # ------------------------------------------------------------------
     # Fact builder: extern companion names
@@ -363,15 +420,7 @@ class _Recognizer:
                         f"{entry.name!r}, which a host addresses by position and never by name.",
                         span=attribute.span,
                     )
-        external = recognized.text_of(OPTION_NAME_ATTRIBUTE)
-        self.program_options[entry.node_id] = ProgramOptionSpec(
-            name=entry.name if external is None else external,
-            short=recognized.text_of(OPTION_SHORT_ATTRIBUTE),
-            env=recognized.text_of(OPTION_ENV_ATTRIBUTE),
-            metavar=recognized.text_of(OPTION_METAVAR_ATTRIBUTE),
-            hidden=OPTION_HIDDEN_ATTRIBUTE in recognized.nodes,
-            doc=recognized.text_of(DOC_ATTRIBUTE),
-        )
+        self.program_options[entry.node_id] = _option_spec(entry.name, recognized)
 
 
 # ---------------------------------------------------------------------------
@@ -396,7 +445,12 @@ def _validate_attribute_prefix(
         spec = BUILTIN_ATTRIBUTES.get(attribute.name)
         if spec is None:
             raise AglScopeError(f"Unknown attribute '@{attribute.name}'.", span=attribute.span)
-        if target not in spec.targets:
+        validation_target = (
+            AttributeTarget.BINDING
+            if target is AttributeTarget.PARAM_BINDING and attribute.name == PARAM_ATTRIBUTE
+            else target
+        )
+        if validation_target not in spec.targets:
             raise AglScopeError(
                 f"Attribute '@{attribute.name}' cannot be attached to a {_TARGET_LABEL[target]}.",
                 span=attribute.span,
@@ -416,6 +470,19 @@ def _validate_attribute_prefix(
             texts[attribute.name] = text
         nodes[attribute.name] = attribute
     return _Recognized(nodes=nodes, texts=texts)
+
+
+def _option_spec(name: str, recognized: _Recognized) -> ProgramOptionSpec:
+    """Build one host-facing parameter's presentation spec."""
+    external = recognized.text_of(OPTION_NAME_ATTRIBUTE)
+    return ProgramOptionSpec(
+        name=name if external is None else external,
+        short=recognized.text_of(OPTION_SHORT_ATTRIBUTE),
+        env=recognized.text_of(OPTION_ENV_ATTRIBUTE),
+        metavar=recognized.text_of(OPTION_METAVAR_ATTRIBUTE),
+        hidden=OPTION_HIDDEN_ATTRIBUTE in recognized.nodes,
+        doc=recognized.text_of(DOC_ATTRIBUTE),
+    )
 
 
 def _program_command_spec(node: FuncDef, recognized: _Recognized) -> ProgramCommandSpec | None:

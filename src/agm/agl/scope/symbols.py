@@ -685,6 +685,10 @@ class AttributeFacts:
         keyed by ``Param.node_id``, as its ``@opt-*`` attributes describe it.
         Every program parameter has an entry; the host builds a program's CLI
         from these rather than from declared names.
+    ``params``
+        The host presentation of every static ``let`` or ``var`` marked
+        ``@param``, keyed by its binding node id. Bindings without the marker
+        have no entry.
     ``command_registrations``
         The package command every ``program def`` registers itself as, keyed
         by ``FuncDef.node_id``, as its ``@command``/``@description``/``@help``
@@ -698,6 +702,7 @@ class AttributeFacts:
     param_zones: dict[int, ParamZone] = field(default_factory=dict)
     extern_names: dict[int, str] = field(default_factory=dict)
     program_options: dict[int, ProgramOptionSpec] = field(default_factory=dict)
+    params: dict[int, ProgramOptionSpec] = field(default_factory=dict)
     command_registrations: dict[int, ProgramCommandSpec] = field(default_factory=dict)
     docs: dict[int, str] = field(default_factory=dict)
 

@@ -45,6 +45,7 @@ __all__ = [
     "OPTION_NAME_PATTERN",
     "OPTION_SHORT_ATTRIBUTE",
     "OPTION_SHORT_PATTERN",
+    "PARAM_ATTRIBUTE",
     "ZONE_ATTRIBUTES",
     "AttributeArguments",
     "AttributeSpec",
@@ -72,6 +73,8 @@ class AttributeTarget(enum.Enum):
     EXCEPTION = "exception"
     TYPE_ALIAS = "type_alias"
     BINDING = "binding"
+    PARAM_BINDING = "param_binding"
+    BUILTIN_VAR = "builtin_var"
     PARAMETER = "parameter"
     FIELD = "field"
     PROGRAM_PARAMETER = "program_parameter"
@@ -162,13 +165,15 @@ HELP_ATTRIBUTE = "help"
 #: The command attributes carrying prose: legal only beside ``@command``.
 COMMAND_PROSE_ATTRIBUTES: tuple[str, ...] = (DESCRIPTION_ATTRIBUTE, HELP_ATTRIBUTE)
 
-#: The attributes shaping how a ``program def`` parameter appears on a host's
-#: command line.
+#: The attributes shaping how a host-facing parameter is presented.
 OPTION_NAME_ATTRIBUTE = "opt-name"
 OPTION_SHORT_ATTRIBUTE = "opt-short"
 OPTION_ENV_ATTRIBUTE = "opt-env"
 OPTION_METAVAR_ATTRIBUTE = "opt-metavar"
 OPTION_HIDDEN_ATTRIBUTE = "opt-hidden"
+
+#: The marker that exposes a static binding as a host-facing parameter.
+PARAM_ATTRIBUTE = "param"
 
 #: The option attributes that address a parameter by name: they rename its
 #: flag, give it a short spelling, name an environment fallback, or keep that
@@ -198,12 +203,14 @@ _OPTION_NAME_EXPECTED = (
 OPTION_SHORT_PATTERN = re.compile(r"[A-Za-z]")
 _OPTION_SHORT_EXPECTED = "takes exactly one ASCII letter, not"
 
-_PROGRAM_PARAMETER_ONLY: frozenset[AttributeTarget] = frozenset({AttributeTarget.PROGRAM_PARAMETER})
+_HOST_PARAMETER_TARGETS: frozenset[AttributeTarget] = frozenset(
+    {AttributeTarget.PROGRAM_PARAMETER, AttributeTarget.PARAM_BINDING}
+)
 
 
 @dataclass(frozen=True, slots=True)
 class ProgramOptionSpec:
-    """How one ``program def`` parameter presents itself to a host.
+    """How one host-facing parameter presents itself to a host.
 
     ``name`` is the external spelling every host surface uses for the
     parameter — its flag, the derived negative, the config key, completion —
@@ -275,7 +282,7 @@ def _option_spec(
 ) -> AttributeSpec:
     return AttributeSpec(
         name=name,
-        targets=_PROGRAM_PARAMETER_ONLY,
+        targets=_HOST_PARAMETER_TARGETS,
         arguments=arguments,
         pattern=pattern,
         expected=expected,
@@ -288,6 +295,11 @@ _SPECS: tuple[AttributeSpec, ...] = (
         name=EXTERN_NAME_ATTRIBUTE,
         targets=frozenset({AttributeTarget.EXTERN}),
         arguments=AttributeArguments.ONE_TEXT,
+    ),
+    AttributeSpec(
+        name=PARAM_ATTRIBUTE,
+        targets=frozenset({AttributeTarget.BINDING}),
+        arguments=AttributeArguments.NONE,
     ),
     _option_spec(
         OPTION_SHORT_ATTRIBUTE,

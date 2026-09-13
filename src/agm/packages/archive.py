@@ -127,6 +127,20 @@ def write_archive(package_root: Path, destination: Path) -> ArchiveMetadata:
         os.close(source_root.fd)
 
 
+def archive_source_manifest(package_root: Path) -> PackageManifest:
+    """Return the manifest an archive of *package_root* would carry.
+
+    The distribution view of the source manifest, with the commands the
+    package's own programs register already merged in. This reads the manifest
+    and the module tree's declarations and validates neither, so a caller that
+    needs the identity before it validates does not pay for a validation it is
+    about to run anyway.
+    """
+    root = _package_root(package_root)
+    manifest, _ = _source_distribution_manifest(root)
+    return manifest
+
+
 def validate_archive_source(
     package_root: Path, *, dependency_packages: Iterable[PackageInfo] = ()
 ) -> PackageManifest:
@@ -596,8 +610,8 @@ def _validate_destination(root: Path, destination: Path) -> None:
             raise ArchiveError(f"package archive destination aliases package source {source}")
 
 
-def _archive_distribution(root: Path) -> tuple[PackageManifest, str, dict[str, bytes]]:
-    """Build the manifest and selected content set for a portable archive.
+def _source_distribution_manifest(root: Path) -> tuple[PackageManifest, str]:
+    """Build the distribution manifest and archive entry prefix for a source tree.
 
     The manifest's commands already include the package's own source-declared
     registrations, so an archive carries the same complete command table an
@@ -608,8 +622,8 @@ def _archive_distribution(root: Path) -> tuple[PackageManifest, str, dict[str, b
     except ManifestError as exc:
         raise ArchiveError(f"cannot load package manifest from {root}: {exc}") from exc
     # Imported lazily so agm.packages.archive stays importable without the AgL
-    # parser for operations that never call _archive_distribution; building an
-    # archive's distribution always needs it to bake in source-declared commands.
+    # parser for operations that never read a source tree's manifest; baking in
+    # source-declared commands always needs it.
     from agm.packages.discipline import DisciplineError
     from agm.packages.model import PackageInfo
     from agm.packages.source_commands import package_with_source_commands
@@ -619,7 +633,12 @@ def _archive_distribution(root: Path) -> tuple[PackageManifest, str, dict[str, b
     except DisciplineError as exc:
         raise ArchiveError(f"package at {root} violates discipline: {exc}") from exc
     manifest = distribution_manifest(source_manifest)
-    prefix = _entry_prefix(manifest)
+    return manifest, _entry_prefix(manifest)
+
+
+def _archive_distribution(root: Path) -> tuple[PackageManifest, str, dict[str, bytes]]:
+    """Build the manifest and selected content set for a portable archive."""
+    manifest, prefix = _source_distribution_manifest(root)
     _archive_path(prefix + MANIFEST_NAME)
     contents = _archive_contents(root, manifest)
     _validate_content_paths(prefix, contents)

@@ -8,7 +8,12 @@ from pathlib import Path
 from agm.cli_support.args import PkgCreateArgs
 from agm.config.context import current_config_context
 from agm.core import dry_run
-from agm.packages.archive import ArchiveError, validate_archive_source, write_archive
+from agm.packages.archive import (
+    ArchiveError,
+    archive_source_manifest,
+    validate_archive_source,
+    write_archive,
+)
 from agm.packages.dependencies import DependencyError, validate_dependencies
 from agm.packages.discipline import DisciplineError, validate_package
 from agm.packages.model import PackageInfo
@@ -19,7 +24,8 @@ def run(args: PkgCreateArgs) -> None:
 
     root = Path.cwd() if args.directory is None else Path(args.directory)
     try:
-        package = PackageInfo(root=root, manifest=validate_archive_source(root))
+        # The identity only, so the one archive validation below is the only one.
+        package = PackageInfo(root=root, manifest=archive_source_manifest(root))
         context = current_config_context()
         dependencies = validate_dependencies(package, home=context.home)
         validate_package(package, dependency_packages=dependencies)

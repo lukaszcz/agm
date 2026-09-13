@@ -1,9 +1,14 @@
-"""Parse-only discovery of the commands a package's own programs register.
+"""Discovery of the commands a package's own programs register.
 
 A ``program def`` may register itself as a package command via ``@command``
 (see :mod:`agm.agl.attributes`). Discovery reads only the AST of every module
 in a package's own module tree — no scope resolution, no dependency graph —
 so a source tree yields its command table without paying for a full compile.
+Those ASTs come from the shared parsed-module cache
+(:mod:`agm.agl.modules.parsed_module_cache`), so a scan reuses whatever a
+previous scan or graph load already parsed and leaves its own parses there
+for them; no module is ever parsed twice for one command.
+
 The result merges into the manifest before anything else (install, ``pkg
 check``, archive creation) sees it, so every downstream consumer reads one
 complete command table and an immutable store package is never rescanned.
@@ -18,7 +23,7 @@ from pathlib import Path
 from agm.agl.attributes import ProgramCommandSpec
 from agm.agl.diagnostics import AglError
 from agm.agl.modules.ids import ModuleId
-from agm.agl.parser.parser import parse_program_seeded
+from agm.agl.modules.loader import load_parsed_module
 from agm.agl.scope import recognize_program_command
 from agm.agl.syntax.nodes import FuncDef, Program, static_function_items
 from agm.packages.discipline import DisciplineError, package_module_files
@@ -96,7 +101,7 @@ def _module_command_specs(
     module_id: ModuleId, path: Path
 ) -> Iterator[tuple[str, ProgramCommandSpec]]:
     """Yield ``(program reference, registration)`` for one module's registering programs."""
-    program = _parse_module(path)
+    program = _parse_module(module_id, path)
     try:
         registrations = [
             (function, recognize_program_command(function))
@@ -110,17 +115,19 @@ def _module_command_specs(
             yield _declaration_reference(module_id, function), registration
 
 
-def _parse_module(path: Path) -> Program:
-    """Parse one module's declaration headers, without resolving infix operators."""
+def _parse_module(module_id: ModuleId, path: Path) -> Program:
+    """Return one module's AST from the shared parsed-module cache.
+
+    Discovery keys the same cache the module loader keys, so a module parsed
+    for a command scan is the one a later graph load reuses, and a module the
+    loader already parsed is never parsed again here.
+    """
     try:
-        text = path.read_text(encoding="utf-8")
+        return load_parsed_module(module_id, path).program
     except (OSError, UnicodeDecodeError) as exc:
         raise DisciplineError(f"cannot read package module {path}: {exc}") from exc
-    try:
-        program, _next_id = parse_program_seeded(text, start_id=0, resolve_infix=False)
     except AglError as exc:
         raise DisciplineError(f"cannot parse package module {path}: {exc}") from exc
-    return program
 
 
 def _declaration_reference(module_id: ModuleId, function: FuncDef) -> str:

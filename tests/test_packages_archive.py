@@ -835,8 +835,10 @@ def test_write_archive_retains_the_write_error_when_temporary_cleanup_fails(
     destination = tmp_path / "package.agmpkg"
     unlink = os.unlink
 
-    def fail_temporary_unlink(path: str, *, dir_fd: int | None = None) -> None:
-        if path.startswith(".package.agmpkg."):
+    # Patching os.unlink reaches every caller in the process, not just the
+    # archive writer, so only the archive's own temporary fails here.
+    def fail_temporary_unlink(path: str | Path, *, dir_fd: int | None = None) -> None:
+        if str(path).startswith(".package.agmpkg."):
             raise OSError("denied")
         unlink(path, dir_fd=dir_fd)
 
@@ -1679,3 +1681,26 @@ def test_archive_path_depth_limit_admits_exactly_the_deepest_component_count(
     with pytest.raises(ArchiveError):
         write_archive(root, rejected)
     assert not rejected.exists()
+
+
+def test_validate_archive_source_rejects_a_resource_the_distribution_excludes(
+    tmp_path: Path,
+) -> None:
+    """A resource present in the source tree but ignored out of the distribution.
+
+    Source-tree validation passes — the file is there — so only the archive
+    view catches that the shipped package would reach for a file it does not
+    carry.
+    """
+    root = _package_tree(tmp_path)
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        'program def main() -> unit =\n  print(resource("prompts/review.md"))\n',
+        encoding="utf-8",
+    )
+    prompts = root / "prompts"
+    prompts.mkdir()
+    (prompts / "review.md").write_text("review", encoding="utf-8")
+    (root / ".gitignore").write_text("prompts/\n", encoding="utf-8")
+
+    with pytest.raises(ArchiveError, match="discipline"):
+        validate_archive_source(root)

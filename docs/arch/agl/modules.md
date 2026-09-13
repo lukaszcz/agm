@@ -24,6 +24,8 @@ User-operator chains are resolved once the graph is known, using each module's l
 
 Imported modules are precompiled on demand and reused in memory and across CLI processes. The pipeline retains parsed syntax, resolution, closed type/function interfaces, checked bodies, compiled match sites, and independently lowered module IR. Entry modules are compiled afresh; non-entry members of cycles reaching the entry may be retained against the exact entry source.
 
+The cache is keyed by module path and identity, not by the graph load that populated it, and `loader.load_parsed_module` serves one module's parse from it for a caller that needs an AST without a graph around it — package command discovery ([packages.md](../packages.md)) is one — so no source is parsed twice in a process or across them.
+
 `modules/parsed_module_cache.py` assigns content-addressed node namespaces so unchanged declarations keep their identity across import orders and processes. `artifact_cache.py` validates each stage against the module and its transitive import/export dependencies; checked stages also depend on host capabilities. Modules sharing a dependency closure share a persisted frontend image. Restored artifacts attach to the current compilation's source objects, preserving stage provenance.
 
 `lower/module.py` persists module bodies and linkable symbol/function/contract tables. Linking assembles them in the current graph's initialization order and rebuilds whole-program metadata. Resource paths are revalidated, and host-materialized contracts distinguish IR variants. Python companions, configuration, module initializers, and mutable runtime state remain invocation-specific.

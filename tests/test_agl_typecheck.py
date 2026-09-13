@@ -2450,6 +2450,26 @@ class TestBlockTyping:
         r = accept_type("let x = 1\nlet y = 2\nx + y")
         assert r.node_types[r.resolved.program.body.items[2].node_id] == IntType()
 
+    def test_binder_suite_takes_its_last_item_type(self) -> None:
+        r = accept_type("let x =\n  let t = 1\n  t + 1\nx")
+        let = r.resolved.program.body.items[0]
+        assert isinstance(let, LetDecl)
+        assert r.node_types[let.value.node_id] == IntType()
+
+    def test_binder_suite_ending_in_a_binder_is_unit(self) -> None:
+        r = accept_type("let x: unit =\n  let t = 1\nx")
+        let = r.resolved.program.body.items[0]
+        assert isinstance(let, LetDecl)
+        assert r.node_types[let.value.node_id] == UnitType()
+
+    def test_binder_suite_is_checked_against_its_annotation(self) -> None:
+        err = reject_type("let x: text =\n  let t = 1\n  t + 1\nx")
+        assert "text" in str(err).lower()
+
+    def test_binder_suite_names_do_not_escape(self) -> None:
+        with pytest.raises(AglScopeError):
+            accept_type("let x =\n  let t = 1\n  t\nt")
+
 
 # ---------------------------------------------------------------------------
 # Unit type propagation

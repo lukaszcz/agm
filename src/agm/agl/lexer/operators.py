@@ -147,6 +147,18 @@ SYMBOLIC_OPERATOR_TYPES = frozenset(
 )
 
 
+# Operators that also open an indented suite.  A binder's ``:=`` continues its
+# line like any other operator, but a *more indented* next line opens the
+# binder's block instead.  (``=`` and ``=>`` never reach this test: they are not
+# operators at all.)
+SUITE_OPENING_OPERATOR_TYPES = frozenset({ASSIGN})
+
+
+def opens_suite(token: Token) -> bool:
+    """Whether *token* opens an indented suite as well as standing as an operator."""
+    return scanner_token_type(token.type) in SUITE_OPENING_OPERATOR_TYPES
+
+
 def promotes_as_operator(word: str, prev_type: str | None, next_type: str | None) -> bool:
     """Whether an operator word stands in operator position rather than naming a member.
 

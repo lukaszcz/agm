@@ -1,0 +1,37 @@
+{
+  "scenarios": [
+    {
+      "name": "right_branch",
+      "params": {
+        "a": 2,
+        "b": 3,
+        "label": "hi"
+      },
+      "expect": {
+        "stdout": "13\n32\n3\n3\nhi:right\n"
+      }
+    },
+    {
+      "name": "left_branch",
+      "params": {
+        "a": 5,
+        "b": 2,
+        "label": "x"
+      },
+      "expect": {
+        "stdout": "16\n44\n6\n2\nx:left\n"
+      }
+    },
+    {
+      "name": "zero_operands",
+      "params": {
+        "a": 0,
+        "b": 0,
+        "label": "zero"
+      },
+      "expect": {
+        "stdout": "0\n2\n1\n0\nzero:right\n"
+      }
+    }
+  ]
+}

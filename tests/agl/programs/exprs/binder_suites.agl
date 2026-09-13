@@ -1,0 +1,32 @@
+# A binder's `=` opens an indented suite, exactly as a function's does; the
+# suite's value is its last item.
+
+record Point(x: int, y: int)
+
+program def main(a: int, b: int, label: text) -> unit =
+  let scaled =
+    let doubled = a * 2
+    let tripled = b * 3
+    doubled + tripled
+
+  var total: int =
+    let base = scaled
+    base + 1
+
+  total :=
+    let bumped = total + a
+    bumped * 2
+
+  let point =
+    let width = a + 1
+    Point(x = width, y = b)
+
+  let described =
+    if a > b => label + ":left"
+    | else => label + ":right"
+
+  print scaled
+  print total
+  print point.x
+  print point.y
+  print described

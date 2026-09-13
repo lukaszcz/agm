@@ -1564,7 +1564,11 @@ class TestDanglingOperatorContinuation:
         assert layout_tokens("let a = xs.\n  map(f)") == []
 
     def test_assignment_joins_the_next_line(self) -> None:
-        assert layout_tokens("count :=\n  count + 1") == []
+        assert layout_tokens("count :=\ncount + 1") == []
+
+    def test_assignment_yields_to_an_indented_suite(self) -> None:
+        """`:=` is the one continuation operator that also opens a suite."""
+        assert layout_tokens("count :=\n  count + 1") == ["_INDENT", "_DEDENT"]
 
     def test_return_type_arrow_joins_the_next_line(self) -> None:
         assert layout_tokens("def f(x: int) ->\n  int = x") == []

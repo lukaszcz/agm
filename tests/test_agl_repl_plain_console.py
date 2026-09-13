@@ -291,6 +291,16 @@ class TestPlainMultiline:
         assert "error" not in output.lower()
         assert capsys.readouterr().out.split() == ["9"]
 
+    def test_binder_suite_entry_continues_and_evaluates(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # `let x =` is incomplete on its own, so the REPL prompts for the suite
+        # that supplies the binding's value.
+        output = drive_plain("let total =\n  let a = 2\n  a + 3\nprint total\n")
+        assert "...> " in output
+        assert "error" not in output.lower()
+        assert capsys.readouterr().out.split() == ["5"]
+
     def test_multiline_string_continues_through_blank_lines(self) -> None:
         # A blank line inside an open triple-quoted string must not force-submit
         # the still-open entry (unlike a blank line outside a string).

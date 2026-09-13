@@ -11,7 +11,8 @@ assignment: `x = e` as an item is a syntax error — use `let`/`var` to bind or
 ## `let` — immutable binding
 
 ```ebnf
-let_decl ::= "let" pattern (":" type_expr)? "=" expr
+let_decl ::= "let" pattern (":" type_expr)? "=" init_value
+init_value ::= expr | suite
 ```
 
 The annotation applies to the complete pattern. The initializer is evaluated
@@ -86,7 +87,7 @@ for declaring a binder inside a `scope` region.
 ## `var` — mutable binding
 
 ```ebnf
-var_decl ::= "var" decl_head (":" type_expr)? "=" expr
+var_decl ::= "var" decl_head (":" type_expr)? "=" init_value
 ```
 
 Identical to `let` except the binding is **mutable** — it may later be
@@ -102,7 +103,7 @@ var artifact: text = impl.ask("Implement %{spec}")
 ## `:=` — destructive assignment
 
 ```ebnf
-assign_stmt ::= assign_target ":=" expr
+assign_stmt ::= assign_target ":=" init_value
 assign_target ::= qualifier_chain? name
                 | postfix "[" expr "]"
                 | postfix "." field_name
@@ -190,6 +191,36 @@ Static rules, all checked before execution:
 5. Reading a name that is not visible in the current scope chain is an error.
 6. The contextual keywords `ask` and `exec` cannot be used as binding or
    parameter names.
+
+## Suite initializers
+
+Every binder's initializer takes the same two shapes a function body does: one
+expression, or an indented **suite** whose value is its last item. A suite lets
+a binding be computed from a sequence of steps without a helper function; names
+bound inside it are local to the suite.
+
+```agl
+program def main(threshold: int) -> unit =
+  let verdict =
+    let doubled = threshold * 2
+    let limit = doubled + 1
+    if threshold > limit => "over" else => "under"
+
+  var budget: int =
+    let base = threshold
+    base * 3
+
+  budget :=
+    let spent = budget - 1
+    spent * 2
+
+  print verdict
+  print budget
+```
+
+A `:=` that ends its line is otherwise a
+[line continuation](lexical-structure.md#layout-rules); the suite form wins when
+the next line is indented further.
 
 ## `def` — function declarations
 

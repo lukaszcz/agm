@@ -124,6 +124,11 @@ The layout rules:
    Neither form applies to a module header, which spells a path rather than an
    expression.
 
+   `:=` is the one continuation operator that also opens an indented suite
+   ([Bindings and scope](bindings-and-scope.md#suite-initializers)), so a line
+   more indented than a trailing `:=` opens the assignment's block rather than
+   continuing its line.
+
 A semicolon `;` also separates items in a block; see
 [Program structure](program-structure.md).
 

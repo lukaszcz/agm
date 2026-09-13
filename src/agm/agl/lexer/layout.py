@@ -23,9 +23,11 @@ Key rules
 - Operator continuation: a line break is suppressed outright when it would
   separate an operator from its operand — when the line ends with an operator
   still awaiting one (its indentation is then unmeasured, as inside brackets),
-  or when a *more indented* line opens with one.  The indentation requirement on
-  the second form is what keeps a block's own item — ``-x``, ``not ready``,
-  ``.map(f)`` — a statement of its own.  Operator position is decided by
+  or when a *more indented* line opens with one.  A trailing ``:=`` is the one
+  operator that also opens an indented suite, so a more indented line after it
+  opens the assignment's block rather than continuing the line.  The indentation
+  requirement on the second form is what keeps a block's own item — ``-x``,
+  ``not ready``, ``.map(f)`` — a statement of its own.  Operator position is decided by
   :func:`agm.agl.lexer.operators.stands_as_operator`, the predicate soft-keyword
   promotion later reads, so the two passes cannot disagree.
 - At EOF: unwind remaining indent levels with ``_DEDENT`` s.
@@ -63,7 +65,7 @@ from agm.agl.keywords import (
     KW_USE,
 )
 from agm.agl.lexer.errors import LexError
-from agm.agl.lexer.operators import stands_as_operator
+from agm.agl.lexer.operators import opens_suite, stands_as_operator
 from agm.agl.lexer.tokens import (
     ARROW,
     DEDENT,
@@ -292,13 +294,17 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
         sig, after_sig = _peek_pair()
 
         in_header = line_start is not None and str(line_start) in _HEADER_WORDS
+        current_level = indent_stack[-1]
 
         # Dangling-operator rule: the line ended with an operator still awaiting
         # its operand, so it is unfinished.  Suppress the _NEWLINE and let the
-        # next line continue it at any indentation, exactly as brackets do.
+        # next line continue it at any indentation, exactly as brackets do.  An
+        # operator that also opens a suite yields to a more indented line, which
+        # opens the block instead.
         if (
             not in_header
             and last_real is not None
+            and not (indent_width > current_level and opens_suite(last_real))
             and stands_as_operator(
                 last_real,
                 prev_real.type if prev_real is not None else None,
@@ -321,8 +327,6 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
             # (we already cleared it on the first significant token after `do`).
             _pending_loop_body = False
             continue
-
-        current_level = indent_stack[-1]
 
         if indent_width > current_level:
             # Leading-operator rule: a more indented line opening with an

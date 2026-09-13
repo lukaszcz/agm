@@ -37,6 +37,7 @@ from agm.agl.runtime.types import (
 )
 from agm.agl.runtime.types import (
     HostEnvironment,
+    ParamBindingInfo,
     ProgramDeclInfo,
     ProgramParamInfo,
 )
@@ -104,8 +105,9 @@ class ProgramDiscovery:
     """Result of ``PipelineDriver.discover_programs``.
 
     Reports every ``program def`` declaration with its own typed
-    value-parameter signature (``ProgramDeclInfo.parameters``), ready for
-    :meth:`PipelineDriver.preflight_arguments`.
+    value-parameter signature (``ProgramDeclInfo.parameters``), plus each
+    checked module's static parameter inventory. :meth:`params_for` projects
+    that inventory through one program's closure without another static pass.
     """
 
     programs: tuple[ProgramDeclInfo, ...]
@@ -113,6 +115,15 @@ class ProgramDiscovery:
     compiled: "MatchCompiledProgram | None"
     diagnostics: tuple[Diagnostic, ...]
     warnings: tuple[Diagnostic, ...]
+    module_params: Mapping["ModuleId", tuple[ParamBindingInfo, ...]] = field(default_factory=dict)
+
+    def params_for(self, program: ProgramDeclInfo) -> tuple[ParamBindingInfo, ...]:
+        """Return *program*'s reachable module parameters in closure order."""
+        return tuple(
+            param
+            for module_id in program.closure
+            for param in self.module_params.get(module_id, ())
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1072,7 +1083,12 @@ class PipelineDriver:
         checked = static.checked
         if static.compiled is None or checked is None:
             return static
-        return replace(static, programs=_program_decl_infos(checked))
+        assert prepared.resolved is not None
+        return replace(
+            static,
+            programs=_program_decl_infos(checked, prepared.resolved.graph),
+            module_params=_module_param_infos(checked),
+        )
 
     def _wire_externs_or_fail(
         self,
@@ -1519,7 +1535,9 @@ def _select_program_inventory(
     )
 
 
-def _program_decl_infos(checked: "CheckedProgram") -> tuple[ProgramDeclInfo, ...]:
+def _program_decl_infos(
+    checked: "CheckedProgram", graph: "ModuleGraph"
+) -> tuple[ProgramDeclInfo, ...]:
     """Return every ``program def`` declaration's info, in stable sorted order.
 
     Pairs each ``program def`` the shared
@@ -1539,6 +1557,7 @@ def _program_decl_infos(checked: "CheckedProgram") -> tuple[ProgramDeclInfo, ...
             parameters=_program_param_infos(checked_module, item),
             is_entry=module_id == checked.entry_id,
             doc=checked_module.resolved.attributes.docs.get(item.node_id),
+            closure=graph.source_reachable_modules(module_id),
         )
         for module_id, checked_module, item in program_funcdefs(checked.modules)
     ]
@@ -1550,6 +1569,49 @@ def _program_decl_infos(checked: "CheckedProgram") -> tuple[ProgramDeclInfo, ...
         )
     )
     return tuple(program_infos)
+
+
+def _module_param_infos(
+    checked: "CheckedProgram",
+) -> dict["ModuleId", tuple[ParamBindingInfo, ...]]:
+    """Return each checked module's marked static bindings in source order."""
+    from agm.agl.syntax.nodes import LetDecl, VarDecl, simple_let_pattern_name, static_items
+
+    module_params: dict[ModuleId, tuple[ParamBindingInfo, ...]] = {}
+    for module_id, checked_module in checked.modules.items():
+        attributes = checked_module.resolved.attributes
+        params: list[ParamBindingInfo] = []
+        for item in static_items(checked_module.resolved.program.body.items):
+            name: str | None
+            if isinstance(item, VarDecl):
+                binding_node_id = item.node_id
+                name = item.name
+            elif isinstance(item, LetDecl):
+                binding_node_id = item.pattern.node_id
+                name = simple_let_pattern_name(item.pattern)
+            else:
+                continue
+            cli = attributes.params.get(binding_node_id)
+            if cli is None:
+                continue
+            assert name is not None
+            binding_type = checked_module.type_env.get_binding_type(binding_node_id)
+            assert binding_type is not None
+            params.append(
+                ParamBindingInfo(
+                    module=module_id,
+                    scope_path=tuple(segment.name for segment in item.scope_path),
+                    name=name,
+                    node_id=binding_node_id,
+                    span=item.span,
+                    type=binding_type,
+                    mutable=isinstance(item, VarDecl),
+                    cli=cli,
+                    doc=attributes.docs.get(item.node_id),
+                )
+            )
+        module_params[module_id] = tuple(params)
+    return module_params
 
 
 def _program_param_infos(

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from agm.agl.attributes import ProgramOptionSpec
     from agm.agl.capabilities import HostCapabilities
+    from agm.agl.ir.static_keys import StaticBindingKey
     from agm.agl.modules.ids import ModuleId
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.codec import OutputCodec
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
 __all__ = [
     "CallSiteInfo",
     "HostEnvironment",
+    "ParamBindingInfo",
     "ProgramDeclInfo",
     "ProgramParamInfo",
 ]
@@ -102,6 +104,34 @@ class ProgramParamInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class ParamBindingInfo:
+    """Static summary of one host-configurable ``@param`` binding."""
+
+    module: "ModuleId"
+    scope_path: tuple[str, ...]
+    name: str
+    node_id: int
+    span: "SourceSpan"
+    type: "AglType"
+    mutable: bool
+    cli: "ProgramOptionSpec"
+    doc: str | None
+
+    @property
+    def key(self) -> "StaticBindingKey":
+        """Return this binding's structured static identity."""
+        from agm.agl.ir.static_keys import static_binding_key
+
+        return static_binding_key(self.module, self.scope_path, self.name)
+
+    @property
+    def declaration_path(self) -> str:
+        """Return the module-qualified spelling of this binding."""
+        path = "::".join((*self.scope_path, self.name))
+        return f"{self.module.display()}::{path}"
+
+
+@dataclass(frozen=True, slots=True)
 class ProgramDeclInfo:
     """Static summary of one ``program def`` declaration.
 
@@ -114,7 +144,8 @@ class ProgramDeclInfo:
     names no single parameter (an unknown argument name, or an excess
     positional argument). ``parameters`` is the program's own value-parameter
     signature, in declaration order. ``doc`` is the declaration's own ``@doc``
-    text, or ``None`` when it carries none.
+    text, or ``None`` when it carries none. ``closure`` holds this program's
+    module followed by its source-reachable modules in loader order.
     """
 
     module: "ModuleId"
@@ -125,6 +156,7 @@ class ProgramDeclInfo:
     parameters: tuple[ProgramParamInfo, ...]
     is_entry: bool
     doc: str | None
+    closure: tuple["ModuleId", ...] = ()
 
     @property
     def declaration_path(self) -> str:

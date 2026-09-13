@@ -1,0 +1,26 @@
+# Static parameters remain ordinary bindings when the host supplies no seed.
+
+record Settings
+  enabled: bool
+  names: array[text]
+
+@param let verbose: bool = false
+@param let retries = 3
+@param var label: text = "base"
+@param let settings: Settings = Settings(enabled = true, names = ["one", "two"])
+@param let note: Option[text] = Option::Some(value = "ready")
+
+scope Logging
+  @param let tags: array[text] = ["dev", "local"]
+end Logging
+
+program def main(delta: int, suffix: text) -> unit =
+  label := "%{label}%{suffix}"
+  print verbose
+  print(retries + delta)
+  print label
+  print Logging::tags[0]
+  print Logging::tags[1]
+  print settings.enabled
+  print settings.names[0]
+  print note.unwrap-or("missing")

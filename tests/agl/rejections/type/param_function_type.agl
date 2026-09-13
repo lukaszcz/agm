@@ -1,0 +1,1 @@
+@param let f: (int) -> int = fn(x: int) => x

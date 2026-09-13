@@ -1,0 +1,24 @@
+{
+  "scenarios": [
+    {
+      "name": "positive_input_uses_defaults",
+      "params": {
+        "delta": 2,
+        "suffix": "!"
+      },
+      "expect": {
+        "stdout": "false\n5\nbase!\ndev\nlocal\ntrue\none\nready\n"
+      }
+    },
+    {
+      "name": "negative_input_uses_defaults",
+      "params": {
+        "delta": -1,
+        "suffix": "?"
+      },
+      "expect": {
+        "stdout": "false\n2\nbase?\ndev\nlocal\ntrue\none\nready\n"
+      }
+    }
+  ]
+}

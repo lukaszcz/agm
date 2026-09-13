@@ -1134,6 +1134,7 @@ class _Checker:
         if isinstance(item, (LetDecl, VarDecl)):
             with self._own_type_scope(item):
                 binding_type = self._check_binding(item)
+            self._validate_parameter_binding(item)
             if static_root and not is_constant_expression(
                 item.value,
                 is_constructor=lambda node_id: self._constructor_ref_for(node_id) is not None,
@@ -1299,17 +1300,16 @@ class _Checker:
     def _reject_undecodable_boundary_type(self, typ: Type, span: SourceSpan) -> None:
         """Raise unless *typ* can cross the host/JSON boundary.
 
-        Used by ``_validate_program_parameters``: a program parameter
-        round-trips through JSON decoding, so this rejects a non-finite
-        schema and a non-wire-serializable type. Text is taken verbatim and
-        is always exempt.
+        Parameters round-trip through JSON decoding, so this rejects a
+        non-finite schema and a non-wire-serializable type. Text is taken
+        verbatim and is always exempt.
         """
         if isinstance(typ, TextType):
             return
-        self._reject_unbounded_extern_type(typ, span=span, use="a program parameter type")
+        self._reject_unbounded_extern_type(typ, span=span, use="a parameter type")
         if not self._type_is_wire_serializable(typ):
             raise AglTypeError(
-                f"Program parameter type '{typ!r}' cannot be decoded from JSON; "
+                f"Parameter type '{typ!r}' cannot be decoded from JSON; "
                 "use text or a JSON-serializable data type.",
                 span=span,
             )
@@ -1435,6 +1435,22 @@ class _Checker:
         if isinstance(stmt, VarDecl):
             return self._check_var_binding(stmt)
         return self._check_let_binding(stmt)
+
+    def _validate_parameter_binding(self, stmt: LetDecl | VarDecl) -> None:
+        """Require a static host parameter to have a closed, decodable type."""
+        binding_node_id = stmt.node_id if isinstance(stmt, VarDecl) else stmt.pattern.node_id
+        if binding_node_id not in self._resolved.attributes.params:
+            return
+        binding_type = self._env.get_binding_type(binding_node_id)
+        assert binding_type is not None, "checked parameter binding has no recorded type"
+        variables = free_type_vars(binding_type)
+        if variables:
+            names = ", ".join(sorted(variables))
+            raise AglTypeError(
+                f"Parameter type '{binding_type!r}' contains free type variables: {names}.",
+                span=stmt.span,
+            )
+        self._reject_undecodable_boundary_type(binding_type, stmt.span)
 
     def _check_var_binding(self, stmt: VarDecl) -> Type:
         """Check the intentionally single-name mutable binding form."""

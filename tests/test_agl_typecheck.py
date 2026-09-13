@@ -80,6 +80,7 @@ from agm.agl.syntax.nodes import (
     Placeholder,
     Program,
     Raise,
+    RecordDef,
     Return,
     ScopeRegion,
     StringLit,
@@ -99,6 +100,7 @@ from agm.agl.syntax.types import (
     FuncT,
     IntT,
     JsonT,
+    NameT,
     TextT,
     TypeExpr,
     UnitT,
@@ -146,6 +148,7 @@ from tests.agl.module_graph import (
     resolve_and_check_entry,
     resolve_and_check_inline_entry,
     resolve_and_check_repl_entry,
+    resolve_entry,
     resolve_inline_entry,
 )
 
@@ -9757,6 +9760,63 @@ class TestProgramParameterValidation:
         assert "'b' has no default but follows a defaulted positional parameter" in str(err)
 
 
+class TestStaticParameterBindingValidation:
+    """Static parameter bindings expose only closed host-decodable types."""
+
+    def test_recorded_free_type_variable_is_rejected_at_the_binding(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        resolved = resolve_entry(
+            "record Token[T](value: int)\n@param let value: Token[int] = Token(value = 1)",
+            default_stdlib=False,
+        )
+        record = resolved.program.body.items[0]
+        parameter = resolved.program.body.items[1]
+        assert isinstance(record, RecordDef)
+        assert isinstance(parameter, LetDecl)
+        assert parameter.type_ann is not None
+
+        # Source type syntax cannot name an unbound rigid variable, so adapt the
+        # annotation to a phantom nominal supplied by an earlier entry.
+        open_type = RecordType(
+            "Token",
+            (TypeVarType("T"),),
+            module_id=ENTRY_ID,
+            decl_id=record.node_id,
+        )
+        open_annotation = NameT(
+            name="OpenToken",
+            span=parameter.type_ann.span,
+            node_id=parameter.type_ann.node_id,
+        )
+        open_parameter = replace(parameter, type_ann=open_annotation)
+        open_resolved = replace(
+            resolved,
+            program=replace(
+                resolved.program,
+                body=replace(resolved.program.body, items=(record, open_parameter)),
+            ),
+        )
+        seed_env = TypeEnvironment()
+        seed_env.register_type("OpenToken", open_type)
+        seed_env.seal()
+
+        with pytest.raises(AglTypeError) as raised:
+            check_resolved(open_resolved, seed_env=seed_env)
+
+        assert raised.value.span == open_parameter.span
+        assert "free type variable" in str(raised.value).lower()
+
+        # A phantom argument does not affect Token's JSON boundary shape.
+        # Bypassing only the closed-type rule therefore accepts the binding.
+        monkeypatch.setattr(
+            "agm.agl.typecheck.checker.free_type_vars",
+            lambda _typ: frozenset(),
+        )
+        checked = check_resolved(open_resolved, seed_env=seed_env)
+        assert checked.type_env.get_binding_type(open_parameter.pattern.node_id) == open_type
+
+
 class TestDefensiveGuards:
     """Cover defensive guards that are unreachable from the parser.
 
@@ -13310,7 +13370,7 @@ class TestNoFiniteSchemaUseSites:
         err = reject_type(_GROWING_TYPE_SRC + "program def main(p: Perfect[int]) -> unit = ()")
         msg = str(err).lower()
         assert "perfect[int]" in msg
-        assert "program parameter type" in msg
+        assert "parameter type" in msg
 
     def test_program_parameter_not_wire_serializable_rejected(self) -> None:
         err = reject_type("program def main(p: unit) -> unit = ()")

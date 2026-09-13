@@ -2,8 +2,8 @@
   "diagnostic": {
     "line": 1,
     "message_contains": [
-      "parameter type",
-      "decoded"
+      "infer type",
+      "empty array"
     ]
   }
 }

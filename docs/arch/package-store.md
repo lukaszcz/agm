@@ -8,7 +8,7 @@ A package source directory is stored and shipped as its *distribution*: the norm
 
 ## Install and Uninstall
 
-Installation resolves the dependency closure, stages the distribution beside its final store path, runs dependency-aware discipline validation against the staging tree, then publishes with an atomic rename, so a partially written tree is never reachable. Command-shadow diagnostics are finalized while the store lock is held; any diagnostic or activation failure rolls the new tree back. Dry runs perform the same validation without persisting. Store and index changes are serialized by a store lock.
+Installation resolves the dependency closure, stages the distribution beside its final store path, checks the staging tree against the source resolution it was copied from, then publishes with an atomic rename, so a partially written tree is never reachable. Command-shadow diagnostics are finalized while the store lock is held; any diagnostic or activation failure rolls the new tree back. Dry runs perform the same validation without persisting. Store and index changes are serialized by a store lock.
 
 Every installed tree carries a SHA-256 `RECORD` listing the files the install created; uninstall removes exactly those (plus cache and VCS residue) and fails loudly on anything else. Removal renames the tree to a hidden tombstone first, so an interrupted cleanup is retryable. `RECORD` is unsigned and lives inside the tree it describes, so it is only ever checked against an anchor outside that tree: an archive's own record on read, or the source hash when installing over an existing tree. Nothing re-hashes a package to read, activate, or execute it.
 

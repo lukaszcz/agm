@@ -8,14 +8,12 @@ from pathlib import Path
 import pytest
 import semver
 
-from agm.agl.modules import loader
-from agm.agl.modules.ids import ModuleId
-from agm.agl.modules.parsed_module_cache import clear_parsed_module_cache
 from agm.packages.discipline import DisciplineError, validate_package
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.manifest import CommandSpec, PackageManifest, expanded_commands
 from agm.packages.model import PackageInfo
 from agm.packages.source_commands import package_with_source_commands
+from tests._parse_counts import parse_counts
 
 _skip_if_root = pytest.mark.skipif(
     hasattr(os, "geteuid") and os.geteuid() == 0,
@@ -292,19 +290,9 @@ def test_discovery_and_validation_parse_each_module_once(
     (package.root / MODULE_TREE_DIRNAME / "main.agl").write_text(
         '@command("launch")\nprogram def main() -> unit = ()\n', encoding="utf-8"
     )
-    built: list[str] = []
-    real = loader._parse_imported_module
 
-    def counting(
-        module_id: ModuleId, path: Path, start_id: int, source_text: str, *, default_stdlib: bool
-    ) -> tuple[loader.LoadedModule, int]:
-        built.append(str(path))
-        return real(module_id, path, start_id, source_text, default_stdlib=default_stdlib)
-
-    monkeypatch.setattr(loader, "_parse_imported_module", counting)
-    clear_parsed_module_cache()
-
-    validate_package(package_with_source_commands(package))
+    with parse_counts(monkeypatch) as counts:
+        validate_package(package_with_source_commands(package))
 
     module = str((package.root / MODULE_TREE_DIRNAME / "main.agl").resolve())
-    assert built.count(module) == 1
+    assert counts[module] == 1

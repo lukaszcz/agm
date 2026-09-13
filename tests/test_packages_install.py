@@ -7,6 +7,7 @@ import hashlib
 import re
 import shutil
 import zipfile
+from collections import Counter
 from collections.abc import Callable, Generator, Iterable, Iterator
 from pathlib import Path
 from typing import NamedTuple
@@ -56,6 +57,7 @@ from agm.packages.record import (
 )
 from agm.version import AGM_VERSION
 from tests._package_helpers import archive_contents, older_incompatible_std_requirement, write_zip
+from tests._parse_counts import parse_counts
 
 
 @pytest.fixture(autouse=True)
@@ -3164,3 +3166,27 @@ def test_install_and_uninstall_use_dry_run_filesystem_primitives(tmp_path: Path)
     uninstall_package("alpha", home=home, env={})
 
     assert (home / ".agm" / "packages" / "alpha" / "1.0.0").exists()
+
+
+def test_installing_a_directory_parses_each_module_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A staged distribution reuses the resolution of the tree it was staged from.
+
+    Staging copies the source tree's modules unchanged, so resolving the copy
+    would repeat work the install has already done on the original.
+    """
+    source = _package(tmp_path / "alpha", "alpha", "1.0.0")
+    (source / MODULE_TREE_DIRNAME / "helper.agl").write_text(
+        "def twice(x: int) -> int = x + x\n", encoding="utf-8"
+    )
+    home = tmp_path / "home"
+
+    with parse_counts(monkeypatch) as counts:
+        install_directory(source, home=home, env={})
+
+    by_name: Counter[str] = Counter()
+    for path, count in counts.items():
+        by_name[Path(path).name] += count
+    assert by_name["main.agl"] == 1
+    assert by_name["helper.agl"] == 1

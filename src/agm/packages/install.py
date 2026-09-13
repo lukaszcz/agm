@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import mkdtemp
+from typing import TYPE_CHECKING
 
 import semver
 
@@ -80,6 +81,11 @@ from agm.packages.store import (
 )
 from agm.stdlib_locator import shipped_stdlib_root
 from agm.version import AGM_VERSION
+
+if TYPE_CHECKING:
+    # Imported for typing only: agm.packages.discipline pulls in the AgL
+    # frontend, which installation loads lazily at the call sites that need it.
+    from agm.packages.discipline import PackageResolution
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,7 +236,7 @@ def refresh_managed_stdlib(
         package = _validated_directory_package(source)
         _validate_managed_stdlib_install(package.manifest, source=package.root, editable=False)
         _validate_agm_compatibility(package.manifest)
-        validate_package(package)
+        resolution = validate_package(package)
         try:
             destination = canonical_package_store_path(
                 package.manifest.name, package.manifest.version, home=home, env=env
@@ -245,7 +251,9 @@ def refresh_managed_stdlib(
         staging: Path | None = None
         published: tuple[Path, Path | None] | None = None
         try:
-            staging = _stage_directory_package(package.root, package, destination)
+            staging = _stage_directory_package(
+                package.root, package, destination, resolution=resolution
+            )
             previous = _publish_staged_refresh(staging, destination)
             published = (staging, previous)
             state = _InstallState(
@@ -428,15 +436,17 @@ def _stage_directory_package(
     package: PackageInfo,
     destination: Path,
     *,
-    dependency_packages: tuple[PackageInfo, ...] = (),
+    resolution: "PackageResolution",
 ) -> Path:
     """Stage and fully validate a package distribution in a sibling directory.
 
     The staged tree is the same distribution an archive of *source* would
     carry — its normalized manifest and its selected files — so a package has
-    one stored shape and one content hash however it reaches the store.
+    one stored shape and one content hash however it reaches the store. It is
+    validated against *resolution*, the source tree's own, since staging copies
+    that tree's modules unchanged.
     """
-    from agm.packages.discipline import validate_package
+    from agm.packages.discipline import validate_staged_distribution
 
     source_root = source.resolve()
     staging_parent = destination.parent.resolve()
@@ -448,7 +458,7 @@ def _stage_directory_package(
         distribution = distribution_manifest(package.manifest)
         materialize_distribution(source_root, distribution, staging)
         staged = PackageInfo(staging, load_manifest(staging / MANIFEST_NAME))
-        validate_package(staged, dependency_packages=dependency_packages)
+        validate_staged_distribution(resolution, staged)
         if (
             canonical_package_identity(staged.manifest.name, staged.manifest.version)
             != canonical_package_identity(package.manifest.name, package.manifest.version)
@@ -515,7 +525,7 @@ def _install_directory(
     _resolve_dependencies(package, state)
     dependency_packages = tuple(state.resource_packages.values())
     try:
-        validate_package(package, dependency_packages=dependency_packages)
+        resolution = validate_package(package, dependency_packages=dependency_packages)
     except DisciplineError as exc:
         raise PackageInstallError(f"cannot install package from {source}: {exc}") from exc
 
@@ -550,7 +560,7 @@ def _install_directory(
                     root,
                     package,
                     destination,
-                    dependency_packages=dependency_packages,
+                    resolution=resolution,
                 )
                 staging.replace(destination)
                 _record_created_tree(state, destination)
@@ -572,10 +582,7 @@ def _install_directory(
         else:
             try:
                 validate_package_tree(root)
-                validate_package_distribution(
-                    package,
-                    dependency_packages=dependency_packages,
-                )
+                validate_package_distribution(resolution)
             except (DisciplineError, DistributionError, OSError, RecordError) as exc:
                 raise PackageInstallError(
                     f"cannot install package {package.manifest.name!r}: {exc}"

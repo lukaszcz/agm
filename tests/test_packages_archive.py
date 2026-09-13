@@ -7,6 +7,7 @@ import io
 import os
 import tempfile
 import zipfile
+from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
 from typing import IO, cast
@@ -29,6 +30,7 @@ from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.manifest import CommandSpec, expanded_commands
 from agm.packages.record import RecordEntry, serialize_record
 from tests._package_helpers import archive_contents, write_zip
+from tests._parse_counts import parse_counts
 
 
 def _package_tree(tmp_path: Path) -> Path:
@@ -1701,6 +1703,55 @@ def test_validate_archive_source_rejects_a_resource_the_distribution_excludes(
     prompts.mkdir()
     (prompts / "review.md").write_text("review", encoding="utf-8")
     (root / ".gitignore").write_text("prompts/\n", encoding="utf-8")
+
+    with pytest.raises(ArchiveError, match="discipline"):
+        validate_archive_source(root)
+
+
+def test_validate_archive_source_parses_each_module_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The source tree and its distribution share one resolution.
+
+    A distribution is its source tree minus excluded files, so validating it
+    reuses the names already resolved for the tree rather than resolving a
+    copy of the same modules again.
+    """
+    root = _package_tree(tmp_path)
+    (root / MODULE_TREE_DIRNAME / "helper.agl").write_text(
+        "def twice(x: int) -> int = x + x\n", encoding="utf-8"
+    )
+
+    with parse_counts(monkeypatch) as counts:
+        validate_archive_source(root)
+
+    # By file name, so a second parse of a copy staged elsewhere counts too.
+    by_name: Counter[str] = Counter()
+    for path, count in counts.items():
+        by_name[Path(path).name] += count
+    assert by_name["main.agl"] == 1
+    assert by_name["helper.agl"] == 1
+
+
+def test_validate_archive_source_rejects_a_module_the_distribution_excludes(tmp_path: Path) -> None:
+    """An ignored module still imported by one that ships."""
+    root = _package_tree(tmp_path)
+    (root / MODULE_TREE_DIRNAME / "helper.agl").write_text(
+        "def twice(x: int) -> int = x + x\n", encoding="utf-8"
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "import review_tools/helper\nprogram def main() -> unit = ()\n", encoding="utf-8"
+    )
+    (root / ".gitignore").write_text("helper.agl\n", encoding="utf-8")
+
+    with pytest.raises(ArchiveError, match="discipline"):
+        validate_archive_source(root)
+
+
+def test_validate_archive_source_rejects_an_excluded_module_tree(tmp_path: Path) -> None:
+    """A distribution that ships no module tree at all."""
+    root = _package_tree(tmp_path)
+    (root / ".gitignore").write_text(f"{MODULE_TREE_DIRNAME}/\n", encoding="utf-8")
 
     with pytest.raises(ArchiveError, match="discipline"):
         validate_archive_source(root)

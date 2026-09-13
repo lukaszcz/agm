@@ -551,6 +551,66 @@ class TestBinders:
         assert isinstance(items(prog)[1], VarRef)
 
 
+class TestBinderSuites:
+    """A binder's ``=`` opens an indented suite, exactly as a function's does."""
+
+    def test_let_suite(self) -> None:
+        let = first(parse("let x =\n  let t = 2\n  t + 1\n"))
+        assert isinstance(let, LetDecl)
+        assert isinstance(let.value, Block)
+        assert len(let.value.items) == 2
+        assert isinstance(let.value.items[1], BinaryOp)
+
+    def test_let_suite_annotated(self) -> None:
+        let = first(parse("let x: int =\n  1\n"))
+        assert isinstance(let, LetDecl)
+        assert isinstance(let.type_ann, IntT)
+        assert isinstance(let.value, Block)
+
+    def test_var_suite(self) -> None:
+        decl = first(parse("var count: int =\n  let base = 2\n  base * 2\n"))
+        assert isinstance(decl, VarDecl)
+        assert isinstance(decl.value, Block)
+
+    def test_assign_suite(self) -> None:
+        stmt = first(parse("x :=\n  let t = 1\n  t\n"))
+        assert isinstance(stmt, AssignStmt)
+        assert isinstance(stmt.value, Block)
+
+    def test_suite_ends_at_dedent(self) -> None:
+        prog = parse("let x =\n  1\nlet y = x\n")
+        assert len(items(prog)) == 2
+        let = items(prog)[0]
+        assert isinstance(let, LetDecl)
+        assert isinstance(let.value, Block)
+        second = items(prog)[1]
+        assert isinstance(second, LetDecl)
+        assert isinstance(second.value, VarRef)
+
+    def test_binder_suite_nests_inside_a_function_suite(self) -> None:
+        func = first(parse("def f() =\n  let x =\n    let t = 1\n    t + 1\n  x\n"))
+        assert isinstance(func, FuncDef)
+        assert isinstance(func.body, Block)
+        let = func.body.items[0]
+        assert isinstance(let, LetDecl)
+        assert isinstance(let.value, Block)
+        assert len(let.value.items) == 2
+
+    def test_inline_initializer_is_still_not_a_block(self) -> None:
+        let = first(parse("let x = 5"))
+        assert isinstance(let, LetDecl)
+        assert isinstance(let.value, IntLit)
+
+    @pytest.mark.parametrize(
+        "source",
+        ("let x =\n", "let x =\n1\n", "var x =\n", "x :=\n"),
+        ids=("let-empty", "let-unindented", "var-empty", "assign-empty"),
+    )
+    def test_binder_without_a_suite_body_is_rejected(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse(source)
+
+
 # ---------------------------------------------------------------------------
 # Type expressions
 # ---------------------------------------------------------------------------
@@ -3309,7 +3369,7 @@ class TestNegativeCases:
     def test_unexpected_newline_does_not_report_indentation_width(self) -> None:
         """Unexpected layout newlines should be named, not rendered as ``'0'``."""
         with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program("let x =\n11\n")
+            parse_program("let x = if true\n")
         assert "newline" in str(exc_info.value).lower()
         assert "'0'" not in str(exc_info.value)
 
@@ -3508,11 +3568,11 @@ class TestLarkErrorMapping:
     def test_indent_after_an_unfinished_item_names_the_indentation(self) -> None:
         """An indent the grammar cannot take is named even when no item is in hand.
 
-        A blank line separates the dangling ``let`` from the block that would
-        have been its body, so the item is still open when the indent arrives.
+        A blank line separates the dangling ``raise`` from the indented line, so
+        the item is still open when the indent arrives.
         """
         with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program("let x =\n\n  1\n")
+            parse_program("let x = raise\n\n  1\n")
 
         assert str(exc_info.value) == "Unexpected indentation."
 

@@ -316,9 +316,14 @@ func_body: suite_expr | raw_return_expr | line_final_expr
 
 ?binder: let_decl | var_decl | assign_stmt
 
-let_decl: attributes? "let" pattern type_ann? EQ line_final_expr
-var_decl: attributes? VAR decl_head type_ann? EQ line_final_expr
-assign_stmt: postfix ASSIGN line_final_expr
+// A binder's initializer takes the same two shapes a function body does: an
+// indented suite, or one line-final expression.  The suite alternative starts
+// with _INDENT and no expression form can, so the choice is unambiguous.
+_init_value: suite_expr | line_final_expr
+
+let_decl: attributes? "let" pattern type_ann? EQ _init_value
+var_decl: attributes? VAR decl_head type_ann? EQ _init_value
+assign_stmt: postfix ASSIGN _init_value
 
 // Type annotation: COLON followed by a type_expr.
 type_ann: COLON type_expr

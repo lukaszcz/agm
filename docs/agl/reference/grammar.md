@@ -390,13 +390,27 @@ priorities.
 ## Bindings and mutation
 
 ```ebnf
-let_decl       ::= attributes? "let" pattern type_ann? "=" expr
-var_decl       ::= attributes? "var" decl_head type_ann? "=" expr
+let_decl       ::= attributes? "let" pattern type_ann? "=" init_value
+var_decl       ::= attributes? "var" decl_head type_ann? "=" init_value
 builtin_var_def ::= attributes? "builtin" NEWLINE? "var" name type_ann ["=" expr]  (* standard library only *)
-assign_stmt ::= assign_target ":=" expr
+assign_stmt ::= assign_target ":=" init_value
+init_value  ::= expr | suite
 assign_target ::= qualifier_chain? name
                 | postfix "[" expr "]"
                 | postfix "." field_name
+```
+
+An initializer takes the same two shapes a function body does: one expression,
+or an indented suite whose value is its last item. A suite initializer is what
+lets a binding be computed from a sequence of steps without a helper function:
+
+```agl
+program def main() -> unit =
+  let summary =
+    let total = 1 + 2
+    let doubled = total * 2
+    "total %{total}, doubled %{doubled}"
+  print summary
 ```
 
 A `builtin var` is a body-less, host-backed mutable binding with a mandatory

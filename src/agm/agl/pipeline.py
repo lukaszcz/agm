@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode
     from agm.agl.ir.ids import NominalId, SymbolId
     from agm.agl.ir.program import ExecutableProgram, NominalDescriptor
+    from agm.agl.ir.static_keys import StaticBindingKey
     from agm.agl.matchcompile import MatchCompiledProgram
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule, ModuleGraph
@@ -142,11 +143,14 @@ class ArgumentPreflight:
         The bound, decoded arguments, ready for ``run_prepared``'s own
         ``arguments`` — one entry per declared parameter, in declaration
         order — or ``()`` when the static pipeline or binding failed.
+    ``param_seeds``
+        The decoded module-parameter values, ready for ``run_prepared``.
     """
 
     result: "RunResult"
     executable: "ExecutableProgram | None"
     arguments: "tuple[Value | UseDefault, ...]" = ()
+    param_seeds: "Mapping[StaticBindingKey, Value]" = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -436,6 +440,7 @@ class PipelineDriver:
         host_settings_policy: "HostSettingsPolicy | None" = None,
         builtin_host_settings: "Mapping[str, Value] | None" = None,
         builtin_var_seeds: "Mapping[BuiltinVarKey, Value] | None" = None,
+        param_seeds: "Mapping[StaticBindingKey, Value] | None" = None,
         process_environment: "Mapping[str, str] | None" = None,
         program_symbol: "SymbolId | None" = None,
         select_default_program: bool = False,
@@ -586,6 +591,7 @@ class PipelineDriver:
                 extern_registry=host_env.extern_registry,
                 host_reconfigurer=reconfigurer,
                 builtin_host_settings=interpreter_builtin_settings,
+                param_seeds=param_seeds,
                 process_environment=process_environment,
             )
             entry_bindings = interp.run(program_symbol=program_symbol, arguments=arguments)
@@ -1131,6 +1137,7 @@ class PipelineDriver:
         host_settings_policy: "HostSettingsPolicy | None" = None,
         builtin_host_settings: "Mapping[str, Value] | None" = None,
         builtin_var_seeds: "Mapping[BuiltinVarKey, Value] | None" = None,
+        param_seeds: "Mapping[StaticBindingKey, Value] | None" = None,
         process_environment: "Mapping[str, str] | None" = None,
         program_symbol: "SymbolId | None" = None,
         select_default_program: bool = False,
@@ -1184,6 +1191,7 @@ class PipelineDriver:
             host_settings_policy=host_settings_policy,
             builtin_host_settings=builtin_host_settings,
             builtin_var_seeds=builtin_var_seeds,
+            param_seeds=param_seeds,
             process_environment=process_environment,
             program_symbol=program_symbol,
             select_default_program=select_default_program,
@@ -1248,8 +1256,9 @@ class PipelineDriver:
         arguments: "ProgramArguments",
         *,
         compiled: "MatchCompiledProgram | None" = None,
+        param_values: "Mapping[StaticBindingKey, object] | None" = None,
     ) -> ArgumentPreflight:
-        """Validate host-supplied *arguments* against *program*'s own parameters.
+        """Validate program arguments and module parameter values before execution.
 
         Runs the static pipeline exactly as :meth:`run_prepared` does under
         ``check_only``, then binds and decodes *arguments* against the
@@ -1259,13 +1268,15 @@ class PipelineDriver:
         :meth:`run_prepared` (``executable=``, ``arguments=``) to execute it
         without lowering it a second time.
         """
-        from agm.agl.runtime.arguments import bind_program_arguments_for
+        from agm.agl.runtime.arguments import bind_param_values, bind_program_arguments_for
 
         result, executable = self._lower_and_record(prepared, program, compiled=compiled)
         if executable is None or not result.ok:
             return ArgumentPreflight(result=result, executable=executable)
 
-        bound, diagnostics = bind_program_arguments_for(executable, program, arguments)
+        bound, argument_diagnostics = bind_program_arguments_for(executable, program, arguments)
+        param_seeds, param_diagnostics = bind_param_values(executable, param_values or {})
+        diagnostics = (*argument_diagnostics, *param_diagnostics)
         if diagnostics:
             return ArgumentPreflight(
                 result=RunResult(
@@ -1276,7 +1287,12 @@ class PipelineDriver:
                 ),
                 executable=executable,
             )
-        return ArgumentPreflight(result=result, executable=executable, arguments=bound)
+        return ArgumentPreflight(
+            result=result,
+            executable=executable,
+            arguments=bound,
+            param_seeds=param_seeds,
+        )
 
     def _run_program(
         self,
@@ -1290,6 +1306,7 @@ class PipelineDriver:
         host_settings_policy: "HostSettingsPolicy | None" = None,
         builtin_host_settings: "Mapping[str, Value] | None" = None,
         builtin_var_seeds: "Mapping[BuiltinVarKey, Value] | None" = None,
+        param_seeds: "Mapping[StaticBindingKey, Value] | None" = None,
         process_environment: "Mapping[str, str] | None" = None,
         program_symbol: "SymbolId | None" = None,
         select_default_program: bool = False,
@@ -1451,6 +1468,7 @@ class PipelineDriver:
                 host_settings_policy=host_settings_policy,
                 builtin_host_settings=builtin_host_settings,
                 builtin_var_seeds=builtin_var_seeds,
+                param_seeds=param_seeds,
                 process_environment=process_environment,
                 program_symbol=program_symbol,
                 select_default_program=select_default_program,
@@ -1532,6 +1550,16 @@ def _select_program_inventory(
             for call_site in executable.dry_run_inventory
             if call_site.module in source_reachable
         ),
+        param_bindings={
+            key: symbol
+            for key, symbol in executable.param_bindings.items()
+            if key[0] in source_reachable
+        },
+        param_decoders={
+            key: decoder
+            for key, decoder in executable.param_decoders.items()
+            if key[0] in source_reachable
+        },
     )
 
 

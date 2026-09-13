@@ -25,6 +25,7 @@ from agm.agl.ir.builtin_vars import BuiltinVarKey
 from agm.agl.ir.contracts import ContractRequest, ExceptionFieldEncode, ParamDecoder
 from agm.agl.ir.ids import ContractId, FunctionId, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import IrExpr, IrFunctionParam
+from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.modules.ids import ModuleId, spell_scope_path
 from agm.agl.zones import ParamZone
 
@@ -334,6 +335,11 @@ class ExecutableProgram:
         parameter signature (``IrProgramParam``, in declaration order). Every
         ``program_functions`` key has an entry here, including an empty tuple
         for a parameterless program.
+      ``param_bindings`` — static ``@param`` identities -> their pre-allocated
+        binding symbols. The interpreter uses this table to apply host seeds
+        while initializing modules without changing the executable IR.
+      ``param_decoders`` — static ``@param`` identities -> their host-value
+        decoders, compiled alongside program parameter signatures.
       ``builtin_nominals`` — bare built-in type name -> the ``NominalId`` a
         host mints for it (see ``agm.agl.ir.builtin_nominals``), built during
         lowering from the program's ``builtin`` declarations. Defaults to
@@ -366,6 +372,8 @@ class ExecutableProgram:
     program_functions: dict[SymbolId, FunctionId] = field(default_factory=dict)
     synthetic_main_symbol: SymbolId | None = None
     program_signatures: Mapping[SymbolId, tuple[IrProgramParam, ...]] = field(default_factory=dict)
+    param_bindings: dict[StaticBindingKey, SymbolId] = field(default_factory=dict)
+    param_decoders: dict[StaticBindingKey, ParamDecoder] = field(default_factory=dict)
     contracts: dict["ContractId", "ContractRequest"] = field(default_factory=dict)
     dry_run_inventory: "tuple[DryRunEntry, ...]" = ()
     builtin_nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS

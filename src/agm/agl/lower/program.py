@@ -11,7 +11,7 @@ import hashlib
 from collections.abc import Iterable, Mapping
 
 from agm.agl.ir.builtin_vars import BuiltinVarKey, builtin_var_key
-from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode
+from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode, ParamDecoder
 from agm.agl.ir.ids import FunctionId, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import IrExpr
 from agm.agl.ir.program import (
@@ -26,6 +26,7 @@ from agm.agl.ir.program import (
     SymbolDescriptor,
     VariantDescriptor,
 )
+from agm.agl.ir.static_keys import StaticBindingKey, static_binding_key
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower import module as module_cache
 from agm.agl.lower.lowerer import (
@@ -41,7 +42,14 @@ from agm.agl.modules.ids import STD_ENV_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import TypeDef, TypeTable, is_json_convertible
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
-from agm.agl.syntax.nodes import BuiltinVarDecl, FuncDef, static_items
+from agm.agl.syntax.nodes import (
+    BuiltinVarDecl,
+    FuncDef,
+    LetDecl,
+    VarDecl,
+    simple_let_pattern_name,
+    static_items,
+)
 from agm.agl.type_schema import build_encode_plan, build_param_decoder
 from agm.agl.typecheck.env import CheckedModule, FunctionSignature
 from agm.agl.typecheck.program import program_funcdefs
@@ -107,6 +115,40 @@ def _program_signatures(
         assert sig is not None, f"compiler bug: no function signature for program {item.name!r}"
         result[fn_node_to_sym[item.node_id]] = _program_signature(sig, type_table)
     return result
+
+
+def _param_tables(
+    modules: Mapping[ModuleId, CheckedModule],
+    decl_to_sym: Mapping[int, SymbolId],
+    type_table: TypeTable,
+) -> tuple[dict[StaticBindingKey, SymbolId], dict[StaticBindingKey, ParamDecoder]]:
+    """Build host seed identities and decoders for every linked ``@param`` binding."""
+    bindings: dict[StaticBindingKey, SymbolId] = {}
+    decoders: dict[StaticBindingKey, ParamDecoder] = {}
+    for module_id, checked_module in modules.items():
+        attributes = checked_module.resolved.attributes
+        for item in static_items(checked_module.resolved.program.body.items):
+            if isinstance(item, VarDecl):
+                binding_node_id = item.node_id
+                name = item.name
+            elif isinstance(item, LetDecl):
+                binding_node_id = item.pattern.node_id
+                let_name = simple_let_pattern_name(item.pattern)
+                if let_name is None:
+                    continue
+                name = let_name
+            else:
+                continue
+            if binding_node_id not in attributes.params:
+                continue
+            key = static_binding_key(module_id, (segment.name for segment in item.scope_path), name)
+            bindings[key] = decl_to_sym[binding_node_id]
+            binding_type = checked_module.type_env.get_binding_type(binding_node_id)
+            assert binding_type is not None, (
+                f"compiler bug: parameter binding {name!r} has no checked type"
+            )
+            decoders[key] = build_param_decoder(binding_type, type_table)
+    return bindings, decoders
 
 
 def _live_functions_and_symbols(
@@ -456,6 +498,7 @@ def lower_program(
         item.node_id: link.fn_node_to_sym[item.node_id]
         for _mid, _cm, item in program_funcdefs(checked.modules)
     }
+    param_bindings, param_decoders = _param_tables(checked.modules, link.decl_to_sym, type_table)
     program = ExecutableProgram(
         entry_module=checked.entry_id,
         modules=executable_modules,
@@ -478,6 +521,8 @@ def lower_program(
             None,
         ),
         program_signatures=_program_signatures(checked.modules, link.fn_node_to_sym, type_table),
+        param_bindings=param_bindings,
+        param_decoders=param_decoders,
         contracts=dict(link.contracts),
         dry_run_inventory=dry_run_inventory,
         builtin_nominals=link.builtin_nominals,

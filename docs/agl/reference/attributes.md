@@ -119,6 +119,10 @@ parameter. The binding must be at module root or directly in a scope region,
 must bind exactly one name rather than `_` or a destructuring pattern, and must
 have an initializer. Its type annotation is optional.
 
+Its initializer supplies the value when the host leaves the parameter unset;
+when the host supplies a value, that value is bound instead and the initializer
+is not evaluated.
+
 The presentation attributes `@opt-name`, `@opt-short`, `@opt-env`,
 `@opt-metavar`, `@opt-hidden`, and `@doc` apply to the binding. Without
 `@opt-name`, its external name is its declared name.

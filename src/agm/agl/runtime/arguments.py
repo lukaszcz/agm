@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, assert_never
 
 from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
 from agm.agl.ir.nodes import UseDefault
+from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.semantics.arguments import (
     ArgumentBindingError,
     ArgumentBindingErrorKind,
@@ -48,6 +49,7 @@ __all__ = [
     "ProgramSignature",
     "bind_program_arguments",
     "bind_program_arguments_for",
+    "bind_param_values",
     "decode_param_value",
     "default_program_arguments",
 ]
@@ -300,6 +302,51 @@ def bind_program_arguments_for(
         executable.program_signatures[program_symbol], program.parameters, program.span
     )
     return bind_program_arguments(signature, arguments)
+
+
+def bind_param_values(
+    executable: "ExecutableProgram", raw: "Mapping[StaticBindingKey, object]"
+) -> "tuple[Mapping[StaticBindingKey, Value], tuple[Diagnostic, ...]]":
+    """Decode supplied module-parameter values against *executable*'s tables.
+
+    Every supplied key is checked independently so an unknown parameter and
+    all malformed values are returned together before the interpreter starts.
+    """
+    from agm.agl.runtime.convert import StrictJsonParseError
+
+    values: dict[StaticBindingKey, Value] = {}
+    diagnostics: list[Diagnostic] = []
+    for key, value in raw.items():
+        decoder = executable.param_decoders.get(key)
+        if decoder is None:
+            module_id, scope_path, name = key
+            declaration_path = "::".join((*scope_path, name))
+            diagnostics.append(
+                Diagnostic(
+                    message=(
+                        f"Unknown module parameter: {module_id.display()}::{declaration_path}"
+                    ),
+                    line=1,
+                )
+            )
+            continue
+        try:
+            values[key] = decode_param_value(decoder, value)
+        except (StrictJsonParseError, ValueError) as exc:
+            module_id, scope_path, name = key
+            declaration_path = "::".join((*scope_path, name))
+            diagnostics.append(
+                Diagnostic(
+                    message=(
+                        f"Module parameter {module_id.display()}::{declaration_path}: "
+                        f"could not parse as {decoder.target_type_label}: {exc}"
+                    ),
+                    line=1,
+                )
+            )
+    if diagnostics:
+        return {}, tuple(diagnostics)
+    return values, ()
 
 
 def default_program_arguments(

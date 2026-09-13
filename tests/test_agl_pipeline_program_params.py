@@ -4,9 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.roots import RootSet
-from agm.agl.pipeline import PipelineDriver, ProgramDiscovery
+from agm.agl.pipeline import ArgumentPreflight, PipelineDriver, PreparedProgram, ProgramDiscovery
+from agm.agl.runtime.arguments import ProgramArguments
+from tests._agl_helpers import agl_roots
 
 
 def _discover(source: str, tmp_path: Path) -> ProgramDiscovery:
@@ -19,6 +24,32 @@ def _discover(source: str, tmp_path: Path) -> ProgramDiscovery:
     discovery = PipelineDriver().discover_programs(prepared)
     assert discovery.diagnostics == ()
     return discovery
+
+
+def _prepared(source: str, tmp_path: Path) -> PreparedProgram:
+    """Prepare source with modules rooted at *tmp_path*."""
+    return PipelineDriver.prepare_program(
+        source,
+        roots=RootSet(roots=frozenset({tmp_path})),
+        default_stdlib=False,
+    )
+
+
+def _preflight(
+    runtime: PipelineDriver,
+    prepared: PreparedProgram,
+    discovery: ProgramDiscovery,
+    *,
+    param_values: dict[StaticBindingKey, object] | None = None,
+) -> ArgumentPreflight:
+    """Preflight the first discovered program with no value arguments."""
+    return runtime.preflight_arguments(
+        prepared,
+        discovery.programs[0],
+        ProgramArguments(positional=(), named={}),
+        compiled=discovery.compiled,
+        param_values=param_values,
+    )
 
 
 def test_discovery_inventories_module_params_in_declaration_order(tmp_path: Path) -> None:
@@ -115,3 +146,179 @@ def test_discovery_has_empty_module_param_inventory_without_param_bindings(tmp_p
 
     assert all(not params for params in discovery.module_params.values())
     assert tuple(discovery.params_for(discovery.programs[0])) == ()
+
+
+class TestParamSeeds:
+    def test_executable_exposes_a_binding_and_decoder_for_every_inventory_key(
+        self, tmp_path: Path
+    ) -> None:
+        runtime = PipelineDriver()
+        prepared = _prepared(
+            """
+@param let root: int = 1
+scope Tuning
+  @param var retries: int = 2
+end Tuning
+
+program def main() -> unit = ()
+""",
+            tmp_path,
+        )
+        discovery = runtime.discover_programs(prepared)
+
+        preflight = _preflight(runtime, prepared, discovery)
+
+        assert preflight.result.ok
+        assert preflight.executable is not None
+        expected_keys = {param.key for param in discovery.params_for(discovery.programs[0])}
+        assert set(preflight.executable.param_bindings) == expected_keys
+        assert set(preflight.executable.param_decoders) == expected_keys
+        assert set(preflight.executable.param_bindings.values()) <= set(
+            preflight.executable.symbols
+        )
+
+    def test_preflight_decodes_all_param_values_and_reports_all_failures(
+        self, tmp_path: Path
+    ) -> None:
+        runtime = PipelineDriver()
+        prepared = _prepared(
+            """
+@param let number: int = 1
+@param let enabled: bool = false
+program def main() -> unit = ()
+""",
+            tmp_path,
+        )
+        discovery = runtime.discover_programs(prepared)
+        number, enabled = discovery.params_for(discovery.programs[0])
+        unknown = (ModuleId(("missing",)), (), "unknown")
+
+        preflight = _preflight(
+            runtime,
+            prepared,
+            discovery,
+            param_values={number.key: "not-an-int", enabled.key: "not-a-bool", unknown: 1},
+        )
+
+        assert not preflight.result.ok
+        assert preflight.executable is not None
+        assert preflight.arguments == ()
+        assert preflight.param_seeds == {}
+        assert len(preflight.result.diagnostics) == 3
+
+    def test_seeds_override_defaults_and_keep_vars_writable(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "library.agl").write_text(
+            """
+@param let imported: int = 1
+""",
+            encoding="utf-8",
+        )
+        runtime = PipelineDriver()
+        prepared = PipelineDriver.prepare_program(
+            """
+import library
+@param let root: int = 2
+@param var count: int = 3
+
+scope Tuning
+  @param let scoped: int = 4
+end Tuning
+
+program def main() -> unit =
+  count := count + 1
+  print library::imported
+  print root
+  print count
+  print Tuning::scoped
+""",
+            roots=agl_roots(tmp_path),
+        )
+        discovery = runtime.discover_programs(prepared)
+        params = {param.name: param for param in discovery.params_for(discovery.programs[0])}
+
+        preflight = _preflight(
+            runtime,
+            prepared,
+            discovery,
+            param_values={
+                params["imported"].key: 10,
+                params["root"].key: 20,
+                params["count"].key: 30,
+                params["scoped"].key: 40,
+            },
+        )
+
+        assert preflight.result.ok
+        assert preflight.executable is not None
+        assert set(preflight.param_seeds) == {param.key for param in params.values()}
+        result = runtime.run_prepared(
+            prepared,
+            compiled=discovery.compiled,
+            executable=preflight.executable,
+            program_symbol=preflight.executable.program_symbols[discovery.programs[0].node_id],
+            arguments=preflight.arguments,
+            param_seeds=preflight.param_seeds,
+        )
+
+        assert result.ok
+        assert capsys.readouterr().out == "10\n20\n31\n40\n"
+
+    def test_unseeded_param_uses_its_default(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        runtime = PipelineDriver()
+        prepared = PipelineDriver.prepare_program(
+            """
+@param let value: int = 7
+program def main() -> unit = print value
+""",
+            roots=agl_roots(tmp_path),
+        )
+        discovery = runtime.discover_programs(prepared)
+
+        result = runtime.run_prepared(
+            prepared, compiled=discovery.compiled, select_default_program=True
+        )
+
+        assert result.ok
+        assert capsys.readouterr().out == "7\n"
+
+    def test_check_only_never_binds_preflighted_seeds(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        runtime = PipelineDriver()
+        prepared = PipelineDriver.prepare_program(
+            """
+@param let value: int = 7
+program def main() -> unit = print value
+""",
+            roots=agl_roots(tmp_path),
+        )
+        discovery = runtime.discover_programs(prepared)
+        value = discovery.params_for(discovery.programs[0])[0]
+
+        preflight = _preflight(
+            runtime,
+            prepared,
+            discovery,
+            param_values={value.key: 9},
+        )
+        assert preflight.result.ok
+        assert preflight.executable is not None
+
+        run_result = runtime.run_prepared(
+            prepared,
+            check_only=True,
+            compiled=discovery.compiled,
+            executable=preflight.executable,
+            param_seeds=preflight.param_seeds,
+        )
+        check_result = runtime.check_prepared(prepared, compiled=discovery.compiled)
+
+        assert run_result.ok
+        assert run_result.bindings == {}
+        assert check_result.ok
+        assert check_result.bindings == {}
+        assert capsys.readouterr().out == ""

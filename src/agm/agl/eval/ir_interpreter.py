@@ -136,6 +136,7 @@ from agm.agl.ir.program import (
     FunctionDescriptor,
     IrFunctionBody,
 )
+from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.ir.validate import InvalidIrError
 from agm.agl.modules.ids import STD_CONFIG_ID, STD_ENV_ID, ModuleId
 from agm.agl.runtime.agents import AgentFn
@@ -489,6 +490,7 @@ class IrInterpreter:
         extern_registry: ExternRegistry | None = None,
         host_reconfigurer: "HostSettingsReconfigurer | None" = None,
         builtin_host_settings: Mapping[str | BuiltinVarKey, Value] | None = None,
+        param_seeds: Mapping[StaticBindingKey, Value] | None = None,
         process_environment: Mapping[str, str] | None = None,
     ) -> None:
         self._program = program
@@ -522,6 +524,11 @@ class IrInterpreter:
         self._timeout_setting = none_value(nominals=self._program.builtin_nominals)
         self._builtin_host_settings: dict[str, Value] = {}
         self._builtin_vars: dict[BuiltinVarKey, Value] = {}
+        self._seeded_symbols: dict[SymbolId, Value] = {
+            symbol: value
+            for key, value in (param_seeds or {}).items()
+            if (symbol := self._program.param_bindings.get(key)) is not None
+        }
         self._host_reconfigurer = host_reconfigurer
 
         defaults: dict[BuiltinVarKey, Value] = {
@@ -1191,6 +1198,14 @@ class IrInterpreter:
 
     def _eval_initializer(self, node: IrExpr) -> Value:
         match node:
+            case IrBind(symbol=sym) if sym in self._seeded_symbols:
+                value = self._seeded_symbols[sym]
+                seed_desc = self._program.symbols.get(sym)
+                if seed_desc is not None and seed_desc.mutable:
+                    self._frame[sym] = Cell(value)
+                else:
+                    self._frame[sym] = value
+                return value
             case IrBind(symbol=sym, value=IrMakeClosure(function_id=fn_id)):
                 desc = self._program.functions.get(fn_id)
                 if desc is not None and desc.function_symbol == sym:

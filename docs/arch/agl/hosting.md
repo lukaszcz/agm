@@ -16,6 +16,8 @@ Preparation records every `program def` with its module, scope path, and whether
 
 Discovery also inventories each checked module's marked static parameter bindings (`ParamBindingInfo`) and the source-reachable module closure of every program. Hosts consume `ProgramDiscovery.params_for` in that closure order, without re-running a static pass; the shared static-binding key identifies these bindings alongside existing host-backed built-in variables.
 
+Lowering records each discovered static parameter's binding symbol and decoder in the executable. `preflight_arguments` decodes raw module values with those tables together with program arguments, aggregates their failures before execution, and returns typed parameter seeds beside the lowered executable. `run_prepared` passes those seeds to the interpreter; check-only execution never applies them.
+
 ## Engine Settings and Host Seeds
 
 Engine settings (`default-agent`, `log`, `log-file`, `strict-json`, `max-iters`, `timeout`) are root `builtin var` bindings of `std/config`, catalogued in `config/engine_keys.py` ([config.md](../config.md)). Hosts seed them, and any other host-backed binding, through typed `builtin_var_seeds` keyed by module, scope path, and name; a source write overrides a seed from its program point onward, and the evaluator routes each write by the catalog's consuming side — a live interpreter field or a host-consumed register.

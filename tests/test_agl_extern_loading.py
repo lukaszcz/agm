@@ -500,6 +500,55 @@ class TestCompanionBytecodeCache:
         registry.load_companion(mid, py_path)
         assert registry.resolve(mid, "f")(1) == 2
 
+    def test_companion_changed_after_cache_read_is_compiled_from_current_source(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cache hit is invalid when the companion changes before it is used."""
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("def f(x):\n    return x + 1\n")
+        age_file(py_path)
+        mid = ModuleId.from_path("lib/mod")
+        ExternRegistry().load_companion(mid, py_path)
+
+        original_read_payload = externs.read_payload
+
+        def _rewrite_after_cache_read(entry: Path, identity: bytes) -> bytes | None:
+            payload = original_read_payload(entry, identity)
+            py_path.write_text("def f(x):\n    return x + 9\n")
+            age_file(py_path)
+            return payload
+
+        monkeypatch.setattr(externs, "read_payload", _rewrite_after_cache_read)
+
+        registry = ExternRegistry()
+        registry.load_companion(mid, py_path)
+
+        assert registry.resolve(mid, "f")(1) == 10
+
+    def test_companion_removed_after_cache_read_fails_to_import(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cache hit cannot import a companion deleted before it is used."""
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("def f(x):\n    return x + 1\n")
+        age_file(py_path)
+        mid = ModuleId.from_path("lib/mod")
+        ExternRegistry().load_companion(mid, py_path)
+
+        original_read_payload = externs.read_payload
+
+        def _remove_after_cache_read(entry: Path, identity: bytes) -> bytes | None:
+            payload = original_read_payload(entry, identity)
+            py_path.unlink()
+            return payload
+
+        monkeypatch.setattr(externs, "read_payload", _remove_after_cache_read)
+
+        with pytest.raises(ExternImportError):
+            ExternRegistry().load_companion(mid, py_path)
+
     def test_companion_edited_in_place_without_changing_its_stamp_keeps_serving_cached_code(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

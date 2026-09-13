@@ -161,7 +161,15 @@ class _CompanionBytecodeLoader(importlib.machinery.SourceFileLoader):
             except (ValueError, EOFError, TypeError):
                 cached = None
             if isinstance(cached, CodeType):
-                return cached
+                # The registry stamped the companion before constructing this
+                # loader. Revalidate immediately before serving its cached
+                # code: the file could have changed or vanished while the
+                # cache payload was being read.
+                try:
+                    if fs.identity_stamp(path) == self._stamp:
+                        return cached
+                except OSError:
+                    pass
 
         source_path = self.get_filename(fullname)
         observed_ns = time.time_ns()

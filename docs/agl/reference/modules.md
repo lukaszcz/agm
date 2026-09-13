@@ -291,7 +291,7 @@ rows, and `std/path`'s `path` type alone. The rest are imported explicitly:
 | `std/exec`, `std/agent`, `std/session` | shell execution, agent calls, and agent sessions |
 | `std/package` | package resource lookup |
 | `std/option`, `std/pair`, `std/either`, `std/result` | `Option[T]`, `Pair[A, B]`, `Either[A, B]`, and `Result[T, E]` |
-| `std/array`, `std/dict`, `std/text`, `std/json` | builtin receiver scopes and free functions; `std/text` also provides `TextBuilder`; the prelude re-exports the scopes |
+| `std/array`, `std/dict`, `std/text`, `std/json` | builtin receiver scopes and free functions; the prelude re-exports the scopes |
 | `std/math` | builtin receiver scopes for `int`, `decimal`, and `bool`, aggregates, and constants |
 | `std/toml` | conversion between TOML documents and `json` |
 | `std/regex` | Python-compatible searching, rewriting, and splitting |

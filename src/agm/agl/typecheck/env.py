@@ -1225,6 +1225,11 @@ class TypeEnvironment:
         if journal is not None:
             journal.extend(facts.entries)
 
+    def _record_fact(self, fact: EnvironmentFact) -> None:
+        """Append a fact while the own-facts journal is active."""
+        if self._journal is not None:
+            self._journal.append(fact)
+
     # --- Type namespace queries ---
 
     def has_type(self, name: str) -> bool:
@@ -1372,8 +1377,7 @@ class TypeEnvironment:
     def register_type(self, name: str, typ: Type) -> None:
         self._assert_mutable()
         self._types[name] = typ
-        if self._journal is not None:
-            self._journal.append(TypeFact(name=name, typ=typ))
+        self._record_fact(TypeFact(name=name, typ=typ))
 
     def unregister_name(self, name: str) -> None:
         """Remove a user *name* from the tables that only ever expose ONE definition.
@@ -1440,10 +1444,7 @@ class TypeEnvironment:
         self._alias_targets[name] = target_expr
         self._resolved_aliases.pop(name, None)
         self._alias_type_params[name] = type_params
-        if self._journal is not None:
-            self._journal.append(
-                AliasFact(name=name, target_expr=target_expr, type_params=type_params)
-            )
+        self._record_fact(AliasFact(name=name, target_expr=target_expr, type_params=type_params))
 
     def freeze_alias(self, name: str, template: Type, *, type_params: tuple[str, ...] = ()) -> None:
         """Preserve an alias's resolved template under its declaring identities."""
@@ -1460,8 +1461,7 @@ class TypeEnvironment:
         """Register a generic type definition under *name*."""
         self._assert_mutable()
         self._generic_types[name] = gdef
-        if self._journal is not None:
-            self._journal.append(GenericTypeFact(name=name, gdef=gdef))
+        self._record_fact(GenericTypeFact(name=name, gdef=gdef))
 
     def get_generic_type(self, name: str) -> GenericTypeDef | None:
         """Return the ``GenericTypeDef`` for *name*, or ``None`` if unknown."""
@@ -1580,8 +1580,7 @@ class TypeEnvironment:
         assert isinstance(result, (RecordType, EnumType))
         key = self._constructor_key(result.module_id, result.name, result.scope_path)
         self._constructor_sigs[key] = sig
-        if self._journal is not None:
-            self._journal.append(ConstructorSignatureFact(sig=sig))
+        self._record_fact(ConstructorSignatureFact(sig=sig))
 
     def get_constructor_signature(
         self, owner_name: str, *, scope_path: ScopePath = ()
@@ -1710,8 +1709,7 @@ class TypeEnvironment:
         self._function_signatures_by_path[(scope_path, name)] = sig
         if not scope_path:
             self._function_signatures[name] = sig
-        if self._journal is not None:
-            self._journal.append(FunctionSignatureFact(name=name, sig=sig, scope_path=scope_path))
+        self._record_fact(FunctionSignatureFact(name=name, sig=sig, scope_path=scope_path))
 
     def get_function_signature(
         self, name: str, *, scope_path: ScopePath = ()
@@ -1735,8 +1733,7 @@ class TypeEnvironment:
         """
         self._assert_mutable()
         self._function_signatures_by_node_id[node_id] = sig
-        if self._journal is not None:
-            self._journal.append(FunctionSignatureByNodeIdFact(node_id=node_id, sig=sig))
+        self._record_fact(FunctionSignatureByNodeIdFact(node_id=node_id, sig=sig))
 
     def get_function_signature_by_node_id(self, node_id: int) -> FunctionSignature | None:
         """Return the function signature for a callee's declaration ``node_id``.
@@ -1765,8 +1762,7 @@ class TypeEnvironment:
         """
         self._assert_mutable()
         self._extern_node_ids.add(node_id)
-        if self._journal is not None:
-            self._journal.append(ExternNodeIdFact(node_id=node_id))
+        self._record_fact(ExternNodeIdFact(node_id=node_id))
 
     def is_extern_node_id(self, node_id: int) -> bool:
         """Return ``True`` if *node_id* names a declared ``extern def``."""
@@ -1777,8 +1773,7 @@ class TypeEnvironment:
     def set_binding_type(self, node_id: int, typ: Type) -> None:
         self._assert_mutable()
         self._binding_types[node_id] = typ
-        if self._journal is not None:
-            self._journal.append(BindingTypeFact(node_id=node_id, typ=typ))
+        self._record_fact(BindingTypeFact(node_id=node_id, typ=typ))
 
     def snapshot_binding_types(self) -> PersistentDict[int, Type]:
         """Return a restorable snapshot of transient binding-type metadata."""
@@ -3041,16 +3036,15 @@ class TypeEnvironment:
         self._constructor_field_kinds[key] = fields
         if decl_id is not None:
             self._constructor_field_kinds_by_decl_id[decl_id] = fields
-        if self._journal is not None:
-            self._journal.append(
-                ConstructorFieldKindsFact(
-                    owner_name=owner_name,
-                    fields=fields,
-                    scope_path=scope_path,
-                    module_id=owner_module_id,
-                    decl_id=decl_id,
-                )
+        self._record_fact(
+            ConstructorFieldKindsFact(
+                owner_name=owner_name,
+                fields=fields,
+                scope_path=scope_path,
+                module_id=owner_module_id,
+                decl_id=decl_id,
             )
+        )
 
     def get_constructor_field_kinds(
         self,

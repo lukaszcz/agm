@@ -205,6 +205,17 @@ class FunctionSignatureRecord:
     candidate_evidence: tuple[SourceSpan, ...] = ()
 
 
+def _records_for_return_source(
+    records: Mapping[int, FunctionSignatureRecord], source: FunctionReturnSource
+) -> dict[int, FunctionSignatureRecord]:
+    """Return records with one result-type source, keyed by declaration id."""
+    return {
+        declaration_id: record
+        for declaration_id, record in records.items()
+        if record.return_source is source
+    }
+
+
 def candidate_records_for(
     records: Mapping[int, FunctionSignatureRecord],
 ) -> dict[int, FunctionSignatureRecord]:
@@ -214,11 +225,7 @@ def candidate_records_for(
     records; the final checker keys inferred-return provenance off the candidate
     subset alone, so callers filter once and share the result.
     """
-    return {
-        declaration_id: record
-        for declaration_id, record in records.items()
-        if record.return_source is FunctionReturnSource.CANDIDATE
-    }
+    return _records_for_return_source(records, FunctionReturnSource.CANDIDATE)
 
 
 def declared_records_for(
@@ -232,11 +239,7 @@ def declared_records_for(
     ``published_signatures`` -- is published solely through
     :func:`publish_candidate_signature`'s narrower per-SCC rule.
     """
-    return {
-        declaration_id: record
-        for declaration_id, record in records.items()
-        if record.return_source is FunctionReturnSource.DECLARED
-    }
+    return _records_for_return_source(records, FunctionReturnSource.DECLARED)
 
 
 def _declaration_key(node: FuncDef) -> tuple[int, int]:

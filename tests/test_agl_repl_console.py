@@ -358,12 +358,16 @@ class TestLexer:
             '"a%{x}"',
             '"a%{x}b"',
             '"%{x}%{y}"',
+            '"${PROJ_DIR}"',
+            '"a${HOME}b"',
+            '"${A}%{x}${B}"',
         ],
     )
     def test_string_interpolation_is_not_duplicated(self, line: str) -> None:
-        # The lexer gives STRING_FRAGMENT a source span that can overlap the
-        # following INTERP_START. The prompt highlighter must still partition
-        # the source so typed interpolation delimiters render exactly once.
+        # Interpolation tokens can overlap in source: a STRING_FRAGMENT spans the
+        # following INTERP_START, and an environment hole's synthetic body tokens
+        # share its name's characters. The prompt highlighter must still
+        # partition the source so every typed character renders exactly once.
         fragments = AglPromptLexer().lex_document(Document(line))(0)
         assert "".join(text for _style, text in fragments) == line
 

@@ -93,7 +93,7 @@ promoted token types are `src/agm/agl/lexer/tokens.py''s
   "The AgL builtin call names, highlighted by spelling.
 
 These lex as ordinary NAME tokens; the stdlib declares them as
-`builtin def' across `stdlib/src/*.agl'.  Canonical source:
+`builtin def' across `packages/stdlib/src/*.agl'.  Canonical source:
 `src/agm/agl/scope/symbols.py' (the `BUILTIN_CALL_NAMES' mapping),
 mirrored here in full -- update this list with that one.
 

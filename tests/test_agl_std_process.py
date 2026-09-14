@@ -13,7 +13,7 @@ from agm.agl import PipelineDriver
 from agm.agl.modules.roots import RootSet
 from tests._agl_helpers import agl_roots
 
-_STDLIB = Path(__file__).resolve().parents[1] / "stdlib"
+_STDLIB = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
 
 
 def _roots() -> RootSet:

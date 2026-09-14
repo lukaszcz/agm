@@ -39,8 +39,8 @@ from tests.agl.module_graph import resolve_and_check_inline_entry, resolve_inlin
 
 _ROOTS = agl_roots()
 _CAPS = HostCapabilities()
-_STD_DIR = Path(__file__).resolve().parents[1] / "stdlib" / "src"
-_STD_OPTION = Path(__file__).resolve().parents[1] / "stdlib" / "src" / "option.agl"
+_STD_DIR = Path(__file__).resolve().parents[1] / "packages" / "stdlib" / "src"
+_STD_OPTION = Path(__file__).resolve().parents[1] / "packages" / "stdlib" / "src" / "option.agl"
 
 
 def _check(source: str, *, default_stdlib: bool = True) -> None:

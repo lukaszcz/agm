@@ -18,7 +18,7 @@ from agm.version import AGM_VERSION
 def _activate_stdlib(home: Path, version: str = AGM_VERSION) -> Path:
     """Create and activate a store ``std`` package at *version*."""
     root = home / "packages" / "std" / version
-    shutil.copytree(Path(__file__).resolve().parent.parent / "stdlib", root)
+    shutil.copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", root)
     write_record(root)
     write_activation_index(
         ActivationIndex({"std": ActivePackage(semver.Version.parse(version))}),
@@ -140,7 +140,7 @@ class TestResolveStdlibRootEnvOverride:
         home = tmp_path / "home"
 
         assert resolve_stdlib_root(home=home, env={"AGM_STDLIB": ""}) == (
-            Path(__file__).resolve().parent.parent / "stdlib"
+            Path(__file__).resolve().parent.parent / "packages" / "stdlib"
         )
 
     def test_agm_home_override_relocates_active_store_stdlib(self, tmp_path: Path) -> None:

@@ -46,7 +46,7 @@ The standard library is the first of:
    whatever version it declares;
 3. the active immutable `<AGM-home>/packages/std/<AGM_VERSION>/` package matching the running
    binary; a selected active package of another version is an error;
-4. AGM's bundled copy (`agm/stdlib` in a wheel, `stdlib/` in a source checkout) when no active
+4. AGM's bundled copy (`agm/stdlib` in a wheel, `packages/stdlib/` in a source checkout) when no active
    package is selected or its store tree is absent, so a wheel runs AgL even when the home has
    no active `std`.
 

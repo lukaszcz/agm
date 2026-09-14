@@ -57,7 +57,7 @@ def resolve_std_package_root(
     active immutable store ``std`` package wins, but only when its version
     exactly matches the running AGM binary. Without an active store package,
     AGM uses the stdlib bundled in an installed wheel or the repository
-    ``stdlib/`` tree in a source checkout.
+    ``packages/stdlib/`` tree in a source checkout.
     """
     if anchor is not None:
         checkout = _anchoring_std_checkout(anchor, home=home, env=env)

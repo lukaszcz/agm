@@ -3779,7 +3779,7 @@ class TestImportDeclScope:
 
     Each import here targets ``std/prelude`` — the only always-real module
     available to this file's ``resolve_entry``-backed ``parse_and_resolve``
-    (its search root is the repo's real ``stdlib/`` directory; there is no
+    (its search root is the repo's real ``packages/stdlib/`` directory; there is no
     on-disk ``foo`` module for it to find). Under the old ``resolve_module``
     wrapper, an import naming a nonexistent module never actually resolved to
     a file — the per-module pass has no loader, so a bogus module id like

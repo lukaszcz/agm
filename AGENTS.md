@@ -23,7 +23,7 @@ The primary purpose of architecture docs in docs/arch/**/*.md is to provide agen
 Use `just` for the standard workflow:
 
 - `just setup` creates `.venv` with Python 3.14 and installs the project plus dev dependencies via `uv`
-- `just lint` runs `ruff check src/ tests/ stdlib/ tools/`, `ruff format --check src/ tests/ stdlib/ tools/`, and `just agl-style` (run `uv run ruff format src/ tests/ stdlib/ tools/` to fix formatting)
+- `just lint` runs `ruff check src/ tests/ packages/stdlib/ tools/`, `ruff format --check src/ tests/ packages/stdlib/ tools/`, and `just agl-style` (run `uv run ruff format src/ tests/ packages/stdlib/ tools/` to fix formatting)
 - `just agl-style` checks the layout style of every AgL source, doc snippet, and embedded test snippet; `just agl-style-fix` rewrites them into it
 - `just test` runs the test suite
 - `just typecheck` runs strict `mypy`
@@ -51,7 +51,7 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 - Do NOT add heavy ungated validation or defensive assertions (defense-in-depth) to the code. Write appropriate tests instead. Defense-in-depth assertions are allowed ONLY if they are trivial preconditions or gated behind a test-only flag.
 - Make sure tests are not flaky.
 - Keep individual tests cheap.
-- Maintain 100% test coverage of `src/` and of the standard library's Python companions in `stdlib/src/`.
+- Maintain 100% test coverage of `src/` and of the standard library's Python companions in `packages/stdlib/src/`.
 - Maintain 100% command coverage in e2e tests.
 - Group the tests in `tests/` by meaningful categories and name the files meaningfully.
 - NEVER run real agents (claude, codex, pi, ...) in the tests - ALWAYS mock agent calls.

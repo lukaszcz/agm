@@ -495,7 +495,7 @@ def agent_value(variant: str, **fields: str) -> RecordValue:
     )
 
 
-REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
 
 
 def agl_roots(*paths: Path, include_stdlib: bool = True) -> RootSet:

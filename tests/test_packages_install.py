@@ -88,7 +88,7 @@ def _package(root: Path, name: str, version: str, dependencies: str = "") -> Pat
 
 def _stdlib_source() -> Path:
     """Return the repository's own standard library, the shipped std package."""
-    return Path(__file__).resolve().parent.parent / "stdlib"
+    return Path(__file__).resolve().parent.parent / "packages" / "stdlib"
 
 
 def _store_root(home: Path, name: str, version: str) -> Path:
@@ -197,7 +197,7 @@ def test_prebuilt_store_hands_every_caller_an_isolated_copy(
 
 
 def test_refresh_registers_stdlib_package_under_an_isolated_agm_home(tmp_path: Path) -> None:
-    source = Path(__file__).resolve().parent.parent / "stdlib"
+    source = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
     agm_home = tmp_path / "agm-home"
 
     installed = refresh_managed_stdlib(
@@ -217,7 +217,7 @@ def test_refresh_registers_stdlib_package_under_an_isolated_agm_home(tmp_path: P
 def test_managed_stdlib_refresh_deactivates_packages_from_an_incompatible_release_line(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source = Path(__file__).resolve().parent.parent / "stdlib"
+    source = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
     home = tmp_path / "home"
     dependency = f'\n[dependencies]\nstd = "{AGM_VERSION}"\n'
     alpha = install_directory(
@@ -357,7 +357,7 @@ def test_managed_stdlib_refresh_restores_the_complete_tree_when_activation_fails
 def test_initial_managed_stdlib_refresh_removes_publication_when_activation_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source = Path(__file__).resolve().parent.parent / "stdlib"
+    source = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
     home = tmp_path / "home"
 
     def fail_activation(*_args: object, **_kwargs: object) -> None:
@@ -374,7 +374,7 @@ def test_initial_managed_stdlib_refresh_removes_publication_when_activation_fail
 def test_managed_stdlib_refresh_reports_a_failed_activation_rollback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source = Path(__file__).resolve().parent.parent / "stdlib"
+    source = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
     home = tmp_path / "home"
 
     def fail_activation(*_args: object, **_kwargs: object) -> None:
@@ -394,7 +394,7 @@ def test_managed_stdlib_refresh_reports_a_failed_activation_rollback(
 def test_initial_managed_stdlib_refresh_cleans_staging_when_publication_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source = Path(__file__).resolve().parent.parent / "stdlib"
+    source = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
     home = tmp_path / "home"
     destination = home / ".agm" / "packages" / "std" / AGM_VERSION
     original_replace = Path.replace
@@ -444,7 +444,7 @@ def test_managed_stdlib_refresh_restores_the_complete_tree_when_publication_fail
 def test_managed_stdlib_refresh_dry_run_only_reports_the_planned_refresh(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    source = Path(__file__).resolve().parent.parent / "stdlib"
+    source = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
     home = tmp_path / "home"
     dry_run.set_enabled(True)
 
@@ -456,7 +456,7 @@ def test_managed_stdlib_refresh_dry_run_only_reports_the_planned_refresh(
 
 
 def test_managed_stdlib_refresh_refuses_a_symlinked_store_destination(tmp_path: Path) -> None:
-    source = Path(__file__).resolve().parent.parent / "stdlib"
+    source = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
     home = tmp_path / "home"
     std_versions = home / ".agm" / "packages" / "std"
     outside = tmp_path / "outside"
@@ -612,7 +612,7 @@ def test_install_keeps_provenance_separate_from_colliding_version_names(tmp_path
 
 
 def test_uninstall_refuses_the_managed_standard_library(tmp_path: Path) -> None:
-    source = Path(__file__).resolve().parent.parent / "stdlib"
+    source = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
     home = tmp_path / "home"
     installed = install_directory(source, home=home, env={})
 
@@ -635,7 +635,7 @@ def test_install_accepts_shipped_standard_library_from_wheel_layout(
 ) -> None:
     locator = tmp_path / "site-packages" / "agm" / "stdlib_locator.py"
     source = locator.parent / "stdlib"
-    shutil.copytree(Path(__file__).resolve().parent.parent / "stdlib", source)
+    shutil.copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", source)
     monkeypatch.setattr(stdlib_locator, "__file__", str(locator))
 
     installed = install_directory(source, home=tmp_path / "home", env={})
@@ -651,14 +651,14 @@ def test_install_refuses_a_standard_library_at_an_arbitrary_version(tmp_path: Pa
 
 
 def test_install_refuses_an_editable_standard_library(tmp_path: Path) -> None:
-    source = Path(__file__).resolve().parent.parent / "stdlib"
+    source = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
 
     with pytest.raises(PackageInstallError, match="editable"):
         install_directory(source, home=tmp_path / "home", env={}, editable=True)
 
 
 def test_archive_install_refuses_the_managed_standard_library(tmp_path: Path) -> None:
-    source = Path(__file__).resolve().parent.parent / "stdlib"
+    source = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
     archive = tmp_path / "std.agmpkg"
     write_archive(source, archive)
 

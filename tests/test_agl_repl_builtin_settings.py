@@ -28,7 +28,7 @@ from agm.agl.semantics.values import BoolValue, IntValue, RecordValue, TextValue
 from agm.agl.setting_overrides import SettingOverride
 from tests._agl_helpers import agent_value
 
-_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
 
 
 def _copy_core_and_option(directory: Path) -> None:

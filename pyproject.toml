@@ -32,11 +32,11 @@ agm = "agm.cli:main"
 packages = ["src/agm"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"stdlib" = "agm/stdlib"
+"packages/stdlib" = "agm/stdlib"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["--cov=agm", "--cov=stdlib/src", "--cov-branch", "--cov-fail-under=100"]
+addopts = ["--cov=agm", "--cov=packages/stdlib/src", "--cov-branch", "--cov-fail-under=100"]
 
 [tool.mypy]
 # Keep direct invocations and the standard workflow on the same local stubs.

@@ -11,7 +11,7 @@ from agm.agl.repl import ReplSession
 from agm.agl.semantics.values import BoolValue, DictValue, IntValue, RecordValue, TextValue
 from tests._agl_helpers import agl_roots, run_inline_command
 
-_STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
+_STDLIB = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
 
 
 def _run(source: str, **kwargs: object):

@@ -20,7 +20,7 @@ from agm.agl.typecheck import AglTypeError
 from tests._agl_helpers import option_nominal_descriptors
 from tests.agl.module_graph import resolve_and_check_inline_entry
 
-_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
 _ARRAY_MODULE = ModuleId(("std", "array"))
 _INDEX_ERROR = NominalId(9_400_001)
 _OPTION = NominalId(9_400_002)

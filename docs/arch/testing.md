@@ -14,12 +14,12 @@ Tests assert observable behavior, never exact help, warning, or error text. Impo
 
 - **Static typing** — `pyproject.toml` configures strict mypy checks and the local source and stub paths, shared by direct `uv run mypy` invocations and `just typecheck`.
 - **Package layering** — `tests/test_agl_dependencies.py` asserts the AgL import contract described in [agl/index.md](agl/index.md).
-- **Coverage** — 100% line and branch coverage of `src/` and of `stdlib/src/` (the standard library's Python companions ship in the wheel), measured through `sys.monitoring`, which is why `.python-version` pins the development interpreter to Python 3.14.
+- **Coverage** — 100% line and branch coverage of `src/` and of `packages/stdlib/src/` (the standard library's Python companions ship in the wheel), measured through `sys.monitoring`, which is why `.python-version` pins the development interpreter to Python 3.14.
 - **Command coverage** — `tests/_command_coverage.py` walks the live Typer registry and records which leaf commands the e2e suite actually ran through the real binary, merging across xdist workers; it judges only whole-suite runs.
 - **Documented examples compile** — every ```` ```agl ```` fence under `docs/agl/reference/` runs through the static pipeline (`tests/test_agl_doc_snippets.py`); an `agl-check` marker declares a deliberately incomplete or rejected block.
 - **AgL layout style** — `tools/agl_style.py` is both formatter and checker for every `.agl` file, doc fence, and embedded snippet; `just agl-style` runs inside `just lint`.
 - **Self-validation** — the compiler's invariant self-checks (checked-output closure, match-artifact validation, deep IR validation, FFI class shape) are gated by one toggle, `agm.agl.self_validation`; `tests/conftest.py` turns it on for the whole suite so every compilation doubles as an oracle while production pays nothing. The `self_validation_disabled` fixture pins the production path.
-- **Hermeticity** — a run never reads or writes installed AGM files: autouse fixtures strip inherited `AGM_*` variables, pin `AGM_STDLIB` to the in-repo `stdlib/`, and report the installation prefix as absent. Tests of the prefix fallback take the `installed_agm_prefix` fixture.
+- **Hermeticity** — a run never reads or writes installed AGM files: autouse fixtures strip inherited `AGM_*` variables, pin `AGM_STDLIB` to the in-repo `packages/stdlib/`, and report the installation prefix as absent. Tests of the prefix fallback take the `installed_agm_prefix` fixture.
 - **Vacuous-assertion guard** — `just test-neutral-tmp` re-runs the suite with neutrally named temp directories, so an assertion cannot pass on a path that happens to contain its own test's name.
 
 ## Test Cost

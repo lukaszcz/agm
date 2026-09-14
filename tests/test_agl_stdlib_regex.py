@@ -24,7 +24,7 @@ from agm.agl.semantics.values import (
 )
 from tests._agl_helpers import option_nominal_descriptors
 
-_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
 _REGEX_MODULE = ModuleId(("std", "regex"))
 _MATCH = NominalId(9_700_001)
 _REGEX_ERROR = NominalId(9_700_002)

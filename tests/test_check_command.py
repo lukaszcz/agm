@@ -563,7 +563,7 @@ def enum-alias() -> int =
 class TestPackageOwnedEntry:
     """A checked file that a package owns is compiled under its module identity."""
 
-    _REPO_STDLIB = Path(__file__).resolve().parents[1] / "stdlib"
+    _REPO_STDLIB = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
 
     def _isolated_home(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Point the AGM home and cwd at *tmp_path*, away from the developer's own."""

@@ -479,7 +479,7 @@ def _agm_install(tmp_path_factory: pytest.TempPathFactory, isolated_compiler_cac
             {
                 "PATH": _ORIGINAL_PATH,
                 "HOME": str(warm_home),
-                "AGM_STDLIB": str(repo_root / "stdlib"),
+                "AGM_STDLIB": str(repo_root / "packages" / "stdlib"),
             }
         ),
         check=False,

@@ -16,7 +16,7 @@ from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.semantics.values import ArrayValue, RecordValue, TextValue
 from tests._agl_helpers import option_nominal_descriptors
 
-_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
 _PATH_MODULE = ModuleId(("std", "path"))
 _OPTION = NominalId(9_800_001)
 _OPTION_NONE = NominalId(9_800_002)

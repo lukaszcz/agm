@@ -70,4 +70,4 @@ Layering is enforced by `tests/test_agl_dependencies.py`: `semantics` is the fou
 - [hosting.md](hosting.md) — the pipeline orchestrator, host capabilities, parameters, engine settings, diagnostics.
 - [repl.md](repl.md) — the incremental REPL session and its front ends.
 
-The language itself is documented for users in `docs/agl/reference/`; the standard library's sources under `stdlib/src/` are its own reference.
+The language itself is documented for users in `docs/agl/reference/`; the standard library's sources under `packages/stdlib/src/` are its own reference.

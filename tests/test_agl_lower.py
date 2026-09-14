@@ -130,7 +130,7 @@ from tests._agl_helpers import agl_roots
 from tests.agl.ir_harness import _compiled_checked, compile_checked_module, lower_compiled_module
 from tests.agl.module_graph import resolve_and_check_inline_entry
 
-_REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+_REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
 
 # ---------------------------------------------------------------------------
 # Pipeline helper

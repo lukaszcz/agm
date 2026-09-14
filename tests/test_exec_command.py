@@ -4458,7 +4458,7 @@ class TestNegatedConstantDefaults:
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
 
-        repo_stdlib = Path(__file__).resolve().parent.parent / "stdlib"
+        repo_stdlib = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
         lib_root = tmp_path / "lib"
         shutil.copytree(repo_stdlib, lib_root)
         config = lib_root / MODULE_TREE_DIRNAME / "config.agl"

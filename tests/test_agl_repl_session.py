@@ -1161,7 +1161,7 @@ _CONSTRUCTIBLE_PRELUDE_TYPE_NAMES = sorted(
 
 class TestStdlib:
     def test_implicit_core_import_makes_names_available_unqualified(self) -> None:
-        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib")
 
         some_result = s.eval_entry("let present: Option[int] = Some(value = 1)")
         none_result = s.eval_entry("let missing: Option[int] = None")
@@ -1170,12 +1170,12 @@ class TestStdlib:
         assert none_result.ok, none_result.diagnostics
 
     def test_type_of_uses_implicit_core_import(self) -> None:
-        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib")
 
         assert "Option::Some[int]" in s.type_of("Some(value = 1)")
 
     def test_retained_explicit_core_import_suppresses_later_preludes(self) -> None:
-        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib")
 
         assert s.eval_entry("import std/prelude").ok
         assert not s.eval_entry("Some(value = 1)").ok
@@ -1184,7 +1184,7 @@ class TestStdlib:
     def test_no_stdlib_requires_explicit_core_import_after_reset(self) -> None:
         s = open_session(
             default_stdlib=False,
-            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
         )
 
         assert not s.eval_entry("Some(value = 1)").ok
@@ -1204,7 +1204,7 @@ class TestStdlib:
         """
         s = open_session(
             default_stdlib=False,
-            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
         )
 
         failed = s.eval_entry(
@@ -1218,7 +1218,7 @@ class TestStdlib:
         assert kept.ok, kept.diagnostics
 
     def test_core_stdlib_qualified_generic_type_resolves_in_type_definition(self) -> None:
-        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib")
 
         result = s.eval_entry("enum E = A(x: std/prelude::Option[int])")
 
@@ -1352,7 +1352,7 @@ def _session_with_import_root(root: Path) -> ReplSession:
 
     roots = assemble_roots(
         invocation_root=root,
-        stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+        stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
         lib_root=None,
         configured=[],
         cli=[],
@@ -4386,7 +4386,7 @@ class TestTraceLogging:
         trace = tmp_path / "repl.log"
         session = open_session(
             trace_path=trace,
-            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
         )
 
         with pytest.raises(SystemExit) as raised:
@@ -4848,7 +4848,7 @@ class TestInfixDecl:
         s = ReplSession()
         s._roots = assemble_roots(
             invocation_root=root,
-            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
             lib_root=None,
             configured=[],
             cli=[],
@@ -4872,7 +4872,7 @@ class TestInfixDecl:
         s = ReplSession()
         s._roots = assemble_roots(
             invocation_root=root,
-            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
             lib_root=None,
             configured=[],
             cli=[],
@@ -4898,7 +4898,7 @@ class TestInfixDecl:
         s = ReplSession()
         s._roots = assemble_roots(
             invocation_root=root,
-            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
             lib_root=None,
             configured=[],
             cli=[],
@@ -5677,7 +5677,7 @@ class TestImports:
 
         s._roots = RootSet(
             roots=frozenset(),
-            stdlib_roots=frozenset({Path(__file__).resolve().parents[1] / "stdlib"}),
+            stdlib_roots=frozenset({Path(__file__).resolve().parents[1] / "packages" / "stdlib"}),
         )
         r = s.eval_entry("import something\n1")
         assert not r.ok
@@ -6554,7 +6554,7 @@ class TestExternRepl:
 
         roots = assemble_roots(
             invocation_root=root,
-            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
             lib_root=None,
             configured=[],
             cli=[],
@@ -7021,7 +7021,7 @@ class TestBareTypeEntry:
         (tmp_path / "a.agl").write_text("record Box[T](value: T)\n")
         session = open_session(
             cwd=tmp_path,
-            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
         )
         setup = session.eval_entry(f"import a\n{local_route}")
         assert setup.ok, setup.diagnostics
@@ -7037,7 +7037,7 @@ class TestBareTypeEntry:
         (tmp_path / "a.agl").write_text("record Box[T](value: T)\n")
         session = open_session(
             cwd=tmp_path,
-            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
         )
         setup = session.eval_entry("import a\nuse /a as a")
         assert setup.ok, setup.diagnostics
@@ -7102,7 +7102,7 @@ class TestBareTypeEntry:
     def test_implicit_core_import_bare_generic_type_echoes_definition(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib")
         r = s.eval_entry("Option")
         assert r.ok
         assert r.kind == "type"
@@ -7115,7 +7115,7 @@ class TestBareTypeEntry:
     def test_implicit_core_import_qualified_generic_type_echoes_definition(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib")
         r = s.eval_entry("std/prelude::Option")
         assert r.ok
         assert r.kind == "type"
@@ -7530,7 +7530,7 @@ class TestSessionOpen:
     def test_open_rechecks_a_changed_cached_stdlib(self, tmp_path: Path) -> None:
         """A fresh session never receives stale static results after an edit."""
         stdlib = tmp_path / "stdlib"
-        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
 
         assert ReplSession(stdlib_root=stdlib).open() == ()
         # This second fresh session can reuse the unchanged bootstrap image.
@@ -7553,7 +7553,7 @@ class TestSessionOpen:
     ) -> None:
         """A cache hit must not bypass the loader's companion-file check."""
         stdlib = tmp_path / "stdlib"
-        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
 
         assert ReplSession(stdlib_root=stdlib).open() == ()
         (stdlib / MODULE_TREE_DIRNAME / "array.py").unlink()
@@ -7566,7 +7566,7 @@ class TestSessionOpen:
     def test_open_reports_invalid_utf8_after_a_cached_bootstrap(self, tmp_path: Path) -> None:
         """Cache validation falls back to ordinary module-load diagnostics."""
         stdlib = tmp_path / "stdlib"
-        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
 
         assert ReplSession(stdlib_root=stdlib).open() == ()
         (stdlib / MODULE_TREE_DIRNAME / "config.agl").write_bytes(b"\xff")
@@ -7581,7 +7581,7 @@ class TestSessionOpen:
         from agm.agl.modules.ids import STD_CONFIG_ID
 
         stdlib = tmp_path / "stdlib"
-        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
         config = stdlib / MODULE_TREE_DIRNAME / "config.agl"
         replacement = stdlib / MODULE_TREE_DIRNAME / "replacement.agl"
         replacement.write_text(config.read_text(encoding="utf-8"), encoding="utf-8")
@@ -7602,7 +7602,7 @@ class TestSessionOpen:
         import agm.agl.modules.loader as loader_mod
 
         stdlib = tmp_path / "stdlib"
-        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
         config = stdlib / MODULE_TREE_DIRNAME / "config.agl"
         config.write_text(
             config.read_text(encoding="utf-8").replace("\n", "\r\n"), encoding="utf-8"
@@ -7626,7 +7626,7 @@ class TestSessionOpen:
         """A cached image cannot bypass fresh module resolution ambiguity checks."""
         stdlib = tmp_path / "stdlib"
         workspace = tmp_path / "workspace"
-        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
         workspace.mkdir()
 
         assert ReplSession(stdlib_root=stdlib, cwd=workspace).open() == ()
@@ -7670,7 +7670,7 @@ class TestSessionOpen:
         import agm.agl.modules.loader as loader_mod
 
         stdlib = tmp_path / "stdlib"
-        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
         original = loader_mod.build_repl_graph
         new_module_counts: list[int] = []
 
@@ -7690,7 +7690,7 @@ class TestSessionOpen:
 
     def test_open_does_not_reuse_a_bootstrap_from_another_root(self, tmp_path: Path) -> None:
         """The selected root is part of the bootstrap image's provenance."""
-        source_stdlib = Path(__file__).resolve().parent.parent / "stdlib"
+        source_stdlib = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
         first_root = tmp_path / "first"
         second_root = tmp_path / "second"
         copytree(source_stdlib, first_root)
@@ -7726,7 +7726,7 @@ class TestSessionOpen:
                 return "bootstrap-extra"
 
         stdlib = tmp_path / "stdlib"
-        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
         original = loader_mod.build_repl_graph
         new_module_counts: list[int] = []
 
@@ -7753,7 +7753,7 @@ class TestSessionOpen:
         from agm.agl.setting_overrides import SettingOverride
 
         stdlib = tmp_path / "stdlib"
-        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
         assert ReplSession(stdlib_root=stdlib).open() == ()
 
         overridden = ReplSession(
@@ -8034,7 +8034,9 @@ class TestDeferredStdlibResolution:
             if source.is_file():
                 (std_dir / source.name).write_bytes(source.read_bytes())
         (stdlib_root / "package.toml").write_bytes(
-            (Path(__file__).resolve().parents[1] / "stdlib" / "package.toml").read_bytes()
+            (
+                Path(__file__).resolve().parents[1] / "packages" / "stdlib" / "package.toml"
+            ).read_bytes()
         )
         write_record(stdlib_root)
         write_activation_index(

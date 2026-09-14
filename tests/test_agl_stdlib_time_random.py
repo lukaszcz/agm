@@ -21,7 +21,7 @@ from agm.agl.semantics.values import ArrayValue, IntValue, TextValue
 from tests._agl_helpers import option_nominal_descriptors
 from tests.agl.ir_harness import extern_caps, lower_ir
 
-_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
 _TIME_MODULE = ModuleId(("std", "time"))
 _RANDOM_MODULE = ModuleId(("std", "random"))
 _TIME_PARSE_ERROR = NominalId(9_600_001)

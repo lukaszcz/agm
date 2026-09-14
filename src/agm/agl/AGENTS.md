@@ -12,7 +12,7 @@ The primary purpose of architecture docs in docs/arch/agl/**/*.md is to provide 
 
 The AgL reference documentation is in `docs/agl/reference/`. This reference is written from the language user perspective (audience is expert programmers familiar with CS / PL concepts).
 
-Per `docs/agl/AGENTS.md`, standard-library detail (modules, module content, exact signatures, type definitions) does NOT belong in the reference: the `stdlib/src/*.agl` sources are the standard library's reference. The language reference names a library type or function only where the language's own semantics depend on it, as with the builtin exceptions.
+Per `docs/agl/AGENTS.md`, standard-library detail (modules, module content, exact signatures, type definitions) does NOT belong in the reference: the `packages/stdlib/src/*.agl` sources are the standard library's reference. The language reference names a library type or function only where the language's own semantics depend on it, as with the builtin exceptions.
 
 **IMPORTANT**: The documentation MUST NOT reference the implementation in any way - ONLY describe the AgL language.
 

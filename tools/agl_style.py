@@ -55,7 +55,7 @@ from agm.agl.lexer import LexError, tokenize
 INDENT_WIDTH = 2
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SOURCE_DIRS = ("docs", "src", "stdlib", "tests", "tools")
+SOURCE_DIRS = ("docs", "src", "packages/stdlib", "tests", "tools")
 SKIP_DIRS = frozenset({".git", ".venv", "__pycache__", "dist", "htmlcov", "node_modules"})
 
 

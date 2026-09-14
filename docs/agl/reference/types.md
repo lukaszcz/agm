@@ -1082,11 +1082,15 @@ Records, enums, and exceptions can be explicitly cast to `json` with `as
 json`, and so can any `array`/`dict` built from them. This is a structural
 conversion:
 
-- **record** → a JSON object with one key per field, in declaration order.
-- **enum** → a JSON object with a `"$case"` key holding the terminal member
-  name, plus one key per member-record field. The same record in a
-  record-typed slot has no `"$case"` key.
-- **exception** → a JSON object with all fields in declaration order.
+- **record** → a JSON object with one key per field, in declaration order,
+  keyed by each field's effective JSON name (declared name unless overridden
+  by [`@name`/`@json-name`](attributes.md#name-and-json-name)).
+- **enum** → a JSON object with a `"$case"` key holding the member's
+  effective JSON tag, plus one key per member-record field, each by its
+  effective JSON name. The same record in a record-typed slot has no
+  `"$case"` key.
+- **exception** → a JSON object with all fields in declaration order, each
+  keyed by its effective JSON name.
 - **`array[E]`/`dict[text, V]`** → the JSON array/object obtained by
   converting each element/value the same way — so `array[R] as json` is a
   JSON array of record objects, and a nested `array[array[R]]` or

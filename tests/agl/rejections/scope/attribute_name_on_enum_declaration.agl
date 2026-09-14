@@ -1,0 +1,6 @@
+@name("shape")
+enum Shape
+  | Square
+  | Circle
+
+program def main() -> unit = ()

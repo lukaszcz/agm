@@ -12,7 +12,7 @@ Built-in JSON contracts consume the typeless schema and decode data compiled dur
 
 ## Rendering and Serialization
 
-All value display — interpolation, `print`, `render`, `as text`, REPL echo — goes through one renderer producing AgL-native syntax; the text-literal encoder is shared with the lexer. Nominal fields are normalized to declaration order at construction, so rendering, JSON, and equality agree without type information. Serialization follows lowered encode plans, adding `$case` only in enum-typed slots. Both walks thread the shared cycle guard; trace logging and in-flight error reporting degrade cycles and non-data values to markers rather than turning a working run into a failing one.
+All value display — interpolation, `print`, `render`, `as text`, REPL echo — goes through one renderer producing AgL-native syntax; the text-literal encoder is shared with the lexer. Nominal fields are normalized to declaration order at construction, so rendering, JSON, and equality agree without type information. Serialization follows lowered encode plans, adding `$case` only in enum-typed slots. Encode/decode plans and JSON Schema carry each field's/member's effective JSON name (`@name`/`@json-name` if given, else declared) alongside its declared name, so JSON keys and `$case` tags can diverge from what rendering shows. Both walks thread the shared cycle guard; trace logging and in-flight error reporting degrade cycles and non-data values to markers rather than turning a working run into a failing one.
 
 ## Host-Backed Values and Tracing
 

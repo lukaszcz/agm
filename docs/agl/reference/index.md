@@ -16,8 +16,9 @@ oriented orchestration language whose core ideas are:
   and validation of its raw output, and the retry-or-abort behavior on
   malformed output.
 - **Structured outputs have one canonical wire format** — JSON, with a
-  reserved `"$case"` tag for enum terminal member names — parsed leniently by default and
-  validated strictly, always.
+  reserved `"$case"` tag holding a member's effective JSON name (its terminal
+  name unless renamed) — parsed leniently by default and validated strictly,
+  always.
 - **Everything is an expression.** There is no statement category: binders
   (`let`/`var`) scope over a continuation, side-effecting forms have type
   `unit` and return `void`, and `if`/`case`/`try` with matching branches yield

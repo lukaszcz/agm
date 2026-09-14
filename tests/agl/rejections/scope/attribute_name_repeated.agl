@@ -1,0 +1,5 @@
+@name("a")
+@name("b")
+record Box(value: int)
+
+program def main() -> unit = ()

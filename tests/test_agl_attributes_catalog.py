@@ -33,7 +33,19 @@ class TestCatalogContents:
             *COMMAND_ATTRIBUTES,
             "extern-name",
             "doc",
+            "name",
+            "json-name",
         }
+
+    @pytest.mark.parametrize("name", ["name", "json-name"])
+    def test_external_name_attributes_sit_on_fields_members_and_records(self, name: str) -> None:
+        spec = BUILTIN_ATTRIBUTES[name]
+        assert spec.targets == {
+            AttributeTarget.FIELD,
+            AttributeTarget.ENUM_MEMBER,
+            AttributeTarget.RECORD,
+        }
+        assert spec.arguments is AttributeArguments.ONE_TEXT
 
     def test_specs_are_keyed_by_their_own_name(self) -> None:
         assert all(name == spec.name for name, spec in BUILTIN_ATTRIBUTES.items())

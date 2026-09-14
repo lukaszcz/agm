@@ -6287,9 +6287,7 @@ def prepare_module_headers(
     module_id: ModuleId,
 ) -> None:
     """Build a module's type table and pre-register its function headers."""
-    _TypeBuilder(env, module_id=module_id, param_zones=resolved.attributes.param_zones).collect(
-        resolved.program
-    )
+    _TypeBuilder(env, module_id=module_id, attributes=resolved.attributes).collect(resolved.program)
     header_checker = _Checker(
         env=env,
         resolved=resolved,

@@ -276,11 +276,11 @@ A run ends in one of three ways:
 2. **Pre-execution failure** — a static error, program-argument validation error, or
    host configuration error; nothing was executed.
 3. **Uncaught exception** — the program started and an exception reached the
-   top. The host reports the exception's type name, fields, and the source
-   location of the raise site. A field holding a value with a reference cycle
-   ([Types](types.md#cycles)), or a value of a kind with no JSON
-   representation, is reported as a placeholder marker, so reporting a failure
-   never fails.
+   top. The host reports the exception's type name, its fields keyed by their
+   effective JSON name, and the source location of the raise site. A field
+   holding a value with a reference cycle ([Types](types.md#cycles)), or a
+   value of a kind with no JSON representation, is reported as a placeholder
+   marker, so reporting a failure never fails.
 
 ## Static call inventory
 

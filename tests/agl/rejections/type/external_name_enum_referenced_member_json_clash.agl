@@ -1,0 +1,9 @@
+enum Shape
+  | @json-name("sq") Square(side: int)
+  | ::LateCircle
+
+@json-name("sq")
+record LateCircle
+  radius: int
+
+program def main() -> unit = ()

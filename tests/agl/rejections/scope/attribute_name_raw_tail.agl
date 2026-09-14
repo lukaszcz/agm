@@ -1,0 +1,5 @@
+record Point
+  @name("exec$") x: int
+  y: int
+
+program def main() -> unit = print Point(x = 1, y = 2).x

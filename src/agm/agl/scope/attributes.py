@@ -7,16 +7,17 @@ admitted target, the arguments match the declared schema, the attribute is not
 repeated or contradicted — and turns the surviving attributes into typed
 side-table entries.
 
-Five facts are built: a parameter's zone, from the ``@arg-*`` attribute an
+Six facts are built: a parameter's zone, from the ``@arg-*`` attribute an
 entry or its owning declaration carries; an ``extern def``'s Python companion
 name, from ``@extern-name`` — the walk sees every extern of a module, so it is
 also where their companion names are held apart; a ``program def`` parameter's
 command-line presentation, from the ``@opt-*`` attributes; the package command
-a ``program def`` registers itself as, from ``@command`` and its prose; and a
-declaration's documentation text, from ``@doc``. The walk is the seam a further attribute
-meaning joins through — a new fact reads the attributes the walk already hands
-it and fills a table of its own, so it costs one more builder, never one more
-traversal.
+a ``program def`` registers itself as, from ``@command`` and its prose; a
+declaration's documentation text, from ``@doc``; and a field, inline enum
+member, or record declaration's external spellings, from ``@name``/
+``@json-name``. The walk is the seam a further attribute meaning joins
+through — a new fact reads the attributes the walk already hands it and fills
+a table of its own, so it costs one more builder, never one more traversal.
 """
 
 from __future__ import annotations
@@ -33,7 +34,9 @@ from agm.agl.attributes import (
     DOC_ATTRIBUTE,
     EXTERN_NAME_ATTRIBUTE,
     HELP_ATTRIBUTE,
+    JSON_NAME_ATTRIBUTE,
     NAME_ADDRESSED_OPTION_ATTRIBUTES,
+    NAME_ATTRIBUTE,
     OPTION_ENV_ATTRIBUTE,
     OPTION_HIDDEN_ATTRIBUTE,
     OPTION_METAVAR_ATTRIBUTE,
@@ -45,9 +48,12 @@ from agm.agl.attributes import (
     AttributeTarget,
     ProgramCommandSpec,
     ProgramOptionSpec,
+    invalid_external_name,
+    invalid_json_name,
     invalid_program_command_path,
 )
 from agm.agl.scope.symbols import AglScopeError, AttributeFacts
+from agm.agl.semantics.external_names import ExternalName
 from agm.agl.syntax.nodes import (
     Attribute,
     BuiltinVarDecl,
@@ -176,6 +182,7 @@ def recognize_attributes(
         program_options=recognizer.program_options,
         command_registrations=recognizer.command_registrations,
         docs=recognizer.docs,
+        external_names=recognizer.external_names,
     )
 
 
@@ -189,6 +196,7 @@ class _Recognizer:
         self.program_options: dict[int, ProgramOptionSpec] = {}
         self.command_registrations: dict[int, ProgramCommandSpec] = {}
         self.docs: dict[int, str] = {}
+        self.external_names: dict[int, ExternalName] = {}
         self._companion_owners: dict[str, str] = {}
 
     def visit(self, node: object) -> None:
@@ -236,7 +244,42 @@ class _Recognizer:
         documentation = recognized.text_of(DOC_ATTRIBUTE)
         if documentation is not None:
             self.docs[node_id] = documentation
+        self._external_name(node_id, recognized)
         return recognized
+
+    # ------------------------------------------------------------------
+    # Fact builder: field/member/record external spellings
+    # ------------------------------------------------------------------
+
+    def _external_name(self, node_id: int, recognized: _Recognized) -> None:
+        """Record a field/enum-member/record's ``@name``/``@json-name`` spellings.
+
+        Only these three target kinds admit either attribute (enforced by the
+        catalog before *recognized* exists), so this runs unconditionally for
+        every declaration :meth:`_check` sees and simply finds nothing to
+        file for the rest.
+        """
+        texts: dict[str, str | None] = {}
+        for attribute, invalid_text in (
+            (NAME_ATTRIBUTE, invalid_external_name),
+            (JSON_NAME_ATTRIBUTE, invalid_json_name),
+        ):
+            attribute_node = recognized.nodes.get(attribute)
+            text = recognized.text_of(attribute)
+            if text is not None:
+                assert attribute_node is not None
+                invalid = invalid_text(text)
+                if invalid is not None:
+                    raise AglScopeError(
+                        f"Attribute '@{attribute}' argument {text!r} {invalid}.",
+                        span=attribute_node.span,
+                    )
+            texts[attribute] = text
+        if texts[NAME_ATTRIBUTE] is None and texts[JSON_NAME_ATTRIBUTE] is None:
+            return
+        self.external_names[node_id] = ExternalName(
+            name=texts[NAME_ATTRIBUTE], json_name=texts[JSON_NAME_ATTRIBUTE]
+        )
 
     # ------------------------------------------------------------------
     # Fact builder: extern companion names

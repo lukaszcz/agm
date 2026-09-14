@@ -39,6 +39,8 @@ __all__ = [
     "ExceptionEncode",
     "ExceptionFieldEncode",
     "EnumDecode",
+    "FieldDecode",
+    "FieldEncode",
     "ParamDecoder",
     "RecordDecode",
     "RecordEncode",
@@ -94,22 +96,32 @@ class DictDecode:
 
 
 @dataclass(frozen=True, slots=True)
+class FieldDecode:
+    """One record field's declared name, JSON key, and decoder."""
+
+    name: str
+    json_name: str
+    schema: "DecodeSchema"
+
+
+@dataclass(frozen=True, slots=True)
 class RecordDecode:
     """Decode a JSON object into a record with the given fields (in order)."""
 
     nominal: NominalId
     display_name: str
-    fields: "tuple[tuple[str, DecodeSchema], ...]"
+    fields: tuple[FieldDecode, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class VariantDecode:
-    """One enum member's terminal tag, record identity, display name, and field decoders."""
+    """One enum member's terminal name, JSON ``$case`` tag, identity, display name, and fields."""
 
     name: str
+    json_name: str
     nominal: NominalId
     display_name: str
-    fields: "tuple[tuple[str, DecodeSchema], ...]"
+    fields: tuple[FieldDecode, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,11 +204,20 @@ class DictEncode:
 
 
 @dataclass(frozen=True, slots=True)
+class FieldEncode:
+    """One record or exception field's declared name, JSON key, and encoder."""
+
+    name: str
+    json_name: str
+    schema: "EncodeSchema"
+
+
+@dataclass(frozen=True, slots=True)
 class RecordEncode:
     """Encode a record as its statically ordered field object."""
 
     nominal: NominalId
-    fields: "tuple[tuple[str, EncodeSchema], ...]"
+    fields: tuple[FieldEncode, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,16 +225,17 @@ class ExceptionEncode:
     """Encode an exception as its statically ordered field object."""
 
     nominal: NominalId
-    fields: "tuple[tuple[str, EncodeSchema], ...]"
+    fields: tuple[FieldEncode, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class VariantEncode:
-    """One enum member's terminal tag, identity, and ordered field encoders."""
+    """One enum member's terminal name, JSON ``$case`` tag, identity, and ordered field encoders."""
 
     name: str
+    json_name: str
     nominal: NominalId
-    fields: "tuple[tuple[str, EncodeSchema], ...]"
+    fields: tuple[FieldEncode, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,10 +320,16 @@ def forwarded_encode_key(definition: "EncodeDefinition") -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class ExceptionFieldEncode:
-    """Static encode provenance for one reportable exception field."""
+    """Static reporting provenance for one exception field, JSON-keyed.
+
+    ``plan`` is ``None`` for a field with no JSON form (``unit``, ``agent``,
+    function, ...); ``json_name`` is always its effective JSON name, so every
+    field — JSON-convertible or not — is covered and uniquely keyed.
+    """
 
     field_name: str
-    plan: EncodePlan
+    json_name: str
+    plan: EncodePlan | None
 
 
 @dataclass(frozen=True, slots=True)

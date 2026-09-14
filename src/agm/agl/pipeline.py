@@ -2119,10 +2119,16 @@ def exception_value_to_run_error(
 ) -> RunError:
     """Convert an ``ExceptionValue`` to a ``RunError`` for ``RunResult``.
 
-    Field values are converted via the exception nominal's static encode plans,
-    when present, or the shared value-directed serializer otherwise. Both preserve
-    ``Decimal`` exactness (never routed through binary ``float``).
-    This runs while reporting an error already in flight, so a field that is
+    Every field is reported under its effective JSON name (``@json-name`` ??
+    ``@name`` ?? declared), from ``exception_field_encodes`` — including a
+    field with no JSON form, so no two fields can collide on a shared
+    fallback declared key. A field with an encode plan is converted through
+    it, matching ``e as json``; one without (not JSON-convertible) goes
+    through the shared value-directed serializer instead. Both preserve
+    ``Decimal`` exactness (never routed through binary ``float``). When
+    ``exception_field_encodes`` has no entry for the exception (e.g. no
+    lowering data), every field falls back to its declared name. This runs
+    while reporting an error already in flight, so a field that is
     itself cyclic (including one closed through mutable record fields), or
     a field of a kind with no JSON representation (``unit``, ``agent``,
     ``constructor``, ``function``, ``iterator`` — legal on an exception field
@@ -2145,18 +2151,26 @@ def exception_value_to_run_error(
     from agm.agl.syntax.spans import SourceSpan
 
     encodes = {
-        encode.field_name: encode.plan
+        encode.field_name: encode
         for encode in (
             () if exception_field_encodes is None else exception_field_encodes.get(exc.nominal, ())
         )
     }
     fields: dict[str, object] = {}
     for k, v in exc.fields.items():
+        encode = encodes.get(k)
+        # No entry (no lowering data for this exception) falls back to the
+        # declared name; an entry always carries its effective JSON name,
+        # whether or not it carries a plan.
+        json_key = encode.json_name if encode is not None else k
         try:
-            plan = encodes.get(k)
-            fields[k] = encode_value(plan, v) if plan is not None else value_to_json_obj(v)
+            fields[json_key] = (
+                encode_value(encode.plan, v)
+                if encode is not None and encode.plan is not None
+                else value_to_json_obj(v)
+            )
         except (AglCyclicValue, AglNonDataValue) as field_exc:
-            fields[k] = degraded_marker(field_exc)
+            fields[json_key] = degraded_marker(field_exc)
     line: int | None = None
     col: int | None = None
     if isinstance(span, (SourceSpan, Location)):

@@ -23,6 +23,7 @@ from agm.agl.ir.contracts import (
     ArrayDecode,
     DictDecode,
     EnumDecode,
+    FieldDecode,
     RecordDecode,
     RefDecode,
     ScalarDecode,
@@ -326,8 +327,8 @@ class TestDecodeValueHappy:
             nominal=nominal,
             display_name="Point",
             fields=(
-                ("x", ScalarDecode(kind=ScalarKind.INT)),
-                ("y", ScalarDecode(kind=ScalarKind.INT)),
+                FieldDecode("x", "x", ScalarDecode(kind=ScalarKind.INT)),
+                FieldDecode("y", "y", ScalarDecode(kind=ScalarKind.INT)),
             ),
         )
         result = decode_value(schema, {"x": 1, "y": 2})
@@ -344,10 +345,18 @@ class TestDecodeValueHappy:
             display_name="Color",
             variants=(
                 VariantDecode(
-                    name="Red", nominal=NominalId(2), display_name="Color::Red", fields=()
+                    name="Red",
+                    json_name="Red",
+                    nominal=NominalId(2),
+                    display_name="Color::Red",
+                    fields=(),
                 ),
                 VariantDecode(
-                    name="Blue", nominal=NominalId(3), display_name="Color::Blue", fields=()
+                    name="Blue",
+                    json_name="Blue",
+                    nominal=NominalId(3),
+                    display_name="Color::Blue",
+                    fields=(),
                 ),
             ),
         )
@@ -361,13 +370,18 @@ class TestDecodeValueHappy:
             display_name="Result",
             variants=(
                 VariantDecode(
-                    name="Ok", nominal=NominalId(2), display_name="Result::Ok", fields=()
+                    name="Ok",
+                    json_name="Ok",
+                    nominal=NominalId(2),
+                    display_name="Result::Ok",
+                    fields=(),
                 ),
                 VariantDecode(
                     name="Err",
+                    json_name="Err",
                     nominal=NominalId(3),
                     display_name="Result::Err",
-                    fields=(("code", ScalarDecode(kind=ScalarKind.INT)),),
+                    fields=(FieldDecode("code", "code", ScalarDecode(kind=ScalarKind.INT)),),
                 ),
             ),
         )
@@ -375,6 +389,38 @@ class TestDecodeValueHappy:
         assert result == RecordValue(
             nominal=NominalId(3), display_name="Result::Err", fields={"code": IntValue(42)}
         )
+
+    def test_record_reads_renamed_json_key_builds_declared_field(self) -> None:
+        """A field's ``json_name`` is read from JSON; the built record keeps the declared name."""
+        nominal = NominalId(1)
+        schema = RecordDecode(
+            nominal=nominal,
+            display_name="Point",
+            fields=(FieldDecode("x", "x-coord", ScalarDecode(kind=ScalarKind.INT)),),
+        )
+        result = decode_value(schema, {"x-coord": 1})
+        assert result == RecordValue(
+            nominal=nominal, display_name="Point", fields={"x": IntValue(1)}
+        )
+
+    def test_enum_matches_case_against_renamed_json_tag(self) -> None:
+        """``$case`` is matched against ``VariantDecode.json_name``, not the declared name."""
+        nominal = NominalId(1)
+        schema = EnumDecode(
+            nominal=nominal,
+            display_name="Color",
+            variants=(
+                VariantDecode(
+                    name="Red",
+                    json_name="RED",
+                    nominal=NominalId(2),
+                    display_name="Color::Red",
+                    fields=(),
+                ),
+            ),
+        )
+        result = decode_value(schema, {"$case": "RED"})
+        assert result == RecordValue(nominal=NominalId(2), display_name="Color::Red", fields={})
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +472,7 @@ class TestDecodeValueErrors:
         schema = RecordDecode(
             nominal=NominalId(1),
             display_name="R",
-            fields=(("x", ScalarDecode(kind=ScalarKind.INT)),),
+            fields=(FieldDecode("x", "x", ScalarDecode(kind=ScalarKind.INT)),),
         )
         with pytest.raises(ValueError, match="record"):
             decode_value(schema, [1, 2])
@@ -435,7 +481,7 @@ class TestDecodeValueErrors:
         schema = RecordDecode(
             nominal=NominalId(1),
             display_name="R",
-            fields=(("x", ScalarDecode(kind=ScalarKind.INT)),),
+            fields=(FieldDecode("x", "x", ScalarDecode(kind=ScalarKind.INT)),),
         )
         with pytest.raises(ValueError, match="Missing field"):
             decode_value(schema, {})
@@ -445,7 +491,9 @@ class TestDecodeValueErrors:
             nominal=NominalId(1),
             display_name="E",
             variants=(
-                VariantDecode(name="A", nominal=NominalId(2), display_name="E::A", fields=()),
+                VariantDecode(
+                    name="A", json_name="A", nominal=NominalId(2), display_name="E::A", fields=()
+                ),
             ),
         )
         with pytest.raises(ValueError, match="object for enum"):
@@ -456,7 +504,9 @@ class TestDecodeValueErrors:
             nominal=NominalId(1),
             display_name="E",
             variants=(
-                VariantDecode(name="A", nominal=NominalId(2), display_name="E::A", fields=()),
+                VariantDecode(
+                    name="A", json_name="A", nominal=NominalId(2), display_name="E::A", fields=()
+                ),
             ),
         )
         with pytest.raises(ValueError, match=r"\$case"):
@@ -467,7 +517,9 @@ class TestDecodeValueErrors:
             nominal=NominalId(1),
             display_name="E",
             variants=(
-                VariantDecode(name="A", nominal=NominalId(2), display_name="E::A", fields=()),
+                VariantDecode(
+                    name="A", json_name="A", nominal=NominalId(2), display_name="E::A", fields=()
+                ),
             ),
         )
         with pytest.raises(ValueError, match=r"\$case"):
@@ -478,7 +530,9 @@ class TestDecodeValueErrors:
             nominal=NominalId(1),
             display_name="E",
             variants=(
-                VariantDecode(name="A", nominal=NominalId(2), display_name="E::A", fields=()),
+                VariantDecode(
+                    name="A", json_name="A", nominal=NominalId(2), display_name="E::A", fields=()
+                ),
             ),
         )
         with pytest.raises(ValueError, match="Unknown enum variant"):
@@ -491,9 +545,10 @@ class TestDecodeValueErrors:
             variants=(
                 VariantDecode(
                     name="B",
+                    json_name="B",
                     nominal=NominalId(2),
                     display_name="E::B",
-                    fields=(("x", ScalarDecode(kind=ScalarKind.INT)),),
+                    fields=(FieldDecode("x", "x", ScalarDecode(kind=ScalarKind.INT)),),
                 ),
             ),
         )
@@ -518,16 +573,21 @@ class TestDecodeValueRefDecode:
             display_name="Tree",
             variants=(
                 VariantDecode(
-                    name="Leaf", nominal=NominalId(2), display_name="Tree::Leaf", fields=()
+                    name="Leaf",
+                    json_name="Leaf",
+                    nominal=NominalId(2),
+                    display_name="Tree::Leaf",
+                    fields=(),
                 ),
                 VariantDecode(
                     name="Node",
+                    json_name="Node",
                     nominal=NominalId(3),
                     display_name="Tree::Node",
                     fields=(
-                        ("value", ScalarDecode(kind=ScalarKind.INT)),
-                        ("left", RefDecode("Tree")),
-                        ("right", RefDecode("Tree")),
+                        FieldDecode("value", "value", ScalarDecode(kind=ScalarKind.INT)),
+                        FieldDecode("left", "left", RefDecode("Tree")),
+                        FieldDecode("right", "right", RefDecode("Tree")),
                     ),
                 ),
             ),
@@ -570,7 +630,7 @@ class TestDecodeValueRefDecode:
         schema = RecordDecode(
             nominal=category_nominal,
             display_name="Wrapper",
-            fields=(("trees", ArrayDecode(RefDecode("Tree"))),),
+            fields=(FieldDecode("trees", "trees", ArrayDecode(RefDecode("Tree"))),),
         )
         node_payload = {
             "$case": "Node",

@@ -29,6 +29,7 @@ from typing import TypeAlias as TypingTypeAlias
 from agm.agl.attributes import ProgramCommandSpec, ProgramOptionSpec
 from agm.agl.diagnostics import AglError
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.semantics.external_names import ExternalName
 from agm.agl.semantics.types import EnumType, RecordType, TypeVarType
 from agm.agl.syntax.nodes import (
     EnumDef,
@@ -693,6 +694,10 @@ class AttributeFacts:
     ``docs``
         The ``@doc`` text of every declaration carrying one, parameters and
         fields included, keyed by that declaration's node id.
+    ``external_names``
+        The ``@name``/``@json-name`` spellings of every field, enum member,
+        and record declaration carrying one, keyed by that declaration's node
+        id. Typecheck stores them on the type table.
     """
 
     param_zones: dict[int, ParamZone] = field(default_factory=dict)
@@ -700,6 +705,7 @@ class AttributeFacts:
     program_options: dict[int, ProgramOptionSpec] = field(default_factory=dict)
     command_registrations: dict[int, ProgramCommandSpec] = field(default_factory=dict)
     docs: dict[int, str] = field(default_factory=dict)
+    external_names: dict[int, ExternalName] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

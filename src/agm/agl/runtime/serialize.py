@@ -31,6 +31,7 @@ from agm.agl.ir.contracts import (
     EncodeSchema,
     EnumEncode,
     ExceptionEncode,
+    FieldEncode,
     RecordEncode,
     RefEncode,
     ScalarEncode,
@@ -176,8 +177,10 @@ def _encode(
         active = enter_value(id(value), active)
         try:
             return {
-                name: _encode(field, value.fields[name], definitions, arguments, active)
-                for name, field in schema.fields
+                fenc.json_name: _encode(
+                    fenc.schema, value.fields[fenc.name], definitions, arguments, active
+                )
+                for fenc in schema.fields
             }
         finally:
             active.discard(id(value))
@@ -185,11 +188,13 @@ def _encode(
         variant, fields = _variant_for_encode(schema, value)
         active = enter_value(id(value), active)
         try:
-            result: dict[str, object] = {"$case": variant.name}
+            result: dict[str, object] = {"$case": variant.json_name}
             result.update(
                 {
-                    name: _encode(field, fields[name], definitions, arguments, active)
-                    for name, field in variant.fields
+                    fenc.json_name: _encode(
+                        fenc.schema, fields[fenc.name], definitions, arguments, active
+                    )
+                    for fenc in variant.fields
                 }
             )
             return result
@@ -251,6 +256,7 @@ def _substitute_arguments(
                 tuple(
                     VariantEncode(
                         variant.name,
+                        variant.json_name,
                         variant.nominal,
                         _substitute_fields(variant.fields, arguments),
                     )
@@ -262,10 +268,13 @@ def _substitute_arguments(
 
 
 def _substitute_fields(
-    fields: "tuple[tuple[str, EncodeSchema], ...]", arguments: tuple[EncodeSchema, ...]
-) -> "tuple[tuple[str, EncodeSchema], ...]":
+    fields: "tuple[FieldEncode, ...]", arguments: tuple[EncodeSchema, ...]
+) -> "tuple[FieldEncode, ...]":
     """Substitute *arguments* through one ordered field or variant-field list."""
-    return tuple((name, _substitute_arguments(field, arguments)) for name, field in fields)
+    return tuple(
+        FieldEncode(fenc.name, fenc.json_name, _substitute_arguments(fenc.schema, arguments))
+        for fenc in fields
+    )
 
 
 def _resolve_encode_ref(key: str, definitions: dict[str, EncodeDefinition]) -> EncodeDefinition:

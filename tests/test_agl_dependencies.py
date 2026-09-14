@@ -216,7 +216,7 @@ def _agm_imports_of_file(path: Path) -> list[str]:
     ("leaf", "allowed"),
     [
         ("zones.py", ()),
-        ("attributes.py", ("agm.agl.zones", "agm.command_catalog")),
+        ("attributes.py", ("agm.agl.keywords", "agm.agl.zones", "agm.command_catalog")),
         ("artifact_storage.py", ()),
         ("keywords.py", ("agm.util.ident", "agm.raw_tail_catalog")),
     ],
@@ -225,11 +225,12 @@ def test_shared_leaves_sit_below_every_pass(leaf: str, allowed: tuple[str, ...])
     """Keep the shared vocabulary modules, plus the storage envelope leaf, below every pass.
 
     ``zones`` is the bottom leaf and imports nothing under ``agm``;
-    ``attributes`` names the zones its ``@arg-*`` entries select and the
+    ``attributes`` names the zones its ``@arg-*`` entries select, the
     command-path rule its ``@command`` entry shares with a package manifest,
-    both pure data leaves, and nothing else; ``artifact_storage`` is the disk
-    envelope every disk cache writes through and, like ``zones``, imports
-    nothing under ``agm``; ``keywords`` names only the identifier grammar and
+    and the plain-name predicate its ``@name`` argument rule shares, all pure
+    data leaves, and nothing else; ``artifact_storage`` is the disk envelope
+    every disk cache writes through and, like ``zones``, imports nothing
+    under ``agm``; ``keywords`` names only the identifier grammar and
     raw-tail spelling leaves its plain-name predicate cross-checks.
     """
     violations = [

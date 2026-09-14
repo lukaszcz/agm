@@ -1,0 +1,39 @@
+{
+  "scenarios": [
+    {
+      "name": "uncaught_exception_reports_renamed_field_key",
+      "params": {
+        "mode": "renamed"
+      },
+      "expect": {
+        "raises": {
+          "type": "RenamedError",
+          "fields": {
+            "failure-code": 5
+          },
+          "message_contains": [
+            "boom"
+          ]
+        }
+      }
+    },
+    {
+      "name": "uncaught_exception_reports_distinct_keys_on_rename_collision",
+      "params": {
+        "mode": "collision"
+      },
+      "expect": {
+        "raises": {
+          "type": "CollisionError",
+          "fields": {
+            "callback": 7,
+            "cb": "<function has no JSON representation>"
+          },
+          "message_contains": [
+            "collision"
+          ]
+        }
+      }
+    }
+  ]
+}

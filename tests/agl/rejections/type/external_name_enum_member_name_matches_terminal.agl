@@ -1,0 +1,5 @@
+enum Shape
+  | @name("Circle") Square(side: int)
+  | Circle(radius: int)
+
+program def main() -> unit = ()

@@ -1,0 +1,7 @@
+@json-name("dup")
+record Circle
+  radius: int
+
+@json-name("dup")
+record Square
+  side: int

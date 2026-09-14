@@ -1,0 +1,62 @@
+# Every legal placement of @name/@json-name: record and enum-member
+# declarations, plain and var fields, exception fields (including a base
+# chain), inline and referenced enum members, and generic record/enum. These
+# attributes never change construction, matching, mutation, or rendering by
+# declared name; effective JSON naming is exercised elsewhere.
+
+@name("job") @json-name("job_v1")
+record Job
+  @name("file") @json-name("file_path") file-path: text
+  @name("tries") var attempt: int
+  shape: Shape
+
+enum Shape
+  | @name("sq") @json-name("square_shape") Square(side: int)
+  | Rect(@json-name("w") width: int, @json-name("h") height: int)
+  | ::LateCircle
+
+@name("circle")
+record LateCircle
+  radius: int
+
+enum Wrapped[T]
+  | @name("w") Wrap(value: T)
+
+exception JobError extends Exception
+  @name("job-name") job: text
+
+exception RetryError extends JobError
+  @json-name("attempt_count") attempts: int
+
+record Pair[T]
+  @name("l") left: T
+  @name("r") right: T
+
+program def main(variant: text) -> unit =
+  let shape: Shape = case variant of
+    | "square" => Square(side = 2)
+    | "rect" => Rect(width = 3, height = 4)
+    | _ => LateCircle(radius = 5)
+  let job = Job(file-path = "./work", attempt = 0, shape = shape)
+  job.attempt := job.attempt + 1
+  let described = case job.shape of
+    | Square(side) => "square %{side}"
+    | Rect(width, height) => "rect %{width}x%{height}"
+    | LateCircle(radius) => "circle %{radius}"
+  print job.file-path
+  print job.attempt
+  print described
+
+  let pair = Pair(left = 1, right = 2)
+  print pair.left
+  print pair.right
+
+  let wrapped: Wrapped[int] = Wrap(value = 9)
+  let unwrapped = case wrapped of
+    | Wrap(value) => value
+  print unwrapped
+
+  try
+    raise RetryError(message = "build failed", job = "build", attempts = 3)
+  catch RetryError as e =>
+    print "%{e.job}:%{e.attempts}"

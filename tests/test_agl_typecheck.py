@@ -8349,9 +8349,13 @@ class TestTypeDeclarations:
         assert "already declared" in str(err).lower() or "duplicate" in str(err).lower()
 
     def test_type_builder_duplicate_type_name_guard_raises(self) -> None:
+        from agm.agl.scope.symbols import AttributeFacts as _AttributeFacts
+
         program = parse_program("record A\n  x: int\nrecord A\n  y: int\nA(x = 1)")
         with pytest.raises(AglTypeError) as exc_info:
-            _TypeBuilder(TypeEnvironment(), param_zones=_standard_zones(program)).collect(program)
+            _TypeBuilder(
+                TypeEnvironment(), attributes=_AttributeFacts(param_zones=_standard_zones(program))
+            ).collect(program)
         assert "already declared" in str(exc_info.value).lower()
 
     def test_record_bare_self_field_is_uninhabitable(self) -> None:
@@ -10312,7 +10316,7 @@ def _method_header(
     function = next(item for item in resolved.program.body.items if isinstance(item, FuncDef))
     owner = resolved.method_declarations[(ENTRY_ID, ("Point",), function.name)]
     env = TypeEnvironment()
-    _TypeBuilder(env, param_zones=resolved.attributes.param_zones).collect(resolved.program)
+    _TypeBuilder(env, attributes=resolved.attributes).collect(resolved.program)
     with env.type_scope(owner.scope_path):
         signature, _type, _receiver = resolve_function_header(
             env,

@@ -1,0 +1,5 @@
+record Item
+  @json-name("id") a: int
+  @json-name("id") b: int
+
+program def main() -> unit = ()

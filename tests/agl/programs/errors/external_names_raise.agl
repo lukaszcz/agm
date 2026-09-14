@@ -1,0 +1,21 @@
+# An uncaught exception with `@json-name`-renamed fields, reported by its
+# effective JSON name rather than its declared name. `mode` selects which
+# exception is raised: "renamed" raises `RenamedError`, whose sole field is
+# reported under its `@json-name`; "collision" raises `CollisionError`, where
+# `code` is renamed to "callback" and `callback` (a function, with no JSON
+# form, reported as a marker) is renamed to "cb" -- the two renamed keys must
+# still appear distinctly in the report, even though "callback" is also
+# `callback`'s own declared name.
+
+exception RenamedError extends Exception
+  @json-name("failure-code") code: int
+
+exception CollisionError extends Exception
+  @json-name("callback") code: int
+  @json-name("cb") callback: (int) -> int
+
+program def main(mode: text) -> unit =
+  if mode == "renamed" =>
+    raise RenamedError(message = "boom", code = 5)
+
+  raise CollisionError(message = "collision", code = 7, callback = fn(n: int) => n)

@@ -1,0 +1,107 @@
+# `@name`/`@json-name` renaming: the effective JSON name (`@json-name` ??
+# `@name` ?? declared) keys `as`/`as?` JSON casts, enum `$case` tags, and
+# program parameters decoded from JSON. Rendering and field access always
+# use the declared name. A declared field key or `$case` tag, where a rename
+# exists, is rejected by both `as` (via `as?` testing `false`) and by
+# program-parameter decoding (a host error).
+import std/json
+
+record Point
+  @json-name("x-coord") x: int
+  @name("y-name") y: int
+
+@json-name("triangle-shape")
+record Triangle
+  sides: int
+
+enum Shape = ::Triangle | @name("sq") Square(side: int) | Circle(radius: int)
+
+record Box[T]
+  @json-name("val") value: T
+
+enum Result[T]
+  | @json-name("success") Ok(value: T)
+  | Err(message: text)
+
+exception ConfigError extends Exception
+  @json-name("error-code") code: int
+
+exception NestedConfigError extends ConfigError
+  detail: text
+
+program def main(
+  x: int,
+  y: int,
+  sides: int,
+  side: int,
+  code: int,
+  detail: text,
+  shape-json: text,
+  point-param: Point,
+  shape-param: Shape,
+) -> unit =
+  let p = Point(x = x, y = y)
+  print p.x
+  print p.y
+  print (p as json)
+
+  let round-tripped = (p as json) as Point
+  print round-tripped.x
+  print round-tripped.y
+
+  let tri: Shape = Triangle(sides = sides)
+  print (tri as json)
+
+  let sq: Shape = Square(side = side)
+  print (sq as json)
+
+  let restored = json::parse(shape-json) as Shape
+  case restored of
+    | Triangle(sides) => print "triangle: %{sides}"
+    | Square(side)    => print "square: %{side}"
+    | Circle(radius)  => print "circle: %{radius}"
+
+  # `text as T` succeeds using renamed keys, for a record and for an enum.
+  let point-from-text = "{\"x-coord\": 20, \"y-name\": 21}" as Point
+  print point-from-text.x
+  print point-from-text.y
+
+  let shape-from-text = "{\"$case\": \"sq\", \"side\": 22}" as Shape
+  case shape-from-text of
+    | Triangle(sides) => print "text-triangle: %{sides}"
+    | Square(side)    => print "text-square: %{side}"
+    | Circle(radius)  => print "text-circle: %{radius}"
+
+  # `as?` tests `false` for a declared field key, and for a declared
+  # `$case` tag, where a rename exists.
+  print ("{\"x\": 1, \"y-name\": 2}" as? Point)
+  print ("{\"$case\": \"Square\", \"side\": 3}" as? Shape)
+
+  # A record-typed and an enum-typed program parameter decode via their
+  # renamed JSON keys/tags.
+  print point-param.x
+  print point-param.y
+  case shape-param of
+    | Triangle(sides) => print "param-triangle: %{sides}"
+    | Square(side)    => print "param-square: %{side}"
+    | Circle(radius)  => print "param-circle: %{radius}"
+
+  # A generic record and a generic enum with renamed fields/tags round-trip
+  # through both `as json` and `text as T` at a concrete instantiation.
+  let box: Box[int] = Box(value = code)
+  print (box as json)
+  let box-from-json = (box as json) as Box[int]
+  print box-from-json.value
+  let box-from-text = "{\"val\": 77}" as Box[int]
+  print box-from-text.value
+
+  let ok: Result[int] = Ok(value = sides)
+  print (ok as json)
+  let ok-from-text = "{\"$case\": \"success\", \"value\": 88}" as Result[int]
+  case ok-from-text of
+    | Ok(value)      => print "generic-ok: %{value}"
+    | Err(message)   => print "generic-err: %{message}"
+
+  let error = NestedConfigError(message = "boom", code = code, detail = detail)
+  print error.code
+  print (error as json)

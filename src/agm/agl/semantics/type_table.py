@@ -66,6 +66,7 @@ from agm.agl.ir.reserved_nominals import (
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id as _reserved_id
 from agm.agl.modules.ids import RESERVED_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
+from agm.agl.semantics.external_names import NO_EXTERNAL_NAME, ExternalName
 from agm.agl.semantics.types import (
     HOST_MINTED_PRELUDE_TYPE_IDS,
     HOST_MINTED_PRELUDE_TYPE_NAMES,
@@ -208,6 +209,12 @@ class TypeDef:
     ``is_inline_enum_member`` — ``True`` for a synthetic record declaration
                    created by an inline enum member. Its inhabitation is
                    determined by its enclosing enum rather than independently.
+    ``external_name`` — a record's own ``@name``/``@json-name`` spellings
+                   (its value-syntax name and its ``$case`` tag as an enum
+                   member); unused for enums and exceptions.
+    ``field_external_names`` — ``(field_name, ExternalName)`` pairs for the
+                   OWN fields carrying ``@name``/``@json-name``, in
+                   declaration order; unrenamed fields are absent.
     """
 
     kind: TypeDefKind
@@ -224,6 +231,8 @@ class TypeDef:
     is_builtin: bool = field(default=False, compare=False)
     decl_node_id: int = field(default=NO_DECL_ID, compare=False)
     is_inline_enum_member: bool = field(default=False, compare=False)
+    external_name: ExternalName = NO_EXTERNAL_NAME
+    field_external_names: tuple[tuple[str, ExternalName], ...] = ()
 
     def handle(self, type_args: tuple[Type, ...] = ()) -> RecordType | EnumType | ExceptionType:
         """Return the ``RecordType``/``EnumType``/``ExceptionType`` handle naming this ``TypeDef``.
@@ -925,6 +934,47 @@ class TypeTable:
             (fname, kind)
             for _chain_id, typedef in self._exception_chain(decl_id, caller="exception_field_kinds")
             for (fname, _ftype), kind in zip(typedef.fields, typedef.field_kinds, strict=True)
+        )
+
+    def field_external_names(
+        self, handle: RecordType | ExceptionType
+    ) -> Mapping[str, ExternalName]:
+        """Return the renamed fields of *handle*, an exception's base chain applied.
+
+        A field without ``@name``/``@json-name`` is absent from the mapping.
+        """
+        if isinstance(handle, RecordType):
+            typedef = self._require_record_def(handle, caller="field_external_names")
+            return dict(typedef.field_external_names)
+        return {
+            field_name: external
+            for _chain_id, typedef in self._exception_chain(
+                handle.decl_id, caller="field_external_names"
+            )
+            for field_name, external in typedef.field_external_names
+        }
+
+    def external_name(self, handle: RecordType) -> ExternalName:
+        """Return the ``@name``/``@json-name`` spellings of record *handle*'s declaration."""
+        return self._require_record_def(handle, caller="external_name").external_name
+
+    def json_fields(self, handle: RecordType | ExceptionType) -> tuple[tuple[str, str, Type], ...]:
+        """Return every field of *handle* as ``(declared_name, json_name, field_type)``.
+
+        ``json_name`` is the effective JSON name (``@json-name`` ?? ``@name``
+        ?? declared), covering every field — not only renamed ones, unlike
+        :meth:`field_external_names`. An exception's base chain is flattened
+        in, as for :meth:`exception_fields`.
+        """
+        renamed = self.field_external_names(handle)
+        fields = (
+            self.record_fields(handle)
+            if isinstance(handle, RecordType)
+            else self.exception_fields(handle)
+        )
+        return tuple(
+            (name, renamed[name].json(name) if name in renamed else name, field_type)
+            for name, field_type in fields.items()
         )
 
     def exception_def(self, handle: ExceptionType) -> TypeDef:

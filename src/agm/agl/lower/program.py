@@ -65,7 +65,14 @@ def _superseded_reserved(typedef: TypeDef, type_table: TypeTable) -> bool:
 def _exception_field_encodes(
     type_table: TypeTable,
 ) -> dict[NominalId, tuple[ExceptionFieldEncode, ...]]:
-    """Compile reporting provenance for every JSON-representable exception slot."""
+    """Compile reporting provenance for every exception field, JSON-convertible or not.
+
+    Each field's JSON name is its effective external name (``@json-name`` ??
+    ``@name`` ?? declared) — the uncaught-exception report is keyed by it,
+    covering every field so no two fields can collide on a fallback declared
+    key. A field with no JSON form carries no encode plan and is reported via
+    the value-directed serializer instead (see ``pipeline.exception_value_to_run_error``).
+    """
     result: dict[NominalId, tuple[ExceptionFieldEncode, ...]] = {}
     for typedef in type_table.entries():
         if typedef.kind != "exception":
@@ -75,9 +82,14 @@ def _exception_field_encodes(
         handle = typedef.handle()
         assert isinstance(handle, ExceptionType)
         result[NominalId(typedef.decl_node_id)] = tuple(
-            ExceptionFieldEncode(field_name, build_encode_plan(field_type, type_table))
-            for field_name, field_type in type_table.exception_fields(handle).items()
-            if is_json_convertible(field_type, type_table)
+            ExceptionFieldEncode(
+                field_name,
+                json_name,
+                build_encode_plan(field_type, type_table)
+                if is_json_convertible(field_type, type_table)
+                else None,
+            )
+            for field_name, json_name, field_type in type_table.json_fields(handle)
         )
     return result
 

@@ -328,7 +328,12 @@ class ExecProgramDiscovery:
         """
         from agm.cli_support.program_options import EXEC_RESERVED_FLAGS, program_command_for
 
-        return program_command_for(self.selection(file).selected, EXEC_RESERVED_FLAGS)
+        program = self.selection(file).selected
+        artifacts = self.cached_artifacts(file)
+        params = (
+            () if artifacts is None or program is None else artifacts.discovery.params_for(program)
+        )
+        return program_command_for(program, EXEC_RESERVED_FLAGS, params)
 
 
 def unmatched_program_message(

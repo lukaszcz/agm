@@ -723,6 +723,31 @@ def test_registered_command_program_may_claim_exec_only_flags(
     assert "-p" in help_result.output
 
 
+def test_registered_help_reuses_discovery_for_a_host_shaped_program_value(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "home"
+    write_installed_package(
+        home,
+        "tools",
+        source="program def main(tag: text) -> unit = ()\n",
+        commands={"tools run": "tools/main::main"},
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(
+        dispatch,
+        "load_command_index",
+        lambda **_: ActivationIndex(
+            commands={"tools run": CommandRegistration("tools", "tools/main::main")}
+        ),
+    )
+
+    result = invoke(CliRunner(), ["tools", "run", "--tag", "--dry-run", "--help"])
+
+    assert result.exit_code == 0
+    assert "--tag" in result.output
+
+
 def test_registered_command_help_returns_false_when_index_is_unavailable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1331,7 +1356,10 @@ def test_registered_command_argument_error_renders_shared_usage_help(
         'description = "Lint package inputs" }\n',
         encoding="utf-8",
     )
-    module.write_text("program def main(level: text) -> unit = ()\n", encoding="utf-8")
+    module.write_text(
+        "@param let verbose: bool = false\nprogram def main(level: text) -> unit = ()\n",
+        encoding="utf-8",
+    )
     write_record(package_root)
     write_activation_index(
         ActivationIndex({"tools": ActivePackage(semver.Version.parse("1.0.0"))}), home=home
@@ -1358,6 +1386,8 @@ def test_registered_command_argument_error_renders_shared_usage_help(
     assert "Lint package inputs" in err
     assert "Options:" in err
     assert "--level" in err
+    assert "Parameters of tools/lint" in err
+    assert "--verbose" in err
 
 
 def test_registered_command_argument_error_handles_no_description_or_parameters(

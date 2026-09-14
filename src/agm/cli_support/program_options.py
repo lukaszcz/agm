@@ -107,8 +107,10 @@ from agm.agl.semantics.types import (
 from agm.agl.zones import ParamZone
 
 if TYPE_CHECKING:
-    from agm.agl.runtime.types import ProgramDeclInfo, ProgramParamInfo
+    from agm.agl.ir.static_keys import StaticBindingKey
+    from agm.agl.runtime.types import ParamBindingInfo, ProgramDeclInfo, ProgramParamInfo
     from agm.agl.semantics.types import Type as AglType
+    from agm.cli_support.param_surface import ParamSurfaceEntry
 
 __all__ = [
     "DuplicateOptionFlagError",
@@ -118,6 +120,7 @@ __all__ = [
     "ProgramCommand",
     "ProgramHelpRequested",
     "ProgramOptionError",
+    "ParsedTail",
     "ProjectedOption",
     "REGISTERED_RESERVED_FLAGS",
     "ReservedFlagError",
@@ -380,6 +383,24 @@ class ExecTail:
 
     file: str | None
     tokens: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedTail:
+    """Raw program arguments and module-parameter values from one CLI tail."""
+
+    arguments: ProgramArguments
+    params: dict["StaticBindingKey", object]
+
+    @property
+    def positional(self) -> tuple[object, ...]:
+        """Return the parsed program positional values."""
+        return self.arguments.positional
+
+    @property
+    def named(self) -> Mapping[str, object]:
+        """Return the parsed program named values."""
+        return self.arguments.named
 
 
 def _is_option_token(token: str) -> bool:
@@ -776,7 +797,7 @@ def _reject_repetition(
     raise ValueError(f"Option {spelling!r} specified more than once")
 
 
-def _short_flag(param: "ProgramParamInfo") -> str | None:
+def _short_flag(param: "ProgramParamInfo | ParamBindingInfo") -> str | None:
     """Return *param*'s ``-x`` short spelling, or ``None`` when it declares none."""
     short = param.cli.short
     return None if short is None else f"-{short}"
@@ -820,6 +841,14 @@ class _ProgramOption(click.Option):
         return None if raw is None else [raw]
 
 
+class _EnvironmentFallbackOption(_ProgramOption):
+    """An environment-only program parameter fallback with no CLI declaration."""
+
+    def add_to_parser(self, parser: object, ctx: click.Context) -> None:
+        """Keep the synthetic declaration out of Click's accepted option table."""
+        del parser, ctx
+
+
 def _default_metavar(projected: ProjectedOption) -> str:
     """Return the placeholder standing for a value-taking option's own VALUE.
 
@@ -843,7 +872,11 @@ def _default_metavar(projected: ProjectedOption) -> str:
 
 
 def _click_params(
-    index: int, param: "ProgramParamInfo", projected: ProjectedOption
+    index: int,
+    param: "ProgramParamInfo | ParamBindingInfo",
+    projected: ProjectedOption,
+    *,
+    names: Sequence[str] | None = None,
 ) -> list[click.Parameter]:
     """Build the Click parameter(s) carrying one program parameter's CLI surface.
 
@@ -857,6 +890,9 @@ def _click_params(
     rather than either polarity of its flag.
     """
     spec = param.cli
+    option_names = (param.cli.name,) if names is None else tuple(names)
+    positive_flags = tuple(f"--{name}" for name in option_names)
+    negative_flags = tuple(f"--no-{name}" for name in option_names)
     short = _short_flag(param)
     shorts: list[str] = [] if short is None else [short]
     if projected.value_form is ValueForm.BOOL:
@@ -864,7 +900,10 @@ def _click_params(
             _ProgramOption(
                 [
                     _positive_dest(index),
-                    f"{projected.flags[0]}/{projected.negative_flags[0]}",
+                    *(
+                        f"{positive}/{negative}"
+                        for positive, negative in zip(positive_flags, negative_flags, strict=True)
+                    ),
                     *shorts,
                 ],
                 type=click.BOOL,
@@ -876,7 +915,7 @@ def _click_params(
             )
         ]
     positive = _ProgramOption(
-        [_positive_dest(index), projected.flags[0], *shorts],
+        [_positive_dest(index), *positive_flags, *shorts],
         default=None,
         multiple=True,
         metavar=spec.metavar or _default_metavar(projected),
@@ -887,7 +926,7 @@ def _click_params(
     if projected.value_form is not ValueForm.OPTION:
         return [positive]
     negative = _ProgramOption(
-        [_negative_dest(index), projected.negative_flags[0]],
+        [_negative_dest(index), *negative_flags],
         is_flag=True,
         type=click.BOOL,
         default=None,
@@ -895,6 +934,120 @@ def _click_params(
         hidden=spec.hidden,
     )
     return [positive, negative]
+
+
+def _module_click_params(
+    index: int, entry: "ParamSurfaceEntry", projected: ProjectedOption
+) -> list[click.Parameter]:
+    """Build one module parameter's Click options from its resolved flag table."""
+    spec = entry.param.cli
+    positive = (*entry.positive_option_spellings, *entry.short_option_spellings)
+    negative = entry.negative_option_spellings
+    if projected.value_form is ValueForm.BOOL:
+        result: list[click.Parameter] = []
+        if positive:
+            result.append(
+                _ProgramOption(
+                    [_positive_dest(index), *positive],
+                    is_flag=True,
+                    default=None,
+                    multiple=True,
+                    envvar=spec.env,
+                    help=spec.doc,
+                    hidden=spec.hidden,
+                )
+            )
+        elif spec.env is not None:
+            result.append(_module_environment_fallback(index, entry, projected))
+        if negative:
+            result.append(
+                _ProgramOption(
+                    [_negative_dest(index), *negative],
+                    is_flag=True,
+                    default=None,
+                    multiple=True,
+                    hidden=spec.hidden,
+                )
+            )
+        return result
+    result = []
+    if positive:
+        result.append(
+            _ProgramOption(
+                [_positive_dest(index), *positive],
+                default=None,
+                multiple=True,
+                metavar=spec.metavar or _default_metavar(projected),
+                envvar=spec.env,
+                help=spec.doc,
+                hidden=spec.hidden,
+            )
+        )
+    elif spec.env is not None:
+        result.append(_module_environment_fallback(index, entry, projected))
+    if negative:
+        result.append(
+            _ProgramOption(
+                [_negative_dest(index), *negative],
+                is_flag=True,
+                type=click.BOOL,
+                default=None,
+                multiple=True,
+                hidden=spec.hidden,
+            )
+        )
+    return result
+
+
+def _module_environment_fallback(
+    index: int, entry: "ParamSurfaceEntry", projected: ProjectedOption
+) -> _EnvironmentFallbackOption:
+    """Build a module parameter's environment-only positive-polarity source."""
+    spec = entry.param.cli
+    assert spec.env is not None
+    declarations = [_positive_dest(index), f"--_module-env-{index}"]
+    if projected.value_form is ValueForm.BOOL:
+        return _EnvironmentFallbackOption(
+            declarations,
+            is_flag=True,
+            default=None,
+            multiple=True,
+            envvar=spec.env,
+            hidden=True,
+        )
+    return _EnvironmentFallbackOption(
+        declarations,
+        default=None,
+        multiple=True,
+        metavar=spec.metavar or _default_metavar(projected),
+        envvar=spec.env,
+        hidden=True,
+    )
+
+
+def _module_help_record(entry: "ParamSurfaceEntry", projected: ProjectedOption) -> tuple[str, str]:
+    """Render one module parameter under its shortest resolving option spelling."""
+    spelling = (
+        entry.positive_option_spellings[0]
+        if entry.positive_option_spellings
+        else entry.negative_option_spellings[0]
+    )
+    if projected.takes_value:
+        spelling = f"{spelling} {entry.param.cli.metavar or _default_metavar(projected)}"
+    help_text = entry.param.cli.doc or ""
+    if entry.param.cli.env is not None:
+        environment = f"[env var: {entry.param.cli.env}]"
+        help_text = f"{help_text}  {environment}" if help_text else environment
+    return spelling, help_text
+
+
+def _module_primary_flag(entry: "ParamSurfaceEntry") -> str:
+    """Return an available spelling, or the logical positive flag for diagnostics."""
+    if entry.positive_option_spellings:
+        return entry.positive_option_spellings[0]
+    if entry.negative_option_spellings:
+        return entry.negative_option_spellings[0]
+    return f"--{entry.param.cli.name}"
 
 
 class _ProgramClickCommand(click.Command):
@@ -913,6 +1066,12 @@ class _ProgramClickCommand(click.Command):
         params: list[click.Parameter],
         description: str | None,
         usage_slots: tuple[str, ...],
+        parameter_sections: tuple[tuple[str, tuple[click.Parameter, ...]], ...] = (),
+        module_help_sections: tuple[
+            tuple[str, tuple[tuple["ParamSurfaceEntry", ProjectedOption], ...]], ...
+        ] = (),
+        ambiguous_options: Mapping[str, tuple["ParamBindingInfo", ...]] | None = None,
+        surface_entries: Mapping["ParamBindingInfo", "ParamSurfaceEntry"] | None = None,
         context_settings: dict[str, bool] | None = None,
     ) -> None:
         settings: dict[str, bool] = {} if context_settings is None else dict(context_settings)
@@ -924,12 +1083,104 @@ class _ProgramClickCommand(click.Command):
             context_settings=settings,
         )
         self.usage_slots = usage_slots
+        self.parameter_sections = parameter_sections
+        self.module_help_sections = module_help_sections
+        self.ambiguous_options = {} if ambiguous_options is None else ambiguous_options
+        self.surface_entries = {} if surface_entries is None else surface_entries
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        """Turn Click's invalid ambiguity value syntax into the candidate diagnostic."""
+        ambiguous_short = self._ambiguous_short_option(args)
+        if ambiguous_short is not None:
+            short_candidates = self.ambiguous_options[ambiguous_short]
+            raise click.UsageError(
+                _ambiguous_option_message(ambiguous_short, short_candidates, self.surface_entries),
+                ctx,
+            )
+        try:
+            return super().parse_args(ctx, args)
+        except click.BadOptionUsage as exc:
+            candidates = self.ambiguous_options.get(exc.option_name)
+            if candidates is None:
+                raise
+            raise click.UsageError(
+                _ambiguous_option_message(exc.option_name, candidates, self.surface_entries), ctx
+            ) from exc
+
+    def _ambiguous_short_option(self, args: Sequence[str]) -> str | None:
+        """Return an ambiguous short spelling Click reaches before any parse error.
+
+        Click rejects the suffix of ``-tVALUE`` after accepting the flag
+        ``-t`` when that flag is a rejecting ambiguity sentinel.  Detect that
+        spelling before Click reaches its suffix so both the direct command
+        and :meth:`ProgramCommand.parse` report the candidates.  The walk
+        deliberately stops at a value-taking option: in ``-xt``, ``t`` is
+        the attached value for ``-x``, not another short option.
+        """
+        option_values = option_value_map(cast(Sequence[click.Option], self.params[1:]))
+        index = 0
+        while index < len(args):
+            token = args[index]
+            if token == END_OF_OPTIONS:
+                return None
+            if token.startswith("--"):
+                spelling, separator, _value = token.partition("=")
+                if option_values.get(spelling, False) and not separator:
+                    index += 2
+                    continue
+                index += 1
+                continue
+            if not token.startswith("-") or token == "-":
+                index += 1
+                continue
+            for offset, short in enumerate(token[1:]):
+                spelling = f"-{short}"
+                if spelling in self.ambiguous_options:
+                    return spelling
+                takes_value = option_values.get(spelling)
+                if takes_value is None:
+                    index += 1
+                    break
+                if takes_value:
+                    if offset + 2 == len(token) and index + 1 < len(args):
+                        index += 2
+                    else:
+                        index += 1
+                    break
+            else:
+                index += 1
+                continue
+            continue
+        return None
 
     def collect_usage_pieces(self, ctx: click.Context) -> list[str]:
         """Return the usage pieces after the command name."""
         del ctx
         options = [] if self.options_metavar is None else [self.options_metavar]
         return [*options, *self.usage_slots]
+
+    def format_options(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
+        """Render program options, then module-parameter sections."""
+        section_params = {
+            id(param) for _title, params in self.parameter_sections for param in params
+        }
+        own_options = [
+            record
+            for param in self.get_params(ctx)
+            if id(param) not in section_params
+            if (record := param.get_help_record(ctx)) is not None
+        ]
+        with formatter.section("Options"):
+            formatter.write_dl(own_options)
+        for title, entries in self.module_help_sections:
+            records = [
+                _module_help_record(entry, projected)
+                for entry, projected in entries
+                if not entry.hidden
+            ]
+            if records:
+                with formatter.section(f"Parameters of {title}"):
+                    formatter.write_dl(records)
 
 
 def _build_click_command(
@@ -939,6 +1190,12 @@ def _build_click_command(
     description: str | None,
     usage_slots: tuple[str, ...],
     extra_options: Sequence[click.Parameter] = (),
+    parameter_sections: tuple[tuple[str, tuple[click.Parameter, ...]], ...] = (),
+    module_help_sections: tuple[
+        tuple[str, tuple[tuple["ParamSurfaceEntry", ProjectedOption], ...]], ...
+    ] = (),
+    ambiguous_options: Mapping[str, tuple["ParamBindingInfo", ...]] | None = None,
+    surface_entries: Mapping["ParamBindingInfo", "ParamSurfaceEntry"] | None = None,
     context_settings: dict[str, bool] | None = None,
 ) -> _ProgramClickCommand:
     """Assemble one program command: its own parameters, then *extra_options*, then help.
@@ -953,6 +1210,10 @@ def _build_click_command(
         params=[*params, *extra_options, _help_option()],
         description=description,
         usage_slots=usage_slots,
+        parameter_sections=parameter_sections,
+        module_help_sections=module_help_sections,
+        ambiguous_options=ambiguous_options,
+        surface_entries=surface_entries,
         context_settings=context_settings,
     )
 
@@ -1000,9 +1261,10 @@ class ProgramCommand:
     command: _ProgramClickCommand
     positional: tuple["ProgramParamInfo", ...]
     options: tuple[tuple["ProgramParamInfo", ProjectedOption], ...]
+    module_options: tuple[tuple["ParamSurfaceEntry", ProjectedOption], ...]
     params: tuple[click.Parameter, ...]
 
-    def parse(self, tokens: Sequence[str]) -> ProgramArguments:
+    def parse(self, tokens: Sequence[str]) -> ParsedTail:
         """Parse *tokens* into raw positional/named host values, keyed by declared name.
 
         Click owns the token conventions: short options and their bundles,
@@ -1080,7 +1342,58 @@ class ProgramCommand:
                 named[param.name] = option_none_raw()
             elif positive and not positional_overrides_environment:
                 named[param.name] = _positive_raw(projected, flag, cast(str, positive[0]))
-        return ProgramArguments(positional=positional, named=named)
+        module_params: dict[StaticBindingKey, object] = {}
+        for offset, (entry, projected) in enumerate(self.module_options, start=len(self.options)):
+            module_param = entry.param
+            positive_flag = _module_primary_flag(entry)
+            positive = cast(tuple[object, ...], values.get(_positive_dest(offset), ()))
+            if projected.value_form is ValueForm.BOOL:
+                _reject_repetition(positive, positive_flag)
+                negative = cast(tuple[object, ...], values.get(_negative_dest(offset), ()))
+                negative_flag = next(iter(entry.negative_option_spellings), positive_flag)
+                _reject_repetition(negative, negative_flag)
+                if (
+                    positive
+                    and negative
+                    and self._from_commandline(ctx, _positive_dest(offset))
+                    and self._from_commandline(ctx, _negative_dest(offset))
+                ):
+                    raise ValueError(
+                        f"Options {positive_flag!r} and {negative_flag!r} cannot both be supplied"
+                    )
+                if negative:
+                    module_params[module_param.key] = False
+                elif positive:
+                    module_params[module_param.key] = cast(bool, positive[0])
+                continue
+            _reject_repetition(positive, positive_flag)
+            if projected.value_form is not ValueForm.OPTION:
+                if positive:
+                    module_params[module_param.key] = _positive_raw(
+                        projected, positive_flag, cast(str, positive[0])
+                    )
+                continue
+            negative_flag = next(iter(entry.negative_option_spellings), positive_flag)
+            negative = cast(tuple[object, ...], values.get(_negative_dest(offset), ()))
+            _reject_repetition(negative, negative_flag)
+            if (
+                positive
+                and negative
+                and self._from_commandline(ctx, _positive_dest(offset))
+                and self._from_commandline(ctx, _negative_dest(offset))
+            ):
+                raise ValueError(
+                    f"Options {positive_flag!r} and {negative_flag!r} cannot both be supplied"
+                )
+            if negative:
+                module_params[module_param.key] = option_none_raw()
+            elif positive:
+                module_params[module_param.key] = _positive_raw(
+                    projected, positive_flag, cast(str, positive[0])
+                )
+        return ParsedTail(
+            arguments=ProgramArguments(positional=positional, named=named), params=module_params
+        )
 
     def value_token_indexes(
         self, tokens: Sequence[str], *, host_options: OptionValueMap = frozenset()
@@ -1103,6 +1416,14 @@ class ProgramCommand:
             short = _short_flag(param)
             if short is not None:
                 short_options[short] = projected.takes_value
+        for entry, projected in self.module_options:
+            for spelling in entry.option_spellings:
+                if spelling.startswith("--"):
+                    long_options[spelling] = projected.takes_value and not spelling.startswith(
+                        "--no-"
+                    )
+                else:
+                    short_options[spelling] = projected.takes_value
 
         values: set[int] = set()
         index = 0
@@ -1179,6 +1500,10 @@ class ProgramCommand:
             description=self.command.help if description is None else description,
             usage_slots=self.command.usage_slots,
             extra_options=extra_options,
+            parameter_sections=self.command.parameter_sections,
+            module_help_sections=self.command.module_help_sections,
+            ambiguous_options=self.command.ambiguous_options,
+            surface_entries=self.command.surface_entries,
         )
         return _format_help(command, program_name)
 
@@ -1195,6 +1520,9 @@ class ProgramCommand:
             if param.cli.hidden:
                 continue
             spellings.extend(_spellings(param, projected))
+        for entry, _projected in self.module_options:
+            if not entry.hidden:
+                spellings.extend(entry.option_spellings)
         spellings.extend(HELP_FLAGS)
         return tuple(spellings)
 
@@ -1249,8 +1577,56 @@ def _check_reservation(
     return None
 
 
+def _ambiguous_option_callback(
+    spelling: str,
+    candidates: tuple["ParamBindingInfo", ...],
+    entries: Mapping["ParamBindingInfo", "ParamSurfaceEntry"],
+) -> Callable[[click.Context, click.Parameter, object], None]:
+    """Return the usage callback for one ambiguous module-parameter flag."""
+
+    def reject(ctx: click.Context, param: click.Parameter, value: object) -> None:
+        del ctx, param
+        if value:
+            raise click.UsageError(_ambiguous_option_message(spelling, candidates, entries))
+
+    return reject
+
+
+def _ambiguous_option_message(
+    spelling: str,
+    candidates: tuple["ParamBindingInfo", ...],
+    entries: Mapping["ParamBindingInfo", "ParamSurfaceEntry"],
+) -> str:
+    """Render one ambiguous option's declaration-aware usage diagnostic."""
+    descriptions = "; ".join(
+        f"{candidate.declaration_path} ({', '.join(entries[candidate].option_spellings)})"
+        for candidate in candidates
+    )
+    return f"ambiguous option {spelling!r}: {descriptions}"
+
+
+def _ambiguous_click_options(
+    ambiguous: Mapping[str, tuple["ParamBindingInfo", ...]],
+    entries: Mapping["ParamBindingInfo", "ParamSurfaceEntry"],
+) -> list[click.Parameter]:
+    """Build hidden rejecting options for every ambiguous module spelling."""
+    return [
+        click.Option(
+            [f"_ambiguous{index}", spelling],
+            is_flag=True,
+            is_eager=True,
+            expose_value=False,
+            hidden=True,
+            callback=_ambiguous_option_callback(spelling, candidates, entries),
+        )
+        for index, (spelling, candidates) in enumerate(ambiguous.items())
+    ]
+
+
 def build_program_command(
-    program: "ProgramDeclInfo", reserved_flags: frozenset[str]
+    program: "ProgramDeclInfo",
+    reserved_flags: frozenset[str],
+    params: Sequence["ParamBindingInfo"] = (),
 ) -> "ProgramCommand | ProgramOptionError":
     """Build *program*'s Click command, checking flag reservation first.
 
@@ -1279,25 +1655,54 @@ def build_program_command(
     collision = _check_reservation(options, reserved_flags)
     if collision is not None:
         return collision
-    params: list[click.Parameter] = [_positional_argument()]
+    from agm.cli_support.param_surface import build_param_surface
+
+    surface = build_param_surface(reserved_flags, program, params)
+    module_options = tuple(
+        (entry, project_option(entry.param.cli.name, entry.param.type))
+        for entry in surface.entries
+        if entry.option_spellings or entry.param.cli.env is not None
+    )
+    click_params: list[click.Parameter] = [_positional_argument()]
     for index, (param, projected) in enumerate(options):
-        params.extend(_click_params(index, param, projected))
+        click_params.extend(_click_params(index, param, projected))
+    sections: dict[str, list[click.Parameter]] = {}
+    help_sections: dict[str, list[tuple[ParamSurfaceEntry, ProjectedOption]]] = {}
+    for offset, (entry, projected) in enumerate(module_options, start=len(options)):
+        entry_params = _module_click_params(offset, entry, projected)
+        click_params.extend(entry_params)
+        sections.setdefault(entry.section, []).extend(entry_params)
+        if entry.option_spellings:
+            help_sections.setdefault(entry.section, []).append((entry, projected))
+    entries = {entry.param: entry for entry in surface.entries}
+    click_params.extend(_ambiguous_click_options(surface.ambiguous_options, entries))
     command = _build_click_command(
         program.declaration_path,
-        params=params,
+        params=click_params,
         description=program.doc,
         usage_slots=_usage_slots(positional),
+        parameter_sections=tuple(
+            (section, tuple(section_params)) for section, section_params in sections.items()
+        ),
+        module_help_sections=tuple(
+            (section, tuple(section_entries)) for section, section_entries in help_sections.items()
+        ),
+        ambiguous_options=surface.ambiguous_options,
+        surface_entries=entries,
     )
     return ProgramCommand(
         command=command,
         positional=positional,
         options=options,
-        params=tuple(params),
+        module_options=module_options,
+        params=tuple(click_params),
     )
 
 
 def program_command_for(
-    program: "ProgramDeclInfo | None", reserved_flags: frozenset[str]
+    program: "ProgramDeclInfo | None",
+    reserved_flags: frozenset[str],
+    params: Sequence["ParamBindingInfo"] = (),
 ) -> "ProgramCommand | None":
     """Build *program*'s command, degrading a missing program or a collision to ``None``.
 
@@ -1308,7 +1713,7 @@ def program_command_for(
     """
     if program is None:
         return None
-    result = build_program_command(program, reserved_flags)
+    result = build_program_command(program, reserved_flags, params)
     return result if isinstance(result, ProgramCommand) else None
 
 

@@ -21,6 +21,9 @@ class ParamSurfaceEntry:
     param: ParamBindingInfo
     spellings: tuple[str, ...]
     option_spellings: tuple[str, ...]
+    positive_option_spellings: tuple[str, ...]
+    negative_option_spellings: tuple[str, ...]
+    short_option_spellings: tuple[str, ...]
     section: str
     hidden: bool
 
@@ -200,16 +203,34 @@ def _entry(
     long_winners: Mapping[str, ParamBindingInfo | None],
     option_winners: Mapping[str, ParamBindingInfo | None],
 ) -> ParamSurfaceEntry:
-    spellings = tuple(
-        spelling for spelling in _param_spellings(param) if long_winners.get(spelling) == param
+    all_spellings = _param_spellings(param)
+    spellings = tuple(spelling for spelling in all_spellings if long_winners.get(spelling) == param)
+    positive_option_spellings: list[str] = []
+    negative_option_spellings: list[str] = []
+    option_spellings: list[str] = []
+    for spelling in all_spellings:
+        projected = project_option(spelling, param.type)
+        for flag in projected.flags:
+            if option_winners.get(flag) == param:
+                positive_option_spellings.append(flag)
+                option_spellings.append(flag)
+        for flag in projected.negative_flags:
+            if option_winners.get(flag) == param:
+                negative_option_spellings.append(flag)
+                option_spellings.append(flag)
+    short_option_spellings = (
+        ()
+        if param.cli.short is None or option_winners.get(f"-{param.cli.short}") != param
+        else (f"-{param.cli.short}",)
     )
-    option_spellings = tuple(
-        flag for flag in _option_spellings(param, spellings) if option_winners.get(flag) == param
-    )
+    option_spellings.extend(short_option_spellings)
     return ParamSurfaceEntry(
         param=param,
         spellings=spellings,
-        option_spellings=option_spellings,
+        option_spellings=tuple(option_spellings),
+        positive_option_spellings=tuple(positive_option_spellings),
+        negative_option_spellings=tuple(negative_option_spellings),
+        short_option_spellings=short_option_spellings,
         section=param.module.display(),
         hidden=param.cli.hidden,
     )

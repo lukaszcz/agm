@@ -916,7 +916,14 @@ def _exec_print_help(
         print_help_for_command_path(["exec"])
         return True
     selection = discovery.selection(file)
-    program_command = program_command_for(selection.selected, EXEC_RESERVED_FLAGS)
+    artifacts = discovery.cached_artifacts(file)
+    program_command = program_command_for(
+        selection.selected,
+        EXEC_RESERVED_FLAGS,
+        ()
+        if selection.selected is None or artifacts is None
+        else artifacts.discovery.params_for(selection.selected),
+    )
     if not program_help_requested(tokens, program_command):
         return False
     if program_command is None:

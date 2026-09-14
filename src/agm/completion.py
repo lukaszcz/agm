@@ -20,7 +20,8 @@ from agm.config.general import load_merged_config, load_run_config
 from agm.project.dependency_checkout import main_dep_repo
 
 if TYPE_CHECKING:
-    from agm.agl.runtime.types import ProgramDeclInfo
+    from agm.agl.runtime.types import ParamBindingInfo, ProgramDeclInfo
+    from agm.cli_support.program_discovery import ProgramDiscoveryArtifacts
 
 from agm.project.layout import (
     current_workspace_or_project_root,
@@ -274,10 +275,19 @@ def registered_command_param_completion(
         return []
     if resolution.registration.program is None:
         return [CompletionItem("--help")] if "--help".startswith(incomplete) else []
+    artifacts: list[ProgramDiscoveryArtifacts] = []
     declaration = registered_program_declaration(
-        resolution.registration.program, resolution.registration.package, context=context
+        resolution.registration.program,
+        resolution.registration.package,
+        context=context,
+        artifact_sink=artifacts,
     )
-    program_command = program_command_for(declaration, REGISTERED_RESERVED_FLAGS)
+    params = (
+        ()
+        if declaration is None or not artifacts
+        else artifacts[0].discovery.params_for(declaration)
+    )
+    program_command = program_command_for(declaration, REGISTERED_RESERVED_FLAGS, params)
     flags = (
         "--dry-run",
         *(() if program_command is None else program_command.option_spellings()),
@@ -469,7 +479,7 @@ def complete_agl_file(ctx: click.Context, args: list[str], incomplete: str) -> l
 
 
 def _program_argument_completion_items(
-    program: "ProgramDeclInfo", incomplete: str
+    program: "ProgramDeclInfo", incomplete: str, params: "Sequence[ParamBindingInfo]" = ()
 ) -> list[CompletionItem]:
     """Return ``CompletionItem`` objects for *program*'s own value-parameter flags.
 
@@ -481,7 +491,7 @@ def _program_argument_completion_items(
     """
     from agm.cli_support.program_options import EXEC_RESERVED_FLAGS, program_command_for
 
-    program_command = program_command_for(program, EXEC_RESERVED_FLAGS)
+    program_command = program_command_for(program, EXEC_RESERVED_FLAGS, params)
     if program_command is None:
         return []
     return [
@@ -568,11 +578,18 @@ class ExecCommand(TyperCommand):
                 None if isinstance(raw_command, str) else discovery.command_for_file
             ),
         )
-        program_command = (
-            program_command_for(discovery.selection(selected.file).selected, EXEC_RESERVED_FLAGS)
-            if preview_args != args
-            else None
-        )
+        if preview_args != args:
+            selected_program = discovery.selection(selected.file).selected
+            artifacts = discovery.cached_artifacts(selected.file)
+            program_command = program_command_for(
+                selected_program,
+                EXEC_RESERVED_FLAGS,
+                ()
+                if selected_program is None or artifacts is None
+                else artifacts.discovery.params_for(selected_program),
+            )
+        else:
+            program_command = None
         protected, replacements = protect_host_option_values(args, program_command, host_options)
         remaining = super().parse_args(ctx, retain_end_of_options(protected, host_options))
         ctx.args[:] = [replacements.get(token, token) for token in ctx.args]
@@ -616,7 +633,12 @@ class ExecCommand(TyperCommand):
             selection = discovery.selection(file)
             if selection.selected is None:
                 return base
-            extra = _program_argument_completion_items(selection.selected, incomplete)
+            artifacts = discovery.cached_artifacts(file)
+            extra = _program_argument_completion_items(
+                selection.selected,
+                incomplete,
+                () if artifacts is None else artifacts.discovery.params_for(selection.selected),
+            )
             items_by_value: dict[str, CompletionItem] = {}
             for item in (*base, *extra):
                 items_by_value[cast(str, item.value)] = item

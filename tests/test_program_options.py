@@ -10,10 +10,10 @@ import pytest
 
 from agm.agl.attributes import ProgramOptionSpec
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
-from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.runtime.arguments import decode_param_value
 from agm.agl.runtime.option import none_value, some_value
-from agm.agl.runtime.types import ProgramDeclInfo, ProgramParamInfo
+from agm.agl.runtime.types import ParamBindingInfo, ProgramDeclInfo, ProgramParamInfo
 from agm.agl.semantics.type_table import create_seeded_type_table
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
@@ -34,6 +34,7 @@ from agm.cli_support.program_options import (
     REGISTERED_RESERVED_FLAGS,
     DuplicateOptionFlagError,
     ExecTail,
+    ParsedTail,
     ProgramCommand,
     ProgramHelpRequested,
     ReservedFlagError,
@@ -107,6 +108,47 @@ def _program(*params: ProgramParamInfo, doc: str | None = None) -> ProgramDeclIn
 
 def _command(*params: ProgramParamInfo, doc: str | None = None) -> ProgramCommand:
     result = build_program_command(_program(*params, doc=doc), EXEC_RESERVED_FLAGS)
+    assert isinstance(result, ProgramCommand)
+    return result
+
+
+def _module_param(
+    module: ModuleId,
+    name: str,
+    typ: Type,
+    *,
+    scope_path: tuple[str, ...] = (),
+    external: str | None = None,
+    short: str | None = None,
+    env: str | None = None,
+    metavar: str | None = None,
+    hidden: bool = False,
+    doc: str | None = None,
+) -> ParamBindingInfo:
+    return ParamBindingInfo(
+        module=module,
+        scope_path=scope_path,
+        name=name,
+        node_id=next_decl_id(),
+        span=_SPAN,
+        type=typ,
+        mutable=False,
+        cli=ProgramOptionSpec(
+            name=name if external is None else external,
+            short=short,
+            env=env,
+            metavar=metavar,
+            hidden=hidden,
+            doc=doc,
+        ),
+        doc=doc,
+    )
+
+
+def _command_with_module_params(
+    program: ProgramDeclInfo, *params: ParamBindingInfo
+) -> ProgramCommand:
+    result = build_program_command(program, EXEC_RESERVED_FLAGS, params)
     assert isinstance(result, ProgramCommand)
     return result
 
@@ -1150,6 +1192,369 @@ class TestOptionSpellings:
 
         assert "--help" in spellings
         assert "-h" in spellings
+
+
+class TestModuleParameterOptions:
+    def _program(self) -> ProgramDeclInfo:
+        module = ModuleId(("tool",))
+        return ProgramDeclInfo(
+            module=module,
+            scope_path=(),
+            name="main",
+            node_id=1,
+            span=_SPAN,
+            parameters=(),
+            is_entry=True,
+            doc=None,
+            closure=(module, ModuleId(("A", "logging"))),
+        )
+
+    def test_module_params_accept_resolving_forms_and_return_static_keys(self) -> None:
+        program = self._program()
+        own = _module_param(program.module, "verbose", BoolType(), short="v")
+        logging = _module_param(
+            ModuleId(("A", "logging")), "trace", BoolType(), scope_path=("debug",)
+        )
+        command = _command_with_module_params(program, own, logging)
+
+        for tokens, expected in (
+            (["--verbose"], {own.key: True}),
+            (["--no-verbose"], {own.key: False}),
+            (["--tool.verbose"], {own.key: True}),
+            (["--no-tool.verbose"], {own.key: False}),
+            (["--logging.debug.trace"], {logging.key: True}),
+            (["--no-A.logging.debug.trace"], {logging.key: False}),
+            (["-v"], {own.key: True}),
+        ):
+            parsed = command.parse(tokens)
+            assert isinstance(parsed, ParsedTail)
+            assert parsed.arguments.named == {}
+            assert parsed.params == expected
+
+    def test_module_param_value_equals_form_and_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        program = self._program()
+        count = _module_param(program.module, "count", IntType(), env="TOOL_COUNT")
+        command = _command_with_module_params(program, count)
+
+        assert command.parse([]).params == {}
+        assert command.parse(["--count=3"]).params == {count.key: "3"}
+        monkeypatch.setenv("TOOL_COUNT", "4")
+        assert command.parse([]).params == {count.key: "4"}
+        assert "TOOL_COUNT" in command.render_help("agm exec tool.agl")
+
+    def test_module_option_param_supports_present_and_absent_forms(self) -> None:
+        program = self._program()
+        region = _module_param(program.module, "region", _option_type(TextType()))
+        command = _command_with_module_params(program, region)
+
+        assert command.parse(["--region", "eu"]).params == {
+            region.key: {"$case": "Some", "value": "eu"}
+        }
+        assert command.parse(["--no-region"]).params == {region.key: {"$case": "None"}}
+        assert command.parse([]).params == {}
+        with pytest.raises(ValueError):
+            command.parse(["--region", "eu", "--no-region"])
+
+    def test_ambiguous_module_spelling_is_a_usage_error(self) -> None:
+        program = self._program()
+        left = _module_param(ModuleId(("A", "one")), "trace", BoolType())
+        right = _module_param(ModuleId(("B", "two")), "trace", BoolType())
+        command = _command_with_module_params(program, left, right)
+
+        with pytest.raises(ValueError) as exc_info:
+            command.parse(["--trace"])
+
+        assert left.declaration_path in str(exc_info.value)
+        assert right.declaration_path in str(exc_info.value)
+        assert "--A.one.trace" in str(exc_info.value)
+        assert "--B.two.trace" in str(exc_info.value)
+        assert command.parse([]).params == {}
+
+    def test_ambiguous_short_module_spelling_is_a_usage_error(self) -> None:
+        program = self._program()
+        left = _module_param(ModuleId(("A", "one")), "trace", BoolType(), short="t")
+        right = _module_param(ModuleId(("B", "two")), "trace", BoolType(), short="t")
+        command = _command_with_module_params(program, left, right)
+
+        with pytest.raises(ValueError) as exc_info:
+            command.parse(["-t"])
+
+        assert left.declaration_path in str(exc_info.value)
+        assert right.declaration_path in str(exc_info.value)
+
+    @pytest.mark.parametrize("tokens", (["-t=ok"], ["-tok"]))
+    def test_ambiguous_short_spelling_with_a_suffix_reports_candidates(
+        self, tokens: list[str]
+    ) -> None:
+        program = self._program()
+        left = _module_param(ModuleId(("A", "one")), "trace", BoolType(), short="t")
+        right = _module_param(ModuleId(("B", "two")), "trace", BoolType(), short="t")
+        command = _command_with_module_params(program, left, right)
+
+        with pytest.raises(ValueError) as parse_error:
+            command.parse(tokens)
+        with pytest.raises(click.UsageError) as click_error:
+            command.command.main(args=tokens, standalone_mode=False)
+
+        for error in (parse_error.value, click_error.value):
+            assert left.declaration_path in str(error)
+            assert right.declaration_path in str(error)
+
+    def test_attached_value_for_a_preceding_short_option_owns_an_ambiguous_letter(self) -> None:
+        program = self._program()
+        tag = _module_param(program.module, "tag", TextType(), short="x")
+        left = _module_param(ModuleId(("A", "one")), "trace", BoolType(), short="t")
+        right = _module_param(ModuleId(("B", "two")), "trace", BoolType(), short="t")
+        command = _command_with_module_params(program, tag, left, right)
+
+        assert command.parse(["-xt"]).params == {tag.key: "t"}
+
+    def test_click_command_rejects_ambiguous_options_when_used_directly(self) -> None:
+        program = self._program()
+        left = _module_param(ModuleId(("A", "one")), "trace", BoolType())
+        right = _module_param(ModuleId(("B", "two")), "trace", BoolType())
+        command = _command_with_module_params(program, left, right)
+
+        with pytest.raises(click.UsageError) as exc_info:
+            command.command.main(args=["--trace"], standalone_mode=False)
+
+        assert left.declaration_path in str(exc_info.value)
+        assert right.declaration_path in str(exc_info.value)
+
+    def test_ambiguous_value_spelling_reports_candidates_before_click_rejects_it(self) -> None:
+        program = self._program()
+        left = _module_param(ModuleId(("A", "one")), "trace", TextType())
+        right = _module_param(ModuleId(("B", "two")), "trace", TextType())
+        command = _command_with_module_params(program, left, right)
+
+        with pytest.raises(ValueError) as exc_info:
+            command.parse(["--trace=hello"])
+
+        assert left.declaration_path in str(exc_info.value)
+        assert right.declaration_path in str(exc_info.value)
+        with pytest.raises(ValueError) as exc_info:
+            command.parse(["--trace", "hello"])
+
+        assert left.declaration_path in str(exc_info.value)
+        assert right.declaration_path in str(exc_info.value)
+
+    def test_ambiguous_spelling_is_not_taken_from_a_valid_option_value(self) -> None:
+        program = self._program()
+        tag = _module_param(program.module, "tag", TextType(), short="t")
+        left = _module_param(ModuleId(("A", "one")), "trace", TextType())
+        right = _module_param(ModuleId(("B", "two")), "trace", TextType())
+        command = _command_with_module_params(program, tag, left, right)
+
+        assert command.parse(["--tag", "--trace"]).params == {tag.key: "--trace"}
+        assert command.parse(["-t", "--trace"]).params == {tag.key: "--trace"}
+        assert command.parse(["-t--trace"]).params == {tag.key: "--trace"}
+
+    def test_direct_click_ambiguity_with_an_equals_value_reports_candidates(self) -> None:
+        program = self._program()
+        left = _module_param(ModuleId(("A", "one")), "trace", TextType())
+        right = _module_param(ModuleId(("B", "two")), "trace", TextType())
+        command = _command_with_module_params(program, left, right)
+
+        with pytest.raises(click.UsageError) as exc_info:
+            command.command.main(args=["--trace=hello"], standalone_mode=False)
+
+        assert left.declaration_path in str(exc_info.value)
+        assert right.declaration_path in str(exc_info.value)
+
+    def test_help_sections_and_completion_hide_hidden_module_params(self) -> None:
+        program = self._program()
+        own = _module_param(program.module, "verbose", BoolType(), doc="Own setting.")
+        logging = _module_param(
+            ModuleId(("A", "logging")), "trace", BoolType(), scope_path=("debug",), doc="Trace."
+        )
+        hidden = _module_param(ModuleId(("A", "logging")), "secret", TextType(), hidden=True)
+        command = _command_with_module_params(program, own, logging, hidden)
+
+        help_text = command.render_help("agm exec tool.agl")
+
+        assert "Parameters of tool" in help_text
+        assert "Parameters of A/logging" in help_text
+        assert "--verbose" in help_text
+        assert "--trace" in help_text
+        assert "--tool.verbose" not in help_text
+        assert "--logging.debug.trace" not in help_text
+        assert "--secret" not in help_text
+        spellings = command.option_spellings()
+        expected = {
+            "--verbose",
+            "--tool.verbose",
+            "--logging.debug.trace",
+            "--A.logging.debug.trace",
+        }
+        assert expected <= set(spellings)
+        assert "--secret" not in spellings
+
+    def test_surface_resolves_each_flag_independently(self) -> None:
+        program = self._program()
+        own = _module_param(program.module, "verbose", BoolType())
+        signature = _param("verbose", BoolType())
+        program = ProgramDeclInfo(
+            module=program.module,
+            scope_path=program.scope_path,
+            name=program.name,
+            node_id=program.node_id,
+            span=program.span,
+            parameters=(signature,),
+            is_entry=program.is_entry,
+            doc=program.doc,
+            closure=program.closure,
+        )
+        command = _command_with_module_params(program, own)
+
+        assert command.parse(["--tool.verbose"]).params == {own.key: True}
+        assert command.parse(["--verbose"]).arguments.named == {"verbose": True}
+
+    def test_negation_collision_keeps_unrelated_resolving_forms(self) -> None:
+        program = self._program()
+        foo = _module_param(program.module, "foo", BoolType())
+        no_foo = _module_param(program.module, "no-foo", BoolType())
+        command = _command_with_module_params(program, foo, no_foo)
+
+        assert command.parse(["--foo"]).params == {foo.key: True}
+        assert command.parse(["--no-no-foo"]).params == {no_foo.key: False}
+        with pytest.raises(ValueError) as exc_info:
+            command.parse(["--no-foo"])
+        assert foo.declaration_path in str(exc_info.value)
+        assert no_foo.declaration_path in str(exc_info.value)
+
+    def test_module_params_keep_each_resolving_polarity_independently(self) -> None:
+        program = self._program()
+        foo = _module_param(program.module, "foo", BoolType())
+        no_foo = _module_param(program.module, "no-foo", BoolType())
+        qualified_shadow = _module_param(
+            program.module, "shadow", TextType(), external="no-tool.foo"
+        )
+        command = _command_with_module_params(program, foo, no_foo, qualified_shadow)
+
+        assert command.parse(["--foo"]).params == {foo.key: True}
+        assert command.parse(["--no-no-foo"]).params == {no_foo.key: False}
+
+    def test_module_bool_keeps_only_a_resolving_negative_polarity(self) -> None:
+        program = self._program()
+        foo = _module_param(program.module, "foo", BoolType())
+        no_foo = _module_param(program.module, "no-foo", BoolType())
+        qualified_shadow = _module_param(
+            program.module, "shadow", TextType(), external="tool.no-foo"
+        )
+        command = _command_with_module_params(program, foo, no_foo, qualified_shadow)
+
+        assert command.parse(["--no-no-foo"]).params == {no_foo.key: False}
+
+    def test_module_bool_rejects_both_resolving_polarities(self) -> None:
+        program = self._program()
+        verbose = _module_param(program.module, "verbose", BoolType())
+        command = _command_with_module_params(program, verbose)
+
+        with pytest.raises(ValueError):
+            command.parse(["--verbose", "--no-verbose"])
+
+    def test_module_option_keeps_a_resolving_negative_polarity(self) -> None:
+        program = self._program()
+        region = _module_param(program.module, "region", _option_type(TextType()))
+        no_region = _module_param(program.module, "no-region", _option_type(TextType()))
+        qualified_shadow = _module_param(
+            program.module, "shadow", TextType(), external="tool.no-region"
+        )
+        command = _command_with_module_params(program, region, no_region, qualified_shadow)
+
+        assert command.parse(["--no-no-region"]).params == {no_region.key: {"$case": "None"}}
+
+    def test_host_shadowing_keeps_only_the_module_qualified_form(self) -> None:
+        program = self._program()
+        help_param = _module_param(program.module, "help", BoolType())
+        command = _command_with_module_params(program, help_param)
+
+        assert command.parse(["--tool.help"]).params == {help_param.key: True}
+        with pytest.raises(ProgramHelpRequested):
+            command.parse(["--help"])
+
+    def test_module_env_applies_when_only_its_negative_flag_resolves(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        program = self._program()
+        foo = _module_param(program.module, "foo", BoolType())
+        no_foo = _module_param(program.module, "no-foo", BoolType(), env="TOOL_NO_FOO")
+        qualified_shadow = _module_param(
+            program.module, "shadow", TextType(), external="tool.no-foo"
+        )
+        command = _command_with_module_params(program, foo, no_foo, qualified_shadow)
+        monkeypatch.setenv("TOOL_NO_FOO", "true")
+
+        assert command.parse([]).params == {no_foo.key: True}
+        assert command.parse(["--no-no-foo"]).params == {no_foo.key: False}
+
+    def test_module_env_applies_when_every_cli_spelling_is_shadowed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        program = self._program()
+        foo = _module_param(program.module, "foo", TextType(), env="TOOL_FOO")
+        result = build_program_command(
+            program,
+            frozenset({"--foo", "--no-foo", "--tool.foo", "--no-tool.foo"}),
+            (foo,),
+        )
+        assert isinstance(result, ProgramCommand)
+        monkeypatch.setenv("TOOL_FOO", "value")
+
+        assert result.parse([]).params == {foo.key: "value"}
+
+    def test_module_env_applies_independently_despite_an_ambiguous_bare_spelling(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        program = self._program()
+        left = _module_param(ModuleId(("A", "one")), "trace", BoolType(), env="LEFT_TRACE")
+        right = _module_param(ModuleId(("B", "two")), "trace", BoolType(), env="RIGHT_TRACE")
+        command = _command_with_module_params(program, left, right)
+        monkeypatch.setenv("LEFT_TRACE", "true")
+        monkeypatch.setenv("RIGHT_TRACE", "false")
+
+        assert command.parse([]).params == {left.key: True, right.key: False}
+
+    def test_all_hidden_module_params_omit_their_help_section(self) -> None:
+        program = self._program()
+        secret = _module_param(program.module, "secret", TextType(), hidden=True)
+        command = _command_with_module_params(program, secret)
+
+        help_text = command.render_help("agm exec tool.agl")
+
+        assert "Parameters of tool" not in help_text
+
+    def test_module_value_options_protect_their_separate_values(self) -> None:
+        program = self._program()
+        message = _module_param(program.module, "message", TextType(), short="m")
+        enabled = _module_param(program.module, "enabled", BoolType())
+        command = _command_with_module_params(program, message, enabled)
+
+        assert command.value_token_indexes(
+            ["--message", "--dry-run", "-m", "--no-stdlib", "--enabled"]
+        ) == frozenset({1, 3})
+
+    def test_program_arguments_stay_separate_without_module_param_values(self) -> None:
+        program = self._program()
+        module_param = _module_param(program.module, "verbose", BoolType())
+        signature = _param("name", TextType())
+        program = ProgramDeclInfo(
+            module=program.module,
+            scope_path=program.scope_path,
+            name=program.name,
+            node_id=program.node_id,
+            span=program.span,
+            parameters=(signature,),
+            is_entry=program.is_entry,
+            doc=program.doc,
+            closure=program.closure,
+        )
+        command = _command_with_module_params(program, module_param)
+
+        parsed = command.parse(["--name", "Ada"])
+
+        assert parsed.arguments.named == {"name": "Ada"}
+        assert parsed.params == {}
 
 
 class TestProgramCommandFor:

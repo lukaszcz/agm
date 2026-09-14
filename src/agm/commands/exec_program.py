@@ -145,10 +145,12 @@ class RegisteredProgramUsageError(Exception):
         self,
         message: str,
         program: ProgramDeclInfo | None = None,
+        command: ProgramCommand | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.program = program
+        self.command = command
 
 
 def _package_entry_segments(entry_path: Path | None, roots: RootSet) -> tuple[str, ...] | None:
@@ -605,7 +607,9 @@ def run(
     # parameter's own flag) is reported unconditionally.
     program_command: ProgramCommand | None = None
     if selected_program is not None:
-        command_result = build_program_command(selected_program, reserved_flags)
+        command_result = build_program_command(
+            selected_program, reserved_flags, discovery.params_for(selected_program)
+        )
         if isinstance(command_result, ProgramCommand):
             program_command = command_result
         else:
@@ -614,14 +618,14 @@ def run(
 
     if program_command is not None:
         try:
-            cli_arguments = program_command.parse(args.argument_tokens)
+            cli_arguments = program_command.parse(args.argument_tokens).arguments
         except ProgramHelpRequested as exc:
             # The command owns ``-h``/``--help``; the caller renders the help
             # its own invocation calls for, so it is given the declaration
             # behind the command as well.
             raise ProgramHelpRequested(exc.command, selected_program) from exc
         except ValueError as exc:
-            raise RegisteredProgramUsageError(str(exc), selected_program) from exc
+            raise RegisteredProgramUsageError(str(exc), selected_program, program_command) from exc
     elif args.argument_tokens:
         raise RegisteredProgramUsageError(
             f"unexpected argument: {args.argument_tokens[0]!r}", selected_program

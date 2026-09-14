@@ -163,13 +163,17 @@ def print_registered_command_help(command_path: Sequence[str]) -> bool:
     from agm.cli_support.program_options import REGISTERED_RESERVED_FLAGS, program_command_for
     from agm.commands.exec_program import registered_program_declaration
 
-    program = registered_program_declaration(registration.program, registration.package)
+    artifacts: list[ProgramDiscoveryArtifacts] = []
+    program = registered_program_declaration(
+        registration.program, registration.package, artifact_sink=artifacts
+    )
+    params = () if program is None or not artifacts else artifacts[0].discovery.params_for(program)
     print(
         registered_command_help(
             path_name,
             registration,
             program=program,
-            command=program_command_for(program, REGISTERED_RESERVED_FLAGS),
+            command=program_command_for(program, REGISTERED_RESERVED_FLAGS, params),
         ),
         end="",
     )
@@ -309,7 +313,12 @@ class RegisteredProgramCommand(TyperCommand):
         program, pipeline_cache = (
             self._discover_program_with_artifacts() if preview != args else (None, None)
         )
-        program_command = program_command_for(program, REGISTERED_RESERVED_FLAGS)
+        params = (
+            ()
+            if program is None or pipeline_cache is None
+            else pipeline_cache.discovery.params_for(program)
+        )
+        program_command = program_command_for(program, REGISTERED_RESERVED_FLAGS, params)
         protected, replacements = protect_host_option_values(args, program_command, host_options)
         remaining = super().parse_args(ctx, retain_end_of_options(protected, host_options))
         ctx.args[:] = [replacements.get(token, token) for token in ctx.args]
@@ -318,12 +327,6 @@ class RegisteredProgramCommand(TyperCommand):
         if pipeline_cache is not None:
             cast(dict[str, object], ctx.meta)["registered_pipeline_cache"] = pipeline_cache
         return [replacements.get(token, token) for token in remaining]
-
-    def _discover_program(self) -> "ProgramDeclInfo | None":
-        """Discover the referenced ``program def``'s declaration, or ``None``."""
-        from agm.commands.exec_program import registered_program_declaration
-
-        return registered_program_declaration(self._program, self._registration.package)
 
     def _discover_program_with_artifacts(
         self,
@@ -353,12 +356,20 @@ class RegisteredProgramCommand(TyperCommand):
             # This is the first point at which an unknown command has been proven
             # to be registered, so AgL remains unloaded for all builtin commands.
             cached_program = metadata.pop("registered_program", None)
-            program = (
-                cast("ProgramDeclInfo", cached_program)
-                if cached_program is not None
-                else self._discover_program()
+            cached_pipeline = metadata.pop("registered_pipeline_cache", None)
+            program: ProgramDeclInfo | None
+            pipeline_cache: ProgramDiscoveryArtifacts | None
+            if cached_program is not None:
+                program = cast("ProgramDeclInfo", cached_program)
+                pipeline_cache = cast("ProgramDiscoveryArtifacts | None", cached_pipeline)
+            else:
+                program, pipeline_cache = self._discover_program_with_artifacts()
+            params = (
+                ()
+                if program is None or pipeline_cache is None
+                else pipeline_cache.discovery.params_for(program)
             )
-            command = program_command_for(program, REGISTERED_RESERVED_FLAGS)
+            command = program_command_for(program, REGISTERED_RESERVED_FLAGS, params)
             if program_help_requested(ctx.args, command):
                 print(
                     self._help(program=program, command=command),
@@ -396,7 +407,11 @@ class RegisteredProgramCommand(TyperCommand):
             print(
                 self._help(
                     program=exc.program,
-                    command=program_command_for(exc.program, REGISTERED_RESERVED_FLAGS),
+                    command=(
+                        exc.command
+                        if exc.command is not None
+                        else program_command_for(exc.program, REGISTERED_RESERVED_FLAGS)
+                    ),
                 ),
                 end="",
                 file=sys.stderr,

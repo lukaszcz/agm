@@ -3123,7 +3123,7 @@ class TestTemplates:
         assert isinstance(interpolation.expr.callee, VarRef)
         assert interpolation.expr.callee.name == "getenv"
         assert interpolation.expr.callee.qualifier is not None
-        assert interpolation.expr.callee.qualifier.route_segments == ("std", "env")
+        assert interpolation.expr.callee.qualifier.route_segments == ("std", "prelude")
         qualifier_segment = interpolation.expr.callee.qualifier.segments[0]
         name_offset = source.index("HOME")
         assert (

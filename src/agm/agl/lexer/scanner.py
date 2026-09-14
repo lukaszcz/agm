@@ -572,7 +572,7 @@ class _Scanner:
             yield from self._scan_environment_interpolation(environment_name)
 
     def _scan_environment_interpolation(self, name: str) -> Iterator[Token]:
-        """Desugar an environment hole's body to ``std/env::getenv(\"NAME\")``.
+        """Desugar an environment hole's body to ``std/prelude::getenv(\"NAME\")``.
 
         The synthetic expression uses the source span of its compact spelling.
         It consequently has the same scope, type, and runtime behavior as the
@@ -603,7 +603,7 @@ class _Scanner:
         # The qualifier transformer removes the two source characters occupied
         # by ``::`` from every MODQUAL span.  Give this synthetic token an
         # equivalent width inside the hole so its resulting span stays valid.
-        yield token(MODQUAL, "std/env", name_start, name_start + 2)
+        yield token(MODQUAL, "std/prelude", name_start, name_start + 2)
         yield token(NAME, "getenv", name_start, name_start)
         yield token(LPAR, "(", name_start, name_start)
         yield token(TEMPLATE_START, '"', name_start, name_start)

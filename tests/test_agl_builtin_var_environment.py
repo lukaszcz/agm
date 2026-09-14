@@ -188,6 +188,16 @@ def test_repl_reuses_its_startup_environment_snapshot() -> None:
     assert session.eval_entry('getenv("REPL_ONLY")').value == TextValue("changed")
 
 
+def test_repl_environment_hole_needs_no_import() -> None:
+    session = ReplSession(stdlib_root=_STDLIB, process_environment={"PROJ_DIR": "/proj"})
+
+    assert session.open() == ()
+    result = session.eval_entry('"${PROJ_DIR}"')
+
+    assert result.ok, result.diagnostics
+    assert result.value == TextValue("/proj")
+
+
 def test_non_stdlib_library_builtin_var_is_rejected(tmp_path: Path) -> None:
     (tmp_path / "library.agl").write_text("builtin var value: int = 1\n", encoding="utf-8")
 

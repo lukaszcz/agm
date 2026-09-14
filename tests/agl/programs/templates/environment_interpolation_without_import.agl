@@ -1,0 +1,13 @@
+def getenv(name: text) -> text = "shadowed %{name}"
+
+def label(key: text) -> text =
+  let getenv = 0
+  "%{key}=${VALUE} (%{getenv})"
+
+program def main(mode: int) -> unit =
+  case mode of
+    | 1 =>
+        print label("value")
+        print getenv("VALUE")
+    | _ =>
+        print '''missing=${MISSING}'''

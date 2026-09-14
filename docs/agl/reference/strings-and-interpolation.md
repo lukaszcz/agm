@@ -28,10 +28,11 @@ argument, an `exec` command, or any other position. A percent sign not
 followed by `{` is literal; `\%` produces a literal percent sign.
 
 An environment hole `${NAME}` is shorthand for
-`%{std/env::getenv("NAME")}`. It uses the environment snapshot supplied to
+`%{std/prelude::getenv("NAME")}`, so it needs no import and a local binding
+named `getenv` does not affect it. It uses the environment snapshot supplied to
 the running program, and a missing variable raises the same exception as that
-call. `NAME` is an AgL identifier, and the `std/env` module must be available
-to the source just as it must be for the explicit form.
+call. `NAME` is an AgL identifier. Environment holes are available wherever the
+prelude is.
 
 Use `\${` to write a literal `${` in a string template.
 

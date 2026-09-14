@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "environment_holes_ignore_local_getenv_bindings",
+      "params": {"mode": 1},
+      "process_environment": {"VALUE": "from environment"},
+      "expect": {
+        "stdout": "value=from environment (0)\nshadowed VALUE\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "missing_environment_holes_raise_without_import",
+      "params": {"mode": 2},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "KeyError", "fields": {"key": "MISSING"}},
+        "calls": {}
+      }
+    }
+  ]
+}

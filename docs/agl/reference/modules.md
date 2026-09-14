@@ -274,14 +274,14 @@ other module. Two have a language-level role:
 - `std/prelude` is the prelude described above. It declares nothing itself: it
   re-exports the modules declaring the types, exceptions, and built-ins the
   language itself refers to, together with the generic sum and product types,
-  the receiver scopes that make builtin methods available, and `std/path`'s
-  `path` type.
+  the receiver scopes that make builtin methods available, `std/path`'s
+  `path` type, and `std/env`'s `getenv`, which environment holes read.
 - `std/config` exposes the host engine settings as `builtin var` bindings; see
   [Host environment](host-environment.md).
 
 Every other `std/*` module carries no special status; the prelude re-exports
 the first six rows below in full, the receiver scopes from the following two
-rows, and `std/path`'s `path` type alone. The rest are imported explicitly:
+rows, `std/path`'s `path` type alone, and `std/env`'s `getenv` alone. The rest are imported explicitly:
 
 | Module | Provides |
 | ------ | -------- |

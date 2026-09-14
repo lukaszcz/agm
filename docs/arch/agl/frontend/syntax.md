@@ -4,6 +4,8 @@ The hand-written lexer handles layout (INDENT/DEDENT), string templates with `%{
 
 Single- and triple-quoted templates share hole recognition and token emission; raw tails reuse the expression-hole scanner. Environment holes scan names with the shared identifier rules and desugar to expression tokens. Triple-quoted dedenting measures indentation across literal/hole segments, assembles retained line slices, and maps only literal boundaries, preserving hole tokens' source positions without per-character position tables.
 
+The lexer's escape, number, identifier, and environment-hole scanning rules live in `agl/value_syntax/lexical.py`, a leaf below the lexer that also backs the value-syntax reader (`agl/value_syntax/reader.py`), so both scan AgL literals identically.
+
 ## Keywords
 
 `keywords.py` is the single inventory of reserved words and of the soft keywords, which are ordinary names outside their promotion window: the header words (`import`, `use`, `export`, `hiding`, `scope`, `end`) outside their declaration contexts, and the operator words (`and`, `or`, `not`, `is`, `in`, `to`, `downto`, `step`, `with`) outside operator position, which is what lets a member be named `or` or `not`. The lexer, the grammar's token contract, the REPL highlighter, and the editor modes all derive from it rather than repeating spellings.

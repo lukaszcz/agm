@@ -103,6 +103,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
                 "agm.agl.semantics",
                 "agm.agl.syntax",
                 "agm.agl.typecheck",
+                "agm.agl.value_syntax",
             ),
         ),
         (
@@ -177,6 +178,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
                 "agm.agl.syntax.spans",
                 "agm.agl.typecheck.env",
                 "agm.agl.type_schema",
+                "agm.agl.value_syntax",
                 "agm.agl.zones",
             ),
         ),
@@ -216,6 +218,7 @@ def _agm_imports_of_file(path: Path) -> list[str]:
         ("zones.py", ()),
         ("attributes.py", ("agm.agl.zones", "agm.command_catalog")),
         ("artifact_storage.py", ()),
+        ("keywords.py", ("agm.util.ident", "agm.raw_tail_catalog")),
     ],
 )
 def test_shared_leaves_sit_below_every_pass(leaf: str, allowed: tuple[str, ...]) -> None:
@@ -226,7 +229,8 @@ def test_shared_leaves_sit_below_every_pass(leaf: str, allowed: tuple[str, ...])
     command-path rule its ``@command`` entry shares with a package manifest,
     both pure data leaves, and nothing else; ``artifact_storage`` is the disk
     envelope every disk cache writes through and, like ``zones``, imports
-    nothing under ``agm``.
+    nothing under ``agm``; ``keywords`` names only the identifier grammar and
+    raw-tail spelling leaves its plain-name predicate cross-checks.
     """
     violations = [
         f"{leaf} imports {module}"
@@ -248,6 +252,18 @@ def test_ir_all_agm_dependencies_are_explicit() -> None:
     violations = [
         f"{path.relative_to(AGL_ROOT)} imports {module}"
         for path, module in _agm_imports("ir")
+        if not _is_allowed(module, allowed)
+    ]
+
+    assert violations == []
+
+
+def test_value_syntax_all_agm_dependencies_are_explicit() -> None:
+    """Keep the value-syntax leaf on shared vocabulary only, below the frontend."""
+    allowed = ("agm.util", "agm.agl.keywords", "agm.agl.value_syntax")
+    violations = [
+        f"{path.relative_to(AGL_ROOT)} imports {module}"
+        for path, module in _agm_imports("value_syntax")
         if not _is_allowed(module, allowed)
     ]
 

@@ -5,8 +5,8 @@ from __future__ import annotations
 from agm.agent.spec import AGENT_SPECS, AgentClaude, AgentCodex, AgentCommand, AgentSpec
 from agm.agent.values import parse_agent_shorthand
 from agm.agl.parser import AglSyntaxError, parse_program
-from agm.agl.semantics.text_literal import quote_text
 from agm.agl.syntax import Call, VarRef
+from agm.agl.value_syntax.lexical import quote_text
 
 __all__ = ["normalize_agent_source"]
 

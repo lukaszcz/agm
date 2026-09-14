@@ -87,9 +87,11 @@ from agm.agl.lexer.tokens import (
     TEMPLATE_START,
     THIN_ARROW,
 )
-from agm.agl.semantics.text_literal import ESCAPE_DECODE, INTERP_OPEN, INTERP_TRIGGER
+from agm.agl.value_syntax import lexical
+from agm.agl.value_syntax.errors import ValueSyntaxError
 from agm.raw_tail_catalog import RAW_TAIL_BUILTINS
-from agm.util.ident import IDENT_STOP, is_identifier_start
+from agm.util.ident import is_identifier_start
+from agm.util.interp import INTERP_OPEN, INTERP_TRIGGER
 from agm.util.text import normalize_newlines
 
 # ---------------------------------------------------------------------------
@@ -110,11 +112,6 @@ _TAB_LEN = 4
 # Characters that end a verbatim run inside a raw-tail payload: ``%`` may open a
 # hole and ``\`` may escape one.  Everything between them is copied wholesale.
 _RAW_RUN_STOP_RE = re.compile(rf"[\\{re.escape(INTERP_TRIGGER)}]")
-
-
-def _is_ascii_digit(ch: str) -> bool:
-    """Return True iff *ch* is an ASCII digit (``0``–``9``)."""
-    return "0" <= ch <= "9"
 
 
 # Single-char operator table (must not overlap with maximal-munch multi-char ops).
@@ -169,10 +166,6 @@ def _is_operator_name_char(ch: str) -> bool:
     if ch == "" or ch.isspace() or ch in _OPERATOR_NAME_EXCLUDED_CHARS:
         return False
     return unicodedata.category(ch)[0] in ("P", "S")
-
-
-# JSON escape decoding table (excluding \uXXXX, handled separately)
-_JSON_ESCAPES: dict[str, str] = dict(ESCAPE_DECODE)
 
 
 # ---------------------------------------------------------------------------
@@ -441,41 +434,28 @@ class _Scanner:
     # Escape decoding
     # ------------------------------------------------------------------
 
-    def _decode_escape(self) -> str:
-        """Decode a backslash escape; the ``\\`` has already been consumed.
+    def _decode_template_escape(self) -> str:
+        """Decode the escape at the cursor (which sits at the backslash).
 
-        Returns the decoded character(s).
-        Raises :class:`LexError` for unknown escapes.
+        Delegates the escape rule to :mod:`agm.agl.value_syntax.lexical`, then
+        replays `_advance` over the consumed characters so line/column
+        tracking and TAB advisories apply. Raises :class:`LexError` for
+        unknown or malformed escapes.
         """
-        esc_line = self._line
-        esc_col = self._col
-        # The backslash sits one position before the current scan position.
-        esc_offset = self._pos - 1
-        if self._at_end():
-            span = SourceSpan(esc_line, esc_col, esc_line, esc_col, esc_offset, self._pos)
-            raise LexError("Unexpected end of input after backslash", span=span)
-        ch = self._advance()
-        if ch in _JSON_ESCAPES:
-            return _JSON_ESCAPES[ch]
-        if ch == "u":
-            # \uXXXX
-            hex_digits = ""
-            for _ in range(4):
-                if self._at_end():
-                    span = SourceSpan(
-                        esc_line, esc_col, self._line, self._col, esc_offset, self._pos
-                    )
-                    raise LexError("Incomplete \\uXXXX escape", span=span)
-                d = self._advance()
-                if d not in "0123456789abcdefABCDEF":
-                    span = SourceSpan(
-                        esc_line, esc_col, self._line, self._col, esc_offset, self._pos
-                    )
-                    raise LexError(f"Invalid hex digit in \\uXXXX escape: {d!r}", span=span)
-                hex_digits += d
-            return chr(int(hex_digits, 16))
-        span = SourceSpan(esc_line, esc_col, self._line, self._col, esc_offset, self._pos)
-        raise LexError(f"Unknown escape sequence: \\{ch}", span=span)
+        backslash_offset = self._pos
+        try:
+            decoded, end_offset = lexical.decode_escape(self._src, backslash_offset)
+        except ValueSyntaxError as exc:
+            self._advance()  # backslash
+            esc_line, esc_col = self._line, self._col
+            while self._pos < exc.end:
+                self._advance()
+            span = SourceSpan(esc_line, esc_col, self._line, self._col, exc.start, self._pos)
+            raise LexError(exc.message, span=span) from None
+        in_string = decoded == "${"
+        while self._pos < end_offset:
+            self._advance(in_string=in_string)
+        return decoded
 
     # ------------------------------------------------------------------
     # Template sub-scanner
@@ -561,27 +541,11 @@ class _Scanner:
                 self._advance(in_string=True)
                 buf.append(ch)
 
-    def _environment_interpolation_name(self) -> str | None:
-        """Return the environment name when the cursor starts a ``${NAME}`` hole."""
-        if not self._src.startswith("${", self._pos):
-            return None
-        start = self._pos + 2
-        if start == len(self._src) or not is_identifier_start(self._src[start]):
-            return None
-        end = start + 1
-        # Stop at the first delimiter, so malformed holes cannot repeatedly
-        # search or copy overlapping suffixes of the remaining source.
-        while end < len(self._src) and self._src[end] not in IDENT_STOP:
-            end += 1
-        if end < len(self._src) and self._src[end] == "}":
-            return self._src[start:end]
-        return None
-
     def _template_interpolation(self) -> Iterator[Token] | None:
         """Recognize either ordinary-template hole without advancing the cursor."""
         if self._src.startswith(INTERP_OPEN, self._pos):
             return self._scan_interpolation()
-        name = self._environment_interpolation_name()
+        name = lexical.environment_hole_name(self._src, self._pos)
         return self._scan_interpolation(name) if name is not None else None
 
     def _scan_interpolation(self, environment_name: str | None = None) -> Iterator[Token]:
@@ -606,16 +570,6 @@ class _Scanner:
             yield from self._scan_interp_code()
         else:
             yield from self._scan_environment_interpolation(environment_name)
-
-    def _decode_template_escape(self) -> str:
-        """Decode the escape at the cursor in an ordinary string template."""
-        if self._src.startswith("${", self._pos + 1):
-            self._advance(in_string=True)
-            self._advance(in_string=True)
-            self._advance(in_string=True)
-            return "${"
-        self._advance()
-        return self._decode_escape()
 
     def _scan_environment_interpolation(self, name: str) -> Iterator[Token]:
         """Desugar an environment hole's body to ``std/env::getenv(\"NAME\")``.
@@ -1139,7 +1093,9 @@ class _Scanner:
         # ``!=``, ``<=``, ``>=``, field access ``.``, etc.) still lex as operators
         # when they appear as standalone reserved spellings.
         if is_identifier_start(ch):
-            while not self._at_end() and self._peek() not in IDENT_STOP:
+            end = lexical.scan_name(self._src, start_pos)
+            assert end is not None
+            while self._pos < end:
                 self._advance()
             word = self._src[start_pos : self._pos]
             if word in KEYWORDS:
@@ -1173,20 +1129,14 @@ class _Scanner:
         # the scan is restricted to the ASCII range.  Non-ASCII digits therefore
         # fall through to the ``Unexpected character`` path (or, when they follow
         # a letter, become part of a greedy identifier — see ``IDENT_STOP``).
-        if _is_ascii_digit(ch):
-            while not self._at_end() and _is_ascii_digit(self._peek()):
+        if lexical.is_ascii_digit(ch):
+            is_decimal, end = lexical.scan_number(self._src, start_pos)
+            while self._pos < end:
                 self._advance()
-            if self._peek() == "." and (
-                self._pos + 1 < len(self._src) and _is_ascii_digit(self._src[self._pos + 1])
-            ):
-                self._advance()  # '.'
-                while not self._at_end() and _is_ascii_digit(self._peek()):
-                    self._advance()
-                value = self._src[start_pos : self._pos]
-                yield self._make_token(DECIMAL, value, start_pos, start_line, start_col)
-            else:
-                value = self._src[start_pos : self._pos]
-                yield self._make_token(INT, value, start_pos, start_line, start_col)
+            value = self._src[start_pos : self._pos]
+            yield self._make_token(
+                DECIMAL if is_decimal else INT, value, start_pos, start_line, start_col
+            )
             return
 
         # Strings/templates
@@ -1197,8 +1147,8 @@ class _Scanner:
             yield from self._scan_template(start_pos, start_line, start_col, quote="'")
             return
 
-        if ch == "?" and _is_ascii_digit(self._peek()):
-            while not self._at_end() and _is_ascii_digit(self._peek()):
+        if ch == "?" and lexical.is_ascii_digit(self._peek()):
+            while not self._at_end() and lexical.is_ascii_digit(self._peek()):
                 self._advance()
             yield self._make_token(
                 PLACEHOLDER_NUM,

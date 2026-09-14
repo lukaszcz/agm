@@ -7,14 +7,11 @@ import pytest
 from agm.agl.lexer import tokenize
 from agm.agl.matchcompile import LiteralKind, LiteralWitness, render_witness
 from agm.agl.runtime.render import render_value
-from agm.agl.semantics.text_literal import (
-    ESCAPE_DECODE,
-    ESCAPE_ENCODE,
-    INTERP_OPEN,
-    INTERP_TRIGGER,
-    quote_text,
-)
 from agm.agl.semantics.values import TextValue
+from agm.agl.value_syntax.lexical import ESCAPE_DECODE, ESCAPE_ENCODE, quote_text
+from agm.agl.value_syntax.nodes import TextNode
+from agm.agl.value_syntax.reader import read_value
+from agm.util.interp import INTERP_OPEN, INTERP_TRIGGER
 
 _TEXT_CORPUS = (
     '"',
@@ -55,6 +52,14 @@ def test_quoted_text_round_trips_through_the_template_scanner(value: str) -> Non
 
 def test_quote_text_escapes_environment_interpolation() -> None:
     assert quote_text("${HOME}") == r'"\${HOME}"'
+
+
+@pytest.mark.parametrize("value", _TEXT_CORPUS)
+def test_quoted_text_round_trips_through_the_value_syntax_reader(value: str) -> None:
+    """The shared encoder produces a quoted literal the value-syntax reader reads back."""
+    node = read_value(quote_text(value))
+    assert isinstance(node, TextNode)
+    assert node.value == value
 
 
 def test_text_literal_surface_constants_define_escape_directions() -> None:

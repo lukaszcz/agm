@@ -7853,6 +7853,33 @@ class TestPackageInstall:
         assert uninstalled.returncode == 0
         assert unknown.returncode != 0
 
+    def test_registered_commands_accept_exec_run_time_options(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        home = tmp_path / "agm-home"
+        env["AGM_HOME"] = str(home)
+        package = self._write_tools_command_package(tmp_path, home)
+        trace = tmp_path / "trace.jsonl"
+
+        run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
+        overridden = run_agm(
+            ["publish", "--no-strict-json", "--log-file", str(trace), "--subject", "flag"],
+            env=env,
+            cwd=tmp_path,
+        )
+        timed = run_agm(
+            ["publish", "--timeout", "5s", "--max-call-depth", "64", "--no-log"],
+            env=env,
+            cwd=tmp_path,
+        )
+        conflicting = run_agm(["publish", "--log", "--no-log"], env=env, cwd=tmp_path, check=False)
+
+        assert overridden.stdout == "flag\nfalse\n"
+        assert trace.stat().st_size > 0
+        assert timed.stdout == "configured\ntrue\n"
+        assert conflicting.returncode == 1
+        assert conflicting.stdout == ""
+
     def test_registered_commands_honor_program_value_arguments_and_config(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

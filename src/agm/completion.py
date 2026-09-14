@@ -255,15 +255,20 @@ def registered_command_completion(
 
 @_completes_quietly
 def registered_command_param_completion(
-    command_path: Sequence[str], incomplete: str
+    command_path: Sequence[str], incomplete: str, ctx: click.Context
 ) -> list[CompletionItem]:
     """Complete parameters for an already resolved registered command.
 
-    Combines ``--dry-run`` with the referenced program's own value-parameter
-    option flags (and their ``--no-`` forms), the same mechanism
-    ``registered_command_help`` renders.
+    *ctx* is a context under the ``agm`` group. Combines ``--dry-run`` and
+    ``agm exec``'s run-time options with the
+    referenced program's own value-parameter option flags (and their ``--no-``
+    forms), the same mechanism ``registered_command_help`` renders.
     """
-    from agm.cli_dispatch import load_command_index, resolve_registered_command
+    from agm.cli_dispatch import (
+        load_command_index,
+        registered_run_options,
+        resolve_registered_command,
+    )
     from agm.cli_support.program_options import REGISTERED_RESERVED_FLAGS, program_command_for
     from agm.commands.exec_program import registered_program_declaration
 
@@ -280,6 +285,11 @@ def registered_command_param_completion(
     program_command = program_command_for(declaration, REGISTERED_RESERVED_FLAGS)
     flags = (
         "--dry-run",
+        *(
+            flag
+            for option in registered_run_options(ctx)
+            for flag in (*option.opts, *option.secondary_opts)
+        ),
         *(() if program_command is None else program_command.option_spellings()),
     )
     return [CompletionItem(flag) for flag in flags if flag.startswith(incomplete)]

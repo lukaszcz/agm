@@ -175,9 +175,14 @@ An active package's commands run as `agm COMMAND ...` (longest matching path win
 - **Arguments.** Value parameters project onto the command's CLI as for `agm exec`:
   positional-capable parameters fill trailing words in order, name-addressable ones take
   `--name VALUE` (`--name`/`--no-name` for `bool`). See
-  [Program arguments](agl.md#program-arguments). A registered command reserves only `--dry-run`
-  and `-h`/`--help`, so its parameters may reuse spellings `agm exec` itself reserves, such as
-  `--module-path` or `-p`; running that program through `agm exec` instead still rejects them.
+  [Program arguments](agl.md#program-arguments). A registered command reserves its run-time
+  options, `--dry-run`, and `-h`/`--help`; its parameters may reuse the other spellings
+  `agm exec` reserves, such as `--module-path` or `-p`, which running that program through
+  `agm exec` instead still rejects.
+- **Run-time options.** `agm exec`'s engine-setting flags (`--strict-json`/`--no-strict-json`,
+  `--default-agent`, `--timeout`/`--no-timeout`, `--log`/`--no-log`,
+  `--log-file`/`--no-log-file`) and `--max-call-depth` work as for
+  [`agm exec`](agl.md#agm-exec), anywhere after the command path.
 - **Configuration.** Omitted arguments and engine settings come from the program's qualified table
   (e.g. `[review-tools.main.review]` for `review-tools/main::review`) or the registered command
   path (`[pr-review]`, or `[dev.review]` for command `dev review`). Both name the same program

@@ -25,6 +25,15 @@ def _make_ctx(**params: Any) -> click.Context:
     return ctx
 
 
+def _root_ctx() -> click.Context:
+    """Create a Context for the ``agm`` group, as shell completion resolves it."""
+    from typer.main import get_command
+
+    import agm.cli as cli
+
+    return click.Context(get_command(cli.app))
+
+
 def test_complete_registered_commands_reads_active_index(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -230,7 +239,9 @@ def test_registered_param_completion_degrades_on_unknown_or_unavailable_commands
     monkeypatch.setattr(completion, "current_config_context", lambda: context)
     monkeypatch.setattr(dispatch, "load_command_index", lambda **_: ActivationIndex())
 
-    assert completion.registered_command_param_completion(["tools", "lint"], "--") == []
+    assert (
+        completion.registered_command_param_completion(["tools", "lint"], "--", _root_ctx()) == []
+    )
 
     monkeypatch.setattr(
         dispatch,
@@ -238,7 +249,9 @@ def test_registered_param_completion_degrades_on_unknown_or_unavailable_commands
         lambda **_: (_ for _ in ()).throw(RuntimeError("unavailable")),
     )
 
-    assert completion.registered_command_param_completion(["tools", "lint"], "--") == []
+    assert (
+        completion.registered_command_param_completion(["tools", "lint"], "--", _root_ctx()) == []
+    )
 
 
 def test_registered_command_param_completion_offers_program_value_argument_flags(
@@ -288,13 +301,18 @@ version = "1.0.0"
 
     values = [
         item.value
-        for item in completion.registered_command_param_completion(["tools", "lint"], "--")
+        for item in completion.registered_command_param_completion(
+            ["tools", "lint"], "--", _root_ctx()
+        )
     ]
 
     assert "--tag" in values
     assert "--verbose" in values
     assert "--no-verbose" in values
     assert "--dry-run" in values
+    assert "--log-file" in values
+    assert "--no-timeout" in values
+    assert "--module-path" not in values
 
 
 def test_complete_registered_commands_silently_degrades_on_bad_index(

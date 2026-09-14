@@ -47,8 +47,9 @@ the declared name, so the shared binder only ever sees declared names.
 Each surface a program runs under reserves its own flag inventory.
 ``EXEC_RESERVED_FLAGS`` is ``agm exec``'s: the flags it declares itself
 (``--help``, ``-p``, ``--program``, …) union every engine-key
-flag. ``REGISTERED_RESERVED_FLAGS`` is a package-registered command's: only
-``--dry-run`` beside the help flags every program command owns. A program
+flag. ``REGISTERED_RESERVED_FLAGS`` is a package-registered command's: its
+``agm exec`` run-time options (``REGISTERED_RUN_FLAGS``) and ``--dry-run``
+beside the help flags every program command owns. A program
 parameter can never be projected onto its surface's reserved flags —
 :func:`build_program_command` reports the collision instead.
 
@@ -120,6 +121,7 @@ __all__ = [
     "ProgramOptionError",
     "ProjectedOption",
     "REGISTERED_RESERVED_FLAGS",
+    "REGISTERED_RUN_FLAGS",
     "ReservedFlagError",
     "ValueForm",
     "build_program_command",
@@ -357,11 +359,17 @@ _BUILTIN_EXEC_FLAGS: frozenset[str] = frozenset(
 # underscore/hyphen normalisation.
 EXEC_RESERVED_FLAGS: frozenset[str] = _BUILTIN_EXEC_FLAGS | engine_key_flags()
 
-# A package-registered command's reserved flag strings. It declares only
-# ``--dry-run`` (``agm.cli_dispatch``, a layer above this one, so mirrored
-# here like ``_BUILTIN_EXEC_FLAGS``) and takes no engine-key flags, so its
-# program may claim ``agm exec``'s other spellings.
-REGISTERED_RESERVED_FLAGS: frozenset[str] = frozenset({*HELP_FLAGS, "--dry-run"})
+# ``agm exec``'s run-time options a package-registered command parses too: every
+# engine-key flag and ``--max-call-depth``. ``agm.cli_dispatch`` takes the options
+# themselves from ``agm exec``'s command by these spellings.
+REGISTERED_RUN_FLAGS: frozenset[str] = engine_key_flags() | {"--max-call-depth"}
+
+# A package-registered command's reserved flag strings: its run-time options,
+# ``--dry-run`` and help. Its program may claim ``agm exec``'s other spellings
+# (``-p``, ``--module-path``, …), which select sources a registration fixes.
+REGISTERED_RESERVED_FLAGS: frozenset[str] = (
+    frozenset({*HELP_FLAGS, "--dry-run"}) | REGISTERED_RUN_FLAGS
+)
 
 # The end-of-options marker. ``agm exec`` consumes one only when it is what
 # names the FILE; any other marker belongs to the program and reaches it.

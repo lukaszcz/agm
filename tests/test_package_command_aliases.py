@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import click
 import pytest
 from click.testing import CliRunner
 from typer.main import get_command
@@ -154,7 +155,9 @@ def test_group_help_remains_available_when_source_is_missing(command_package: Pa
 def test_group_option_completion(command_package: Path, prefix: str, expected: list[str]) -> None:
     from agm.completion import registered_command_param_completion
 
-    assert [item.value for item in registered_command_param_completion(["dev"], prefix)] == expected
+    root = click.Context(get_command(app))
+    completions = registered_command_param_completion(["dev"], prefix, root)
+    assert [item.value for item in completions] == expected
 
 
 def test_unknown_command_help_is_rejected(command_package: Path) -> None:

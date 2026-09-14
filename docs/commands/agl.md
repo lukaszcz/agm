@@ -170,10 +170,10 @@ program for execution fails, while `--help` and shell completion silently fall b
   `--log`/`--no-log`, `--log-file`/`--no-log-file` (so `no-log: text` collides);
 - other parameters' projected flags (`cache: bool`'s `--no-cache` vs `no-cache: bool`).
 
-A [registered package command](pkg.md#registered-commands) reserves only `--dry-run` and
-`-h`/`--help`. Because of the help fallback, `agm exec FILE --nope -h` prints `agm exec`'s help
-(exit 0) for a colliding program, but is a usage error (exit 1) when the program's own parser
-exists to reject `--nope`.
+A [registered package command](pkg.md#registered-commands) reserves `--dry-run`, `-h`/`--help`,
+and its run-time options: the engine-setting flags and `--max-call-depth`. Because of the help
+fallback, `agm exec FILE --nope -h` prints `agm exec`'s help (exit 0) for a colliding program, but
+is a usage error (exit 1) when the program's own parser exists to reject `--nope`.
 
 **Tokens.**
 

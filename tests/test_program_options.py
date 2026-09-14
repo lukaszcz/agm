@@ -105,6 +105,27 @@ def _program(*params: ProgramParamInfo, doc: str | None = None) -> ProgramDeclIn
     )
 
 
+def _registered_command_flags() -> set[str]:
+    """Return every option spelling a registered command declares."""
+    import typer.main
+
+    from agm import cli
+    from agm.cli_dispatch import RegisteredProgramCommand, registered_run_options
+    from agm.packages.activation import CommandRegistration
+
+    command = RegisteredProgramCommand(
+        "tools run",
+        CommandRegistration("tools", "tools/run::main"),
+        registered_run_options(click.Context(typer.main.get_command(cli.app))),
+    )
+    return {
+        flag
+        for param in command.params
+        if isinstance(param, click.Option)
+        for flag in (*param.opts, *param.secondary_opts)
+    }
+
+
 def _command(*params: ProgramParamInfo, doc: str | None = None) -> ProgramCommand:
     result = build_program_command(_program(*params, doc=doc), EXEC_RESERVED_FLAGS)
     assert isinstance(result, ProgramCommand)
@@ -231,20 +252,10 @@ class TestEngineKeyFlags:
 
     def test_every_flag_a_registered_command_declares_is_reserved(self) -> None:
         """Derived from the registered command's own declarations, as for ``agm exec``."""
-        from agm.cli_dispatch import RegisteredProgramCommand
-        from agm.packages.activation import CommandRegistration
+        assert _registered_command_flags() <= REGISTERED_RESERVED_FLAGS
 
-        command = RegisteredProgramCommand(
-            "tools run", CommandRegistration("tools", "tools/run::main")
-        )
-        declared = {
-            flag
-            for param in command.params
-            if isinstance(param, click.Option)
-            for flag in (*param.opts, *param.secondary_opts)
-        }
-
-        assert declared <= REGISTERED_RESERVED_FLAGS
+    def test_a_registered_command_declares_every_run_time_exec_flag(self) -> None:
+        assert engine_key_flags() | {"--max-call-depth"} <= _registered_command_flags()
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +376,15 @@ class TestBuildProgramCommand:
         )
 
         assert isinstance(result, ProgramCommand)
+
+    @pytest.mark.parametrize("flag", ["max-call-depth", "log-file", "no-timeout"])
+    def test_run_time_exec_flags_are_reserved_on_a_registered_command(self, flag: str) -> None:
+        result = build_program_command(
+            _program(_param("value", TextType(), external=flag)), REGISTERED_RESERVED_FLAGS
+        )
+
+        assert isinstance(result, ReservedFlagError)
+        assert result.flag == f"--{flag}"
 
     def test_exec_leaves_the_agent_flag_to_the_program(self) -> None:
         result = build_program_command(

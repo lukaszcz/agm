@@ -45,6 +45,7 @@ from agm.cli_support.args import (
     WorktreeNewArgs,
     WorktreeRemoveArgs,
 )
+from agm.cli_support.run_options import exec_option_conflict, log_option_conflict
 from agm.command_catalog import COMMAND_OVERVIEW
 from agm.config.general import parse_timeout
 from agm.parser import (
@@ -146,14 +147,10 @@ def _missing_arguments(command_path: Sequence[str], names: Sequence[str]) -> NoR
     exit_with_usage_error(command_path, f"error: the following arguments are required: {joined}")
 
 
-def _check_log_flags_exclusive(
-    command: str, *, no_log: bool, log: bool, log_file: str | None
-) -> None:
-    """Reject combinations of the mutually exclusive trace-logging flags."""
-    if sum([no_log, log, log_file is not None]) > 1:
-        exit_with_usage_error(
-            [command], "error: --log, --no-log, and --log-file are mutually exclusive"
-        )
+def _reject_run_option_conflict(command: str, conflict: str | None) -> None:
+    """Exit with a usage error for *conflict* among *command*'s run-time options, if any."""
+    if conflict is not None:
+        exit_with_usage_error([command], f"error: {conflict}")
 
 
 def _require_value(
@@ -1087,37 +1084,30 @@ def exec_cmd(
         exit_with_usage_error(["exec"], "error: argument FILE not allowed with -c/--command")
     if command is None and file is None:
         exit_with_usage_error(["exec"], "error: one of the arguments FILE -c/--command is required")
-    _check_log_flags_exclusive("exec", no_log=no_log, log=log, log_file=log_file)
-    _reject_option_conflict(
-        ["exec"], "--log-file", "--no-log-file", conflicting=log_file is not None and no_log_file
+    exec_args = ExecArgs(
+        file=file,
+        command=command,
+        program=program,
+        argument_tokens=argument_tokens,
+        strict_json=strict_json,
+        max_call_depth=max_call_depth,
+        default_agent=default_agent,
+        no_log=no_log,
+        log_file=log_file,
+        log=log,
+        module_paths=module_paths,
+        no_stdlib=no_stdlib,
+        timeout=timeout,
+        no_timeout=no_timeout,
+        no_log_file=no_log_file,
+        pipeline_cache=discovery.cached_artifacts(file),
     )
-    _reject_option_conflict(
-        ["exec"], "--timeout", "--no-timeout", conflicting=timeout is not None and no_timeout
-    )
+    _reject_run_option_conflict("exec", exec_option_conflict(exec_args))
     # Imported lazily: pulls in the AgL DSL (runtime, codec, jsonschema), which
     # would otherwise slow every non-AgL ``agm`` invocation's startup.
     import agm.commands.exec as exec_command
 
-    exec_command.run(
-        ExecArgs(
-            file=file,
-            command=command,
-            program=program,
-            argument_tokens=argument_tokens,
-            strict_json=strict_json,
-            max_call_depth=max_call_depth,
-            default_agent=default_agent,
-            no_log=no_log,
-            log_file=log_file,
-            log=log,
-            module_paths=module_paths,
-            no_stdlib=no_stdlib,
-            timeout=timeout,
-            no_timeout=no_timeout,
-            no_log_file=no_log_file,
-            pipeline_cache=discovery.cached_artifacts(file),
-        )
-    )
+    exec_command.run(exec_args)
 
 
 @app.command(name="repl")
@@ -1189,7 +1179,9 @@ def repl_cmd(
 ) -> None:
     del _help
     del _dry_run
-    _check_log_flags_exclusive("repl", no_log=no_log, log=log, log_file=log_file)
+    _reject_run_option_conflict(
+        "repl", log_option_conflict(no_log=no_log, log=log, log_file=log_file)
+    )
     # Imported lazily: pulls in the AgL DSL (runtime, repl console), which would
     # otherwise slow every non-AgL ``agm`` invocation's startup.
     import agm.commands.repl as repl_command

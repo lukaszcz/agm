@@ -50,7 +50,6 @@ from agm.agl.ir.program import (
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
 from agm.agl.ir.validate import validate_ir
 from agm.agl.modules.ids import ENTRY_ID, STD_PRELUDE_ID
-from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import (
     VOID_VALUE,
     BoolValue,
@@ -249,60 +248,8 @@ def test_literal_negative_bound_runs_zero_iterations() -> None:
     assert ir["r"] == IntValue(0)
 
 
-def test_valve_does_not_cap_for_over_finite_collection() -> None:
-    """The max-iters valve must not cap a for loop over a finite collection.
-
-    Regression: the valve applied to ALL loops, so --max-iters 3 broke
-    `for x in [1,2,3,4]`.  Self-bounded loops (for/do[n]) are guarded and
-    exempt from the host safety valve.
-    """
-    source = "var s = 0\nfor x in [1, 2, 3, 4, 5] do s := s + x done\ns\n"
-    executable = _lower(source)
-    interp = IrInterpreter(executable, loop_limit=3)
-    result = interp.run(program_symbol=executable.synthetic_main_symbol)
-    assert result["s"] == IntValue(15)
-
-
-def test_valve_does_not_cap_bounded_do_n_loop() -> None:
-    """The max-iters valve must not cap a do[n] loop whose own bound exceeds it."""
-    source = "var i = 0\ndo[10]\n  i := i + 1\nuntil i >= 5\ni\n"
-    executable = _lower(source)
-    interp = IrInterpreter(executable, loop_limit=3)
-    result = interp.run(program_symbol=executable.synthetic_main_symbol)
-    assert result["i"] == IntValue(5)
-
-
-def test_valve_caps_unbounded_do_until_loop() -> None:
-    """The max-iters valve caps an unguarded (no [n], no for) do...until loop."""
-    source = "var i = 0\ndo\n  i := i + 1\nuntil i >= 1000\ni\n"
-    executable = _lower(source)
-    interp = IrInterpreter(executable, loop_limit=3)
-    try:
-        interp.run(program_symbol=executable.synthetic_main_symbol)
-    except AglRaise as exc:
-        assert exc.exc.display_name == "MaxIterationsExceeded"
-        assert exc.exc.fields.get("limit") == IntValue(3)
-        return
-    raise AssertionError("expected MaxIterationsExceeded")
-
-
-def test_valve_counts_a_continued_iteration() -> None:
-    """A `continue` counts toward the host valve, just as it does toward a `[n]` bound.
-
-    The body continues on its first four passes and would exit on the fifth, so a
-    valve that ignored continued iterations would let the loop finish normally.
-    """
-    source = "var seen = 0\ndo\n  seen := seen + 1\n  if seen < 5 => continue\nuntil true\nseen\n"
-    executable = _lower(source)
-    interp = IrInterpreter(executable, loop_limit=3)
-    with pytest.raises(AglRaise) as exc:
-        interp.run(program_symbol=executable.synthetic_main_symbol)
-    assert exc.value.exc.display_name == "MaxIterationsExceeded"
-    assert exc.value.exc.fields.get("limit") == IntValue(3)
-
-
-def test_unvalved_loop_with_continue_runs_to_its_own_exit() -> None:
-    """Without a host valve the same loop exits on its own terms."""
+def test_unbounded_loop_with_continue_runs_to_its_own_exit() -> None:
+    """A `continue` re-enters an unbounded loop until its own exit condition holds."""
     source = "var seen = 0\ndo\n  seen := seen + 1\n  if seen < 5 => continue\nuntil true\nseen\n"
     assert evaluate_ir(source)["seen"] == IntValue(5)
 

@@ -140,13 +140,12 @@ key:
 | --- | -------- | ---------------- |
 | `log` | `bool` | `false` |
 | `strict-json` | `bool` | `false` (lenient recovery) |
-| `max-iters` | `int` | `0` (off) |
 | `default-agent` | `Agent` | `AgentClaude("sonnet", "medium")` |
 | `log-file` | `Option[path]` | `None` |
 | `timeout` | `Option[text]` | `None` |
 
 Import `std/config` and read or write a setting through a qualified target
-(`std/config::max-iters`); writing zero disables that safety valve.
+(`std/config::strict-json`).
 `default-agent` is a typed `Agent` value — its selected member `RecordValue` at runtime — used by `ask` when its `agent` option is omitted. Host CLI and TOML strings use the shared [Agent syntax](../../commands/agl.md#host-agent-syntax): native shorthand selects Claude, Codex, or Pi, and other text selects `AgentCommand`. The optional settings (`log-file`, `timeout`) take a `Some("…")` or `None` value.
 
 ### Precedence
@@ -173,7 +172,7 @@ positional argument in a named-only position.
 ### Config-file schema
 
 `[exec]` holds global engine defaults with kebab field names (`strict-json`,
-`max-iters`, `log-file`). A qualified table uses a module suffix (the entry
+`log-file`). A qualified table uses a module suffix (the entry
 file's stem, or a package's declared route) and the selected program's own
 declaration name — `[prog.main]` for a program named `main` in a file whose
 stem or route is `prog`. The same table supplies both that program's engine-key
@@ -199,10 +198,9 @@ completed write remains effective if a later expression fails. Writing `log` or
 `log-file` updates the trace destination used by subsequent calls. Assigning
 `Some(path)` to `log-file`
 enables logging; a later `log := false` disables it while retaining the path.
-Writing `strict-json`, `max-iters`, or `timeout` changes subsequent agent-output
-parsing, unbounded loops, or `exec` calls, respectively. A write the engine
-cannot accept — a negative `max-iters`, or a `timeout` whose text is not a
-duration — raises the catchable `TypeError`
+Writing `strict-json` or `timeout` changes subsequent agent-output parsing or
+`exec` calls, respectively. A write the engine cannot accept — a `timeout`
+whose text is not a duration — raises the catchable `TypeError`
 ([Exceptions](exceptions.md#typeerror)) and leaves the setting unchanged.
 Trace output is best-effort: a filesystem failure disables tracing for the rest
 of the run without rolling back the assigned `log` or `log-file` value.

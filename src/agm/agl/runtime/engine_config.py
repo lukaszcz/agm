@@ -77,8 +77,7 @@ def engine_default_settings() -> "dict[str, Value]":
     """Build the typed engine-default value for every scalar/``Option[text]`` engine key.
 
     Derives the raw values from the shared engine-key catalog, then decodes
-    them via :func:`convert_config_value` (``false``/``false``/``0``/``none``/
-    ``none``, where zero represents the disabled ``max-iters`` safety valve),
+    them via :func:`convert_config_value` (``false``/``false``/``none``/``none``),
     building its own fresh seeded ``TypeTable`` rather than requiring one from
     the caller.
 

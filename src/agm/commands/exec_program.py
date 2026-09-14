@@ -43,7 +43,7 @@ Flag notes:
       disables the automatic import throughout the loaded program. Ordinary imports are
       qualified by default; tails and ``use`` declarations make names bare.
     - A program reads and writes the engine settings (``strict-json``,
-      ``max-iters``, ``default-agent``, ``timeout``, ``log``, ``log-file``) through the
+      ``default-agent``, ``timeout``, ``log``, ``log-file``) through the
       ``std/config`` module; a ``std/config::KEY := VALUE`` write takes effect
       from its program point onward and overrides the CLI flag, which overrides
       the config-file layer.  ``--max-call-depth`` remains a host/runtime
@@ -74,7 +74,7 @@ from agm.agl.runtime.types import ProgramDeclInfo
 from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES
 from agm.agl.syntax.nodes import FuncDef, static_items
 from agm.cli_support.args import ExecArgs
-from agm.cli_support.engine_seeds import build_host_engine_seeds, check_max_iters
+from agm.cli_support.engine_seeds import build_host_engine_seeds
 from agm.cli_support.exec_roots import effective_exec_roots_or_none
 from agm.cli_support.exec_target import (
     ExecTargetError,
@@ -466,12 +466,6 @@ def run(
         config.max_call_depth,
     )
 
-    # Resolve loop limit (max-iters valve): CLI > config. ``None`` leaves the
-    # valve off. A source ``std/config::max-iters := VALUE`` write is applied
-    # at runtime from its program point, overriding this initial value.
-    check_max_iters(args.max_iters)
-    resolved_loop_limit = _first(args.max_iters, config.default_loop_limit)
-
     # Resolve timeout: CLI > [exec] config. A source ``std/config::timeout :=
     # VALUE`` write is applied at runtime from its program point.
     # ``--timeout VALUE`` overrides the config; ``--no-timeout`` clears it (None).
@@ -509,8 +503,6 @@ def run(
     cli_values: dict[str, object | None] = {}
     if args.strict_json is not None:
         cli_values["strict-json"] = args.strict_json
-    if args.max_iters is not None:
-        cli_values["max-iters"] = args.max_iters
     if args.timeout is not None:
         cli_values["timeout"] = args.timeout
     elif args.no_timeout:
@@ -551,7 +543,6 @@ def run(
     # ``prepare_parsed_entry`` was already called above; the same ``PreparedProgram``
     # is reused for discovery and the run, so the source is loaded and scoped only once.
     runtime = PipelineDriver(
-        default_loop_limit=resolved_loop_limit,
         default_strict_json=resolved_strict_json,
         agent_dispatcher=factory,
         session_host=session_host,

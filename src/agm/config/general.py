@@ -671,7 +671,6 @@ class ExecConfig:
     # a default agent. Lower precedence than default_agent; decoded into an
     # AgentCommand value rather than parsed as AgL source (see engine_seeds.py).
     runner: str | None = None
-    default_loop_limit: int | None = None
     # Optional recursion call-depth override (None = use the canonical default).
     max_call_depth: int | None = None
 
@@ -711,8 +710,7 @@ def exec_config_from_merged(
 
     When *program_table* is supplied, each engine key present in that already
     resolved qualified program table overrides the global ``[exec]`` value.
-    Engine keys use kebab-case names: ``strict-json``, ``max-iters``,
-    ``log-file``.
+    Engine keys use kebab-case names: ``strict-json``, ``log-file``.
     """
     exec_table = _select_command_table(
         toml_dict(merged.get("exec")),
@@ -730,7 +728,6 @@ def exec_config_from_merged(
                 effective[key] = program_table[key]
 
     resolved_strict_json = _optional_bool(effective, "strict-json")
-    resolved_loop_limit = _optional_positive_int(effective, "max-iters")
     resolved_max_call_depth = _optional_positive_int(exec_table, "max-call-depth")
 
     resolved_timeout = _optional_timeout(effective, "timeout")
@@ -747,7 +744,6 @@ def exec_config_from_merged(
 
     return ExecConfig(
         strict_json=resolved_strict_json,
-        default_loop_limit=resolved_loop_limit,
         max_call_depth=resolved_max_call_depth,
         timeout=resolved_timeout,
         log=resolved_log,

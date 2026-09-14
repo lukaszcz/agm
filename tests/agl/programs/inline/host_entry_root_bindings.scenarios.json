@@ -9,7 +9,7 @@
         ]
       },
       "expect": {
-        "stdout": "corner: 1,2\n9\nhinge\n1\n2\n3\n7\n42\n2\n0\nlooks fine\n",
+        "stdout": "corner: 1,2\n9\nhinge\n1\n2\n3\n7\n42\n2\nfalse\nlooks fine\n",
         "calls": {
           "reviewer": 1
         },

@@ -12,7 +12,6 @@ from agm.config.general import ExecConfig
 _CONFIG_RAW_VALUES: dict[str, object] = {
     "log": True,
     "strict-json": True,
-    "max-iters": 7,
     "default-agent": 'AgentCommand("configured")',
     "log-file": "configured.jsonl",
     "timeout": "12s",
@@ -21,7 +20,6 @@ _CONFIG_RAW_VALUES: dict[str, object] = {
 _CLI_VALUES: dict[str, object] = {
     "log": False,
     "strict-json": False,
-    "max-iters": 3,
     "log-file": "cli.jsonl",
     "timeout": "3s",
 }
@@ -30,7 +28,6 @@ _CLI_VALUES: dict[str, object] = {
 def _config_for(key: str, configured: bool) -> ExecConfig:
     return ExecConfig(
         strict_json=configured if key == "strict-json" else False,
-        default_loop_limit=7 if configured and key == "max-iters" else None,
         timeout=12.0 if configured and key == "timeout" else None,
         log=configured if key == "log" else False,
         log_file="configured.jsonl" if configured and key == "log-file" else None,
@@ -111,7 +108,6 @@ def test_toml_default_agent_uses_the_same_external_syntax() -> None:
 @pytest.mark.parametrize(
     ("key", "raw_value", "expected_keys"),
     [
-        ("max-iters", 0, set()),
         ("log-file", "", {"log"}),
         ("log-file", 1, {"log"}),
     ],
@@ -155,7 +151,6 @@ def test_configured_numeric_timeout_is_seeded_from_its_raw_spelling() -> None:
     seeds = build_host_engine_seeds(
         config=ExecConfig(
             strict_json=False,
-            default_loop_limit=None,
             timeout=0.5,
             log=False,
             log_file=None,

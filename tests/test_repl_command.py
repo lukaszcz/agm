@@ -241,7 +241,6 @@ def _args(
     no_log: bool = False,
     log: bool = False,
     log_file: str | None = None,
-    max_iters: int | None = None,
     default_agent: str | None = None,
     no_stdlib: bool = False,
     plain: bool = True,
@@ -260,7 +259,6 @@ def _args(
         no_log=no_log,
         log=log,
         log_file=log_file,
-        max_iters=max_iters,
         default_agent=default_agent,
         no_stdlib=no_stdlib,
         plain=plain,
@@ -634,7 +632,6 @@ class TestReplRun:
         (agm_dir / "config.toml").write_text(
             "[exec]\n"
             "strict-json = true\n"
-            "max-iters = 3\n"
             'timeout = "2s"\n'
             "log = true\n"
             'log-file = "configured.jsonl"\n'
@@ -648,7 +645,6 @@ class TestReplRun:
         session: ReplSession = fake_plain_console[0]["session"]
         assert set(session._engine_seed) == {
             "strict-json",
-            "max-iters",
             "timeout",
             "log",
             "log-file",
@@ -686,34 +682,6 @@ class TestReplRun:
 
         call = fake_console[0]
         assert call["history_path"] == agm_home / "repl_history"
-
-    def test_max_iters_flows_into_session_valve(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        fake_plain_console: list[dict[str, object]],
-    ) -> None:
-        """``--max-iters`` resolves to the session's max-iters valve (ON at N)."""
-        _isolated_home(monkeypatch, tmp_path)
-        repl_command.run(_args(max_iters=10))
-        session: ReplSession = fake_plain_console[0]["session"]
-        assert session._default_loop_limit == 10
-
-    @pytest.mark.parametrize("limit", [0, -1])
-    def test_max_iters_requires_positive_value(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        fake_plain_console: list[dict[str, object]],
-        limit: int,
-    ) -> None:
-        _isolated_home(monkeypatch, tmp_path)
-
-        with pytest.raises(SystemExit) as exc_info:
-            repl_command.run(_args(max_iters=limit))
-
-        assert exc_info.value.code == 1
-        assert fake_plain_console == []
 
     @pytest.mark.parametrize(
         ("args", "expected_log", "expected_file"),

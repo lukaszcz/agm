@@ -326,10 +326,7 @@ python-type: text    # the raising Python exception's class name; empty for
 ### `MaxIterationsExceeded`
 
 A **bounded** loop (`[n]`, with `n ≥ 1`) exhausted its bound before an exit
-condition triggered ([Control flow](control-flow.md)). An unbounded loop (no
-`[n]`) raises this only when the host `max-iters` safety valve is active and its
-cap is reached (see [Control flow](control-flow.md)); with the valve off, an
-unbounded loop never raises it.
+condition triggered ([Control flow](control-flow.md)).
 
 ```text
 limit: int                  # the bound in effect
@@ -373,9 +370,8 @@ operation: text    # the operator, e.g. "/"
 
 ### `TypeError`
 
-Raised by an engine-setting write the host cannot accept — a negative
-`max-iters`, or a `timeout` whose text is not a duration ([Host
-environment](host-environment.md#engine-settings)).
+Raised by an engine-setting write the host cannot accept — a `timeout` whose
+text is not a duration ([Host environment](host-environment.md#engine-settings)).
 
 ```text
 (base fields only)
@@ -526,7 +522,7 @@ how equality and tracing treat one.
 | Call-depth limit exceeded | `RecursionError` |
 | Explicit `raise MatchError(...)` | `MatchError` |
 | Division by zero | `ArithmeticError` |
-| Engine-setting write the host rejects (negative `max-iters`, unparseable `timeout`) | `TypeError` |
+| Engine-setting write the host rejects (unparseable `timeout`) | `TypeError` |
 | Fallible `as` cast — source does not conform to target type | `CastError` |
 | `std/json` parsing — input is not well-formed JSON | `JsonParseError` |
 | `std/toml` parsing — input is not well-formed TOML | `TomlParseError` |

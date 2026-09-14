@@ -8,7 +8,7 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver
 from agm.agl.repl import ReplSession
-from agm.agl.semantics.values import DictValue, IntValue, RecordValue, TextValue
+from agm.agl.semantics.values import BoolValue, DictValue, IntValue, RecordValue, TextValue
 from tests._agl_helpers import agl_roots, run_inline_command
 
 _STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
@@ -108,17 +108,19 @@ def test_repl_accepts_scoped_module_qualified_host_seeds(tmp_path: Path) -> None
 
 def test_repl_accepts_root_engine_seeds_in_the_structured_api(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "config.agl").write_text("builtin var max-iters: int\n", encoding="utf-8")
+    (tmp_path / "src" / "config.agl").write_text(
+        "builtin var strict-json: bool\n", encoding="utf-8"
+    )
     session = ReplSession(
         stdlib_root=tmp_path,
         default_stdlib=False,
-        builtin_var_seeds={(ModuleId.from_path("std/config"), (), "max-iters"): IntValue(1)},
+        builtin_var_seeds={(ModuleId.from_path("std/config"), (), "strict-json"): BoolValue(True)},
     )
 
-    result = session.eval_entry("import std/config\nstd/config::max-iters")
+    result = session.eval_entry("import std/config\nstd/config::strict-json")
 
     assert result.ok, result.diagnostics
-    assert result.value == IntValue(1)
+    assert result.value == BoolValue(True)
 
 
 def test_unseeded_non_engine_builtin_var_is_a_diagnostic_not_a_key_error(tmp_path: Path) -> None:

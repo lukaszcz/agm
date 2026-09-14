@@ -848,7 +848,6 @@ def test_exec_installed_reference_preserves_all_file_options(
         log=True,
         module_paths=["modules"],
         no_stdlib=True,
-        max_iters=3,
         max_call_depth=4,
         timeout="5s",
         no_timeout=True,

@@ -482,7 +482,6 @@ class IrInterpreter:
         session_host: "SessionHost | None" = None,
         close_sessions: bool = True,
         strict_json: bool = False,
-        loop_limit: int | None = None,
         shell_exec_timeout: float | None = None,
         host_contracts: Mapping[ContractId, "OutputContract"] | None = None,
         base_frame: Frame | None = None,
@@ -517,7 +516,6 @@ class IrInterpreter:
         # setting or invoke a host operation, so this temporary state is never
         # observable by their evaluation.
         self._strict_json = False
-        self._loop_limit: int | None = None
         self._shell_exec_timeout: float | None = None
         self._timeout_setting = none_value(nominals=self._program.builtin_nominals)
         self._builtin_host_settings: dict[str, Value] = {}
@@ -556,17 +554,6 @@ class IrInterpreter:
             strict_setting = BoolValue(strict_json or strict_default.value)
         assert isinstance(strict_setting, BoolValue)
         self._apply_config_effect("strict-json", strict_setting)
-
-        max_iters_key = builtin_var_key(STD_CONFIG_ID, (), "max-iters")
-        max_iters_setting = seed.get(max_iters_key)
-        if max_iters_setting is None:
-            max_iters_default = defaults[max_iters_key]
-            assert isinstance(max_iters_default, IntValue)
-            max_iters_setting = IntValue(
-                loop_limit if loop_limit is not None else max_iters_default.value
-            )
-        assert isinstance(max_iters_setting, IntValue)
-        self._apply_config_effect("max-iters", max_iters_setting)
 
         timeout_key = builtin_var_key(STD_CONFIG_ID, (), "timeout")
         timeout_setting = seed.get(timeout_key)
@@ -653,11 +640,6 @@ class IrInterpreter:
     def strict_json(self) -> bool:
         """Current strict-JSON setting (may have been updated by a ``builtin var`` write)."""
         return self._strict_json
-
-    @property
-    def loop_limit(self) -> int | None:
-        """Current global max-iters valve (``None`` means off)."""
-        return self._loop_limit
 
     @property
     def timeout_setting(self) -> RecordValue:
@@ -1675,45 +1657,19 @@ class IrInterpreter:
                     return self._eval(default)
                 raise InvalidIrError("IrCase has no matching key and no default")
 
-            case IrLoop(body=body_expr, guarded=guarded):
+            case IrLoop(body=body_expr):
                 # Unconditional repeat — all loop logic (bound checks, until
                 # guards, for/while clauses) is desugared into the body by the
                 # lowerer.  The only exits are IrBreak (leave the loop)
                 # and IrContinue (next iteration).  Both signals propagate through
                 # IrTry bodies (which catch only AglRaise) to reach this handler.
-                #
-                # The host's global max-iters valve applies ONLY to unguarded
-                # loops (no [n] bound, no for clause): a self-bounded loop carries
-                # its own termination and must never be cut short by this safety
-                # net, which exists to catch runaway while/do-until loops.
-                iterations = 0
                 while True:
-                    if (
-                        not guarded
-                        and self._loop_limit is not None
-                        and iterations >= self._loop_limit
-                    ):
-                        raise AglRaise(
-                            _make_exc_value(
-                                "MaxIterationsExceeded",
-                                f"Loop exhausted after {self._loop_limit} iterations",
-                                nominals=self._program.builtin_nominals,
-                                fields={
-                                    "limit": IntValue(self._loop_limit),
-                                    "condition": TextValue("loop limit"),
-                                    "last-condition-value": BoolValue(False),
-                                    "metadata": JsonValue(None),
-                                },
-                            )
-                        )
                     try:
                         self._eval(body_expr)
                     except _BreakSignal:
                         return VOID_VALUE
                     except _ContinueSignal:
-                        iterations += 1
                         continue
-                    iterations += 1
 
             case IrBreak():
                 raise _BreakSignal()
@@ -1973,8 +1929,6 @@ class IrInterpreter:
                 raise MissingBuiltinVarSeedError(key) from exc
         if name == "strict-json":
             return BoolValue(self._strict_json)
-        if name == "max-iters":
-            return IntValue(0 if self._loop_limit is None else self._loop_limit)
         if name == "timeout":
             return self._timeout_setting
         if name not in self._builtin_host_settings:
@@ -1987,8 +1941,8 @@ class IrInterpreter:
     def _store_builtin_setting(self, key: BuiltinVarKey | str, value: Value) -> None:
         """Store *value* into the host-backed binding *key*.
 
-        The three runtime-live keys route through ``_apply_config_effect`` so the
-        live effect (loop cap, strict-json mode, shell timeout) takes hold from
+        The runtime-live keys route through ``_apply_config_effect`` so the
+        live effect (strict-json mode, shell timeout) takes hold from
         the write onward; the host-consumed keys update their register.
         Writes to the ``log``/``log-file`` trace-register pair additionally
         reconfigure the live trace service when a host reconfigurer is present;
@@ -2045,23 +1999,12 @@ class IrInterpreter:
     def _apply_config_effect(self, public_name: str, config_value: Value) -> None:
         """Apply the live engine-setting effect for a runtime-live engine key.
 
-        Only ``strict-json``, ``max-iters``, and ``timeout`` update live
+        Only ``strict-json`` and ``timeout`` update live
         interpreter state; all other keys are inert here.
         """
         if public_name == "strict-json":
             assert isinstance(config_value, BoolValue)
             self._strict_json = config_value.value
-        elif public_name == "max-iters":
-            assert isinstance(config_value, IntValue)
-            if config_value.value < 0:
-                raise AglRaise(
-                    _make_exc_value(
-                        "TypeError",
-                        "invalid max-iters: expected a non-negative integer",
-                        nominals=self._program.builtin_nominals,
-                    )
-                )
-            self._loop_limit = config_value.value or None
         else:
             assert public_name == "timeout"
             assert isinstance(config_value, RecordValue)

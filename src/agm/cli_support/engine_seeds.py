@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from agm.agl.semantics.values import Value
     from agm.config.general import ExecConfig
 
-__all__ = ["EngineSeeds", "build_host_engine_seeds", "check_max_iters"]
+__all__ = ["EngineSeeds", "build_host_engine_seeds"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,18 +52,6 @@ class EngineSeeds:
 
     values: "dict[str, Value]" = field(default_factory=dict)
     overrides: "dict[str, SettingOverride]" = field(default_factory=dict)
-
-
-def check_max_iters(max_iters: int | None) -> None:
-    """Reject a non-positive ``--max-iters`` before anything runs.
-
-    The ``max-iters`` safety valve counts iterations, so zero and negatives are
-    meaningless; ``None`` means the flag was not given.  Shared by ``agm exec``
-    and ``agm repl``, which take the flag with identical semantics.
-    """
-    if max_iters is not None and max_iters <= 0:
-        print("Error: --max-iters must be a positive integer", file=sys.stderr)
-        raise SystemExit(1)
 
 
 def _require_agent_text(value: object, *, source: str) -> str:
@@ -151,7 +139,7 @@ def build_host_engine_seeds(
             value = _configured_value(spec, config, primary_table, fallback)
             # A ``None`` config result is absent, not an explicit control. In
             # particular this lets a builtin initializer supply invalid/empty
-            # max-iters and Option values just as before.
+            # Option values.
             if value is not None:
                 seed_raw[spec.name] = value
 

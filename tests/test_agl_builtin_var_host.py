@@ -37,7 +37,6 @@ def _exec_args(
         file=str(agl_file),
         argument_tokens=[],
         strict_json=None,
-        max_iters=None,
         no_log=no_log,
         log=log,
         log_file=log_file,

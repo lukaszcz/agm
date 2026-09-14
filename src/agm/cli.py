@@ -965,11 +965,6 @@ def exec_cmd(
         "--strict-json/--no-strict-json",
         help="Require agents to return exactly one bare JSON value; default is lenient recovery.",
     ),
-    max_iters: int | None = typer.Option(
-        None,
-        "--max-iters",
-        help="Positive cap for unbounded loops without an inline bound; off by default.",
-    ),
     max_call_depth: int | None = typer.Option(
         None,
         "--max-call-depth",
@@ -1110,7 +1105,6 @@ def exec_cmd(
             program=program,
             argument_tokens=argument_tokens,
             strict_json=strict_json,
-            max_iters=max_iters,
             max_call_depth=max_call_depth,
             default_agent=default_agent,
             no_log=no_log,
@@ -1132,11 +1126,6 @@ def repl_cmd(
         None,
         "--strict-json/--no-strict-json",
         help="Require agents to return exactly one bare JSON value; default is lenient recovery.",
-    ),
-    max_iters: int | None = typer.Option(
-        None,
-        "--max-iters",
-        help="Positive cap for unbounded loops without an inline bound; off by default.",
     ),
     max_call_depth: int | None = typer.Option(
         None,
@@ -1208,7 +1197,6 @@ def repl_cmd(
     repl_command.run(
         ReplArgs(
             strict_json=strict_json,
-            max_iters=max_iters,
             max_call_depth=max_call_depth,
             default_agent=default_agent,
             confirm_agents=confirm_agents,

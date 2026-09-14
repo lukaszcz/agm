@@ -510,7 +510,7 @@ class TestBinders:
             parse("Option[int]::some::x := 3")
 
     def test_module_qualified_assignment_target_preserved(self) -> None:
-        assignment = first(parse("std/config::max-iters := 3"))
+        assignment = first(parse("std/config::strict-json := true"))
         assert isinstance(assignment, AssignStmt)
         assert isinstance(assignment.target, NameTarget)
         assert assignment.target.qualifier is not None
@@ -529,8 +529,8 @@ class TestBinders:
         "source",
         (
             "mm::xs[0] := 42",
-            "std/config::max-iters[0] := 3",
-            "std/config::NoSuchType::max-iters[0] := 3",
+            "std/config::strict-json[0] := 3",
+            "std/config::NoSuchType::strict-json[0] := 3",
         ),
     )
     def test_module_qualified_indexed_assignment_target_accepted(self, source: str) -> None:

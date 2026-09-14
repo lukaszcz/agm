@@ -200,11 +200,6 @@ class TestEngineKeyFlags:
         assert "--timeout" in flags
         assert "--no-timeout" in flags
 
-    def test_scalar_engine_key_contributes_only_its_positive_flag(self) -> None:
-        flags = engine_key_flags()
-        assert "--max-iters" in flags
-        assert "--no-max-iters" not in flags
-
     def test_agent_engine_key_contributes_only_its_positive_flag(self) -> None:
         flags = engine_key_flags()
         assert "--default-agent" in flags

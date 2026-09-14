@@ -69,7 +69,6 @@ class EntryPipelineCtx(Protocol):
     _ambient_bare_constructor_candidates: dict[str, tuple[ConstructorRef, ...]]
     _ambient_type_names: frozenset[str]
     _trace_path: Path | None
-    _default_loop_limit: int | None
     _default_call_depth_limit: int
     _default_stdlib: bool
     _shell_exec_timeout: float | None
@@ -730,7 +729,6 @@ class EntryPipeline:
                 session_host=host_env.session_host,
                 close_sessions=False,
                 strict_json=self._ctx._default_strict_json,
-                loop_limit=self._ctx._default_loop_limit,
                 max_call_depth=self._ctx._default_call_depth_limit,
                 shell_exec_timeout=(
                     self._ctx._shell_exec_timeout if "timeout" not in self._ctx._current else None

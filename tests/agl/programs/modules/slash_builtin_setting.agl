@@ -1,5 +1,5 @@
 import std/config
 
 program def main() -> unit =
-  std/config::max-iters := 3
-  print(config::max-iters)
+  std/config::strict-json := true
+  print(config::strict-json)

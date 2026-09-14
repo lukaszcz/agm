@@ -7778,7 +7778,7 @@ class TestPackageInstall:
             "import std/config\n"
             "program def main(subject: text) -> unit =\n"
             "  print subject\n"
-            "  print std/config::max-iters\n"
+            "  print std/config::strict-json\n"
             '  let _ = exec("true")\n',
             encoding="utf-8",
         )
@@ -7787,7 +7787,7 @@ class TestPackageInstall:
         )
         home.mkdir()
         (home / "config.toml").write_text(
-            '["tools/main".main]\nsubject = "configured"\nmax-iters = 9\n',
+            '["tools/main".main]\nsubject = "configured"\nstrict-json = true\n',
             encoding="utf-8",
         )
         return package
@@ -7847,8 +7847,8 @@ class TestPackageInstall:
         unknown = run_agm(["publish"], env=env, cwd=tmp_path, check=False)
 
         assert installed.returncode == 0
-        assert published.stdout == "flag\n9\n"
-        assert configured.stdout == "configured\n9\n"
+        assert published.stdout == "flag\ntrue\n"
+        assert configured.stdout == "configured\ntrue\n"
         assert "call-sites:" in dry_run.stdout
         assert uninstalled.returncode == 0
         assert unknown.returncode != 0

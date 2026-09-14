@@ -8,7 +8,7 @@ the [AgL language reference](../agl/reference/index.md).
 
 ```text
 agm exec [--strict-json|--no-strict-json]
-         [--max-iters N] [--max-call-depth N] [--default-agent AGENT]
+         [--max-call-depth N] [--default-agent AGENT]
          [--timeout DURATION|--no-timeout] [--dry-run]
          [--log|--log-file PATH|--no-log] [--no-log-file]
          [--no-stdlib]
@@ -87,11 +87,6 @@ a direct `agm repl` entry is a static error.
 - `--no-strict-json` (default): Recover exactly one JSON value from chatty output (stripping
   fences/prose, repairing trivially malformed JSON), then validate it strictly against the
   schema. `ask`'s `strict-json:` argument overrides either per call.
-- `--max-iters N`: Cap **unbounded** loops (`while … do … done` or `do … until E` with no `[n]`
-  bound and no `for` clause) at `N` > 0 body executions, raising `MaxIterationsExceeded`. `for`
-  and `do[n]` loops are never cut short. Off by default (reads as `0`); this option, config, or a
-  positive source write enables it, `std/config::max-iters := 0` disables it. See
-  [Control flow](../agl/reference/control-flow.md).
 - `--max-call-depth N`: Maximum recursion depth (overrides `[exec] max-call-depth`; default 256).
   Exceeding it raises `RecursionError`.
 - `--default-agent AGENT`: Seed `std/config::default-agent`, the agent of `ask` calls without
@@ -162,7 +157,7 @@ Also reported before any agent runs: a parameter supplied twice (two flags, or p
 
 **Reserved names.** Program arguments and engine settings share one flag and config namespace,
 so a name-addressable parameter named after an engine setting (`default-agent`, `strict-json`,
-`max-iters`, `timeout`, `log`, `log-file`) is a static error even if never supplied, also
+`timeout`, `log`, `log-file`) is a static error even if never supplied, also
 reported by `agm check`.
 A projected flag that collides with a reserved flag has no static check, only a host one: selecting that
 program for execution fails, while `--help` and shell completion silently fall back to
@@ -171,7 +166,7 @@ program for execution fails, while `--help` and shell completion silently fall b
 - its own options: `--help`/`-h`, `--program`/`-p`, `--command`/`-c`, `--module-path`/`-I`,
   `--max-call-depth`, `--no-stdlib`, `--dry-run`;
 - every engine-setting flag in both polarities: `--default-agent`,
-  `--strict-json`/`--no-strict-json`, `--max-iters`, `--timeout`/`--no-timeout`,
+  `--strict-json`/`--no-strict-json`, `--timeout`/`--no-timeout`,
   `--log`/`--no-log`, `--log-file`/`--no-log-file` (so `no-log: text` collides);
 - other parameters' projected flags (`cache: bool`'s `--no-cache` vs `no-cache: bool`).
 
@@ -287,7 +282,6 @@ placeholder. Opening a session from a command without it raises `SessionError`. 
 default-agent = "claude/sonnet-medium" # native shorthand or custom command
 # runner = "custom-agent --session %{SESSION_ID}" # command must create/resume this id
 strict-json = false         # lenient JSON recovery is the default
-max-iters = 5               # opt into a safety-valve cap for unbounded loops
 timeout = "30m"             # initial shell-exec and agent idle timeout
 log = false                 # trace logging off by default; set true to enable
 # log-file = "trace.jsonl" # explicit trace path (omit for auto timestamped path)
@@ -325,7 +319,6 @@ program def main(spec: text) -> unit =
   std/config::log := true             # enable trace logging for this program
   std/config::log-file := Some("trace.jsonl")  # explicit trace path
   std/config::strict-json := true     # require bare JSON from agents
-  std/config::max-iters := 10         # host safety valve cap for unbounded loops
   std/config::default-agent := AgentClaude("sonnet", "medium")
   std/config::timeout := Some("30s")  # shell-exec idle timeout
 
@@ -336,17 +329,17 @@ program def main(spec: text) -> unit =
 A qualified target (`std/config::KEY := …`) always works; after `import std/config::*`, so does
 bare `KEY := …`. `Option[text]` settings (`log-file`, `timeout`) take `Some("…")` or `None`.
 
-Precedence for `default-agent`, `log`, `strict-json`, `max-iters`, `log-file`, and `timeout` is
+Precedence for `default-agent`, `log`, `strict-json`, `log-file`, and `timeout` is
 `source write > CLI > qualified program table > [exec].X > engine default`, with `[exec] runner`
 as an extra `default-agent` fallback just below `[exec] default-agent`. CLI and config supply the
 **initial** value; a source write overrides it from that program point on: after `--no-log`,
-`std/config::log := true` enables tracing from there, and `std/config::max-iters := 10`
-overrides `[exec] max-iters = 5`.
+`std/config::log := true` enables tracing from there, and `std/config::strict-json := true`
+overrides `[exec] strict-json = false`.
 
 Writes take effect **positionally**, like `var` mutation. `log`/`log-file` writes reconfigure
 the trace destination for subsequent calls; `log-file := Some(path)` enables logging, and a later
-`log := false` disables it without clearing the path. `strict-json`, `max-iters`, and `timeout`
-writes affect subsequent agent-output parsing, unbounded loops, and `exec` calls.
+`log := false` disables it without clearing the path. `strict-json` and `timeout`
+writes affect subsequent agent-output parsing and `exec` calls.
 
 A CLI, program-table, or `[exec]` timeout seeds both the shell-exec and agent idle timeouts; a
 source `timeout` write changes only the **shell-exec** timeout; agent idle timeout cannot change
@@ -464,7 +457,7 @@ $ echo $?
 
 ```text
 agm repl [--strict-json|--no-strict-json]
-         [--max-iters N] [--max-call-depth N] [--default-agent AGENT] [--confirm-agents]
+         [--max-call-depth N] [--default-agent AGENT] [--confirm-agents]
          [--quiet] [--dry-run] [--no-stdlib] [--log|--log-file PATH|--no-log] [--plain]
 ```
 
@@ -487,7 +480,7 @@ Both front ends share session and evaluation behavior:
 Plain is used automatically when stdin or stdout is not a terminal, or `TERM=dumb`; `--plain`
 forces it on a terminal. No flag forces the console onto a non-terminal.
 
-The REPL reuses `[exec]` settings for `default-agent`, max-iters, call depth, JSON strictness,
+The REPL reuses `[exec]` settings for `default-agent`, call depth, JSON strictness,
 and timeout. As in `agm exec`, each typed `Agent` value selects its own backend command,
 `--default-agent` and `[exec] default-agent` accept [host Agent syntax](#host-agent-syntax), and
 `--default-agent` with `--no-stdlib` fails if the session never loads `std/config` (during
@@ -568,7 +561,7 @@ Meta-commands start with `:`, which never collides with AgL syntax:
 
 ### Options
 
-- `--strict-json` / `--no-strict-json`, `--max-iters N`, `--max-call-depth N`,
+- `--strict-json` / `--no-strict-json`, `--max-call-depth N`,
   `--default-agent AGENT`: As for `agm exec`.
 - `--confirm-agents`: Start in [confirm mode](#agent-call-confirmation).
 - `--quiet`: Do not echo entry results.
@@ -593,7 +586,7 @@ Meta-commands start with `:`, which never collides with AgL syntax:
   unapplied generic such as `Option` shows its generic definition. A REPL convenience only; names
   that are also values (a record constructor, a binding) evaluate normally.
 - **Engine settings**: import `std/config` and write a qualified target
-  (`std/config::max-iters := 3`). The write takes effect positionally, so subsequent entries see
+  (`std/config::strict-json := true`). The write takes effect positionally, so subsequent entries see
   it even if a later expression in the same entry fails; `log`/`log-file` writes reconfigure the
   trace destination. The initial `[exec] timeout` is also the idle timeout for CLI and Pi RPC
   agent sessions; a source `timeout` write changes only shell `exec`. `:reset` restores the

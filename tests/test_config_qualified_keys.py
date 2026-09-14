@@ -269,12 +269,12 @@ class TestQualifiedConfigKeys:
         }
 
     def test_configured_leaf_tables_exclude_nested_tables(self) -> None:
-        config = _config({"workflow": {"msg": "hi", "main": {"max-iters": 1}}})
+        config = _config({"workflow": {"msg": "hi", "main": {"strict-json": True}}})
 
         assert configured_leaf_tables(config, ("workflow",)) == {"msg": ("workflow",)}
 
     def test_configured_leaf_tables_skip_reserved_sections(self) -> None:
-        config = _config({"exec": {"max-iters": 1}})
+        config = _config({"exec": {"strict-json": True}})
 
         assert configured_leaf_tables(config, ("exec",)) == {}
 

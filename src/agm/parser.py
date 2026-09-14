@@ -565,9 +565,9 @@ _HELP_TEXTS: dict[str, str] = {
               Create the session with PANES panes.
     """),
     "exec": textwrap.dedent("""\
-        agm exec [--strict-json|--no-strict-json] [--max-iters N]
-                 [--max-call-depth N] [--default-agent AGENT]
-                 [--timeout DURATION|--no-timeout] [--dry-run]
+        agm exec [--strict-json|--no-strict-json] [--max-call-depth N]
+                 [--default-agent AGENT] [--timeout DURATION|--no-timeout]
+                 [--dry-run]
                  [--log|--log-file PATH|--no-log] [--no-log-file]
                  [--no-stdlib] [-I DIR]... [-p PATH]
                  (FILE | PACKAGE/MODULE::PROGRAM | -c COMMAND) [ARG]... [--NAME VALUE]...
@@ -608,7 +608,6 @@ _HELP_TEXTS: dict[str, str] = {
           -p, --program PATH     Select a program def by declaration path.
           --strict-json         Require bare JSON output from agents (no recovery).
           --no-strict-json      Use lenient JSON recovery (default).
-          --max-iters N         Cap unbounded loops; off by default (CLI > config).
           --max-call-depth N    Override the maximum recursion call depth
                                 (CLI > config).
           --default-agent AGENT Seed the free-ask default session from an Agent value
@@ -648,7 +647,7 @@ _HELP_TEXTS: dict[str, str] = {
           2  The workflow executed but ended with an uncaught AgL exception.
     """),
     "repl": textwrap.dedent("""\
-        agm repl [--strict-json|--no-strict-json] [--max-iters N] [--max-call-depth N]
+        agm repl [--strict-json|--no-strict-json] [--max-call-depth N]
                  [--default-agent AGENT] [--confirm-agents] [--dry-run] [--no-stdlib]
                  [--quiet] [--log|--log-file PATH|--no-log] [--plain]
 
@@ -680,8 +679,6 @@ _HELP_TEXTS: dict[str, str] = {
         Options:
           --strict-json         Require bare JSON output from agents (no recovery).
           --no-strict-json      Use lenient JSON recovery (default).
-          --max-iters N         Positive cap for unbounded loops; off by default
-                                (source writes > CLI > config).
           --max-call-depth N    Override the maximum recursion call depth
                                 (CLI > config; source pragmas are not applied in the REPL).
           --default-agent AGENT Seed the free-ask default session from an Agent value

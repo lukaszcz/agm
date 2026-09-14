@@ -44,7 +44,7 @@ from agm.agl.repl.plain_console import plain_mode_engaged
 from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.cli_support.args import ReplArgs
-from agm.cli_support.engine_seeds import build_host_engine_seeds, check_max_iters
+from agm.cli_support.engine_seeds import build_host_engine_seeds
 from agm.config.context import current_config_context
 from agm.config.general import (
     agm_home_dir,
@@ -85,8 +85,6 @@ def run(args: ReplArgs) -> None:
     repl_config = load_repl_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
 
     strict_json = args.strict_json if args.strict_json is not None else config.strict_json
-    check_max_iters(args.max_iters)
-    loop_limit = args.max_iters if args.max_iters is not None else config.default_loop_limit
     # Resolve max call depth: CLI > [exec] config (config pragmas are not applied
     # in the REPL).  ``None`` lets the session apply the canonical default.
     call_depth_limit = (
@@ -161,8 +159,6 @@ def run(args: ReplArgs) -> None:
     cli_values: dict[str, object | None] = {}
     if args.strict_json is not None:
         cli_values["strict-json"] = args.strict_json
-    if args.max_iters is not None:
-        cli_values["max-iters"] = args.max_iters
     if args.no_log:
         cli_values["log"] = False
     elif args.log:
@@ -181,7 +177,6 @@ def run(args: ReplArgs) -> None:
     with preserve_primary_error(session_host.close_all, label="agent session cleanup"):
         session = ReplSession(
             default_strict_json=strict_json,
-            default_loop_limit=loop_limit,
             default_call_depth_limit=call_depth_limit,
             agent_dispatcher=confirming_agent,
             session_host=session_host,

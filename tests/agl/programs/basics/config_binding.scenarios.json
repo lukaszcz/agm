@@ -9,7 +9,7 @@
       ],
       "expect": {
         "stdout_contains": [
-          "5\n"
+          "true\n"
         ]
       }
     }

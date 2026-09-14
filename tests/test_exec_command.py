@@ -2,7 +2,7 @@
 
 Covers:
 - CLI wires FILE argument and params, --strict-json/--no-strict-json,
-  --max-iters, --default-agent, --log-file, --no-log flags into ExecArgs
+  --default-agent, --log-file, --no-log flags into ExecArgs
 - Missing file exits with code 1 and prints to stderr
 - Unreadable file exits with code 1 and prints error to stderr
 - Valid programs execute through the program pipeline; static failures and uncaught
@@ -54,7 +54,6 @@ def inline_args(command: str, *, argument_tokens: list[str] | None = None) -> Ex
         command=command,
         argument_tokens=argument_tokens or [],
         strict_json=None,
-        max_iters=None,
         no_log=True,
         log_file=None,
     )
@@ -90,7 +89,6 @@ def file_args(path: Path) -> ExecArgs:
         command=None,
         argument_tokens=[],
         strict_json=None,
-        max_iters=None,
         no_log=True,
         log_file=None,
     )
@@ -324,18 +322,6 @@ class TestExecArgsParsing:
 
         args = recorded_runs[0]
         assert getattr(args, "strict_json") is False
-
-    def test_exec_max_iters_flag(
-        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
-    ) -> None:
-        agl_file = tmp_path / "test.agl"
-        write_file_program(agl_file, "let x = 1\n")
-
-        result = invoke(runner, ["exec", "--max-iters", "10", str(agl_file)])
-        assert result.exit_code == 0
-
-        args = recorded_runs[0]
-        assert getattr(args, "max_iters") == 10
 
     def test_exec_default_agent_flag(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
@@ -578,7 +564,6 @@ class TestExecCommandInline:
             command=None,
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=True,
             log_file=None,
         )
@@ -780,7 +765,6 @@ class TestExecCommandBehavior:
             file=str(tmp_path / "nonexistent.agl"),
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=False,
             log_file=None,
         )
@@ -797,7 +781,6 @@ class TestExecCommandBehavior:
             file=str(tmp_path / "nonexistent.agl"),
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=False,
             log_file=None,
         )
@@ -819,7 +802,6 @@ class TestExecCommandBehavior:
             file=str(a_dir),
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=False,
             log_file=None,
         )
@@ -854,7 +836,6 @@ class TestExecCommandBehavior:
                 file=str(unreadable),
                 argument_tokens=[],
                 strict_json=None,
-                max_iters=None,
                 no_log=False,
                 log_file=None,
             )
@@ -879,7 +860,6 @@ class TestExecCommandBehavior:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=False,
             log_file=None,
         )
@@ -899,7 +879,6 @@ class TestExecCommandBehavior:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=False,
             log_file=None,
         )
@@ -919,7 +898,6 @@ class TestExecCommandBehavior:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=False,
             log_file=str(log_path),
         )
@@ -938,7 +916,6 @@ def _exec_args(
         file=str(agl_file),
         argument_tokens=argument_tokens or [],
         strict_json=None,
-        max_iters=None,
         no_log=False,
         log_file=log_file,
     )
@@ -1174,7 +1151,6 @@ class TestExecCommandWarnings:
             command="let x = undefined-name\n",
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=False,
             log_file=None,
         )
@@ -1432,7 +1408,6 @@ class TestExecCommandExitCodes:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=False,
             log_file=None,
         )
@@ -1456,7 +1431,6 @@ class TestExecCommandExitCodes:
             file=str(agl_file),
             argument_tokens=["--value", "7"],
             strict_json=None,
-            max_iters=None,
             no_log=False,
             log_file=None,
         )
@@ -1477,7 +1451,6 @@ class TestExecCommandExitCodes:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=False,
             log_file=None,
         )
@@ -1523,7 +1496,6 @@ class TestExecCommandExitCodes:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=True,
             log_file=None,
         )
@@ -1565,7 +1537,6 @@ class TestExecCommandExitCodes:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=False,
             log_file=None,
         )
@@ -1589,7 +1560,6 @@ class TestExecCommandExitCodes:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=False,
             log_file=None,
         )
@@ -1616,7 +1586,6 @@ class TestExecCommandExitCodes:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=False,
             log_file=None,
         )
@@ -1638,7 +1607,6 @@ class TestExecCommandExitCodes:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=False,
             log_file=None,
         )
@@ -1660,19 +1628,16 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
         def __init__(
             self,
             *,
-            default_loop_limit: int = 5,
             default_strict_json: bool = False,
             agent_dispatcher: Any | None = None,
             session_host: Any | None = None,
             shell_exec_timeout: float | None = None,
             default_call_depth_limit: int | None = None,
         ) -> None:
-            captured["default_loop_limit"] = default_loop_limit
             captured["default_strict_json"] = default_strict_json
             captured["shell_exec_timeout"] = shell_exec_timeout
             captured["default_call_depth_limit"] = default_call_depth_limit
             super().__init__(
-                default_loop_limit=default_loop_limit,
                 default_strict_json=default_strict_json,
                 agent_dispatcher=agent_dispatcher,
                 session_host=session_host,
@@ -1685,12 +1650,12 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
 
 
 class TestExecConfigWiring:
-    """[exec] config (strict-json/max-iters) flows into the runtime."""
+    """[exec] config (strict-json) flows into the runtime."""
 
     def _config_home(self, tmp_path: Path) -> Path:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text("[exec]\nstrict-json = true\nmax-iters = 9\n")
+        (home / ".agm" / "config.toml").write_text("[exec]\nstrict-json = true\n")
         return home
 
     def test_config_values_reach_runtime_constructor(
@@ -1715,13 +1680,11 @@ class TestExecConfigWiring:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=False,
             log_file=None,
         )
         assert exec_command.run(args) is None
         assert captured["default_strict_json"] is True
-        assert captured["default_loop_limit"] == 9
 
     def test_cli_strict_json_overrides_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1745,13 +1708,11 @@ class TestExecConfigWiring:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=False,  # CLI --no-strict-json overrides config true
-            max_iters=7,  # CLI --max-iters overrides config 9
             no_log=False,
             log_file=None,
         )
         assert exec_command.run(args) is None
         assert captured["default_strict_json"] is False
-        assert captured["default_loop_limit"] == 7
 
     def test_timeout_config_flows_to_shell_exec_timeout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1779,7 +1740,6 @@ class TestExecConfigWiring:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=False,
             log_file=None,
         )
@@ -1812,7 +1772,6 @@ class TestExecConfigWiring:
                     file=str(agl_file),
                     argument_tokens=[],
                     strict_json=None,
-                    max_iters=None,
                     no_log=True,
                     log_file=None,
                 )
@@ -1841,7 +1800,6 @@ def _exec_args_with_fallback_runtime(
         def __init__(
             self,
             *,
-            default_loop_limit: int = 5,
             default_strict_json: bool = False,
             agent_dispatcher: AgentFn | None = None,
             session_host: Any | None = None,
@@ -1850,7 +1808,6 @@ def _exec_args_with_fallback_runtime(
         ) -> None:
             del agent_dispatcher
             super().__init__(
-                default_loop_limit=default_loop_limit,
                 default_strict_json=default_strict_json,
                 agent_dispatcher=stub_agent,
                 session_host=session_host,
@@ -1995,7 +1952,6 @@ class TestDryRunInventory:
             def __init__(
                 self,
                 *,
-                default_loop_limit: int = 5,
                 default_strict_json: bool = False,
                 agent_dispatcher: AgentFn | None = None,
                 session_host: Any | None = None,
@@ -2004,7 +1960,6 @@ class TestDryRunInventory:
             ) -> None:
                 del agent_dispatcher
                 super().__init__(
-                    default_loop_limit=default_loop_limit,
                     default_strict_json=default_strict_json,
                     agent_dispatcher=spy_agent,
                     session_host=session_host,
@@ -2262,7 +2217,6 @@ class TestUncaughtExceptionOutputFormat:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=True,
             log_file=None,
         )
@@ -2304,7 +2258,6 @@ class TestExecBinaryFileError:
             file=str(binary_file),
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=True,
             log_file=None,
         )
@@ -2328,7 +2281,6 @@ class TestExecBinaryFileError:
             file=str(binary_file),
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=True,
             log_file=None,
         )
@@ -2605,204 +2557,6 @@ class TestExecSourceConfigPrecedence:
     """
 
     # ------------------------------------------------------------------
-    # max_iters source declaration
-    # ------------------------------------------------------------------
-
-    def test_source_max_iters_caps_loop_at_source_value(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """``std/config::max-iters := 3`` in source caps the do loop at 3 iterations.
-
-        The loop ``until n >= 100`` cannot complete in 3 iterations (n starts at
-        0 and increments by 1), so the runtime raises a LoopLimitExceeded and
-        the command exits 2.
-        """
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file,
-            "import std/config\n"
-            "std/config::max-iters := 3\n"
-            "var n = 0\n"
-            "do\n"
-            "  n := n + 1\n"
-            "until n >= 100\n",
-        )
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
-        assert exc_info.value.code == 2
-
-    def test_source_max_iters_allows_completion_when_sufficient(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """``std/config::max-iters := 100`` allows a do loop needing exactly 100 iterations."""
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file,
-            "import std/config\n"
-            "std/config::max-iters := 100\n"
-            "var n = 0\n"
-            "do\n"
-            "  n := n + 1\n"
-            "until n >= 100\n"
-            'print "done"\n',
-        )
-        result = exec_command.run(_exec_args_no_log(agl_file))
-        assert result is None  # exit 0
-        assert capsys.readouterr().out == "done\n"
-
-    def test_source_max_iters_zero_disables_host_limit(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """``std/config::max-iters := 0`` turns an active host valve off."""
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file,
-            "import std/config\n"
-            "std/config::max-iters := 0\n"
-            "var i = 0\n"
-            "do\n"
-            "  i := i + 1\n"
-            "until i >= 3\n"
-            "print i\n",
-        )
-
-        exec_command.run(_exec_args_no_log(agl_file, max_iters=1))
-        assert capsys.readouterr().out == "3\n"
-
-    def test_source_max_iters_negative_expression_is_rejected(self, tmp_path: Path) -> None:
-        """A computed negative ``max-iters`` value is rejected at the assignment point."""
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file, "import std/config\nlet bad = 0 - 1\nstd/config::max-iters := bad\nprint 1\n"
-        )
-
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
-        assert exc_info.value.code == 2
-
-    def test_source_max_iters_overrides_cli_max_iters(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """Source ``std/config::max-iters := 3`` overrides CLI ``--max-iters 100``.
-
-        The CLI ``--max-iters 100`` seeds the loop valve, but the source
-        assignment takes effect from its program point and caps the loop at 3.
-        The loop needs 100 iterations, so it exceeds the source cap and the
-        command exits 2 (source wins over the CLI flag).
-        """
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file,
-            "import std/config\n"
-            "std/config::max-iters := 3\n"
-            "var n = 0\n"
-            "do\n"
-            "  n := n + 1\n"
-            "until n >= 100\n"
-            'print "done"\n',
-        )
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file, max_iters=100))
-        assert exc_info.value.code == 2  # source 3 overrides CLI 100
-
-    def test_source_max_iters_overrides_config_max_iters(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """Source ``std/config::max-iters := 100`` overrides ``[exec] max-iters = 3`` in config.
-
-        Config says 3 (loop would fail); source assignment says 100 (loop completes).
-        """
-        from agm.config.general import ExecConfig
-
-        low_limit_config = ExecConfig(
-            strict_json=False,
-            default_loop_limit=3,
-            timeout=None,
-            log=False,
-            log_file=None,
-        )
-        monkeypatch.setattr(
-            exec_engine, "exec_config_from_merged", lambda *_, **__: low_limit_config
-        )
-
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file,
-            "import std/config\n"
-            "std/config::max-iters := 100\n"
-            "var n = 0\n"
-            "do\n"
-            "  n := n + 1\n"
-            "until n >= 100\n"
-            'print "done"\n',
-        )
-        result = exec_command.run(_exec_args_no_log(agl_file))
-        assert result is None  # exit 0 — source 100 overrides config 3
-        assert capsys.readouterr().out == "done\n"
-
-    # ------------------------------------------------------------------
-    # max-iters valve scope: self-bounded loops are exempt
-    # ------------------------------------------------------------------
-
-    def test_max_iters_does_not_cap_for_over_finite_collection(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """``--max-iters`` caps only unguarded loops; a ``for`` over a finite
-        collection larger than the cap must run to completion.
-
-        Regression: the valve applied to all loops, so ``--max-iters 3`` broke
-        ``for x in [1,2,3,4]``.
-        """
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file,
-            "var s = 0\nfor x in [1, 2, 3, 4, 5] do s := s + x done\nprint s\n",
-        )
-        result = exec_command.run(_exec_args_no_log(agl_file, max_iters=3))
-        assert result is None  # exit 0
-        assert capsys.readouterr().out == "15\n"
-
-    def test_max_iters_does_not_cap_bounded_do_n_loop(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """``--max-iters`` does not cap a ``do[n]`` loop whose own bound exceeds it.
-
-        The loop's own ``[n]`` bound is its termination machinery; the host
-        safety valve must not cut it short.
-        """
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "var i = 0\ndo[10]\n  i := i + 1\nuntil i >= 5\nprint i\n")
-        result = exec_command.run(_exec_args_no_log(agl_file, max_iters=3))
-        assert result is None  # exit 0
-        assert capsys.readouterr().out == "5\n"
-
-    def test_max_iters_caps_unbounded_do_until_loop(self, tmp_path: Path) -> None:
-        """``--max-iters`` caps an unguarded ``do…until`` loop (no [n], no for)."""
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "var i = 0\ndo\n  i := i + 1\nuntil i >= 1000\nprint i\n")
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file, max_iters=3))
-        assert exc_info.value.code == 2
-
-    @pytest.mark.parametrize("limit", [0, -1])
-    def test_cli_max_iters_requires_positive_value(self, tmp_path: Path, limit: int) -> None:
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "print 1\n")
-
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file, max_iters=limit))
-
-        assert exc_info.value.code == 1
-
-    def test_max_iters_five_enables_valve(self, tmp_path: Path) -> None:
-        """An explicit positive CLI limit consistently enables the valve."""
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "var i = 0\ndo\n  i := i + 1\nuntil i >= 1000\nprint i\n")
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file, max_iters=5))
-        assert exc_info.value.code == 2
-
-    # ------------------------------------------------------------------
     # strict-json source declaration
     # ------------------------------------------------------------------
 
@@ -2856,7 +2610,6 @@ class TestExecSourceConfigPrecedence:
 
         strict_config = ExecConfig(
             strict_json=True,
-            default_loop_limit=5,
             timeout=None,
             log=False,
             log_file=None,
@@ -2920,7 +2673,6 @@ class TestExecSourceConfigPrecedence:
 
         config_with_timeout = ExecConfig(
             strict_json=False,
-            default_loop_limit=5,
             timeout=999.0,
             log=False,
             log_file=None,
@@ -2979,7 +2731,6 @@ class TestExecSourceConfigPrecedence:
                     file=str(agl_file),
                     argument_tokens=[],
                     strict_json=None,
-                    max_iters=None,
                     no_log=False,
                     log_file=None,
                 )
@@ -3004,7 +2755,6 @@ class TestExecSourceConfigPrecedence:
                 file=str(agl_file),
                 argument_tokens=[],
                 strict_json=None,
-                max_iters=None,
                 no_log=False,
                 log_file=None,
             )
@@ -3016,7 +2766,6 @@ def _exec_args_inline_no_log(
     command: str,
     *,
     strict_json: bool | None = None,
-    max_iters: int | None = None,
 ) -> ExecArgs:
     """Build a minimal ExecArgs for -c inline exec tests."""
     return ExecArgs(
@@ -3024,7 +2773,6 @@ def _exec_args_inline_no_log(
         command=command,
         argument_tokens=[],
         strict_json=strict_json,
-        max_iters=max_iters,
         no_log=True,
         log_file=None,
         log=False,
@@ -3316,7 +3064,6 @@ class TestExecCliModulePaths:
             command=None,
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=True,
             log_file=None,
             log=False,
@@ -3351,7 +3098,6 @@ class TestExecCliModulePaths:
             command=None,
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=True,
             log_file=None,
             log=False,
@@ -3379,7 +3125,6 @@ class TestExecCliModulePaths:
             command=None,
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=True,
             log_file=None,
             log=False,
@@ -3419,7 +3164,6 @@ class TestExecCliModulePaths:
             command="import util::*\nlet r = greet()\nprint r\n",
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=True,
             log_file=None,
             log=False,
@@ -3450,7 +3194,7 @@ class TestEntryModuleConfig:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
         (home / ".agm" / "config.toml").write_text(
-            '[main.main]\nmax-iters = 1\n\n["tools/main".main]\nmax-iters = 1\n'
+            '[main.main]\nstrict-json = true\n\n["tools/main".main]\nstrict-json = true\n'
         )
         agl_file = tmp_path / "main.agl"
         write_file_program(agl_file, 'program def main() -> unit = print "unreached"\n')
@@ -3533,7 +3277,7 @@ class TestEntryModuleConfig:
         assert exec_command.run(_exec_args_no_log(agl_file, program="second")) is None
         assert capsys.readouterr().out == "second\n"
 
-    def test_cli_max_iters_overrides_selected_qualified_program_table(
+    def test_cli_strict_json_overrides_selected_qualified_program_table(
         self,
         runner: CliRunner,
         tmp_path: Path,
@@ -3545,7 +3289,7 @@ class TestEntryModuleConfig:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
         (home / ".agm" / "config.toml").write_text(
-            "[workflow.first]\nmax-iters = 3\n\n[workflow.second]\nmax-iters = 1\n"
+            "[workflow.first]\nstrict-json = false\n\n[workflow.second]\nstrict-json = true\n"
         )
         monkeypatch.setattr(
             exec_engine,
@@ -3556,11 +3300,8 @@ class TestEntryModuleConfig:
         agl_file.write_text(
             'program def first() -> unit = print "first"\n'
             "program def second() -> unit =\n"
-            "  var count = 0\n"
-            "  do\n"
-            "    count := count + 1\n"
-            "  until count >= 2\n"
-            '  print "second"\n'
+            "  let r: int = exec \"printf '```json\\n5\\n```'\"\n"
+            "  print r\n"
         )
 
         configured = invoke(runner, ["exec", "-p", "second", str(agl_file)])
@@ -3568,10 +3309,10 @@ class TestEntryModuleConfig:
 
         overridden = invoke(
             runner,
-            ["exec", "--max-iters", "2", "-p", "second", str(agl_file)],
+            ["exec", "--no-strict-json", "-p", "second", str(agl_file)],
         )
         assert overridden.exit_code == 0
-        assert overridden.output == "second\n"
+        assert overridden.output == "5\n"
 
     def test_qualified_program_table_supplies_multiple_engine_keys(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -3581,7 +3322,7 @@ class TestEntryModuleConfig:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
         (home / ".agm" / "config.toml").write_text(
-            "[workflow.main]\nstrict-json = true\nmax-iters = 2\n"
+            '[workflow.main]\nstrict-json = true\ntimeout = "30s"\n'
         )
         monkeypatch.setattr(
             exec_engine,
@@ -4933,7 +4674,6 @@ class TestExecProgramSelection:
             command='let value = "inline"\nprint value\n',
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=True,
             log_file=None,
             log=False,
@@ -4958,7 +4698,6 @@ class TestExecProgramSelection:
             command='print "only selected mains run"',
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=True,
             log_file=None,
             log=False,
@@ -4987,7 +4726,6 @@ class TestExecProgramSelection:
             command='print "only selected mains run"',
             argument_tokens=["stray"],
             strict_json=None,
-            max_iters=None,
             no_log=True,
             log_file=None,
             log=False,

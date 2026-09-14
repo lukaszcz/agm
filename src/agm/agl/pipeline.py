@@ -292,13 +292,6 @@ class PipelineDriver:
         When ``True`` the JSON codec defaults to strict parsing (only a bare
         JSON value with surrounding whitespace is accepted).  The default
         ``False`` enables lenient JSON recovery.
-    default_loop_limit : int or None
-        The host's global ``max-iters`` safety valve for unguarded loops
-        (``while``/``do…until`` with no ``[n]`` bound and no ``for`` clause).
-        ``None`` (the default) leaves the valve off; an integer caps unguarded
-        loops at that many iterations, raising ``MaxIterationsExceeded``. Self-bounded
-        loops (``for``, ``do[n]``) are never affected by this valve.  Resolved
-        by the caller as ``--max-iters`` > ``[exec] max-iters``.
     agent_dispatcher : callable or None
         The callable used to dispatch a typed ``Agent`` value for ``ask``.
     shell_exec_timeout : float or None
@@ -321,7 +314,6 @@ class PipelineDriver:
         self,
         *,
         default_strict_json: bool = False,
-        default_loop_limit: int | None = None,
         agent_dispatcher: AgentFn | None = None,
         session_host: "SessionHost | None" = None,
         shell_exec_timeout: float | None = None,
@@ -329,7 +321,6 @@ class PipelineDriver:
         extern_registry: "ExternRegistry | None" = None,
     ) -> None:
         self._default_strict_json = default_strict_json
-        self._default_loop_limit = default_loop_limit
         self._agent_dispatcher = agent_dispatcher
         self._session_host = session_host
         self._shell_exec_timeout = shell_exec_timeout
@@ -567,7 +558,6 @@ class PipelineDriver:
                 agent_dispatcher=host_env.agent_dispatcher,
                 session_host=host_env.session_host,
                 strict_json=self._default_strict_json,
-                loop_limit=self._default_loop_limit,
                 shell_exec_timeout=self._shell_exec_timeout,
                 trace=trace,
                 max_call_depth=self._default_call_depth_limit,

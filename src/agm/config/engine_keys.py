@@ -21,7 +21,6 @@ class EngineKeyKind(Enum):
     """
 
     BOOL = "bool"
-    INT = "int"
     TEXT = "text"
     OPTION_TEXT = "option_text"
     AGENT = "agent"
@@ -31,8 +30,8 @@ class EngineKeyConsumer(Enum):
     """Which side of the host boundary owns an engine key's live value.
 
     ``RUNTIME_LIVE``
-        The AgL evaluator backs the key with a live interpreter field (the loop
-        cap, the strict-json mode, the shell timeout), so a write takes effect
+        The AgL evaluator backs the key with a live interpreter field (the
+        strict-json mode, the shell timeout), so a write takes effect
         inside the evaluator itself.
     ``HOST_CONSUMED``
         The key has no interpreter field; its value lives in a register for the
@@ -77,13 +76,6 @@ ENGINE_KEYS: tuple[EngineKeySpec, ...] = (
         EngineKeyConsumer.RUNTIME_LIVE,
         config_attr="strict_json",
         default=False,
-    ),
-    EngineKeySpec(
-        "max-iters",
-        EngineKeyKind.INT,
-        EngineKeyConsumer.RUNTIME_LIVE,
-        config_attr="default_loop_limit",
-        default=0,
     ),
     EngineKeySpec(
         "default-agent",

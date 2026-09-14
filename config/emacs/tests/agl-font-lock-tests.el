@@ -631,8 +631,8 @@
   ;; ordinary reference, not a type annotation.
   (agl-flt--with-buffer "let d = Point::distance(p)\n"
     (should-not (eq (agl-flt--face-of "distance") 'font-lock-type-face)))
-  (agl-flt--with-buffer "std/config::max-iters := 5\n"
-    (should-not (eq (agl-flt--face-of "max-iters") 'font-lock-type-face)))
+  (agl-flt--with-buffer "std/config::strict-json := true\n"
+    (should-not (eq (agl-flt--face-of "strict-json") 'font-lock-type-face)))
   (agl-flt--with-buffer "let v = Status::Good\n"
     (should-not (eq (agl-flt--face-of "Good") 'font-lock-type-face))))
 

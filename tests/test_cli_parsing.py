@@ -2150,7 +2150,6 @@ class TestParserHelpers:
         result = output.getvalue()
         for option in (
             "--default-agent",
-            "--max-iters",
             "--timeout",
             "--no-timeout",
             "--no-log-file",
@@ -2164,11 +2163,11 @@ class TestParserHelpers:
 
         assert "PACKAGE/MODULE::PROGRAM" in output.getvalue()
 
-    def test_repl_help_lists_max_iters(self) -> None:
+    def test_repl_help_lists_engine_options(self) -> None:
         output = io.StringIO()
         parser_helpers.print_help_for_command_path(["repl"], file=output)
         result = output.getvalue()
-        assert "--max-iters" in result
+        assert "--strict-json" in result
         assert "--default-agent" in result
         assert "--runner" not in result
 

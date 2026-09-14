@@ -1459,7 +1459,7 @@ class TestReservedNames:
 
 class TestBuiltinVarPlacement:
     def test_entry_module_declaration_rejected(self) -> None:
-        err = reject_scope("builtin var max-iters: int\n()")
+        err = reject_scope("builtin var strict-json: bool\n()")
         line, message = diag(err)
         assert "std/config" in message
         assert line == 1
@@ -1468,7 +1468,7 @@ class TestBuiltinVarPlacement:
         """The region relaxation lifts only the scope-path clause; the module
         restriction stands, so a scoped ``builtin var`` outside ``std/config``
         is rejected the same way as a root one."""
-        err = reject_scope("scope Region\n  builtin var max-iters: int\nend Region\n\n()")
+        err = reject_scope("scope Region\n  builtin var strict-json: bool\nend Region\n\n()")
         line, message = diag(err)
         assert "std/config" in message
         assert line == 2

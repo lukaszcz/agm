@@ -58,7 +58,6 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn, TypeVar, assert_never
@@ -81,6 +80,7 @@ from agm.cli_support.exec_target import (
     PackageProgramReference,
     resolve_installed_reference,
 )
+from agm.cli_support.param_config import RouteReport, _report_undeclared_config_keys
 from agm.cli_support.program_discovery import (
     ProgramDiscoveryArtifacts,
     discover_program_artifacts_for_target,
@@ -101,12 +101,10 @@ from agm.cli_support.program_options import (
     native_raw_value,
 )
 from agm.config.context import ConfigContext, current_config_context
-from agm.config.general import GeneralConfig, exec_config_from_merged, load_general_config
+from agm.config.general import exec_config_from_merged, load_general_config
 from agm.config.qualified_keys import (
     QualifiedConfigKey,
     QualifiedConfigLookupError,
-    configured_leaf_tables,
-    display_table_path,
     resolve_qualified_values,
 )
 from agm.core import dry_run
@@ -206,60 +204,6 @@ def _registered_command_mismatch(command_path: str) -> NoReturn:
         file=sys.stderr,
     )
     raise SystemExit(1)
-
-
-def _report_undeclared_config_keys(
-    config: GeneralConfig,
-    module_segments: tuple[str, ...],
-    argument_keys: Iterable[QualifiedConfigKey],
-    *,
-    scope_path: tuple[str, ...],
-    command_paths: tuple[tuple[str, ...], ...],
-    positional_only_names: Iterable[str],
-) -> None:
-    """Warn about config keys in a program's qualified table that no argument claims.
-
-    A key set in the table that is neither one of the selected program's own
-    value parameters nor an engine setting is read by nothing — most often a
-    misspelled name — so report it instead of dropping it silently. The
-    warning never affects the run: the program still executes on its
-    defaults. Engine settings legitimately share the table with program
-    arguments, and nested tables (scope regions, per-program engine settings)
-    address routes of their own.
-
-    *scope_path* is the selected program's own qualified table path (e.g.
-    ``workflow.main``); *command_paths* adds the CLI paths the program is
-    registered under, which address it as well. Each warning names the table
-    the key was actually read from, so it points at the spelling its author
-    wrote.
-
-    *positional_only_names* names leaves that are declared but not
-    name-addressable — a positional-only program argument, which a config
-    table (a name-keyed channel) can never supply, the same way it can never
-    be passed by name in an AgL call. Such a leaf is a distinct, milder
-    warning than a genuinely undeclared key: it exists, it is just not
-    reachable by this channel.
-    """
-    declared = {key.leaf for key in argument_keys}
-    positional_only = set(positional_only_names)
-    leaf_tables = configured_leaf_tables(config, module_segments, scope_path, command_paths)
-    for leaf in sorted(leaf_tables):
-        if leaf in declared or leaf in ENGINE_KEY_NAMES:
-            continue
-        table_name = display_table_path(leaf_tables[leaf])
-        if leaf in positional_only:
-            print(
-                f"warning: config key '{leaf}' in the '{table_name}' configuration table "
-                "names a positional-only program argument, which can only be supplied "
-                "positionally, and will be ignored",
-                file=sys.stderr,
-            )
-            continue
-        print(
-            f"warning: config key '{leaf}' in the '{table_name}' "
-            "configuration table is not a declared program argument and will be ignored",
-            file=sys.stderr,
-        )
 
 
 def _program_option_error_message(error: ProgramOptionError) -> str:
@@ -666,11 +610,15 @@ def run(
                 program_named[info.name] = native_raw_value(projected, configured_arguments[key])
         _report_undeclared_config_keys(
             config_view,
-            config_entry_segments,
-            argument_keys,
-            scope_path=program_path,
-            command_paths=command_paths,
-            positional_only_names=program_command.positional_only_names(),
+            (
+                RouteReport(
+                    config_entry_segments,
+                    program_path,
+                    command_paths,
+                    frozenset(key.leaf for key in argument_keys) | ENGINE_KEY_NAMES,
+                    frozenset(program_command.positional_only_names()),
+                ),
+            ),
         )
     arguments = ProgramArguments(positional=cli_arguments.positional, named=program_named)
 

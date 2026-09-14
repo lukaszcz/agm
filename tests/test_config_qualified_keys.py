@@ -189,6 +189,14 @@ class TestQualifiedConfigKeys:
         assert entry == (("demo",),)
         assert set(entry).issubset(imported)
 
+    def test_scope_region_route_includes_suffixes_and_the_quoted_module_anchor(self) -> None:
+        """A scope-region leaf reads the same qualified table spellings as its binding."""
+        assert route_table_paths(("A", "logging"), ("debug",)) == (
+            ("logging", "debug"),
+            ("A", "logging", "debug"),
+            ("A/logging", "debug"),
+        )
+
     def test_resolves_a_registered_command_path_table(self) -> None:
         """A command path addresses the program its package registers under it."""
         key = QualifiedConfigKey(

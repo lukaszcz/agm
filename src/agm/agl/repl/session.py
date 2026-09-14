@@ -19,7 +19,7 @@ rendering, meta-commands, and the prompt_toolkit console are future work.
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from threading import Lock
 from typing import TYPE_CHECKING
@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.ids import SymbolId
+    from agm.agl.ir.static_keys import StaticBindingKey
     from agm.agl.matchcompile import MatchCompiledProgram
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule
@@ -47,6 +48,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.host_settings import HostSettingsPolicy
     from agm.agl.runtime.sessions import SessionHost
+    from agm.agl.runtime.types import ParamBindingInfo
     from agm.agl.scope.program import ResolvedModule
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
@@ -191,6 +193,10 @@ class ReplSession:
         trace_path: "Path | None" = None,
         engine_base: "Mapping[str, Value] | None" = None,
         builtin_var_seeds: "Mapping[BuiltinVarKey, Value] | None" = None,
+        param_seed_resolver: (
+            "Callable[[ModuleId, tuple[ParamBindingInfo, ...]], Mapping[StaticBindingKey, object]]"
+            " | None"
+        ) = None,
         process_environment: "Mapping[str, str] | None" = None,
         setting_overrides: "Mapping[str, SettingOverride] | None" = None,
         host_settings_policy: "HostSettingsPolicy | None" = None,
@@ -216,6 +222,15 @@ class ReplSession:
         )
         self._builtin_var_seed: dict[BuiltinVarKey, Value] = {}
         self._builtin_var_values: dict[BuiltinVarKey, Value] = {}
+        self._param_seed_resolver = param_seed_resolver
+        # Decoded parameter values survive in the session alongside host-backed
+        # builtin values. They are passed to each fresh interpreter, which only
+        # consumes a seed while its static initializer first runs.
+        self._param_seed_values: dict[StaticBindingKey, Value] = {}
+        # ``open()`` checks modules before an entry lowers them. Keep its raw
+        # resolver output until the first executable that initializes those
+        # modules can decode it with its own parameter decoder table.
+        self._pending_param_raw_values: dict[StaticBindingKey, object] = {}
         # ``strict-json`` is the one engine key whose host argument cannot be
         # folded into the seed map below: it is a plain ``bool`` with no way to
         # spell "the host did not specify a value", so an unseeded ``False``
@@ -524,6 +539,7 @@ class ReplSession:
                 return (Diagnostic(message=str(exc), line=1),)
 
             self._loaded_lib_modules.update(loaded.new_modules)
+            self._pending_param_raw_values.update(loaded.raw_param_values)
             self._next_node_id = loaded.new_next_id
             checked_program = loaded.checked_program
             self._type_env = checked_program.modules[checked_program.entry_id].type_env
@@ -561,6 +577,7 @@ class ReplSession:
         if (
             not self._default_stdlib
             or self._setting_overrides
+            or self._param_seed_resolver is not None
             or self._next_node_id != 0
             or self._loaded_lib_modules
             or not isinstance(capabilities, HostCapabilities)
@@ -1872,6 +1889,8 @@ class ReplSession:
         self._shell_exec_timeout = self._seeded_timeout_seconds()
         self._trace_path = self._initial_trace_path
         self._builtin_var_values = dict(self._builtin_var_seed)
+        self._param_seed_values = {}
+        self._pending_param_raw_values = {}
         # Clear module state.
         self._roots = None
         self._loaded_lib_modules = {}

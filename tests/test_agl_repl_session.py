@@ -10,7 +10,7 @@ exactly-once agent dispatch, the ``:set`` param flow, ``reset``, ``load_file``,
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from shutil import copyfile, copytree
 from unittest.mock import patch
@@ -18,9 +18,12 @@ from unittest.mock import patch
 import pytest
 
 from agm.agl.diagnostics import AglError
+from agm.agl.ir.static_keys import StaticBindingKey
+from agm.agl.modules.ids import ModuleId
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.runtime.sessions import AgentDispatcherSessionHost
+from agm.agl.runtime.types import ParamBindingInfo
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, create_seeded_type_table
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -1346,7 +1349,13 @@ _ASK_REQUEST_FREE_OPTIONS = (
 _ASK_REQUEST_DECL = f"builtin def ask-request[T](\n{_ASK_REQUEST_FREE_OPTIONS}) -> AgentRequest\n"
 
 
-def _session_with_import_root(root: Path) -> ReplSession:
+def _session_with_import_root(
+    root: Path,
+    *,
+    param_seed_resolver: (
+        Callable[[ModuleId, tuple[ParamBindingInfo, ...]], Mapping[StaticBindingKey, object]] | None
+    ) = None,
+) -> ReplSession:
     """Create a ``ReplSession`` with *root* as the only module search root."""
     from agm.agl.modules.roots import assemble_roots
 
@@ -1358,9 +1367,243 @@ def _session_with_import_root(root: Path) -> ReplSession:
         cli=[],
         cwd=root,
     )
-    s = ReplSession()
+    s = ReplSession(param_seed_resolver=param_seed_resolver)
     s._roots = roots
     return s
+
+
+# ---------------------------------------------------------------------------
+# Module parameter seeds
+# ---------------------------------------------------------------------------
+
+
+class TestModuleParameterSeeds:
+    """REPL module parameters are resolved and initialized once per module."""
+
+    def test_resolver_runs_once_for_a_loaded_module(self, tmp_path: Path) -> None:
+        (tmp_path / "settings.agl").write_text("@param let value: int = 1\n", encoding="utf-8")
+        calls: list[tuple[str, tuple[str, ...]]] = []
+
+        def resolve(
+            module: ModuleId, params: tuple[ParamBindingInfo, ...]
+        ) -> Mapping[StaticBindingKey, object]:
+            calls.append((module.display(), tuple(param.name for param in params)))
+            return {params[0].key: 7}
+
+        session = _session_with_import_root(tmp_path, param_seed_resolver=resolve)
+
+        first = session.eval_entry("import settings\nsettings::value")
+        second = session.eval_entry("import settings\nsettings::value")
+
+        assert first.ok, first.diagnostics
+        assert _int(first.value) == 7
+        assert second.ok, second.diagnostics
+        assert _int(second.value) == 7
+        assert calls == [("settings", ("value",))]
+
+    def test_seed_replaces_the_first_module_initializer(self, tmp_path: Path) -> None:
+        (tmp_path / "settings.agl").write_text("@param let value: int = 1\n", encoding="utf-8")
+
+        def resolve(
+            _module: ModuleId, params: tuple[ParamBindingInfo, ...]
+        ) -> Mapping[StaticBindingKey, object]:
+            return {params[0].key: 9}
+
+        session = _session_with_import_root(tmp_path, param_seed_resolver=resolve)
+
+        result = session.eval_entry("import settings\nsettings::value")
+
+        assert result.ok, result.diagnostics
+        assert _int(result.value) == 9
+
+    def test_seeded_var_keeps_a_later_write(self, tmp_path: Path) -> None:
+        (tmp_path / "settings.agl").write_text(
+            "@param var value: int = 1\n"
+            "def increment() -> unit =\n"
+            "  value := value + 1\n"
+            "def read() -> int = value\n",
+            encoding="utf-8",
+        )
+
+        def resolve(
+            _module: ModuleId, params: tuple[ParamBindingInfo, ...]
+        ) -> Mapping[StaticBindingKey, object]:
+            return {params[0].key: 4}
+
+        session = _session_with_import_root(tmp_path, param_seed_resolver=resolve)
+        assert session.eval_entry("import settings\nsettings::increment()").ok
+
+        result = session.eval_entry("settings::read()")
+
+        assert result.ok, result.diagnostics
+        assert _int(result.value) == 5
+
+    def test_empty_resolver_result_uses_the_initializer(self, tmp_path: Path) -> None:
+        (tmp_path / "settings.agl").write_text("@param let value: int = 3\n", encoding="utf-8")
+
+        def resolve(
+            _module: ModuleId, _params: tuple[ParamBindingInfo, ...]
+        ) -> Mapping[StaticBindingKey, object]:
+            return {}
+
+        session = _session_with_import_root(tmp_path, param_seed_resolver=resolve)
+
+        result = session.eval_entry("import settings\nsettings::value")
+
+        assert result.ok, result.diagnostics
+        assert _int(result.value) == 3
+
+    def test_decode_failure_can_retry_the_module(self, tmp_path: Path) -> None:
+        (tmp_path / "settings.agl").write_text("@param let value: int = 1\n", encoding="utf-8")
+        calls = 0
+
+        def resolve(
+            _module: ModuleId, params: tuple[ParamBindingInfo, ...]
+        ) -> Mapping[StaticBindingKey, object]:
+            nonlocal calls
+            calls += 1
+            return {params[0].key: "bad" if calls == 1 else 8}
+
+        session = _session_with_import_root(tmp_path, param_seed_resolver=resolve)
+
+        rejected = session.eval_entry("import settings\nsettings::value")
+        retried = session.eval_entry("import settings\nsettings::value")
+
+        assert not rejected.ok
+        assert rejected.diagnostics
+        assert retried.ok, retried.diagnostics
+        assert _int(retried.value) == 8
+        assert calls == 2
+
+    def test_session_without_resolver_uses_module_initializers(self, tmp_path: Path) -> None:
+        (tmp_path / "settings.agl").write_text("@param let value: int = 6\n", encoding="utf-8")
+        session = _session_with_import_root(tmp_path)
+
+        result = session.eval_entry("import settings\nsettings::value")
+
+        assert result.ok, result.diagnostics
+        assert _int(result.value) == 6
+
+    def test_reset_discards_parameter_seed_state(self, tmp_path: Path) -> None:
+        (tmp_path / "settings.agl").write_text("@param let value: int = 1\n", encoding="utf-8")
+        values = iter((2, 5))
+
+        def resolve(
+            _module: ModuleId, params: tuple[ParamBindingInfo, ...]
+        ) -> Mapping[StaticBindingKey, object]:
+            return {params[0].key: next(values)}
+
+        session = _session_with_import_root(tmp_path, param_seed_resolver=resolve)
+        roots = session._roots
+        initial = session.eval_entry("import settings\nsettings::value")
+        session.reset()
+        session._roots = roots
+        reset = session.eval_entry("import settings\nsettings::value")
+
+        assert initial.ok, initial.diagnostics
+        assert _int(initial.value) == 2
+        assert reset.ok, reset.diagnostics
+        assert _int(reset.value) == 5
+
+    def test_open_defers_module_seed_decoding_until_initialization(self, tmp_path: Path) -> None:
+        stdlib = tmp_path / "stdlib"
+        copytree(REPO_STDLIB_ROOT, stdlib)
+        prelude = stdlib / MODULE_TREE_DIRNAME / "prelude.agl"
+        prelude.write_text(
+            prelude.read_text(encoding="utf-8") + "@param let configured: int = 1\n",
+            encoding="utf-8",
+        )
+        calls: list[ModuleId] = []
+
+        def resolve(
+            module: ModuleId, params: tuple[ParamBindingInfo, ...]
+        ) -> Mapping[StaticBindingKey, object]:
+            calls.append(module)
+            return {params[0].key: 12}
+
+        session = ReplSession(
+            stdlib_root=stdlib,
+            cwd=tmp_path,
+            param_seed_resolver=resolve,
+        )
+
+        assert session.open() == ()
+        result = session.eval_entry("std/prelude::configured")
+
+        assert result.ok, result.diagnostics
+        assert _int(result.value) == 12
+        assert calls == [ModuleId(("std", "prelude"))]
+
+    def test_preloaded_seeded_var_survives_a_later_failed_entry(self, tmp_path: Path) -> None:
+        stdlib = tmp_path / "stdlib"
+        copytree(REPO_STDLIB_ROOT, stdlib)
+        prelude = stdlib / MODULE_TREE_DIRNAME / "prelude.agl"
+        array = stdlib / MODULE_TREE_DIRNAME / "array.agl"
+        array.write_text(
+            array.read_text(encoding="utf-8")
+            + "@param var configured: int = 1\n"
+            + "def increase-configured() -> unit =\n"
+            + "  configured := configured + 1\n"
+            + "def configured-value() -> int = configured\n",
+            encoding="utf-8",
+        )
+        prelude.write_text(
+            prelude.read_text(encoding="utf-8").replace(
+                "export std/array::{array}",
+                "export std/array::{array, increase-configured, configured-value}",
+            ),
+            encoding="utf-8",
+        )
+        calls: list[ModuleId] = []
+
+        def resolve(
+            module: ModuleId, params: tuple[ParamBindingInfo, ...]
+        ) -> Mapping[StaticBindingKey, object]:
+            calls.append(module)
+            return {params[0].key: 12}
+
+        session = ReplSession(
+            stdlib_root=stdlib,
+            cwd=tmp_path,
+            param_seed_resolver=resolve,
+        )
+
+        assert session.open() == ()
+        failed = session.eval_entry(
+            'increase-configured()\nlet failure: int = raise Abort(message = "stop")'
+        )
+        retained = session.eval_entry("configured-value()")
+
+        assert not failed.ok
+        assert retained.ok, retained.diagnostics
+        assert _int(retained.value) == 13
+        assert calls == [ModuleId(("std", "array"))]
+
+    def test_completed_module_keeps_its_seed_after_a_dependency_run_fails(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "first.agl").write_text("@param let value: int = 1\n", encoding="utf-8")
+        (tmp_path / "broken.agl").write_text(
+            "import first\n"
+            "@param let value: int = 2\n"
+            'let failure: int = raise Abort(message = "stop")\n',
+            encoding="utf-8",
+        )
+
+        def resolve(
+            _module: ModuleId, params: tuple[ParamBindingInfo, ...]
+        ) -> Mapping[StaticBindingKey, object]:
+            return {param.key: 10 for param in params}
+
+        session = _session_with_import_root(tmp_path, param_seed_resolver=resolve)
+
+        failed = session.eval_entry("import broken")
+        retained = session.eval_entry("import first\nfirst::value")
+
+        assert not failed.ok
+        assert retained.ok, retained.diagnostics
+        assert _int(retained.value) == 10
+        assert {key[0] for key in session._param_seed_values} == {ModuleId(("first",))}
 
 
 class TestBuiltinIdentityAcrossEntries:

@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.contracts import ContractPayload
     from agm.agl.ir.ids import SymbolId
+    from agm.agl.ir.static_keys import StaticBindingKey
     from agm.agl.lower import LinkImage
     from agm.agl.matchcompile import MatchCompiledProgram
     from agm.agl.modules.loader import LoadedModule, ModuleGraph
@@ -31,7 +32,7 @@ if TYPE_CHECKING:
     from agm.agl.pipeline import RunError
     from agm.agl.runtime.host_settings import HostSettingsPolicy
     from agm.agl.runtime.trace import TraceStore
-    from agm.agl.runtime.types import HostEnvironment
+    from agm.agl.runtime.types import HostEnvironment, ParamBindingInfo
     from agm.agl.scope.program import ResolvedModule, ResolvedProgram
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
@@ -76,6 +77,11 @@ class EntryPipelineCtx(Protocol):
     _process_environment: dict[str, str] | None
     _builtin_var_seed: dict[BuiltinVarKey, Value]
     _builtin_var_values: dict[BuiltinVarKey, Value]
+    _param_seed_resolver: (
+        Callable[[ModuleId, tuple[ParamBindingInfo, ...]], Mapping[StaticBindingKey, object]] | None
+    )
+    _param_seed_values: dict[StaticBindingKey, Value]
+    _pending_param_raw_values: dict[StaticBindingKey, object]
     # The current-value register for the five engine keys with a ``Value``
     # form (strict-json, timeout, log, log-file, default-agent); a key is
     # present only once a host seed or a learned declared default has made it
@@ -154,6 +160,7 @@ class LoadedCheckedProgram:
     entry_imports: "tuple[ImportDecl, ...]"
     entry_uses: "tuple[ImportDecl | ScopeRegion, ...]"
     entry_infix_ambient: "dict[str, tuple[int, InfixAssoc]]"
+    raw_param_values: "dict[StaticBindingKey, object]"
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +254,7 @@ class EntryPipeline:
             cached_checked_modules=self._ctx._retained_checked_modules,
         )
         self._retain_module_artifacts(resolved_program, checked_program)
+        raw_param_values = self._resolve_new_module_params(checked_program, new_modules)
         return LoadedCheckedProgram(
             checked_program=checked_program,
             new_modules=new_modules,
@@ -255,7 +263,27 @@ class EntryPipeline:
             entry_imports=entry_imports,
             entry_uses=entry_uses,
             entry_infix_ambient=graph.entry_infix_ambient,
+            raw_param_values=raw_param_values,
         )
+
+    def _resolve_new_module_params(
+        self,
+        checked_program: "CheckedProgram",
+        new_modules: Mapping[ModuleId, "LoadedModule"],
+    ) -> dict["StaticBindingKey", object]:
+        """Ask the host once for each newly loaded module's parameter values."""
+        resolver = self._ctx._param_seed_resolver
+        if resolver is None:
+            return {}
+        from agm.agl.pipeline import _module_param_infos
+
+        module_params = _module_param_infos(checked_program)
+        values: dict[StaticBindingKey, object] = {}
+        for module_id in new_modules:
+            params = module_params[module_id]
+            if params:
+                values.update(resolver(module_id, params))
+        return values
 
     def eval_entry(
         self,
@@ -322,6 +350,7 @@ class EntryPipeline:
         entry_imports = loaded.entry_imports
         entry_uses = loaded.entry_uses
         entry_infix_ambient = loaded.entry_infix_ambient
+        raw_param_values = loaded.raw_param_values
         entry_cm = checked_program.modules[checked_program.entry_id]
 
         # Collect warnings from all passes.
@@ -377,6 +406,7 @@ class EntryPipeline:
             entry_uses=entry_uses,
             entry_infix_ambient=entry_infix_ambient,
             contract_payloads=contract_payloads,
+            raw_param_values=raw_param_values,
         )
 
     def resolve_and_check_program(
@@ -646,6 +676,7 @@ class EntryPipeline:
         entry_uses: tuple[ImportDecl | ScopeRegion, ...],
         entry_infix_ambient: Mapping[str, tuple[int, InfixAssoc]],
         contract_payloads: Mapping[int, "ContractPayload"],
+        raw_param_values: Mapping["StaticBindingKey", object],
     ) -> EntryResult:
         """Lower and execute one program entry in the persistent IR image."""
         from agm.agl.eval.ir_interpreter import HostConfigurationError, IrInterpreter
@@ -692,6 +723,23 @@ class EntryPipeline:
                 else Diagnostic(message=str(exc), line=1)
             )
             return self._ctx._fail([diagnostic], warnings)
+        from agm.agl.runtime.arguments import bind_param_values
+
+        pending_raw_param_values = {
+            key: value
+            for key, value in self._ctx._pending_param_raw_values.items()
+            if key[0] in lowered.program.modules
+        }
+        pending_raw_param_values.update(raw_param_values)
+        decoded_param_seeds, param_diagnostics = bind_param_values(
+            lowered.program, pending_raw_param_values
+        )
+        if param_diagnostics:
+            self._ctx._link_image.restore_state(link_snapshot)
+            return self._ctx._fail(list(param_diagnostics), warnings)
+        decoded_param_seeds_by_module: dict[ModuleId, dict[StaticBindingKey, Value]] = {}
+        for key, seed in decoded_param_seeds.items():
+            decoded_param_seeds_by_module.setdefault(key[0], {})[key] = seed
         extern_diagnostics = _wire_extern_registry(
             checked=checked_program,
             capabilities=host_env.capabilities,
@@ -746,6 +794,7 @@ class EntryPipeline:
                 # this interpreter should learn its own ``std/config`` declared
                 # default for, rather than have imposed on it.
                 builtin_host_settings=self._builtin_host_settings(),
+                param_seeds={**self._ctx._param_seed_values, **decoded_param_seeds},
                 process_environment=self._ctx._process_environment,
             )
         except AglRaise as exc:
@@ -820,29 +869,37 @@ class EntryPipeline:
                 if module_id in new_modules
             )
             self._ctx._link_image.mark_linked(module_ids)
+            for module_id in module_ids:
+                for key, seed in decoded_param_seeds_by_module.get(module_id, {}).items():
+                    self._ctx._param_seed_values[key] = seed
+                    self._ctx._pending_param_raw_values.pop(key, None)
 
         def completed_library_module_ids() -> frozenset[ModuleId]:
-            """Return newly loaded modules retained by this entry.
+            """Return fully initialized library modules retained by this entry.
 
-            A module is retained only when its own initializers all ran AND
-            every dependency it needs is retained too. An interrupt can abort
-            a run between modules, so a module later in initialization order
-            can complete while an earlier one it does not depend on does not;
-            and a module import cycle makes the loader's initialization order
-            arbitrary within the cycle, so a completed module can still
+            This includes modules checked by ``open()``: they are source-cached
+            before their first entry initializes them, so a partial failure
+            must mark their completed allocation as linked just like a newly
+            loaded module. A module is retained only when its own initializers
+            all ran AND every dependency it needs is retained too. An interrupt
+            can abort a run between modules, so a module later in initialization
+            order can complete while an earlier one it does not depend on does
+            not; and a module import cycle makes the loader's initialization
+            order arbitrary within the cycle, so a completed module can still
             depend on a later, unretained one. The dependency fixpoint below
             prunes those out.
             """
             candidates: set[ModuleId] = set()
-            for module_id in new_modules:
-                module = lowered.program.modules[module_id]
+            for module_id, module in lowered.program.modules.items():
+                if module_id == lowered.program.entry_module:
+                    continue
                 completed_indices = interp.module_completed_initializer_indices.get(
                     module_id, set()
                 )
                 if completed_indices == set(range(len(module.initializers))):
                     candidates.add(module_id)
 
-            available = set(self._ctx._loaded_lib_modules) | candidates
+            available = set(candidates)
             while incomplete := {
                 module_id
                 for module_id in candidates
@@ -895,7 +952,7 @@ class EntryPipeline:
                 interp.module_completed_initializer_indices.get(
                     lowered.program.entry_module, set()
                 ),
-                self._ctx._loaded_lib_modules.keys() | completed_module_ids,
+                completed_module_ids,
             )
             installed = promote(
                 partial=True,

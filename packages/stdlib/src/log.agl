@@ -1,0 +1,83 @@
+
+enum Level = Error | Warn | Info | Debug
+
+var level: Level = Info
+
+def Level::to-int(self) -> int =
+  case self of
+    | Error => 0
+    | Warn => 1
+    | Info => 2
+    | Debug => 3
+
+def Level::from-int(l: int) -> Level =
+  if
+    | l == 0 => Error
+    | l == 1 => Warn
+    | l == 2 => Info
+    | l == 3 => Debug
+    | else => Debug
+
+def print[T](lvl: Level, val: T) -> unit =
+  if lvl.to-int() <= level.to-int() =>
+    print val
+
+def print-sep(lvl: Level) -> unit =
+  ::print(lvl, "------------------------------------------")
+
+def print-nl(lvl: Level) -> unit =
+  ::print(lvl, "")
+
+def print-heading[T](lvl: Level, val: T) -> unit =
+  print-sep(lvl)
+  ::print(lvl, val)
+  print-sep(lvl)
+  print-nl(lvl)
+
+def error[T](val: T) -> unit =
+  ::print(Error, val)
+
+def error-sep() -> unit =
+  print-sep(Error)
+
+def error-nl() -> unit =
+  print-sep(Error)
+
+def error-heading[T](val: T) -> unit =
+  print-heading(Error, val)
+
+def warn[T](val: T) -> unit =
+  ::print(Warn, val)
+
+def warn-sep() -> unit =
+  print-sep(Warn)
+
+def warn-nl() -> unit =
+  print-sep(Warn)
+
+def warn-heading[T](val: T) -> unit =
+  print-heading(Warn, val)
+
+def info[T](val: T) -> unit =
+  ::print(Info, val)
+
+def info-sep() -> unit =
+  print-sep(Info)
+
+def info-nl() -> unit =
+  print-sep(Info)
+
+def info-heading[T](val: T) -> unit =
+  print-heading(Info, val)
+
+def debug[T](val: T) -> unit =
+  ::print(Debug, val)
+
+def debug-sep() -> unit =
+  print-sep(Debug)
+
+def debug-nl() -> unit =
+  print-sep(Debug)
+
+def debug-heading[T](val: T) -> unit =
+  print-heading(Info, val)

@@ -12,13 +12,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
-from agm.agent.runner import parse_command
-from agm.agl.runtime.engine_config import (
-    build_engine_config_seeds,
-    convert_config_value,
-    raw_option_str,
-)
-from agm.agl.semantics.engine_keys import get_engine_key_type
+from agm.agl.runtime.engine_config import build_engine_config_seeds, raw_option_str
 from agm.agl.setting_overrides import SettingOverride
 from agm.cli_support.agent_values import normalize_agent_source
 from agm.config.engine_keys import ENGINE_KEY_NAMES, ENGINE_KEYS, EngineKeyKind, EngineKeySpec
@@ -100,20 +94,11 @@ def build_host_engine_seeds(
     are consulted in *primary_table* then *fallback_table* order.
 
     ``default-agent`` precedence, highest first: ``--default-agent``, then
-    the qualified program table/``[exec] default-agent``, then ``[exec] runner``.  Exactly
-    one of the three ever supplies the key, and it lands in exactly one of the
-    two result mappings: an Agent value (the ``--default-agent`` flag or a
-    configured ``default-agent``) is normalized into constructor source and becomes a
+    the qualified program table/``[exec] default-agent``.  The winning Agent
+    value is normalized into constructor source and becomes a
     :class:`~agm.agl.setting_overrides.SettingOverride` in ``overrides`` so the
-    program's own compilation resolves it; a bare host command
-    (``[exec] runner``) is decoded directly into an ``AgentCommand`` value in
-    ``values``, since it is host text, not AgL source — rendering it as AgL
-    source would have to re-escape quotes, backslashes, and ``%{``, which
-    ``AgentCommand`` deliberately carries verbatim.  A blank or non-string raw
-    config/CLI value exits 1 here, before anything runs.  ``[exec] runner`` is
-    additionally shell-split with :func:`~agm.agent.runner.parse_command` right
-    here, so a malformed command (e.g. an unclosed quote) also exits 1 before
-    anything runs rather than surfacing later as a runtime agent-call failure.
+    program's own compilation resolves it.  A blank or non-string raw
+    config/CLI value exits 1 here, before anything runs.
 
     The two normalized Agent sources carry different
     :attr:`~agm.agl.setting_overrides.SettingOverride.required` provenance:
@@ -164,19 +149,6 @@ def build_host_engine_seeds(
         literal = _require_agent_text(config.default_agent, source="[exec] configuration")
         overrides["default-agent"] = SettingOverride(
             source=literal, origin="[exec] default-agent", required=False
-        )
-    elif config.runner is not None:
-        try:
-            parse_command(config.runner, kind="[exec] runner")
-        except ValueError as exc:
-            print(f"Error: {exc}.", file=sys.stderr)
-            raise SystemExit(1) from exc
-        agent_type = get_engine_key_type("default-agent")
-        assert agent_type is not None
-        seeds["default-agent"] = convert_config_value(
-            "default-agent",
-            {"$case": "AgentCommand", "command": config.runner},
-            agent_type,
         )
 
     return EngineSeeds(values=seeds, overrides=overrides)

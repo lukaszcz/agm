@@ -130,10 +130,7 @@ def convert_config_value(
     ``default-agent`` is an ``Agent`` value, not a scalar or ``Option`` setting;
     a host-supplied AgL literal (``--default-agent``/``[exec] default-agent``) is parsed
     separately as an engine-setting override rather than through this helper.
-    The one exception is ``[exec] runner``, a bare host command string with no
-    AgL syntax of its own: it is decoded here as an ``{"$case":
-    "AgentCommand", "command": ...}`` shape, the same decode path any other
-    engine key uses. For ``Option[T]`` engine keys (``timeout``, ``log-file``) the raw value is
+    For ``Option[T]`` engine keys (``timeout``, ``log-file``) the raw value is
     projected into the Option enum: a present *raw* becomes ``some(value)`` with
     its inner ``T`` decoded via :func:`convert_host_value`, and ``None`` becomes
     ``none``.  Non-Option keys fall back to :func:`convert_host_value`.

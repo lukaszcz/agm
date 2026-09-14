@@ -270,8 +270,8 @@ def _host_seeded_session(
 
     ``default_agent`` is the raw
     ``AgentCommand`` command text (not AgL source) — a host-seeded ``Value``,
-    like ``[exec] runner`` builds in production, rather than the AgL-literal
-    ``SettingOverride`` path ``--default-agent``/``[exec] default-agent`` use.
+    rather than the AgL-literal ``SettingOverride`` path
+    ``--default-agent``/``[exec] default-agent`` use.
     """
     raw: dict[str, object] = {}
     if strict_json is not None:

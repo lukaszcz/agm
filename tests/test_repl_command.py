@@ -584,7 +584,7 @@ class TestReplRun:
             "log-file",
         }
 
-    def test_cli_false_strict_json_and_blank_config_runner_seed_correctly(
+    def test_cli_false_strict_json_over_empty_exec_config_seeds_correctly(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
@@ -824,29 +824,6 @@ class TestReplRun:
         repl_command.run(_args())
 
         assert len(fake_plain_console) == 1
-
-    def test_exec_runner_config_seeds_default_agent_as_agent_command(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        fake_plain_console: list[dict[str, object]],
-    ) -> None:
-        """``[exec] runner`` is a bare host command, decoded into an ``AgentCommand`` value seed."""
-        from agm.agl.semantics.values import RecordValue, TextValue
-
-        home = _isolated_home(monkeypatch, tmp_path)
-        config_dir = home / ".agm"
-        config_dir.mkdir()
-        (config_dir / "config.toml").write_text('[exec]\nrunner = "claude"\n')
-
-        repl_command.run(_args())
-
-        session: ReplSession = fake_plain_console[0]["session"]
-        seeded = session._engine_seed["default-agent"]
-        assert isinstance(seeded, RecordValue)
-        assert seeded.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
-        assert seeded.fields["command"] == TextValue("claude")
-        assert session._setting_overrides == {}
 
     def test_invalid_config_exits_1(
         self,

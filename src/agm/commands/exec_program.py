@@ -30,8 +30,7 @@ Flag notes:
       true`` in config also enables logging; CLI flags override config.
     - ``--default-agent AGENT`` seeds ``std/config::default-agent`` from host Agent
       syntax or a canonical constructor, taking precedence over the qualified program
-      table/``[exec] default-agent``, which in turn takes precedence over the
-      bare host command in ``[exec] runner``.
+      table/``[exec] default-agent``.
     - A sole entry-module ``program def`` runs after initializers; when several
       are declared, ``-p``/``--program`` selects one by declaration path. A file
       must declare at least one program; inline ``-c`` statements are wrapped in

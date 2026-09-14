@@ -210,7 +210,7 @@ class TestLoadModuleRootsLayering:
     def test_no_modules_section_gives_no_roots(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[exec]\nrunner = "claude"\n')
+        (home / ".agm" / "config.toml").write_text("[exec]\nstrict-json = true\n")
         cfg = load_module_roots(home=home, proj_dir=None, cwd=tmp_path)
         assert cfg.lib_root is None
         assert cfg.extra == ()

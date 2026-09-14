@@ -93,7 +93,7 @@ a direct `agm repl` entry is a static error.
   `agent`, in [host Agent syntax](#host-agent-syntax) or canonical constructor syntax
   (`AgentClaude("sonnet", "medium")`). Typechecked before execution; overrides qualified
   program-table/`[exec]` config. An `AgentCommand(...)` command is shell-split and validated
-  like `[exec] runner`; a malformed one (e.g. an unclosed quote) exits 1 with nothing run. With
+  before execution; a malformed one (e.g. an unclosed quote) exits 1 with nothing run. With
   `--no-stdlib` on a program that never loads `std/config` it exits 1, whereas a configured
   `default-agent` is merely inert.
 - `--timeout DURATION` / `--no-timeout`: Override the initial shell-exec and agent idle
@@ -271,7 +271,7 @@ which pipes the prompt on stdin. AgL text literals interpolate `%{…}` themselv
 
 A continuing `AgentCommand` session requires an unescaped `%{SESSION_ID}` in its command. AGM
 substitutes a generated id into the argv (not the child environment); the command must use it to
-create or resume its transcript. Free `ask` (including an `[exec] runner` default),
+create or resume its transcript. Free `ask` with an `AgentCommand` default agent,
 `Session::open(AgentCommand(...))`, and `AgentCommand(...).ask(...)` with corrective retries open
 continuing sessions; a single-attempt `AgentCommand(...).ask(...)` sends one prompt and needs no
 placeholder. Opening a session from a command without it raises `SessionError`. See
@@ -285,19 +285,12 @@ placeholder. Opening a session from a command without it raises `SessionError`. 
 ```toml
 [exec]
 default-agent = "claude/sonnet-medium" # native shorthand or custom command
-# runner = "custom-agent --session %{SESSION_ID}" # command must create/resume this id
 strict-json = false         # lenient JSON recovery is the default
 timeout = "30m"             # initial shell-exec and agent idle timeout
 log = false                 # trace logging off by default; set true to enable
 # log-file = "trace.jsonl" # explicit trace path (omit for auto timestamped path)
 
 ```
-
-`runner` (`[exec]`-only) is a bare host command like `[loop] runner`, not AgL syntax. It seeds
-`default-agent` as `AgentCommand(runner)` when no `--default-agent` or configured
-`default-agent` is given, and must handle [session ids](#session-runners); prefer a native
-`AgentClaude`, `AgentCodex`, or `AgentPi`. It is shell-split and validated when configuration is
-read, before module loading; a malformed command exits 1 with nothing run.
 
 Qualified tables address a declaration by module suffix and scope path. A loose entry file's
 module component is its `.agl` stem; a file run from a package (development checkout, installed
@@ -335,8 +328,7 @@ A qualified target (`std/config::KEY := …`) always works; after `import std/co
 bare `KEY := …`. `Option[text]` settings (`log-file`, `timeout`) take `Some("…")` or `None`.
 
 Precedence for `default-agent`, `log`, `strict-json`, `log-file`, and `timeout` is
-`source write > CLI > qualified program table > [exec].X > engine default`, with `[exec] runner`
-as an extra `default-agent` fallback just below `[exec] default-agent`. CLI and config supply the
+`source write > CLI > qualified program table > [exec].X > engine default`. CLI and config supply the
 **initial** value; a source write overrides it from that program point on: after `--no-log`,
 `std/config::log := true` enables tracing from there, and `std/config::strict-json := true`
 overrides `[exec] strict-json = false`.

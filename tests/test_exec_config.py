@@ -25,22 +25,11 @@ class TestExecConfig:
             timeout=None,
             log=False,
             log_file=None,
-            runner="claude",
         )
         assert cfg.strict_json is False
         assert cfg.timeout is None
         assert cfg.log is False
         assert cfg.log_file is None
-        assert cfg.runner == "claude"
-
-    def test_runner_defaults_to_none(self) -> None:
-        cfg = ExecConfig(
-            strict_json=False,
-            timeout=None,
-            log=False,
-            log_file=None,
-        )
-        assert cfg.runner is None
 
     def test_frozen(self) -> None:
         cfg = ExecConfig(
@@ -62,33 +51,6 @@ class TestLoadExecConfig:
         assert cfg.timeout is None
         assert cfg.log is False
         assert cfg.log_file is None
-        assert cfg.runner is None
-
-    def test_runner_loaded_from_toml(self, tmp_path: Path) -> None:
-        home = tmp_path / "home"
-        config = home / ".agm" / "config.toml"
-        config.parent.mkdir(parents=True)
-        config.write_text('[exec]\nrunner = "claude"\n')
-        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
-        assert cfg.runner == "claude"
-
-    def test_blank_runner_is_none(self, tmp_path: Path) -> None:
-        home = tmp_path / "home"
-        config = home / ".agm" / "config.toml"
-        config.parent.mkdir(parents=True)
-        config.write_text('[exec]\nrunner = ""\n')
-        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
-        assert cfg.runner is None
-
-    def test_runner_is_not_a_program_table_override(self, tmp_path: Path) -> None:
-        """Unlike an engine key, ``runner`` never comes from a qualified program table."""
-        home = tmp_path / "home"
-        config = home / ".agm" / "config.toml"
-        config.parent.mkdir(parents=True)
-        config.write_text('[exec]\nrunner = "claude"\n')
-        merged = load_merged_config(home=home, proj_dir=None, cwd=tmp_path)
-        cfg = exec_config_from_merged(merged, program_table={"runner": "codex"})
-        assert cfg.runner == "claude"
 
     def test_load_exec_config_from_toml(self, tmp_path: Path) -> None:
         home = tmp_path / "home"

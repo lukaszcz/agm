@@ -252,75 +252,16 @@ def test_exec_agent_source_cli_and_config_precedence(
         assert field.value in rendered
 
 
-def test_exec_runner_config_seeds_default_agent_as_agent_command(
+def test_exec_config_runner_key_leaves_the_default_agent_unset(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """``[exec] runner`` is a bare host command, decoded into ``AgentCommand``.
-
-    Unlike ``default-agent``, it is never rendered as AgL source (it carries
-    quotes/backslashes/``%{`` verbatim), so it is decoded directly into a
-    typed value rather than spliced in as an override.
-    """
+    """``[exec] runner`` is not a setting: even a malformed one is inert."""
     home = tmp_path / "home"
     config_dir = home / ".agm"
     config_dir.mkdir(parents=True)
-    (config_dir / "config.toml").write_text('[exec]\nrunner = "claude"\n')
-    program = tmp_path / "program.agl"
-    program.write_text(
-        "import std/config\n"
-        "program def main() -> unit =\n"
-        "  let agent = std/config::default-agent\n"
-        "  let command = case agent of\n"
-        "    | AgentCommand(command) => command\n"
-        '    | _ => "unexpected"\n'
-        "  let encoded = agent as json\n"
-        "  print command\n"
-        "  print encoded\n"
-    )
-    monkeypatch.setattr(
-        exec_engine,
-        "current_config_context",
-        lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-    )
-
-    assert (
-        exec_command.run(ExecArgs(file=str(program), strict_json=None, no_log=True, log_file=None))
-        is None
-    )
-
-    rendered = capsys.readouterr().out
-    assert "AgentCommand" in rendered
-    assert "claude" in rendered
-
-
-@pytest.mark.parametrize(
-    ("default_agent_literal", "runner", "expected"),
-    (
-        (None, "claude", agent_value("AgentCommand", command="claude")),
-        (
-            'AgentCommand("configured")',
-            "claude",
-            agent_value("AgentCommand", command="configured"),
-        ),
-    ),
-)
-def test_exec_default_agent_beats_runner_precedence(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    default_agent_literal: str | None,
-    runner: str,
-    expected: RecordValue,
-) -> None:
-    home = tmp_path / "home"
-    config_dir = home / ".agm"
-    config_dir.mkdir(parents=True)
-    default_agent_line = (
-        "" if default_agent_literal is None else f"default-agent = {default_agent_literal!r}\n"
-    )
-    (config_dir / "config.toml").write_text(f'[exec]\nrunner = "{runner}"\n{default_agent_line}')
+    (config_dir / "config.toml").write_text('[exec]\nrunner = "claude \'oops"\n')
     program = tmp_path / "program.agl"
     program.write_text(_file_program("import std/config\nprint std/config::default-agent\n"))
     monkeypatch.setattr(
@@ -335,10 +276,8 @@ def test_exec_default_agent_beats_runner_precedence(
     )
 
     rendered = capsys.readouterr().out
-    assert expected.display_name.rsplit("::", maxsplit=1)[-1] in rendered
-    for field in expected.fields.values():
-        assert isinstance(field, TextValue)
-        assert field.value in rendered
+    assert "AgentClaude" in rendered
+    assert "AgentCommand" not in rendered
 
 
 @pytest.mark.parametrize("value", ["AgentCommand(", "true", 'AgentCommand("x") + "y"'])
@@ -439,37 +378,6 @@ def test_exec_rejects_blank_agent_literal_from_cli(
     error = capsys.readouterr().err
     assert "default-agent" in error
     assert "--default-agent" in error
-
-
-def test_exec_rejects_malformed_exec_runner_before_any_module_loads(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """``[exec] runner`` is shell-split eagerly, before the program is even loaded.
-
-    An unclosed quote is a host-configuration error (exit 1): the module
-    graph is never loaded, so the program's own output never appears.
-    """
-    home = tmp_path / "home"
-    config_dir = home / ".agm"
-    config_dir.mkdir(parents=True)
-    (config_dir / "config.toml").write_text('[exec]\nrunner = "claude \'oops"\n')
-    program = tmp_path / "program.agl"
-    program.write_text(_file_program('print "not-run"\n'))
-    monkeypatch.setattr(
-        exec_engine,
-        "current_config_context",
-        lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-    )
-
-    with pytest.raises(SystemExit) as exc_info:
-        exec_command.run(ExecArgs(file=str(program), strict_json=None, no_log=True, log_file=None))
-
-    assert exc_info.value.code == 1
-    out, error = capsys.readouterr()
-    assert out == ""
-    assert "runner" in error
 
 
 def test_exec_rejects_malformed_agent_command_literal_from_cli(

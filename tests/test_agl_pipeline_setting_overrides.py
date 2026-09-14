@@ -373,10 +373,9 @@ class TestMalformedAgentCommandAtConstruction:
         assert value.fields["command"] == TextValue("echo hi")
 
     def test_seeded_malformed_command_text_is_also_a_pre_execution_diagnostic(self) -> None:
-        """A directly host-seeded value (e.g. ``[exec] runner``'s decode target)
-        is validated the same way as a declared/spliced default: whichever
-        value wins at construction is checked, regardless of which channel
-        supplied it.
+        """A directly host-seeded value is validated the same way as a
+        declared/spliced default: whichever value wins at construction is
+        checked, regardless of which channel supplied it.
         """
         from tests._agl_helpers import agent_value
 

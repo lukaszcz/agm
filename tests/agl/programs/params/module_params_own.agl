@@ -1,0 +1,18 @@
+# Module parameters are seeded before the entry runs, while remaining ordinary bindings.
+
+record Settings
+  enabled: bool
+  labels: array[text]
+
+@param let verbose: bool = false
+@param @opt-name("display-label") var label: text = "base"
+@param let settings: Settings = Settings(enabled = true, labels = ["one", "two"])
+@param let note: Option[text] = Option::Some(value = "ready")
+
+program def main(boost: int) -> unit =
+  label := "%{label}-%{boost}"
+  print verbose
+  print label
+  print settings.enabled
+  print settings.labels[0]
+  print note.unwrap-or("missing")

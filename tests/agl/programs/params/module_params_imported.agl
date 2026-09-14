@@ -1,0 +1,8 @@
+# Module-closure parameters can seed direct and transitive imports without a value signature.
+
+import A/logging
+
+program def main() -> unit =
+  print A/logging::verbose
+  print A/logging::Debug::trace
+  print A/logging::default-limit()

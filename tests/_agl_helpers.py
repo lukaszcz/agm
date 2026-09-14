@@ -51,11 +51,13 @@ from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import IrBind, IrExpr, IrSequence
 from agm.agl.ir.program import NominalDescriptor, NominalKind, VariantDescriptor
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
+from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program_seeded, wrap_inline_program
-from agm.agl.pipeline import PreparedProgram, RunResult
+from agm.agl.pipeline import PreparedProgram, ProgramDiscovery, RunResult
 from agm.agl.runtime.arguments import ProgramArguments
+from agm.agl.runtime.types import ProgramDeclInfo
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_MEMBER_TYPE_DEFS,
     TypeDef,
@@ -206,10 +208,9 @@ def run_inline_command(
 ) -> RunResult:
     """Run test-only inline source through the same entry transform as ``agm exec -c``.
 
-    Routes through :meth:`PipelineDriver.preflight_arguments` (binding
-    ``positional``/``param_values`` as the entry program's own value
-    arguments) when the selected entry ``program def`` declares parameters,
-    and through plain default-program selection otherwise.
+    Routes through :meth:`PipelineDriver.preflight_arguments` for an entry's
+    value arguments or its scenario module parameters, and otherwise through
+    plain default-program selection.
     """
     prepared = prepare_inline_command(
         source,
@@ -219,6 +220,7 @@ def run_inline_command(
     )
     param_values = run_kwargs.pop("param_values", None)
     positional = run_kwargs.pop("positional", None)
+    module_params = run_kwargs.pop("module_params", None)
     discovery = runtime.discover_programs(prepared)
     if discovery.compiled is None:
         return runtime.run_prepared(prepared, **run_kwargs)
@@ -226,7 +228,18 @@ def run_inline_command(
     assert len(entry_programs) <= 1
     entry_program = entry_programs[0] if entry_programs else None
 
-    if entry_program is None or not entry_program.parameters:
+    if entry_program is None:
+        assert not param_values and not positional, (
+            "scenario supplied 'param_values'/'positional' but the entry program "
+            "declares no value parameters to receive them - check the fixture's "
+            "program signature"
+        )
+        assert module_params is None, "scenario supplied module parameters without an entry program"
+        return runtime.run_prepared(
+            prepared, compiled=discovery.compiled, select_default_program=True, **run_kwargs
+        )
+
+    if not entry_program.parameters and module_params is None:
         assert not param_values and not positional, (
             "scenario supplied 'param_values'/'positional' but the entry program "
             "declares no value parameters to receive them - check the fixture's "
@@ -244,6 +257,7 @@ def run_inline_command(
             named=dict(param_values) if param_values else {},
         ),
         compiled=discovery.compiled,
+        param_values=module_param_values(discovery, entry_program, module_params),
     )
     if not argument_preflight.result.ok:
         return argument_preflight.result
@@ -254,8 +268,30 @@ def run_inline_command(
         executable=argument_preflight.executable,
         program_symbol=argument_preflight.executable.program_symbols[entry_program.node_id],
         arguments=argument_preflight.arguments,
+        param_seeds=argument_preflight.param_seeds,
         **run_kwargs,
     )
+
+
+def module_param_values(
+    discovery: ProgramDiscovery,
+    program: ProgramDeclInfo,
+    declaration_values: Mapping[str, object] | None,
+) -> dict[StaticBindingKey, object]:
+    """Translate scenario declaration paths into the selected program's parameter keys."""
+    params = tuple(discovery.params_for(program))
+    params_by_path = {param.declaration_path: param.key for param in params}
+    assert len(params_by_path) == len(params), "fixture has duplicate module parameter paths"
+
+    values: dict[StaticBindingKey, object] = {}
+    for declaration_path, value in (declaration_values or {}).items():
+        key = params_by_path.get(declaration_path)
+        assert key is not None, (
+            f"scenario supplied unknown module parameter {declaration_path!r}; "
+            "check the fixture declaration path"
+        )
+        values[key] = value
+    return values
 
 
 def next_decl_id() -> int:

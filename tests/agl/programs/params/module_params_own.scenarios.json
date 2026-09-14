@@ -1,0 +1,45 @@
+{
+  "scenarios": [
+    {
+      "name": "no_module_seeds",
+      "params": {
+        "boost": 2
+      },
+      "expect": {
+        "stdout": "false\nbase-2\ntrue\none\nready\n"
+      }
+    },
+    {
+      "name": "seed_root_bindings_and_complex_values",
+      "params": {
+        "boost": 5
+      },
+      "module_params": {
+        "<entry>::verbose": true,
+        "<entry>::label": "seed",
+        "<entry>::settings": {
+          "enabled": false,
+          "labels": ["custom", "other"]
+        },
+        "<entry>::note": {
+          "$case": "None"
+        }
+      },
+      "expect": {
+        "stdout": "true\nseed-5\nfalse\ncustom\nmissing\n"
+      }
+    },
+    {
+      "name": "invalid_module_seed_fails_preflight",
+      "params": {
+        "boost": 1
+      },
+      "module_params": {
+        "<entry>::verbose": "not-a-bool"
+      },
+      "expect": {
+        "host_error": {}
+      }
+    }
+  ]
+}

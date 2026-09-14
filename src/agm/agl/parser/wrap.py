@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import agm.agl.syntax as syntax
+from agm.agl.attributes import PARAM_ATTRIBUTE
 from agm.agl.syntax.nodes import Item, Program, static_function_items
 from agm.agl.syntax.visitor import walk
 
@@ -66,10 +67,11 @@ def _free_names(item: Item) -> frozenset[str]:
 def _root_retained(items: tuple[Item, ...]) -> frozenset[int]:
     """Indices of the items that must stay at the program root.
 
-    Declarations and path-bearing bindings are retained outright — a scoped
-    binder path is illegal inside a block. An unscoped ``let``/``var`` is
-    retained only when a retained item reads its name, computed to a fixpoint
-    so a retained binding's own initializer retains what it reads in turn.
+    Declarations, path-bearing bindings, and ``@param`` bindings are retained
+    outright — each is valid only at a module root. An unscoped ordinary
+    ``let``/``var`` is retained only when a retained item reads its name,
+    computed to a fixpoint so a retained binding's own initializer retains
+    what it reads in turn.
     Constancy is not decided here: the checker rejects a retained binding whose
     initializer is not a constant expression, which the scope pass alone cannot
     determine.
@@ -78,7 +80,13 @@ def _root_retained(items: tuple[Item, ...]) -> frozenset[int]:
         index
         for index, item in enumerate(items)
         if isinstance(item, _ROOT_DECLARATIONS)
-        or (isinstance(item, (syntax.LetDecl, syntax.VarDecl)) and bool(item.scope_path))
+        or (
+            isinstance(item, (syntax.LetDecl, syntax.VarDecl))
+            and (
+                bool(item.scope_path)
+                or any(attr.name == PARAM_ATTRIBUTE for attr in item.attributes)
+            )
+        )
     }
     needed: set[str] = set()
     for index in retained:
@@ -104,8 +112,9 @@ def wrap_inline_program(program: Program, *, next_node_id: int) -> tuple[Program
     """Wrap root non-declarations in a host-only synthetic program entry.
 
     The transform is syntactic: root declarations, scope regions, path-bearing
-    bindings, and every binding a root item reads (see :func:`_root_retained`)
-    stay at the root, while all other items move into ``main`` in source order.
+    and ``@param`` bindings, and every binding a root item reads (see
+    :func:`_root_retained`) stay at the root, while all other items move into
+    ``main`` in source order.
     Retaining the bindings root declarations read keeps those declarations'
     normal textual visibility.
 

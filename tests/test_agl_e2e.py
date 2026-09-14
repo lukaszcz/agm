@@ -51,7 +51,13 @@ from agm.agent.session import (
     SessionService,
 )
 from agm.packages.layout import MODULE_TREE_DIRNAME
-from tests._agl_helpers import REPO_STDLIB_ROOT, agl_roots, prepare_inline_command
+from tests._agl_helpers import (
+    REPO_STDLIB_ROOT,
+    agl_roots,
+    module_param_values,
+    prepare_inline_command,
+    run_inline_command,
+)
 from tests._process_helpers import FakeShell
 
 AGL_DIR = Path(__file__).parent / "agl"
@@ -744,6 +750,7 @@ def _run_prepared_entry(
     prepared: Any,
     *,
     param_values: dict[str, Any],
+    module_params: dict[str, Any] | None = None,
     positional: list[Any] | None = None,
     process_environment: dict[str, str] | None = None,
 ) -> Any:
@@ -751,8 +758,8 @@ def _run_prepared_entry(
 
     Routes through :meth:`PipelineDriver.preflight_arguments` (binding
     *positional*/*param_values* as the entry program's own value arguments)
-    when the selected entry ``program def`` declares parameters. A program
-    with no parameters just runs.
+    when the selected entry ``program def`` declares parameters or a scenario
+    supplies module parameters. A program with neither just runs.
     """
     discovery = runtime.discover_programs(prepared)
     if discovery.compiled is None:
@@ -761,7 +768,7 @@ def _run_prepared_entry(
     assert len(entry_programs) == 1
     entry_program = entry_programs[0]
 
-    if entry_program.parameters:
+    if entry_program.parameters or module_params is not None:
         from agm.agl.runtime.arguments import ProgramArguments
 
         argument_preflight = runtime.preflight_arguments(
@@ -772,6 +779,7 @@ def _run_prepared_entry(
                 named=dict(param_values) if param_values else {},
             ),
             compiled=discovery.compiled,
+            param_values=module_param_values(discovery, entry_program, module_params),
         )
         if not argument_preflight.result.ok:
             return argument_preflight.result
@@ -782,6 +790,7 @@ def _run_prepared_entry(
             executable=argument_preflight.executable,
             program_symbol=argument_preflight.executable.program_symbols[entry_program.node_id],
             arguments=argument_preflight.arguments,
+            param_seeds=argument_preflight.param_seeds,
             process_environment=process_environment,
         )
 
@@ -810,6 +819,32 @@ def _run_source_entry(
 
     prepared = PipelineDriver.prepare_program(source, roots=roots, default_stdlib=default_stdlib)
     return _run_prepared_entry(runtime, prepared, param_values={})
+
+
+def test_module_param_paths_must_exist_in_selected_program_closure() -> None:
+    from agm.agl import PipelineDriver
+
+    prepared = PipelineDriver.prepare_program(
+        "@param let enabled: bool = false\nprogram def main() -> unit = ()\n",
+        default_stdlib=False,
+    )
+    discovery = PipelineDriver().discover_programs(prepared)
+
+    with pytest.raises(AssertionError):
+        module_param_values(discovery, discovery.programs[0], {"<entry>::missing": True})
+
+
+def test_inline_entry_module_params_seed_root_binding(capsys: pytest.CaptureFixture[str]) -> None:
+    from agm.agl import PipelineDriver
+
+    result = run_inline_command(
+        PipelineDriver(),
+        "@param var value: int = 1\nvalue := value + 1\nprint value\n",
+        module_params={"<entry>::value": 4},
+    )
+
+    assert result.ok
+    assert capsys.readouterr().out == "5\n"
 
 
 def _run_program(
@@ -863,6 +898,7 @@ def _run_program(
                 runtime,
                 prepared,
                 param_values=scenario.get("params", {}),
+                module_params=scenario.get("module_params"),
                 positional=scenario.get("positional"),
                 process_environment=scenario.get("process_environment"),
             )

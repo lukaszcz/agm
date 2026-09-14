@@ -1,0 +1,9 @@
+import B/defaults
+
+@param let verbose: bool = false
+
+scope Debug
+  @param let trace: bool = false
+end Debug
+
+def default-limit() -> int = B/defaults::limit

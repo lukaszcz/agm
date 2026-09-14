@@ -1,0 +1,27 @@
+{
+  "scenarios": [
+    {
+      "name": "no_module_seeds",
+      "module_roots": [
+        "program_modules/params/module_params_imported"
+      ],
+      "expect": {
+        "stdout": "false\nfalse\n3\n"
+      }
+    },
+    {
+      "name": "seed_direct_and_transitive_modules",
+      "module_roots": [
+        "program_modules/params/module_params_imported"
+      ],
+      "module_params": {
+        "A/logging::verbose": true,
+        "A/logging::Debug::trace": true,
+        "B/defaults::limit": 9
+      },
+      "expect": {
+        "stdout": "true\ntrue\n9\n"
+      }
+    }
+  ]
+}

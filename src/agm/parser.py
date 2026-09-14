@@ -648,7 +648,7 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "repl": textwrap.dedent("""\
         agm repl [--strict-json|--no-strict-json] [--max-call-depth N]
-                 [--default-agent AGENT] [--confirm-agents] [--dry-run] [--no-stdlib]
+                 [--default-agent AGENT] [--dry-run] [--no-stdlib]
                  [--quiet] [--log|--log-file PATH|--no-log] [--plain]
 
         Start an interactive read-eval-print loop for AgL.  Each entry is
@@ -683,8 +683,6 @@ _HELP_TEXTS: dict[str, str] = {
                                 (CLI > config; source pragmas are not applied in the REPL).
           --default-agent AGENT Seed the free-ask default session from an Agent value
                                 or command.
-          --confirm-agents     Confirm each agent prompt before dispatching it
-                                (default: fire agent calls without confirming).
           --quiet               Suppress automatic echoing of entry results.
           --no-stdlib           Disable the automatic import std/prelude::* prelude for
                                 each loaded REPL program (entries and library modules).

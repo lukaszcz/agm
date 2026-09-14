@@ -8,8 +8,7 @@ This file covers what a front end cannot: calling :func:`run_repl_loop`
 directly with a bare reader/writer seam, including the case neither front end
 exercises — no ``on_theme_change`` hook at all — plus direct, driver-free tests
 of the other names ``agm.agl.repl.loop`` exports: :func:`format_banner`,
-:func:`is_incomplete`, :func:`has_runnable_statements`, and
-:func:`make_console_confirm`.
+:func:`is_incomplete`, and :func:`has_runnable_statements`.
 """
 
 from __future__ import annotations
@@ -19,13 +18,10 @@ from collections.abc import Callable
 import pytest
 
 from agm.agl.repl import ReplSession
-from agm.agl.repl.agentmode import AgentMode
-from agm.agl.repl.agents import ConfirmDecision
 from agm.agl.repl.loop import (
     format_banner,
     has_runnable_statements,
     is_incomplete,
-    make_console_confirm,
     run_repl_loop,
 )
 
@@ -119,10 +115,7 @@ def test_keyboard_interrupt_cancels_entry_without_exiting() -> None:
 
 
 def test_format_banner_starts_with_stable_prefix() -> None:
-    # The first banner line is a stable prefix regardless of mode.
     assert format_banner().startswith("AgL REPL")
-    assert format_banner(AgentMode(mode="auto")).startswith("AgL REPL")
-    assert format_banner(AgentMode(mode="confirm")).startswith("AgL REPL")
 
 
 # ---------------------------------------------------------------------------
@@ -208,50 +201,3 @@ class TestHasRunnableStatements:
         # An odd/unlexable entry is conservatively runnable so it reaches the
         # evaluator and surfaces a real diagnostic rather than being dropped.
         assert has_runnable_statements("@") is True
-
-
-# ---------------------------------------------------------------------------
-# make_console_confirm
-# ---------------------------------------------------------------------------
-#
-# Despite the name (kept for the callback's established meaning: it confirms a
-# live agent call the way the console does), this callback is UI-free — it is
-# shared by both front ends via agm.agl.repl.loop — so it is tested directly
-# here with no console driven at all.
-
-
-class TestMakeConsoleConfirm:
-    def _confirm_factory(
-        self, *answers: str
-    ) -> tuple[Callable[[str, str], ConfirmDecision], list[str]]:
-        """Build a confirm callback whose reader replays scripted answers."""
-        replies = iter(answers)
-        printed: list[str] = []
-        confirm = make_console_confirm(
-            reader=lambda _prompt: next(replies),
-            printer=printed.append,
-        )
-        return confirm, printed
-
-    def test_yes_no_always(self) -> None:
-        confirm, _printed = self._confirm_factory("y", "n", "a")
-        assert confirm("writer", "do it") == "yes"
-        assert confirm("writer", "do it") == "no"
-        assert confirm("writer", "do it") == "always"
-
-    def test_empty_answer_defaults_to_yes(self) -> None:
-        confirm, _printed = self._confirm_factory("")
-        assert confirm("writer", "do it") == "yes"
-
-    def test_unrecognised_reasks_then_accepts(self) -> None:
-        confirm, printed = self._confirm_factory("huh?", "yes")
-        assert confirm("writer", "do it") == "yes"
-        assert any("y(es)" in line for line in printed)
-
-    def test_view_prints_full_prompt_then_accepts(self) -> None:
-        long_prompt = "X" * 500
-        confirm, printed = self._confirm_factory("v", "y")
-        assert confirm("writer", long_prompt) == "yes"
-        # The truncated preview AND the full text both appear.
-        assert any("truncated" in line for line in printed)
-        assert any(long_prompt in line for line in printed)

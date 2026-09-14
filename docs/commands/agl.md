@@ -457,7 +457,7 @@ $ echo $?
 
 ```text
 agm repl [--strict-json|--no-strict-json]
-         [--max-call-depth N] [--default-agent AGENT] [--confirm-agents]
+         [--max-call-depth N] [--default-agent AGENT]
          [--quiet] [--dry-run] [--no-stdlib] [--log|--log-file PATH|--no-log] [--plain]
 ```
 
@@ -545,25 +545,14 @@ Meta-commands start with `:`, which never collides with AgL syntax:
 | `:type EXPR` | Type-check `EXPR` against the session and print its type (no eval) |
 | `:bindings` / `:env` | List current bindings as `name : Type = value` |
 | `:set echo on\|off` | Toggle result echoing |
-| `:agent confirm\|auto` | Switch the agent-call mode (or report it with no argument) |
 | `:load FILE` | Load a saved transcript by its original entries, or an ordinary `.agl` file one item per entry |
 | `:save FILE` | Write the accumulated session source and entry boundaries to a transcript |
 | `:theme [dark\|light\|auto]` | Show or switch the syntax-highlighting theme; saves to `~/.agm/config.toml` |
-
-### Agent-call confirmation
-
-- **auto** (default): agent calls fire immediately, as in `agm exec`.
-- **confirm** (`--confirm-agents` or `:agent confirm`): before every live agent prompt,
-  including `Session::ask` and each parse-retry follow-up, show the agent and rendered prompt
-  (truncated; `[v]iew` prints it in full) and ask `[Y]es / [n]o / [a]lways`. `yes` runs the call,
-  `no` aborts the entry and rolls back its bindings, `always` switches the session to auto.
-- `exec` shell calls are never gated.
 
 ### Options
 
 - `--strict-json` / `--no-strict-json`, `--max-call-depth N`,
   `--default-agent AGENT`: As for `agm exec`.
-- `--confirm-agents`: Start in [confirm mode](#agent-call-confirmation).
 - `--quiet`: Do not echo entry results.
 - `--no-stdlib`: Disable the automatic prelude for every loaded program (entries and library
   modules); explicit imports still work. `:reset` keeps this choice.
@@ -624,9 +613,6 @@ text
 agl> :bindings
 greeting : text = hello
 agl> :quit
-
-# Confirm each agent call before dispatching it.
-agm repl --confirm-agents
 
 # Explore types only — no agent or exec calls fire, nothing is persisted.
 agm repl --dry-run

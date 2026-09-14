@@ -1128,11 +1128,6 @@ def repl_cmd(
         metavar="AGENT",
         help="Seed the free-ask default session from an Agent value or command.",
     ),
-    confirm_agents: bool = typer.Option(
-        False,
-        "--confirm-agents",
-        help="Confirm each agent call before dispatching it.",
-    ),
     quiet: bool = typer.Option(
         False,
         "--quiet",
@@ -1191,7 +1186,6 @@ def repl_cmd(
             strict_json=strict_json,
             max_call_depth=max_call_depth,
             default_agent=default_agent,
-            confirm_agents=confirm_agents,
             quiet=quiet,
             no_log=no_log,
             log_file=log_file,

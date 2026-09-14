@@ -6,10 +6,9 @@ timeout), so an interactive session evaluates entries with the same agent
 dispatch backing a batch ``agm exec`` run would use.
 
 The command itself is thin: it resolves configuration the same way ``exec``
-does, builds a value-driven dispatcher wrapped in a confirming wrapper,
-constructs a :class:`ReplSession`, then hands control to one of two front
-ends sharing the same UI-free loop core (:mod:`agm.agl.repl.loop`):
-:func:`agm.agl.repl.console.run_console` (prompt_toolkit) or
+does, builds a value-driven dispatcher, constructs a :class:`ReplSession`,
+then hands control to one of two front ends sharing the same UI-free loop
+core (:mod:`agm.agl.repl.loop`): :func:`agm.agl.repl.console.run_console` (prompt_toolkit) or
 :func:`agm.agl.repl.plain_console.run_plain_console` (plain line I/O, for a
 pipe, comint buffer, or any other non-terminal consumer). The front end is
 chosen by :func:`~agm.agl.repl.plain_console.plain_mode_engaged` (non-tty
@@ -17,11 +16,7 @@ stdin/stdout, or ``TERM=dumb``) or by the explicit ``--plain`` flag; there is
 no flag to force prompt_toolkit onto a pipe. All the interactive logic lives
 in :mod:`agm.agl.repl`.
 
-Agent calls are gated: a single shared :class:`AgentMode` (``confirm`` by
-default, ``auto``; ``confirm`` under ``--confirm-agents``) is passed to BOTH the confirming
-wrapper and the chosen front end, so the ``:agent`` meta-command, an ``always``
-answer, and the wrapper all stay in sync.  Trace logging (``--log-file`` /
-``--no-log``) Each REPL entry and its loaded library modules receive ``std/prelude``
+Each REPL entry and its loaded library modules receive ``std/prelude``
 glob imports by default. An explicit import whose expansion includes
 ``std/prelude`` supplies that contribution instead, so plain ``import std/prelude``
 leaves prelude names qualified-only. ``--no-stdlib`` disables the automatic import
@@ -37,9 +32,6 @@ import sys
 from agm.agent.session import create_agl_session_host
 from agm.agl.diagnostics import format_diagnostic
 from agm.agl.repl import ReplSession
-from agm.agl.repl.agentmode import AgentMode
-from agm.agl.repl.agents import ConfirmingAgent
-from agm.agl.repl.loop import make_console_confirm
 from agm.agl.repl.plain_console import plain_mode_engaged
 from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
@@ -114,20 +106,7 @@ def run(args: ReplArgs) -> None:
 
     runner_agent = value_driven_agent_factory(idle_timeout=config.timeout)
 
-    # ONE shared agent-mode holder: passed to BOTH the confirming wrapper and the
-    # chosen front end, so ``:agent``/``always`` and the wrapper observe the same
-    # mode.  ``--confirm-agents`` starts in ``confirm``; otherwise auto (decision 2).
-    agent_mode = AgentMode(mode="confirm" if args.confirm_agents else "auto")
-
-    # UI-free: shared by both front ends, so building it never pulls in
-    # prompt_toolkit even when the plain front end is the one that runs.
-    confirm_agent_call = make_console_confirm()
-    confirming_agent = ConfirmingAgent(runner_agent, agent_mode, confirm=confirm_agent_call)
-
-    session_host = create_agl_session_host(
-        idle_timeout=config.timeout,
-        confirm_session=confirming_agent.confirm_session_values,
-    )
+    session_host = create_agl_session_host(idle_timeout=config.timeout)
 
     host_settings_policy = HostSettingsPolicy(
         resolve_trace_path=LiveTracePathResolver(command_name="repl", auto_path=trace_path),
@@ -178,7 +157,7 @@ def run(args: ReplArgs) -> None:
         session = ReplSession(
             default_strict_json=strict_json,
             default_call_depth_limit=call_depth_limit,
-            agent_dispatcher=confirming_agent,
+            agent_dispatcher=runner_agent,
             session_host=session_host,
             shell_exec_timeout=config.timeout,
             trace_path=trace_path,
@@ -231,7 +210,6 @@ def run(args: ReplArgs) -> None:
                 session,
                 echo=not args.quiet,
                 check_only=dry_run.enabled(),
-                agent_mode=agent_mode,
                 theme=repl_config.theme,
                 on_theme_save=on_theme_save,
                 stdin=sys.stdin,
@@ -245,7 +223,6 @@ def run(args: ReplArgs) -> None:
             session,
             echo=not args.quiet,
             check_only=dry_run.enabled(),
-            agent_mode=agent_mode,
             history_path=history_path,
             theme=repl_config.theme,
             on_theme_save=on_theme_save,

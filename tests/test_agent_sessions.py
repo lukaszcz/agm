@@ -170,18 +170,13 @@ def test_production_session_host_selects_and_rejects_transports(
         host.open(command, "bad")
 
 
-def test_agl_session_host_confirmation_and_invalid_agent_are_handled() -> None:
+def test_agl_session_host_rejects_closed_unknown_and_invalid_agents() -> None:
     capabilities = SessionCapabilities(frozenset({SessionOperation.ASK}))
     backend = FakeBackend(capabilities)
-    confirmed: list[tuple[object, str]] = []
-    host = AglSessionHost(
-        SessionService(lambda _agent, _transport: backend),
-        confirm_session=lambda agent, prompt: confirmed.append((agent, prompt)),
-    )
+    host = AglSessionHost(SessionService(lambda _agent, _transport: backend))
     agent = agent_value("AgentCommand", command="worker")
     handle = host.open(agent, "Cli")
     assert host.ask(handle, "hello") == "answer"
-    assert confirmed == [(agent, "hello")]
     host.close(handle)
     with pytest.raises(AglSessionHostError):
         host.ask(handle, "closed")

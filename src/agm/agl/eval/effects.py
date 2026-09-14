@@ -445,12 +445,6 @@ class EffectHandlers:
             )
         except SessionHostError as error:
             self._session_error(error)
-        except AgentCancelled as error:
-            self._ctx._trace.agent_response(
-                ok=False, cancelled=True, reason=error.reason, span=node.location
-            )
-            error.span = node.location
-            raise
         except KeyboardInterrupt as error:
             cancelled = AgentCancelled(
                 render_value(request.agent), "interrupted", span=node.location

@@ -29,7 +29,6 @@ from agm.agent.session.protocol import (
 from agm.core.cleanup import preserve_primary_error
 
 _T = TypeVar("_T")
-SessionConfirmation = Callable[["RecordValue", str], None]
 
 SessionBackendFactory = Callable[[object, str], SessionBackend]
 
@@ -46,11 +45,8 @@ class _HostSession:
 class AglSessionHost:
     """Adapt the AGM session service to the firewall-safe AgL host protocol."""
 
-    def __init__(
-        self, service: SessionService, *, confirm_session: SessionConfirmation | None = None
-    ) -> None:
+    def __init__(self, service: SessionService) -> None:
         self._service = service
-        self._confirm_session = confirm_session
         self._sessions: dict[str, _HostSession] = {}
 
     def open(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
@@ -131,8 +127,6 @@ class AglSessionHost:
 
     def _ask(self, handle: str, prompt: str) -> SessionAskResponse:
         try:
-            if self._confirm_session is not None:
-                self._confirm_session(self._session_for(handle, "ask").agent, prompt)
             return self._service.ask(handle, SessionAskRequest(prompt))
         except SessionAskError as error:
             self._raise_ask_error(error)
@@ -249,9 +243,7 @@ class AglSessionHost:
             AglSessionHost._raise_host_error(error)
 
 
-def create_agl_session_host(
-    *, idle_timeout: float | None, confirm_session: SessionConfirmation | None = None
-) -> AglSessionHost:
+def create_agl_session_host(*, idle_timeout: float | None) -> AglSessionHost:
     """Create the production AgL session host with transport-aware backends."""
     from agm.agent.session.cli_adapters import CLI_SESSION_BACKENDS
     from agm.agent.session.rpc import PiRpcSessionBackend
@@ -266,7 +258,7 @@ def create_agl_session_host(
             raise SessionHostError(f"unsupported session transport {transport!r}", "open")
         return CLI_SESSION_BACKENDS[type(agent).__name__](idle_timeout=idle_timeout)
 
-    return AglSessionHost(SessionService(backend_for), confirm_session=confirm_session)
+    return AglSessionHost(SessionService(backend_for))
 
 
 @dataclass(slots=True)

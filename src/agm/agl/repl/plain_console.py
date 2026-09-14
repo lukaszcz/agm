@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, TextIO
 from agm.agl.repl.loop import CONTINUATION, PROMPT, is_incomplete, run_repl_loop
 
 if TYPE_CHECKING:
-    from agm.agl.repl.agentmode import AgentMode
     from agm.agl.repl.session import ReplSession
 
 
@@ -109,7 +108,6 @@ def run_plain_console(
     *,
     echo: bool = True,
     check_only: bool = False,
-    agent_mode: "AgentMode | None" = None,
     theme: str = "auto",
     on_theme_save: "Callable[[str], None] | None" = None,
     stdin: TextIO,
@@ -141,7 +139,6 @@ def run_plain_console(
         writer=writer,
         echo=echo,
         check_only=check_only,
-        agent_mode=agent_mode,
         theme=theme,
         on_theme_change=on_theme_change,
     )

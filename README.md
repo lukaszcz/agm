@@ -283,9 +283,8 @@ a package directory's manifest and module-tree discipline.
 Start an interactive read-eval-print loop for AgL. The REPL keeps a persistent session:
 each entry is parsed, type-checked, and evaluated once against an environment that
 accumulates bindings, types, and declarations, so earlier results stay available and agent
-calls fire exactly once. By default it fires agent calls immediately; `--confirm-agents`
-asks before each one. Multiline editing, syntax highlighting, tab-completion, and history are
-built in, and `:` meta-commands (`:help`, `:type`, `:bindings`, …) inspect the session.
+calls fire exactly once. Multiline editing, syntax highlighting, tab-completion, and history
+are built in, and `:` meta-commands (`:help`, `:type`, `:bindings`, …) inspect the session.
 Each loaded program receives the `std/prelude` standard-library prelude, as in
 `agm exec`, unless an explicit import includes `std/prelude`; plain `import std/prelude`
 therefore leaves its names qualified-only. Pass `--no-stdlib` to disable the
@@ -293,7 +292,6 @@ prelude for the entry and its library modules.
 
 ```bash
 agm repl                        # launch; type :help for commands, :quit to exit
-agm repl --confirm-agents       # confirm each agent call before dispatching it
 agl> let n = 21 * 2             # bindings persist across entries → "n : int = 42"
 ```
 

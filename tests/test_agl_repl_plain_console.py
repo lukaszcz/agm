@@ -15,7 +15,6 @@ from collections.abc import Callable
 import pytest
 
 from agm.agl.repl import ReplSession
-from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.plain_console import PlainReader, plain_mode_engaged, run_plain_console
 
 # ---------------------------------------------------------------------------
@@ -114,7 +113,6 @@ def drive_plain(
     session: ReplSession | None = None,
     echo: bool = True,
     check_only: bool = False,
-    agent_mode: AgentMode | None = None,
     theme: str = "auto",
     on_theme_save: Callable[[str], None] | None = None,
 ) -> str:
@@ -131,7 +129,6 @@ def drive_plain(
         repl_session,
         echo=echo,
         check_only=check_only,
-        agent_mode=agent_mode,
         theme=theme,
         on_theme_save=on_theme_save,
         stdin=stdin,

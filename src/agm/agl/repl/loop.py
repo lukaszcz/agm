@@ -13,8 +13,6 @@ it provides:
 - :func:`is_incomplete` — the multiline continuation predicate (delegates to
   the parser's structured incompleteness signal), shared so a pasted or
   editor-sent multi-line block accumulates identically on both front ends;
-- :func:`make_console_confirm` — the stdlib-``input``/``print``-based agent-call
-  confirmation callback, shared by both front ends;
 - :func:`run_repl_loop` — the loop itself, parameterized by a reader/writer
   seam and an ``on_theme_change`` hook.
 """
@@ -32,10 +30,8 @@ from agm.agl.parser import (
 from agm.agl.repl import meta as meta_mod
 from agm.agl.repl import render as render_mod
 from agm.agl.repl import session as session_mod
-from agm.agl.repl.agentmode import AgentMode
 
 if TYPE_CHECKING:
-    from agm.agl.repl.agents import ConfirmDecision
     from agm.agl.repl.session import ReplSession
 
 
@@ -47,26 +43,19 @@ PROMPT = "agl> "
 CONTINUATION = "...> "
 
 
-def format_banner(agent_mode: "AgentMode | None" = None) -> str:
-    """Return the startup banner, noting the active agent-call mode.
+def format_banner() -> str:
+    """Return the startup banner.
 
     The first line is always ``AgL REPL …`` (a stable prefix other tooling and
-    tests key on).  Subsequent lines state the prompt, how to get help, how to
-    quit, and — when an :class:`AgentMode` is supplied — the current agent-call
-    mode so the user knows up front whether live calls will prompt for
-    confirmation.
+    tests key on); the rest state the prompt, how to get help, and how to quit.
     """
-    lines = [
-        "AgL REPL — an interactive read-eval-print loop for AgL.",
-        f"  Enter AgL at the {PROMPT!r} prompt; a block continues on {CONTINUATION!r}.",
-        "  Type :help for the meta-command list; :quit or Ctrl-D to exit.",
-    ]
-    if agent_mode is not None:
-        if agent_mode.mode == "auto":
-            lines.append("  Agent-call mode: auto (live calls fire without confirmation).")
-        else:
-            lines.append("  Agent-call mode: confirm (you approve each live agent call).")
-    return "\n".join(lines)
+    return "\n".join(
+        [
+            "AgL REPL — an interactive read-eval-print loop for AgL.",
+            f"  Enter AgL at the {PROMPT!r} prompt; a block continues on {CONTINUATION!r}.",
+            "  Type :help for the meta-command list; :quit or Ctrl-D to exit.",
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -106,65 +95,6 @@ has_runnable_statements = session_mod.has_runnable_statements
 
 
 # ---------------------------------------------------------------------------
-# Agent-call confirmation prompt
-# ---------------------------------------------------------------------------
-
-# How much of a rendered prompt to show inline before truncating; longer prompts
-# offer a ``[v]iew`` option to print the full text.
-_PROMPT_PREVIEW_CHARS = 200
-
-# The reader the confirm prompt uses to read a line.  Injected so headless tests
-# can script answers without a terminal; defaults to stdlib ``input``.
-PromptReader = Callable[[str], str]
-
-
-def make_console_confirm(
-    *,
-    reader: "PromptReader | None" = None,
-    printer: Callable[[str], None] | None = None,
-) -> "Callable[[str, str], ConfirmDecision]":
-    """Return a confirm callback for :class:`~agm.agl.repl.agents.ConfirmingAgent`.
-
-    The callback shows the *callee* and the rendered prompt (truncated, with a
-    ``[v]iew`` option to print the full text), then reads ``[Y]es / [n]o /
-    [a]lways`` and maps the answer to ``"yes"`` / ``"no"`` / ``"always"``.  An
-    empty answer defaults to ``"yes"`` (the capitalised default).  Anything
-    unrecognised re-asks.
-
-    *reader* / *printer* are injected so headless tests drive it without a
-    terminal; they default to stdlib ``input`` / ``print``.  Shared by both REPL
-    front ends: neither needs styling for this prompt.
-    """
-    read: PromptReader = reader if reader is not None else input
-    write: Callable[[str], None] = printer if printer is not None else print
-
-    def confirm(callee: str, prompt: str) -> ConfirmDecision:
-        write(f"Agent call to {callee!r}:")
-        write(_preview_prompt(prompt))
-        while True:
-            answer = read("Run this agent call? [Y]es / [n]o / [a]lways: ").strip().lower()
-            if answer in ("", "y", "yes"):
-                return "yes"
-            if answer in ("n", "no"):
-                return "no"
-            if answer in ("a", "always"):
-                return "always"
-            if answer in ("v", "view"):
-                write(prompt)
-                continue
-            write("Please answer y(es), n(o), a(lways), or v(iew).")
-
-    return confirm
-
-
-def _preview_prompt(prompt: str) -> str:
-    """Return the inline prompt preview, truncated with a ``[v]iew`` hint."""
-    if len(prompt) <= _PROMPT_PREVIEW_CHARS:
-        return prompt
-    return f"{prompt[:_PROMPT_PREVIEW_CHARS]}… (truncated; type 'v' to view full)"
-
-
-# ---------------------------------------------------------------------------
 # The read-eval-print loop
 # ---------------------------------------------------------------------------
 
@@ -176,7 +106,6 @@ def run_repl_loop(
     writer: Callable[[str], None],
     echo: bool = True,
     check_only: bool = False,
-    agent_mode: "AgentMode | None" = None,
     theme: str = "auto",
     on_theme_change: Callable[[str], None] | None = None,
 ) -> None:
@@ -212,11 +141,10 @@ def run_repl_loop(
     ctx = meta_mod.MetaContext(
         session=session,
         echo=echo,
-        agent_mode=agent_mode if agent_mode is not None else AgentMode(),
         theme=theme,
     )
 
-    writer(format_banner(ctx.agent_mode))
+    writer(format_banner())
     current_theme = theme
     while True:
         try:

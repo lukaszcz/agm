@@ -4,7 +4,7 @@ Drives :func:`run_console` through prompt_toolkit's ``create_pipe_input`` +
 ``DummyOutput`` so no real terminal is required, and exercises the highlighting
 lexer and the completer directly. Tests for the UI-free predicates and helpers
 ``run_console`` delegates to (``format_banner``, ``is_incomplete``,
-``has_runnable_statements``, ``make_console_confirm``) live in
+``has_runnable_statements``) live in
 ``tests/test_agl_repl_loop.py`` alongside the rest of ``agm.agl.repl.loop``'s
 direct tests; this file covers only what actually needs the console driven.
 
@@ -30,7 +30,6 @@ from prompt_toolkit.input import PipeInput, create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
 from agm.agl.repl import ReplSession as _ReplSession
-from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.console import (
     AglCompleter,
     AglPromptLexer,
@@ -115,7 +114,6 @@ def drive(
     session: ReplSession | None = None,
     echo: bool = True,
     check_only: bool = False,
-    agent_mode: AgentMode | None = None,
 ) -> str:
     """Feed *keystrokes* to a headless REPL and return everything it printed."""
     repl_session = session if session is not None else ReplSession()
@@ -130,7 +128,6 @@ def drive(
                 repl_session,
                 echo=echo,
                 check_only=check_only,
-                agent_mode=agent_mode,
                 history_path=None,  # InMemoryHistory — never touch real $HOME
                 input=pipe,
                 output=DummyOutput(),
@@ -163,14 +160,6 @@ class TestLoop:
         # The banner points the user at :help and how to quit.
         assert ":help" in output
         assert ":quit" in output
-
-    def test_banner_reports_confirm_mode(self) -> None:
-        output = drive("\x04", agent_mode=AgentMode(mode="confirm"))
-        assert "confirm" in output.lower()
-
-    def test_banner_reports_auto_mode(self) -> None:
-        output = drive("\x04", agent_mode=AgentMode(mode="auto"))
-        assert "auto" in output.lower()
 
     def test_single_expression_submits_and_echoes(self) -> None:
         output = drive("1 + 2\r\x04")
@@ -911,24 +900,6 @@ class TestMetaThroughLoop:
         output = drive("1 + 2\r:type 1 + 2\r\x04", session=ReplSession())
         assert "int" in output
 
-    def test_agent_meta_mutates_shared_mode(self) -> None:
-        # The shared AgentMode passed to run_console reflects :agent mutations,
-        # which is exactly the instance the wrapper also receives.
-        from agm.agl.repl.agentmode import AgentMode
-
-        mode = AgentMode()
-        with _scripted_input(":agent auto\r\x04") as pipe:
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
-                run_console(
-                    ReplSession(),
-                    agent_mode=mode,
-                    history_path=None,
-                    input=pipe,
-                    output=DummyOutput(),
-                )
-        assert mode.mode == "auto"
-
     def test_load_meta_runs_file_into_session(self, tmp_path: object) -> None:
         from pathlib import Path
 
@@ -939,54 +910,6 @@ class TestMetaThroughLoop:
         output = drive(f":load {src}\r\x04", session=session)
         assert "loaded : int = 9" in output
         assert any(n == "loaded" for n, _t, _v in session.bindings())
-
-
-# ---------------------------------------------------------------------------
-# Confirm flow through run_console
-# ---------------------------------------------------------------------------
-#
-# make_console_confirm's own behaviour (yes/no/always, the empty-answer
-# default, re-asking, the [v]iew option) is a pure-callback unit test with no
-# console involved; it lives in ``tests/test_agl_repl_loop.py`` alongside the
-# other ``agm.agl.repl.loop`` exports. What belongs here is the confirm flow
-# actually driven through the console loop end to end.
-
-
-def _confirming_session(*answers: str, reply: str = "agent-reply") -> tuple[ReplSession, "object"]:
-    """A session whose default agent is a ConfirmingAgent with a scripted confirm."""
-    from agm.agl.repl.agentmode import AgentMode
-    from agm.agl.repl.agents import ConfirmingAgent
-    from agm.agl.repl.loop import make_console_confirm
-
-    replies = iter(answers)
-    confirm = make_console_confirm(reader=lambda _prompt: next(replies), printer=lambda _s: None)
-    mode = AgentMode(mode="confirm")
-    underlying = _CountingAgent(reply)
-    wrapper = ConfirmingAgent(underlying, mode, confirm=confirm)
-    session = ReplSession(agent_dispatcher=wrapper, default_stdlib=True)
-    return session, underlying
-
-
-class TestConfirmFlowThroughLoop:
-    def test_confirmed_call_dispatches_and_echoes(self) -> None:
-        session, underlying = _confirming_session("y", reply="hello-world")
-        assert isinstance(underlying, _CountingAgent)
-        output = drive('let g = ask """ask"""\r\x04', session=session)
-        assert underlying.calls == 1
-        assert "hello-world" in output
-        assert any(n == "g" for n, _t, _v in session.bindings())
-
-    def test_declined_call_aborts_entry_repl_continues(self) -> None:
-        session, underlying = _confirming_session("n")
-        assert isinstance(underlying, _CountingAgent)
-        # Decline the agent call, then run a plain entry to prove the REPL keeps
-        # looping after the abort.
-        output = drive('let g = ask """ask"""\rlet ok = 1\r\x04', session=session)
-        assert underlying.calls == 0
-        assert "cancelled" in output.lower()
-        # The aborted entry promoted nothing; the later entry succeeded.
-        assert all(n != "g" for n, _t, _v in session.bindings())
-        assert any(n == "ok" for n, _t, _v in session.bindings())
 
 
 # ---------------------------------------------------------------------------

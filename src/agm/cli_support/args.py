@@ -273,7 +273,6 @@ class ExecArgs:
 @dataclass(slots=True)
 class ReplArgs:
     strict_json: bool | None
-    confirm_agents: bool
     quiet: bool
     no_log: bool
     log_file: str | None

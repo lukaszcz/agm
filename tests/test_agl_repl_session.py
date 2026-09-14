@@ -4239,23 +4239,8 @@ class TestEntryResultShape:
 
 
 # ---------------------------------------------------------------------------
-# Agent-call cancellation (declined / interrupted)
+# Agent-call cancellation
 # ---------------------------------------------------------------------------
-
-
-class _CancellingAgent:
-    """A fake ``AgentFn`` that raises ``AgentCancelled`` on dispatch."""
-
-    def __init__(self, callee: str = "ask", reason: str = "declined") -> None:
-        self._callee = callee
-        self._reason = reason
-        self.calls = 0
-
-    def __call__(self, request: AgentRequest) -> AgentResponse:
-        from agm.agl.repl.agents import AgentCancelled
-
-        self.calls += 1
-        raise AgentCancelled(self._callee, self._reason)
 
 
 class _InterruptAgent:
@@ -4283,18 +4268,18 @@ class TestAgentCancellation:
         assert "cancelled" not in message, "an interrupt is not an agent cancellation"
         assert session.eval_entry("2 + 2").ok
 
-    def test_declined_agent_aborts_entry_with_diagnostic(self) -> None:
-        s = open_session(agent_dispatcher=_CancellingAgent())
+    def test_cancelled_agent_aborts_entry_with_diagnostic(self) -> None:
+        s = open_session(agent_dispatcher=_InterruptAgent())
         r = s.eval_entry('let g = ask """do it"""')
         assert not r.ok
         assert r.error is None
         assert r.diagnostics
         message = r.diagnostics[0].message.lower()
         assert "cancelled" in message
-        assert "interrupted" not in message, "a declined agent is not a bare interrupt"
+        assert "interrupted" not in message, "an agent cancellation is not a bare interrupt"
 
-    def test_declined_agent_leaves_bindings_unchanged(self) -> None:
-        s = open_session(agent_dispatcher=_CancellingAgent())
+    def test_cancelled_agent_leaves_bindings_unchanged(self) -> None:
+        s = open_session(agent_dispatcher=_InterruptAgent())
         s.eval_entry("let keep = 7")
         before = _snapshot(s)
         r = s.eval_entry('let g = ask """do it"""')
@@ -4303,17 +4288,8 @@ class TestAgentCancellation:
         assert _snapshot(s) == before
         assert all(n != "g" for n, _t, _v in s.bindings())
 
-    def test_keyboard_interrupt_aborts_entry(self) -> None:
-        s = open_session(agent_dispatcher=_InterruptAgent())
-        s.eval_entry("let x = 1")
-        before = _snapshot(s)
-        r = s.eval_entry('let g = ask """slow"""')
-        assert not r.ok
-        assert r.error is None
-        assert _snapshot(s) == before
-
     def test_cancellation_preserves_prior_assignment(self) -> None:
-        s = open_session(agent_dispatcher=_CancellingAgent())
+        s = open_session(agent_dispatcher=_InterruptAgent())
         s.eval_entry("var v = 1")
         r = s.eval_entry('v := 2\nlet g = ask """x"""')
         assert not r.ok
@@ -4325,14 +4301,14 @@ class TestAgentCancellation:
         # before a cancelled agent call must be promoted, mirroring the
         # partial-effects behavior for runtime raises. Previously cancellation
         # carried no failure span, so every type declaration was dropped.
-        s = open_session(agent_dispatcher=_CancellingAgent())
+        s = open_session(agent_dispatcher=_InterruptAgent())
         r = s.eval_entry('record Box\n  value: int\nlet g = ask """x"""')
         assert not r.ok
         assert s.eval_entry("Box(value = 3)").ok
 
     def test_cancellation_excludes_record_declared_after_call(self) -> None:
         # A type declared after the cancelled call is not promoted.
-        s = open_session(agent_dispatcher=_CancellingAgent())
+        s = open_session(agent_dispatcher=_InterruptAgent())
         r = s.eval_entry('let g = ask """x"""\nrecord After\n  value: int')
         assert not r.ok
         assert not s.eval_entry("After(value: 1)").ok
@@ -4390,7 +4366,7 @@ class TestTraceLogging:
         import json
 
         trace = tmp_path / "repl.log"
-        s = open_session(agent_dispatcher=_CancellingAgent(), trace_path=trace)
+        s = open_session(agent_dispatcher=_InterruptAgent(), trace_path=trace)
         r = s.eval_entry('let g = ask """x"""')
         assert not r.ok
         records = [json.loads(line) for line in trace.read_text().splitlines() if line]

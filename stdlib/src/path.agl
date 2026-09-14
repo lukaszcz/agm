@@ -1,7 +1,8 @@
 import std/option::Option
 
-# A filesystem location.  Transparent: a `path` is a `text`.
-type path = text
+# A filesystem location.  Transparent: a `path` is a `text`; program
+# parameters annotated with it complete as filesystem paths.
+builtin type path = text
 
 extern def join(parts: array[path]) -> path
 extern def dirname(path: path) -> path

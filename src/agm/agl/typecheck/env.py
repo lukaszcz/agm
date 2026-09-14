@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 if TYPE_CHECKING:
     from agm.agl.scope.program import ResolvedModule
+    from agm.agl.syntax.types import AppliedT, NameT
     from agm.agl.typecheck.function_inference import FunctionSignatureRecord
 
 from agm.agl.diagnostics import AglError, Diagnostic
@@ -62,6 +63,7 @@ from agm.agl.semantics.type_table import (
     create_seeded_type_table,
 )
 from agm.agl.semantics.types import (
+    BUILTIN_ALIAS_TARGETS,
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPE_NAMES,
     BUILTIN_PRELUDE_TYPES,
@@ -1655,6 +1657,35 @@ class TypeEnvironment:
         except AglTypeError:
             return None
 
+    def type_name_declaration(self, type_expr: NameT | AppliedT) -> DeclKey | None:
+        """Return the declaration identity an annotation's type name selects.
+
+        Follows resolution's selection order without resolving, so a host can
+        see through the transparent aliases resolution erases: this module's
+        own type namespace, then scope-use and import contributions, then a
+        qualified name's module route. ``None`` when no route selects one, as
+        for a builtin alias target no declaration reaches. *type_expr* must
+        belong to a checked annotation.
+        """
+        name = type_expr.name
+        qualifier = type_expr.qualifier
+        if qualifier is None:
+            local_name = self._lexical_type_name(name)
+            if self._has_own_type_name(local_name):
+                return (self._module_id, *_split_scoped_type_name(local_name))
+            bare = self._bare_type_key(name, None)
+            return None if bare is None else bare[0]
+        qualified_local_name = self._local_qualified_type_name(qualifier, name)
+        if qualified_local_name is not None:
+            return (self._module_id, *_split_scoped_type_name(qualified_local_name))
+        if qualifier.anchor is None:
+            segments = tuple(segment.name for segment in qualifier.segments)
+            opened = self._opened_type_key(_type_path_atom((*segments, name)), None)
+            if opened is not None:
+                return opened
+        qname = self._resolve_import_qname(qualifier, name, span=None, required=False)
+        return None if qname is None else self._qname_decl_key(qname)
+
     @staticmethod
     def _qname_decl_key(qname: QName) -> DeclKey:
         atom = qname[1]
@@ -2506,6 +2537,9 @@ class TypeEnvironment:
         bare = self._resolve_bare_type(name, span)
         if bare is not None:
             return bare
+        reserved_alias = BUILTIN_ALIAS_TARGETS.get(name)
+        if reserved_alias is not None:
+            return reserved_alias
         raise AglTypeError(
             f"Unknown type '{name}'.",
             span=span,

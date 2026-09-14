@@ -647,7 +647,7 @@ tag) in [Agent calls](agent-calls.md).
 member names and fields must match the built-in shape exactly.
 
 The `builtin` modifier behaves like a decorator on a type declaration: it may
-sit on the same line as the `record`, `enum`, or `exception` keyword or on the
+sit on the same line as the `record`, `enum`, `exception`, or `type` keyword or on the
 line directly above it (the newline after the modifier is insignificant).
 
 A `builtin` type declaration also names the type the host produces values of
@@ -852,8 +852,20 @@ type Metadata = dict[text, json]
 
 Aliases never create a new nominal type: a value of type `Status` *is* a
 value of type `Review`. Aliases are transparent everywhere, including
-qualified member access. Alias chains resolve transitively. The standard
-library's `path` ([Modules](modules.md)) is such an alias for `text`.
+qualified member access. Alias chains resolve transitively.
+
+`builtin type` declares a host-recognized alias. The one such alias is `path`,
+the `text` alias naming a filesystem location; its declaration must read
+exactly `builtin type path = text`, and like every `builtin` declaration its
+scoped name is declared at most once across the whole program. The standard
+library declares it in `std/path`, and the prelude forwards it
+([Modules](modules.md)). Where no declaration of `path` is visible — as in a
+program started with `--no-stdlib` — the name `path` still denotes `text`; a
+visible declaration of that name, builtin or not, takes precedence as usual.
+A host presents a program parameter annotated `path`, `Option[path]`, or an
+alias of either as a filesystem location
+([Host environment](host-environment.md#program-arguments)); any other
+annotation, including a non-builtin alias named `path`, is ordinary `text`.
 
 ## Type parameters and applied types
 

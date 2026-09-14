@@ -81,10 +81,9 @@ both remain ordinary names in expression positions.
 `"builtin"` is a **declaration modifier** that behaves like a decorator: it may
 sit on the same line as the declaration it adorns (`builtin enum …`) or on the
 line directly above it (`builtin` then `enum …`). The newline after a modifier
-is insignificant. `builtin` prefixes a `record`, `enum`, or `exception`.
-`builtin def` is a body-less declaration form, not a modifier applied to an
-ordinary `def`. `builtin` is not accepted for type aliases or extern
-functions. The `extern` of an `extern def` and the `program` of a
+is insignificant. `builtin` prefixes a `record`, `enum`, `exception`, or `type`
+alias. `builtin def` is a body-less declaration form, not a modifier applied to
+an ordinary `def`. `builtin` is not accepted for extern functions. The `extern` of an `extern def` and the `program` of a
 `program def` place the same way: each may sit on its declaration's line or on
 the line directly above it.
 
@@ -263,7 +262,7 @@ exception_body   ::= NEWLINE INDENT field_def (NEWLINE field_def)* NEWLINE? DEDE
                    | "(" field_list? ")"
                    | field_list
 
-type_alias       ::= attributes? "type" decl_head type_params? "=" type_expr
+type_alias       ::= attributes? builtin_modifier? "type" decl_head type_params? "=" type_expr
 
 type_params      ::= "[" type_param ("," type_param)* "]"
 type_param       ::= name | "_"

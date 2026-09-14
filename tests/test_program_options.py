@@ -74,6 +74,7 @@ def _param(
     metavar: str | None = None,
     hidden: bool = False,
     doc: str | None = None,
+    is_path: bool = False,
 ) -> ProgramParamInfo:
     return ProgramParamInfo(
         name=name,
@@ -89,6 +90,7 @@ def _param(
             hidden=hidden,
             doc=doc,
         ),
+        is_path=is_path,
     )
 
 
@@ -1127,6 +1129,76 @@ class TestDefaultMetavar:
         help_text = _command(_param("count", IntType(), metavar="N")).render_help("prog")
 
         assert "--count N" in help_text
+
+    def test_a_path_parameter_announces_a_path(self) -> None:
+        help_text = _command(
+            _param("out", TextType(), is_path=True),
+            _param("journal", _option_type(TextType()), is_path=True),
+            _param("dest", TextType(), is_path=True, metavar="DIR"),
+        ).render_help("prog")
+
+        assert "--out PATH" in help_text
+        assert "--journal PATH" in help_text
+        assert "--dest DIR" in help_text
+
+
+class TestCompletionQueries:
+    """What a completer needs to know about a partially typed program invocation."""
+
+    def _command(self) -> ProgramCommand:
+        return _command(
+            _param("source", TextType(), ParamZone.POSITIONAL_ONLY, is_path=True),
+            _param("count", IntType(), ParamZone.STANDARD, has_default=True),
+            _param("out", TextType(), short="o", has_default=True, is_path=True),
+            _param("tag", _option_type(TextType()), has_default=True),
+            _param("verbose", BoolType(), short="v", has_default=True),
+        )
+
+    @pytest.mark.parametrize(
+        ("tokens", "expected"),
+        [
+            ([], "source"),
+            (["a.txt"], "count"),
+            (["--out", "x", "a.txt"], "count"),
+            (["-o", "x"], "source"),
+            (["-vo", "x"], "source"),
+            (["-ox", "a.txt"], "count"),
+            (["--out=x", "--verbose", "a.txt"], "count"),
+            (["--no-tag", "a.txt"], "count"),
+            (["--", "--out"], "count"),
+            (["a.txt", "3"], None),
+            (["--out"], None),
+            (["-vo"], None),
+        ],
+    )
+    def test_the_next_positional_slot_skips_option_values(
+        self, tokens: list[str], expected: str | None
+    ) -> None:
+        slot = self._command().next_positional(tokens, "b.txt")
+
+        assert (None if slot is None else slot.name) == expected
+
+    @pytest.mark.parametrize(
+        ("tokens", "expected"),
+        [(["--log-file", "trace.jsonl", "--dry-run"], "source"), (["--log-file"], None)],
+    )
+    def test_host_options_and_their_values_fill_no_slot(
+        self, tokens: list[str], expected: str | None
+    ) -> None:
+        slot = self._command().next_positional(
+            tokens, "b.txt", host_options={"--log-file": True, "--dry-run": False}
+        )
+
+        assert (None if slot is None else slot.name) == expected
+
+    def test_value_options_list_every_spelling_that_takes_a_value(self) -> None:
+        options = self._command().value_options()
+
+        assert [(param.name, spellings) for param, spellings in options] == [
+            ("count", ("--count",)),
+            ("out", ("--out", "-o")),
+            ("tag", ("--tag",)),
+        ]
 
 
 class TestOptionSpellings:

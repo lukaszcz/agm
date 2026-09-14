@@ -62,11 +62,13 @@ if TYPE_CHECKING:
     from agm.agl.scope.program import ResolvedProgram
     from agm.agl.scope.symbols import ModuleResolution
     from agm.agl.semantics.type_table import TypeTable
+    from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import ExceptionValue, Value
     from agm.agl.setting_overrides import SettingOverride
     from agm.agl.syntax.advisories import SpacedQualifier
     from agm.agl.syntax.nodes import FuncDef, Program
-    from agm.agl.typecheck.env import CheckedModule, OutputContractSpec
+    from agm.agl.syntax.types import TypeExpr
+    from agm.agl.typecheck.env import OutputContractSpec
     from agm.agl.typecheck.program import CheckedProgram
     from agm.packages.model import PackageInfo
 
@@ -1526,7 +1528,7 @@ def _program_decl_infos(checked: "CheckedProgram") -> tuple[ProgramDeclInfo, ...
             name=item.name,
             node_id=item.node_id,
             span=item.span,
-            parameters=_program_param_infos(checked_module, item),
+            parameters=_program_param_infos(checked, module_id, item),
             is_entry=module_id == checked.entry_id,
             doc=checked_module.resolved.attributes.docs.get(item.node_id),
         )
@@ -1543,19 +1545,21 @@ def _program_decl_infos(checked: "CheckedProgram") -> tuple[ProgramDeclInfo, ...
 
 
 def _program_param_infos(
-    checked_module: "CheckedModule", funcdef: "FuncDef"
+    checked: "CheckedProgram", module_id: "ModuleId", funcdef: "FuncDef"
 ) -> tuple[ProgramParamInfo, ...]:
     """Return *funcdef*'s checked parameter signature as host-facing info.
 
-    Pairs each AST ``Param`` (for its declaration span and the option
-    presentation scope recognized for it) with the checker's ``ParamSpec``
-    (for its zone, type, and default) positionally — the two describe the same
-    parameter list, in the same declaration order.
+    Pairs each AST ``Param`` (for its declaration span, annotation, and the
+    option presentation scope recognized for it) with the checker's
+    ``ParamSpec`` (for its zone, type, and default) positionally — the two
+    describe the same parameter list, in the same declaration order.
     """
+    checked_module = checked.modules[module_id]
     signature = checked_module.type_env.get_function_signature_by_node_id(funcdef.node_id)
     assert signature is not None, (
         f"compiler bug: program {funcdef.name!r} has no recorded function signature"
     )
+    scope_path = tuple(segment.name for segment in funcdef.scope_path)
     return tuple(
         ProgramParamInfo(
             name=param_spec.name,
@@ -1564,8 +1568,63 @@ def _program_param_infos(
             has_default=param_spec.has_default,
             span=ast_param.span,
             cli=checked_module.resolved.attributes.program_options[ast_param.node_id],
+            is_path=_annotates_path(
+                checked, module_id, scope_path, ast_param.type_expr, param_spec.type
+            ),
         )
         for ast_param, param_spec in zip(funcdef.params, signature.params, strict=True)
+    )
+
+
+def _annotates_path(
+    checked: "CheckedProgram",
+    module_id: "ModuleId",
+    scope_path: tuple[str, ...],
+    type_expr: "TypeExpr | None",
+    resolved: "Type",
+) -> bool:
+    """Return whether *type_expr*, checked as *resolved*, spells the builtin ``path``.
+
+    Resolution erases transparent aliases, so the annotation's own
+    declarations are followed instead: non-generic aliases down to the builtin
+    alias, or to the reserved ``path`` no declaration reaches, optionally
+    wrapped in the standard ``Option``.
+    """
+    from agm.agl.semantics.types import PATH_TYPE_NAME, is_standard_option_enum
+    from agm.agl.syntax.nodes import TypeAlias, static_type_items
+    from agm.agl.syntax.types import AppliedT, NameT
+
+    if not isinstance(type_expr, (NameT, AppliedT)):
+        return False
+    env = checked.modules[module_id].type_env
+    with env.type_scope(scope_path):
+        key = env.type_name_declaration(type_expr)
+    if key is None:
+        return isinstance(type_expr, NameT) and type_expr.name == PATH_TYPE_NAME
+    decl_module, decl_path, decl_name = key
+    alias = next(
+        (
+            item
+            for item in static_type_items(checked.modules[decl_module].resolved.program.body.items)
+            if isinstance(item, TypeAlias)
+            and item.name == decl_name
+            and tuple(segment.name for segment in item.scope_path) == decl_path
+        ),
+        None,
+    )
+    if alias is not None:
+        if alias.is_builtin:
+            return alias.name == PATH_TYPE_NAME
+        return not alias.type_params and _annotates_path(
+            checked, decl_module, decl_path, alias.type_expr, resolved
+        )
+    return (
+        isinstance(type_expr, AppliedT)
+        and is_standard_option_enum(resolved)
+        and len(type_expr.args) == len(resolved.type_args) == 1
+        and _annotates_path(
+            checked, module_id, scope_path, type_expr.args[0], resolved.type_args[0]
+        )
     )
 
 

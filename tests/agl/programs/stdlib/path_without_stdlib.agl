@@ -1,0 +1,13 @@
+# Without the standard library's `std/path`, `path` still names the reserved
+# transparent `text` alias, in program parameters and in the body alike.
+import std/io::print
+
+type folder = path
+
+program def main(@arg-pos target: path, parents: array[folder] = []) -> unit =
+  let spelled: text = target
+  print(spelled)
+  for parent in parents do
+    let again: path = parent
+    print("%{again}/%{target}")
+  done

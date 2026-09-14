@@ -467,27 +467,58 @@ class RegisteredProgramCommand(TyperCommand):
         )
 
 
+def _command_path(ctx: click.Context) -> list[str]:
+    """Return the words a group context left unparsed: a registered command path and its tail.
+
+    Click splits a group's tail into ``_protected_args`` (the first word, the
+    one a subcommand name would come from) and ``args`` (the rest), and
+    exposes no undeprecated accessor for the pair: ``protected_args`` warns
+    and is slated for removal, while ``args`` alone drops the very word that
+    starts a registered command path. Click's own ``shell_completion`` reads
+    the same attribute for the same reason.
+    """
+    return [*ctx._protected_args, *ctx.args]
+
+
 class RegisteredCommandGroup(TyperGroup):
     """Root group that falls back to package registrations after builtins miss."""
 
+    def get_params(self, ctx: click.Context) -> list[click.Parameter]:
+        """Return the group's parameters, plus completion-only registered program value options.
+
+        Completion leaves a registered command path unresolved on this
+        group's context, so the options its program's flag values complete
+        through are added here, and only while completing.
+        """
+        params = super().get_params(ctx)
+        command_path = _command_path(ctx)
+        if not ctx.resilient_parsing or not command_path:
+            return params
+        from agm.completion import registered_command_value_options
+
+        return [*params, *registered_command_value_options(command_path, ctx)]
+
     def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem]:
-        """Extend root completion with the next registered-command path segment."""
+        """Extend root completion with the next registered-command path segment.
+
+        Past a registered program's path, a non-option token completes that
+        program's next positional slot.
+        """
         from agm.completion import registered_command_completion
 
-        # Click splits a group's tail into ``_protected_args`` (the first word,
-        # the one a subcommand name would come from) and ``args`` (the rest),
-        # and exposes no undeprecated accessor for the pair: ``protected_args``
-        # warns and is slated for removal, while ``args`` alone drops the very
-        # word that starts a registered command path. Click's own
-        # ``shell_completion`` reads the same attribute for the same reason.
-        command_path = [*ctx._protected_args, *ctx.args]
+        command_path = _command_path(ctx)
         registered_segments, is_registered = registered_command_completion(command_path, incomplete)
         if command_path and is_registered:
             if incomplete.startswith("-"):
                 from agm.completion import registered_command_param_completion
 
                 return registered_command_param_completion(command_path, incomplete, ctx)
-            return [CompletionItem(segment) for segment in registered_segments]
+            from agm.completion import registered_command_positional_completion
+
+            return [
+                *(CompletionItem(segment) for segment in registered_segments),
+                *registered_command_positional_completion(command_path, incomplete, ctx),
+            ]
         items_by_value: dict[str, CompletionItem] = {
             cast(str, item.value): item for item in super().shell_complete(ctx, incomplete)
         }

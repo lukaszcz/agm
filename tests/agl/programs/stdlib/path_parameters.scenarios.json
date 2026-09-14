@@ -1,0 +1,35 @@
+{
+  "scenarios": [
+    {
+      "name": "source_only_uses_path_defaults",
+      "positional": ["src/notes/draft.md"],
+      "params": {},
+      "expect": {
+        "stdout": "draft.md in 'src/notes'\nout/result.bak\nno journal\nplan\n"
+      }
+    },
+    {
+      "name": "every_path_parameter_by_name",
+      "positional": ["a.txt"],
+      "params": {
+        "out": "build/a.out",
+        "journal": {"$case": "Some", "value": "logs/run.log"},
+        "archive": {"$case": "Some", "value": "backups"},
+        "label": "v1"
+      },
+      "expect": {
+        "stdout": "a.txt in ''\nbuild/a.bak\njournal: logs/run.log\nbackups/v1\n"
+      }
+    },
+    {
+      "name": "standard_zone_path_filled_positionally",
+      "positional": ["x/y.txt", "z/w.txt"],
+      "params": {
+        "archive": {"$case": "Some", "value": "/abs"}
+      },
+      "expect": {
+        "stdout": "y.txt in 'x'\nz/w.bak\nno journal\n/abs/plan\n"
+      }
+    }
+  ]
+}

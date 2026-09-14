@@ -942,7 +942,7 @@ def exec_cmd(
     tail: list[str] | None = typer.Argument(
         None,
         metavar="FILE",
-        autocompletion=completion.complete_agl_file,
+        autocompletion=completion.complete_exec_tail,
     ),
     command: str | None = typer.Option(
         None,

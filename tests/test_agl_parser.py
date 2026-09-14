@@ -999,6 +999,18 @@ class TestDeclarations:
         assert en.is_builtin is True
         assert len(en.members) == 2
 
+    @pytest.mark.parametrize("source", ["builtin type path = text", "builtin\ntype path = text"])
+    def test_builtin_type_alias(self, source: str) -> None:
+        alias = first(parse(source))
+        assert isinstance(alias, TypeAlias)
+        assert alias.name == "path"
+        assert alias.is_builtin is True
+
+    def test_plain_type_alias_is_not_builtin(self) -> None:
+        alias = first(parse("type path = text"))
+        assert isinstance(alias, TypeAlias)
+        assert alias.is_builtin is False
+
 
 # ---------------------------------------------------------------------------
 # Scope regions

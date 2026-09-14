@@ -25,6 +25,85 @@ class TestProgramDeclarationDiscovery:
         assert [program.name for program in programs] == ["main"]
         assert [param.name for param in programs[0].parameters] == ["name"]
 
+    def test_marks_parameters_annotated_as_paths(self) -> None:
+        from agm.cli_support.program_discovery import discover_program_declarations_from_source
+
+        (program,) = discover_program_declarations_from_source(
+            "import std/path\n"
+            "type location = path\n"
+            "type maybe-location = Option[location]\n"
+            "type label = text\n"
+            "\n"
+            "scope files\n"
+            "  type spot = path\n"
+            "end files\n"
+            "\n"
+            "program def main(\n"
+            "  plain: path,\n"
+            "  qualified: path::path,\n"
+            "  scoped: files::spot,\n"
+            "  optional: Option[path],\n"
+            "  aliased: location,\n"
+            "  optional-alias: maybe-location,\n"
+            "  words: text,\n"
+            "  text-alias: label,\n"
+            "  many: array[path],\n"
+            "  optional-text: Option[text],\n"
+            ") -> unit = ()\n"
+        )
+
+        assert {param.name: param.is_path for param in program.parameters} == {
+            "plain": True,
+            "qualified": True,
+            "scoped": True,
+            "optional": True,
+            "aliased": True,
+            "optional-alias": True,
+            "words": False,
+            "text-alias": False,
+            "many": False,
+            "optional-text": False,
+        }
+
+    def test_an_own_text_alias_named_path_is_not_a_path(self) -> None:
+        from agm.cli_support.program_discovery import discover_program_declarations_from_source
+
+        (program,) = discover_program_declarations_from_source(
+            "type path = text\nprogram def main(target: path) -> unit = ()\n"
+        )
+
+        assert [param.is_path for param in program.parameters] == [False]
+
+    def test_marks_the_reserved_path_without_the_standard_library(self) -> None:
+        from agm.cli_support.program_discovery import discover_program_declarations_from_source
+
+        (program,) = discover_program_declarations_from_source(
+            "program def main(target: path, name: text) -> unit = ()\n", default_stdlib=False
+        )
+
+        assert [param.is_path for param in program.parameters] == [True, False]
+
+    def test_follows_a_path_alias_imported_from_another_module(self, tmp_path: Path) -> None:
+        from agm.cli_support.program_discovery import discover_program_declarations_from_source
+        from tests._agl_helpers import agl_roots
+
+        (tmp_path / "shared.agl").write_text(
+            "scope files\n  type location = path\nend files\n", encoding="utf-8"
+        )
+
+        (program,) = discover_program_declarations_from_source(
+            "import shared\n"
+            "use shared::*\n"
+            "program def main(\n"
+            "  target: shared::files::location,\n"
+            "  opened: files::location,\n"
+            "  anchored: /shared::files::location,\n"
+            ") -> unit = ()\n",
+            roots=agl_roots(tmp_path),
+        )
+
+        assert [param.is_path for param in program.parameters] == [True, True, True]
+
     def test_discovers_the_option_presentation_and_documentation(self) -> None:
         from agm.agl.attributes import ProgramOptionSpec
         from agm.cli_support.program_discovery import discover_program_declarations_from_source

@@ -258,6 +258,25 @@ def test_unknown_builtin_type_is_rejected() -> None:
         _check("builtin record Mystery\n  value: int\n()\n")
 
 
+def test_builtin_type_alias_target_must_be_text() -> None:
+    with pytest.raises(AglTypeError, match="Builtin type 'path' has an invalid definition"):
+        _check("builtin type path = int\n()\n", default_stdlib=False)
+
+
+def test_builtin_type_alias_must_not_be_generic() -> None:
+    with pytest.raises(AglTypeError, match="Builtin type 'path' has an invalid definition"):
+        _check("builtin type path[T] = text\n()\n", default_stdlib=False)
+
+
+def test_path_names_text_without_the_standard_library() -> None:
+    _check('let p: path = "a"\nlet t: text = p\nlet back: path = t\n()\n', default_stdlib=False)
+
+
+def test_a_declared_path_type_replaces_the_reserved_text_alias() -> None:
+    with pytest.raises(AglTypeError):
+        _check('record path(value: int)\nlet p: path = "a"\n()\n', default_stdlib=False)
+
+
 def test_builtin_type_shape_must_match() -> None:
     with pytest.raises(AglTypeError, match="Builtin type 'ExecResult' has an invalid definition"):
         _check("builtin record ExecResult\n  stdout: text\n()\n")

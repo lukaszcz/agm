@@ -225,7 +225,7 @@ def _builtin_bare_declarations(
 ) -> list[tuple[ModuleId, tuple[str, ...], str, SourceSpan]]:
     """List every builtin type and builtin def declaration by scoped name.
 
-    A ``builtin`` type (record/enum/exception) and a ``builtin def`` share one
+    A ``builtin`` type (record/enum/exception/alias) and a ``builtin def`` share one
     name space within the declaration's scope path. A ``builtin var`` is
     neither, and is excluded. This lets a builtin method coexist with the
     root builtin it dispatches to while retaining one declaration per scoped
@@ -239,7 +239,7 @@ def _builtin_bare_declarations(
     for module_id in sorted(modules, key=partial(_module_visit_order, entry_id=entry_id)):
         resolved = modules[module_id]
         for item in static_items(resolved.program.body.items):
-            if not isinstance(item, (RecordDef, EnumDef, ExceptionDef, FuncDef)):
+            if not isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias, FuncDef)):
                 continue
             if not item.is_builtin:
                 continue

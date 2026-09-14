@@ -305,8 +305,8 @@ rows, and `std/path`'s `path` type alone. The rest are imported explicitly:
 A few conventions run through all of them. Every name the library exposes —
 functions, fields, and named arguments alike — is spelled in kebab-case, with
 types and constructors in `CamelCase`. A value naming a filesystem location
-is typed `path` — the transparent `text` alias `std/path` declares and the
-prelude forwards — so a signature says which of its strings are locations
+is typed `path` — the builtin `text` alias ([Type aliases](types.md#type-aliases))
+`std/path` declares and the prelude forwards — so a signature says which of its strings are locations
 without making them a separate type. Each module declares the exception
 types its own operations raise, so an error type lives beside the operations
 that produce it; the exceptions the language itself raises live in

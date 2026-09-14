@@ -828,14 +828,17 @@ class _ProgramOption(click.Option):
         return None if raw is None else [raw]
 
 
-def _default_metavar(projected: ProjectedOption) -> str:
+def _default_metavar(param: "ProgramParamInfo", projected: ProjectedOption) -> str:
     """Return the placeholder standing for a value-taking option's own VALUE.
 
-    It names how the token is read rather than the declared type: a ``text``
-    parameter takes its token verbatim, standard ``Agent`` uses host syntax,
-    and every other type parses one strict JSON value. An ``Option[T]`` follows
-    ``T``.
+    A ``path`` parameter (directly or as ``Option[path]``) announces a path.
+    Otherwise it names how the token is read rather than the declared type: a
+    ``text`` parameter takes its token verbatim, standard ``Agent`` uses host
+    syntax, and every other type parses one strict JSON value. An
+    ``Option[T]`` follows ``T``.
     """
+    if param.is_path:
+        return "PATH"
     form = projected.value_form
     if form is ValueForm.OPTION:
         if isinstance(projected.option_inner, TextType):
@@ -887,7 +890,7 @@ def _click_params(
         [_positive_dest(index), projected.flags[0], *shorts],
         default=None,
         multiple=True,
-        metavar=spec.metavar or _default_metavar(projected),
+        metavar=spec.metavar or _default_metavar(param, projected),
         envvar=spec.env,
         help=spec.doc,
         hidden=spec.hidden,
@@ -1102,6 +1105,43 @@ class ProgramCommand:
         tail. Inline long and attached short values are part of their option
         token and therefore have no separate index to report.
         """
+        return self._read_tokens(tokens, host_options)[0]
+
+    def next_positional(
+        self, tokens: Sequence[str], token: str, *, host_options: OptionValueMap = frozenset()
+    ) -> "ProgramParamInfo | None":
+        """Return the positional slot *token*, written after *tokens*, fills.
+
+        ``None`` when *token* fills none: option tokens, their separate values,
+        and *host_options* with their values fill no slot, nor does any token
+        once every positional-capable parameter is filled. Every token after
+        ``--`` fills one.
+        """
+        count = self._read_tokens(tokens, host_options)[1]
+        if count >= len(self.positional) or (
+            self._read_tokens([*tokens, token], host_options)[1] == count
+        ):
+            return None
+        return self.positional[count]
+
+    def value_options(self) -> tuple[tuple["ProgramParamInfo", tuple[str, ...]], ...]:
+        """Return each value-taking parameter with the spellings its value follows.
+
+        Its long flag and ``@opt-short`` spelling; a ``--no-x`` negative
+        never takes a value.
+        """
+        result: list[tuple["ProgramParamInfo", tuple[str, ...]]] = []
+        for param, projected in self.options:
+            if not projected.takes_value:
+                continue
+            short = _short_flag(param)
+            result.append((param, (projected.flags[0], *(() if short is None else (short,)))))
+        return tuple(result)
+
+    def _read_tokens(
+        self, tokens: Sequence[str], host_options: OptionValueMap
+    ) -> tuple[frozenset[int], int]:
+        """Return the separate option-value indexes in *tokens* and its positional token count."""
         long_options: dict[str, bool] = {}
         short_options: dict[str, bool] = {}
         for param, projected in self.options:
@@ -1113,10 +1153,12 @@ class ProgramCommand:
                 short_options[short] = projected.takes_value
 
         values: set[int] = set()
+        positional = 0
         index = 0
         while index < len(tokens):
             token = tokens[index]
             if token == END_OF_OPTIONS:
+                positional += len(tokens) - index - 1
                 break
             owned_by_host, host_claims_next = _option_token_ownership(token, host_options)
             if owned_by_host:
@@ -1147,8 +1189,10 @@ class ProgramCommand:
                 else:
                     index += 1
                 continue
+            else:
+                positional += 1
             index += 1
-        return frozenset(values)
+        return frozenset(values), positional
 
     @staticmethod
     def _from_commandline(ctx: click.Context, dest: str) -> bool:

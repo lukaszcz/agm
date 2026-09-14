@@ -2987,6 +2987,10 @@ class AstBuilder(Transformer):
         """builtin_exception_def: attributes? BUILTIN _exception_def_tail"""
         return replace(self.exception_def(meta, args), is_builtin=True)
 
+    def builtin_type_alias(self, meta: Meta, args: _Args) -> syntax.TypeAlias:
+        """builtin_type_alias: attributes? BUILTIN _type_alias_tail"""
+        return replace(self.type_alias(meta, args), is_builtin=True)
+
     # ------------------------------------------------------------------
     # Qualified refs
     # ------------------------------------------------------------------

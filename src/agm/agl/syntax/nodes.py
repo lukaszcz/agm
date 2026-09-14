@@ -1270,6 +1270,7 @@ class TypeAlias(GenericDeclaration):
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     type_param_slots: tuple[str, ...] = ()
+    is_builtin: bool = False
     scope_path: tuple[ScopeSegment, ...] = ()
     attributes: tuple[Attribute, ...] = ()
 

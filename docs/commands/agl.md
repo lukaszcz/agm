@@ -142,6 +142,11 @@ A name-addressable parameter's type selects its flag form; every value-taking fl
 | `Agent` | `--x VALUE`, in [host Agent syntax](#host-agent-syntax) or canonical tagged JSON |
 | other | `--x VALUE`, one strict JSON value validated against the type |
 
+A `path` parameter — `path`, `Option[path]`, or an alias of either — takes its value as the
+matching `text` form does, with `PATH` as its default value placeholder. Shell completion offers
+filesystem paths for its value (`--x <TAB>`, `-x <TAB>`, `--x=<TAB>`) and for its positional slot,
+under `agm exec FILE` and a registered package command alike.
+
 A positional slot has no `--no-x`, so `Option[T]` gets no special treatment there: `text` is
 verbatim, `Agent` uses host syntax, and every other type, `Option[T]` included, is one strict
 JSON value of the declared type (`'{"$case": "Some", "value": "hi"}'` for `Option[text]`).

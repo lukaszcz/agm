@@ -46,7 +46,7 @@ to anchor a cycle — by the existing alias-cycle check in
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Container, Iterator, Mapping, Sequence
 from dataclasses import replace
 from typing import cast
 
@@ -57,6 +57,7 @@ from agm.agl.semantics.type_table import (
     source_nominal_decl_id,
 )
 from agm.agl.semantics.types import (
+    BUILTIN_ALIAS_TARGETS,
     BUILTIN_EXCEPTION_NAMES,
     BUILTIN_PRELUDE_TYPE_NAMES,
     EnumType,
@@ -188,6 +189,7 @@ class _TypeBuilder:
         self._record_defs: dict[str, RecordDef] = {}
         self._enum_defs: dict[str, EnumDef] = {}
         self._exception_defs: dict[str, ExceptionDef] = {}
+        self._builtin_alias_defs: dict[str, TypeAlias] = {}
         # Source-built definitions retained independently of the shared table.
         # A source declaration can supersede a seeded fallback at the same
         # name path, so contract validation must inspect this exact object.
@@ -299,9 +301,16 @@ class _TypeBuilder:
                 )
                 self._exception_defs[item.name] = item
             else:
-                self._register_name(item.name, item.span)
+                self._register_name(
+                    item.name,
+                    item.span,
+                    is_builtin=item.is_builtin,
+                    expected_contracts=BUILTIN_ALIAS_TARGETS,
+                )
                 self._env.unregister_name(item.name)
                 self._env.register_alias(item.name, item.type_expr, type_params=item.type_params)
+                if item.is_builtin:
+                    self._builtin_alias_defs[item.name] = item
 
     def reconcile_inline_member_arities(self) -> None:
         """Finalize inline-member shells before any dependent body resolves.
@@ -469,6 +478,17 @@ class _TypeBuilder:
                 expected_contracts,
                 base_type=base_type,
             )
+        for alias in self._builtin_alias_defs.values():
+            path = tuple(segment.name for segment in alias.scope_path)
+            if not alias.type_params:
+                with self._env.type_scope(path):
+                    target = self._env.resolve_type_expr(alias.type_expr, span=alias.span)
+                if target == BUILTIN_ALIAS_TARGETS[_bare_name(alias.name)]:
+                    continue
+            raise AglTypeError(
+                f"Builtin type '{alias.name}' has an invalid definition.",
+                span=alias.span,
+            )
 
     def _register_name(
         self,
@@ -476,7 +496,7 @@ class _TypeBuilder:
         span: SourceSpan,
         *,
         is_builtin: bool = False,
-        expected_contracts: Mapping[str, BuiltinTypeContract] | None = None,
+        expected_contracts: Container[str] | None = None,
     ) -> None:
         # `name` carries its scope path joined with "::" (see
         # `_static_type_items`) when the declaration is scoped, so the check

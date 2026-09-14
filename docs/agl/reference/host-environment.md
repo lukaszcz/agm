@@ -104,6 +104,12 @@ other type is parsed from its JSON representation **strictly** (externally
 supplied values are not chatty agent output, so no lenient recovery applies)
 and validated against the declared type.
 
+A parameter annotated [`path`](types.md#type-aliases) — directly, as
+`Option[path]`, or through an alias of either — takes its value exactly as the
+corresponding `text` parameter does. A host presents that value as a
+filesystem location: its value placeholder defaults to `PATH`, and a host
+offering completion completes it from the filesystem.
+
 The declared type must be JSON-wire-serializable, including for a parameter
 whose default is always used. Runtime-only values such as `unit` and
 functions are not valid program-argument types, whether or not the host ever

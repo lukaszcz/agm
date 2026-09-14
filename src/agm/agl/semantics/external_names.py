@@ -30,6 +30,16 @@ class ExternalName:
             return (declared,)
         return (declared, self.name)
 
+    def alias(self, declared: str) -> str | None:
+        """Return the ``@name`` spelling if it differs from *declared*, else ``None``.
+
+        The single rule for a decode descriptor's optional alias field:
+        derived from :meth:`value_names` so every caller (record, enum member,
+        and field descriptors alike) computes it the same way.
+        """
+        names = self.value_names(declared)
+        return names[-1] if len(names) > 1 else None
+
 
 #: The external spellings of a declaration carrying neither attribute.
 NO_EXTERNAL_NAME = ExternalName()

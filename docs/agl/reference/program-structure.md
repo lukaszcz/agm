@@ -88,9 +88,10 @@ parameter is addressed by `--name`. `@arg-pos` opens a positional slot;
 Each parameter resolves as CLI token > `@opt-env` variable > qualified config
 table > declared default. A required parameter with no external value is a
 host invocation error, reported before anything executes. Parameter types
-must be JSON-wire-serializable: `text` crosses verbatim, every other type is
-parsed strictly from JSON; `unit` and function types are rejected. A
-name-addressable parameter cannot spell an
+must be JSON-wire-serializable: `text` crosses verbatim, every other type
+reads its external text as strict JSON or an [AgL value syntax
+literal](host-environment.md#value-syntax); `unit` and function types are
+rejected. A name-addressable parameter cannot spell an
 [engine setting](#engine-settings) name, since both share one flag and config
 namespace. Full resolution and help rules:
 [Host environment](host-environment.md#program-arguments).

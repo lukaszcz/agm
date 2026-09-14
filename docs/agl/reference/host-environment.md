@@ -100,9 +100,38 @@ error** — reported like a static failure, not catchable in-language, before
 any statement executes.
 
 `text` parameters take their external value verbatim. A parameter of any
-other type is parsed from its JSON representation **strictly** (externally
-supplied values are not chatty agent output, so no lenient recovery applies)
-and validated against the declared type.
+other type reads its external text as one **strict JSON value or AgL value
+syntax literal** (externally supplied values are not chatty agent output, so
+no lenient recovery applies), validated against the declared type: a token
+that parses as strict JSON is read as JSON; any other token is read as one
+[value syntax](#value-syntax) literal instead. An `Agent`-typed value
+([Agents](#agents) above) instead reads compact shorthand, then a JSON
+object, then an `Agent` member constructor call, and otherwise falls back to
+a verbatim command — see [host Agent syntax](../../commands/agl.md#host-agent-syntax).
+
+### Value syntax
+
+A value-syntax literal is a data-only subset of AgL's own expression syntax:
+an integer, decimal, `true`/`false`, a quoted text literal, an `[item, ...]`
+array, a `{key: value, ...}` dict of quoted-or-bare keys, or a constructor
+reference/call — `Name`, `Name()`, or `Name(arg, ..., field = value, ...)`. A
+constructor's arguments bind against its declared fields by the same
+[zone rules](functions.md#parameters) an ordinary call uses, except that a
+named-only field always takes an explicit `field = value`: value syntax has
+no variables, so the bare-name shorthand an ordinary call allows for a
+named-only argument does not apply. A bare or called name matches a record's
+or enum member's declared name or its own
+[`@name`](attributes.md#name-and-json-name) alias. An optional qualifier is
+the single name immediately enclosing the record's declaration: its innermost
+scope (`Geo::Point(...)`) or, for an inline enum member, its enum
+(`Shape::Square(...)`). A top-level record takes no qualifier. Where an enum
+type is expected, the enum's own name also qualifies any of its members. A
+duplicate dict key is an error. Nesting is
+unrestricted — a constructor argument, array item, or dict value may itself
+be any value-syntax literal, including another constructor call. `null` and
+a heterogeneous (mixed-type) array or dict are legal only in a `json`-typed
+slot, read as plain data with no constructor calls, since a `json` value has
+no declared type to resolve one against.
 
 A parameter annotated [`path`](types.md#type-aliases) — directly, as
 `Option[path]`, or through an alias of either — takes its value exactly as the

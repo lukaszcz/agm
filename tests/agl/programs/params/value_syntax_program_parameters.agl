@@ -1,0 +1,41 @@
+# AgL value syntax on program-parameter values: a strict-JSON token is read
+# as JSON; any other text is read as one value-syntax literal (int/decimal/
+# bool/null/text/array/dict/constructor call). A record/enum matches its
+# declared name or its own ``@name`` alias, with a qualifier round-trip rule,
+# and its arguments bind through the same zone rules as an ordinary call.
+
+@name("pt") record Point
+  @name("px") x: int
+  y: int
+
+record Msg
+  text: text
+
+enum Shape
+  | @name("sq") Square(side: int)
+  | @arg-named Circle(radius: int)
+  | Empty
+
+program def main(
+  @arg-pos label: text,
+  point: Point,
+  shape: Shape,
+  count: int = 0,
+  tag: Option[int] = Option::None,
+  meta: json = {},
+  ratio: decimal = 0,
+  msg: Msg = Msg(text = "")
+) -> unit =
+  print label
+  print "%{point.x},%{point.y}"
+  print (case shape of
+    | Square(side) => "square %{side}"
+    | Circle(radius) => "circle %{radius}"
+    | Empty => "empty")
+  print count
+  print (case tag of
+    | Option::Some(value) => "tag %{value}"
+    | Option::None => "no tag")
+  print meta
+  print ratio
+  print msg.text

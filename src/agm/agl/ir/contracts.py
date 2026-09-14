@@ -6,9 +6,10 @@ WITHOUT any checker ``Type``.  It defines the cast/conversion descriptors
 (``ConversionRecipe`` and the ``DecodeSchema`` union).
 
 Dependency rule: ``agm.agl.ir`` imports
-only stdlib + ``ir.ids`` / ``ir.operations`` + ``modules.ids``.  It imports
-nothing from ``typecheck``, ``eval``, or ``runtime``, and stores no callables —
-every descriptor is immutable, runtime-neutral data.
+only stdlib + ``ir.ids`` / ``ir.operations`` + ``modules.ids`` + ``zones``
+(the parameter-zone enum, a dependency-free shared leaf).  It imports nothing
+from ``typecheck``, ``eval``, or ``runtime``, and stores no callables — every
+descriptor is immutable, runtime-neutral data.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from dataclasses import dataclass
 from typing import TypeVar
 
 from agm.agl.ir.ids import NominalId
+from agm.agl.zones import ParamZone
 
 __all__ = [
     "ArrayDecode",
@@ -97,40 +99,71 @@ class DictDecode:
 
 @dataclass(frozen=True, slots=True)
 class FieldDecode:
-    """One record field's declared name, JSON key, and decoder."""
+    """One record field's declared name, JSON key, decoder, zone, and value-syntax alias.
+
+    ``zone`` is the field's parameter zone (positional-only/standard/named-
+    only), for a value-syntax reader binding constructor arguments with the
+    shared zone binder. ``alias`` is the field's ``@name`` spelling when it
+    differs from ``name`` (an additional legal value-syntax spelling), or
+    ``None`` when the field carries no alias.
+    """
 
     name: str
     json_name: str
     schema: "DecodeSchema"
+    zone: ParamZone
+    alias: str | None
 
 
 @dataclass(frozen=True, slots=True)
 class RecordDecode:
-    """Decode a JSON object into a record with the given fields (in order)."""
+    """Decode a JSON object into a record with the given fields (in order).
+
+    ``name`` is the record's terminal declared name (the handle's own
+    ``name``, unqualified — unlike ``display_name``). ``alias`` is the
+    record's own ``@name`` spelling when it differs from ``name``, or
+    ``None`` when the record carries no alias.
+    """
 
     nominal: NominalId
     display_name: str
     fields: tuple[FieldDecode, ...]
+    name: str
+    alias: str | None
 
 
 @dataclass(frozen=True, slots=True)
 class VariantDecode:
-    """One enum member's terminal name, JSON ``$case`` tag, identity, display name, and fields."""
+    """One enum member's terminal name, JSON ``$case`` tag, identity, display name, and fields.
+
+    ``alias`` is the member's own ``@name`` spelling when it differs from
+    ``name``, or ``None`` when the member carries no alias.
+    """
 
     name: str
     json_name: str
     nominal: NominalId
     display_name: str
     fields: tuple[FieldDecode, ...]
+    alias: str | None
 
 
 @dataclass(frozen=True, slots=True)
 class EnumDecode:
-    """Decode a JSON object (with a ``$case`` discriminator) into an enum."""
+    """Decode a JSON object (with a ``$case`` discriminator) into an enum.
+
+    ``name`` is the enum's terminal declared name (unqualified, unlike
+    ``display_name``). ``host_agent`` is ``True`` exactly for the standard
+    library's ``Agent`` enum (see
+    ``semantics.types.is_standard_agent_enum``); an enum has no ``@name``
+    alias of its own — only its members and their fields do.
+    """
 
     nominal: NominalId
     display_name: str
     variants: tuple[VariantDecode, ...]
+    name: str
+    host_agent: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,14 +367,17 @@ class ExceptionFieldEncode:
 
 @dataclass(frozen=True, slots=True)
 class ParamDecoder:
-    """Typeless decoder for one host-supplied entry parameter."""
+    """Typeless decoder for one host-supplied entry parameter.
+
+    Whether a raw value is taken verbatim (``text``) or read through the
+    Agent host-text conventions is derived from ``decode`` itself at decode
+    time (see ``runtime.value_decode.host_text_to_json``), not stored here.
+    """
 
     target_type_label: str
     json_schema: str
     decode: DecodeSchema
     defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
-    text_verbatim: bool = False
-    agent_text: bool = False
 
 
 # ---------------------------------------------------------------------------

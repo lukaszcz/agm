@@ -19,7 +19,7 @@ from agm.agl.value_syntax.nodes import (
     TextNode,
     ValueArg,
 )
-from agm.agl.value_syntax.reader import read_value
+from agm.agl.value_syntax.reader import read_ctor_head, read_value
 
 # ---------------------------------------------------------------------------
 # Shapes
@@ -309,3 +309,36 @@ def test_trailing_garbage_error_offsets_point_past_the_value() -> None:
         read_value("1 2")
     error = exc_info.value
     assert (error.start, error.end) == (2, 3)
+
+
+# ---------------------------------------------------------------------------
+# read_ctor_head
+# ---------------------------------------------------------------------------
+
+
+def test_read_ctor_head_unqualified() -> None:
+    assert read_ctor_head("Circle(1)") == (None, "Circle")
+
+
+def test_read_ctor_head_qualified() -> None:
+    assert read_ctor_head("Shape::Square(side = 1)") == ("Shape", "Square")
+
+
+def test_read_ctor_head_allows_whitespace_around_double_colon_and_before_paren() -> None:
+    assert read_ctor_head("Shape :: Square (side = 1)") == ("Shape", "Square")
+
+
+def test_read_ctor_head_allows_leading_whitespace() -> None:
+    assert read_ctor_head("  \n Circle(1)") == (None, "Circle")
+
+
+def test_read_ctor_head_none_for_bare_name_without_call() -> None:
+    assert read_ctor_head("Circle") is None
+
+
+def test_read_ctor_head_none_for_text_not_opening_with_a_name() -> None:
+    assert read_ctor_head("(1)") is None
+
+
+def test_read_ctor_head_none_for_malformed_qualifier_chain() -> None:
+    assert read_ctor_head("Shape::(x)") is None

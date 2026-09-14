@@ -99,6 +99,7 @@ from agm.agl.semantics.types import (
     substitute,
     type_children,
 )
+from agm.agl.zones import ParamZone
 from agm.util.graph import bfs_first
 
 if TYPE_CHECKING:
@@ -145,14 +146,6 @@ class MethodDef:
         return self.module_id, self.scope_path, self.name
 
 
-# ``ParamZone.value`` strings (``"positional_only"``/``"standard"``/
-# ``"named_only"``) — ``semantics`` may not import ``syntax.nodes`` (see
-# ``tests/test_agl_dependencies.py``), so ``TypeDef.field_kinds`` below stores
-# the stable string values instead of the ``ParamZone`` enum itself; the
-# ``typecheck`` layer (which already imports both) converts back with
-# ``ParamZone(value)``.
-
-
 @dataclass(frozen=True, slots=True)
 class TypeDef:
     """One nominal type declaration's parameter list and shape templates.
@@ -176,19 +169,12 @@ class TypeDef:
     ``base``     — exception metadata: the resolved declaration identity
                    (``DeclId``) of the ``extends`` target, or ``None`` for the
                    root; unused for records/enums.
-    ``field_kinds`` — exception metadata: the OWN parameter kind (positional-
-                   only/standard/named-only, from the ``@arg-*`` attributes the
-                   declaration and its fields carry) for each entry of
-                   ``fields``, in the same order — a field's declared kind is
-                   honored the same way a record's is, it is not forced to
-                   named-only.
-                   Stored as ``ParamZone.value`` strings, not the enum itself
-                   (``semantics`` may not import ``syntax.nodes``); see the
-                   module-level comment above.  Unused for records/enums,
-                   whose constructor kinds live in the separate
-                   ``TypeEnvironment`` registry instead. See
-                   :meth:`TypeTable.exception_field_kinds`, which flattens
-                   this alongside the base chain.
+    ``field_kinds`` — each field's own ``ParamZone``, in ``fields`` order;
+                   for an exception, its OWN kinds only (see
+                   :meth:`TypeTable.field_kinds` for the flattened base
+                   chain). Mirrors the ``TypeEnvironment`` constructor-kind
+                   registry, computed once at the same declaration site and
+                   fed to both.
     ``is_builtin`` — ``True`` when this entry came from a source ``builtin``
                    declaration, at whatever path it was written. It is
                    metadata about the declaration, not part of its shape, so
@@ -227,7 +213,7 @@ class TypeDef:
     members: tuple[RecordType, ...] = ()
     abstract: bool = False
     base: DeclId | None = None
-    field_kinds: tuple[str, ...] = ()
+    field_kinds: tuple[ParamZone, ...] = ()
     is_builtin: bool = field(default=False, compare=False)
     decl_node_id: int = field(default=NO_DECL_ID, compare=False)
     is_inline_enum_member: bool = field(default=False, compare=False)
@@ -308,9 +294,9 @@ class TypeTable:
         # there is no type_args substitution — the memo is keyed directly by
         # declaration identity, one entry per exception.
         self._exception_fields_cache: dict[DeclId, Mapping[str, Type]] = {}
-        # Memo for exception_field_kinds — same keying convention as
+        # Memo for field_kinds's exception branch — same keying convention as
         # _exception_fields_cache above.
-        self._exception_field_kinds_cache: dict[DeclId, tuple[tuple[str, str], ...]] = {}
+        self._exception_field_kinds_cache: dict[DeclId, tuple[tuple[str, ParamZone], ...]] = {}
         # Whole-table indexes over the live standard-library builtin declarations.
         # Both answer questions about what the session declares as a whole, so
         # they are invalidated wholesale like the fixpoints below.
@@ -904,35 +890,44 @@ class TypeTable:
             fields.update(typedef.fields)
         return fields
 
-    def exception_field_kinds(self, handle: ExceptionType) -> tuple[tuple[str, str], ...]:
-        """Return *handle*'s fully flattened ``(field_name, ParamZone.value)`` pairs.
+    def field_kinds(self, handle: RecordType | ExceptionType) -> tuple[tuple[str, ParamZone], ...]:
+        """Return *handle*'s ``(field_name, ParamZone)`` pairs, in field order.
 
-        Mirrors :meth:`exception_fields`'s base-chain flattening (base fields
-        first, in declaration order, then the exception's own), but carries
-        each field's declared parameter kind instead of its type — an
-        exception's OWN fields honor their declared ``@arg-*`` attribute exactly
-        like a record's fields do (see ``TypeDef.field_kinds``); only
-        inheritance is exception-specific.
+        For a record, reads the zones straight off its own ``TypeDef``
+        (:attr:`TypeDef.field_kinds`) — declaration-level, like
+        :meth:`record_mutable_fields`, so every instantiation of a generic
+        record shares the same zones regardless of ``type_args`` and no
+        memoization is needed. ``field_kinds`` must have one entry per field,
+        in order — a builder that leaves it unset for a non-empty ``fields``
+        is a bug, caught by the strict zip below rather than silently
+        defaulted.
 
-        Each kind is a ``ParamZone.value`` string, not the enum itself (see
-        the module-level comment on ``TypeDef.field_kinds``); the caller
-        (``typecheck.env``) converts back with ``ParamZone(value)``.
+        For an exception, mirrors :meth:`exception_fields`'s base-chain
+        flattening (base fields first, in declaration order, then the
+        exception's own), memoized the same way — an exception's OWN fields
+        honor their declared ``@arg-*`` attribute exactly like a record's
+        fields do; only inheritance is exception-specific.
 
         Raises ``KeyError``/``AssertionError`` under the same conditions as
-        :meth:`exception_fields`.
+        :meth:`record_fields`/:meth:`exception_fields`.
         """
-        decl_id = handle.decl_id
-        cached = self._exception_field_kinds_cache.get(decl_id)
-        if cached is not None:
-            return cached
-        result = self._flatten_exception_field_kinds(decl_id)
-        self._exception_field_kinds_cache[decl_id] = result
-        return result
+        if isinstance(handle, ExceptionType):
+            decl_id = handle.decl_id
+            cached = self._exception_field_kinds_cache.get(decl_id)
+            if cached is not None:
+                return cached
+            result = self._flatten_exception_field_kinds(decl_id)
+            self._exception_field_kinds_cache[decl_id] = result
+            return result
+        typedef = self._require_record_def(handle, caller="field_kinds")
+        return tuple(
+            zip((fname for fname, _ftype in typedef.fields), typedef.field_kinds, strict=True)
+        )
 
-    def _flatten_exception_field_kinds(self, decl_id: DeclId) -> tuple[tuple[str, str], ...]:
+    def _flatten_exception_field_kinds(self, decl_id: DeclId) -> tuple[tuple[str, ParamZone], ...]:
         return tuple(
             (fname, kind)
-            for _chain_id, typedef in self._exception_chain(decl_id, caller="exception_field_kinds")
+            for _chain_id, typedef in self._exception_chain(decl_id, caller="field_kinds")
             for (fname, _ftype), kind in zip(typedef.fields, typedef.field_kinds, strict=True)
         )
 
@@ -1825,6 +1820,11 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
 # ---------------------------------------------------------------------------
 
 
+def _standard(fields: tuple[tuple[str, Type], ...]) -> tuple[ParamZone, ...]:
+    """Return one ``ParamZone.STANDARD`` per entry of *fields*."""
+    return (ParamZone.STANDARD,) * len(fields)
+
+
 def _builtin_enum_defs(
     name: str,
     variants: tuple[tuple[str, tuple[tuple[str, Type], ...]], ...],
@@ -1846,6 +1846,7 @@ def _builtin_enum_defs(
                 if any(param in free_type_vars(field_type) for _field, field_type in fields)
             ),
             fields=fields,
+            field_kinds=_standard(fields),
             decl_node_id=require_reserved_enum_member_id(name, member_name),
         )
         for member_name, fields in variants
@@ -1925,17 +1926,26 @@ def _with_reserved_ids(defs: Mapping[str, TypeDef]) -> Mapping[str, TypeDef]:
     }
 
 
+#: Reused as a walrus target below, one entry at a time, to derive each
+#: shape's ``field_kinds`` from its own ``fields`` without repeating them;
+#: annotated so each narrower assignment type-checks against this declared
+#: type rather than the first literal's.
+_fields: tuple[tuple[str, Type], ...]
+
 _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
     "ExecResult": TypeDef(
         kind="record",
         name="ExecResult",
         module_id=RESERVED_ID,
         fields=(
-            ("stdout", TextType()),
-            ("exit-code", IntType()),
-            ("stderr", TextType()),
-            ("timed-out", BoolType()),
+            _fields := (
+                ("stdout", TextType()),
+                ("exit-code", IntType()),
+                ("stderr", TextType()),
+                ("timed-out", BoolType()),
+            )
         ),
+        field_kinds=_standard(_fields),
     ),
     "ParsePolicy": _PARSE_POLICY_DEF,
     "Agent": _AGENT_DEF,
@@ -1944,13 +1954,16 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
         name="OutputContract",
         module_id=RESERVED_ID,
         fields=(
-            ("target-type", TextType()),
-            ("codec-name", TextType()),
-            ("strict-json", JsonType()),
-            ("format-instructions", TextType()),
-            ("json-schema", JsonType()),
-            ("structured-exec", BoolType()),
+            _fields := (
+                ("target-type", TextType()),
+                ("codec-name", TextType()),
+                ("strict-json", JsonType()),
+                ("format-instructions", TextType()),
+                ("json-schema", JsonType()),
+                ("structured-exec", BoolType()),
+            )
         ),
+        field_kinds=_standard(_fields),
     ),
     "OutputContractOption": _OUTPUT_CONTRACT_OPTION_DEF,
     "AgentRequest": TypeDef(
@@ -1958,30 +1971,33 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
         name="AgentRequest",
         module_id=RESERVED_ID,
         fields=(
-            (
-                "agent",
-                EnumType(name="Agent", module_id=RESERVED_ID, decl_id=_reserved_id("Agent")),
-            ),
-            ("prompt", TextType()),
-            (
-                "target-type",
-                standard_option_type(TextType()),
-            ),
-            (
-                "format-instructions",
-                standard_option_type(TextType()),
-            ),
-            (
-                "json-schema",
-                standard_option_type(JsonType()),
-            ),
-            ("attempt", IntType()),
-            (
-                "previous-error",
-                standard_option_type(TextType()),
-            ),
-            ("metadata", JsonType()),
+            _fields := (
+                (
+                    "agent",
+                    EnumType(name="Agent", module_id=RESERVED_ID, decl_id=_reserved_id("Agent")),
+                ),
+                ("prompt", TextType()),
+                (
+                    "target-type",
+                    standard_option_type(TextType()),
+                ),
+                (
+                    "format-instructions",
+                    standard_option_type(TextType()),
+                ),
+                (
+                    "json-schema",
+                    standard_option_type(JsonType()),
+                ),
+                ("attempt", IntType()),
+                (
+                    "previous-error",
+                    standard_option_type(TextType()),
+                ),
+                ("metadata", JsonType()),
+            )
         ),
+        field_kinds=_standard(_fields),
     ),
     "SessionTransport": _SESSION_TRANSPORT_DEF,
     "Session": TypeDef(
@@ -1989,39 +2005,45 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
         name="Session",
         module_id=RESERVED_ID,
         fields=(
-            ("id", TextType()),
-            (
-                "agent",
-                EnumType(name="Agent", module_id=RESERVED_ID, decl_id=_reserved_id("Agent")),
-            ),
-            (
-                "transport",
-                EnumType(
-                    name="SessionTransport",
-                    module_id=RESERVED_ID,
-                    decl_id=_reserved_id("SessionTransport"),
+            _fields := (
+                ("id", TextType()),
+                (
+                    "agent",
+                    EnumType(name="Agent", module_id=RESERVED_ID, decl_id=_reserved_id("Agent")),
                 ),
-            ),
+                (
+                    "transport",
+                    EnumType(
+                        name="SessionTransport",
+                        module_id=RESERVED_ID,
+                        decl_id=_reserved_id("SessionTransport"),
+                    ),
+                ),
+            )
         ),
+        field_kinds=_standard(_fields),
     ),
     "SessionStats": TypeDef(
         kind="record",
         name="SessionStats",
         module_id=RESERVED_ID,
         fields=(
-            ("input-tokens", IntType()),
-            ("output-tokens", IntType()),
-            ("cost", DecimalType()),
-            ("context-percent", DecimalType()),
+            _fields := (
+                ("input-tokens", IntType()),
+                ("output-tokens", IntType()),
+                ("cost", DecimalType()),
+                ("context-percent", DecimalType()),
+            )
         ),
+        field_kinds=_standard(_fields),
     ),
     "SessionError": TypeDef(
         kind="exception",
         name="SessionError",
         module_id=RESERVED_ID,
-        fields=(("operation", TextType()),),
+        fields=(_fields := (("operation", TextType()),)),
         base=_reserved_id("Exception"),
-        field_kinds=("standard",),
+        field_kinds=_standard(_fields),
     ),
 }
 
@@ -2077,15 +2099,10 @@ def source_enum_member_decl_id(
 # exception — see :meth:`TypeTable.exception_fields`, which flattens the
 # ``base`` chain on demand).  ``field_kinds`` is likewise own-fields-only: the
 # root's ``message`` is NAMED_ONLY, every other built-in exception field is
-# STANDARD — see :meth:`TypeTable.exception_field_kinds`.
+# STANDARD — see :meth:`TypeTable.field_kinds`.
 # ---------------------------------------------------------------------------
 
 _EXCEPTION_ROOT_ID: DeclId = _reserved_id("Exception")
-
-
-def _standard(count: int) -> tuple[str, ...]:
-    """Return *count* copies of the ``ParamZone.STANDARD`` value (one per own field)."""
-    return ("standard",) * count
 
 
 _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
@@ -2093,58 +2110,64 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
         kind="exception",
         name="Exception",
         module_id=RESERVED_ID,
-        fields=(("message", TextType()),),
+        fields=(_fields := (("message", TextType()),)),
         abstract=True,
-        field_kinds=("named_only",),
+        field_kinds=(ParamZone.NAMED_ONLY,) * len(_fields),
     ),
     "AgentCallError": TypeDef(
         kind="exception",
         name="AgentCallError",
         module_id=RESERVED_ID,
         fields=(
-            (
-                "agent",
-                EnumType(name="Agent", module_id=RESERVED_ID, decl_id=_reserved_id("Agent")),
-            ),
-            ("cause", TextType()),
-            ("metadata", JsonType()),
+            _fields := (
+                (
+                    "agent",
+                    EnumType(name="Agent", module_id=RESERVED_ID, decl_id=_reserved_id("Agent")),
+                ),
+                ("cause", TextType()),
+                ("metadata", JsonType()),
+            )
         ),
         base=_EXCEPTION_ROOT_ID,
-        field_kinds=_standard(3),
+        field_kinds=_standard(_fields),
     ),
     "AgentParseError": TypeDef(
         kind="exception",
         name="AgentParseError",
         module_id=RESERVED_ID,
         fields=(
-            (
-                "agent",
-                EnumType(name="Agent", module_id=RESERVED_ID, decl_id=_reserved_id("Agent")),
-            ),
-            ("target-type", TextType()),
-            ("expected-schema", JsonType()),
-            ("raw", TextType()),
-            ("normalized-raw", TextType()),
-            ("validation-errors", JsonType()),
-            ("attempts", IntType()),
-            ("metadata", JsonType()),
+            _fields := (
+                (
+                    "agent",
+                    EnumType(name="Agent", module_id=RESERVED_ID, decl_id=_reserved_id("Agent")),
+                ),
+                ("target-type", TextType()),
+                ("expected-schema", JsonType()),
+                ("raw", TextType()),
+                ("normalized-raw", TextType()),
+                ("validation-errors", JsonType()),
+                ("attempts", IntType()),
+                ("metadata", JsonType()),
+            )
         ),
         base=_EXCEPTION_ROOT_ID,
-        field_kinds=_standard(8),
+        field_kinds=_standard(_fields),
     ),
     "ExecError": TypeDef(
         kind="exception",
         name="ExecError",
         module_id=RESERVED_ID,
         fields=(
-            ("command", TextType()),
-            ("exit-code", IntType()),
-            ("stdout", TextType()),
-            ("stderr", TextType()),
-            ("timed-out", BoolType()),
+            _fields := (
+                ("command", TextType()),
+                ("exit-code", IntType()),
+                ("stdout", TextType()),
+                ("stderr", TextType()),
+                ("timed-out", BoolType()),
+            )
         ),
         base=_EXCEPTION_ROOT_ID,
-        field_kinds=_standard(5),
+        field_kinds=_standard(_fields),
     ),
     # ``python_type`` is the raising Python exception's class name, or empty for
     # a contract violation (no Python exception was involved).
@@ -2152,46 +2175,48 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
         kind="exception",
         name="ExternError",
         module_id=RESERVED_ID,
-        fields=(("function", TextType()), ("python-type", TextType())),
+        fields=(_fields := (("function", TextType()), ("python-type", TextType()))),
         base=_EXCEPTION_ROOT_ID,
-        field_kinds=_standard(2),
+        field_kinds=_standard(_fields),
     ),
     "MaxIterationsExceeded": TypeDef(
         kind="exception",
         name="MaxIterationsExceeded",
         module_id=RESERVED_ID,
         fields=(
-            ("limit", IntType()),
-            ("condition", TextType()),
-            ("last-condition-value", BoolType()),
-            ("metadata", JsonType()),
+            _fields := (
+                ("limit", IntType()),
+                ("condition", TextType()),
+                ("last-condition-value", BoolType()),
+                ("metadata", JsonType()),
+            )
         ),
         base=_EXCEPTION_ROOT_ID,
-        field_kinds=_standard(4),
+        field_kinds=_standard(_fields),
     ),
     "MatchError": TypeDef(
         kind="exception",
         name="MatchError",
         module_id=RESERVED_ID,
-        fields=(("scrutinee-type", TextType()), ("scrutinee", JsonType())),
+        fields=(_fields := (("scrutinee-type", TextType()), ("scrutinee", JsonType()))),
         base=_EXCEPTION_ROOT_ID,
-        field_kinds=_standard(2),
+        field_kinds=_standard(_fields),
     ),
     "IndexError": TypeDef(
         kind="exception",
         name="IndexError",
         module_id=RESERVED_ID,
-        fields=(("index", IntType()), ("length", IntType())),
+        fields=(_fields := (("index", IntType()), ("length", IntType()))),
         base=_EXCEPTION_ROOT_ID,
-        field_kinds=_standard(2),
+        field_kinds=_standard(_fields),
     ),
     "KeyError": TypeDef(
         kind="exception",
         name="KeyError",
         module_id=RESERVED_ID,
-        fields=(("key", TextType()),),
+        fields=(_fields := (("key", TextType()),)),
         base=_EXCEPTION_ROOT_ID,
-        field_kinds=_standard(1),
+        field_kinds=_standard(_fields),
     ),
     "TypeError": TypeDef(
         kind="exception",
@@ -2203,9 +2228,9 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
         kind="exception",
         name="ArithmeticError",
         module_id=RESERVED_ID,
-        fields=(("operation", TextType()),),
+        fields=(_fields := (("operation", TextType()),)),
         base=_EXCEPTION_ROOT_ID,
-        field_kinds=_standard(1),
+        field_kinds=_standard(_fields),
     ),
     # Statically prevented by scope/typecheck (assignment to immutable bindings
     # and undeclared names), but still listed as catchable runtime exceptions
@@ -2214,17 +2239,17 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
         kind="exception",
         name="UndefinedVariableError",
         module_id=RESERVED_ID,
-        fields=(("name", TextType()),),
+        fields=(_fields := (("name", TextType()),)),
         base=_EXCEPTION_ROOT_ID,
-        field_kinds=_standard(1),
+        field_kinds=_standard(_fields),
     ),
     "ImmutableBindingError": TypeDef(
         kind="exception",
         name="ImmutableBindingError",
         module_id=RESERVED_ID,
-        fields=(("name", TextType()), ("operation", TextType())),
+        fields=(_fields := (("name", TextType()), ("operation", TextType()))),
         base=_EXCEPTION_ROOT_ID,
-        field_kinds=_standard(2),
+        field_kinds=_standard(_fields),
     ),
     "Abort": TypeDef(
         kind="exception",
@@ -2237,29 +2262,31 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
         kind="exception",
         name="RecursionError",
         module_id=RESERVED_ID,
-        fields=(("limit", IntType()),),
+        fields=(_fields := (("limit", IntType()),)),
         base=_EXCEPTION_ROOT_ID,
-        field_kinds=_standard(1),
+        field_kinds=_standard(_fields),
     ),
     "CastError": TypeDef(
         kind="exception",
         name="CastError",
         module_id=RESERVED_ID,
         fields=(
-            ("source-type", TextType()),
-            ("target-type", TextType()),
-            ("raw", TextType()),
+            _fields := (
+                ("source-type", TextType()),
+                ("target-type", TextType()),
+                ("raw", TextType()),
+            )
         ),
         base=_EXCEPTION_ROOT_ID,
-        field_kinds=_standard(3),
+        field_kinds=_standard(_fields),
     ),
     "JsonParseError": TypeDef(
         kind="exception",
         name="JsonParseError",
         module_id=RESERVED_ID,
-        fields=(("raw", TextType()),),
+        fields=(_fields := (("raw", TextType()),)),
         base=_EXCEPTION_ROOT_ID,
-        field_kinds=_standard(1),
+        field_kinds=_standard(_fields),
     ),
     "RangeError": TypeDef(
         kind="exception",

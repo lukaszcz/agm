@@ -35,7 +35,7 @@ from agm.agl.value_syntax.nodes import (
 )
 from agm.util.interp import INTERP_OPEN
 
-__all__ = ["read_value"]
+__all__ = ["read_ctor_head", "read_value"]
 
 # The scanner's own whitespace set (space, TAB, and the two newline forms it
 # normalizes away); not `str.isspace()`, which admits other Unicode space
@@ -214,31 +214,69 @@ def _parse_dict_entry(source: str, pos: int) -> tuple[DictEntry, int]:
     return DictEntry(key, value, entry_start, scan_pos), scan_pos
 
 
-def _parse_ctor(source: str, start: int, word: str, pos: int) -> tuple[ValueNode, int]:
+def _read_ctor_qualifier(
+    source: str, start: int, word: str, pos: int
+) -> tuple[str | None, str, int]:
+    """Read an optional ``word :: NAME`` qualifier chain following *word*.
+
+    *word* is the already-scanned leading name, ending at *pos*. Returns
+    ``(qualifier, name, end)`` -- *qualifier* is ``None`` and *name* is
+    *word* itself when no ``::`` follows, with whitespace (including
+    newlines) allowed around it exactly like everywhere else in this
+    grammar. Raises :class:`ValueSyntaxError` for an invalid constructor
+    name, on either side of ``::``.
+    """
     if not is_plain_name(word):
         raise ValueSyntaxError(f"{word!r} is not a valid constructor name", start, pos)
-    qualifier: str | None = None
-    name = word
     dcolon_pos = _skip_ws(source, pos)
-    if source.startswith("::", dcolon_pos):
-        member_start = _skip_ws(source, dcolon_pos + 2)
-        member_end = lexical.scan_name(source, member_start)
-        if member_end is None:
-            raise ValueSyntaxError("expected a name after '::'", member_start, member_start)
-        member_word = source[member_start:member_end]
-        if not is_plain_name(member_word):
-            raise ValueSyntaxError(
-                f"{member_word!r} is not a valid constructor name", member_start, member_end
-            )
-        qualifier = word
-        name = member_word
-        pos = member_end
+    if not source.startswith("::", dcolon_pos):
+        return None, word, pos
+    member_start = _skip_ws(source, dcolon_pos + 2)
+    member_end = lexical.scan_name(source, member_start)
+    if member_end is None:
+        raise ValueSyntaxError("expected a name after '::'", member_start, member_start)
+    member_word = source[member_start:member_end]
+    if not is_plain_name(member_word):
+        raise ValueSyntaxError(
+            f"{member_word!r} is not a valid constructor name", member_start, member_end
+        )
+    return word, member_word, member_end
+
+
+def _parse_ctor(source: str, start: int, word: str, pos: int) -> tuple[ValueNode, int]:
+    qualifier, name, pos = _read_ctor_qualifier(source, start, word, pos)
     peek = _skip_ws(source, pos)
     args: tuple[ValueArg, ...] | None = None
     end = pos
     if peek < len(source) and source[peek] == "(":
         args, end = _parse_args(source, peek)
     return CtorNode(qualifier, name, args, start, end), end
+
+
+def read_ctor_head(source: str) -> tuple[str | None, str] | None:
+    """Return ``(qualifier, name)`` when *source* opens with a constructor call.
+
+    Skips leading whitespace, then reads exactly the qualifier/name prefix
+    :func:`_parse_ctor` reads -- the same whitespace handling around ``::``
+    and before ``(`` -- so a caller probing for an attempted call (the host
+    Agent-text dispatch) can never diverge from how the reader itself treats
+    the same text. Returns ``None`` for anything that is not a name opening
+    a call: a bare name with no ``(``, a malformed qualifier chain, or text
+    that is not a name at all.
+    """
+    pos = _skip_ws(source, 0)
+    end = lexical.scan_name(source, pos)
+    if end is None:
+        return None
+    word = source[pos:end]
+    try:
+        qualifier, name, after = _read_ctor_qualifier(source, pos, word, end)
+    except ValueSyntaxError:
+        return None
+    peek = _skip_ws(source, after)
+    if peek >= len(source) or source[peek] != "(":
+        return None
+    return qualifier, name
 
 
 def _parse_args(source: str, pos: int) -> tuple[tuple[ValueArg, ...], int]:

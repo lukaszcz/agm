@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi, AgentSpec
 
-__all__ = ["agent_spec_shape", "parse_agent_shorthand", "parse_agent_text"]
+__all__ = ["agent_spec_shape", "parse_agent_shorthand"]
 
 
 def _model_effort(text: str) -> tuple[str, str] | None:
@@ -41,11 +41,6 @@ def parse_agent_shorthand(text: str) -> AgentSpec | None:
         model, effort = model_effort
         return AgentPi(parts[0], model, effort)
     return None
-
-
-def parse_agent_text(text: str) -> AgentSpec:
-    """Parse compact syntax, falling back to a verbatim custom command."""
-    return parse_agent_shorthand(text) or AgentCommand(text)
 
 
 def agent_spec_shape(spec: AgentSpec) -> dict[str, object]:

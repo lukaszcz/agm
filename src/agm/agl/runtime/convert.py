@@ -232,7 +232,7 @@ def decode_value(
     """
     match schema:
         case RefDecode(key=key):
-            resolved = _resolve_decode_ref(key, defs)
+            resolved = resolve_decode_ref(key, defs)
             return decode_value(resolved, obj, defs)
         case ScalarDecode(kind=kind):
             return _decode_scalar(kind, obj)
@@ -288,7 +288,7 @@ def decode_value(
             assert_never(unreachable)
 
 
-def _resolve_decode_ref(key: str, defs: Mapping[str, DecodeSchema]) -> DecodeSchema:
+def resolve_decode_ref(key: str, defs: Mapping[str, DecodeSchema]) -> DecodeSchema:
     """Resolve a ``RefDecode`` key to a non-ref body, rejecting malformed cycles."""
     return resolve_schema_ref(
         key,

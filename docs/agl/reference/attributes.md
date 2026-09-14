@@ -113,6 +113,11 @@ whose declared/`@name` spellings collide, are static errors, checked across
 a record's own fields, an exception's inherited field chain, and an enum's
 members (inline and referenced alike).
 
+A record's or enum member's `@name` alias is also a valid constructor spelling
+in [host value syntax](host-environment.md#value-syntax): `Square` or `sq`
+both match the `Square` member below, and a field's `@name` alias binds it in
+a constructor call the same way it would bind a declared name.
+
 ```agl
 enum Shape
   | @name("sq") Square(side: int)

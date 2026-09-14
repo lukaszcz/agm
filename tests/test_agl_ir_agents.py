@@ -20,6 +20,7 @@ from agm.agl.semantics.values import (
     RecordValue,
     TextValue,
 )
+from agm.agl.zones import ParamZone
 from tests._agl_helpers import run_inline_command
 from tests.agl.ir_harness import (
     agent_caps,
@@ -729,16 +730,32 @@ def test_enum_bad_case_raises_agent_parse_error() -> None:
     decode = EnumDecode(
         nominal=nominal,
         display_name="Status",
+        name="Status",
+        host_agent=False,
         variants=(
             VariantDecode(
-                name="Ok", json_name="Ok", nominal=NominalId(999), display_name="Ok", fields=()
+                name="Ok",
+                json_name="Ok",
+                nominal=NominalId(999),
+                display_name="Ok",
+                fields=(),
+                alias=None,
             ),
             VariantDecode(
                 name="Err",
                 json_name="Err",
                 nominal=NominalId(999),
                 display_name="Err",
-                fields=(FieldDecode("msg", "msg", ScalarDecode(ScalarKind.TEXT)),),
+                fields=(
+                    FieldDecode(
+                        "msg",
+                        "msg",
+                        ScalarDecode(ScalarKind.TEXT),
+                        zone=ParamZone.STANDARD,
+                        alias=None,
+                    ),
+                ),
+                alias=None,
             ),
         ),
     )
@@ -1101,10 +1118,24 @@ def test_parse_agent_output_required_field_error() -> None:
     decode = RecordDecode(
         nominal=nom,
         display_name="Point",
+        name="Point",
         fields=(
-            FieldDecode("x", "x", ScalarDecode(ScalarKind.INT)),
-            FieldDecode("y", "y", ScalarDecode(ScalarKind.INT)),
+            FieldDecode(
+                "x",
+                "x",
+                ScalarDecode(ScalarKind.INT),
+                zone=ParamZone.STANDARD,
+                alias=None,
+            ),
+            FieldDecode(
+                "y",
+                "y",
+                ScalarDecode(ScalarKind.INT),
+                zone=ParamZone.STANDARD,
+                alias=None,
+            ),
         ),
+        alias=None,
     )
     contract = ContractRequest(
         codec_name="json",
@@ -1147,7 +1178,17 @@ def test_parse_agent_output_additional_properties_error() -> None:
     decode = RecordDecode(
         nominal=nom,
         display_name="Point",
-        fields=(FieldDecode("x", "x", ScalarDecode(ScalarKind.INT)),),
+        name="Point",
+        fields=(
+            FieldDecode(
+                "x",
+                "x",
+                ScalarDecode(ScalarKind.INT),
+                zone=ParamZone.STANDARD,
+                alias=None,
+            ),
+        ),
+        alias=None,
     )
     contract = ContractRequest(
         codec_name="json",
@@ -1232,12 +1273,24 @@ def test_enum_instance_not_dict_bad_case() -> None:
     decode = EnumDecode(
         nominal=nominal,
         display_name="Flag",
+        name="Flag",
+        host_agent=False,
         variants=(
             VariantDecode(
-                name="On", json_name="On", nominal=NominalId(999), display_name="On", fields=()
+                name="On",
+                json_name="On",
+                nominal=NominalId(999),
+                display_name="On",
+                fields=(),
+                alias=None,
             ),
             VariantDecode(
-                name="Off", json_name="Off", nominal=NominalId(999), display_name="Off", fields=()
+                name="Off",
+                json_name="Off",
+                nominal=NominalId(999),
+                display_name="Off",
+                fields=(),
+                alias=None,
             ),
         ),
     )
@@ -1288,12 +1341,24 @@ def test_enum_no_case_tag_bad_case() -> None:
     decode = EnumDecode(
         nominal=nominal,
         display_name="Flag",
+        name="Flag",
+        host_agent=False,
         variants=(
             VariantDecode(
-                name="On", json_name="On", nominal=NominalId(999), display_name="On", fields=()
+                name="On",
+                json_name="On",
+                nominal=NominalId(999),
+                display_name="On",
+                fields=(),
+                alias=None,
             ),
             VariantDecode(
-                name="Off", json_name="Off", nominal=NominalId(999), display_name="Off", fields=()
+                name="Off",
+                json_name="Off",
+                nominal=NominalId(999),
+                display_name="Off",
+                fields=(),
+                alias=None,
             ),
         ),
     )
@@ -1380,9 +1445,16 @@ def test_find_enum_decode_at_path_through_array() -> None:
     enum_dec = EnumDecode(
         nominal=nominal,
         display_name="Status",
+        name="Status",
+        host_agent=False,
         variants=(
             VariantDecode(
-                name="Ok", json_name="Ok", nominal=NominalId(999), display_name="Ok", fields=()
+                name="Ok",
+                json_name="Ok",
+                nominal=NominalId(999),
+                display_name="Ok",
+                fields=(),
+                alias=None,
             ),
         ),
     )
@@ -1418,9 +1490,16 @@ def test_find_enum_decode_at_path_through_dict() -> None:
     enum_dec = EnumDecode(
         nominal=nominal,
         display_name="Status",
+        name="Status",
+        host_agent=False,
         variants=(
             VariantDecode(
-                name="Ok", json_name="Ok", nominal=NominalId(999), display_name="Ok", fields=()
+                name="Ok",
+                json_name="Ok",
+                nominal=NominalId(999),
+                display_name="Ok",
+                fields=(),
+                alias=None,
             ),
         ),
     )
@@ -1457,9 +1536,16 @@ def test_find_enum_decode_at_path_through_record() -> None:
     enum_dec = EnumDecode(
         nominal=nominal,
         display_name="Status",
+        name="Status",
+        host_agent=False,
         variants=(
             VariantDecode(
-                name="Ok", json_name="Ok", nominal=NominalId(999), display_name="Ok", fields=()
+                name="Ok",
+                json_name="Ok",
+                nominal=NominalId(999),
+                display_name="Ok",
+                fields=(),
+                alias=None,
             ),
         ),
     )
@@ -1467,10 +1553,18 @@ def test_find_enum_decode_at_path_through_record() -> None:
     rec_dec = RecordDecode(
         nominal=rec_nominal,
         display_name="Wrapper",
+        name="Wrapper",
         fields=(
-            FieldDecode("status", "status", enum_dec),
-            FieldDecode("n", "n", ScalarDecode(ScalarKind.INT)),
+            FieldDecode("status", "status", enum_dec, zone=ParamZone.STANDARD, alias=None),
+            FieldDecode(
+                "n",
+                "n",
+                ScalarDecode(ScalarKind.INT),
+                zone=ParamZone.STANDARD,
+                alias=None,
+            ),
         ),
+        alias=None,
     )
     contract = ContractRequest(
         codec_name="json",
@@ -1509,9 +1603,16 @@ def test_find_enum_decode_at_path_enum_at_top_navigated_into() -> None:
     enum_dec = EnumDecode(
         nominal=nominal,
         display_name="Status",
+        name="Status",
+        host_agent=False,
         variants=(
             VariantDecode(
-                name="Ok", json_name="Ok", nominal=NominalId(999), display_name="Ok", fields=()
+                name="Ok",
+                json_name="Ok",
+                nominal=NominalId(999),
+                display_name="Ok",
+                fields=(),
+                alias=None,
             ),
         ),
     )
@@ -1570,7 +1671,17 @@ def test_find_enum_decode_at_path_end_at_scalar() -> None:
     rec_dec = RecordDecode(
         nominal=nom,
         display_name="Point",
-        fields=(FieldDecode("x", "x", ScalarDecode(ScalarKind.INT)),),
+        name="Point",
+        fields=(
+            FieldDecode(
+                "x",
+                "x",
+                ScalarDecode(ScalarKind.INT),
+                zone=ParamZone.STANDARD,
+                alias=None,
+            ),
+        ),
+        alias=None,
     )
     contract = ContractRequest(
         codec_name="json",
@@ -1603,16 +1714,32 @@ def test_enum_known_case_with_additional_props_error() -> None:
     decode = EnumDecode(
         nominal=nominal,
         display_name="Status",
+        name="Status",
+        host_agent=False,
         variants=(
             VariantDecode(
-                name="Ok", json_name="Ok", nominal=NominalId(999), display_name="Ok", fields=()
+                name="Ok",
+                json_name="Ok",
+                nominal=NominalId(999),
+                display_name="Ok",
+                fields=(),
+                alias=None,
             ),
             VariantDecode(
                 name="Err",
                 json_name="Err",
                 nominal=NominalId(999),
                 display_name="Err",
-                fields=(FieldDecode("msg", "msg", ScalarDecode(ScalarKind.TEXT)),),
+                fields=(
+                    FieldDecode(
+                        "msg",
+                        "msg",
+                        ScalarDecode(ScalarKind.TEXT),
+                        zone=ParamZone.STANDARD,
+                        alias=None,
+                    ),
+                ),
+                alias=None,
             ),
         ),
     )
@@ -1761,20 +1888,33 @@ def test_validate_contract_request_recursive_decode_defs() -> None:
     tree_body = EnumDecode(
         nominal=tree_nominal,
         display_name="Tree",
+        name="Tree",
         variants=(
-            VariantDecode("Leaf", "Leaf", NominalId(11), "Tree::Leaf", ()),
+            VariantDecode("Leaf", "Leaf", NominalId(11), "Tree::Leaf", (), None),
             VariantDecode(
                 "Node",
                 "Node",
                 NominalId(12),
                 "Tree::Node",
                 (
-                    FieldDecode("value", "value", ScalarDecode(ScalarKind.INT)),
-                    FieldDecode("left", "left", RefDecode("Tree")),
-                    FieldDecode("right", "right", RefDecode("Tree")),
+                    FieldDecode(
+                        "value",
+                        "value",
+                        ScalarDecode(ScalarKind.INT),
+                        zone=ParamZone.STANDARD,
+                        alias=None,
+                    ),
+                    FieldDecode(
+                        "left", "left", RefDecode("Tree"), zone=ParamZone.STANDARD, alias=None
+                    ),
+                    FieldDecode(
+                        "right", "right", RefDecode("Tree"), zone=ParamZone.STANDARD, alias=None
+                    ),
                 ),
+                None,
             ),
         ),
+        host_agent=False,
     )
     cid = ContractId(0)
     req = ContractRequest(
@@ -2270,6 +2410,7 @@ def test_enum_required_field_loop_partial_coverage() -> None:
     decode = EnumDecode(
         nominal=nominal,
         display_name="Pair",
+        name="Pair",
         variants=(
             VariantDecode(
                 name="Both",
@@ -2277,11 +2418,17 @@ def test_enum_required_field_loop_partial_coverage() -> None:
                 nominal=NominalId(999),
                 display_name="Both",
                 fields=(
-                    FieldDecode("a", "a", ScalarDecode(ScalarKind.INT)),
-                    FieldDecode("b", "b", ScalarDecode(ScalarKind.INT)),
+                    FieldDecode(
+                        "a", "a", ScalarDecode(ScalarKind.INT), zone=ParamZone.STANDARD, alias=None
+                    ),
+                    FieldDecode(
+                        "b", "b", ScalarDecode(ScalarKind.INT), zone=ParamZone.STANDARD, alias=None
+                    ),
                 ),
+                alias=None,
             ),
         ),
+        host_agent=False,
     )
     # Schema requiring both 'a' and 'b'.
     schema = _json.dumps(
@@ -2404,16 +2551,32 @@ def test_classify_enum_sub_error_type_only_fallback() -> None:
     decode = EnumDecode(
         nominal=nominal,
         display_name="Status",
+        name="Status",
+        host_agent=False,
         variants=(
             VariantDecode(
-                name="Ok", json_name="Ok", nominal=NominalId(999), display_name="Ok", fields=()
+                name="Ok",
+                json_name="Ok",
+                nominal=NominalId(999),
+                display_name="Ok",
+                fields=(),
+                alias=None,
             ),
             VariantDecode(
                 name="Err",
                 json_name="Err",
                 nominal=NominalId(999),
                 display_name="Err",
-                fields=(FieldDecode("msg", "msg", ScalarDecode(ScalarKind.TEXT)),),
+                fields=(
+                    FieldDecode(
+                        "msg",
+                        "msg",
+                        ScalarDecode(ScalarKind.TEXT),
+                        zone=ParamZone.STANDARD,
+                        alias=None,
+                    ),
+                ),
+                alias=None,
             ),
         ),
     )
@@ -2464,9 +2627,16 @@ def test_classify_enum_failure_nullary_case_all_fields_present() -> None:
     decode = EnumDecode(
         nominal=nominal,
         display_name="Status",
+        name="Status",
+        host_agent=False,
         variants=(
             VariantDecode(
-                name="Err", json_name="Err", nominal=NominalId(999), display_name="Err", fields=()
+                name="Err",
+                json_name="Err",
+                nominal=NominalId(999),
+                display_name="Err",
+                fields=(),
+                alias=None,
             ),
         ),
     )
@@ -2502,16 +2672,32 @@ def test_classify_enum_failure_known_case_all_payload_present() -> None:
     decode = EnumDecode(
         nominal=nominal,
         display_name="Status",
+        name="Status",
+        host_agent=False,
         variants=(
             VariantDecode(
-                name="Ok", json_name="Ok", nominal=NominalId(999), display_name="Ok", fields=()
+                name="Ok",
+                json_name="Ok",
+                nominal=NominalId(999),
+                display_name="Ok",
+                fields=(),
+                alias=None,
             ),
             VariantDecode(
                 name="Err",
                 json_name="Err",
                 nominal=NominalId(999),
                 display_name="Err",
-                fields=(FieldDecode("msg", "msg", ScalarDecode(ScalarKind.TEXT)),),
+                fields=(
+                    FieldDecode(
+                        "msg",
+                        "msg",
+                        ScalarDecode(ScalarKind.TEXT),
+                        zone=ParamZone.STANDARD,
+                        alias=None,
+                    ),
+                ),
+                alias=None,
             ),
         ),
     )

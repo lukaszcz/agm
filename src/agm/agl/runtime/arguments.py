@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from agm.agl.zones import ParamZone
 
 __all__ = [
+    "OptionSome",
     "ProgramArguments",
     "ProgramParameter",
     "ProgramSignature",
@@ -148,16 +149,19 @@ class ProgramSignature:
         return cls(parameters=tuple(parameters), span=span)
 
 
-def agent_raw_value(text: str) -> object:
-    """Convert Agent host text to the raw tagged shape used by AgL decoding."""
-    from agm.agent.values import agent_spec_shape, parse_agent_text
-    from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
+@dataclass(frozen=True, slots=True)
+class OptionSome:
+    """A host-supplied ``Option[T]`` "Some" raw payload, awaiting decode.
 
-    try:
-        parsed = parse_json_strict(text)
-    except StrictJsonParseError:
-        parsed = None
-    return parsed if isinstance(parsed, dict) else agent_spec_shape(parse_agent_text(text))
+    Boxes the raw ``VALUE`` a CLI flag or config table supplied for an
+    ``Option[T]`` parameter (:func:`~agm.cli_support.program_options.option_some_raw`
+    builds it) so :func:`decode_param_value` can decode ``value`` against the
+    ``Some`` variant's own field type before wrapping it back into the enum's
+    JSON shape — a string is read through the same host-text dispatch as any
+    other textual value; a native value is already decoded data.
+    """
+
+    value: object
 
 
 def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
@@ -165,13 +169,16 @@ def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
 
     The single decode path shared by program-argument binding
     (:func:`bind_program_arguments`) and the host engine-config decode path
-    (``runtime.engine_config.convert_host_value``). ``text`` params are taken
-    verbatim. Standard ``Agent`` params accept canonical tagged JSON, compact
-    native-agent syntax, or a command string. Every other value crosses the
-    canonical JSON boundary (strict parse, integral-decimal normalization,
-    JSON-Schema validation, then the typeless ``decode_value`` walk).
+    (``runtime.engine_config.convert_host_value``). A textual value is read
+    through the shared host-text dispatch (``runtime.value_decode.host_text_to_json``):
+    ``text`` params verbatim, the standard ``Agent`` enum through its own text
+    conventions, everything else as strict JSON falling back to AgL value
+    syntax. An :class:`OptionSome` payload decodes its own ``value`` the same
+    way (when textual) before being wrapped back into the ``Option`` enum's
+    JSON shape. Every other value crosses the canonical JSON boundary (strict
+    parse, integral-decimal normalization, JSON-Schema validation, then the
+    typeless ``decode_value`` walk).
 
-    :raises StrictJsonParseError: if a textual/native value is not strict JSON.
     :raises ValueError: on a type/shape mismatch or schema-validation failure.
     """
     from agm.agl.runtime.convert import (
@@ -182,27 +189,46 @@ def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
         validator_for_schema,
     )
     from agm.agl.runtime.serialize import dumps_exact
+    from agm.agl.runtime.value_decode import (
+        host_text_to_json,
+        option_some_field_schema,
+        option_some_json_name,
+    )
 
-    if decoder.text_verbatim:
-        if not isinstance(raw, str):
-            raise ValueError(f"expected a text value (str), got {type(raw).__name__}")
-        obj: object = raw
-    elif decoder.agent_text and isinstance(raw, str):
-        obj = agent_raw_value(raw)
+    def native_to_json(value: object) -> object:
+        """Cross an already-native (non-string) host value into JSON-native form.
+
+        Round-trips through the same strict-parse boundary a textual value's
+        JSON branch uses, so a native ``float`` becomes ``Decimal`` via
+        ``parse_float=Decimal`` and a value with no JSON shape (a TOML
+        datetime, say) reports a clean error instead of reaching JSON-Schema
+        validation as a foreign type. Shared by the top-level native branch
+        and an ``OptionSome`` payload's non-string inner value, so neither can
+        drift from the other.
+        """
+        if not _is_json_shaped(value):
+            raise ValueError(f"expected a JSON-compatible value, got {type(value).__name__}")
+        return parse_json_strict(dumps_exact(value, indent=None))
+
+    defs = dict(decoder.defs)
+    if isinstance(raw, OptionSome):
+        inner = raw.value
+        field_schema = option_some_field_schema(decoder.decode, defs)
+        inner_obj = (
+            host_text_to_json(inner, field_schema, defs, agent_command_fallback=True)
+            if isinstance(inner, str)
+            else native_to_json(inner)
+        )
+        obj: object = {"$case": option_some_json_name(decoder.decode, defs), "value": inner_obj}
     elif isinstance(raw, str):
-        obj = parse_json_strict(raw)
-    elif _is_json_shaped(raw):
-        # Native host values cross the same canonical JSON boundary as textual
-        # values. In particular, Python floats become Decimal through
-        # parse_float=Decimal before typed decoding.
-        obj = parse_json_strict(dumps_exact(raw, indent=None))
+        obj = host_text_to_json(raw, decoder.decode, defs, agent_command_fallback=True)
     else:
-        raise ValueError(f"expected a JSON-compatible value, got {type(raw).__name__}")
+        obj = native_to_json(raw)
     normalized = normalize_integral_decimals(obj)
     validation_errors = list(validator_for_schema(decoder.json_schema).iter_errors(normalized))
     if validation_errors:
         raise ValueError(_clean_validation_message(validation_errors[0]))
-    return decode_value(decoder.decode, normalized, dict(decoder.defs))
+    return decode_value(decoder.decode, normalized, defs)
 
 
 @dataclass(frozen=True, slots=True)

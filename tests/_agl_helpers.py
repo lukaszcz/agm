@@ -91,6 +91,7 @@ from agm.agl.syntax import (
 )
 from agm.agl.syntax.nodes import Program
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
+from agm.agl.zones import ParamZone
 
 # Declaration identities for ad-hoc test TypeDefs, distinct from real AST node
 # ids (which start at 0) and from every reserved identity (<= -2, see
@@ -364,6 +365,7 @@ def enum_typedef(
                 if any(param in free_type_vars(field_type) for field_type in fields.values())
             ),
             fields=tuple(fields.items()),
+            field_kinds=(ParamZone.STANDARD,) * len(fields),
             decl_node_id=next_decl_id(),
         )
         for member_name, fields in variants.items()
@@ -414,6 +416,7 @@ def record_type(
         module_id=module_id,
         type_params=type_params,
         fields=tuple(fields.items()),
+        field_kinds=(ParamZone.STANDARD,) * len(fields),
         decl_node_id=next_decl_id() if decl_id is None else decl_id,
     )
     return typedef.handle(type_args), typedef

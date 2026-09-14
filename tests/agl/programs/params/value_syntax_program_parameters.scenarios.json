@@ -1,0 +1,224 @@
+{
+  "scenarios": [
+    {
+      "name": "declared_name_spellings",
+      "positional": ["hi"],
+      "params": {
+        "point": "Point(x = 1, y = 2)",
+        "shape": "Square(side = 2)"
+      },
+      "expect": {
+        "stdout": "hi\n1,2\nsquare 2\n0\nno tag\n{}\n0\n\n"
+      }
+    },
+    {
+      "name": "record_and_field_alias_spellings",
+      "positional": ["yo"],
+      "params": {
+        "point": "pt(px = 3, y = 4)",
+        "shape": "sq(2)"
+      },
+      "expect": {
+        "stdout": "yo\n3,4\nsquare 2\n0\nno tag\n{}\n0\n\n"
+      }
+    },
+    {
+      "name": "qualified_enum_member_and_positional_field",
+      "positional": ["q"],
+      "params": {
+        "point": "Point(1, y = 6)",
+        "shape": "Shape::Circle(radius = 9)"
+      },
+      "expect": {
+        "stdout": "q\n1,6\ncircle 9\n0\nno tag\n{}\n0\n\n"
+      }
+    },
+    {
+      "name": "option_and_json_value_syntax",
+      "positional": ["m"],
+      "params": {
+        "point": "Point(x = 1, y = 1)",
+        "shape": "Circle(radius = 1)",
+        "count": "42",
+        "tag": "Some(7)",
+        "meta": "{a: 1, b: 2}"
+      },
+      "expect": {
+        "stdout": "m\n1,1\ncircle 1\n42\ntag 7\n{\"a\": 1, \"b\": 2}\n0\n\n"
+      }
+    },
+    {
+      "name": "wrong_constructor_name",
+      "positional": ["e"],
+      "params": {
+        "point": "NotPoint(x = 1, y = 2)",
+        "shape": "Circle(radius = 1)"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": ["point"]
+        }
+      }
+    },
+    {
+      "name": "unknown_field",
+      "positional": ["e"],
+      "params": {
+        "point": "Point(x = 1, y = 2, z = 3)",
+        "shape": "Circle(radius = 1)"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": ["point"]
+        }
+      }
+    },
+    {
+      "name": "duplicate_field_spelling",
+      "positional": ["e"],
+      "params": {
+        "point": "Point(1, x = 2, y = 3)",
+        "shape": "Circle(radius = 1)"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": ["point"]
+        }
+      }
+    },
+    {
+      "name": "null_outside_json",
+      "positional": ["e"],
+      "params": {
+        "point": "Point(x = null, y = 2)",
+        "shape": "Circle(radius = 1)"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": ["point"]
+        }
+      }
+    },
+    {
+      "name": "constructor_inside_json",
+      "positional": ["e"],
+      "params": {
+        "point": "Point(x = 1, y = 2)",
+        "shape": "Circle(radius = 1)",
+        "meta": "Foo(x = 1)"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": ["meta"]
+        }
+      }
+    },
+    {
+      "name": "malformed_value_syntax",
+      "positional": ["e"],
+      "params": {
+        "point": "Point(x = 1",
+        "shape": "Circle(radius = 1)"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": ["point"]
+        }
+      }
+    },
+    {
+      "name": "bare_zero_field_member",
+      "positional": ["e"],
+      "params": {
+        "point": "Point(x = 1, y = 2)",
+        "shape": "Empty"
+      },
+      "expect": {
+        "stdout": "e\n1,2\nempty\n0\nno tag\n{}\n0\n\n"
+      }
+    },
+    {
+      "name": "empty_call_zero_field_member",
+      "positional": ["e"],
+      "params": {
+        "point": "Point(x = 1, y = 2)",
+        "shape": "Empty()"
+      },
+      "expect": {
+        "stdout": "e\n1,2\nempty\n0\nno tag\n{}\n0\n\n"
+      }
+    },
+    {
+      "name": "named_only_field_supplied_by_name",
+      "positional": ["e"],
+      "params": {
+        "point": "Point(x = 1, y = 2)",
+        "shape": "Circle(radius = 5)"
+      },
+      "expect": {
+        "stdout": "e\n1,2\ncircle 5\n0\nno tag\n{}\n0\n\n"
+      }
+    },
+    {
+      "name": "named_only_field_rejects_positional_spelling",
+      "positional": ["e"],
+      "params": {
+        "point": "Point(x = 1, y = 2)",
+        "shape": "Circle(5)"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": ["shape"]
+        }
+      }
+    },
+    {
+      "name": "negative_numbers",
+      "positional": ["e"],
+      "params": {
+        "point": "Point(x = -1, y = -2)",
+        "shape": "Circle(radius = 1)",
+        "ratio": "-3.5"
+      },
+      "expect": {
+        "stdout": "e\n-1,-2\ncircle 1\n0\nno tag\n{}\n-3.5\n\n"
+      }
+    },
+    {
+      "name": "int_widens_into_a_decimal_parameter",
+      "positional": ["e"],
+      "params": {
+        "point": "Point(x = 1, y = 2)",
+        "shape": "Circle(radius = 1)",
+        "ratio": "3"
+      },
+      "expect": {
+        "stdout": "e\n1,2\ncircle 1\n0\nno tag\n{}\n3\n\n"
+      }
+    },
+    {
+      "name": "text_field_decodes_escapes",
+      "positional": ["e"],
+      "params": {
+        "point": "Point(x = 1, y = 2)",
+        "shape": "Circle(radius = 1)",
+        "msg": "Msg(text = \"a\\\"b\\n\")"
+      },
+      "expect": {
+        "stdout": "e\n1,2\ncircle 1\n0\nno tag\n{}\n0\na\"b\n\n"
+      }
+    },
+    {
+      "name": "dict_with_bare_and_quoted_keys",
+      "positional": ["e"],
+      "params": {
+        "point": "Point(x = 1, y = 2)",
+        "shape": "Circle(radius = 1)",
+        "meta": "{a: 1, \"b c\": 2}"
+      },
+      "expect": {
+        "stdout": "e\n1,2\ncircle 1\n0\nno tag\n{\"a\": 1, \"b c\": 2}\n0\n\n"
+      }
+    }
+  ]
+}

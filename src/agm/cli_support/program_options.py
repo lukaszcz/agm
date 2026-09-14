@@ -61,28 +61,27 @@ end-of-options marker visible to it across Click's own parse.
 Nested ``Option`` handling
 ---------------------------
 
-Only the outermost type gets special CLI treatment. A ``text``/JSON-form
-flag's ``VALUE`` token passes through verbatim, exactly like a positional
-token: ``decode_param_value`` already parses a raw string against the
-parameter's own decoder (JSON-form included), so parsing it again here would
-duplicate that step and lose its diagnostic, anchored at the parameter's
-declaration, on a malformed value.
+Only the outermost type gets special CLI treatment. A non-``Option`` flag's
+``VALUE`` token passes through verbatim, exactly like a positional token:
+``decode_param_value`` already reads a raw string against the parameter's
+own decoder (host Agent syntax, strict JSON, or AgL value syntax alike), so
+reading it again here would duplicate that step and lose its diagnostic,
+anchored at the parameter's declaration, on a malformed value.
 
-An ``Option[T]`` flag is the one envelope exception. Its raw value is a
-``{"$case": "Some"/"None", "value": ...}`` envelope, not a bare string —
-``decode_param_value``'s enum-decode walk needs the ``"value"`` payload to
-already be a native Python object, not JSON text standing for one — so the
-``Some`` payload is built here: verbatim when ``T`` is ``text``, through the
-host Agent decoder when ``T`` is ``Agent``, otherwise eagerly strict-JSON-parsed.
-This rule is applied once, uniformly, with no
-further special case, so it also defines nested behavior: ``Option[bool]``'s
-``VALUE`` is a JSON boolean literal (``--x true`` / ``--x false``; ``--no-x``
-for ``None``), and ``Option[Option[T]]``'s ``VALUE`` is a JSON literal of the
-*whole* inner ``Option`` shape (``--x '{"$case": "Some", "value": ...}'`` /
-``--x '{"$case": "None"}'``; ``--no-x`` for the outer ``None``). Unlike a
-top-level ``text``/JSON-form flag, a malformed ``Option`` payload is
-therefore a plain usage error raised by :meth:`ProgramCommand.parse` itself,
-not a decode diagnostic.
+An ``Option[T]`` flag is the one boxing exception. Its raw value is an
+:class:`~agm.agl.runtime.arguments.OptionSome` box around the token, built by
+:func:`option_some_raw` — ``decode_param_value``'s deferred-decode path reads
+a boxed ``Some`` payload against ``T``'s own field schema (host-text dispatch
+when it is a string, as native data otherwise) and wraps the result into the
+enum's own ``{"$case": "Some", "value": ...}`` JSON shape itself, so no
+decoding happens in this module. This rule is applied once, uniformly, with
+no further special case, so it also defines nested behavior:
+``Option[bool]``'s ``VALUE`` is a JSON boolean literal (``--x true`` /
+``--x false``; ``--no-x`` for ``None``), and ``Option[Option[T]]``'s
+``VALUE`` is a JSON or value-syntax literal of the *whole* inner ``Option``
+shape (``--no-x`` for the outer ``None``). A malformed ``Option`` payload —
+like any other malformed value — surfaces as a decode diagnostic anchored at
+the parameter's declaration, not as a Click usage error.
 """
 
 from __future__ import annotations
@@ -95,12 +94,12 @@ from typing import TYPE_CHECKING, cast
 import click
 from click.core import ParameterSource
 
-from agm.agl.runtime.arguments import ProgramArguments, agent_raw_value
-from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
+from agm.agl.runtime.arguments import OptionSome, ProgramArguments
 from agm.agl.runtime.serialize import dumps_exact
 from agm.agl.semantics.engine_keys import ENGINE_KEY_TYPES
 from agm.agl.semantics.types import (
     BoolType,
+    JsonType,
     TextType,
     is_standard_agent_enum,
     is_standard_option_enum,
@@ -243,10 +242,13 @@ class ValueForm(enum.Enum):
     OPTION = "option"
     #: ``bool``: a native Python bool, no ``VALUE`` token.
     BOOL = "bool"
-    #: Standard ``Agent``: compact syntax, command text, or canonical JSON.
+    #: Standard ``Agent``: compact syntax, command text, a constructor call, or
+    #: canonical JSON.
     AGENT = "agent"
-    #: Every other type: one strict-JSON token.
+    #: ``json``: one JSON token.
     JSON = "json"
+    #: Every other type: one strict-JSON-or-AgL-value-syntax token.
+    VALUE = "value"
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,16 +259,18 @@ class ProjectedOption:
     ``takes_value`` both follow from it, so :attr:`takes_value` is derived
     rather than stored and cannot disagree with the form.
 
-    ``option_inner`` is ``T`` when ``value_form`` is :attr:`ValueForm.OPTION`
+    ``option_inner``/``option_inner_form`` are ``Option[T]``'s own ``T`` and
+    ``T``'s bare value form when ``value_form`` is :attr:`ValueForm.OPTION`,
     and ``None`` for every other form — computed once here rather than
     re-derived from the parameter's type on every token, so the raw-value
-    builder never has to represent the impossible combination.
+    builder and the metavar never have to re-classify ``T`` themselves.
     """
 
     flags: tuple[str, ...]
     negative_flags: tuple[str, ...]
     value_form: ValueForm
     option_inner: "AglType | None" = None
+    option_inner_form: ValueForm | None = None
 
     @property
     def takes_value(self) -> bool:
@@ -281,6 +285,21 @@ def _option_inner(type_: "AglType") -> "AglType | None":
     return None
 
 
+def _bare_value_form(type_: "AglType") -> ValueForm:
+    """Return the CLI value form for a bare type: never ``bool`` or ``Option``.
+
+    Shared by a parameter's own type, when it is neither, and by
+    ``Option[T]``'s inner ``T``, so the type-to-form mapping is written once.
+    """
+    if isinstance(type_, TextType):
+        return ValueForm.TEXT
+    if is_standard_agent_enum(type_):
+        return ValueForm.AGENT
+    if isinstance(type_, JsonType):
+        return ValueForm.JSON
+    return ValueForm.VALUE
+
+
 def project_option(name: str, type_: "AglType") -> ProjectedOption:
     """Project one *name*/*type_* pair (a program parameter or an engine key) onto its CLI flags.
 
@@ -288,22 +307,21 @@ def project_option(name: str, type_: "AglType") -> ProjectedOption:
     program parameter's ``@opt-name`` (defaulting to its declared name).
     """
     inner = _option_inner(type_)
+    inner_form: ValueForm | None = None
     if isinstance(type_, BoolType):
         form = ValueForm.BOOL
     elif inner is not None:
         form = ValueForm.OPTION
-    elif isinstance(type_, TextType):
-        form = ValueForm.TEXT
-    elif is_standard_agent_enum(type_):
-        form = ValueForm.AGENT
+        inner_form = _bare_value_form(inner)
     else:
-        form = ValueForm.JSON
+        form = _bare_value_form(type_)
     negated = form in (ValueForm.BOOL, ValueForm.OPTION)
     return ProjectedOption(
         flags=(f"--{name}",),
         negative_flags=(f"--no-{name}",) if negated else (),
         value_form=form,
         option_inner=inner if form is ValueForm.OPTION else None,
+        option_inner_form=inner_form,
     )
 
 
@@ -686,38 +704,18 @@ class DuplicateOptionFlagError:
 type ProgramOptionError = ReservedFlagError | DuplicateOptionFlagError
 
 
-def _value_from_token(flag: str, inner_type: "AglType", token: str) -> object:
-    """Return the raw ``Some`` payload for one ``Option[T]`` flag's ``VALUE`` token.
+def option_some_raw(value: object) -> OptionSome:
+    """Box one raw ``Option[T]`` "Some" value for ``decode_param_value`` to decode.
 
-    Verbatim when ``T`` is ``text``, normalized when it is ``Agent``, and
-    otherwise strict-JSON-parsed, so a
-    nested ``Option``/``bool``/... inner type round-trips through
-    ``decode_param_value``'s enum-decode walk, which needs a native Python
-    object already, not another string to parse. *flag* names the option in
-    a malformed-JSON error, so the message identifies which flag failed.
+    The single place this box is built — shared by :func:`_positive_raw`,
+    for a CLI flag's raw ``VALUE`` token, and by the config-table path
+    (``commands.exec_program``), for an already-native TOML/JSON value read
+    from a program's qualified table. Decoding *value* (host-text dispatch
+    when it is a string, as is otherwise) and wrapping it into the enum's
+    ``{"$case": "Some", "value": ...}`` JSON shape happens at decode time
+    against the ``Some`` variant's own field type, not here.
     """
-    if isinstance(inner_type, TextType):
-        return token
-    if is_standard_agent_enum(inner_type):
-        return agent_raw_value(token)
-    try:
-        return parse_json_strict(token)
-    except StrictJsonParseError as exc:
-        raise ValueError(
-            f"Option {flag!r} value {token!r} is not valid JSON: {exc.message}"
-        ) from exc
-
-
-def option_some_raw(value: object) -> object:
-    """Return the ``Some`` envelope ``decode_param_value`` expects for an ``Option[T]`` raw value.
-
-    The single place this shape (``{"$case": "Some", "value": ...}``) is
-    built — shared by :func:`_positive_raw`, for a CLI flag's already-decoded
-    ``VALUE`` token, and by the config-table path (``commands.exec_program``),
-    for an already-native TOML/JSON value read from a program's qualified
-    table.
-    """
-    return {"$case": "Some", "value": value}
+    return OptionSome(value)
 
 
 def option_none_raw() -> object:
@@ -732,32 +730,37 @@ def native_raw_value(projected: ProjectedOption, raw: object) -> object:
     same ``Option`` rule to a CLI ``VALUE`` token. A present value for an
     ``Option[T]`` parameter is wrapped ``Some``: a config table has no
     ``--no-x`` equivalent, so an absent key supplies nothing at all and the
-    parameter falls back to its own default. A native string for a JSON-form
-    parameter is encoded into JSON text, preserving its distinction from a
-    serialized CLI token; every other value form is already a native
-    TOML/JSON value that ``decode_param_value`` decodes directly. Keeping this beside
-    :func:`_positive_raw` is what stops the envelope rule from being spelled
-    once per host surface.
+    parameter falls back to its own default. A native string for a slot whose
+    type is ``json`` (the parameter's own type, or ``Option[T]``'s inner
+    ``T``) is encoded into JSON text, preserving its distinction from AgL
+    value syntax; every other native string is host text, decoded the same
+    way a CLI token or ``@opt-env`` value is; a non-string native is already
+    decoded data. Keeping this beside :func:`_positive_raw` is what stops the
+    envelope rule from being spelled once per host surface.
     """
     if projected.value_form is ValueForm.OPTION:
-        if projected.option_inner is not None and is_standard_agent_enum(projected.option_inner):
-            value = agent_raw_value(raw) if isinstance(raw, str) else raw
-            return option_some_raw(value)
-        return option_some_raw(raw)
+        value = raw
+        if isinstance(raw, str) and projected.option_inner_form is ValueForm.JSON:
+            value = dumps_exact(raw, indent=None)
+        return option_some_raw(value)
     if projected.value_form is ValueForm.JSON and isinstance(raw, str):
         return dumps_exact(raw, indent=None)
     return raw
 
 
-def _positive_raw(projected: ProjectedOption, flag: str, token: str) -> object:
+def _positive_raw(projected: ProjectedOption, token: str) -> object:
     """Build the raw value for one value-taking flag's ``VALUE`` token.
 
-    Only ``TEXT``/``JSON``/``OPTION`` forms reach here — the caller
-    (:meth:`ProgramCommand.parse`) never calls this for a ``BOOL`` form,
-    whose ``takes_value`` is ``False``.
+    Only ``TEXT``/``JSON``/``VALUE``/``AGENT``/``OPTION`` forms reach here —
+    the caller (:meth:`ProgramCommand.parse`) never calls this for a ``BOOL``
+    form, whose ``takes_value`` is ``False``. Every form but ``OPTION`` takes
+    its token verbatim: ``decode_param_value`` reads a string raw value
+    through the shared host-text dispatch, so parsing it here would duplicate
+    that step and lose its diagnostic. An ``Option[T]`` token is boxed for the
+    same deferred decode, against ``T``'s own field type.
     """
     if projected.option_inner is not None:
-        return option_some_raw(_value_from_token(flag, projected.option_inner, token))
+        return option_some_raw(token)
     return token
 
 
@@ -828,29 +831,31 @@ class _ProgramOption(click.Option):
         return None if raw is None else [raw]
 
 
+def _value_form_metavar(form: ValueForm) -> str:
+    """Return the placeholder for a bare (non-``Option``) value form."""
+    if form is ValueForm.TEXT:
+        return "TEXT"
+    if form is ValueForm.AGENT:
+        return "AGENT"
+    if form is ValueForm.JSON:
+        return "JSON"
+    return "VALUE"
+
+
 def _default_metavar(param: "ProgramParamInfo", projected: ProjectedOption) -> str:
     """Return the placeholder standing for a value-taking option's own VALUE.
 
     A ``path`` parameter (directly or as ``Option[path]``) announces a path.
     Otherwise it names how the token is read rather than the declared type: a
     ``text`` parameter takes its token verbatim, standard ``Agent`` uses host
-    syntax, and every other type parses one strict JSON value. An
-    ``Option[T]`` follows ``T``.
+    syntax, ``json`` parses one JSON value, and every other type reads strict
+    JSON or AgL value syntax. An ``Option[T]`` follows ``T``.
     """
     if param.is_path:
         return "PATH"
-    form = projected.value_form
-    if form is ValueForm.OPTION:
-        if isinstance(projected.option_inner, TextType):
-            return "TEXT"
-        return (
-            "AGENT"
-            if projected.option_inner is not None and is_standard_agent_enum(projected.option_inner)
-            else "JSON"
-        )
-    if form is ValueForm.TEXT:
-        return "TEXT"
-    return "AGENT" if form is ValueForm.AGENT else "JSON"
+    if projected.value_form is ValueForm.OPTION:
+        return _value_form_metavar(cast(ValueForm, projected.option_inner_form))
+    return _value_form_metavar(projected.value_form)
 
 
 def _click_params(
@@ -1037,9 +1042,12 @@ class ProgramCommand:
             running the program.
         :raises ValueError: for any Click usage error (unknown option,
             missing value, a value given to a flag), for a parameter supplied
-            more than once, for an ``Option[T]`` parameter given both
-            polarities on the command line, or for a malformed ``Option``
-            ``VALUE`` (see the module docstring).
+            more than once, or for an ``Option[T]`` parameter given both
+            polarities on the command line. A malformed ``VALUE`` — including
+            a malformed ``Option`` payload (see the module docstring) — is
+            not raised here: it reaches this method's caller as a deferred
+            decode diagnostic from ``decode_param_value``, anchored at the
+            parameter's declaration.
         """
         try:
             ctx = self.command.make_context(self.command.name, list(tokens))
@@ -1073,7 +1081,7 @@ class ProgramCommand:
             _reject_repetition(positive, flag)
             if projected.value_form is not ValueForm.OPTION:
                 if positive and not positional_overrides_environment:
-                    named[param.name] = _positive_raw(projected, flag, cast(str, positive[0]))
+                    named[param.name] = _positive_raw(projected, cast(str, positive[0]))
                 continue
             negative_flag = projected.negative_flags[0]
             negative = cast(tuple[object, ...], values[_negative_dest(index)])
@@ -1090,7 +1098,7 @@ class ProgramCommand:
             if negative:
                 named[param.name] = option_none_raw()
             elif positive and not positional_overrides_environment:
-                named[param.name] = _positive_raw(projected, flag, cast(str, positive[0]))
+                named[param.name] = _positive_raw(projected, cast(str, positive[0]))
         return ProgramArguments(positional=positional, named=named)
 
     def value_token_indexes(

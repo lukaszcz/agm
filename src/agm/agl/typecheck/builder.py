@@ -103,6 +103,7 @@ from agm.agl.typecheck.env import (
     GenericTypeDef,
     TypeEnvironment,
 )
+from agm.agl.zones import ParamZone
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -584,6 +585,20 @@ class _TypeBuilder:
             )
         self._declared[name] = span
 
+    def _field_zones(self, fields: tuple[Param, ...]) -> tuple[tuple[str, ParamZone], ...]:
+        """Each field's own declared ``@arg-*`` zone, in declaration order.
+
+        Computed once and fed to both a ``TypeDef``'s ``field_kinds`` and the
+        constructor-kind registration, so the two never disagree about a
+        field's zone. Used by records, generic records, and enum members; an
+        exception's own fields honor their declared zone the same way, but
+        (unlike a record's) are never registered into the constructor-kind
+        table — inheriting the base's kinds through the ``extends`` chain is
+        ``TypeTable.field_kinds``'s job instead (walked on demand from
+        ``TypeDef.base``, no build-ordering step needed).
+        """
+        return tuple((fd.name, self._attributes.param_zones[fd.node_id]) for fd in fields)
+
     def _build_record(self, stmt: RecordDef) -> None:
         if stmt.type_params:
             self._build_generic_record(stmt)
@@ -602,6 +617,7 @@ class _TypeBuilder:
         module_id = self._module_id
         scope_path = tuple(segment.name for segment in stmt.scope_path)
         bare_name = _bare_name(stmt.name)
+        field_kind_pairs = self._field_zones(stmt.fields)
         typedef = TypeDef(
             kind="record",
             name=bare_name,
@@ -609,6 +625,7 @@ class _TypeBuilder:
             scope_path=scope_path,
             fields=tuple(fields.items()),
             mutable_fields=_mutable_field_names(stmt.fields),
+            field_kinds=tuple(zone for _fname, zone in field_kind_pairs),
             is_builtin=stmt.is_builtin,
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
             external_name=self._attributes.external_names.get(stmt.node_id, NO_EXTERNAL_NAME),
@@ -619,12 +636,9 @@ class _TypeBuilder:
         # Register field kinds for this record constructor, under the same
         # owning identity as the TypeDef just above (its declaring module,
         # like every other declaration — including a builtin one).
-        field_kinds = tuple(
-            (fd.name, self._attributes.param_zones[fd.node_id]) for fd in stmt.fields
-        )
         self._env.register_constructor_field_kinds(
             bare_name,
-            field_kinds,
+            field_kind_pairs,
             scope_path=scope_path,
             module_id=module_id,
             decl_id=typedef.decl_node_id,
@@ -639,7 +653,6 @@ class _TypeBuilder:
         for member_def in member_defs:
             self._env.type_table.register(member_def)
         self._env.type_table.register(typedef)
-        self._register_enum_constructor_field_kinds(stmt)
 
     def _build_enum_members(
         self, stmt: EnumDef, *, type_vars: frozenset[str]
@@ -700,6 +713,7 @@ class _TypeBuilder:
                 if any(param in free_type_vars(field_type) for field_type in fields.values())
             )
             decl_id = _member_identity(stmt, vd, module_id)
+            field_kind_pairs = self._field_zones(vd.fields)
             member_def = TypeDef(
                 kind="record",
                 name=vd.name,
@@ -708,12 +722,20 @@ class _TypeBuilder:
                 type_params=captured_params,
                 fields=tuple(fields.items()),
                 mutable_fields=_mutable_field_names(vd.fields),
+                field_kinds=tuple(zone for _fname, zone in field_kind_pairs),
                 decl_node_id=decl_id,
                 is_inline_enum_member=True,
                 external_name=self._attributes.external_names.get(vd.node_id, NO_EXTERNAL_NAME),
                 field_external_names=self._field_external_names(vd.fields),
             )
             member_defs.append(member_def)
+            self._env.register_constructor_field_kinds(
+                vd.name,
+                field_kind_pairs,
+                scope_path=member_scope_path,
+                module_id=module_id,
+                decl_id=decl_id,
+            )
             self._replace_inline_member_handle(stmt, vd, captured_params)
             members.append(
                 RecordType(
@@ -753,22 +775,6 @@ class _TypeBuilder:
             ),
             tuple(member_defs),
         )
-
-    def _register_enum_constructor_field_kinds(self, stmt: EnumDef) -> None:
-        """Keep the current enum-constructor surface keyed by its member names."""
-        module_id = self._module_id
-        scope_path = tuple(segment.name for segment in stmt.scope_path)
-        bare_name = _bare_name(stmt.name)
-        for member in stmt.members:
-            if not isinstance(member, VariantDef):
-                continue
-            self._env.register_constructor_field_kinds(
-                member.name,
-                tuple((fd.name, self._attributes.param_zones[fd.node_id]) for fd in member.fields),
-                scope_path=(*scope_path, bare_name),
-                module_id=module_id,
-                decl_id=_member_identity(stmt, member, module_id),
-            )
 
     def _build_exception(self, stmt: ExceptionDef) -> None:
         """Resolve and register an exception's own ``TypeDef`` (no ordering).
@@ -810,13 +816,6 @@ class _TypeBuilder:
         module_id = self._module_id
         scope_path = tuple(segment.name for segment in stmt.scope_path)
         bare_name = _bare_name(stmt.name)
-        # Own field kinds honor each field's declared ``@arg-*`` attribute —
-        # exactly like a record's fields — in declaration order, parallel to
-        # ``fields`` above.  Stored as ``ParamZone.value`` strings (see
-        # ``TypeDef.field_kinds``: ``semantics`` may not import ``syntax``).
-        # Inheriting the base's kinds through the extends chain is
-        # ``TypeTable.exception_field_kinds``'s job (walked on demand from
-        # ``TypeDef.base``, no build-ordering step needed).
         typedef = TypeDef(
             kind="exception",
             name=bare_name,
@@ -825,7 +824,7 @@ class _TypeBuilder:
             fields=tuple(fields.items()),
             abstract=stmt.base is None,
             base=None if base_type is None else base_type.decl_id,
-            field_kinds=tuple(self._attributes.param_zones[fd.node_id].value for fd in stmt.fields),
+            field_kinds=tuple(zone for _fname, zone in self._field_zones(stmt.fields)),
             is_builtin=stmt.is_builtin,
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
             field_external_names=self._field_external_names(stmt.fields),
@@ -997,6 +996,7 @@ class _TypeBuilder:
         module_id = self._module_id
         scope_path = tuple(segment.name for segment in stmt.scope_path)
         bare_name = _bare_name(stmt.name)
+        field_kind_pairs = self._field_zones(stmt.fields)
         typedef = TypeDef(
             kind="record",
             name=bare_name,
@@ -1005,6 +1005,7 @@ class _TypeBuilder:
             type_params=type_params,
             fields=tuple(fields.items()),
             mutable_fields=_mutable_field_names(stmt.fields),
+            field_kinds=tuple(zone for _fname, zone in field_kind_pairs),
             is_builtin=stmt.is_builtin,
             # Same identity as the handle template registered in phase 1
             # (:meth:`_register_record_or_enum_handle`), so the TypeDef and
@@ -1027,12 +1028,9 @@ class _TypeBuilder:
         self._env.register_constructor_signature(sig)
         # Register field kinds for the generic record constructor, under the
         # same owning identity as the TypeDef just above.
-        generic_record_field_kinds = tuple(
-            (fd.name, self._attributes.param_zones[fd.node_id]) for fd in stmt.fields
-        )
         self._env.register_constructor_field_kinds(
             bare_name,
-            generic_record_field_kinds,
+            field_kind_pairs,
             scope_path=scope_path,
             module_id=module_id,
             decl_id=template.decl_id,
@@ -1069,7 +1067,6 @@ class _TypeBuilder:
                     ),
                 )
             )
-        self._register_enum_constructor_field_kinds(stmt)
 
     def _validate_alias(self, stmt: TypeAlias) -> None:
         """Validate that the alias target resolves without cycles.

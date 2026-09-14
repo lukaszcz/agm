@@ -99,6 +99,7 @@ from agm.agl.ir.contracts import (
     VariantEncode,
 )
 from agm.agl.ir.ids import NominalId
+from agm.agl.semantics.external_names import NO_EXTERNAL_NAME
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
     ArrayType,
@@ -136,9 +137,17 @@ def _emit_field_decodes(
     type_table: TypeTable,
     emit_field: "Callable[[Type], DecodeSchema]",
 ) -> tuple[FieldDecode, ...]:
-    """Build one record/member's field decoders via *emit_field*, JSON-keyed."""
+    """Build one record/member's field decoders via *emit_field*, JSON-keyed, zoned, and aliased."""
+    zones = dict(type_table.field_kinds(handle))
+    externals = type_table.field_external_names(handle)
     return tuple(
-        FieldDecode(name, json_name, emit_field(ftype))
+        FieldDecode(
+            name,
+            json_name,
+            emit_field(ftype),
+            zone=zones[name],
+            alias=externals.get(name, NO_EXTERNAL_NAME).alias(name),
+        )
         for name, json_name, ftype in type_table.json_fields(handle)
     )
 
@@ -643,6 +652,8 @@ def _emit_decode_body(
             fields=_emit_field_decodes(
                 typ, type_table, lambda ftype: _emit_decode(ftype, type_table, plan, memo)
             ),
+            name=typ.name,
+            alias=type_table.external_name(typ).alias(typ.name),
         )
     if isinstance(typ, EnumType):
         members = type_table.enum_member_names(typ)
@@ -660,9 +671,12 @@ def _emit_decode_body(
                         type_table,
                         lambda ftype: _emit_decode(ftype, type_table, plan, memo),
                     ),
+                    alias=type_table.external_name(member).alias(vname),
                 )
                 for vname, member in members.items()
             ),
+            name=typ.name,
+            host_agent=is_standard_agent_enum(typ),
         )
     # Non-data targets (unit/function/exception/bottom/typevar) are not
     # decodable from JSON and are rejected by the checker before lowering.
@@ -865,11 +879,13 @@ def build_param_decoder(typ: Type, type_table: TypeTable) -> ParamDecoder:
     Single source of the param-decoder shape, shared by the lowerer (which
     embeds it in each ``IrProgramParam.external_decoder``)
     and the host engine-config decode path
-    (:func:`agm.agl.runtime.engine_config.convert_host_value`).  ``text`` params
-    are taken verbatim; the standard ``Agent`` additionally accepts host agent
-    text syntax; every other type round-trips through the canonical JSON boundary
-    (``derive_schema`` for validation, ``build_decode_schema`` for the
-    typeless decode walk).  *type_table* resolves record/enum shapes.
+    (:func:`agm.agl.runtime.engine_config.convert_host_value`).  A textual raw
+    value is read through the shared host-text dispatch
+    (``runtime.value_decode.host_text_to_json``), which derives ``text``-verbatim
+    and standard-``Agent`` handling from ``decode`` itself; every other type
+    round-trips through the canonical JSON boundary (``derive_schema`` for
+    validation, ``build_decode_schema`` for the typeless decode walk).
+    *type_table* resolves record/enum shapes.
 
     :raises TypeError: if *typ* has no wire schema (unit/exception/…);
         :func:`derive_schema` rejects such types.
@@ -880,8 +896,6 @@ def build_param_decoder(typ: Type, type_table: TypeTable) -> ParamDecoder:
         json_schema=json.dumps(schema, sort_keys=True),
         decode=decode_plan.root,
         defs=decode_plan.defs,
-        text_verbatim=isinstance(typ, TextType),
-        agent_text=is_standard_agent_enum(typ),
     )
 
 

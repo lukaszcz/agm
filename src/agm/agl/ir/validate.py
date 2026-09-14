@@ -560,7 +560,7 @@ def _walk_decode_schema(
             _walk_decode_schema(elem, defs, ctx)
         case DictDecode(value=value_schema):
             _walk_decode_schema(value_schema, defs, ctx)
-        case RecordDecode(nominal=nominal, display_name=display_name, fields=fields):
+        case RecordDecode(nominal=nominal, display_name=display_name, fields=fields, name=name):
             _check_nominal_in_table(nominal, ctx)
             record = ctx.program.nominals[nominal]
             if record.kind is not NominalKind.RECORD:
@@ -569,16 +569,20 @@ def _walk_decode_schema(
                 raise InvalidIrError(
                     f"RecordDecode display name disagrees with nominal {nominal!r}"
                 )
+            if name != record.declared_name:
+                raise InvalidIrError(f"RecordDecode name disagrees with nominal {nominal!r}")
             _check_nominal_fields(fields, record.fields, "RecordDecode")
             for rdec in fields:
                 _walk_decode_schema(rdec.schema, defs, ctx)
-        case EnumDecode(nominal=nominal, display_name=display_name, variants=variants):
+        case EnumDecode(nominal=nominal, display_name=display_name, variants=variants, name=name):
             _check_nominal_in_table(nominal, ctx)
             enum = ctx.program.nominals[nominal]
             if enum.kind is not NominalKind.ENUM:
                 raise InvalidIrError(f"EnumDecode references non-enum nominal {nominal!r}")
             if display_name != enum.display_name or len(variants) != len(enum.variants):
                 raise InvalidIrError(f"EnumDecode disagrees with enum nominal {nominal!r}")
+            if name != enum.declared_name:
+                raise InvalidIrError(f"EnumDecode name disagrees with nominal {nominal!r}")
             for variant, expected in zip(variants, enum.variants, strict=True):
                 if variant.name != expected.name or variant.nominal != expected.member:
                     raise InvalidIrError(
@@ -590,6 +594,11 @@ def _walk_decode_schema(
                 if variant.display_name != member.display_name:
                     raise InvalidIrError(
                         f"EnumDecode variant {variant.name!r} display name disagrees with"
+                        f" member nominal {variant.nominal!r}"
+                    )
+                if variant.name != member.declared_name:
+                    raise InvalidIrError(
+                        f"EnumDecode variant {variant.name!r} name disagrees with"
                         f" member nominal {variant.nominal!r}"
                     )
                 _check_nominal_fields(variant.fields, expected.fields, "EnumDecode variant")

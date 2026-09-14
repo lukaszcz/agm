@@ -1104,16 +1104,14 @@ class TypeEnvironment:
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
             self._types[exc_name] = exc_type
         # Built-in prelude types (AgL: ExecResult, ParsePolicy) are always
-        # available.  Field/variant names for constructor-kind registration
-        # come from the shared prelude ``TypeDef`` literals — the handles
-        # themselves carry no shape data.
+        # available.  Field/variant names AND zones for constructor-kind
+        # registration come from the shared prelude ``TypeDef`` literals (via
+        # ``TypeTable.field_kinds``) — the handles themselves carry no shape
+        # data.
         for prelude_name, prelude_type in BUILTIN_PRELUDE_TYPES.items():
             self._types[prelude_name] = prelude_type
             if isinstance(prelude_type, RecordType):
-                fields = tuple(
-                    (fname, ParamZone.STANDARD)
-                    for fname in self._type_table.record_fields(prelude_type)
-                )
+                fields = self._type_table.field_kinds(prelude_type)
                 self._constructor_field_kinds[(RESERVED_ID, (), prelude_name)] = fields
                 self._constructor_field_kinds_by_decl_id[prelude_type.decl_id] = fields
                 continue
@@ -1121,9 +1119,7 @@ class TypeEnvironment:
                 continue
             assert isinstance(prelude_type, EnumType)
             for member in self._type_table.enum_members(prelude_type):
-                fields = tuple(
-                    (fname, ParamZone.STANDARD) for fname in self._type_table.record_fields(member)
-                )
+                fields = self._type_table.field_kinds(member)
                 self._constructor_field_kinds[(RESERVED_ID, (prelude_name,), member.name)] = fields
                 self._constructor_field_kinds_by_decl_id[member.decl_id] = fields
         # Exception constructor field kinds are NOT pre-registered here: each
@@ -1131,8 +1127,8 @@ class TypeEnvironment:
         # (stored on its TypeDef as ``field_kinds``, alongside ``fields``),
         # same as a record's fields.  ``get_constructor_field_kinds_for_type``
         # derives the full flattened (base-chain-inherited + own) kinds
-        # directly from ``type_table.exception_field_kinds`` on demand instead
-        # of a pre-registration step, since that requires no build ordering.
+        # directly from ``type_table.field_kinds`` on demand instead of a
+        # pre-registration step, since that requires no build ordering.
 
     def module_interface(self) -> ModuleTypeInterface:
         """Export this module's closed type metadata without another header pass."""
@@ -3111,22 +3107,15 @@ class TypeEnvironment:
         ``RecordType``, ``EnumType``, and ``ExceptionType`` all carry their own
         ``module_id``, so the owning module is read directly off the handle —
         no caller-supplied module id is needed.  Exception field kinds are
-        derived directly from ``type_table.exception_field_kinds``, which
-        flattens the ``extends`` base chain (base kinds first, then own kinds,
-        each honoring its declaration's ``@arg-*`` attribute —
-        exactly like a record's fields), rather than through the registered-kinds
-        table records/enums use, since an exception's kinds are never pre-registered
-        (see ``TypeEnvironment.
-        __init__``).  ``exception_field_kinds`` returns ``ParamZone.value``
-        strings rather than the enum (``semantics`` may not import
-        ``syntax.nodes``), so each is converted back with ``ParamZone(...)``
-        here, in the ``typecheck`` layer.
+        derived directly from ``type_table.field_kinds``, which flattens the
+        ``extends`` base chain (base kinds first, then own kinds, each
+        honoring its declaration's ``@arg-*`` attribute — exactly like a
+        record's fields), rather than through the registered-kinds table
+        records/enums use, since an exception's kinds are never pre-registered
+        (see ``TypeEnvironment.__init__``).
         """
         if isinstance(typ, ExceptionType):
-            return tuple(
-                (fname, ParamZone(kind_value))
-                for fname, kind_value in self._type_table.exception_field_kinds(typ)
-            )
+            return self._type_table.field_kinds(typ)
         assert isinstance(typ, RecordType), f"unexpected constructor owner type {typ!r}"
         by_identity = self._constructor_field_kinds_by_decl_id.get(typ.decl_id)
         if by_identity is not None:

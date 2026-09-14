@@ -927,6 +927,20 @@ def _exec_args_no_log(agl_file: Path, **overrides: object) -> ExecArgs:
     return replace(_exec_args(agl_file), **values)
 
 
+def _config_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, contents: str) -> None:
+    """Point the home config directory at a fresh ``config.toml`` holding *contents*."""
+    from agm.config.context import ConfigContext
+
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "config.toml").write_text(contents)
+    monkeypatch.setattr(
+        exec_engine,
+        "current_config_context",
+        lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+    )
+
+
 _skip_if_root = pytest.mark.skipif(
     hasattr(os, "geteuid") and os.geteuid() == 0,
     reason="permission tests are meaningless as root (root bypasses file modes)",
@@ -3810,18 +3824,6 @@ class TestProgramOptionAttributesCLI:
     argument tokens reach ``agm exec``.
     """
 
-    def _config_home(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, contents: str) -> None:
-        from agm.config.context import ConfigContext
-
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text(contents)
-        monkeypatch.setattr(
-            exec_engine,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
     def _greeter(self, tmp_path: Path) -> Path:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
@@ -3912,7 +3914,7 @@ class TestProgramOptionAttributesCLI:
     def test_the_environment_overrides_the_config_table(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        self._config_home(tmp_path, monkeypatch, '[prog.main]\naddressee = "configured"\n')
+        _config_home(tmp_path, monkeypatch, '[prog.main]\naddressee = "configured"\n')
         agl_file = self._greeter(tmp_path)
         monkeypatch.setenv("GREET_WHO", "from-env")
 
@@ -3922,7 +3924,7 @@ class TestProgramOptionAttributesCLI:
     def test_the_config_table_is_keyed_by_the_external_name(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        self._config_home(tmp_path, monkeypatch, '[prog.main]\naddressee = "configured"\n')
+        _config_home(tmp_path, monkeypatch, '[prog.main]\naddressee = "configured"\n')
         agl_file = self._greeter(tmp_path)
         monkeypatch.delenv("GREET_WHO", raising=False)
 
@@ -3932,7 +3934,7 @@ class TestProgramOptionAttributesCLI:
     def test_the_declared_name_in_the_config_table_is_an_undeclared_key(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        self._config_home(tmp_path, monkeypatch, '[prog.main]\nwho = "configured"\n')
+        _config_home(tmp_path, monkeypatch, '[prog.main]\nwho = "configured"\n')
         agl_file = self._greeter(tmp_path)
         monkeypatch.delenv("GREET_WHO", raising=False)
 

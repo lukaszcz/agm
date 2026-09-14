@@ -137,10 +137,11 @@ A name-addressable parameter's type selects its flag form; every value-taking fl
 | Type | Flag |
 |---|---|
 | `bool` | `--x` / `--no-x`, no value |
-| `Option[T]` | `--x VALUE` (`Some`) / `--no-x` (`None`); `VALUE` verbatim for `text`, else one strict JSON value of `T` |
+| `Option[T]` | `--x VALUE` (`Some`) / `--no-x` (`None`); `VALUE` verbatim for `text`, [host Agent syntax](#host-agent-syntax) for `Agent`, else strict JSON or [value syntax](../agl/reference/host-environment.md#value-syntax) for `T` |
 | `text` | `--x VALUE`, verbatim |
-| `Agent` | `--x VALUE`, in [host Agent syntax](#host-agent-syntax) or canonical tagged JSON |
-| other | `--x VALUE`, one strict JSON value validated against the type |
+| `Agent` | `--x VALUE`, in [host Agent syntax](#host-agent-syntax) |
+| `json` | `--x VALUE`, strict JSON or a value-syntax literal restricted to JSON-shaped data (no constructor calls) |
+| other | `--x VALUE`, strict JSON or [value syntax](../agl/reference/host-environment.md#value-syntax) validated against the type |
 
 A `path` parameter — `path`, `Option[path]`, or an alias of either — takes its value as the
 matching `text` form does, with `PATH` as its default value placeholder. Shell completion offers
@@ -148,8 +149,9 @@ filesystem paths for its value (`--x <TAB>`, `-x <TAB>`, `--x=<TAB>`) and for it
 under `agm exec FILE` and a registered package command alike.
 
 A positional slot has no `--no-x`, so `Option[T]` gets no special treatment there: `text` is
-verbatim, `Agent` uses host syntax, and every other type, `Option[T]` included, is one strict
-JSON value of the declared type (`'{"$case": "Some", "value": "hi"}'` for `Option[text]`).
+verbatim, `Agent` uses host syntax, and every other type, `Option[T]` included, is strict JSON or
+value syntax of the declared type (`'{"$case": "Some", "value": "hi"}'` or `'Some("hi")'` for
+`Option[text]`).
 
 An omitted argument resolves as `CLI > @opt-env variable > qualified program table (see
 [Configuration](#configuration)) > signature default > required error`; errors are reported
@@ -234,10 +236,16 @@ Every CLI argument or TOML string of the standard `Agent` type accepts:
 - any other `PROVIDER/MODEL-EFFORT` → `AgentPi(PROVIDER, MODEL, EFFORT)`
 
 The last hyphen separates the model from an opaque, non-empty effort suffix of any vocabulary.
-Exact lowercase `claude/` and `codex/` prefixes win over the generic Pi form. Other text is a
-verbatim `AgentCommand` (`--default-agent 'worker --flag'`). Agent-typed program parameters also
-accept canonical tagged JSON; `--default-agent` and the `default-agent` config key also accept
-AgL constructor syntax, for compatibility.
+Exact lowercase `claude/` and `codex/` prefixes win over the generic Pi form. Failing shorthand, an
+Agent-typed program parameter or `Agent`-typed flag is read, in order: as a JSON object; then as an
+[AgL value syntax](../agl/reference/host-environment.md#value-syntax) `Agent` member constructor
+call (`AgentCodex(model = "o3", thinking = "high")`, bare or qualified `Agent::AgentPi(...)`); text
+naming no member this way, with no `(` following it, is a verbatim `AgentCommand`. Text that does
+open a member call but fails to read or bind — an unclosed `AgentClaude(model = "x"`, an unknown
+field, a qualifier naming anything but `Agent` — is a host error, not a verbatim command.
+`--default-agent` and the `default-agent` config key instead fall back, after shorthand, straight
+to full AgL constructor syntax (no tagged JSON); other text is likewise a verbatim `AgentCommand`
+(`--default-agent 'worker --flag'`).
 
 ### Agents
 
@@ -304,6 +312,13 @@ A key in the selected program's table naming neither a name-addressable paramete
 setting (typically a misspelling) is reported on stderr and ignored; one naming a
 positional-only parameter is reported with a distinct message (supply it positionally). Either
 way the program runs on its declared defaults.
+
+A TOML value is already host-native, unlike a CLI token or `@opt-env` variable, which are always
+text: a native TOML string for any parameter type other than `json` or `Option[json]` is read the
+same way a CLI token is (verbatim for `text`, else strict JSON or value syntax); a native TOML
+string for a `json`- or `Option[json]`-typed parameter is instead the parameter's own JSON
+*string* value, never re-read as JSON source or value syntax, and a native TOML table or array
+crosses as the matching JSON object or array directly.
 
 #### Source-level engine settings (`std/config`)
 

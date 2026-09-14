@@ -9,28 +9,51 @@ shares with the rest of the runtime.
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
 from agm.agl.attributes import ProgramOptionSpec
+from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.ir.contracts import ParamDecoder
 from agm.agl.ir.nodes import UseDefault
 from agm.agl.ir.program import IrProgramParam
+from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
+from agm.agl.modules.ids import RESERVED_ID
 from agm.agl.runtime.arguments import (
+    OptionSome,
     ProgramArguments,
     ProgramParameter,
     ProgramSignature,
     bind_program_arguments,
     decode_param_value,
 )
+from agm.agl.runtime.option import some_value
 from agm.agl.runtime.types import ProgramParamInfo
-from agm.agl.semantics.type_table import create_seeded_type_table
-from agm.agl.semantics.types import BUILTIN_PRELUDE_TYPES, BoolType, IntType, JsonType, TextType
+from agm.agl.semantics.type_table import TypeTable, create_seeded_type_table
+from agm.agl.semantics.types import (
+    BUILTIN_PRELUDE_TYPES,
+    BoolType,
+    DecimalType,
+    EnumType,
+    IntType,
+    JsonType,
+    TextType,
+)
 from agm.agl.semantics.types import Type as AglType
-from agm.agl.semantics.values import BoolValue, IntValue, JsonValue, RecordValue, TextValue
+from agm.agl.semantics.values import (
+    BoolValue,
+    DecimalValue,
+    IntValue,
+    JsonValue,
+    RecordValue,
+    TextValue,
+)
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import build_param_decoder
 from agm.agl.zones import ParamZone
+from tests.agl.module_graph import resolve_and_check_repl_entry
 
 _TABLE = create_seeded_type_table()
 
@@ -46,6 +69,33 @@ def _span(line: int) -> SourceSpan:
 
 def _decoder(typ: AglType) -> ParamDecoder:
     return build_param_decoder(typ, _TABLE)
+
+
+def _option_type(inner: AglType) -> EnumType:
+    return EnumType(
+        name="Option",
+        type_args=(inner,),
+        module_id=RESERVED_ID,
+        decl_id=require_reserved_nominal_id("Option"),
+    )
+
+
+def _record_point_type() -> "tuple[AglType, TypeTable]":
+    """A real typechecked ``record Point\\n  x: int`` type, for value-syntax decode tests."""
+    checked = resolve_and_check_repl_entry(
+        "record Point\n  x: int\nlet p: Point = Point(x = 1)\np",
+        HostCapabilities(
+            supports_shell_exec=True,
+            codec_kinds={
+                "text": frozenset({"text"}),
+                "json": frozenset(
+                    {"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}
+                ),
+            },
+        ),
+    )
+    last = checked.resolved.program.body.items[-1]
+    return checked.node_types[last.node_id], checked.type_env.type_table
 
 
 def _param_and_info(
@@ -430,6 +480,64 @@ class TestDecodeParamValue:
         assert _is_json_shaped({1: "a"}) is False
         # Dict with str keys and JSON-shaped values.
         assert _is_json_shaped({"k": 1}) is True
+
+    def test_option_some_decodes_a_native_value(self) -> None:
+        value = decode_param_value(_decoder(_option_type(IntType())), OptionSome(5))
+
+        assert value == some_value(IntValue(5))
+
+    def test_option_some_decodes_a_native_float_into_a_decimal(self) -> None:
+        """A native (non-string) ``OptionSome`` payload crosses the same
+        canonical JSON boundary as a top-level native value, so a native
+        Python ``float`` (as a TOML number decodes) widens into ``Decimal``
+        exactly as it would outside an ``Option``."""
+        value = decode_param_value(_decoder(_option_type(DecimalType())), OptionSome(1.1))
+
+        assert value == some_value(DecimalValue(Decimal("1.1")))
+
+    def test_option_some_rejects_a_non_json_shaped_native_payload(self) -> None:
+        with pytest.raises(ValueError):
+            decode_param_value(_decoder(_option_type(IntType())), OptionSome({1, 2}))
+
+    def test_option_some_decodes_a_string_through_host_text(self) -> None:
+        value = decode_param_value(_decoder(_option_type(IntType())), OptionSome("5"))
+
+        assert value == some_value(IntValue(5))
+
+    def test_option_some_of_text_is_taken_verbatim(self) -> None:
+        value = decode_param_value(_decoder(_option_type(TextType())), OptionSome("hello"))
+
+        assert value == some_value(TextValue("hello"))
+
+    def test_option_some_of_agent_uses_host_syntax(self) -> None:
+        value = decode_param_value(
+            _decoder(_option_type(BUILTIN_PRELUDE_TYPES["Agent"])), OptionSome("codex/o3-high")
+        )
+
+        assert isinstance(value, RecordValue)
+        payload = value.fields["value"]
+        assert isinstance(payload, RecordValue)
+        assert payload.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCodex"
+
+    def test_option_some_of_a_record_value_syntax_string(self) -> None:
+        typ, table = _record_point_type()
+        decoder = build_param_decoder(_option_type(typ), table)
+
+        value = decode_param_value(decoder, OptionSome("Point(x = 1)"))
+
+        assert isinstance(value, RecordValue)
+        payload = value.fields["value"]
+        assert isinstance(payload, RecordValue)
+        assert payload.fields == {"x": IntValue(1)}
+
+    def test_value_syntax_decodes_a_record_string_directly(self) -> None:
+        typ, table = _record_point_type()
+        decoder = build_param_decoder(typ, table)
+
+        value = decode_param_value(decoder, "Point(x = 1)")
+
+        assert isinstance(value, RecordValue)
+        assert value.fields == {"x": IntValue(1)}
 
 
 def test_program_parameter_dataclass_carries_all_fields() -> None:

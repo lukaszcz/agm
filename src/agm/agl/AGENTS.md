@@ -23,3 +23,7 @@ The documentation MUST NOT include historical statements about abandoned or supe
 ## Testing
 
 Whenever you add a new language feature, create end-to-end test program examples under `tests/agl/programs/` exercising this feature thoroughly (in combination with other language features). Follow TDD - add end-to-end test program examples as the FIRST step before any other implementation work.
+
+## Architecture constraints
+
+- NEVER re-run AgL pipeline stages on the same source. Reuse earlier results, and compile host-generated code with the program, not in a second pipeline.

@@ -33,6 +33,9 @@ if TYPE_CHECKING:
     from agm.agl.runtime.types import ProgramDeclInfo
 
 
+_PARAM_SURFACE_PACKAGE = Path(__file__).parent / "agl" / "packages" / "param_surface"
+
+
 def registered_help(
     path_name: str, registration: CommandRegistration, *, program: "ProgramDeclInfo | None"
 ) -> str:
@@ -1928,3 +1931,105 @@ def test_registered_command_reports_an_ambiguous_module_parameter(
 
     assert result.exit_code == 1
     assert "ambiguous" in result.output.lower()
+
+
+def test_registered_command_binds_parameter_fixture_across_host_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The package fixture exercises registered module-parameter precedence."""
+    home = tmp_path / "home"
+    install_directory(_PARAM_SURFACE_PACKAGE, home=home, env={})
+    monkeypatch.setenv("HOME", str(home))
+
+    default = invoke(CliRunner(), ["param", "review"])
+    assert default.exit_code == 0
+    assert default.stdout == "1\nfalse\nfalse\nplain\n"
+
+    config = home / ".agm" / "config.toml"
+    config.write_text(
+        "[param_tools.logging]\nretries = 2\ntrace = false\n\n"
+        '[param_tools.format]\ntrace = true\nformat = "module"\n\n'
+        "[param.review]\nretries = 3\n",
+        encoding="utf-8",
+    )
+    configured = invoke(CliRunner(), ["param", "review"])
+    audit = invoke(CliRunner(), ["param", "audit"])
+    assert configured.exit_code == 0
+    assert configured.stdout == "3\nfalse\ntrue\nmodule\n"
+    assert audit.exit_code == 0
+    assert audit.stdout == "2\n"
+
+    monkeypatch.setenv("PARAM_TOOLS_TRACE", "true")
+    environment = invoke(CliRunner(), ["param", "review"])
+    assert environment.exit_code == 0
+    assert environment.stdout == "3\ntrue\ntrue\nmodule\n"
+
+    cli_values = invoke(
+        CliRunner(),
+        [
+            "param",
+            "review",
+            "--retries",
+            "4",
+            "--no-param_tools.logging.trace",
+            "--no-param_tools.format.trace",
+            "--param_tools.format.format",
+            "cli",
+        ],
+    )
+    assert cli_values.exit_code == 0
+    assert cli_values.stdout == "4\nfalse\nfalse\ncli\n"
+
+    qualified_traces = invoke(
+        CliRunner(),
+        [
+            "param",
+            "review",
+            "--param_tools.logging.trace",
+            "--param_tools.format.trace",
+        ],
+    )
+    assert qualified_traces.exit_code == 0
+    assert qualified_traces.stdout == "3\ntrue\ntrue\nmodule\n"
+
+    ambiguous = invoke(CliRunner(), ["param", "review", "--trace"])
+    assert ambiguous.exit_code == 1
+
+    help_result = invoke(CliRunner(), ["param", "review", "--help"])
+    assert help_result.exit_code == 0
+    assert "Parameters of param_tools/logging" in help_result.output
+    assert "Parameters of param_tools/format" in help_result.output
+    assert "--logging.trace" in help_result.output
+
+
+def test_parameter_fixture_runs_by_installed_reference_and_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Installed references and package-owned source files use the same parameters."""
+    home = tmp_path / "home"
+    installed = install_directory(_PARAM_SURFACE_PACKAGE, home=home, env={})
+    monkeypatch.setenv("HOME", str(home))
+
+    reference = invoke(
+        CliRunner(),
+        [
+            "exec",
+            "param_tools/review::main",
+            "--retries",
+            "5",
+            "--param_tools.format.format",
+            "reference",
+        ],
+    )
+    assert reference.exit_code == 0
+    assert reference.stdout == "5\nfalse\nfalse\nreference\n"
+
+    config = home / ".agm" / "config.toml"
+    config.write_text(
+        '[param_tools.logging]\nretries = 6\n\n[param_tools.format]\nformat = "file"\n',
+        encoding="utf-8",
+    )
+    source_file = installed.root / MODULE_TREE_DIRNAME / "review.agl"
+    file_result = invoke(CliRunner(), ["exec", str(source_file)])
+    assert file_result.exit_code == 0
+    assert file_result.stdout == "6\nfalse\nfalse\nfile\n"

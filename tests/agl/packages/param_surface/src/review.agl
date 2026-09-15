@@ -1,0 +1,9 @@
+import param_tools/logging
+import param_tools/format
+
+@command("param review")
+program def main() -> unit =
+  print param_tools/logging::retries
+  print param_tools/logging::trace
+  print param_tools/format::trace
+  print param_tools/format::format

@@ -36,6 +36,8 @@ from agm.packages.record import write_record
 from agm.version import AGM_VERSION
 from tests._package_helpers import older_incompatible_std_requirement, std_compatibility_bound
 
+_PARAM_SURFACE_PACKAGE = Path(__file__).parent / "agl" / "packages" / "param_surface"
+
 
 def _context(tmp_path: Path) -> ConfigContext:
     return ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
@@ -93,6 +95,17 @@ def test_create_command_writes_an_archive_that_can_be_installed(
     assert (installed.root / "package.toml").read_bytes() == (
         package.root / "package.toml"
     ).read_bytes()
+
+
+def test_parameter_surface_fixture_installs_its_source_commands(tmp_path: Path) -> None:
+    """The cross-surface fixture remains a valid installable package."""
+    home = _context(tmp_path).home
+
+    install_directory(_PARAM_SURFACE_PACKAGE, home=home, env={})
+
+    commands = load_activation_index(home=home).commands
+    assert commands["param review"].program == "param_tools/review::main"
+    assert commands["param audit"].program == "param_tools/audit::main"
 
 
 def test_create_command_dry_run_reports_its_plan_without_writing(

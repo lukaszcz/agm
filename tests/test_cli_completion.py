@@ -14,8 +14,11 @@ from click.shell_completion import ShellComplete
 
 import agm.completion as completion
 import agm.vcs.git as git_helpers
+from agm.packages.install import install_directory
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.record import write_record
+
+_PARAM_SURFACE_PACKAGE = Path(__file__).parent / "agl" / "packages" / "param_surface"
 
 
 def _make_ctx(**params: Any) -> click.Context:
@@ -299,6 +302,31 @@ version = "1.0.0"
     assert "--tools.lint.module-verbose" in values
     assert "--no-tools.lint.module-verbose" in values
     assert "--dry-run" in values
+
+
+def test_registered_parameter_fixture_completion_offers_qualified_module_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Registered completion exposes resolving spellings from every fixture module."""
+    from agm.config.context import ConfigContext
+
+    home = tmp_path / "home"
+    install_directory(_PARAM_SURFACE_PACKAGE, home=home, env={})
+    monkeypatch.setattr(
+        completion, "current_config_context", lambda: ConfigContext(home, None, tmp_path)
+    )
+
+    values = [
+        item.value
+        for item in completion.registered_command_param_completion(["param", "review"], "--")
+    ]
+
+    assert "--retries" in values
+    assert "--logging.trace" in values
+    assert "--param_tools.logging.trace" in values
+    assert "--format.trace" in values
+    assert "--param_tools.format.trace" in values
+    assert "--trace" not in values
 
 
 def test_complete_registered_commands_silently_degrades_on_bad_index(

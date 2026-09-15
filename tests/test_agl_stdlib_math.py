@@ -16,7 +16,7 @@ from agm.agl.scope import AglScopeError
 from agm.agl.typecheck import AglTypeError
 from tests.agl.module_graph import resolve_and_check_inline_entry
 
-_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
 _MATH_MODULE = ModuleId(("std", "math"))
 
 

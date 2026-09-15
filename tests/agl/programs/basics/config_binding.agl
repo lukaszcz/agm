@@ -2,6 +2,6 @@
 import std/config
 
 program def main() -> unit =
-  std/config::max-iters := 5
-  let n = std/config::max-iters
+  std/config::strict-json := true
+  let n = std/config::strict-json
   print n

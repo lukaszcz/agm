@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import click
 import pytest
 import semver
 from click.testing import CliRunner, Result
@@ -47,6 +48,7 @@ def registered_help(
         registration,
         program=program,
         command=program_command_for(program, REGISTERED_RESERVED_FLAGS),
+        run_options=dispatch.registered_run_options(click.Context(get_command(cli.app))),
     )
 
 
@@ -151,7 +153,7 @@ def test_registered_command_dispatches_trailing_arguments(
     monkeypatch.setattr(
         exec_program,
         "run_registered",
-        lambda program, argument_tokens, *, package, command_path: calls.append(
+        lambda program, argument_tokens, *, package, command_path, **_kwargs: calls.append(
             (program, argument_tokens, package, command_path)
         ),
     )
@@ -248,6 +250,113 @@ def test_registered_command_preserves_a_host_looking_program_option_value(
 
     assert result.exit_code == 0
     assert calls == [["--message", "--dry-run"]]
+
+
+def _record_registered_exec_args(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> list[ExecArgs | None]:
+    """Register ``tools lint`` (``level: text``) and record the execution arguments it runs with."""
+    import agm.commands.exec_program as exec_program
+    from agm.cli_support.program_discovery import discover_program_declarations_from_source
+
+    context = ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
+    index = ActivationIndex(
+        commands={"tools lint": CommandRegistration("tools", "tools/lint::main")}
+    )
+    monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
+    monkeypatch.setattr(dispatch, "load_command_index", lambda **_: index)
+    (program,) = discover_program_declarations_from_source(
+        'program def main(level: text = "x") -> unit = ()'
+    )
+    monkeypatch.setattr(exec_program, "registered_program_declaration", lambda *_a, **_k: program)
+    calls: list[ExecArgs | None] = []
+
+    def run_registered(
+        _program: str, _tokens: list[str], *, args: ExecArgs | None = None, **_kwargs: object
+    ) -> None:
+        calls.append(args)
+
+    monkeypatch.setattr(exec_program, "run_registered", run_registered)
+    return calls
+
+
+def test_registered_command_forwards_exec_run_time_options(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``agm exec``'s run-time options, among the program's own tokens, reach execution."""
+    calls = _record_registered_exec_args(monkeypatch, tmp_path)
+
+    full = invoke(
+        CliRunner(),
+        [
+            "tools",
+            "lint",
+            "--no-strict-json",
+            "--level",
+            "strict",
+            "--max-call-depth",
+            "9",
+            "--default-agent",
+            "claude",
+            "--timeout",
+            "30s",
+            "--log-file",
+            "trace.jsonl",
+        ],
+    )
+    negated = invoke(CliRunner(), ["tools", "lint", "--log", "--no-timeout", "--no-log-file"])
+    plain = invoke(CliRunner(), ["tools", "lint", "--no-log", "--level=--timeout"])
+
+    assert [result.exit_code for result in (full, negated, plain)] == [0, 0, 0]
+    assert calls == [
+        ExecArgs(
+            file="tools/lint::main",
+            argument_tokens=["--level", "strict"],
+            strict_json=False,
+            max_call_depth=9,
+            default_agent="claude",
+            timeout="30s",
+            log_file="trace.jsonl",
+            no_log=False,
+        ),
+        ExecArgs(
+            file="tools/lint::main",
+            strict_json=None,
+            no_log=False,
+            log_file=None,
+            log=True,
+            no_timeout=True,
+            no_log_file=True,
+        ),
+        ExecArgs(
+            file="tools/lint::main",
+            argument_tokens=["--level=--timeout"],
+            strict_json=None,
+            no_log=True,
+            log_file=None,
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        ["--log", "--no-log"],
+        ["--log", "--log-file", "trace.jsonl"],
+        ["--log-file", "trace.jsonl", "--no-log-file"],
+        ["--timeout", "5s", "--no-timeout"],
+    ],
+)
+def test_registered_command_rejects_mutually_exclusive_run_time_options(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, options: list[str]
+) -> None:
+    calls = _record_registered_exec_args(monkeypatch, tmp_path)
+
+    result = invoke(CliRunner(), ["tools", "lint", *options])
+
+    assert result.exit_code == 1
+    assert "agm tools lint" in result.output
+    assert calls == []
 
 
 def test_ambiguous_registered_value_reuses_static_pipeline_artifacts(
@@ -744,11 +853,43 @@ def test_registered_help_reuses_discovery_for_a_host_shaped_program_value(
             commands={"tools run": CommandRegistration("tools", "tools/main::main")}
         ),
     )
-
     result = invoke(CliRunner(), ["tools", "run", "--tag", "--dry-run", "--help"])
 
     assert result.exit_code == 0
     assert "--tag" in result.output
+
+
+def test_registered_command_applies_exec_run_time_options(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Run-time options seed the program's engine settings, write its trace, and are in its help."""
+    home = tmp_path / "home"
+    write_installed_package(
+        home,
+        "tools",
+        source="import std/config\n\nprogram def main() -> unit =\n  print(config::strict-json)\n",
+        commands={"tools run": "tools/main::main"},
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(
+        dispatch,
+        "load_command_index",
+        lambda **_: ActivationIndex(
+            commands={"tools run": CommandRegistration("tools", "tools/main::main")}
+        ),
+    )
+    trace = tmp_path / "trace.jsonl"
+
+    strict = invoke(CliRunner(), ["tools", "run", "--strict-json", "--log-file", str(trace)])
+    lenient = invoke(CliRunner(), ["tools", "run", "--no-strict-json"])
+    help_result = invoke(CliRunner(), ["tools", "run", "--help"])
+
+    assert strict.stdout == "true\n"
+    assert lenient.stdout == "false\n"
+    assert trace.read_text(encoding="utf-8")
+    assert "--log-file" in help_result.output
+    assert "--no-timeout" in help_result.output
+    assert "--module-path" not in help_result.output
 
 
 def test_registered_command_help_returns_false_when_index_is_unavailable(
@@ -876,7 +1017,6 @@ def test_exec_installed_reference_preserves_all_file_options(
         log=True,
         module_paths=["modules"],
         no_stdlib=True,
-        max_iters=3,
         max_call_depth=4,
         timeout="5s",
         no_timeout=True,

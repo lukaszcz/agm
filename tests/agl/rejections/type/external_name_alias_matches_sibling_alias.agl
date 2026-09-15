@@ -1,0 +1,5 @@
+record Item
+  @name("x") @json-name("ajson") a: int
+  @name("x") @json-name("bjson") b: int
+
+program def main() -> unit = ()

@@ -52,15 +52,16 @@ A **program** is the entry module plus its transitive import and re-export depen
 | Type checking | `src/agm/agl/typecheck/` |
 | Match compilation | `src/agm/agl/matchcompile/` |
 | Semantic foundation (values, types, type table, analyses, exceptions) | `src/agm/agl/semantics/` |
+| Literal lexical rules and the value-syntax reader | `src/agm/agl/value_syntax/` |
 | Lowering / linking | `src/agm/agl/lower/` |
 | Execution IR | `src/agm/agl/ir/` |
 | Evaluator | `src/agm/agl/eval/` |
 | Host runtime services and FFI | `src/agm/agl/runtime/` |
 | Module loading | `src/agm/agl/modules/` |
 | REPL | `src/agm/agl/repl/` |
-| Pipeline orchestrator and host leaves | `src/agm/agl/pipeline.py`, `capabilities.py`, `diagnostics.py`, `setting_overrides.py`, `type_schema.py`, `artifact_cache.py`, `artifact_storage.py`, `self_validation.py` |
+| Pipeline orchestrator and host leaves | `src/agm/agl/pipeline.py`, `capabilities.py`, `diagnostics.py`, `type_schema.py`, `artifact_cache.py`, `artifact_storage.py`, `self_validation.py` |
 
-Layering is enforced by `tests/test_agl_dependencies.py`: `semantics` is the foundation, `syntax` is an AST-only leaf, `typecheck` reaches only scope's output and the layers beneath it, `matchcompile` imports nothing downstream, the IR depends only on its own data and the engine-key catalog, the evaluator never imports the frontend, the runtime is eval-free, and the pipeline sits on top. `agl/zones.py`, `agl/attributes.py` (the built-in attribute catalog, which names zones and carries the host-facing shapes the `@opt-*` and `@command` attributes describe; it is the one place the language reaches out to an AGM leaf, holding a `@command` path to the CLI's own reserved-name rule) and `agl/modules/ids.py` are the vocabulary leaves below every pass, so both scope and the IR can name a parameter's zone and a module's identity without seeing each other. `artifact_storage.py` is a further leaf: the disk-cache envelope shared by the module cache, artifact serialization, and the runtime's companion bytecode cache, importing nothing under `agm`.
+Layering is enforced by `tests/test_agl_dependencies.py`: `semantics` is the foundation, `syntax` is an AST-only leaf, `typecheck` reaches only scope's output and the layers beneath it, `matchcompile` imports nothing downstream, the IR depends only on its own data and the engine-key catalog, the evaluator never imports the frontend, the runtime is eval-free, and the pipeline sits on top. `agl/value_syntax/` is a leaf below the lexer, match compiler, and runtime, holding the literal scanning rules (text escapes, numbers, identifiers, environment holes) and a reader for AgL's data-only value syntax; it imports only `agm.util` and `agl/keywords.py`. `agl/zones.py`, `agl/attributes.py` (the built-in attribute catalog, which names zones and carries the host-facing shapes the `@opt-*` and `@command` attributes describe; it is the one place the language reaches out to an AGM leaf, holding a `@command` path to the CLI's own reserved-name rule) and `agl/modules/ids.py` are the vocabulary leaves below every pass, so both scope and the IR can name a parameter's zone and a module's identity without seeing each other. `artifact_storage.py` is a further leaf: the disk-cache envelope shared by the module cache, artifact serialization, and the runtime's companion bytecode cache, importing nothing under `agm`.
 
 ## What To Read Next
 
@@ -70,4 +71,4 @@ Layering is enforced by `tests/test_agl_dependencies.py`: `semantics` is the fou
 - [hosting.md](hosting.md) — the pipeline orchestrator, host capabilities, parameters, engine settings, diagnostics.
 - [repl.md](repl.md) — the incremental REPL session and its front ends.
 
-The language itself is documented for users in `docs/agl/reference/`; the standard library's sources under `stdlib/src/` are its own reference.
+The language itself is documented for users in `docs/agl/reference/`; the standard library's sources under `packages/stdlib/src/` are its own reference.

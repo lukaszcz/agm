@@ -1130,7 +1130,7 @@ class NameTarget:
     """Assignment target for ``name := expr``.
 
     ``qualifier`` is set for a qualified assignment target such as
-    ``std/config::max-iters := expr``; it is ``None`` for a plain local target.
+    ``std/config::strict-json := expr``; it is ``None`` for a plain local target.
     """
 
     name: str
@@ -1270,6 +1270,7 @@ class TypeAlias(GenericDeclaration):
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     type_param_slots: tuple[str, ...] = ()
+    is_builtin: bool = False
     scope_path: tuple[ScopeSegment, ...] = ()
     attributes: tuple[Attribute, ...] = ()
 
@@ -1313,7 +1314,7 @@ class BuiltinVarDecl:
     has not seeded that identity; the declaration itself still introduces no program
     initializer. ``std/config`` reserves its bindings for named engine settings.
 
-    ``name``      — the declared binding name (for example, ``"max-iters"``).
+    ``name``      — the declared binding name (for example, ``"strict-json"``).
     ``type_ann``  — the mandatory declared type.
     ``default``   — an optional constant expression of that type.
 

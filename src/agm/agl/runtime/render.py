@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
 from agm.agl.semantics.cycles import enter_value
-from agm.agl.semantics.text_literal import quote_text
 from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
@@ -34,6 +33,7 @@ from agm.agl.semantics.values import (
     UnitValue,
     Value,
 )
+from agm.agl.value_syntax.lexical import quote_text
 
 
 def _indent(level: int) -> str:

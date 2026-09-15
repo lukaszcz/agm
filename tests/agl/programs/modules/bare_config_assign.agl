@@ -1,28 +1,20 @@
-# Modules: a glob import exposes a mutable engine setting for bare assignment.
+# Modules: a glob import exposes mutable engine settings for bare assignment.
 # Exercises a bare write cross-checked through a qualified read, a bare write
-# whose value comes from a function exposed by an import tail, a differently-typed setting
-# on the same import, and the write actually raising the cap that bounds an
-# unbounded `do` loop. A param drives the numbers.
+# whose value comes from a function exposed by an import tail, and a
+# differently-typed setting on the same import. A param drives the values.
 import std/config::*
 import tuning::*
 
-# Bare write through the glob import; the qualified read sees the same binding.
-
 program def main(budget: int) -> unit =
-  max-iters := budget
-  print std/config::max-iters
+  # Bare write through the glob import; the qualified read sees the same binding.
+  strict-json := budget <= 4
+  print std/config::strict-json
 
   # The written value may come from a function exposed by an import tail, read back bare.
-  max-iters := scaled(budget)
-  print max-iters
-
-  # `strict-json` is a differently-typed setting reached through the same import.
   strict-json := wants-strict(budget)
   print strict-json
 
-  # The bare write raised the cap that bounds this otherwise unbounded loop.
-  var i: int = 0
-  do
-    i := i + 1
-  until i >= 4
-  print i
+  # `timeout` is a differently-typed setting reached through the same import.
+  timeout := Some(seconds(budget))
+  print timeout
+  print std/config::timeout

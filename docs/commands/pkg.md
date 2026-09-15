@@ -181,9 +181,13 @@ An active package's commands run as `agm COMMAND ...` (longest matching path win
   resolving bare flag and dotted qualified flags, including `--no-...` where its type permits.
   Help groups visible module parameters by declaring module, and completion offers their resolving
   spellings. See [Program arguments](agl.md#program-arguments) and
-  [Module parameters](agl.md#module-parameters). A registered command reserves only `--dry-run`
-  and `-h`/`--help`, so its parameters may reuse spellings `agm exec` itself reserves, such as
-  `--module-path` or `-p`; running that program through `agm exec` instead still rejects them.
+  [Module parameters](agl.md#module-parameters). A registered command reserves its run-time
+  options, `--dry-run`, and `-h`/`--help`; its parameters may reuse other spellings `agm exec`
+  reserves, such as `--module-path` or `-p`, which `agm exec` still rejects.
+- **Run-time options.** `agm exec`'s engine-setting flags (`--strict-json`/`--no-strict-json`,
+  `--default-agent`, `--timeout`/`--no-timeout`, `--log`/`--no-log`,
+  `--log-file`/`--no-log-file`) and `--max-call-depth` work as for
+  [`agm exec`](agl.md#agm-exec), anywhere after the command path.
 - **Configuration.** Omitted signature arguments and engine settings use the program route:
   the program's qualified table (e.g. `[review-tools.main.review]` for
   `review-tools/main::review`) or a registered command path (`[pr-review]`, or `[dev.review]`

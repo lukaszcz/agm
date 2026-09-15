@@ -307,9 +307,9 @@ host-backed values:
 import std/config::*
 
 program def main() -> unit =
-  std/config::max-iters := 10           # write a setting (qualified target)
+  std/config::strict-json := true       # write a setting (qualified target)
   default-agent := AgentClaude("sonnet", "medium") # import tail allows a bare target
-  let cap = std/config::max-iters       # read a setting
+  let strict = std/config::strict-json  # read a setting
 ```
 
 An engine setting is an ordinary mutable binding in another module, so an

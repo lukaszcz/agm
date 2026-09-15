@@ -21,7 +21,7 @@ from agm.packages.manifest import PackageManifest
 from agm.packages.model import PackageInfo
 from tests._agl_helpers import agl_roots
 
-_STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
+_STDLIB = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
 
 
 def _run_file(source: str, path: Path, *, roots: RootSet) -> object:

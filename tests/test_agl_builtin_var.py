@@ -23,9 +23,9 @@ from agm.agl.syntax.constants import is_constant_expression
 from tests._agl_helpers import agent_value, agl_roots, run_inline_command
 
 
-def _run(source: str, *, default_loop_limit: int | None = None) -> RunResult:
+def _run(source: str) -> RunResult:
     """Run a single-module *source* (no imports) through prepare + run_prepared."""
-    rt = PipelineDriver(default_loop_limit=default_loop_limit)
+    rt = PipelineDriver()
     return run_inline_command(rt, source)
 
 
@@ -33,16 +33,12 @@ def _run_program(
     source: str,
     *,
     extra_roots: frozenset[Path] = frozenset(),
-    default_loop_limit: int | None = None,
     shell_exec_timeout: float | None = None,
     builtin_host_settings: dict[str, Value] | None = None,
 ) -> RunResult:
     """Run *source* (with imports) through the program pipeline against the stdlib."""
     roots = agl_roots(*extra_roots)
-    rt = PipelineDriver(
-        default_loop_limit=default_loop_limit,
-        shell_exec_timeout=shell_exec_timeout,
-    )
+    rt = PipelineDriver(shell_exec_timeout=shell_exec_timeout)
     return run_inline_command(rt, source, roots=roots, builtin_host_settings=builtin_host_settings)
 
 
@@ -51,14 +47,13 @@ def _run_with_std_config(
     std_config: str,
     root: Path,
     *,
-    default_loop_limit: int | None = None,
     builtin_host_settings: dict[str, Value] | None = None,
 ) -> RunResult:
     """Run against a test ``std/config`` module without ordinary entry declarations."""
     config_path = root / "std" / "config.agl"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(std_config, encoding="utf-8")
-    rt = PipelineDriver(default_loop_limit=default_loop_limit)
+    rt = PipelineDriver()
     return run_inline_command(
         rt,
         source,
@@ -74,23 +69,16 @@ def _run_with_std_config(
 
 
 class TestBuiltinVarRegisters:
-    def test_read_reflects_write(self) -> None:
-        result = _run_program(
-            "import std/config\nstd/config::max-iters := 3\nlet n = std/config::max-iters\nprint n"
-        )
-        assert result.ok, f"expected success but got: {result.error!r}"
-        assert result.bindings["n"] == IntValue(3)
-
     def test_suffix_and_anchored_writes_target_the_engine_setting(self) -> None:
         result = _run_program(
             "import std/config\n"
-            "config::max-iters := 3\n"
-            "/std/config::max-iters := 4\n"
-            "let n = config::max-iters\n"
-            "print n"
+            "config::strict-json := false\n"
+            "/std/config::strict-json := true\n"
+            "let b = config::strict-json\n"
+            "print b"
         )
         assert result.ok, f"expected success but got: {result.error!r}"
-        assert result.bindings["n"] == IntValue(4)
+        assert result.bindings["b"] == BoolValue(True)
 
     def test_strict_json_write_then_read(self) -> None:
         result = _run_program(
@@ -106,15 +94,6 @@ class TestBuiltinVarRegisters:
         result = _run_program("import std/config::*\nlet l = std/config::log\nprint l")
         assert result.ok
         assert result.bindings["l"] == BoolValue(False)
-
-    def test_max_iters_default_reads_disabled_state(self) -> None:
-        """A read reports zero when the host safety valve is off."""
-        result = _run_program(
-            "import std/config::*\nlet n = std/config::max-iters\nprint n",
-            default_loop_limit=None,
-        )
-        assert result.ok
-        assert result.bindings["n"] == IntValue(0)
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +195,7 @@ class TestBuiltinVarDefaults:
 
 class TestBuiltinVarGate:
     def test_entry_declaration_rejected(self) -> None:
-        result = _run("builtin var max-iters: int\nprint 1")
+        result = _run("builtin var strict-json: bool\nprint 1")
         assert not result.ok
         assert result.diagnostics
 
@@ -233,7 +212,7 @@ class TestBuiltinVarGate:
     def test_wrong_type_rejected(self, tmp_path: Path) -> None:
         result = _run_with_std_config(
             "import std/config::*\n()",
-            "builtin var max-iters: bool",
+            "builtin var strict-json: int",
             tmp_path,
         )
         assert not result.ok
@@ -247,7 +226,7 @@ class TestBuiltinVarGate:
 
     def test_arbitrary_library_declaration_rejected(self, tmp_path: Path) -> None:
         """A regular library cannot expose a register-backed declaration."""
-        (tmp_path / "mylib.agl").write_text("builtin var max-iters: int\n", encoding="utf-8")
+        (tmp_path / "mylib.agl").write_text("builtin var strict-json: bool\n", encoding="utf-8")
         result = _run_program(
             "import mylib\nprint 1",
             extra_roots=frozenset({tmp_path}),
@@ -266,10 +245,10 @@ class TestScopedBuiltinVar:
         """A scoped ``std/config`` binding is read and written through its full path."""
         result = _run_with_std_config(
             "import std/config::*\n"
-            "std/config::Region::max-iters := 3\n"
-            "let n = std/config::Region::max-iters\n"
+            "std/config::Region::retries := 3\n"
+            "let n = std/config::Region::retries\n"
             "n",
-            "scope Region\n  builtin var max-iters: int\nend Region",
+            "scope Region\n  builtin var retries: int\nend Region",
             tmp_path,
         )
         assert result.ok, f"expected success but got: {result.error!r}"
@@ -277,8 +256,8 @@ class TestScopedBuiltinVar:
 
     def test_scoped_builtin_var_is_bare_after_use(self, tmp_path: Path) -> None:
         result = _run_with_std_config(
-            "import std/config::*\nuse std/config::Region::*\nmax-iters := 4\nlet n = max-iters\nn",
-            "scope Region\n  builtin var max-iters: int\nend Region",
+            "import std/config::*\nuse std/config::Region::*\nretries := 4\nlet n = retries\nn",
+            "scope Region\n  builtin var retries: int\nend Region",
             tmp_path,
         )
         assert result.ok, f"expected success but got: {result.error!r}"
@@ -300,12 +279,12 @@ class TestScopedBuiltinVar:
     def test_scoped_same_named_settings_are_independent(self, tmp_path: Path) -> None:
         result = _run_with_std_config(
             "import std/config\n"
-            "std/config::First::max-iters := 3\n"
-            "let second = std/config::Second::max-iters\n"
+            "std/config::First::retries := 3\n"
+            "let second = std/config::Second::retries\n"
             "second",
-            "scope First\n  builtin var max-iters: int = 1\nend First\n"
+            "scope First\n  builtin var retries: int = 1\nend First\n"
             "\n"
-            "scope Second\n  builtin var max-iters: int = 2\nend Second",
+            "scope Second\n  builtin var retries: int = 2\nend Second",
             tmp_path,
         )
 
@@ -317,24 +296,20 @@ class TestScopedBuiltinVar:
     ) -> None:
         result = _run_with_std_config(
             "import std/config\n"
-            "std/config::Region::max-iters := 3\n"
-            "var i = 0\n"
-            "do\n"
-            "  i := i + 1\n"
-            "until i >= 2\n",
-            "scope Region\n  builtin var max-iters: int = 0\nend Region",
+            'std/config::Region::timeout := "not-a-timeout"\n'
+            "let value = std/config::Region::timeout\n"
+            "value",
+            'scope Region\n  builtin var timeout: text = "1s"\nend Region',
             tmp_path,
-            default_loop_limit=1,
         )
 
-        assert not result.ok
-        assert result.error is not None
-        assert result.error.type_name == "MaxIterationsExceeded"
+        assert result.ok, f"expected success but got: {result.error!r}"
+        assert result.bindings["value"] == TextValue("not-a-timeout")
 
     def test_scoped_declaration_still_confined_to_std_config(self, tmp_path: Path) -> None:
         """A scoped ``builtin var`` outside ``std/config`` is rejected, same as a root one."""
         (tmp_path / "mylib.agl").write_text(
-            "scope Region\n  builtin var max-iters: int\nend Region\n", encoding="utf-8"
+            "scope Region\n  builtin var retries: int\nend Region\n", encoding="utf-8"
         )
         result = _run_program(
             "import mylib\nprint 1",
@@ -347,21 +322,21 @@ class TestScopedBuiltinVar:
         """A root binding and a same-named scoped one are separate registers."""
         result = _run_with_std_config(
             "import std/config\n"
-            "std/config::max-iters := 3\n"
-            "std/config::Region::max-iters := 4\n"
-            "let root-setting = std/config::max-iters\n"
-            "let scoped = std/config::Region::max-iters\n"
+            "std/config::strict-json := true\n"
+            "std/config::Region::strict-json := false\n"
+            "let root-setting = std/config::strict-json\n"
+            "let scoped = std/config::Region::strict-json\n"
             "()",
-            "builtin var max-iters: int\n"
+            "builtin var strict-json: bool\n"
             "\n"
             "scope Region\n"
-            "  builtin var max-iters: int = 0\n"
+            "  builtin var strict-json: bool = false\n"
             "end Region",
             tmp_path,
         )
         assert result.ok, f"expected success but got: {result.error!r}"
-        assert result.bindings["root-setting"] == IntValue(3)
-        assert result.bindings["scoped"] == IntValue(4)
+        assert result.bindings["root-setting"] == BoolValue(True)
+        assert result.bindings["scoped"] == BoolValue(False)
 
 
 # ---------------------------------------------------------------------------
@@ -373,53 +348,18 @@ class TestStdConfigQualified:
     def test_qualified_read_sees_a_bare_write_to_the_same_setting(self) -> None:
         """The bare name a wildcard import brings in addresses the same register."""
         result = _run_program(
-            "import std/config::*\nmax-iters := 3\nlet n = std/config::max-iters\nprint n"
+            "import std/config::*\nstrict-json := true\nlet b = std/config::strict-json\nprint b"
         )
         assert result.ok, f"expected success but got: {result.error!r}"
-        assert result.bindings["n"] == IntValue(3)
+        assert result.bindings["b"] == BoolValue(True)
 
-    def test_max_iters_zero_disables_valve(self) -> None:
-        result = _run_program(
-            "import std/config::*\n"
-            "std/config::max-iters := 0\n"
-            "var i = 0\n"
-            "do\n"
-            "  i := i + 1\n"
-            "until i >= 6\n"
-            "print i",
-            default_loop_limit=2,
-        )
-        assert result.ok
-        assert result.bindings["i"] == IntValue(6)
-
-    def test_negative_max_iters_raises_catchable_type_error(self) -> None:
-        """Assigning a negative ``max-iters`` raises a catchable built-in exception.
+    def test_invalid_timeout_raises_catchable_type_error(self) -> None:
+        """Assigning an unparseable ``timeout`` raises a catchable built-in exception.
 
         Regression test: the live engine-setting effect built this exception
         under an undeclared name (``"ValueError"``, never a real AgL built-in
         exception), which went unnoticed because nothing validated the name.
         The declared ``TypeError`` is what must be raised.
-        """
-        result = _run_program("import std/config::*\nstd/config::max-iters := -1\nprint 1")
-        assert not result.ok
-        assert result.error is not None
-        assert result.error.type_name == "TypeError"
-
-        caught = _run_program(
-            "import std/config::*\n"
-            "let caught = try\n"
-            "    std/config::max-iters := -1\n"
-            "    false\n"
-            "  catch TypeError as e =>\n"
-            "    true\n"
-        )
-        assert caught.ok, caught.diagnostics
-        assert caught.bindings["caught"] == BoolValue(True)
-
-    def test_invalid_timeout_raises_catchable_type_error(self) -> None:
-        """Assigning an unparseable ``timeout`` raises a catchable built-in exception.
-
-        Regression test: see ``test_negative_max_iters_raises_catchable_type_error``.
         """
         result = _run_program(
             'import std/config::*\nstd/config::timeout := Some("not-a-timeout")\nprint 1'
@@ -537,54 +477,29 @@ class TestStdConfigQualified:
         assert isinstance(bound, RecordValue)
         assert bound.fields["value"] == TextValue("0.0000001s")
 
-    def test_disabled_max_iters_round_trips_without_enabling_valve(self) -> None:
-        result = _run_program(
-            "import std/config::*\n"
-            "std/config::max-iters := std/config::max-iters\n"
-            "var i = 0\n"
-            "do\n"
-            "  i := i + 1\n"
-            "until i >= 6\n"
-            "print i"
-        )
-
-        assert result.ok
-        assert result.bindings["i"] == IntValue(6)
-
 
 # ---------------------------------------------------------------------------
 # Effect-at-binding: a write takes effect from that program point forward
 # ---------------------------------------------------------------------------
 
 
-class TestEffectAtBinding:
-    def test_loop_after_write_uses_new_limit(self) -> None:
-        """A ``max-iters := 3`` before an unguarded loop raises the effective cap."""
-        source = (
-            "import std/config::*\n"
-            "var i: int = 0\n"
-            "std/config::max-iters := 3\n"
-            "do\n"
-            "  i := i + 1\n"
-            "until i >= 2\n"
-        )
-        result = _run_program(source, default_loop_limit=1)
-        assert result.ok, f"expected success but got: {result.error!r}"
+_FENCED_EXEC = "let r: int = exec \"printf '```json\\n5\\n```'\"\n"
 
-    def test_loop_before_write_uses_initial_limit(self) -> None:
-        """A loop before the write uses the initial (small) cap and overflows."""
-        source = (
-            "import std/config::*\n"
-            "var i: int = 0\n"
-            "do\n"
-            "  i := i + 1\n"
-            "until i >= 5\n"
-            "std/config::max-iters := 3\n"
-        )
-        result = _run_program(source, default_loop_limit=1)
+
+class TestEffectAtBinding:
+    def test_parse_after_write_uses_new_mode(self) -> None:
+        """A ``strict-json := true`` before a typed ``exec`` rejects a fenced reply."""
+        source = "import std/config::*\nstd/config::strict-json := true\n" + _FENCED_EXEC
+        result = _run_program(source)
         assert not result.ok
         assert result.error is not None
-        assert result.error.type_name == "MaxIterationsExceeded"
+
+    def test_parse_before_write_uses_initial_mode(self) -> None:
+        """A typed ``exec`` before the write still parses leniently."""
+        source = "import std/config::*\n" + _FENCED_EXEC + "std/config::strict-json := true\n"
+        result = _run_program(source)
+        assert result.ok, f"expected success but got: {result.error!r}"
+        assert result.bindings["r"] == IntValue(5)
 
 
 # ---------------------------------------------------------------------------
@@ -595,34 +510,32 @@ class TestEffectAtBinding:
 class TestBareCrossModuleAssign:
     def test_bare_write_reflected_by_bare_read(self) -> None:
         """An import makes::* a setting assignable and readable without a qualifier."""
-        result = _run_program("import std/config::*\nmax-iters := 3\nlet n = max-iters\nprint n")
+        result = _run_program(
+            "import std/config::*\nstrict-json := true\nlet b = strict-json\nprint b"
+        )
         assert result.ok, f"expected success but got: {result.error!r}"
-        assert result.bindings["n"] == IntValue(3)
+        assert result.bindings["b"] == BoolValue(True)
 
     def test_bare_write_reflected_by_qualified_read(self) -> None:
         """Bare and qualified targets denote the same binding."""
         result = _run_program(
-            "import std/config::*\nmax-iters := 4\nlet n = std/config::max-iters\nprint n"
+            'import std/config::*\ntimeout := Some("4s")\nlet t = std/config::timeout\nprint t'
         )
         assert result.ok, f"expected success but got: {result.error!r}"
-        assert result.bindings["n"] == IntValue(4)
+        bound = result.bindings["t"]
+        assert isinstance(bound, RecordValue)
+        assert bound.fields["value"] == TextValue("4s")
 
-    def test_bare_write_takes_effect_on_loop_limit(self) -> None:
+    def test_bare_write_takes_effect_on_the_engine(self) -> None:
         """A bare write changes engine behavior, not just the readable value."""
-        result = _run_program(
-            "import std/config::*\n"
-            "var i: int = 0\n"
-            "max-iters := 3\n"
-            "do\n"
-            "  i := i + 1\n"
-            "until i >= 2\n",
-            default_loop_limit=1,
-        )
-        assert result.ok, f"expected success but got: {result.error!r}"
+        result = _run_program('import std/config::*\ntimeout := Some("not-a-timeout")\nprint 1')
+        assert not result.ok
+        assert result.error is not None
+        assert result.error.type_name == "TypeError"
 
     def test_bare_write_to_qualified_only_import_rejected(self, tmp_path: Path) -> None:
         """A qualified-only import does not expose the name for bare assignment."""
-        result = _run_program("import std/config as cfg\nmax-iters := 3\nprint 1")
+        result = _run_program("import std/config as cfg\nstrict-json := true\nprint 1")
         assert not result.ok
         assert result.diagnostics
 

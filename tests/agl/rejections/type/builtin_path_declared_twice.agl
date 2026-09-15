@@ -1,0 +1,4 @@
+builtin type path = text
+
+program def main() -> unit =
+  ()

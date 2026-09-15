@@ -479,7 +479,7 @@ def _agm_install(tmp_path_factory: pytest.TempPathFactory, isolated_compiler_cac
             {
                 "PATH": _ORIGINAL_PATH,
                 "HOME": str(warm_home),
-                "AGM_STDLIB": str(repo_root / "stdlib"),
+                "AGM_STDLIB": str(repo_root / "packages" / "stdlib"),
             }
         ),
         check=False,
@@ -7778,7 +7778,7 @@ class TestPackageInstall:
             "import std/config\n"
             "program def main(subject: text) -> unit =\n"
             "  print subject\n"
-            "  print std/config::max-iters\n"
+            "  print std/config::strict-json\n"
             '  let _ = exec("true")\n',
             encoding="utf-8",
         )
@@ -7787,7 +7787,7 @@ class TestPackageInstall:
         )
         home.mkdir()
         (home / "config.toml").write_text(
-            '["tools/main".main]\nsubject = "configured"\nmax-iters = 9\n',
+            '["tools/main".main]\nsubject = "configured"\nstrict-json = true\n',
             encoding="utf-8",
         )
         return package
@@ -7847,11 +7847,38 @@ class TestPackageInstall:
         unknown = run_agm(["publish"], env=env, cwd=tmp_path, check=False)
 
         assert installed.returncode == 0
-        assert published.stdout == "flag\n9\n"
-        assert configured.stdout == "configured\n9\n"
+        assert published.stdout == "flag\ntrue\n"
+        assert configured.stdout == "configured\ntrue\n"
         assert "call-sites:" in dry_run.stdout
         assert uninstalled.returncode == 0
         assert unknown.returncode != 0
+
+    def test_registered_commands_accept_exec_run_time_options(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        home = tmp_path / "agm-home"
+        env["AGM_HOME"] = str(home)
+        package = self._write_tools_command_package(tmp_path, home)
+        trace = tmp_path / "trace.jsonl"
+
+        run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
+        overridden = run_agm(
+            ["publish", "--no-strict-json", "--log-file", str(trace), "--subject", "flag"],
+            env=env,
+            cwd=tmp_path,
+        )
+        timed = run_agm(
+            ["publish", "--timeout", "5s", "--max-call-depth", "64", "--no-log"],
+            env=env,
+            cwd=tmp_path,
+        )
+        conflicting = run_agm(["publish", "--log", "--no-log"], env=env, cwd=tmp_path, check=False)
+
+        assert overridden.stdout == "flag\nfalse\n"
+        assert trace.stat().st_size > 0
+        assert timed.stdout == "configured\ntrue\n"
+        assert conflicting.returncode == 1
+        assert conflicting.stdout == ""
 
     def test_registered_commands_honor_program_value_arguments_and_config(
         self, tmp_path: Path, env: dict[str, str]

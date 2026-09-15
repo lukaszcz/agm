@@ -1,0 +1,23 @@
+# `@name`/`@json-name` renaming crosses the agent boundary: a structured
+# response is decoded, schema-validated, and format-instructed by the
+# effective JSON name/`$case` tag; a response spelled with the declared name
+# instead is rejected like any other malformed response.
+record Answer
+  @json-name("answer-text") text: text
+  @name("confidence") score: int
+
+enum Verdict
+  | @json-name("verified") Confirmed(note: text)
+  | Unclear
+
+program def main() -> unit =
+  let responder: Agent = AgentCommand("responder")
+  let a: Answer = ask("Answer the question.", agent = responder)
+  print a.text
+  print a.score
+
+  let judge: Agent = AgentCommand("judge")
+  let v: Verdict = ask("Judge the answer.", agent = judge)
+  case v of
+    | Confirmed(note) => print "confirmed: %{note}"
+    | Unclear         => print "unclear"

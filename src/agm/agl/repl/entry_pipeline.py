@@ -37,7 +37,6 @@ if TYPE_CHECKING:
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import Frame, Value
-    from agm.agl.setting_overrides import SettingOverride
     from agm.agl.syntax.advisories import SpacedQualifier
     from agm.agl.syntax.nodes import ImportDecl, InfixAssoc, Item, Program, ScopeRegion
     from agm.agl.typecheck.env import CheckedModule, TypeEnvironment
@@ -61,7 +60,6 @@ class EntryPipelineCtx(Protocol):
     _accumulated_infix: dict[str, tuple[int, InfixAssoc]]
     _link_image: LinkImage
     _ir_base_frame: Frame
-    _setting_overrides: dict[str, SettingOverride]
     _session_scope: ScopeNode
     _session_scope_nodes: dict[tuple[str, ...], ScopeNode]
     _session_type_paths: dict[tuple[str, ...], str | None]
@@ -70,7 +68,6 @@ class EntryPipelineCtx(Protocol):
     _ambient_bare_constructor_candidates: dict[str, tuple[ConstructorRef, ...]]
     _ambient_type_names: frozenset[str]
     _trace_path: Path | None
-    _default_loop_limit: int | None
     _default_call_depth_limit: int
     _default_stdlib: bool
     _shell_exec_timeout: float | None
@@ -133,22 +130,6 @@ class EntryPipelineCtx(Protocol):
     def _quote_strings_for_entry(self, program: Program) -> bool: ...
 
 
-class OverrideRejected(Exception):
-    """Internal signal: a setting-override splice was rejected.
-
-    Raised by :meth:`EntryPipeline.load_and_check_program` when
-    ``_apply_setting_overrides`` returns diagnostics rather than succeeding,
-    so that stage can share one raise-on-failure contract with the syntax,
-    module-loading, scope, and type-check stages around it. Callers catch it
-    and read :attr:`diagnostics` the same way they read a caught
-    ``AglError.to_diagnostic()``.
-    """
-
-    def __init__(self, diagnostics: list[Diagnostic]) -> None:
-        super().__init__("setting override rejected")
-        self.diagnostics = diagnostics
-
-
 @dataclass(frozen=True, slots=True)
 class LoadedCheckedProgram:
     """Result of :meth:`EntryPipeline.load_and_check_program`."""
@@ -185,39 +166,21 @@ class EntryPipeline:
         host_env: HostEnvironment,
         next_start_id: int,
         spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
-        validate_missing_std_config: bool = False,
     ) -> LoadedCheckedProgram:
-        """Build the module graph, splice overrides, resolve, and type-check.
+        """Build the module graph, resolve, and type-check.
 
         Shared by :meth:`eval_entry` (which continues on to match
         compilation, lowering, and evaluation) and ``ReplSession.open``
         (which stops here and promotes only the loaded library modules,
         before the session accepts its first entry): builds on the session's
-        retained import/use preamble and cached library modules, then
-        applies ``setting_overrides`` via
-        :func:`~agm.agl.pipeline.apply_setting_overrides` — which owns both
-        the splice-once-per-session apply condition and the module-cache
-        reconciliation a caller that caches ``new_modules`` needs — before
+        retained import/use preamble and cached library modules before
         resolving and type-checking the result.
 
-        ``validate_missing_std_config`` is ``False`` for an ordinary entry
-        (:meth:`eval_entry`): a ``required`` override (e.g. ``--default-agent``) that
-        ``std/config`` never loads for stays unvalidated until whichever
-        later entry, if any, first loads it, matching how a non-``required``
-        override already behaves. ``ReplSession.open`` passes ``True``
-        instead, so a ``required`` override is validated at session-open
-        time even when the initial image never loads ``std/config`` (e.g.
-        ``--no-stdlib`` with no explicit import) — reported before the
-        session accepts its first entry rather than deferred to one that may
-        never come.
-
         Raises the underlying ``AglSyntaxError``/module-loading
-        error/``AglScopeError``/``AglTypeError`` on failure, or
-        :class:`OverrideRejected` when the override splice itself is
-        rejected — callers adapt these to their own failure-reporting shape.
+        error/``AglScopeError``/``AglTypeError`` on failure — callers adapt
+        these to their own failure-reporting shape.
         """
         from agm.agl.modules.loader import build_repl_graph
-        from agm.agl.pipeline import apply_setting_overrides
         from agm.agl.typecheck.program import check_program
 
         roots = self._ctx._ensure_roots()
@@ -235,16 +198,6 @@ class EntryPipeline:
             spaced_qualifiers=spaced_qualifiers,
             session_infix=self._ctx._accumulated_infix,
         )
-
-        graph, new_next_id, override_diagnostics, new_modules = apply_setting_overrides(
-            graph,
-            new_next_id,
-            self._ctx._setting_overrides,
-            newly_loaded_modules=new_modules,
-            validate_when_absent=validate_missing_std_config,
-        )
-        if override_diagnostics:
-            raise OverrideRejected(override_diagnostics)
 
         resolved_program = self._resolve_program(graph)
         checked_program = check_program(
@@ -332,8 +285,6 @@ class EntryPipeline:
             MissingExternCompanion,
         ) as exc:
             return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
-        except OverrideRejected as exc:
-            return self._ctx._fail(exc.diagnostics, tab_warnings)
         except AglScopeError as exc:
             return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
         except AglTypeError as exc:
@@ -778,7 +729,6 @@ class EntryPipeline:
                 session_host=host_env.session_host,
                 close_sessions=False,
                 strict_json=self._ctx._default_strict_json,
-                loop_limit=self._ctx._default_loop_limit,
                 max_call_depth=self._ctx._default_call_depth_limit,
                 shell_exec_timeout=(
                     self._ctx._shell_exec_timeout if "timeout" not in self._ctx._current else None

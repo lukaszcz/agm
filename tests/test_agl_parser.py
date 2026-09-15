@@ -510,7 +510,7 @@ class TestBinders:
             parse("Option[int]::some::x := 3")
 
     def test_module_qualified_assignment_target_preserved(self) -> None:
-        assignment = first(parse("std/config::max-iters := 3"))
+        assignment = first(parse("std/config::strict-json := true"))
         assert isinstance(assignment, AssignStmt)
         assert isinstance(assignment.target, NameTarget)
         assert assignment.target.qualifier is not None
@@ -529,8 +529,8 @@ class TestBinders:
         "source",
         (
             "mm::xs[0] := 42",
-            "std/config::max-iters[0] := 3",
-            "std/config::NoSuchType::max-iters[0] := 3",
+            "std/config::strict-json[0] := 3",
+            "std/config::NoSuchType::strict-json[0] := 3",
         ),
     )
     def test_module_qualified_indexed_assignment_target_accepted(self, source: str) -> None:
@@ -998,6 +998,18 @@ class TestDeclarations:
         assert en.name == "Status"
         assert en.is_builtin is True
         assert len(en.members) == 2
+
+    @pytest.mark.parametrize("source", ["builtin type path = text", "builtin\ntype path = text"])
+    def test_builtin_type_alias(self, source: str) -> None:
+        alias = first(parse(source))
+        assert isinstance(alias, TypeAlias)
+        assert alias.name == "path"
+        assert alias.is_builtin is True
+
+    def test_plain_type_alias_is_not_builtin(self) -> None:
+        alias = first(parse("type path = text"))
+        assert isinstance(alias, TypeAlias)
+        assert alias.is_builtin is False
 
 
 # ---------------------------------------------------------------------------
@@ -3111,7 +3123,7 @@ class TestTemplates:
         assert isinstance(interpolation.expr.callee, VarRef)
         assert interpolation.expr.callee.name == "getenv"
         assert interpolation.expr.callee.qualifier is not None
-        assert interpolation.expr.callee.qualifier.route_segments == ("std", "env")
+        assert interpolation.expr.callee.qualifier.route_segments == ("std", "prelude")
         qualifier_segment = interpolation.expr.callee.qualifier.segments[0]
         name_offset = source.index("HOME")
         assert (

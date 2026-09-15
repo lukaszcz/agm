@@ -19,7 +19,6 @@ from agm.agl.diagnostics import Diagnostic, RelatedDiagnostic
 from agm.agl.pipeline import RunError
 from agm.agl.repl import meta as meta_mod
 from agm.agl.repl import render as render_mod
-from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.entry import EntryKind, EntryResult
 from agm.agl.repl.session import ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
@@ -509,15 +508,8 @@ class TestRenderHelpers:
 # ---------------------------------------------------------------------------
 
 
-def _session_ctx(
-    session: ReplSession | None = None,
-    *,
-    agent_mode: AgentMode | None = None,
-) -> meta_mod.MetaContext:
-    return meta_mod.MetaContext(
-        session=session if session is not None else _open_session(),
-        agent_mode=agent_mode if agent_mode is not None else AgentMode(),
-    )
+def _session_ctx(session: ReplSession | None = None) -> meta_mod.MetaContext:
+    return meta_mod.MetaContext(session=session if session is not None else _open_session())
 
 
 class TestReset:
@@ -625,29 +617,6 @@ class TestSet:
         outcome = meta_mod.dispatch_meta(":set echo maybe", ctx)
         assert "usage" in (outcome.text or "").lower()
         assert ctx.echo is True  # unchanged
-
-
-class TestAgent:
-    def test_agent_auto_then_confirm_mutates_shared_mode(self) -> None:
-        mode = AgentMode()
-        ctx = _session_ctx(agent_mode=mode)
-        out_auto = meta_mod.dispatch_meta(":agent auto", ctx)
-        assert mode.mode == "auto"
-        assert "auto" in (out_auto.text or "")
-        out_conf = meta_mod.dispatch_meta(":agent confirm", ctx)
-        assert mode.mode == "confirm"
-        assert "confirm" in (out_conf.text or "")
-
-    def test_agent_no_arg_reports_mode(self) -> None:
-        mode = AgentMode(mode="auto")
-        outcome = meta_mod.dispatch_meta(":agent", _session_ctx(agent_mode=mode))
-        assert "auto" in (outcome.text or "")
-
-    def test_agent_bad_arg_usage_error_no_mutation(self) -> None:
-        mode = AgentMode()
-        outcome = meta_mod.dispatch_meta(":agent bogus", _session_ctx(agent_mode=mode))
-        assert "usage" in (outcome.text or "").lower()
-        assert mode.mode == "confirm"
 
 
 class TestLoad:

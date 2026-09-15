@@ -14,7 +14,7 @@ from agm.cli_support.args import ExecArgs
 from agm.commands import exec as exec_command
 from agm.commands import exec_program as exec_engine
 from agm.config.context import ConfigContext
-from tests._agl_helpers import agent_value, agl_roots, run_inline_command
+from tests._agl_helpers import agent_value, agl_roots, prepare_inline_command, run_inline_command
 
 
 def _file_program(body: str) -> str:
@@ -252,33 +252,23 @@ def test_exec_agent_source_cli_and_config_precedence(
         assert field.value in rendered
 
 
-def test_exec_runner_config_seeds_default_agent_as_agent_command(
+def test_program_table_default_agent_beats_exec_default_agent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """``[exec] runner`` is a bare host command, decoded into ``AgentCommand``.
-
-    Unlike ``default-agent``, it is never rendered as AgL source (it carries
-    quotes/backslashes/``%{`` verbatim), so it is decoded directly into a
-    typed value rather than spliced in as an override.
-    """
+    """A qualified program table's ``default-agent`` outranks ``[exec]``."""
     home = tmp_path / "home"
     config_dir = home / ".agm"
     config_dir.mkdir(parents=True)
-    (config_dir / "config.toml").write_text('[exec]\nrunner = "claude"\n')
-    program = tmp_path / "program.agl"
-    program.write_text(
-        "import std/config\n"
-        "program def main() -> unit =\n"
-        "  let agent = std/config::default-agent\n"
-        "  let command = case agent of\n"
-        "    | AgentCommand(command) => command\n"
-        '    | _ => "unexpected"\n'
-        "  let encoded = agent as json\n"
-        "  print command\n"
-        "  print encoded\n"
+    exec_literal = 'AgentCommand("exec-level")'
+    program_literal = 'AgentCommand("program-level")'
+    config_dir.joinpath("config.toml").write_text(
+        f"[exec]\ndefault-agent = {exec_literal!r}\n\n"
+        f"[prog.main]\ndefault-agent = {program_literal!r}\n"
     )
+    program = tmp_path / "prog.agl"
+    program.write_text(_file_program("import std/config\nprint std/config::default-agent\n"))
     monkeypatch.setattr(
         exec_engine,
         "current_config_context",
@@ -291,36 +281,59 @@ def test_exec_runner_config_seeds_default_agent_as_agent_command(
     )
 
     rendered = capsys.readouterr().out
-    assert "AgentCommand" in rendered
-    assert "claude" in rendered
+    assert "program-level" in rendered
+    assert "exec-level" not in rendered
 
 
-@pytest.mark.parametrize(
-    ("default_agent_literal", "runner", "expected"),
-    (
-        (None, "claude", agent_value("AgentCommand", command="claude")),
-        (
-            'AgentCommand("configured")',
-            "claude",
-            agent_value("AgentCommand", command="configured"),
-        ),
-    ),
-)
-def test_exec_default_agent_beats_runner_precedence(
+def test_cli_default_agent_beats_program_table(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    default_agent_literal: str | None,
-    runner: str,
-    expected: RecordValue,
 ) -> None:
+    """``--default-agent`` outranks a qualified program table's own value."""
     home = tmp_path / "home"
     config_dir = home / ".agm"
     config_dir.mkdir(parents=True)
-    default_agent_line = (
-        "" if default_agent_literal is None else f"default-agent = {default_agent_literal!r}\n"
+    program_literal = 'AgentCommand("program-level")'
+    config_dir.joinpath("config.toml").write_text(
+        f"[prog.main]\ndefault-agent = {program_literal!r}\n"
     )
-    (config_dir / "config.toml").write_text(f'[exec]\nrunner = "{runner}"\n{default_agent_line}')
+    program = tmp_path / "prog.agl"
+    program.write_text(_file_program("import std/config\nprint std/config::default-agent\n"))
+    monkeypatch.setattr(
+        exec_engine,
+        "current_config_context",
+        lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+    )
+
+    assert (
+        exec_command.run(
+            ExecArgs(
+                file=str(program),
+                strict_json=None,
+                default_agent='AgentCommand("cli-level")',
+                no_log=True,
+                log_file=None,
+            )
+        )
+        is None
+    )
+
+    rendered = capsys.readouterr().out
+    assert "cli-level" in rendered
+    assert "program-level" not in rendered
+
+
+def test_exec_config_runner_key_leaves_the_default_agent_unset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``[exec] runner`` is not a setting: even a malformed one is inert."""
+    home = tmp_path / "home"
+    config_dir = home / ".agm"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text('[exec]\nrunner = "claude \'oops"\n')
     program = tmp_path / "program.agl"
     program.write_text(_file_program("import std/config\nprint std/config::default-agent\n"))
     monkeypatch.setattr(
@@ -335,13 +348,11 @@ def test_exec_default_agent_beats_runner_precedence(
     )
 
     rendered = capsys.readouterr().out
-    assert expected.display_name.rsplit("::", maxsplit=1)[-1] in rendered
-    for field in expected.fields.values():
-        assert isinstance(field, TextValue)
-        assert field.value in rendered
+    assert "AgentClaude" in rendered
+    assert "AgentCommand" not in rendered
 
 
-@pytest.mark.parametrize("value", ["AgentCommand(", "true", 'AgentCommand("x") + "y"'])
+@pytest.mark.parametrize("value", ["true", "worker --flag"])
 def test_exec_treats_non_agent_syntax_from_cli_as_a_command(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], value: str
 ) -> None:
@@ -361,6 +372,31 @@ def test_exec_treats_non_agent_syntax_from_cli_as_a_command(
         is None
     )
     assert capsys.readouterr().out == "ran\n"
+
+
+@pytest.mark.parametrize("value", ["AgentCommand(", 'AgentCommand("x") + "y"'])
+def test_exec_rejects_text_that_opens_a_member_call_but_fails_to_read_from_cli(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], value: str
+) -> None:
+    """Text naming a real ``Agent`` member commits to constructor-call syntax:
+    a read failure inside it is a host error, not a verbatim command."""
+    program = tmp_path / "program.agl"
+    program.write_text(_file_program('print "not-run"\n'))
+
+    with pytest.raises(SystemExit) as exc_info:
+        exec_command.run(
+            ExecArgs(
+                file=str(program),
+                strict_json=None,
+                default_agent=value,
+                no_log=True,
+                log_file=None,
+            )
+        )
+
+    assert exc_info.value.code == 1
+    error = capsys.readouterr().err
+    assert "--default-agent" in error
 
 
 @pytest.mark.parametrize("toml_value", ["7"])
@@ -441,37 +477,6 @@ def test_exec_rejects_blank_agent_literal_from_cli(
     assert "--default-agent" in error
 
 
-def test_exec_rejects_malformed_exec_runner_before_any_module_loads(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """``[exec] runner`` is shell-split eagerly, before the program is even loaded.
-
-    An unclosed quote is a host-configuration error (exit 1): the module
-    graph is never loaded, so the program's own output never appears.
-    """
-    home = tmp_path / "home"
-    config_dir = home / ".agm"
-    config_dir.mkdir(parents=True)
-    (config_dir / "config.toml").write_text('[exec]\nrunner = "claude \'oops"\n')
-    program = tmp_path / "program.agl"
-    program.write_text(_file_program('print "not-run"\n'))
-    monkeypatch.setattr(
-        exec_engine,
-        "current_config_context",
-        lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-    )
-
-    with pytest.raises(SystemExit) as exc_info:
-        exec_command.run(ExecArgs(file=str(program), strict_json=None, no_log=True, log_file=None))
-
-    assert exc_info.value.code == 1
-    out, error = capsys.readouterr()
-    assert out == ""
-    assert "runner" in error
-
-
 def test_exec_rejects_malformed_agent_command_literal_from_cli(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -537,8 +542,8 @@ def test_source_write_of_malformed_agent_command_stays_a_runtime_error(
     Only the value materialized at interpreter construction is validated
     eagerly; a source write happens after construction, so a malformed
     command written at runtime surfaces as an ordinary uncaught AgL
-    exception (exit 2) raised from the ``ask`` call site that dispatches it,
-    exactly as before this change -- never a host-configuration exit.
+    exception (exit 2) raised from the ``ask`` call site that dispatches
+    it -- never a host-configuration exit.
     """
     program = tmp_path / "program.agl"
     program.write_text(
@@ -557,3 +562,24 @@ def test_source_write_of_malformed_agent_command_stays_a_runtime_error(
     out, err = capsys.readouterr()
     assert out == "before ask\n"
     assert "SessionError" in err
+
+
+class TestMalformedAgentCommandAtConstruction:
+    """``AgentCommand("...")`` is a valid constant ``Agent`` value even when its
+    command text does not shell-split, so preparing the program accepts it
+    cleanly; the malformed text is only caught eagerly when the interpreter
+    is constructed, before the program's first statement runs.
+    """
+
+    def test_seeded_malformed_command_text_is_a_pre_execution_diagnostic(self) -> None:
+        driver = PipelineDriver()
+        prepared = prepare_inline_command("()", entry_path=None, roots=agl_roots())
+        result = driver.run_prepared(
+            prepared,
+            builtin_host_settings={
+                "default-agent": agent_value("AgentCommand", command="nonexistent-bin -p 'oops")
+            },
+        )
+        assert not result.ok
+        assert result.diagnostics
+        assert result.error is None

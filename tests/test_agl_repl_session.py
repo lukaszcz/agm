@@ -1164,7 +1164,7 @@ _CONSTRUCTIBLE_PRELUDE_TYPE_NAMES = sorted(
 
 class TestStdlib:
     def test_implicit_core_import_makes_names_available_unqualified(self) -> None:
-        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib")
 
         some_result = s.eval_entry("let present: Option[int] = Some(value = 1)")
         none_result = s.eval_entry("let missing: Option[int] = None")
@@ -1173,12 +1173,12 @@ class TestStdlib:
         assert none_result.ok, none_result.diagnostics
 
     def test_type_of_uses_implicit_core_import(self) -> None:
-        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib")
 
         assert "Option::Some[int]" in s.type_of("Some(value = 1)")
 
     def test_retained_explicit_core_import_suppresses_later_preludes(self) -> None:
-        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib")
 
         assert s.eval_entry("import std/prelude").ok
         assert not s.eval_entry("Some(value = 1)").ok
@@ -1187,7 +1187,7 @@ class TestStdlib:
     def test_no_stdlib_requires_explicit_core_import_after_reset(self) -> None:
         s = open_session(
             default_stdlib=False,
-            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
         )
 
         assert not s.eval_entry("Some(value = 1)").ok
@@ -1207,7 +1207,7 @@ class TestStdlib:
         """
         s = open_session(
             default_stdlib=False,
-            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
         )
 
         failed = s.eval_entry(
@@ -1221,7 +1221,7 @@ class TestStdlib:
         assert kept.ok, kept.diagnostics
 
     def test_core_stdlib_qualified_generic_type_resolves_in_type_definition(self) -> None:
-        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib")
 
         result = s.eval_entry("enum E = A(x: std/prelude::Option[int])")
 
@@ -1361,7 +1361,7 @@ def _session_with_import_root(
 
     roots = assemble_roots(
         invocation_root=root,
-        stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+        stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
         lib_root=None,
         configured=[],
         cli=[],
@@ -4482,23 +4482,8 @@ class TestEntryResultShape:
 
 
 # ---------------------------------------------------------------------------
-# Agent-call cancellation (declined / interrupted)
+# Agent-call cancellation
 # ---------------------------------------------------------------------------
-
-
-class _CancellingAgent:
-    """A fake ``AgentFn`` that raises ``AgentCancelled`` on dispatch."""
-
-    def __init__(self, callee: str = "ask", reason: str = "declined") -> None:
-        self._callee = callee
-        self._reason = reason
-        self.calls = 0
-
-    def __call__(self, request: AgentRequest) -> AgentResponse:
-        from agm.agl.repl.agents import AgentCancelled
-
-        self.calls += 1
-        raise AgentCancelled(self._callee, self._reason)
 
 
 class _InterruptAgent:
@@ -4526,18 +4511,18 @@ class TestAgentCancellation:
         assert "cancelled" not in message, "an interrupt is not an agent cancellation"
         assert session.eval_entry("2 + 2").ok
 
-    def test_declined_agent_aborts_entry_with_diagnostic(self) -> None:
-        s = open_session(agent_dispatcher=_CancellingAgent())
+    def test_cancelled_agent_aborts_entry_with_diagnostic(self) -> None:
+        s = open_session(agent_dispatcher=_InterruptAgent())
         r = s.eval_entry('let g = ask """do it"""')
         assert not r.ok
         assert r.error is None
         assert r.diagnostics
         message = r.diagnostics[0].message.lower()
         assert "cancelled" in message
-        assert "interrupted" not in message, "a declined agent is not a bare interrupt"
+        assert "interrupted" not in message, "an agent cancellation is not a bare interrupt"
 
-    def test_declined_agent_leaves_bindings_unchanged(self) -> None:
-        s = open_session(agent_dispatcher=_CancellingAgent())
+    def test_cancelled_agent_leaves_bindings_unchanged(self) -> None:
+        s = open_session(agent_dispatcher=_InterruptAgent())
         s.eval_entry("let keep = 7")
         before = _snapshot(s)
         r = s.eval_entry('let g = ask """do it"""')
@@ -4546,17 +4531,8 @@ class TestAgentCancellation:
         assert _snapshot(s) == before
         assert all(n != "g" for n, _t, _v in s.bindings())
 
-    def test_keyboard_interrupt_aborts_entry(self) -> None:
-        s = open_session(agent_dispatcher=_InterruptAgent())
-        s.eval_entry("let x = 1")
-        before = _snapshot(s)
-        r = s.eval_entry('let g = ask """slow"""')
-        assert not r.ok
-        assert r.error is None
-        assert _snapshot(s) == before
-
     def test_cancellation_preserves_prior_assignment(self) -> None:
-        s = open_session(agent_dispatcher=_CancellingAgent())
+        s = open_session(agent_dispatcher=_InterruptAgent())
         s.eval_entry("var v = 1")
         r = s.eval_entry('v := 2\nlet g = ask """x"""')
         assert not r.ok
@@ -4568,14 +4544,14 @@ class TestAgentCancellation:
         # before a cancelled agent call must be promoted, mirroring the
         # partial-effects behavior for runtime raises. Previously cancellation
         # carried no failure span, so every type declaration was dropped.
-        s = open_session(agent_dispatcher=_CancellingAgent())
+        s = open_session(agent_dispatcher=_InterruptAgent())
         r = s.eval_entry('record Box\n  value: int\nlet g = ask """x"""')
         assert not r.ok
         assert s.eval_entry("Box(value = 3)").ok
 
     def test_cancellation_excludes_record_declared_after_call(self) -> None:
         # A type declared after the cancelled call is not promoted.
-        s = open_session(agent_dispatcher=_CancellingAgent())
+        s = open_session(agent_dispatcher=_InterruptAgent())
         r = s.eval_entry('let g = ask """x"""\nrecord After\n  value: int')
         assert not r.ok
         assert not s.eval_entry("After(value: 1)").ok
@@ -4633,7 +4609,7 @@ class TestTraceLogging:
         import json
 
         trace = tmp_path / "repl.log"
-        s = open_session(agent_dispatcher=_CancellingAgent(), trace_path=trace)
+        s = open_session(agent_dispatcher=_InterruptAgent(), trace_path=trace)
         r = s.eval_entry('let g = ask """x"""')
         assert not r.ok
         records = [json.loads(line) for line in trace.read_text().splitlines() if line]
@@ -4653,7 +4629,7 @@ class TestTraceLogging:
         trace = tmp_path / "repl.log"
         session = open_session(
             trace_path=trace,
-            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
         )
 
         with pytest.raises(SystemExit) as raised:
@@ -5115,7 +5091,7 @@ class TestInfixDecl:
         s = ReplSession()
         s._roots = assemble_roots(
             invocation_root=root,
-            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
             lib_root=None,
             configured=[],
             cli=[],
@@ -5139,7 +5115,7 @@ class TestInfixDecl:
         s = ReplSession()
         s._roots = assemble_roots(
             invocation_root=root,
-            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
             lib_root=None,
             configured=[],
             cli=[],
@@ -5165,7 +5141,7 @@ class TestInfixDecl:
         s = ReplSession()
         s._roots = assemble_roots(
             invocation_root=root,
-            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
             lib_root=None,
             configured=[],
             cli=[],
@@ -5944,7 +5920,7 @@ class TestImports:
 
         s._roots = RootSet(
             roots=frozenset(),
-            stdlib_roots=frozenset({Path(__file__).resolve().parents[1] / "stdlib"}),
+            stdlib_roots=frozenset({Path(__file__).resolve().parents[1] / "packages" / "stdlib"}),
         )
         r = s.eval_entry("import something\n1")
         assert not r.ok
@@ -6821,7 +6797,7 @@ class TestExternRepl:
 
         roots = assemble_roots(
             invocation_root=root,
-            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
             lib_root=None,
             configured=[],
             cli=[],
@@ -7288,7 +7264,7 @@ class TestBareTypeEntry:
         (tmp_path / "a.agl").write_text("record Box[T](value: T)\n")
         session = open_session(
             cwd=tmp_path,
-            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
         )
         setup = session.eval_entry(f"import a\n{local_route}")
         assert setup.ok, setup.diagnostics
@@ -7304,7 +7280,7 @@ class TestBareTypeEntry:
         (tmp_path / "a.agl").write_text("record Box[T](value: T)\n")
         session = open_session(
             cwd=tmp_path,
-            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
         )
         setup = session.eval_entry("import a\nuse /a as a")
         assert setup.ok, setup.diagnostics
@@ -7369,7 +7345,7 @@ class TestBareTypeEntry:
     def test_implicit_core_import_bare_generic_type_echoes_definition(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib")
         r = s.eval_entry("Option")
         assert r.ok
         assert r.kind == "type"
@@ -7382,7 +7358,7 @@ class TestBareTypeEntry:
     def test_implicit_core_import_qualified_generic_type_echoes_definition(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+        s = open_session(stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib")
         r = s.eval_entry("std/prelude::Option")
         assert r.ok
         assert r.kind == "type"
@@ -7774,13 +7750,14 @@ class TestSessionOpen:
 
     A host (``agm repl``) calls it once, right after constructing the
     session and before printing a banner or accepting input, so a rejected
-    engine-setting override is reported before the session appears to have
-    started. The loaded library modules become the cache the first entry
-    reuses, so opening the session never doubles the standard-library
-    compile a lone first entry would otherwise perform on its own.
+    library module (a syntax, scope, type, or file-read failure) is reported
+    before the session appears to have started. The loaded library modules
+    become the cache the first entry reuses, so opening the session never
+    doubles the standard-library compile a lone first entry would otherwise
+    perform on its own.
     """
 
-    def test_open_with_no_overrides_preloads_the_default_stdlib(self) -> None:
+    def test_open_with_no_engine_seeds_preloads_the_default_stdlib(self) -> None:
         from agm.agl.modules.ids import STD_CONFIG_ID, STD_PRELUDE_ID
 
         s = ReplSession()
@@ -7797,7 +7774,7 @@ class TestSessionOpen:
     def test_open_rechecks_a_changed_cached_stdlib(self, tmp_path: Path) -> None:
         """A fresh session never receives stale static results after an edit."""
         stdlib = tmp_path / "stdlib"
-        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
 
         assert ReplSession(stdlib_root=stdlib).open() == ()
         # This second fresh session can reuse the unchanged bootstrap image.
@@ -7820,7 +7797,7 @@ class TestSessionOpen:
     ) -> None:
         """A cache hit must not bypass the loader's companion-file check."""
         stdlib = tmp_path / "stdlib"
-        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
 
         assert ReplSession(stdlib_root=stdlib).open() == ()
         (stdlib / MODULE_TREE_DIRNAME / "array.py").unlink()
@@ -7833,7 +7810,7 @@ class TestSessionOpen:
     def test_open_reports_invalid_utf8_after_a_cached_bootstrap(self, tmp_path: Path) -> None:
         """Cache validation falls back to ordinary module-load diagnostics."""
         stdlib = tmp_path / "stdlib"
-        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
 
         assert ReplSession(stdlib_root=stdlib).open() == ()
         (stdlib / MODULE_TREE_DIRNAME / "config.agl").write_bytes(b"\xff")
@@ -7848,7 +7825,7 @@ class TestSessionOpen:
         from agm.agl.modules.ids import STD_CONFIG_ID
 
         stdlib = tmp_path / "stdlib"
-        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
         config = stdlib / MODULE_TREE_DIRNAME / "config.agl"
         replacement = stdlib / MODULE_TREE_DIRNAME / "replacement.agl"
         replacement.write_text(config.read_text(encoding="utf-8"), encoding="utf-8")
@@ -7869,7 +7846,7 @@ class TestSessionOpen:
         import agm.agl.modules.loader as loader_mod
 
         stdlib = tmp_path / "stdlib"
-        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
         config = stdlib / MODULE_TREE_DIRNAME / "config.agl"
         config.write_text(
             config.read_text(encoding="utf-8").replace("\n", "\r\n"), encoding="utf-8"
@@ -7893,7 +7870,7 @@ class TestSessionOpen:
         """A cached image cannot bypass fresh module resolution ambiguity checks."""
         stdlib = tmp_path / "stdlib"
         workspace = tmp_path / "workspace"
-        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
         workspace.mkdir()
 
         assert ReplSession(stdlib_root=stdlib, cwd=workspace).open() == ()
@@ -7937,7 +7914,7 @@ class TestSessionOpen:
         import agm.agl.modules.loader as loader_mod
 
         stdlib = tmp_path / "stdlib"
-        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
         original = loader_mod.build_repl_graph
         new_module_counts: list[int] = []
 
@@ -7957,7 +7934,7 @@ class TestSessionOpen:
 
     def test_open_does_not_reuse_a_bootstrap_from_another_root(self, tmp_path: Path) -> None:
         """The selected root is part of the bootstrap image's provenance."""
-        source_stdlib = Path(__file__).resolve().parent.parent / "stdlib"
+        source_stdlib = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
         first_root = tmp_path / "first"
         second_root = tmp_path / "second"
         copytree(source_stdlib, first_root)
@@ -7993,7 +7970,7 @@ class TestSessionOpen:
                 return "bootstrap-extra"
 
         stdlib = tmp_path / "stdlib"
-        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
         original = loader_mod.build_repl_graph
         new_module_counts: list[int] = []
 
@@ -8013,31 +7990,38 @@ class TestSessionOpen:
         assert len(new_module_counts) == 2
         assert all(count > 0 for count in new_module_counts)
 
-    def test_open_does_not_reuse_a_bootstrap_when_settings_are_overridden(
-        self, tmp_path: Path
-    ) -> None:
-        """Source-level setting overrides require a freshly checked std/config."""
-        from agm.agl.setting_overrides import SettingOverride
+    def test_open_reuses_a_bootstrap_regardless_of_engine_base_seeds(self, tmp_path: Path) -> None:
+        """A typed engine seed does not touch the compiled module graph.
 
+        A seeded ``default-agent`` value is applied per entry at interpreter
+        construction, never baked into ``std/config``'s own compilation, so
+        two sessions with different seeds safely share one bootstrap image:
+        each still sees its own seed (or the declared default, unseeded),
+        never a value leaked from another session that shared the image.
+        """
         stdlib = tmp_path / "stdlib"
-        copytree(Path(__file__).resolve().parent.parent / "stdlib", stdlib)
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
         assert ReplSession(stdlib_root=stdlib).open() == ()
 
-        overridden = ReplSession(
+        seeded = ReplSession(
             stdlib_root=stdlib,
-            setting_overrides={
-                "default-agent": SettingOverride(
-                    source='AgentCommand("overridden")', origin="--default-agent"
-                )
-            },
+            engine_base={"default-agent": agent_value("AgentCommand", command="seeded")},
         )
-        assert overridden.open() == ()
-        result = overridden.eval_entry("import std/config\nstd/config::default-agent")
-
-        assert result.ok, result.diagnostics
+        assert seeded.open() == ()
+        result = seeded.eval_entry("import std/config\nstd/config::default-agent")
+        assert result.ok
         assert isinstance(result.value, RecordValue)
-        assert result.value.display_name == "Agent::AgentCommand"
-        assert result.value.fields["command"] == TextValue("overridden")
+        assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
+        assert result.value.fields["command"] == TextValue("seeded")
+
+        unseeded = ReplSession(stdlib_root=stdlib)
+        assert unseeded.open() == ()
+        default_result = unseeded.eval_entry("import std/config\nstd/config::default-agent")
+        assert default_result.ok
+        assert isinstance(default_result.value, RecordValue)
+        assert default_result.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentClaude"
+        assert default_result.value.fields["model"] == TextValue("sonnet")
+        assert default_result.value.fields["thinking"] == TextValue("medium")
 
     def test_reopened_sessions_keep_their_library_values_after_eviction(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -8059,16 +8043,16 @@ class TestSessionOpen:
             assert result.ok, result.diagnostics
             assert result.value == IntValue(value)
 
-    def test_open_applies_a_well_formed_override_before_the_first_entry(self) -> None:
-        from agm.agl.semantics.values import RecordValue, TextValue
-        from agm.agl.setting_overrides import SettingOverride
-
+    def test_open_never_rejects_a_default_agent_seed(self) -> None:
+        """``open()`` only loads and checks modules; it never constructs an
+        interpreter, so a seeded ``default-agent`` cannot be rejected here.
+        A malformed command's shell-split failure surfaces only once the
+        first entry constructs its interpreter (see
+        ``tests/test_agl_pipeline_parse_entry.py``'s
+        ``TestMalformedAgentCommandAtConstruction``).
+        """
         s = ReplSession(
-            setting_overrides={
-                "default-agent": SettingOverride(
-                    source='AgentCommand("preloaded")', origin="--default-agent"
-                )
-            }
+            engine_base={"default-agent": agent_value("AgentCommand", command="preloaded")}
         )
         assert s.open() == ()
 
@@ -8078,64 +8062,9 @@ class TestSessionOpen:
         assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert result.value.fields["command"] == TextValue("preloaded")
 
-    def test_open_rejects_an_unparseable_override_naming_its_origin(self) -> None:
-        from agm.agl.setting_overrides import SettingOverride
-
+    def test_reset_leaves_the_seed_in_force(self) -> None:
         s = ReplSession(
-            setting_overrides={
-                "default-agent": SettingOverride(source="(", origin="--default-agent")
-            }
-        )
-        diagnostics = s.open()
-        assert diagnostics
-        from agm.agl.diagnostics import format_diagnostic
-
-        assert any("--default-agent" in format_diagnostic(d) for d in diagnostics)
-        # A rejected override promotes nothing, so the session is left exactly
-        # as constructed rather than with a half-applied initial image.
-        assert s._loaded_lib_modules == {}
-        assert s._next_node_id == 0
-
-    def test_open_rejects_a_wrong_typed_override_naming_its_origin(self) -> None:
-        from agm.agl.setting_overrides import SettingOverride
-
-        s = ReplSession(
-            setting_overrides={
-                "default-agent": SettingOverride(source='"not-an-agent"', origin="--default-agent")
-            }
-        )
-        diagnostics = s.open()
-        assert diagnostics
-        from agm.agl.diagnostics import format_diagnostic
-
-        assert any("--default-agent" in format_diagnostic(d) for d in diagnostics)
-
-    def test_open_rejects_a_non_constant_override_naming_its_origin(self) -> None:
-        from agm.agl.setting_overrides import SettingOverride
-
-        s = ReplSession(
-            setting_overrides={
-                "default-agent": SettingOverride(
-                    source='AgentCommand("not " + "constant")', origin="--default-agent"
-                )
-            }
-        )
-        diagnostics = s.open()
-        assert diagnostics
-        from agm.agl.diagnostics import format_diagnostic
-
-        assert any("--default-agent" in format_diagnostic(d) for d in diagnostics)
-
-    def test_reset_leaves_the_override_in_force(self) -> None:
-        from agm.agl.semantics.values import RecordValue, TextValue
-        from agm.agl.setting_overrides import SettingOverride
-
-        s = ReplSession(
-            setting_overrides={
-                "default-agent": SettingOverride(
-                    source='AgentCommand("preloaded")', origin="--default-agent"
-                )
-            }
+            engine_base={"default-agent": agent_value("AgentCommand", command="preloaded")}
         )
         assert s.open() == ()
         assert s.eval_entry("import std/config").ok
@@ -8149,18 +8078,25 @@ class TestSessionOpen:
         assert result.value.fields["command"] == TextValue("preloaded")
 
     def test_stdlib_is_loaded_exactly_once_across_open_and_two_entries(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The initial image ``open`` builds is the cache every entry reuses.
 
         Spies on the module loader the way the ``agm exec`` guard does
-        (``test_agl_pipeline_setting_overrides.py``), but counts freshly
+        (``test_agl_pipeline_parse_entry.py``), but counts freshly
         loaded modules per call rather than call count -- ``open`` calls
         ``build_repl_graph`` too, same as an entry, so counting calls alone
         would not distinguish "loaded the stdlib" from "reused the cache".
+
+        Uses its own stdlib copy so its bootstrap cache key is guaranteed
+        fresh -- an engine seed does not disqualify the session-wide
+        bootstrap cache, so a shared default root could otherwise be served
+        from another test's cached image before ``build_repl_graph`` runs.
         """
         import agm.agl.modules.loader as loader_mod
-        from agm.agl.setting_overrides import SettingOverride
+
+        stdlib = tmp_path / "stdlib"
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
 
         original = loader_mod.build_repl_graph
         new_module_counts: list[int] = []
@@ -8174,11 +8110,8 @@ class TestSessionOpen:
         monkeypatch.setattr(loader_mod, "build_repl_graph", spy)
 
         s = ReplSession(
-            setting_overrides={
-                "default-agent": SettingOverride(
-                    source='AgentCommand("preloaded")', origin="--default-agent"
-                )
-            }
+            stdlib_root=stdlib,
+            engine_base={"default-agent": agent_value("AgentCommand", command="preloaded")},
         )
         assert s.open() == ()
         assert new_module_counts and new_module_counts[0] > 0
@@ -8188,45 +8121,25 @@ class TestSessionOpen:
 
         assert new_module_counts[1:] == [0, 0]
 
-    def test_open_rejects_a_required_override_when_std_config_never_loads(self) -> None:
-        """``--no-stdlib`` never loads ``std/config``, but a ``required`` override
-        (the default; mirrors a CLI ``--default-agent`` flag) is a request the host
-        cannot silently drop -- it still fails ``open()`` up front, rather than
-        being deferred to whichever entry, if any, first imports ``std/config``.
+    def test_default_agent_seed_is_effective_without_stdlib(self) -> None:
+        """A seeded ``default-agent`` reaches the interpreter's register even
+        when ``std/config`` never loads (``default_stdlib=False``): a typed
+        seed carries no per-key provenance and needs no loaded module to
+        take effect, so a malformed command still fails eagerly on the
+        first entry.
         """
-        from agm.agl.diagnostics import format_diagnostic
-        from agm.agl.setting_overrides import SettingOverride
-
         s = ReplSession(
             default_stdlib=False,
-            setting_overrides={
-                "default-agent": SettingOverride(
-                    source='AgentCommand("x")', origin="--default-agent"
-                )
-            },
-        )
-        diagnostics = s.open()
-        assert diagnostics
-        assert any("--default-agent" in format_diagnostic(d) for d in diagnostics)
-        assert s._loaded_lib_modules == {}
-
-    def test_open_with_non_required_override_and_no_stdlib_is_a_harmless_no_op(self) -> None:
-        """A non-``required`` override (ambient configuration, e.g.
-        ``[exec] default-agent``) is simply inert when ``std/config`` never
-        loads: ``open()`` must not fail because of it.
-        """
-        from agm.agl.setting_overrides import SettingOverride
-
-        s = ReplSession(
-            default_stdlib=False,
-            setting_overrides={
-                "default-agent": SettingOverride(
-                    source='AgentCommand("x")', origin="[exec] default-agent", required=False
-                )
+            engine_base={
+                "default-agent": agent_value("AgentCommand", command="nonexistent-bin -p 'oops")
             },
         )
         assert s.open() == ()
         assert s._loaded_lib_modules == {}
+
+        result = s.eval_entry("1 + 1")
+        assert not result.ok
+        assert result.diagnostics
 
     def test_open_reports_an_unreadable_stdlib_module_instead_of_raising(
         self, tmp_path: Path
@@ -8238,8 +8151,8 @@ class TestSessionOpen:
         tuple, the same as it already does for a syntax/scope/type error. A
         module file's own I/O failure -- invalid UTF-8 here, the same class of
         failure a permission-denied file would raise via
-        ``agm.core.fs.read_text`` -- was previously left uncaught, an
-        unhandled ``UnicodeDecodeError`` breaking the "Never raises" contract.
+        ``agm.core.fs.read_text`` -- must not surface as an unhandled
+        ``UnicodeDecodeError``, which would break the "Never raises" contract.
         """
         std_dir = tmp_path / MODULE_TREE_DIRNAME
         std_dir.mkdir()
@@ -8301,7 +8214,9 @@ class TestDeferredStdlibResolution:
             if source.is_file():
                 (std_dir / source.name).write_bytes(source.read_bytes())
         (stdlib_root / "package.toml").write_bytes(
-            (Path(__file__).resolve().parents[1] / "stdlib" / "package.toml").read_bytes()
+            (
+                Path(__file__).resolve().parents[1] / "packages" / "stdlib" / "package.toml"
+            ).read_bytes()
         )
         write_record(stdlib_root)
         write_activation_index(

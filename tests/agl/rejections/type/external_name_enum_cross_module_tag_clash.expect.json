@@ -1,0 +1,9 @@
+{
+  "module_roots": [
+    "program_modules/type/external_name_enum_cross_module_tag_clash"
+  ],
+  "diagnostic": {
+    "line": 3,
+    "message_contains": ["Circle", "Square", "dup"]
+  }
+}

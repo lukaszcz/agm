@@ -951,6 +951,8 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
         # AgL: RecursionError raised when the call-depth limit is exceeded.
         "RecursionError",
         "CastError",
+        # Raised by `std/value::parse`/`try-parse` on a malformed text argument.
+        "ValueParseError",
         "JsonParseError",
         "RangeError",
         # Reference semantics makes cyclic arrays, dicts, and records constructible;
@@ -1097,6 +1099,13 @@ BUILTIN_PRELUDE_TYPES: dict[str, Type] = {
 
 # Names of built-in prelude types (non-shadowable, like built-in exceptions).
 BUILTIN_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset(BUILTIN_PRELUDE_TYPES)
+
+# The filesystem-location alias: transparent ``text`` that hosts present as a path.
+PATH_TYPE_NAME = "path"
+
+# Every ``builtin type`` alias the host knows, with the target it must declare.
+# A name no declaration reaches still resolves to its target.
+BUILTIN_ALIAS_TARGETS: Mapping[str, Type] = {PATH_TYPE_NAME: TextType()}
 
 # Every bare name the host recognizes as a built-in exception or prelude
 # record/enum — used by ``spells_bare`` to recognize a standard-library

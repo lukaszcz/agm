@@ -1,0 +1,8 @@
+{
+  "diagnostic": {
+    "line": 8,
+    "message_contains": [
+      "parse"
+    ]
+  }
+}

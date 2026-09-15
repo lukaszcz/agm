@@ -27,7 +27,7 @@ _DEFAULT_VALIDATION_SUMMARY = "The response does not match the required output f
 
 
 class AgentCancelled(Exception):
-    """Signal that a host agent call was declined or interrupted."""
+    """Signal that a host agent call was interrupted."""
 
     def __init__(self, callee: str, reason: str, *, span: Location | None = None) -> None:
         super().__init__(f"Agent call to {callee!r} cancelled ({reason}).")

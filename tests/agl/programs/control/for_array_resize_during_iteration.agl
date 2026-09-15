@@ -2,10 +2,8 @@
 # index from the live array. Structural changes can shift or remove future
 # indices, but appended elements cannot extend the loop.
 import std/array
-import std/config
 
 program def main(mode: int) -> unit =
-  std/config::max-iters := 1
   var xs = if mode == 1 => [1] else => [1, 2, 3, 4]
   var seen: array[int] = []
   var iteration = 0

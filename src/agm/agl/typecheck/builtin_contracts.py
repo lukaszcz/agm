@@ -39,6 +39,7 @@ from agm.agl.semantics.types import (
     reroot_type,
     transform_type,
 )
+from agm.agl.zones import ParamZone
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +50,7 @@ class BuiltinMemberContract:
     type_args: tuple[Type, ...]
     fields: tuple[tuple[str, Type], ...]
     mutable_fields: frozenset[str]
+    field_kinds: tuple[ParamZone, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +65,7 @@ class BuiltinTypeContract:
     members: tuple[BuiltinMemberContract, ...]
     abstract: bool
     base: ExceptionType | None
-    field_kinds: tuple[str, ...]
+    field_kinds: tuple[ParamZone, ...]
 
 
 def contract_for_typedef(
@@ -115,6 +117,7 @@ def contract_for_typedef(
                 for name, field_type in table.record_fields(member).items()
             ),
             table.record_mutable_fields(member),
+            tuple(zone for _name, zone in table.field_kinds(member)),
         )
         for member in typedef.members
     )

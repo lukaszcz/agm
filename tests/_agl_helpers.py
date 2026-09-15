@@ -74,7 +74,6 @@ from agm.agl.semantics.types import (
     transform_type,
 )
 from agm.agl.semantics.values import RecordValue, TextValue
-from agm.agl.setting_overrides import SettingOverride
 from agm.agl.syntax import (
     AssignStmt,
     BuiltinVarDecl,
@@ -93,6 +92,7 @@ from agm.agl.syntax import (
 )
 from agm.agl.syntax.nodes import Program
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
+from agm.agl.zones import ParamZone
 
 # Declaration identities for ad-hoc test TypeDefs, distinct from real AST node
 # ids (which start at 0) and from every reserved identity (<= -2, see
@@ -176,7 +176,6 @@ def prepare_inline_command(
     entry_path: Path | None = None,
     roots: RootSet | None = None,
     default_stdlib: bool = True,
-    setting_overrides: dict[str, SettingOverride] | None = None,
 ) -> PreparedProgram:
     """Prepare test-only inline source with the ``agm exec -c`` entry transform.
 
@@ -193,7 +192,6 @@ def prepare_inline_command(
         parsed,
         roots=roots,
         default_stdlib=default_stdlib,
-        setting_overrides=setting_overrides,
     )
 
 
@@ -203,7 +201,6 @@ def run_inline_command(
     *,
     roots: RootSet | None = None,
     default_stdlib: bool = True,
-    setting_overrides: dict[str, SettingOverride] | None = None,
     **run_kwargs: object,
 ) -> RunResult:
     """Run test-only inline source through the same entry transform as ``agm exec -c``.
@@ -216,7 +213,6 @@ def run_inline_command(
         source,
         roots=roots,
         default_stdlib=default_stdlib,
-        setting_overrides=setting_overrides,
     )
     param_values = run_kwargs.pop("param_values", None)
     positional = run_kwargs.pop("positional", None)
@@ -400,6 +396,7 @@ def enum_typedef(
                 if any(param in free_type_vars(field_type) for field_type in fields.values())
             ),
             fields=tuple(fields.items()),
+            field_kinds=(ParamZone.STANDARD,) * len(fields),
             decl_node_id=next_decl_id(),
         )
         for member_name, fields in variants.items()
@@ -450,6 +447,7 @@ def record_type(
         module_id=module_id,
         type_params=type_params,
         fields=tuple(fields.items()),
+        field_kinds=(ParamZone.STANDARD,) * len(fields),
         decl_node_id=next_decl_id() if decl_id is None else decl_id,
     )
     return typedef.handle(type_args), typedef
@@ -531,7 +529,7 @@ def agent_value(variant: str, **fields: str) -> RecordValue:
     )
 
 
-REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
 
 
 def agl_roots(*paths: Path, include_stdlib: bool = True) -> RootSet:

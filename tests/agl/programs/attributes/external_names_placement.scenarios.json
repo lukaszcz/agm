@@ -1,0 +1,31 @@
+{
+  "scenarios": [
+    {
+      "name": "inline_enum_member_square",
+      "params": {
+        "variant": "square"
+      },
+      "expect": {
+        "stdout": "./work\n1\nsquare 2\n1\n2\n9\nbuild:3\n"
+      }
+    },
+    {
+      "name": "inline_enum_member_rect_with_attributed_fields",
+      "params": {
+        "variant": "rect"
+      },
+      "expect": {
+        "stdout": "./work\n1\nrect 3x4\n1\n2\n9\nbuild:3\n"
+      }
+    },
+    {
+      "name": "referenced_enum_member_late_circle",
+      "params": {
+        "variant": "circle"
+      },
+      "expect": {
+        "stdout": "./work\n1\ncircle 5\n1\n2\n9\nbuild:3\n"
+      }
+    }
+  ]
+}

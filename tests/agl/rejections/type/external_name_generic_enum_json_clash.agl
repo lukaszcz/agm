@@ -1,0 +1,5 @@
+enum Pair[T]
+  | @name("l") Left(value: T)
+  | @name("l") Right(value: T)
+
+program def main() -> unit = ()

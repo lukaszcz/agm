@@ -6,12 +6,13 @@ import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, NoReturn, TypedDict, cast
 
 import click
 from click.shell_completion import CompletionItem
 from typer.core import TyperCommand, TyperGroup, TyperOption
 
+from agm.cli_support.args import ExecArgs
 from agm.config.context import current_config_context
 from agm.core import dry_run
 
@@ -103,6 +104,38 @@ def _dry_run_help_option() -> click.Option:
     return click.Option([*parsed.opts, *parsed.secondary_opts], is_flag=True, help=parsed.help)
 
 
+def registered_run_options(ctx: click.Context) -> tuple[TyperOption, ...]:
+    """Return ``agm exec``'s run-time options, which a registered command parses too.
+
+    They are ``agm exec``'s own option objects, taken from the ``agm`` group at
+    the root of *ctx*, so both commands spell, parse, complete, and document
+    them identically.
+    """
+    from agm.cli_support.program_options import REGISTERED_RUN_FLAGS
+
+    exec_command = cast(click.Group, ctx.find_root().command).commands["exec"]
+    return tuple(
+        param
+        for param in exec_command.params
+        if isinstance(param, TyperOption)
+        and {*param.opts, *param.secondary_opts} <= REGISTERED_RUN_FLAGS
+    )
+
+
+class _RunOptionValues(TypedDict):
+    """The ``ExecArgs`` fields :func:`registered_run_options` fill, keyed by option name."""
+
+    strict_json: bool | None
+    max_call_depth: int | None
+    default_agent: str | None
+    log_file: str | None
+    no_log: bool
+    log: bool
+    timeout: str | None
+    no_timeout: bool
+    no_log_file: bool
+
+
 def _help_paragraphs(*parts: str | None) -> str:
     """Join distinct authored help blocks in presentation order."""
     return "\n\n".join({part: None for part in parts if part})
@@ -114,6 +147,7 @@ def registered_command_help(
     *,
     program: "ProgramDeclInfo | None",
     command: "ProgramCommand | None",
+    run_options: Sequence[click.Parameter],
 ) -> str:
     """Render help for one package-registered command.
 
@@ -129,8 +163,9 @@ def registered_command_help(
     The help is the referenced program's own command help, spelled for the
     command the reader invokes rather than the ``program def`` behind it: its
     usage line names ``agm <path>`` and the program's positional slots, its
-    options are the program's own plus ``--dry-run``. The manifest description
-    introduces the source ``@doc`` and any additional manifest help.
+    options are the program's own plus *run_options* and ``--dry-run``. The
+    manifest description introduces the source ``@doc`` and any additional
+    manifest help.
     """
     from agm.cli_support.program_options import render_program_help
 
@@ -141,7 +176,7 @@ def registered_command_help(
         command,
         program_name=f"agm {path_name}",
         description=description or "Run the registered AgL program.",
-        extra_options=(_dry_run_help_option(),),
+        extra_options=(*run_options, _dry_run_help_option()),
     )
 
 
@@ -174,6 +209,7 @@ def print_registered_command_help(command_path: Sequence[str]) -> bool:
             registration,
             program=program,
             command=program_command_for(program, REGISTERED_RESERVED_FLAGS, params),
+            run_options=registered_run_options(click.get_current_context()),
         ),
         end="",
     )
@@ -271,16 +307,26 @@ def resolve_registered_command(
 
 
 class RegisteredProgramCommand(TyperCommand):
-    """Click command that gives all remaining arguments to one AgL program."""
+    """Click command that runs one AgL program with *run_options* and its remaining arguments.
 
-    def __init__(self, path_name: str, registration: CommandRegistration) -> None:
+    *run_options* are :func:`registered_run_options`.
+    """
+
+    def __init__(
+        self,
+        path_name: str,
+        registration: CommandRegistration,
+        run_options: Sequence[TyperOption],
+    ) -> None:
         context_settings: dict[str, bool | list[str]] = {
             "allow_extra_args": True,
             "ignore_unknown_options": True,
             "help_option_names": [],
         }
         super().__init__(name="registered-program", context_settings=context_settings)
+        self.params.extend(run_options)
         self.params.append(_dry_run_option())
+        self._run_options = tuple(run_options)
         self._path_name = path_name
         self._registration = registration
         assert registration.program is not None
@@ -342,6 +388,12 @@ class RegisteredProgramCommand(TyperCommand):
         )
         return program, artifacts[0] if artifacts else None
 
+    def _discover_program(self) -> "ProgramDeclInfo | None":
+        """Discover the referenced ``program def`` declaration, or ``None``."""
+        from agm.commands.exec_program import registered_program_declaration
+
+        return registered_program_declaration(self._program, self._registration.package)
+
     def invoke(self, ctx: click.Context) -> None:
         from agm.cli_support.program_options import (
             REGISTERED_RESERVED_FLAGS,
@@ -350,51 +402,55 @@ class RegisteredProgramCommand(TyperCommand):
             program_command_for,
             program_help_requested,
         )
+        from agm.cli_support.run_options import exec_option_conflict
 
         metadata = cast(dict[str, object], ctx.meta)
+        cached_program = cast("ProgramDeclInfo | None", metadata.pop("registered_program", None))
+
+        def program() -> "ProgramDeclInfo | None":
+            return cached_program if cached_program is not None else self._discover_program()
+
         if contains_help_flag(ctx.args):
             # This is the first point at which an unknown command has been proven
             # to be registered, so AgL remains unloaded for all builtin commands.
-            cached_program = metadata.pop("registered_program", None)
             cached_pipeline = metadata.pop("registered_pipeline_cache", None)
-            program: ProgramDeclInfo | None
-            pipeline_cache: ProgramDiscoveryArtifacts | None
+            declaration: ProgramDeclInfo | None
             if cached_program is not None:
-                program = cast("ProgramDeclInfo", cached_program)
+                declaration = cached_program
                 pipeline_cache = cast("ProgramDiscoveryArtifacts | None", cached_pipeline)
             else:
-                program, pipeline_cache = self._discover_program_with_artifacts()
+                declaration, pipeline_cache = self._discover_program_with_artifacts()
             params = (
                 ()
-                if program is None or pipeline_cache is None
-                else pipeline_cache.discovery.params_for(program)
+                if declaration is None or pipeline_cache is None
+                else pipeline_cache.discovery.params_for(declaration)
             )
-            command = program_command_for(program, REGISTERED_RESERVED_FLAGS, params)
+            command = program_command_for(declaration, REGISTERED_RESERVED_FLAGS, params)
             if program_help_requested(ctx.args, command):
-                print(
-                    self._help(program=program, command=command),
-                    end="",
-                )
+                print(self._help(program=declaration, command=command), end="")
                 return
+        exec_args = ExecArgs(
+            file=self._program,
+            argument_tokens=list(ctx.args),
+            **cast(_RunOptionValues, ctx.params),
+        )
+        conflict = exec_option_conflict(exec_args)
+        if conflict is not None:
+            self._usage_error(conflict, program())
         from agm.commands.exec_program import RegisteredProgramUsageError, run_registered
 
         try:
-            cached_pipeline = metadata.pop("registered_pipeline_cache", None)
-            if cached_pipeline is None:
-                run_registered(
-                    self._program,
-                    list(ctx.args),
-                    package=self._registration.package,
-                    command_path=self._path_name,
-                )
-            else:
-                run_registered(
-                    self._program,
-                    list(ctx.args),
-                    package=self._registration.package,
-                    command_path=self._path_name,
-                    pipeline_cache=cast("ProgramDiscoveryArtifacts", cached_pipeline),
-                )
+            run_registered(
+                self._program,
+                exec_args.argument_tokens,
+                args=exec_args,
+                package=self._registration.package,
+                command_path=self._path_name,
+                pipeline_cache=cast(
+                    "ProgramDiscoveryArtifacts | None",
+                    metadata.pop("registered_pipeline_cache", None),
+                ),
+            )
         except ProgramHelpRequested as exc:
             # A help request Click recognized only while parsing the program's
             # own command — a flag bundled into a short group of its own. The
@@ -402,50 +458,92 @@ class RegisteredProgramCommand(TyperCommand):
             # rendered from that rather than from a second build.
             print(self._help(program=exc.program, command=exc.command), end="")
         except RegisteredProgramUsageError as exc:
-            print(f"error: {exc.message}", file=sys.stderr)
-            print(file=sys.stderr)
-            print(
-                self._help(
-                    program=exc.program,
-                    command=(
-                        exc.command
-                        if exc.command is not None
-                        else program_command_for(exc.program, REGISTERED_RESERVED_FLAGS)
-                    ),
-                ),
-                end="",
-                file=sys.stderr,
-            )
-            raise SystemExit(1) from exc
+            self._usage_error(exc.message, exc.program, exc.command)
+
+    def _usage_error(
+        self,
+        message: str,
+        program: "ProgramDeclInfo | None",
+        command: "ProgramCommand | None" = None,
+    ) -> NoReturn:
+        """Report *message* with this command's help on stderr, and exit 1."""
+        from agm.cli_support.program_options import REGISTERED_RESERVED_FLAGS, program_command_for
+
+        print(f"error: {message}", file=sys.stderr)
+        print(file=sys.stderr)
+        print(
+            self._help(
+                program=program,
+                command=command or program_command_for(program, REGISTERED_RESERVED_FLAGS),
+            ),
+            end="",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
     def _help(self, *, program: "ProgramDeclInfo | None", command: "ProgramCommand | None") -> str:
         """Render this registered command's help for an already-discovered program."""
         return registered_command_help(
-            self._path_name, self._registration, program=program, command=command
+            self._path_name,
+            self._registration,
+            program=program,
+            command=command,
+            run_options=self._run_options,
         )
+
+
+def _command_path(ctx: click.Context) -> list[str]:
+    """Return the words a group context left unparsed: a registered command path and its tail.
+
+    Click splits a group's tail into ``_protected_args`` (the first word, the
+    one a subcommand name would come from) and ``args`` (the rest), and
+    exposes no undeprecated accessor for the pair: ``protected_args`` warns
+    and is slated for removal, while ``args`` alone drops the very word that
+    starts a registered command path. Click's own ``shell_completion`` reads
+    the same attribute for the same reason.
+    """
+    return [*ctx._protected_args, *ctx.args]
 
 
 class RegisteredCommandGroup(TyperGroup):
     """Root group that falls back to package registrations after builtins miss."""
 
+    def get_params(self, ctx: click.Context) -> list[click.Parameter]:
+        """Return the group's parameters, plus completion-only registered program value options.
+
+        Completion leaves a registered command path unresolved on this
+        group's context, so the options its program's flag values complete
+        through are added here, and only while completing.
+        """
+        params = super().get_params(ctx)
+        command_path = _command_path(ctx)
+        if not ctx.resilient_parsing or not command_path:
+            return params
+        from agm.completion import registered_command_value_options
+
+        return [*params, *registered_command_value_options(command_path, ctx)]
+
     def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem]:
-        """Extend root completion with the next registered-command path segment."""
+        """Extend root completion with the next registered-command path segment.
+
+        Past a registered program's path, a non-option token completes that
+        program's next positional slot.
+        """
         from agm.completion import registered_command_completion
 
-        # Click splits a group's tail into ``_protected_args`` (the first word,
-        # the one a subcommand name would come from) and ``args`` (the rest),
-        # and exposes no undeprecated accessor for the pair: ``protected_args``
-        # warns and is slated for removal, while ``args`` alone drops the very
-        # word that starts a registered command path. Click's own
-        # ``shell_completion`` reads the same attribute for the same reason.
-        command_path = [*ctx._protected_args, *ctx.args]
+        command_path = _command_path(ctx)
         registered_segments, is_registered = registered_command_completion(command_path, incomplete)
         if command_path and is_registered:
             if incomplete.startswith("-"):
                 from agm.completion import registered_command_param_completion
 
-                return registered_command_param_completion(command_path, incomplete)
-            return [CompletionItem(segment) for segment in registered_segments]
+                return registered_command_param_completion(command_path, incomplete, ctx)
+            from agm.completion import registered_command_positional_completion
+
+            return [
+                *(CompletionItem(segment) for segment in registered_segments),
+                *registered_command_positional_completion(command_path, incomplete, ctx),
+            ]
         items_by_value: dict[str, CompletionItem] = {
             cast(str, item.value): item for item in super().shell_complete(ctx, incomplete)
         }
@@ -477,7 +575,9 @@ class RegisteredCommandGroup(TyperGroup):
             command = (
                 RegisteredHelpCommand(group_help)
                 if group_help is not None
-                else RegisteredProgramCommand(path_name, resolution.registration)
+                else RegisteredProgramCommand(
+                    path_name, resolution.registration, registered_run_options(ctx)
+                )
             )
             return (
                 path_name,

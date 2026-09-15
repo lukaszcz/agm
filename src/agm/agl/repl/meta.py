@@ -7,7 +7,7 @@ character.
 
 The meta-command set is implemented here: ``:help``, ``:quit`` /
 ``:exit``, ``:reset``, ``:type``, ``:bindings`` / ``:env``,
-``:set``, ``:agent``, ``:load``, ``:save``, plus a clean error for
+``:set``, ``:load``, ``:save``, plus a clean error for
 an unknown ``:command``.  The dispatcher is a registry/table (``_COMMANDS``), so
 the command set is a single source of truth shared by the dispatcher and the
 completer.
@@ -22,11 +22,10 @@ registered command is offered in tab-completion for free.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.theme_selection import THEME_NAMES
 
 if TYPE_CHECKING:
@@ -40,8 +39,6 @@ class MetaContext:
     ``session``     — the live :class:`ReplSession` (handlers query/mutate it).
     ``echo``        — whether successful entries are echoed; the loop reads this
                       live, so ``:set echo on|off`` toggles it by mutation.
-    ``agent_mode``  — the shared, mutable agent-call mode holder read and mutated
-                      by ``:agent`` and the confirming wrapper.
     ``quit``        — set ``True`` by a handler to ask the loop to exit.
     ``theme``       — current highlight theme name; mutated by ``:theme`` so the
                       loop can update the ``PromptSession`` style live.
@@ -49,7 +46,6 @@ class MetaContext:
 
     session: "ReplSession"
     echo: bool = True
-    agent_mode: AgentMode = field(default_factory=AgentMode)
     quit: bool = False
     theme: str = "auto"
 
@@ -162,23 +158,6 @@ def _try_set_echo(arg: str, ctx: MetaContext) -> MetaOutcome | None:
     return MetaOutcome(text="usage: :set echo on|off")
 
 
-def _handle_agent(arg: str, ctx: MetaContext) -> MetaOutcome:
-    """``:agent confirm|auto`` — set the agent-call mode; no arg reports it.
-
-    The mode is recorded in the shared :class:`AgentMode` holder so the console's
-    confirming wrapper can read it; it has no observable effect until then.
-    """
-    if not arg:
-        return MetaOutcome(text=f"Agent-call mode: {ctx.agent_mode.mode}")
-    if arg == "confirm":
-        ctx.agent_mode.mode = "confirm"
-        return MetaOutcome(text="Agent-call mode: confirm")
-    if arg == "auto":
-        ctx.agent_mode.mode = "auto"
-        return MetaOutcome(text="Agent-call mode: auto")
-    return MetaOutcome(text="usage: :agent confirm|auto")
-
-
 def _handle_load(arg: str, ctx: MetaContext) -> MetaOutcome:
     """``:load FILE`` — run a file's statements into the session, one per entry.
 
@@ -281,12 +260,6 @@ _COMMANDS: list[MetaCommand] = [
         usage=":set echo on|off",
         summary="Toggle result echoing.",
         handler=_handle_set,
-    ),
-    MetaCommand(
-        names=("agent",),
-        usage=":agent confirm|auto",
-        summary="Switch the agent-call mode (or report it with no arg).",
-        handler=_handle_agent,
     ),
     MetaCommand(
         names=("load",),

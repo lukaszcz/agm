@@ -1,0 +1,4 @@
+record Box
+  @json-name("$case") value: int
+
+program def main() -> unit = print Box(value = 1).value

@@ -70,6 +70,8 @@ from agm.agl.ir.contracts import (
     EnumDecode,
     EnumEncode,
     ExceptionEncode,
+    FieldDecode,
+    FieldEncode,
     RecordDecode,
     RecordEncode,
     RefDecode,
@@ -497,8 +499,8 @@ def _walk_encode_schema(encode: EncodeSchema, walk: _EncodeWalk, parameter_count
             if desc.kind is not NominalKind.RECORD:
                 raise InvalidIrError(f"RecordEncode references non-record nominal {nominal!r}")
             _check_nominal_fields(fields, desc.fields, "RecordEncode")
-            for _fname, fschema in fields:
-                _walk_encode_schema(fschema, walk, parameter_count)
+            for fenc in fields:
+                _walk_encode_schema(fenc.schema, walk, parameter_count)
         case ExceptionEncode(nominal=nominal, fields=fields):
             _check_nominal_in_table(nominal, ctx)
             desc = ctx.program.nominals[nominal]
@@ -507,8 +509,8 @@ def _walk_encode_schema(encode: EncodeSchema, walk: _EncodeWalk, parameter_count
                     f"ExceptionEncode references non-exception nominal {nominal!r}"
                 )
             _check_nominal_fields(fields, desc.fields, "ExceptionEncode")
-            for _fname, fschema in fields:
-                _walk_encode_schema(fschema, walk, parameter_count)
+            for fenc in fields:
+                _walk_encode_schema(fenc.schema, walk, parameter_count)
         case EnumEncode(nominal=nominal, variants=variants):
             _check_nominal_in_table(nominal, ctx)
             desc = ctx.program.nominals[nominal]
@@ -523,17 +525,19 @@ def _walk_encode_schema(encode: EncodeSchema, walk: _EncodeWalk, parameter_count
                         f" enum nominal {nominal!r}"
                     )
                 _check_nominal_fields(variant.fields, expected.fields, "EnumEncode variant")
-                for _fname, fschema in variant.fields:
-                    _walk_encode_schema(fschema, walk, parameter_count)
+                for fenc in variant.fields:
+                    _walk_encode_schema(fenc.schema, walk, parameter_count)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
 
 def _check_nominal_fields(
-    fields: "tuple[tuple[str, object], ...]", expected: tuple[str, ...], owner: str
+    fields: "tuple[FieldDecode, ...] | tuple[FieldEncode, ...]",
+    expected: tuple[str, ...],
+    owner: str,
 ) -> None:
-    """Require an encoder or decoder to select exactly its linked declaration's fields."""
-    if tuple(name for name, _schema in fields) != expected:
+    """Require an encoder or decoder to select exactly its linked declaration's own fields."""
+    if tuple(f.name for f in fields) != expected:
         raise InvalidIrError(f"{owner} fields disagree with its nominal descriptor")
 
 
@@ -556,7 +560,7 @@ def _walk_decode_schema(
             _walk_decode_schema(elem, defs, ctx)
         case DictDecode(value=value_schema):
             _walk_decode_schema(value_schema, defs, ctx)
-        case RecordDecode(nominal=nominal, display_name=display_name, fields=fields):
+        case RecordDecode(nominal=nominal, display_name=display_name, fields=fields, name=name):
             _check_nominal_in_table(nominal, ctx)
             record = ctx.program.nominals[nominal]
             if record.kind is not NominalKind.RECORD:
@@ -565,16 +569,20 @@ def _walk_decode_schema(
                 raise InvalidIrError(
                     f"RecordDecode display name disagrees with nominal {nominal!r}"
                 )
+            if name != record.declared_name:
+                raise InvalidIrError(f"RecordDecode name disagrees with nominal {nominal!r}")
             _check_nominal_fields(fields, record.fields, "RecordDecode")
-            for _fname, fschema in fields:
-                _walk_decode_schema(fschema, defs, ctx)
-        case EnumDecode(nominal=nominal, display_name=display_name, variants=variants):
+            for rdec in fields:
+                _walk_decode_schema(rdec.schema, defs, ctx)
+        case EnumDecode(nominal=nominal, display_name=display_name, variants=variants, name=name):
             _check_nominal_in_table(nominal, ctx)
             enum = ctx.program.nominals[nominal]
             if enum.kind is not NominalKind.ENUM:
                 raise InvalidIrError(f"EnumDecode references non-enum nominal {nominal!r}")
             if display_name != enum.display_name or len(variants) != len(enum.variants):
                 raise InvalidIrError(f"EnumDecode disagrees with enum nominal {nominal!r}")
+            if name != enum.declared_name:
+                raise InvalidIrError(f"EnumDecode name disagrees with nominal {nominal!r}")
             for variant, expected in zip(variants, enum.variants, strict=True):
                 if variant.name != expected.name or variant.nominal != expected.member:
                     raise InvalidIrError(
@@ -588,9 +596,14 @@ def _walk_decode_schema(
                         f"EnumDecode variant {variant.name!r} display name disagrees with"
                         f" member nominal {variant.nominal!r}"
                     )
+                if variant.name != member.declared_name:
+                    raise InvalidIrError(
+                        f"EnumDecode variant {variant.name!r} name disagrees with"
+                        f" member nominal {variant.nominal!r}"
+                    )
                 _check_nominal_fields(variant.fields, expected.fields, "EnumDecode variant")
-                for _fname, fschema in variant.fields:
-                    _walk_decode_schema(fschema, defs, ctx)
+                for vdec in variant.fields:
+                    _walk_decode_schema(vdec.schema, defs, ctx)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
@@ -1597,6 +1610,7 @@ def validate_ir(program: ExecutableProgram, *, deep: bool = True) -> None:
                     f"{nominal!r}"
                 )
             field_names: set[str] = set()
+            json_names: set[str] = set()
             for field_encode in field_encodes:
                 if field_encode.field_name in field_names:
                     raise InvalidIrError(
@@ -1608,7 +1622,22 @@ def validate_ir(program: ExecutableProgram, *, deep: bool = True) -> None:
                         "exception field encodes reference unknown field "
                         f"{field_encode.field_name!r} of nominal {nominal!r}"
                     )
-                _check_encode_nominals(field_encode.plan.root, field_encode.plan.definitions, ctx)
+                if field_encode.json_name in json_names:
+                    raise InvalidIrError(
+                        "exception field encodes duplicate JSON name "
+                        f"{field_encode.json_name!r} of nominal {nominal!r}"
+                    )
+                json_names.add(field_encode.json_name)
+                if field_encode.plan is not None:
+                    _check_encode_nominals(
+                        field_encode.plan.root, field_encode.plan.definitions, ctx
+                    )
+            missing_fields = set(descriptor.fields) - field_names
+            if missing_fields:
+                raise InvalidIrError(
+                    f"exception field encodes for nominal {nominal!r} omit fields "
+                    f"{sorted(missing_fields)!r}"
+                )
 
     for _module_id, em in program.modules.items():
         for node in em.initializers:

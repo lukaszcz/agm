@@ -25,6 +25,8 @@ from agm.agl.ir.contracts import (
     EnumDecode,
     EnumEncode,
     ExceptionEncode,
+    FieldDecode,
+    FieldEncode,
     RecordDecode,
     RecordEncode,
     RefDecode,
@@ -50,6 +52,7 @@ from agm.agl.semantics.values import (
     RecordValue,
     TextValue,
 )
+from agm.agl.zones import ParamZone
 from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, inline_main_items, lower_inline_ir
 
 
@@ -514,27 +517,65 @@ def test_decode_scalar_success_branches() -> None:
         (DictDecode(ScalarDecode(ScalarKind.INT)), 5, "Expected object, got int"),
         (DictDecode(ScalarDecode(ScalarKind.INT)), {1: 2}, "Dict key must be string, got int"),
         (
-            RecordDecode(_FOO, "Foo", (("a", ScalarDecode(ScalarKind.INT)),)),
+            RecordDecode(
+                _FOO,
+                "Foo",
+                (
+                    FieldDecode(
+                        "a", "a", ScalarDecode(ScalarKind.INT), zone=ParamZone.STANDARD, alias=None
+                    ),
+                ),
+                "Foo",
+                alias=None,
+            ),
             5,
             "Expected object for record, got int",
         ),
         (
-            RecordDecode(_FOO, "Foo", (("a", ScalarDecode(ScalarKind.INT)),)),
+            RecordDecode(
+                _FOO,
+                "Foo",
+                (
+                    FieldDecode(
+                        "a", "a", ScalarDecode(ScalarKind.INT), zone=ParamZone.STANDARD, alias=None
+                    ),
+                ),
+                "Foo",
+                alias=None,
+            ),
             {},
             "Missing field 'a'",
         ),
         (
-            EnumDecode(_RED, "Color", (VariantDecode("Red", NominalId(999), "Red", ()),)),
+            EnumDecode(
+                _RED,
+                "Color",
+                (VariantDecode("Red", "Red", NominalId(999), "Red", (), alias=None),),
+                "Color",
+                host_agent=False,
+            ),
             5,
             "Expected object for enum, got int",
         ),
         (
-            EnumDecode(_RED, "Color", (VariantDecode("Red", NominalId(999), "Red", ()),)),
+            EnumDecode(
+                _RED,
+                "Color",
+                (VariantDecode("Red", "Red", NominalId(999), "Red", (), alias=None),),
+                "Color",
+                host_agent=False,
+            ),
             {},
             "Enum object must have a string '$case' field",
         ),
         (
-            EnumDecode(_RED, "Color", (VariantDecode("Red", NominalId(999), "Red", ()),)),
+            EnumDecode(
+                _RED,
+                "Color",
+                (VariantDecode("Red", "Red", NominalId(999), "Red", (), alias=None),),
+                "Color",
+                host_agent=False,
+            ),
             {"$case": "Purple"},
             "Unknown enum variant 'Purple' for 'Color'. Valid variants: ['Red']",
         ),
@@ -544,9 +585,24 @@ def test_decode_scalar_success_branches() -> None:
                 "Shape",
                 (
                     VariantDecode(
-                        "Circle", NominalId(999), "Circle", (("r", ScalarDecode(ScalarKind.INT)),)
+                        "Circle",
+                        "Circle",
+                        NominalId(999),
+                        "Circle",
+                        (
+                            FieldDecode(
+                                "r",
+                                "r",
+                                ScalarDecode(ScalarKind.INT),
+                                zone=ParamZone.STANDARD,
+                                alias=None,
+                            ),
+                        ),
+                        alias=None,
                     ),
                 ),
+                "Shape",
+                host_agent=False,
             ),
             {"$case": "Circle"},
             "Enum variant 'Circle' is missing field 'r'",
@@ -559,10 +615,29 @@ def test_decode_error_branches(schema, obj, message: str) -> None:
 
 
 def test_decode_nested_record_and_enum_success() -> None:
-    rec = _decode(RecordDecode(_FOO, "Foo", (("a", ScalarDecode(ScalarKind.INT)),)), {"a": 3})
+    rec = _decode(
+        RecordDecode(
+            _FOO,
+            "Foo",
+            (
+                FieldDecode(
+                    "a", "a", ScalarDecode(ScalarKind.INT), zone=ParamZone.STANDARD, alias=None
+                ),
+            ),
+            "Foo",
+            alias=None,
+        ),
+        {"a": 3},
+    )
     assert rec == RecordValue(nominal=_FOO, display_name="Foo", fields={"a": IntValue(3)})
     enum_val = _decode(
-        EnumDecode(_RED, "Color", (VariantDecode("Red", NominalId(999), "Color::Red", ()),)),
+        EnumDecode(
+            _RED,
+            "Color",
+            (VariantDecode("Red", "Red", NominalId(999), "Color::Red", (), alias=None),),
+            "Color",
+            host_agent=False,
+        ),
         {"$case": "Red"},
     )
     assert enum_val == RecordValue(nominal=NominalId(999), display_name="Color::Red", fields={})
@@ -577,11 +652,23 @@ def test_decode_nested_record_and_enum_success() -> None:
             (
                 VariantDecode(
                     "Circle",
+                    "Circle",
                     NominalId(999),
                     "Shape::Circle",
-                    (("r", ScalarDecode(ScalarKind.INT)),),
+                    (
+                        FieldDecode(
+                            "r",
+                            "r",
+                            ScalarDecode(ScalarKind.INT),
+                            zone=ParamZone.STANDARD,
+                            alias=None,
+                        ),
+                    ),
+                    alias=None,
                 ),
             ),
+            "Shape",
+            host_agent=False,
         ),
         {"$case": "Circle", "r": 5},
     )
@@ -794,11 +881,18 @@ def test_validate_rejects_malformed_encode_nominal_shapes() -> None:
         ),
     }
     bad_encodes = (
-        RecordEncode(exception, (("field", ScalarEncode()),)),
-        ExceptionEncode(record, (("field", ScalarEncode()),)),
+        RecordEncode(exception, (FieldEncode("field", "field", ScalarEncode()),)),
+        ExceptionEncode(record, (FieldEncode("field", "field", ScalarEncode()),)),
         EnumEncode(record, ()),
         EnumEncode(enum, ()),
-        EnumEncode(enum, (VariantEncode("Bad", record, (("field", ScalarEncode()),)),)),
+        EnumEncode(
+            enum,
+            (
+                VariantEncode(
+                    "Bad", "Bad", record, (FieldEncode("field", "field", ScalarEncode()),)
+                ),
+            ),
+        ),
         RecordEncode(record, ()),
     )
     for encode in bad_encodes:
@@ -830,8 +924,13 @@ def test_validate_accepts_recursive_to_json_encode_plan() -> None:
                 EnumEncode(
                     tree,
                     (
-                        VariantEncode("Leaf", NominalId(5), ()),
-                        VariantEncode("Node", NominalId(6), (("child", RefEncode("Tree")),)),
+                        VariantEncode("Leaf", "Leaf", NominalId(5), ()),
+                        VariantEncode(
+                            "Node",
+                            "Node",
+                            NominalId(6),
+                            (FieldEncode("child", "child", RefEncode("Tree")),),
+                        ),
                     ),
                 ),
             ),
@@ -882,9 +981,16 @@ def test_validate_accepts_a_parameterized_to_json_encode_plan() -> None:
             EncodeDefinition(
                 "Box",
                 1,
-                RecordEncode(box, (("item", RefEncode("Inner", (TypeParameterEncode(0),))),)),
+                RecordEncode(
+                    box,
+                    (FieldEncode("item", "item", RefEncode("Inner", (TypeParameterEncode(0),))),),
+                ),
             ),
-            EncodeDefinition("Inner", 1, RecordEncode(inner, (("value", TypeParameterEncode(0)),))),
+            EncodeDefinition(
+                "Inner",
+                1,
+                RecordEncode(inner, (FieldEncode("value", "value", TypeParameterEncode(0)),)),
+            ),
         ),
     )
     program = _convert_program(recipe)
@@ -945,7 +1051,14 @@ def test_run_error_encodes_attached_nominal_plan_without_display_name_inspection
     plan = EncodePlan(
         EnumEncode(
             agent,
-            (VariantEncode("AgentCommand", command, (("command", ScalarEncode()),)),),
+            (
+                VariantEncode(
+                    "AgentCommand",
+                    "AgentCommand",
+                    command,
+                    (FieldEncode("command", "command", ScalarEncode()),),
+                ),
+            ),
         )
     )
     error = exception_value_to_run_error(
@@ -957,10 +1070,13 @@ def test_run_error_encodes_attached_nominal_plan_without_display_name_inspection
                 "agent": RecordValue(command, "not-a-tag", {"command": TextValue("worker")}),
             },
         ),
-        exception_field_encodes={NominalId(3): (ExceptionFieldEncode("agent", plan),)},
+        exception_field_encodes={
+            NominalId(3): (ExceptionFieldEncode("agent", "agent-payload", plan),)
+        },
     )
 
-    assert error.fields["agent"] == {"$case": "AgentCommand", "command": "worker"}
+    assert error.fields["agent-payload"] == {"$case": "AgentCommand", "command": "worker"}
+    assert "agent" not in error.fields
 
 
 @pytest.mark.parametrize(
@@ -998,12 +1114,19 @@ def test_validate_rejects_invalid_exception_field_encode_metadata() -> None:
         nominal, ENTRY_ID, (), "Problem", NominalKind.EXCEPTION, ("message", "choice")
     )
     bad_field_encodes = (
-        (ExceptionFieldEncode("missing", EncodePlan(ScalarEncode())),),
+        (ExceptionFieldEncode("missing", "missing", EncodePlan(ScalarEncode())),),
         (
-            ExceptionFieldEncode("choice", EncodePlan(ScalarEncode())),
-            ExceptionFieldEncode("choice", EncodePlan(ScalarEncode())),
+            ExceptionFieldEncode("choice", "choice", EncodePlan(ScalarEncode())),
+            ExceptionFieldEncode("choice", "choice", EncodePlan(ScalarEncode())),
         ),
-        (ExceptionFieldEncode("choice", EncodePlan(RefEncode("missing"))),),
+        (ExceptionFieldEncode("choice", "choice", EncodePlan(RefEncode("missing"))),),
+        # Covers "message" but omits the descriptor's other field "choice" entirely.
+        (ExceptionFieldEncode("message", "message", EncodePlan(ScalarEncode())),),
+        # Distinct fields collapsed onto the same JSON name.
+        (
+            ExceptionFieldEncode("message", "same", EncodePlan(ScalarEncode())),
+            ExceptionFieldEncode("choice", "same", EncodePlan(ScalarEncode())),
+        ),
     )
     for field_encodes in bad_field_encodes:
         program.exception_field_encodes[nominal] = field_encodes
@@ -1021,7 +1144,7 @@ def test_validate_rejects_decode_with_unregistered_nominal() -> None:
         target_label="Ghost",
         json_schema="{}",
         decode=ArrayDecode(
-            RecordDecode(NominalId(4), "Ghost", ()),
+            RecordDecode(NominalId(4), "Ghost", (), "Ghost", alias=None),
         ),
     )
     with pytest.raises(InvalidIrError, match="not in program.nominals"):
@@ -1032,12 +1155,26 @@ def test_validate_rejects_decode_with_unregistered_nominal() -> None:
     ("decode", "descriptor", "error"),
     (
         (
-            RecordDecode(NominalId(10), "Tree", ()),
+            RecordDecode(NominalId(10), "Tree", (), "Tree", alias=None),
             NominalDescriptor(NominalId(10), ENTRY_ID, (), "Tree", NominalKind.ENUM),
             "non-record nominal",
         ),
         (
-            RecordDecode(NominalId(10), "Record", (("wrong", ScalarDecode(ScalarKind.INT)),)),
+            RecordDecode(
+                NominalId(10),
+                "Record",
+                (
+                    FieldDecode(
+                        "wrong",
+                        "wrong",
+                        ScalarDecode(ScalarKind.INT),
+                        zone=ParamZone.STANDARD,
+                        alias=None,
+                    ),
+                ),
+                "Record",
+                alias=None,
+            ),
             NominalDescriptor(
                 NominalId(10),
                 ENTRY_ID,
@@ -1049,7 +1186,21 @@ def test_validate_rejects_decode_with_unregistered_nominal() -> None:
             "fields disagree",
         ),
         (
-            RecordDecode(NominalId(10), "Wrong", (("value", ScalarDecode(ScalarKind.INT)),)),
+            RecordDecode(
+                NominalId(10),
+                "Wrong",
+                (
+                    FieldDecode(
+                        "value",
+                        "value",
+                        ScalarDecode(ScalarKind.INT),
+                        zone=ParamZone.STANDARD,
+                        alias=None,
+                    ),
+                ),
+                "Wrong",
+                alias=None,
+            ),
             NominalDescriptor(
                 NominalId(10),
                 ENTRY_ID,
@@ -1059,6 +1210,32 @@ def test_validate_rejects_decode_with_unregistered_nominal() -> None:
                 ("value",),
             ),
             "display name disagrees",
+        ),
+        (
+            RecordDecode(
+                NominalId(10),
+                "Record",
+                (
+                    FieldDecode(
+                        "value",
+                        "value",
+                        ScalarDecode(ScalarKind.INT),
+                        zone=ParamZone.STANDARD,
+                        alias=None,
+                    ),
+                ),
+                "Wrong",
+                alias=None,
+            ),
+            NominalDescriptor(
+                NominalId(10),
+                ENTRY_ID,
+                (),
+                "Record",
+                NominalKind.RECORD,
+                ("value",),
+            ),
+            "name disagrees",
         ),
     ),
 )
@@ -1085,11 +1262,24 @@ def test_validate_rejects_record_decode_that_disagrees_with_linked_record(
 @pytest.mark.parametrize(
     "variant",
     (
-        VariantDecode("Leaf", NominalId(12), "Tree::Leaf", ()),
-        VariantDecode("Branch", NominalId(11), "Tree::Leaf", ()),
-        VariantDecode("Leaf", NominalId(11), "Wrong::Leaf", ()),
+        VariantDecode("Leaf", "Leaf", NominalId(12), "Tree::Leaf", (), alias=None),
+        VariantDecode("Branch", "Branch", NominalId(11), "Tree::Leaf", (), alias=None),
+        VariantDecode("Leaf", "Leaf", NominalId(11), "Wrong::Leaf", (), alias=None),
         VariantDecode(
-            "Leaf", NominalId(11), "Tree::Leaf", (("value", ScalarDecode(ScalarKind.INT)),)
+            "Leaf",
+            "Leaf",
+            NominalId(11),
+            "Tree::Leaf",
+            (
+                FieldDecode(
+                    "value",
+                    "value",
+                    ScalarDecode(ScalarKind.INT),
+                    zone=ParamZone.STANDARD,
+                    alias=None,
+                ),
+            ),
+            alias=None,
         ),
     ),
 )
@@ -1106,7 +1296,7 @@ def test_validate_rejects_decode_variant_that_disagrees_with_linked_member(
         source_label="json",
         target_label="Tree",
         json_schema="{}",
-        decode=EnumDecode(enum, "Tree", (variant,)),
+        decode=EnumDecode(enum, "Tree", (variant,), "Tree", host_agent=False),
     )
     program = _convert_program(recipe)
     program.nominals.update(
@@ -1127,12 +1317,52 @@ def test_validate_rejects_decode_variant_that_disagrees_with_linked_member(
         validate_ir(program, deep=True)
 
 
+def test_validate_rejects_decode_variant_whose_name_disagrees_with_member_declared_name() -> None:
+    """A variant's ``name`` must match its member nominal's own declared name.
+
+    Distinct from the ``expected.name``/``display_name`` checks above: the
+    member's ``declared_name`` here is crafted so its DERIVED ``display_name``
+    still matches the ``VariantDecode``'s own (unrelated) ``display_name``
+    field, isolating the terminal-name check from the other two.
+    """
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+    enum = NominalId(10)
+    member = NominalId(11)
+    variant = VariantDecode("Leaf", "Leaf", member, "Tree::Leaf", (), alias=None)
+    recipe = ConversionRecipe(
+        strategy=ConversionStrategy.DECODE_JSON,
+        source_label="json",
+        target_label="Tree",
+        json_schema="{}",
+        decode=EnumDecode(enum, "Tree", (variant,), "Tree", host_agent=False),
+    )
+    program = _convert_program(recipe)
+    program.nominals.update(
+        {
+            enum: NominalDescriptor(
+                enum,
+                ENTRY_ID,
+                (),
+                "Tree",
+                NominalKind.ENUM,
+                variants=(VariantDescriptor("Leaf", (), member),),
+            ),
+            member: NominalDescriptor(member, ENTRY_ID, (), "Tree::Leaf", NominalKind.RECORD),
+        }
+    )
+
+    with pytest.raises(InvalidIrError, match="name disagrees"):
+        validate_ir(program, deep=True)
+
+
 @pytest.mark.parametrize(
-    ("enum_descriptor", "member_descriptor", "display_name"),
+    ("enum_descriptor", "member_descriptor", "display_name", "decode_name"),
     (
         (
             NominalDescriptor(NominalId(10), ENTRY_ID, (), "Tree", NominalKind.RECORD),
             None,
+            "Tree",
             "Tree",
         ),
         (
@@ -1146,6 +1376,20 @@ def test_validate_rejects_decode_variant_that_disagrees_with_linked_member(
             ),
             NominalDescriptor(NominalId(11), ENTRY_ID, ("Tree",), "Leaf", NominalKind.RECORD),
             "Tree",
+            "Tree",
+        ),
+        (
+            NominalDescriptor(
+                NominalId(10),
+                ENTRY_ID,
+                (),
+                "Tree",
+                NominalKind.ENUM,
+                variants=(VariantDescriptor("Leaf", (), NominalId(11)),),
+            ),
+            NominalDescriptor(NominalId(11), ENTRY_ID, ("Tree",), "Leaf", NominalKind.RECORD),
+            "Tree",
+            "Wrong",
         ),
     ),
 )
@@ -1153,8 +1397,14 @@ def test_validate_rejects_decode_with_invalid_linked_enum_metadata(
     enum_descriptor: NominalDescriptor,
     member_descriptor: NominalDescriptor | None,
     display_name: str,
+    decode_name: str,
 ) -> None:
-    """Deep validation requires the linked enum and member-record identities."""
+    """Deep validation requires the linked enum and member-record identities.
+
+    ``decode_name`` differs from ``display_name`` only in the case that
+    targets ``EnumDecode.name`` disagreeing with the enum's own
+    ``declared_name`` while ``display_name`` still matches.
+    """
     from agm.agl.ir.validate import InvalidIrError, validate_ir
 
     enum = NominalId(10)
@@ -1164,7 +1414,13 @@ def test_validate_rejects_decode_with_invalid_linked_enum_metadata(
         source_label="json",
         target_label="Tree",
         json_schema="{}",
-        decode=EnumDecode(enum, display_name, (VariantDecode("Leaf", member, "Tree::Leaf", ()),)),
+        decode=EnumDecode(
+            enum,
+            display_name,
+            (VariantDecode("Leaf", "Leaf", member, "Tree::Leaf", (), alias=None),),
+            decode_name,
+            host_agent=False,
+        ),
     )
     program = _convert_program(recipe)
     program.nominals[enum] = enum_descriptor
@@ -1180,17 +1436,31 @@ def _tree_decode_defs() -> tuple[tuple[str, EnumDecode], ...]:
     tree_body = EnumDecode(
         nominal=_TREE,
         display_name="Tree",
+        name="Tree",
+        host_agent=False,
         variants=(
-            VariantDecode("Leaf", NominalId(1), "Tree::Leaf", ()),
+            VariantDecode("Leaf", "Leaf", NominalId(1), "Tree::Leaf", (), alias=None),
             VariantDecode(
+                "Node",
                 "Node",
                 NominalId(2),
                 "Tree::Node",
                 (
-                    ("value", ScalarDecode(ScalarKind.INT)),
-                    ("left", RefDecode("Tree")),
-                    ("right", RefDecode("Tree")),
+                    FieldDecode(
+                        "value",
+                        "value",
+                        ScalarDecode(ScalarKind.INT),
+                        zone=ParamZone.STANDARD,
+                        alias=None,
+                    ),
+                    FieldDecode(
+                        "left", "left", RefDecode("Tree"), zone=ParamZone.STANDARD, alias=None
+                    ),
+                    FieldDecode(
+                        "right", "right", RefDecode("Tree"), zone=ParamZone.STANDARD, alias=None
+                    ),
                 ),
+                alias=None,
             ),
         ),
     )

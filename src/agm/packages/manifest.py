@@ -10,7 +10,7 @@ import semver
 import tomlkit
 from tomlkit.exceptions import TOMLKitError
 
-from agm.agl.keywords import KEYWORDS
+from agm.agl.keywords import is_plain_name
 from agm.agl.modules.ids import ModuleId
 from agm.command_catalog import invalid_command_path
 from agm.core.toml import TomlDict, load_toml_file, toml_dict
@@ -239,7 +239,7 @@ def validate_package_name(value: str) -> str:
         raise ManifestError(f"package name {value!r} is not a valid module segment") from exc
     if len(module_id.segments) != 1:
         raise ManifestError(f"package name {value!r} is not a valid module segment")
-    if value in KEYWORDS:
+    if not is_plain_name(value):
         raise ManifestError(f"package name {value!r} is a reserved AgL keyword")
     return value
 

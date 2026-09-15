@@ -7,7 +7,7 @@
       },
       "expect": {
         "stdout_contains": [
-          "CastError(message = \"Failed to parse text as JSON:",
+          "CastError(message = ",
           "source-type = \"text\", target-type = \"int\", raw = \"abc\")",
           "caught: text -> int\n",
           "\"source-type\": \"text\"",

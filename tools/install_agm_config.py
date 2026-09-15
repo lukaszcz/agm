@@ -114,7 +114,7 @@ def install_user_config(
 
     # The package domain owns the managed stdlib's locked staging,
     # publication, integrity record, activation, and stale-file replacement.
-    stdlib = refresh_managed_stdlib(repo_root / "stdlib", home=install_root, env=env)
+    stdlib = refresh_managed_stdlib(repo_root / "packages" / "stdlib", home=install_root, env=env)
     installed.append(stdlib.root)
 
     micro_source_dir = repo_root / "config" / "micro"

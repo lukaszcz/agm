@@ -8,11 +8,13 @@ The runtime package is the eval-free services layer: agent dispatch and session 
 
 ## Codecs
 
-Built-in JSON contracts consume the typeless schema and decode data compiled during lowering. `runtime/codec.py` keeps strict parsing and lenient recovery separate: agent and shell output use the configured policy, casts always parse strictly, and `std/json` exposes both explicitly.
+Built-in JSON contracts consume the typeless schema and decode data compiled during lowering. `runtime/codec.py` keeps strict parsing and lenient recovery separate: agent and shell output use the configured policy, casts and `std/value::parse`/`try-parse` always parse strictly — accepting strict JSON or one [AgL value-syntax](../../agl/reference/host-environment.md#value-syntax) literal via `runtime/value_decode.py`, never lenient recovery — and `std/json` exposes both explicitly.
 
 ## Rendering and Serialization
 
-All value display — interpolation, `print`, `render`, `as text`, REPL echo — goes through one renderer producing AgL-native syntax; the text-literal encoder is shared with the lexer. Nominal fields are normalized to declaration order at construction, so rendering, JSON, and equality agree without type information. Serialization follows lowered encode plans, adding `$case` only in enum-typed slots. Both walks thread the shared cycle guard; trace logging and in-flight error reporting degrade cycles and non-data values to markers rather than turning a working run into a failing one.
+All value display — interpolation, `print`, `render`, `as text`, REPL echo — goes through one renderer producing AgL-native syntax; the text-literal encoder is shared with the lexer. Nominal fields are normalized to declaration order at construction, so rendering, JSON, and equality agree without type information. Serialization follows lowered encode plans, adding `$case` only in enum-typed slots. Encode/decode plans and JSON Schema carry each field's/member's effective JSON name (`@name`/`@json-name` if given, else declared) alongside its declared name, so JSON keys and `$case` tags can diverge from what rendering shows. Both walks thread the shared cycle guard; trace logging and in-flight error reporting degrade cycles and non-data values to markers rather than turning a working run into a failing one.
+
+The typeless decode schema (`ir/contracts.py`) additionally carries each field's parameter zone and `@name` alias, each record's/member's `@name` alias, each record's/enum's/member's terminal declared name, and whether an enum is the standard `Agent` enum (`EnumDecode.host_agent`) — data a value-syntax reader consumes without re-deriving it from the checked types.
 
 ## Host-Backed Values and Tracing
 

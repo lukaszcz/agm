@@ -449,7 +449,6 @@ class TestUncaughtAgentCallErrorSpan:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            max_iters=None,
             no_log=True,
             log_file=None,
         )
@@ -2551,12 +2550,13 @@ class TestBuildParamDecoder:
     """A param decoder describes how an external value is read into its type."""
 
     def test_text_type_is_verbatim(self) -> None:
-        """TextType params are taken verbatim — text_verbatim is True."""
+        """TextType params decode as a bare text scalar (host text is taken verbatim)."""
+        from agm.agl.ir.contracts import ScalarDecode, ScalarKind
         from agm.agl.semantics.types import TextType
         from agm.agl.type_schema import build_param_decoder
 
         decoder = build_param_decoder(TextType(), type_table_for())
-        assert decoder.text_verbatim is True
+        assert decoder.decode == ScalarDecode(kind=ScalarKind.TEXT)
 
     def test_text_type_target_label(self) -> None:
         """target_type_label is repr(TextType())."""
@@ -2567,12 +2567,13 @@ class TestBuildParamDecoder:
         assert decoder.target_type_label == repr(TextType())
 
     def test_int_type_not_verbatim(self) -> None:
-        """Non-text types are NOT verbatim."""
+        """Non-text types do NOT decode as a bare text scalar."""
+        from agm.agl.ir.contracts import ScalarDecode, ScalarKind
         from agm.agl.semantics.types import IntType
         from agm.agl.type_schema import build_param_decoder
 
         decoder = build_param_decoder(IntType(), type_table_for())
-        assert decoder.text_verbatim is False
+        assert decoder.decode != ScalarDecode(kind=ScalarKind.TEXT)
 
     def test_int_type_json_schema_matches_derive_schema(self) -> None:
         """json_schema is json.dumps(derive_schema(typ), sort_keys=True)."""

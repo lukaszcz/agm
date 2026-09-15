@@ -434,12 +434,12 @@ def _decode_contains_ref(decode: DecodeSchema) -> bool:
     if isinstance(decode, DictDecode):
         return _decode_contains_ref(decode.value)
     if isinstance(decode, RecordDecode):
-        return any(_decode_contains_ref(field_decode) for _name, field_decode in decode.fields)
+        return any(_decode_contains_ref(rfield.schema) for rfield in decode.fields)
     if isinstance(decode, EnumDecode):
         return any(
-            _decode_contains_ref(field_decode)
+            _decode_contains_ref(vfield.schema)
             for variant in decode.variants
-            for _name, field_decode in variant.fields
+            for vfield in variant.fields
         )
     return False
 
@@ -469,9 +469,9 @@ def _find_enum_decode_at_path(
             if not isinstance(elem, str):
                 return None
             field_decode: DecodeSchema | None = None
-            for fname, fschema in decode.fields:
-                if fname == elem:
-                    field_decode = fschema
+            for rfield in decode.fields:
+                if rfield.json_name == elem:
+                    field_decode = rfield.schema
                     break
             if field_decode is None:
                 return None
@@ -550,9 +550,9 @@ def _classify_enum_failure(
             field="$case",
         )
 
-    known_variants = {v.name: v for v in enum_decode.variants}
+    known_variants = {v.json_name: v for v in enum_decode.variants}
     if case_val not in known_variants:
-        valid = ", ".join(v.name for v in enum_decode.variants)
+        valid = ", ".join(v.json_name for v in enum_decode.variants)
         return ValidationError(
             category="bad_case",
             message=f'Unknown "$case" {case_val!r} for enum {enum_decode.display_name!r}. '
@@ -562,7 +562,7 @@ def _classify_enum_failure(
         )
 
     variant = known_variants[case_val]
-    variant_field_names = [fname for fname, _ in variant.fields]
+    variant_field_names = [vfield.json_name for vfield in variant.fields]
     for field_name in variant_field_names:
         if field_name not in instance:
             return ValidationError(

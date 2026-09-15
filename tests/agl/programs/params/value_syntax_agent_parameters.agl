@@ -1,0 +1,17 @@
+# Agent value syntax on program-parameter values: compact shorthand, a
+# tagged JSON object, an Agent member constructor call (bare or the
+# qualified ``Agent::AgentPi`` spelling), and -- for text matching none of
+# those -- a verbatim command.
+
+def describe(agent: Agent) -> text =
+  case agent of
+    | AgentClaude(model, thinking) => "claude %{model} %{thinking}"
+    | AgentCodex(model, thinking) => "codex %{model} %{thinking}"
+    | AgentPi(provider, model, thinking) => "pi %{provider} %{model} %{thinking}"
+    | AgentCommand(command) => "command %{command}"
+
+program def main(worker: Agent, backup: Option[Agent] = Option::None) -> unit =
+  print describe(worker)
+  print (case backup of
+    | Option::Some(value) => describe(value)
+    | Option::None => "no backup")

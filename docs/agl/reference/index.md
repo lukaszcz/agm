@@ -16,8 +16,9 @@ oriented orchestration language whose core ideas are:
   and validation of its raw output, and the retry-or-abort behavior on
   malformed output.
 - **Structured outputs have one canonical wire format** — JSON, with a
-  reserved `"$case"` tag for enum terminal member names — parsed leniently by default and
-  validated strictly, always.
+  reserved `"$case"` tag holding a member's effective JSON name (its terminal
+  name unless renamed) — parsed leniently by default and validated strictly,
+  always.
 - **Everything is an expression.** There is no statement category: binders
   (`let`/`var`) scope over a continuation, side-effecting forms have type
   `unit` and return `void`, and `if`/`case`/`try` with matching branches yield
@@ -73,7 +74,7 @@ program def main(spec: text) -> unit =
 | ------- | -------- |
 | [Lexical structure](lexical-structure.md) | Source text, comments, indentation and layout, keywords, tokens, declaration attributes, operator precedence |
 | [Program structure](program-structure.md) | Modules, `program def` entry points and their parameters, items, binders, inline forms |
-| [Types](types.md) | Built-in types (`unit`, `text`, `int`, `decimal`, `bool`, `json`, function types), `record`/`enum`/`type` declarations, the library types the language itself names (`ExecResult`, `ParsePolicy`, `Agent`, `AgentRequest`, `SessionTransport`, `Session`, `SessionStats`), assignability, casts and convertibility (`as`/`as?`), mutable record fields and reference semantics, cycles, and copying (`copy`/`shallow-copy`) |
+| [Types](types.md) | Built-in types (`unit`, `text`, `int`, `decimal`, `bool`, `json`, function types), `record`/`enum`/`type` declarations, the library types the language itself names (`ExecResult`, `ParsePolicy`, `Agent`, `AgentRequest`, `SessionTransport`, `Session`, `SessionStats`), assignability, casts and convertibility (`as`/`as?`), mutable record fields and reference semantics, cycles, copying (`copy`/`shallow-copy`), and parsing (`parse`/`try-parse`) |
 | [Bindings and scope](bindings-and-scope.md) | `let`, `var`, `:=`, `builtin var`, `def`, lexical scoping, shadowing |
 | [Expressions](expressions.md) | Literals, constructors, calls, operators, `as`/`as?` cast operators, `render`, JSON parsing, `case`/`if` expressions, `unit`-typed forms, expected-type propagation |
 | [Strings and interpolation](strings-and-interpolation.md) | Templates, escapes, `%{…}` interpolation, uniform rendering rules |

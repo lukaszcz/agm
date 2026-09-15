@@ -27,7 +27,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 def _activate_stdlib(home: Path, version: str) -> Path:
     """Create and activate a store ``std`` package at *version*."""
     root = home / ".agm" / "packages" / "std" / version
-    shutil.copytree(_REPO_ROOT / "stdlib", root)
+    shutil.copytree(_REPO_ROOT / "packages" / "stdlib", root)
     write_record(root)
     write_activation_index(
         ActivationIndex({"std": ActivePackage(semver.Version.parse(version))}),
@@ -210,7 +210,7 @@ class TestLoadModuleRootsLayering:
     def test_no_modules_section_gives_no_roots(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[exec]\nrunner = "claude"\n')
+        (home / ".agm" / "config.toml").write_text("[exec]\nstrict-json = true\n")
         cfg = load_module_roots(home=home, proj_dir=None, cwd=tmp_path)
         assert cfg.lib_root is None
         assert cfg.extra == ()
@@ -335,7 +335,7 @@ class TestResolveStdlibRoot:
             env={},
         )
 
-        assert resolve_stdlib_root(home=home, env={}) == _REPO_ROOT / "stdlib"
+        assert resolve_stdlib_root(home=home, env={}) == _REPO_ROOT / "packages" / "stdlib"
 
     def test_unreadable_active_store_stdlib_manifest_reports_a_resolution_error(
         self, tmp_path: Path
@@ -425,7 +425,7 @@ class TestResolveStdlibRoot:
         home = tmp_path / "home"
         home.mkdir()
 
-        assert resolve_stdlib_root(home=home, env={}) == _REPO_ROOT / "stdlib"
+        assert resolve_stdlib_root(home=home, env={}) == _REPO_ROOT / "packages" / "stdlib"
 
     def test_missing_shipped_stdlib_fails_cleanly(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

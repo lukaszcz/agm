@@ -744,7 +744,7 @@ class TestExceptionAccessors:
         """The field-kinds memo follows a changed base the same way.
 
         Same authoritative-``merge_from`` path as the field mapping above,
-        against the separate ``exception_field_kinds`` memo.
+        against ``field_kinds``'s separate exception-branch memo.
         """
         table = TypeTable()
         table.register(
@@ -753,7 +753,7 @@ class TestExceptionAccessors:
                 name="Base",
                 module_id=ENTRY_ID,
                 fields=(("old", IntType()),),
-                field_kinds=("standard",),
+                field_kinds=(ParamZone.STANDARD,),
                 decl_node_id=700013,
             )
         )
@@ -763,13 +763,16 @@ class TestExceptionAccessors:
                 name="Child",
                 module_id=ENTRY_ID,
                 fields=(("own", TextType()),),
-                field_kinds=("named_only",),
+                field_kinds=(ParamZone.NAMED_ONLY,),
                 base=700013,
                 decl_node_id=700012,
             )
         )
         child = ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=700012)
-        assert table.exception_field_kinds(child) == (("old", "standard"), ("own", "named_only"))
+        assert table.field_kinds(child) == (
+            ("old", ParamZone.STANDARD),
+            ("own", ParamZone.NAMED_ONLY),
+        )
 
         source = TypeTable()
         source.register(
@@ -778,15 +781,15 @@ class TestExceptionAccessors:
                 name="Base",
                 module_id=ENTRY_ID,
                 fields=(("new", BoolType()),),
-                field_kinds=("positional_only",),
+                field_kinds=(ParamZone.POSITIONAL_ONLY,),
                 decl_node_id=700013,
             )
         )
         table.merge_from(source)
 
-        assert table.exception_field_kinds(child) == (
-            ("new", "positional_only"),
-            ("own", "named_only"),
+        assert table.field_kinds(child) == (
+            ("new", ParamZone.POSITIONAL_ONLY),
+            ("own", ParamZone.NAMED_ONLY),
         )
 
     def test_exception_fields_missing_def_raises_keyerror(self) -> None:
@@ -1389,16 +1392,14 @@ class TestMethodIndex:
 
 
 # ---------------------------------------------------------------------------
-# TypeTable.exception_field_kinds — own fields honor their declared kind;
-# only the extends-chain flattening order (base-first) is exception-specific.
+# TypeTable.field_kinds (exception branch) — own fields honor their declared
+# kind; only the extends-chain flattening order (base-first) is
+# exception-specific.
 # ---------------------------------------------------------------------------
 
 
 class TestExceptionFieldKinds:
-    """``exception_field_kinds`` returns ``ParamZone.value`` strings (not the
-    enum): ``semantics`` may not import ``syntax.nodes``, so ``TypeDef.
-    field_kinds`` stores the stable string values instead (converted back to
-    ``ParamZone`` by ``typecheck.env``)."""
+    """``field_kinds`` returns each field's ``ParamZone`` directly, in field order."""
 
     def test_root_only_returns_declared_field_kinds(self) -> None:
         table = TypeTable()
@@ -1409,12 +1410,12 @@ class TestExceptionFieldKinds:
                 module_id=ENTRY_ID,
                 fields=(("message", TextType()),),
                 abstract=True,
-                field_kinds=(ParamZone.NAMED_ONLY.value,),
+                field_kinds=(ParamZone.NAMED_ONLY,),
                 decl_node_id=700007,
             )
         )
         handle = ExceptionType(name="Exception", module_id=ENTRY_ID, decl_id=700007)
-        assert table.exception_field_kinds(handle) == (("message", ParamZone.NAMED_ONLY.value),)
+        assert table.field_kinds(handle) == (("message", ParamZone.NAMED_ONLY),)
 
     def test_flattens_base_chain_and_honors_each_level_own_marker(self) -> None:
         """Own fields honor their declared kind at every level of the chain —
@@ -1428,7 +1429,7 @@ class TestExceptionFieldKinds:
                 module_id=ENTRY_ID,
                 fields=(("message", TextType()),),
                 abstract=True,
-                field_kinds=(ParamZone.NAMED_ONLY.value,),
+                field_kinds=(ParamZone.NAMED_ONLY,),
                 decl_node_id=700008,
             )
         )
@@ -1439,7 +1440,7 @@ class TestExceptionFieldKinds:
                 module_id=ENTRY_ID,
                 fields=(("code", IntType()),),
                 base=700008,
-                field_kinds=(ParamZone.STANDARD.value,),
+                field_kinds=(ParamZone.STANDARD,),
                 decl_node_id=700009,
             )
         )
@@ -1450,15 +1451,15 @@ class TestExceptionFieldKinds:
                 module_id=ENTRY_ID,
                 fields=(("detail", TextType()),),
                 base=700009,
-                field_kinds=(ParamZone.POSITIONAL_ONLY.value,),
+                field_kinds=(ParamZone.POSITIONAL_ONLY,),
                 decl_node_id=700010,
             )
         )
         handle = ExceptionType(name="Leaf", module_id=ENTRY_ID, decl_id=700010)
-        assert table.exception_field_kinds(handle) == (
-            ("message", ParamZone.NAMED_ONLY.value),
-            ("code", ParamZone.STANDARD.value),
-            ("detail", ParamZone.POSITIONAL_ONLY.value),
+        assert table.field_kinds(handle) == (
+            ("message", ParamZone.NAMED_ONLY),
+            ("code", ParamZone.STANDARD),
+            ("detail", ParamZone.POSITIONAL_ONLY),
         )
 
     def test_resolves_cross_module_base(self) -> None:
@@ -1470,7 +1471,7 @@ class TestExceptionFieldKinds:
                 module_id=_LIB_ID,
                 fields=(("message", TextType()),),
                 abstract=True,
-                field_kinds=(ParamZone.NAMED_ONLY.value,),
+                field_kinds=(ParamZone.NAMED_ONLY,),
                 decl_node_id=700011,
             )
         )
@@ -1481,14 +1482,14 @@ class TestExceptionFieldKinds:
                 module_id=ENTRY_ID,
                 fields=(("code", IntType()),),
                 base=700011,
-                field_kinds=(ParamZone.STANDARD.value,),
+                field_kinds=(ParamZone.STANDARD,),
                 decl_node_id=700012,
             )
         )
         handle = ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=700012)
-        assert table.exception_field_kinds(handle) == (
-            ("message", ParamZone.NAMED_ONLY.value),
-            ("code", ParamZone.STANDARD.value),
+        assert table.field_kinds(handle) == (
+            ("message", ParamZone.NAMED_ONLY),
+            ("code", ParamZone.STANDARD),
         )
 
     def test_returns_same_object_for_same_handle(self) -> None:
@@ -1499,20 +1500,20 @@ class TestExceptionFieldKinds:
                 name="Boom",
                 module_id=ENTRY_ID,
                 fields=(("code", IntType()),),
-                field_kinds=(ParamZone.STANDARD.value,),
+                field_kinds=(ParamZone.STANDARD,),
                 decl_node_id=700003,
             )
         )
         handle = ExceptionType(name="Boom", module_id=ENTRY_ID, decl_id=700003)
-        first = table.exception_field_kinds(handle)
-        second = table.exception_field_kinds(handle)
+        first = table.field_kinds(handle)
+        second = table.field_kinds(handle)
         assert first is second
 
     def test_missing_def_raises_keyerror(self) -> None:
         table = TypeTable()
         handle = ExceptionType(name="Ghost", module_id=ENTRY_ID)
         with pytest.raises(KeyError):
-            table.exception_field_kinds(handle)
+            table.field_kinds(handle)
 
     def test_raises_when_key_registered_as_record(self) -> None:
         table = TypeTable()
@@ -1527,7 +1528,7 @@ class TestExceptionFieldKinds:
         )
         handle = ExceptionType(name="Point", module_id=ENTRY_ID, decl_id=700000)
         with pytest.raises(AssertionError):
-            table.exception_field_kinds(handle)
+            table.field_kinds(handle)
 
     def test_raises_on_cyclic_base_chain(self) -> None:
         table = TypeTable()
@@ -1551,7 +1552,85 @@ class TestExceptionFieldKinds:
         )
         handle = ExceptionType(name="A", module_id=ENTRY_ID, decl_id=700014)
         with pytest.raises(AssertionError, match="cyclic exception base chain"):
-            table.exception_field_kinds(handle)
+            table.field_kinds(handle)
+
+
+# ---------------------------------------------------------------------------
+# TypeTable.field_kinds (record branch) — a record/enum-member's own zones,
+# read straight off its TypeDef; unlike record_fields, never substituted by
+# type_args, so a generic instantiation shares its template's zones.
+# ---------------------------------------------------------------------------
+
+
+class TestRecordFieldKinds:
+    def test_reads_declared_zones_in_field_order(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Job",
+                module_id=ENTRY_ID,
+                fields=(("file", TextType()), ("shape", IntType())),
+                field_kinds=(ParamZone.POSITIONAL_ONLY, ParamZone.NAMED_ONLY),
+                decl_node_id=700030,
+            )
+        )
+        handle = RecordType(name="Job", module_id=ENTRY_ID, decl_id=700030)
+        assert table.field_kinds(handle) == (
+            ("file", ParamZone.POSITIONAL_ONLY),
+            ("shape", ParamZone.NAMED_ONLY),
+        )
+
+    def test_generic_instantiation_shares_the_template_zones(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(("value", TypeVarType("T")),),
+                field_kinds=(ParamZone.NAMED_ONLY,),
+                decl_node_id=700032,
+            )
+        )
+        handle = RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700032)
+        assert table.field_kinds(handle) == (("value", ParamZone.NAMED_ONLY),)
+
+    def test_enum_member_field_kinds_are_its_own_record_zones(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Rect",
+                module_id=ENTRY_ID,
+                scope_path=("Shape",),
+                fields=(("w", IntType()), ("h", IntType())),
+                field_kinds=(ParamZone.POSITIONAL_ONLY, ParamZone.POSITIONAL_ONLY),
+                is_inline_enum_member=True,
+                decl_node_id=700033,
+            )
+        )
+        member = RecordType(name="Rect", module_id=ENTRY_ID, scope_path=("Shape",), decl_id=700033)
+        assert table.field_kinds(member) == (
+            ("w", ParamZone.POSITIONAL_ONLY),
+            ("h", ParamZone.POSITIONAL_ONLY),
+        )
+
+    def test_missing_def_raises_keyerror(self) -> None:
+        table = TypeTable()
+        handle = RecordType(name="Ghost", module_id=ENTRY_ID)
+        with pytest.raises(KeyError):
+            table.field_kinds(handle)
+
+    def test_raises_when_key_registered_as_exception(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(kind="exception", name="Boom", module_id=ENTRY_ID, decl_node_id=700034)
+        )
+        handle = RecordType(name="Boom", module_id=ENTRY_ID, decl_id=700034)
+        with pytest.raises(AssertionError):
+            table.field_kinds(handle)
 
 
 # ---------------------------------------------------------------------------

@@ -2574,13 +2574,13 @@ class TestIrExec:
 
     def test_legacy_string_key_builtin_default_initializes_engine_setting(self) -> None:
         """Hand-built legacy IR defaults still address root ``std/config`` keys."""
-        program = _make_program((IrBuiltinLoad(_LOC, "max-iters"),))
-        program.builtin_setting_defaults["max-iters"] = IrConstInt(_LOC, 7)
+        program = _make_program((IrBuiltinLoad(_LOC, "strict-json"),))
+        program.builtin_setting_defaults["strict-json"] = IrConstBool(_LOC, True)
 
         interpreter = IrInterpreter(program)
         interpreter.run()
 
-        assert interpreter.initializer_values == [IntValue(7)]
+        assert interpreter.initializer_values == [BoolValue(True)]
 
     def test_host_setting_write_rolls_back_when_live_reconfiguration_fails(self) -> None:
         """A failed host callback leaves the setting register at its prior value."""

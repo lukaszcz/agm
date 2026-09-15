@@ -19,6 +19,7 @@ from agm.agl.ir.contracts import (
     EncodePlan,
     EnumEncode,
     ExceptionEncode,
+    FieldEncode,
     RecordEncode,
     RefEncode,
     ScalarEncode,
@@ -34,6 +35,7 @@ from agm.agl.runtime.serialize import (
     encode_value,
     value_to_json_obj,
 )
+from agm.agl.semantics.external_names import ExternalName
 from agm.agl.semantics.type_table import TypeDef
 from agm.agl.semantics.types import (
     ArrayType,
@@ -42,6 +44,7 @@ from agm.agl.semantics.types import (
     ExceptionType,
     IntType,
     RecordType,
+    TypeVarType,
     UnitType,
 )
 from agm.agl.semantics.values import (
@@ -89,10 +92,10 @@ def test_encode_plan_derives_enum_members_and_nested_records() -> None:
     # ``Item`` occurs in both variants, so it is emitted once into ``defs`` and
     # referenced from each occurrence rather than inlined twice.
     many = plan.root.variants[1]
-    assert isinstance(many.fields[0][1], ArrayEncode)
-    assert many.fields[0][1].elem == RefEncode("Item")
+    assert isinstance(many.fields[0].schema, ArrayEncode)
+    assert many.fields[0].schema.elem == RefEncode("Item")
     one = plan.root.variants[0]
-    assert one.fields[0][1] == RefEncode("Item")
+    assert one.fields[0].schema == RefEncode("Item")
     assert [definition.key for definition in plan.definitions] == ["Item"]
     (item_definition,) = plan.definitions
     assert item_definition.parameter_count == 0
@@ -159,7 +162,9 @@ def test_encode_plan_executes_all_shapes_and_member_identity() -> None:
         "n": 3
     }
 
-    enum = EncodePlan(EnumEncode(NominalId(1), (VariantEncode("Member", NominalId(2), ()),)))
+    enum = EncodePlan(
+        EnumEncode(NominalId(1), (VariantEncode("Member", "Member", NominalId(2), ()),))
+    )
     assert encode_value(
         enum, RecordValue(nominal=NominalId(2), display_name=f"{'E'}::{'Member'}", fields={})
     ) == {"$case": "Member"}
@@ -185,7 +190,7 @@ def test_to_json_recipe_requires_the_lowered_encode_plan() -> None:
 
 def test_encode_plan_reports_malformed_static_plans() -> None:
     scalar = ScalarEncode()
-    enum = EnumEncode(NominalId(1), (VariantEncode("A", NominalId(2), ()),))
+    enum = EnumEncode(NominalId(1), (VariantEncode("A", "A", NominalId(2), ()),))
     cases = (
         (scalar, ArrayValue([])),
         (ArrayEncode(scalar), IntValue(1)),
@@ -228,7 +233,10 @@ def test_encode_plan_binds_definition_parameters_at_each_reference() -> None:
                 2,
                 RecordEncode(
                     pair,
-                    (("first", TypeParameterEncode(0)), ("second", TypeParameterEncode(1))),
+                    (
+                        FieldEncode("first", "first", TypeParameterEncode(0)),
+                        FieldEncode("second", "second", TypeParameterEncode(1)),
+                    ),
                 ),
             ),
         ),
@@ -255,18 +263,26 @@ def test_encode_plan_substitutes_arguments_through_every_composite_shape() -> No
         (ArrayEncode(TypeParameterEncode(0)), ArrayValue([IntValue(4)]), [4]),
         (DictEncode(TypeParameterEncode(0)), DictValue({"n": IntValue(5)}), {"n": 5}),
         (
-            RecordEncode(record, (("value", TypeParameterEncode(0)),)),
+            RecordEncode(record, (FieldEncode("value", "value", TypeParameterEncode(0)),)),
             RecordValue(record, "Record", {"value": IntValue(1)}),
             {"value": 1},
         ),
         (
-            ExceptionEncode(exception, (("value", TypeParameterEncode(0)),)),
+            ExceptionEncode(exception, (FieldEncode("value", "value", TypeParameterEncode(0)),)),
             ExceptionValue(exception, "Problem", {"value": IntValue(2)}),
             {"value": 2},
         ),
         (
             EnumEncode(
-                enum, (VariantEncode("Case", member, (("value", TypeParameterEncode(0)),)),)
+                enum,
+                (
+                    VariantEncode(
+                        "Case",
+                        "Case",
+                        member,
+                        (FieldEncode("value", "value", TypeParameterEncode(0)),),
+                    ),
+                ),
             ),
             RecordValue(member, "Case", {"value": IntValue(3)}),
             {"$case": "Case", "value": 3},
@@ -282,7 +298,9 @@ def test_encode_plan_substitutes_arguments_through_every_composite_shape() -> No
                 EncodeDefinition(
                     "Outer",
                     1,
-                    RecordEncode(outer, (("held", RefEncode("Inner", (composite,))),)),
+                    RecordEncode(
+                        outer, (FieldEncode("held", "held", RefEncode("Inner", (composite,))),)
+                    ),
                 ),
             ),
         )
@@ -521,16 +539,28 @@ def test_encode_plan_distinguishes_record_and_enum_slots_for_a_shared_member() -
                 RecordEncode(
                     envelope,
                     (
-                        ("plain", RecordEncode(member, (("value", ScalarEncode()),))),
-                        (
+                        FieldEncode(
+                            "plain",
+                            "plain",
+                            RecordEncode(member, (FieldEncode("value", "value", ScalarEncode()),)),
+                        ),
+                        FieldEncode(
+                            "selected",
                             "selected",
                             EnumEncode(
                                 enum,
-                                (VariantEncode("Shared", member, (("value", ScalarEncode()),)),),
+                                (
+                                    VariantEncode(
+                                        "Shared",
+                                        "Shared",
+                                        member,
+                                        (FieldEncode("value", "value", ScalarEncode()),),
+                                    ),
+                                ),
                             ),
                         ),
-                        ("items", ArrayEncode(ScalarEncode())),
-                        ("by-name", DictEncode(ScalarEncode())),
+                        FieldEncode("items", "items", ArrayEncode(ScalarEncode())),
+                        FieldEncode("by-name", "by-name", DictEncode(ScalarEncode())),
                     ),
                 ),
             ),
@@ -574,7 +604,11 @@ def test_encode_plan_detects_record_exception_and_enum_closed_cycles() -> None:
                 RefEncode("Node"),
                 (
                     EncodeDefinition(
-                        "Node", 0, RecordEncode(NominalId(1), (("next", RefEncode("Node")),))
+                        "Node",
+                        0,
+                        RecordEncode(
+                            NominalId(1), (FieldEncode("next", "next", RefEncode("Node")),)
+                        ),
                     ),
                 ),
             ),
@@ -587,7 +621,9 @@ def test_encode_plan_detects_record_exception_and_enum_closed_cycles() -> None:
                     EncodeDefinition(
                         "Problem",
                         0,
-                        ExceptionEncode(NominalId(2), (("cause", RefEncode("Problem")),)),
+                        ExceptionEncode(
+                            NominalId(2), (FieldEncode("cause", "cause", RefEncode("Problem")),)
+                        ),
                     ),
                 ),
             ),
@@ -602,7 +638,14 @@ def test_encode_plan_detects_record_exception_and_enum_closed_cycles() -> None:
                         0,
                         EnumEncode(
                             NominalId(3),
-                            (VariantEncode("Cell", NominalId(4), (("next", RefEncode("Link")),)),),
+                            (
+                                VariantEncode(
+                                    "Cell",
+                                    "Cell",
+                                    NominalId(4),
+                                    (FieldEncode("next", "next", RefEncode("Link")),),
+                                ),
+                            ),
                         ),
                     ),
                 ),
@@ -625,8 +668,16 @@ def test_encode_plan_allows_a_record_diamond() -> None:
         RecordEncode(
             pair,
             (
-                ("left", RecordEncode(leaf, (("value", ScalarEncode()),))),
-                ("right", RecordEncode(leaf, (("value", ScalarEncode()),))),
+                FieldEncode(
+                    "left",
+                    "left",
+                    RecordEncode(leaf, (FieldEncode("value", "value", ScalarEncode()),)),
+                ),
+                FieldEncode(
+                    "right",
+                    "right",
+                    RecordEncode(leaf, (FieldEncode("value", "value", ScalarEncode()),)),
+                ),
             ),
         )
     )
@@ -644,6 +695,27 @@ def test_template_encode_plan_rejects_unbound_or_unknown_types() -> None:
         _build_template_encode_plan(RecordType("Ghost", decl_id=999), table)
     with pytest.raises(AssertionError):
         _build_template_encode_plan(UnitType(), table)
+
+
+def test_template_encode_plan_uses_renamed_field() -> None:
+    """The declaration-template plan for a growing source also JSON-keys by rename."""
+    decl_id = next_decl_id()
+    box = RecordType(name="Box", type_args=(IntType(),), decl_id=decl_id)
+    box_def = TypeDef(
+        kind="record",
+        name="Box",
+        module_id=ENTRY_ID,
+        type_params=("T",),
+        fields=(("value", TypeVarType("T")),),
+        field_external_names=(("value", ExternalName(json_name="payload")),),
+        decl_node_id=decl_id,
+    )
+    table = type_table_for(box_def)
+    value = RecordValue(NominalId(decl_id), "Box", {"value": IntValue(9)})
+
+    plan = _build_template_encode_plan(box, table)
+
+    assert encode_value(plan, value) == {"payload": 9}
 
 
 def test_growing_polymorphic_recursive_json_cast_lowers_and_evaluates() -> None:
@@ -697,6 +769,147 @@ def test_encode_plan_handles_recursive_containers() -> None:
 
     assert isinstance(plan.root, RefEncode)
     assert encode_value(plan, value) == value_to_json_obj(value)
+
+
+def test_encode_plan_uses_effective_json_name_diverging_from_value_to_json_obj() -> None:
+    """A renamed field's key diverges from ``value_to_json_obj``, which keeps declared names."""
+    decl_id = next_decl_id()
+    renamed = RecordType(name="Renamed", decl_id=decl_id)
+    renamed_def = TypeDef(
+        kind="record",
+        name="Renamed",
+        module_id=ENTRY_ID,
+        fields=(("value", IntType()),),
+        field_external_names=(("value", ExternalName(json_name="val")),),
+        decl_node_id=decl_id,
+    )
+    value = RecordValue(NominalId(decl_id), "Renamed", {"value": IntValue(3)})
+
+    plan = build_encode_plan(renamed, type_table_for(renamed_def))
+
+    assert encode_value(plan, value) == {"val": 3}
+    assert value_to_json_obj(value) == {"value": 3}
+    assert encode_value(plan, value) != value_to_json_obj(value)
+
+
+def test_encode_plan_uses_member_external_name_as_case_tag() -> None:
+    """A renamed enum member's ``@name``/``@json-name`` becomes the ``$case`` tag."""
+    enum_id = next_decl_id()
+    member_id = next_decl_id()
+    member = RecordType(name="One", module_id=ENTRY_ID, scope_path=("Choice",), decl_id=member_id)
+    member_def = TypeDef(
+        kind="record",
+        name="One",
+        module_id=ENTRY_ID,
+        scope_path=("Choice",),
+        external_name=ExternalName(json_name="uno"),
+        decl_node_id=member_id,
+    )
+    choice = EnumType(name="Choice", decl_id=enum_id)
+    choice_def = TypeDef(
+        kind="enum", name="Choice", module_id=ENTRY_ID, members=(member,), decl_node_id=enum_id
+    )
+    table = type_table_for(member_def, choice_def)
+    value = RecordValue(NominalId(member_id), "Choice::One", {})
+
+    plan = build_encode_plan(choice, table)
+
+    assert encode_value(plan, value) == {"$case": "uno"}
+
+
+def test_encode_plan_json_name_overrides_name_for_field() -> None:
+    """``@json-name`` wins over ``@name`` for a field's JSON key."""
+    decl_id = next_decl_id()
+    renamed = RecordType(name="Renamed", decl_id=decl_id)
+    renamed_def = TypeDef(
+        kind="record",
+        name="Renamed",
+        module_id=ENTRY_ID,
+        fields=(("value", IntType()),),
+        field_external_names=(("value", ExternalName(name="alt", json_name="val")),),
+        decl_node_id=decl_id,
+    )
+    value = RecordValue(NominalId(decl_id), "Renamed", {"value": IntValue(3)})
+
+    plan = build_encode_plan(renamed, type_table_for(renamed_def))
+
+    assert encode_value(plan, value) == {"val": 3}
+
+
+def test_encode_plan_flattens_renamed_field_from_exception_base_chain() -> None:
+    """An inherited field's rename from a base exception still applies at the derived type."""
+    base_id = next_decl_id()
+    derived_id = next_decl_id()
+    base_def = TypeDef(
+        kind="exception",
+        name="Base",
+        module_id=ENTRY_ID,
+        fields=(("code", IntType()),),
+        field_external_names=(("code", ExternalName(json_name="error-code")),),
+        decl_node_id=base_id,
+    )
+    derived = ExceptionType(name="Derived", decl_id=derived_id)
+    derived_def = TypeDef(
+        kind="exception",
+        name="Derived",
+        module_id=ENTRY_ID,
+        base=base_id,
+        decl_node_id=derived_id,
+    )
+    table = type_table_for(base_def, derived_def)
+    value = ExceptionValue(NominalId(derived_id), "Derived", {"code": IntValue(4)})
+
+    plan = build_encode_plan(derived, table)
+
+    assert encode_value(plan, value) == {"error-code": 4}
+
+
+def test_encode_plan_renames_field_in_generic_record() -> None:
+    """A renamed field on a generic record keys its JSON output regardless of instantiation."""
+    decl_id = next_decl_id()
+    box = RecordType(name="Box", type_args=(IntType(),), decl_id=decl_id)
+    box_def = TypeDef(
+        kind="record",
+        name="Box",
+        module_id=ENTRY_ID,
+        type_params=("T",),
+        fields=(("value", TypeVarType("T")),),
+        field_external_names=(("value", ExternalName(json_name="payload")),),
+        decl_node_id=decl_id,
+    )
+    value = RecordValue(NominalId(decl_id), "Box", {"value": IntValue(9)})
+
+    plan = build_encode_plan(box, type_table_for(box_def))
+
+    assert encode_value(plan, value) == {"payload": 9}
+
+
+def test_encode_plan_renames_field_in_recursive_hoisted_type() -> None:
+    """A renamed field survives ``$defs`` hoisting for a recursive type."""
+    recursive_id = next_decl_id()
+    recursive = RecordType(name="Recursive", decl_id=recursive_id)
+    recursive_def = TypeDef(
+        kind="record",
+        name="Recursive",
+        module_id=ENTRY_ID,
+        fields=(("children", ArrayType(recursive)),),
+        field_external_names=(("children", ExternalName(json_name="kids")),),
+        decl_node_id=recursive_id,
+    )
+    value = RecordValue(
+        NominalId(recursive_id),
+        "Recursive",
+        {
+            "children": ArrayValue(
+                [RecordValue(NominalId(recursive_id), "Recursive", {"children": ArrayValue([])})]
+            )
+        },
+    )
+
+    plan = build_encode_plan(recursive, type_table_for(recursive_def))
+
+    assert isinstance(plan.root, RefEncode)
+    assert encode_value(plan, value) == {"kids": [{"kids": []}]}
 
 
 def test_encode_definition_keys_match_the_schema_and_decode_defs_keys() -> None:

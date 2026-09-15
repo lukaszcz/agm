@@ -1,0 +1,5 @@
+import shapes
+
+enum Shape = shapes::Circle | shapes::Square
+
+program def main() -> unit = ()

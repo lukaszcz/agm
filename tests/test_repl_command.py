@@ -24,9 +24,9 @@ predicate) so they do not depend on whether the test runner has a tty either.
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol
 
 import pytest
 from click.testing import CliRunner, Result
@@ -80,7 +80,6 @@ class TestReplArgsParsing:
         assert result.exit_code == 0
         args = recorded_runs[0]
         assert getattr(args, "strict_json") is None
-        assert getattr(args, "confirm_agents") is False
         assert getattr(args, "quiet") is False
         assert getattr(args, "no_log") is False
         assert getattr(args, "log_file") is None
@@ -104,10 +103,6 @@ class TestReplArgsParsing:
             invoke(runner, ["repl", "--default-agent", 'AgentCommand("echo agent")']).exit_code == 0
         )
         assert getattr(recorded_runs[0], "default_agent") == 'AgentCommand("echo agent")'
-
-    def test_confirm_agents_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
-        assert invoke(runner, ["repl", "--confirm-agents"]).exit_code == 0
-        assert getattr(recorded_runs[0], "confirm_agents") is True
 
     def test_quiet_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         assert invoke(runner, ["repl", "--quiet"]).exit_code == 0
@@ -160,7 +155,6 @@ def fake_plain_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object
         *,
         echo: bool = True,
         check_only: bool = False,
-        agent_mode: object = None,
         theme: str = "auto",
         on_theme_save: object = None,
         stdin: object = None,
@@ -171,7 +165,6 @@ def fake_plain_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object
                 "session": session,
                 "echo": echo,
                 "check_only": check_only,
-                "agent_mode": agent_mode,
                 "theme": theme,
                 "on_theme_save": on_theme_save,
             }
@@ -202,7 +195,6 @@ def fake_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
         *,
         echo: bool = True,
         check_only: bool = False,
-        agent_mode: object = None,
         history_path: Path | None = None,
         theme: str = "auto",
         on_theme_save: object = None,
@@ -214,7 +206,6 @@ def fake_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
                 "session": session,
                 "echo": echo,
                 "check_only": check_only,
-                "agent_mode": agent_mode,
                 "history_path": history_path,
                 "theme": theme,
                 "on_theme_save": on_theme_save,
@@ -239,12 +230,10 @@ def _isolated_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 def _args(
     *,
     strict_json: bool | None = None,
-    confirm_agents: bool = False,
     quiet: bool = False,
     no_log: bool = False,
     log: bool = False,
     log_file: str | None = None,
-    max_iters: int | None = None,
     default_agent: str | None = None,
     no_stdlib: bool = False,
     plain: bool = True,
@@ -258,12 +247,10 @@ def _args(
     """
     return ReplArgs(
         strict_json=strict_json,
-        confirm_agents=confirm_agents,
         quiet=quiet,
         no_log=no_log,
         log=log,
         log_file=log_file,
-        max_iters=max_iters,
         default_agent=default_agent,
         no_stdlib=no_stdlib,
         plain=plain,
@@ -271,7 +258,7 @@ def _args(
 
 
 class TestReplRun:
-    def test_repl_exit_closes_the_injected_session_host_and_wires_confirmation(
+    def test_repl_exit_closes_the_injected_session_host(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
@@ -279,7 +266,6 @@ class TestReplRun:
     ) -> None:
         _isolated_home(monkeypatch, tmp_path)
         closed: list[None] = []
-        confirmations: list[object] = []
 
         class SessionHost:
             def close_all(self) -> None:
@@ -288,15 +274,13 @@ class TestReplRun:
         host = SessionHost()
 
         def create_host(**kwargs: object) -> SessionHost:
-            confirmations.append(kwargs["confirm_session"])
+            del kwargs
             return host
 
         monkeypatch.setattr(repl_command, "create_agl_session_host", create_host)
         repl_command.run(_args(plain=False))
 
         assert closed == [None]
-        assert len(confirmations) == 1
-        assert callable(confirmations[0])
 
     def test_repl_evaluates_sessions_through_the_injected_host_and_cleans_up_on_exit(
         self,
@@ -305,11 +289,9 @@ class TestReplRun:
         fake_console: list[dict[str, object]],
     ) -> None:
         _isolated_home(monkeypatch, tmp_path)
-        confirmations: list[tuple[str, str]] = []
 
         class SessionHost:
-            def __init__(self, confirm_session: Callable[[RecordValue, str], None]) -> None:
-                self._confirm_session = confirm_session
+            def __init__(self) -> None:
                 self._sessions: dict[str, tuple[RecordValue, str]] = {}
                 self._default_handle: str | None = None
                 self.opened: list[str] = []
@@ -330,8 +312,6 @@ class TestReplRun:
                 return self._default_handle
 
             def ask(self, handle: str, prompt: str) -> str:
-                agent, _transport = self._sessions[handle]
-                self._confirm_session(agent, prompt)
                 self.prompts.append((handle, prompt))
                 return "answer"
 
@@ -346,14 +326,10 @@ class TestReplRun:
         hosts: list[SessionHost] = []
 
         def create_host(**kwargs: object) -> SessionHost:
-            confirm_session = cast(Callable[[RecordValue, str], None], kwargs["confirm_session"])
-            host = SessionHost(confirm_session)
+            del kwargs
+            host = SessionHost()
             hosts.append(host)
             return host
-
-        def confirm(agent: str, prompt: str) -> str:
-            confirmations.append((agent, prompt))
-            return "yes"
 
         def run_console(session: ReplSession, **_kwargs: object) -> None:
             result = session.eval_entry(
@@ -368,60 +344,17 @@ class TestReplRun:
 
         import agm.agl.repl.console as console_mod
 
-        monkeypatch.setattr(repl_command, "make_console_confirm", lambda: confirm)
         monkeypatch.setattr(console_mod, "run_console", run_console)
         monkeypatch.setattr(repl_command, "create_agl_session_host", create_host)
 
-        repl_command.run(_args(confirm_agents=True, plain=False))
+        repl_command.run(_args(plain=False))
 
         assert len(hosts) == 1
         host = hosts[0]
         assert host.opened == ["opened", "default"]
         assert host.prompts == [("session-1", "open prompt"), ("session-2", "default prompt")]
-        assert [prompt for _agent, prompt in confirmations] == ["open prompt", "default prompt"]
         assert host.close_calls == 1
         assert host.closed_handles == {"session-1", "session-2"}
-
-    def test_repl_session_ask_traverses_the_shared_confirmation_gate(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        fake_console: list[dict[str, object]],
-    ) -> None:
-        from tests._agl_helpers import agent_value
-
-        _isolated_home(monkeypatch, tmp_path)
-        confirmations: list[tuple[str, str]] = []
-        session_confirmation: list[object] = []
-
-        class SessionHost:
-            def close_all(self) -> None:
-                pass
-
-        def confirm(agent: str, prompt: str) -> str:
-            confirmations.append((agent, prompt))
-            return "always"
-
-        monkeypatch.setattr(repl_command, "make_console_confirm", lambda: confirm)
-
-        def create_host(**kwargs: object) -> SessionHost:
-            session_confirmation.append(kwargs["confirm_session"])
-            return SessionHost()
-
-        monkeypatch.setattr(repl_command, "create_agl_session_host", create_host)
-
-        repl_command.run(_args(confirm_agents=True, plain=False))
-
-        callback = session_confirmation[0]
-        assert callable(callback)
-        callback(agent_value("AgentCommand", command="writer"), "continue")
-
-        assert confirmations == [('Agent::AgentCommand(command = "writer")', "continue")]
-        from agm.agl.repl.agentmode import AgentMode
-
-        mode = fake_console[0]["agent_mode"]
-        assert isinstance(mode, AgentMode)
-        assert mode.mode == "auto"
 
     def test_repl_exit_preserves_keyboard_interrupt_when_cleanup_fails(
         self,
@@ -579,15 +512,10 @@ class TestReplRun:
         fake_plain_console: list[dict[str, object]],
     ) -> None:
         from agm.agl.semantics.values import RecordValue, TextValue
-        from agm.agl.setting_overrides import SettingOverride
 
         _isolated_home(monkeypatch, tmp_path)
         repl_command.run(_args(default_agent='AgentCommand("configured")'))
         session: ReplSession = fake_plain_console[0]["session"]
-        assert session._setting_overrides["default-agent"] == SettingOverride(
-            source='AgentCommand("configured")', origin="--default-agent"
-        )
-        assert "default-agent" not in session._engine_seed
 
         assert session.eval_entry("import std/config").ok
         seeded = session.eval_entry("std/config::default-agent")
@@ -637,7 +565,6 @@ class TestReplRun:
         (agm_dir / "config.toml").write_text(
             "[exec]\n"
             "strict-json = true\n"
-            "max-iters = 3\n"
             'timeout = "2s"\n'
             "log = true\n"
             'log-file = "configured.jsonl"\n'
@@ -651,13 +578,12 @@ class TestReplRun:
         session: ReplSession = fake_plain_console[0]["session"]
         assert set(session._engine_seed) == {
             "strict-json",
-            "max-iters",
             "timeout",
             "log",
             "log-file",
         }
 
-    def test_cli_false_strict_json_and_blank_config_runner_seed_correctly(
+    def test_cli_false_strict_json_over_empty_exec_config_seeds_correctly(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
@@ -689,34 +615,6 @@ class TestReplRun:
 
         call = fake_console[0]
         assert call["history_path"] == agm_home / "repl_history"
-
-    def test_max_iters_flows_into_session_valve(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        fake_plain_console: list[dict[str, object]],
-    ) -> None:
-        """``--max-iters`` resolves to the session's max-iters valve (ON at N)."""
-        _isolated_home(monkeypatch, tmp_path)
-        repl_command.run(_args(max_iters=10))
-        session: ReplSession = fake_plain_console[0]["session"]
-        assert session._default_loop_limit == 10
-
-    @pytest.mark.parametrize("limit", [0, -1])
-    def test_max_iters_requires_positive_value(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        fake_plain_console: list[dict[str, object]],
-        limit: int,
-    ) -> None:
-        _isolated_home(monkeypatch, tmp_path)
-
-        with pytest.raises(SystemExit) as exc_info:
-            repl_command.run(_args(max_iters=limit))
-
-        assert exc_info.value.code == 1
-        assert fake_plain_console == []
 
     @pytest.mark.parametrize(
         ("args", "expected_log", "expected_file"),
@@ -824,21 +722,20 @@ class TestReplRun:
         assert "--default-agent" in capsys.readouterr().err
         assert fake_plain_console == []
 
-    def test_malformed_agent_literal_with_no_stdlib_fails_at_session_open(
+    def test_malformed_agent_literal_with_no_stdlib_exits_before_the_session_builds(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
         fake_plain_console: list[dict[str, object]],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """``--no-stdlib`` never loads ``std/config``, but ``--default-agent`` is still an
-        explicit request the host cannot silently drop: it must still exit 1 at
-        session-open time (before the console starts), not be deferred to a
-        later entry that happens to import ``std/config`` (or never come)."""
+        """``--no-stdlib`` never loads ``std/config``, but a malformed
+        ``--default-agent`` literal still exits 1: the decode failure is
+        reported directly, independent of whether any module ever loads."""
         _isolated_home(monkeypatch, tmp_path)
 
         with pytest.raises(SystemExit) as exc_info:
-            repl_command.run(_args(default_agent="(", no_stdlib=True))
+            repl_command.run(_args(default_agent='AgentClaude(model = "x"', no_stdlib=True))
 
         assert exc_info.value.code == 1
         assert "--default-agent" in capsys.readouterr().err
@@ -850,9 +747,10 @@ class TestReplRun:
         tmp_path: Path,
         fake_plain_console: list[dict[str, object]],
     ) -> None:
-        """A project-configured ``[exec] default-agent`` is ambient configuration,
-        not a request: with ``--no-stdlib`` (``std/config`` never loads), it must
-        be inert rather than block the session from opening."""
+        """A project-configured ``[exec] default-agent`` decodes and seeds the
+        session cleanly even when ``--no-stdlib`` means ``std/config`` never
+        loads: the seed reaches the interpreter's register independent of the
+        module graph."""
         home = _isolated_home(monkeypatch, tmp_path)
         agm_dir = home / ".agm"
         agm_dir.mkdir()
@@ -891,6 +789,36 @@ class TestReplRun:
         assert "just install" in captured.err
         assert fake_plain_console == []
 
+    def test_open_diagnostics_from_a_broken_stdlib_exit_1_before_the_banner(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """``session.open()`` loading the initial library image can still
+        fail -- e.g. a broken standard-library source -- and that exits 1
+        before any front end prints its banner."""
+        from shutil import copytree
+
+        _isolated_home(monkeypatch, tmp_path)
+
+        stdlib = tmp_path / "broken-stdlib"
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
+        config_agl = stdlib / MODULE_TREE_DIRNAME / "config.agl"
+        config_agl.write_text(
+            config_agl.read_text(encoding="utf-8") + '\nlet broken: int = "text"\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(repl_command, "resolve_stdlib_root", lambda **_kwargs: stdlib)
+
+        with pytest.raises(SystemExit) as exc_info:
+            repl_command.run(_args())
+
+        assert exc_info.value.code == 1
+        assert capsys.readouterr().err
+        assert fake_plain_console == []
+
     def test_blank_default_agent_config_literal_exits_1(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -926,29 +854,6 @@ class TestReplRun:
 
         assert len(fake_plain_console) == 1
 
-    def test_exec_runner_config_seeds_default_agent_as_agent_command(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        fake_plain_console: list[dict[str, object]],
-    ) -> None:
-        """``[exec] runner`` is a bare host command, decoded into an ``AgentCommand`` value seed."""
-        from agm.agl.semantics.values import RecordValue, TextValue
-
-        home = _isolated_home(monkeypatch, tmp_path)
-        config_dir = home / ".agm"
-        config_dir.mkdir()
-        (config_dir / "config.toml").write_text('[exec]\nrunner = "claude"\n')
-
-        repl_command.run(_args())
-
-        session: ReplSession = fake_plain_console[0]["session"]
-        seeded = session._engine_seed["default-agent"]
-        assert isinstance(seeded, RecordValue)
-        assert seeded.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
-        assert seeded.fields["command"] == TextValue("claude")
-        assert session._setting_overrides == {}
-
     def test_invalid_config_exits_1(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -963,7 +868,6 @@ class TestReplRun:
         monkeypatch.setattr(repl_command, "exec_config_from_merged", boom)
         args = ReplArgs(
             strict_json=None,
-            confirm_agents=False,
             quiet=False,
             no_log=False,
             log_file=None,
@@ -1108,38 +1012,8 @@ class TestReplFrontEndSelection:
 
 
 # ---------------------------------------------------------------------------
-# Wiring: agent mode and trace path resolution
+# Wiring: module roots and trace path resolution
 # ---------------------------------------------------------------------------
-
-
-class TestReplAgentMode:
-    def test_default_mode_is_auto(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        fake_plain_console: list[dict[str, object]],
-    ) -> None:
-        _isolated_home(monkeypatch, tmp_path)
-        repl_command.run(_args())
-        mode = fake_plain_console[0]["agent_mode"]
-        from agm.agl.repl.agentmode import AgentMode
-
-        assert isinstance(mode, AgentMode)
-        assert mode.mode == "auto"
-
-    def test_confirm_agents_starts_in_confirm(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        fake_plain_console: list[dict[str, object]],
-    ) -> None:
-        _isolated_home(monkeypatch, tmp_path)
-        repl_command.run(_args(confirm_agents=True))
-        mode = fake_plain_console[0]["agent_mode"]
-        from agm.agl.repl.agentmode import AgentMode
-
-        assert isinstance(mode, AgentMode)
-        assert mode.mode == "confirm"
 
 
 class TestReplModuleRoots:

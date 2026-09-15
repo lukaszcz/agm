@@ -1,0 +1,82 @@
+{
+  "scenarios": [
+    {
+      "name": "explicit_type_argument",
+      "params": {"mode": "explicit", "input": "Point(x = 1, y = 2)"},
+      "expect": {"stdout": "Point(x = 1, y = 2)\n"}
+    },
+    {
+      "name": "contextual_expected_type",
+      "params": {"mode": "contextual", "input": "Point(x = 3, y = 4)"},
+      "expect": {"stdout": "Point(x = 3, y = 4)\n"}
+    },
+    {
+      "name": "round_trip_record",
+      "params": {"mode": "round_trip_record", "input": "Point(x = 5, y = 6)"},
+      "expect": {"stdout": "true\n"}
+    },
+    {
+      "name": "round_trip_inline_enum_member",
+      "params": {"mode": "round_trip_enum_member", "input": "Square(side = 9)"},
+      "expect": {"stdout": "true\n"}
+    },
+    {
+      "name": "round_trip_scoped_record",
+      "params": {"mode": "round_trip_scoped_record", "input": "Circle(radius = 3)"},
+      "expect": {"stdout": "true\n"}
+    },
+    {
+      "name": "round_trip_nested_array_option_dict_text_escapes",
+      "params": {
+        "mode": "round_trip_nested",
+        "input": "Nested(shapes = [Square(side = 1), Circle(radius = 2)], center = Some(Point(x = 1, y = 2)), weights = {a: 1.5, b: -2}, note = \"line1\\nline2\")"
+      },
+      "expect": {"stdout": "true\n"}
+    },
+    {
+      "name": "qualified_enum_member",
+      "params": {"mode": "qualified_member", "input": "Shape::Square(side = 2)"},
+      "expect": {"stdout": "Shape::Square(side = 2)\n"}
+    },
+    {
+      "name": "try_parse_expected_type_ok",
+      "params": {"mode": "try_parse_expected", "input": "Point(x = 7, y = 8)"},
+      "expect": {"stdout": "ok Point(x = 7, y = 8)\n"}
+    },
+    {
+      "name": "try_parse_expected_type_err",
+      "params": {"mode": "try_parse_expected", "input": "not-a-point"},
+      "expect": {"stdout": "err not-a-point\n"}
+    },
+    {
+      "name": "try_parse_ok",
+      "params": {"mode": "try_parse_err_raw", "input": "42"},
+      "expect": {"stdout": "ok 42\n"}
+    },
+    {
+      "name": "try_parse_err_never_raises_and_prints_raw",
+      "params": {"mode": "try_parse_err_raw", "input": "not-a-number"},
+      "expect": {"stdout": "err text -> int, raw = not-a-number\n"}
+    },
+    {
+      "name": "value_parse_error_distinct_from_cast_error",
+      "params": {"mode": "distinct_from_cast_error", "input": "not-a-number"},
+      "expect": {"stdout": "caught: text -> int, raw = not-a-number\n"}
+    },
+    {
+      "name": "json_module_parse_alongside_bare_and_qualified_value_parse",
+      "params": {"mode": "json_and_value_parse", "input": "42"},
+      "expect": {"stdout": "42\n42\n42\n"}
+    },
+    {
+      "name": "strict_json_input_to_parse",
+      "params": {"mode": "strict_json", "input": "{\"x\": 1, \"y\": 2}"},
+      "expect": {"stdout": "Point(x = 1, y = 2)\n"}
+    },
+    {
+      "name": "top_level_text_target_is_verbatim_not_a_value_syntax_escape",
+      "params": {"mode": "top_level_text_verbatim", "input": "hello \"world\""},
+      "expect": {"stdout": "hello \"world\"\n"}
+    }
+  ]
+}

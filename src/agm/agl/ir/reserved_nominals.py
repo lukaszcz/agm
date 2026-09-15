@@ -92,6 +92,8 @@ RESERVED_NOMINAL_NAMES: tuple[str, ...] = (
     "Session",
     "SessionStats",
     "SessionError",
+    # Appended: built-in exception raised by std/value::parse / try-parse.
+    "ValueParseError",
 )
 
 #: Bare reserved name -> its stable, distinct identity. Derived from

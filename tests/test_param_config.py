@@ -249,7 +249,7 @@ def test_ignores_a_nonbare_ambiguous_spelling_in_the_program_table() -> None:
     assert values == {}
 
 
-def test_engine_key_leaf_does_not_form_a_program_route_for_a_param() -> None:
+def test_non_engine_key_leaf_forms_a_program_route_for_a_param() -> None:
     binding = _binding("A/logging", "max-iters", IntType())
     program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
 
@@ -257,7 +257,7 @@ def test_engine_key_leaf_does_not_form_a_program_route_for_a_param() -> None:
         _config({"workflow": {"run": {"max-iters": 4}}}), program, (binding,)
     )
 
-    assert values == {}
+    assert values == {binding.key: 4}
 
 
 def test_anonymous_entry_params_do_not_read_a_module_route() -> None:
@@ -323,7 +323,6 @@ def test_reports_each_module_route_and_the_program_route() -> None:
                     "default-agent",
                     "log",
                     "log-file",
-                    "max-iters",
                     "strict-json",
                     "timeout",
                 }

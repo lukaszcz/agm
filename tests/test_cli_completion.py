@@ -28,6 +28,15 @@ def _make_ctx(**params: Any) -> click.Context:
     return ctx
 
 
+def _root_ctx() -> click.Context:
+    """Create a Context for the ``agm`` group, as shell completion resolves it."""
+    from typer.main import get_command
+
+    import agm.cli as cli
+
+    return click.Context(get_command(cli.app))
+
+
 def test_complete_registered_commands_reads_active_index(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -95,6 +104,127 @@ review-tools = { program = "tools/review::main" }
     assert shell_complete.get_completions(["tools", "lint", "--level"], "") == []
     assert completion.complete_help_path(_make_ctx(help_command=[]), "to") == ["tools"]
     assert completion.complete_help_path(_make_ctx(help_command=["tools"]), "li") == ["lint"]
+
+
+_PATH_PROGRAM = (
+    "program def main(\n"
+    "  @arg-pos source: path,\n"
+    "  @arg-pos count: int,\n"
+    '  @opt-short("o") out: path = "out.txt",\n'
+    "  journal: Option[path] = None,\n"
+    '  name: text = "x",\n'
+    ") -> unit = ()\n"
+)
+
+
+def _completion_values(args: list[str], incomplete: str) -> list[str]:
+    from agm.cli import app
+
+    shell_complete = ShellComplete(typer.main.get_command(app), {}, "agm", "_TYPER_COMPLETE_ARGS")
+    return [cast(str, item.value) for item in shell_complete.get_completions(args, incomplete)]
+
+
+class TestExecPathParameterCompletion:
+    """``agm exec FILE`` completes a path-typed program parameter's value from the filesystem."""
+
+    @pytest.fixture
+    def program(self, tmp_path: Path) -> Path:
+        source = tmp_path / "prog.agl"
+        source.write_text(_PATH_PROGRAM, encoding="utf-8")
+        (tmp_path / "data.txt").write_text("", encoding="utf-8")
+        (tmp_path / "docs").mkdir()
+        return source
+
+    @pytest.mark.parametrize("flag", ["--out", "-o", "--journal"])
+    def test_a_path_option_value_completes_paths(self, program: Path, flag: str) -> None:
+        values = _completion_values(["exec", str(program), flag], f"{program.parent}/d")
+
+        assert f"{program.parent}/data.txt" in values
+        assert f"{program.parent}/docs/" in values
+
+    def test_an_attached_path_option_value_completes_paths(self, program: Path) -> None:
+        values = _completion_values(["exec", str(program)], f"--out={program.parent}/da")
+
+        assert values == [f"{program.parent}/data.txt"]
+
+    def test_a_non_path_option_value_offers_nothing(self, program: Path) -> None:
+        assert _completion_values(["exec", str(program), "--name"], f"{program.parent}/d") == []
+
+    def test_a_path_positional_slot_completes_paths(self, program: Path) -> None:
+        values = _completion_values(["exec", str(program), "--out", "o.txt"], f"{program.parent}/d")
+
+        assert f"{program.parent}/data.txt" in values
+        assert f"{program.parent}/docs/" in values
+
+    def test_a_non_path_positional_slot_offers_nothing(self, program: Path) -> None:
+        assert _completion_values(["exec", str(program), "a.txt"], f"{program.parent}/d") == []
+
+    def test_an_unselected_program_offers_nothing(self, program: Path) -> None:
+        program.write_text(
+            _PATH_PROGRAM + "program def other(@arg-pos target: path) -> unit = ()\n",
+            encoding="utf-8",
+        )
+
+        assert _completion_values(["exec", str(program)], f"{program.parent}/d") == []
+
+    def test_the_file_slot_still_completes_agl_sources(self, program: Path) -> None:
+        values = _completion_values(["exec"], f"{program.parent}/")
+
+        assert str(program) in values
+        assert f"{program.parent}/docs/" in values
+        assert f"{program.parent}/data.txt" not in values
+
+
+def test_registered_command_completes_path_parameter_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import semver
+
+    from agm.config.context import ConfigContext
+    from agm.packages.activation import (
+        ActivationIndex,
+        ActivePackage,
+        CommandRegistration,
+        write_activation_index,
+    )
+
+    home = tmp_path / "home"
+    package_root = home / ".agm" / "packages" / "tools" / "1.0.0"
+    (package_root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    (package_root / MODULE_TREE_DIRNAME / "lint.agl").write_text(_PATH_PROGRAM, encoding="utf-8")
+    (package_root / "package.toml").write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
+        '[commands]\n"tools lint" = { program = "tools/lint::main" }\n',
+        encoding="utf-8",
+    )
+    write_record(package_root)
+    write_activation_index(
+        ActivationIndex(
+            packages={"tools": ActivePackage(semver.Version.parse("1.0.0"))},
+            commands={"tools lint": CommandRegistration("tools", "tools/lint::main")},
+        ),
+        home=home,
+    )
+    monkeypatch.setattr(
+        completion, "current_config_context", lambda: ConfigContext(home, None, tmp_path)
+    )
+    files = tmp_path / "files"
+    files.mkdir()
+    (files / "data.txt").write_text("", encoding="utf-8")
+    expected = f"{files}/data.txt"
+
+    assert expected in _completion_values(["tools", "lint", "--out"], f"{files}/d")
+    assert expected in _completion_values(["tools", "lint", "-o"], f"{files}/d")
+    assert _completion_values(["tools", "lint"], f"--journal={files}/d") == [expected]
+    assert expected in _completion_values(["tools", "lint"], f"{files}/d")
+    assert expected in _completion_values(
+        ["tools", "lint", "--log-file", "trace.jsonl", "--dry-run"], f"{files}/d"
+    )
+    assert _completion_values(["tools", "lint", "--name"], f"{files}/d") == []
+    assert _completion_values(["tools", "lint", "--timeout"], f"{files}/d") == []
+    assert _completion_values(["tools", "lint", "a.txt"], f"{files}/d") == []
+    assert _completion_values(["tools", "lint", "a.txt", "3"], f"{files}/d") == []
+    assert completion.registered_command_positional_completion(["nope"], "", _make_ctx()) == []
 
 
 def test_installed_exec_reference_offers_program_value_argument_completion(
@@ -233,7 +363,9 @@ def test_registered_param_completion_degrades_on_unknown_or_unavailable_commands
     monkeypatch.setattr(completion, "current_config_context", lambda: context)
     monkeypatch.setattr(dispatch, "load_command_index", lambda **_: ActivationIndex())
 
-    assert completion.registered_command_param_completion(["tools", "lint"], "--") == []
+    assert (
+        completion.registered_command_param_completion(["tools", "lint"], "--", _root_ctx()) == []
+    )
 
     monkeypatch.setattr(
         dispatch,
@@ -241,7 +373,9 @@ def test_registered_param_completion_degrades_on_unknown_or_unavailable_commands
         lambda **_: (_ for _ in ()).throw(RuntimeError("unavailable")),
     )
 
-    assert completion.registered_command_param_completion(["tools", "lint"], "--") == []
+    assert (
+        completion.registered_command_param_completion(["tools", "lint"], "--", _root_ctx()) == []
+    )
 
 
 def test_registered_command_param_completion_offers_program_value_argument_flags(
@@ -293,7 +427,9 @@ version = "1.0.0"
 
     values = [
         item.value
-        for item in completion.registered_command_param_completion(["tools", "lint"], "--")
+        for item in completion.registered_command_param_completion(
+            ["tools", "lint"], "--", _root_ctx()
+        )
     ]
 
     assert "--tag" in values
@@ -302,6 +438,9 @@ version = "1.0.0"
     assert "--tools.lint.module-verbose" in values
     assert "--no-tools.lint.module-verbose" in values
     assert "--dry-run" in values
+    assert "--log-file" in values
+    assert "--no-timeout" in values
+    assert "--module-path" not in values
 
 
 def test_registered_parameter_fixture_completion_offers_qualified_module_flags(
@@ -318,7 +457,9 @@ def test_registered_parameter_fixture_completion_offers_qualified_module_flags(
 
     values = [
         item.value
-        for item in completion.registered_command_param_completion(["param", "review"], "--")
+        for item in completion.registered_command_param_completion(
+            ["param", "review"], "--", _root_ctx()
+        )
     ]
 
     assert "--retries" in values
@@ -997,6 +1138,15 @@ class TestPathCandidates:
         monkeypatch.chdir(work)
         result = completion._path_candidates("sub/f")
         assert "sub/file.txt" in result
+
+    def test_a_directory_prefix_lists_the_directory_contents(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "file.txt").write_text("x")
+        monkeypatch.chdir(tmp_path)
+        assert completion._path_candidates("sub/") == ["sub/file.txt"]
 
 
 class TestCompleteOpenTarget:

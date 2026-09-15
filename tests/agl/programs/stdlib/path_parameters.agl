@@ -1,0 +1,30 @@
+# Path-typed program parameters. The builtin `path` alias is transparent: its
+# values mix freely with text, flow through user aliases, records, and
+# `Option`, and reach the `std/path` functions.
+import std/path
+
+type location = path
+type maybe-location = Option[location]
+
+record Plan(source: location, target: path)
+
+def describe(target: location) -> text =
+  "%{path::basename(target)} in '%{path::dirname(target)}'"
+
+program def main(
+  @arg-pos source: path,
+  @arg-std out: path::path = "out/result.txt",
+  journal: maybe-location = None,
+  archive: Option[path] = None,
+  label: text = "plan",
+) -> unit =
+  let plan = Plan(source = source, target = out)
+  print(describe(plan.source))
+  print(path::with-extension(plan.target, ".bak"))
+  case journal of
+    | Some(value) => print("journal: %{value}")
+    | None => print("no journal")
+  let archived: text = case archive of
+    | Some(value) => path::join([value, label])
+    | None => label
+  print(archived)

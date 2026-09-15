@@ -101,9 +101,50 @@ error** — reported like a static failure, not catchable in-language, before
 any statement executes.
 
 `text` parameters take their external value verbatim. A parameter of any
-other type is parsed from its JSON representation **strictly** (externally
-supplied values are not chatty agent output, so no lenient recovery applies)
-and validated against the declared type.
+other type reads its external text as one **strict JSON value or AgL value
+syntax literal** (externally supplied values are not chatty agent output, so
+no lenient recovery applies), validated against the declared type: a token
+that parses as strict JSON is read as JSON; any other token is read as one
+[value syntax](#value-syntax) literal instead. An `Agent`-typed value
+([Agents](#agents) above) instead reads compact shorthand, then a JSON
+object, then an `Agent` member constructor call, and otherwise falls back to
+a verbatim command — see [host Agent syntax](../../commands/agl.md#host-agent-syntax).
+
+### Value syntax
+
+A `text`-to-structured-type cast (`as`/`as?`, [Types](types.md#strict-parsing-in-text-and-json-casts))
+accepts the same value-syntax literal alongside strict JSON, with no lenient
+recovery either way; a cast to `Agent` accepts shorthand, a JSON object, or a
+member constructor call, but never falls back to a verbatim command the way a
+host `Agent` parameter does.
+
+A value-syntax literal is a data-only subset of AgL's own expression syntax:
+an integer, decimal, `true`/`false`, a quoted text literal, an `[item, ...]`
+array, a `{key: value, ...}` dict of quoted-or-bare keys, or a constructor
+reference/call — `Name`, `Name()`, or `Name(arg, ..., field = value, ...)`. A
+constructor's arguments bind against its declared fields by the same
+[zone rules](functions.md#parameters) an ordinary call uses, except that a
+named-only field always takes an explicit `field = value`: value syntax has
+no variables, so the bare-name shorthand an ordinary call allows for a
+named-only argument does not apply. A bare or called name matches a record's
+or enum member's declared name or its own
+[`@name`](attributes.md#name-and-json-name) alias. An optional qualifier is
+the single name immediately enclosing the record's declaration: its innermost
+scope (`Geo::Point(...)`) or, for an inline enum member, its enum
+(`Shape::Square(...)`). A top-level record takes no qualifier. Where an enum
+type is expected, the enum's own name also qualifies any of its members. A
+duplicate dict key is an error. Nesting is
+unrestricted — a constructor argument, array item, or dict value may itself
+be any value-syntax literal, including another constructor call. `null` and
+a heterogeneous (mixed-type) array or dict are legal only in a `json`-typed
+slot, read as plain data with no constructor calls, since a `json` value has
+no declared type to resolve one against.
+
+A parameter annotated [`path`](types.md#type-aliases) — directly, as
+`Option[path]`, or through an alias of either — takes its value exactly as the
+corresponding `text` parameter does. A host presents that value as a
+filesystem location: its value placeholder defaults to `PATH`, and a host
+offering completion completes it from the filesystem.
 
 The declared type must be JSON-wire-serializable, including for a parameter
 whose default is always used. Runtime-only values such as `unit` and
@@ -225,14 +266,13 @@ key:
 | --- | -------- | ---------------- |
 | `log` | `bool` | `false` |
 | `strict-json` | `bool` | `false` (lenient recovery) |
-| `max-iters` | `int` | `0` (off) |
 | `default-agent` | `Agent` | `AgentClaude("sonnet", "medium")` |
 | `log-file` | `Option[path]` | `None` |
 | `timeout` | `Option[text]` | `None` |
 
 Import `std/config` and read or write a setting through a qualified target
-(`std/config::max-iters`); writing zero disables that safety valve.
-`default-agent` is a typed `Agent` value — its selected member `RecordValue` at runtime — used by `ask` when its `agent` option is omitted. Host CLI and TOML strings use the shared [Agent syntax](../../commands/agl.md#host-agent-syntax): native shorthand selects Claude, Codex, or Pi, and other text selects `AgentCommand`. The optional settings (`log-file`, `timeout`) take a `Some("…")` or `None` value.
+(`std/config::strict-json`).
+`default-agent` is a typed `Agent` value — its selected member `RecordValue` at runtime — used by `ask` when its `agent` option is omitted. Host CLI and TOML values read the same [host Agent syntax](../../commands/agl.md#host-agent-syntax) as an `Agent`-typed parameter: compact shorthand, then a JSON object, then an `Agent` member constructor call, and otherwise a verbatim command. The optional settings (`log-file`, `timeout`) take a `Some("…")` or `None` value.
 
 ### Precedence
 
@@ -258,7 +298,7 @@ positional argument in a named-only position.
 ### Config-file schema
 
 `[exec]` holds global engine defaults with kebab field names (`strict-json`,
-`max-iters`, `log-file`). A qualified table uses a module suffix (the entry
+`log-file`). A qualified table uses a module suffix (the entry
 file's stem, or a package's declared route) and the selected program's own
 declaration name — `[prog.main]` for a program named `main` in a file whose
 stem or route is `prog`. The same table supplies both that program's engine-key
@@ -284,10 +324,9 @@ completed write remains effective if a later expression fails. Writing `log` or
 `log-file` updates the trace destination used by subsequent calls. Assigning
 `Some(path)` to `log-file`
 enables logging; a later `log := false` disables it while retaining the path.
-Writing `strict-json`, `max-iters`, or `timeout` changes subsequent agent-output
-parsing, unbounded loops, or `exec` calls, respectively. A write the engine
-cannot accept — a negative `max-iters`, or a `timeout` whose text is not a
-duration — raises the catchable `TypeError`
+Writing `strict-json` or `timeout` changes subsequent agent-output parsing or
+`exec` calls, respectively. A write the engine cannot accept — a `timeout`
+whose text is not a duration — raises the catchable `TypeError`
 ([Exceptions](exceptions.md#typeerror)) and leaves the setting unchanged.
 Trace output is best-effort: a filesystem failure disables tracing for the rest
 of the run without rolling back the assigned `log` or `log-file` value.
@@ -357,11 +396,11 @@ A run ends in one of three ways:
 2. **Pre-execution failure** — a static error, program-argument validation error, or
    host configuration error; nothing was executed.
 3. **Uncaught exception** — the program started and an exception reached the
-   top. The host reports the exception's type name, fields, and the source
-   location of the raise site. A field holding a value with a reference cycle
-   ([Types](types.md#cycles)), or a value of a kind with no JSON
-   representation, is reported as a placeholder marker, so reporting a failure
-   never fails.
+   top. The host reports the exception's type name, its fields keyed by their
+   effective JSON name, and the source location of the raise site. A field
+   holding a value with a reference cycle ([Types](types.md#cycles)), or a
+   value of a kind with no JSON representation, is reported as a placeholder
+   marker, so reporting a failure never fails.
 
 ## Static call inventory
 

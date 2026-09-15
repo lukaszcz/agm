@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 if TYPE_CHECKING:
     from agm.agl.scope.program import ResolvedModule
+    from agm.agl.syntax.types import AppliedT, NameT
     from agm.agl.typecheck.function_inference import FunctionSignatureRecord
 
 from agm.agl.diagnostics import AglError, Diagnostic
@@ -62,6 +63,7 @@ from agm.agl.semantics.type_table import (
     create_seeded_type_table,
 )
 from agm.agl.semantics.types import (
+    BUILTIN_ALIAS_TARGETS,
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPE_NAMES,
     BUILTIN_PRELUDE_TYPES,
@@ -1102,16 +1104,14 @@ class TypeEnvironment:
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
             self._types[exc_name] = exc_type
         # Built-in prelude types (AgL: ExecResult, ParsePolicy) are always
-        # available.  Field/variant names for constructor-kind registration
-        # come from the shared prelude ``TypeDef`` literals — the handles
-        # themselves carry no shape data.
+        # available.  Field/variant names AND zones for constructor-kind
+        # registration come from the shared prelude ``TypeDef`` literals (via
+        # ``TypeTable.field_kinds``) — the handles themselves carry no shape
+        # data.
         for prelude_name, prelude_type in BUILTIN_PRELUDE_TYPES.items():
             self._types[prelude_name] = prelude_type
             if isinstance(prelude_type, RecordType):
-                fields = tuple(
-                    (fname, ParamZone.STANDARD)
-                    for fname in self._type_table.record_fields(prelude_type)
-                )
+                fields = self._type_table.field_kinds(prelude_type)
                 self._constructor_field_kinds[(RESERVED_ID, (), prelude_name)] = fields
                 self._constructor_field_kinds_by_decl_id[prelude_type.decl_id] = fields
                 continue
@@ -1119,9 +1119,7 @@ class TypeEnvironment:
                 continue
             assert isinstance(prelude_type, EnumType)
             for member in self._type_table.enum_members(prelude_type):
-                fields = tuple(
-                    (fname, ParamZone.STANDARD) for fname in self._type_table.record_fields(member)
-                )
+                fields = self._type_table.field_kinds(member)
                 self._constructor_field_kinds[(RESERVED_ID, (prelude_name,), member.name)] = fields
                 self._constructor_field_kinds_by_decl_id[member.decl_id] = fields
         # Exception constructor field kinds are NOT pre-registered here: each
@@ -1129,8 +1127,8 @@ class TypeEnvironment:
         # (stored on its TypeDef as ``field_kinds``, alongside ``fields``),
         # same as a record's fields.  ``get_constructor_field_kinds_for_type``
         # derives the full flattened (base-chain-inherited + own) kinds
-        # directly from ``type_table.exception_field_kinds`` on demand instead
-        # of a pre-registration step, since that requires no build ordering.
+        # directly from ``type_table.field_kinds`` on demand instead of a
+        # pre-registration step, since that requires no build ordering.
 
     def module_interface(self) -> ModuleTypeInterface:
         """Export this module's closed type metadata without another header pass."""
@@ -1654,6 +1652,35 @@ class TypeEnvironment:
             return self._resolve_type_key_as_bare(key, name, span=span)
         except AglTypeError:
             return None
+
+    def type_name_declaration(self, type_expr: NameT | AppliedT) -> DeclKey | None:
+        """Return the declaration identity an annotation's type name selects.
+
+        Follows resolution's selection order without resolving, so a host can
+        see through the transparent aliases resolution erases: this module's
+        own type namespace, then scope-use and import contributions, then a
+        qualified name's module route. ``None`` when no route selects one, as
+        for a builtin alias target no declaration reaches. *type_expr* must
+        belong to a checked annotation.
+        """
+        name = type_expr.name
+        qualifier = type_expr.qualifier
+        if qualifier is None:
+            local_name = self._lexical_type_name(name)
+            if self._has_own_type_name(local_name):
+                return (self._module_id, *_split_scoped_type_name(local_name))
+            bare = self._bare_type_key(name, None)
+            return None if bare is None else bare[0]
+        qualified_local_name = self._local_qualified_type_name(qualifier, name)
+        if qualified_local_name is not None:
+            return (self._module_id, *_split_scoped_type_name(qualified_local_name))
+        if qualifier.anchor is None:
+            segments = tuple(segment.name for segment in qualifier.segments)
+            opened = self._opened_type_key(_type_path_atom((*segments, name)), None)
+            if opened is not None:
+                return opened
+        qname = self._resolve_import_qname(qualifier, name, span=None, required=False)
+        return None if qname is None else self._qname_decl_key(qname)
 
     @staticmethod
     def _qname_decl_key(qname: QName) -> DeclKey:
@@ -2506,6 +2533,9 @@ class TypeEnvironment:
         bare = self._resolve_bare_type(name, span)
         if bare is not None:
             return bare
+        reserved_alias = BUILTIN_ALIAS_TARGETS.get(name)
+        if reserved_alias is not None:
+            return reserved_alias
         raise AglTypeError(
             f"Unknown type '{name}'.",
             span=span,
@@ -3077,22 +3107,15 @@ class TypeEnvironment:
         ``RecordType``, ``EnumType``, and ``ExceptionType`` all carry their own
         ``module_id``, so the owning module is read directly off the handle —
         no caller-supplied module id is needed.  Exception field kinds are
-        derived directly from ``type_table.exception_field_kinds``, which
-        flattens the ``extends`` base chain (base kinds first, then own kinds,
-        each honoring its declaration's ``@arg-*`` attribute —
-        exactly like a record's fields), rather than through the registered-kinds
-        table records/enums use, since an exception's kinds are never pre-registered
-        (see ``TypeEnvironment.
-        __init__``).  ``exception_field_kinds`` returns ``ParamZone.value``
-        strings rather than the enum (``semantics`` may not import
-        ``syntax.nodes``), so each is converted back with ``ParamZone(...)``
-        here, in the ``typecheck`` layer.
+        derived directly from ``type_table.field_kinds``, which flattens the
+        ``extends`` base chain (base kinds first, then own kinds, each
+        honoring its declaration's ``@arg-*`` attribute — exactly like a
+        record's fields), rather than through the registered-kinds table
+        records/enums use, since an exception's kinds are never pre-registered
+        (see ``TypeEnvironment.__init__``).
         """
         if isinstance(typ, ExceptionType):
-            return tuple(
-                (fname, ParamZone(kind_value))
-                for fname, kind_value in self._type_table.exception_field_kinds(typ)
-            )
+            return self._type_table.field_kinds(typ)
         assert isinstance(typ, RecordType), f"unexpected constructor owner type {typ!r}"
         by_identity = self._constructor_field_kinds_by_decl_id.get(typ.decl_id)
         if by_identity is not None:

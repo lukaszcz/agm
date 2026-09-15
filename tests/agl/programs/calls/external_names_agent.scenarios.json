@@ -1,0 +1,64 @@
+{
+  "scenarios": [
+    {
+      "name": "renamed_field_and_tag_accepted",
+      "agents": {
+        "responder": ["{\"answer-text\": \"42\", \"confidence\": 9}"],
+        "judge": ["{\"$case\": \"verified\", \"note\": \"looks right\"}"]
+      },
+      "expect": {
+        "stdout": "42\n9\nconfirmed: looks right\n",
+        "calls": {"responder": 1, "judge": 1},
+        "prompts": [
+          {
+            "agent": "responder",
+            "call": 0,
+            "schema_contains": ["answer-text", "confidence"]
+          },
+          {
+            "agent": "judge",
+            "call": 0,
+            "schema_contains": ["verified"]
+          }
+        ]
+      }
+    },
+    {
+      "name": "declared_field_names_rejected",
+      "agents": {
+        "responder": ["{\"text\": \"42\", \"score\": 9}"]
+      },
+      "expect": {
+        "stdout": "",
+        "calls": {"responder": 1},
+        "raises": {
+          "type": "AgentParseError",
+          "fields": {
+            "agent": {"$case": "AgentCommand", "command": "responder"},
+            "attempts": 1,
+            "target-type": "Answer"
+          }
+        }
+      }
+    },
+    {
+      "name": "declared_case_tag_rejected",
+      "agents": {
+        "responder": ["{\"answer-text\": \"ok\", \"confidence\": 1}"],
+        "judge": ["{\"$case\": \"Confirmed\", \"note\": \"x\"}"]
+      },
+      "expect": {
+        "stdout": "ok\n1\n",
+        "calls": {"responder": 1, "judge": 1},
+        "raises": {
+          "type": "AgentParseError",
+          "fields": {
+            "agent": {"$case": "AgentCommand", "command": "judge"},
+            "attempts": 1,
+            "target-type": "Verdict"
+          }
+        }
+      }
+    }
+  ]
+}

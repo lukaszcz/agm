@@ -1,8 +1,8 @@
 """AgL REPL package.
 
 The UI-free incremental session core lives in :mod:`agm.agl.repl.session`.
-The prompt_toolkit console, meta-command dispatch,
-result rendering, and the confirming agent wrapper.
+Sibling modules hold the shared loop, the two front ends, meta-command dispatch,
+and result rendering.
 """
 
 from __future__ import annotations

@@ -1,3 +1,0 @@
-builtin def render[T](value: T) -> text
-builtin def copy[T](value: T) -> T
-builtin def shallow-copy[T](value: T) -> T

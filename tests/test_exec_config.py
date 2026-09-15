@@ -23,33 +23,18 @@ class TestExecConfig:
     def test_explicit_values(self) -> None:
         cfg = ExecConfig(
             strict_json=False,
-            default_loop_limit=5,
             timeout=None,
             log=False,
             log_file=None,
-            runner="claude",
         )
         assert cfg.strict_json is False
-        assert cfg.default_loop_limit == 5
         assert cfg.timeout is None
         assert cfg.log is False
         assert cfg.log_file is None
-        assert cfg.runner == "claude"
-
-    def test_runner_defaults_to_none(self) -> None:
-        cfg = ExecConfig(
-            strict_json=False,
-            default_loop_limit=5,
-            timeout=None,
-            log=False,
-            log_file=None,
-        )
-        assert cfg.runner is None
 
     def test_frozen(self) -> None:
         cfg = ExecConfig(
             strict_json=False,
-            default_loop_limit=5,
             timeout=None,
             log=False,
             log_file=None,
@@ -64,73 +49,44 @@ class TestLoadExecConfig:
         home.mkdir()
         cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
         assert cfg.strict_json is False
-        assert cfg.default_loop_limit is None
         assert cfg.timeout is None
         assert cfg.log is False
         assert cfg.log_file is None
-        assert cfg.runner is None
-
-    def test_runner_loaded_from_toml(self, tmp_path: Path) -> None:
-        home = tmp_path / "home"
-        config = home / ".agm" / "config.toml"
-        config.parent.mkdir(parents=True)
-        config.write_text('[exec]\nrunner = "claude"\n')
-        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
-        assert cfg.runner == "claude"
-
-    def test_blank_runner_is_none(self, tmp_path: Path) -> None:
-        home = tmp_path / "home"
-        config = home / ".agm" / "config.toml"
-        config.parent.mkdir(parents=True)
-        config.write_text('[exec]\nrunner = ""\n')
-        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
-        assert cfg.runner is None
-
-    def test_runner_is_not_a_program_table_override(self, tmp_path: Path) -> None:
-        """Unlike an engine key, ``runner`` never comes from a qualified program table."""
-        home = tmp_path / "home"
-        config = home / ".agm" / "config.toml"
-        config.parent.mkdir(parents=True)
-        config.write_text('[exec]\nrunner = "claude"\n')
-        merged = load_merged_config(home=home, proj_dir=None, cwd=tmp_path)
-        cfg = exec_config_from_merged(merged, program_table={"runner": "codex"})
-        assert cfg.runner == "claude"
 
     def test_load_exec_config_from_toml(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         config = home / ".agm" / "config.toml"
         config.parent.mkdir(parents=True)
-        config.write_text('[exec]\nstrict-json = true\nmax-iters = 10\ntimeout = "30m"\n')
+        config.write_text('[exec]\nstrict-json = true\ntimeout = "30m"\n')
         cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
         assert cfg.strict_json is True
-        assert cfg.default_loop_limit == 10
         assert cfg.timeout == pytest.approx(1800.0)
 
     def test_project_config_overrides_home(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text("[exec]\nmax-iters = 3\n")
+        (home / ".agm" / "config.toml").write_text("[exec]\ntimeout = 3\n")
         proj_dir = tmp_path / "proj"
         (proj_dir / "config").mkdir(parents=True)
-        (proj_dir / "config" / "config.toml").write_text("[exec]\nmax-iters = 7\n")
+        (proj_dir / "config" / "config.toml").write_text("[exec]\ntimeout = 7\n")
         cfg = load_exec_config(home=home, proj_dir=proj_dir, cwd=tmp_path)
-        assert cfg.default_loop_limit == 7
+        assert cfg.timeout == pytest.approx(7.0)
 
     def test_command_name_selects_sub_table(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         config = home / ".agm" / "config.toml"
         config.parent.mkdir(parents=True)
-        config.write_text("[exec]\nmax-iters = 3\n\n[exec.myflow]\nmax-iters = 7\n")
+        config.write_text("[exec]\ntimeout = 3\n\n[exec.myflow]\ntimeout = 7\n")
         cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path, command_name="myflow")
-        assert cfg.default_loop_limit == 7
+        assert cfg.timeout == pytest.approx(7.0)
 
     def test_command_name_none_uses_base_table(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         config = home / ".agm" / "config.toml"
         config.parent.mkdir(parents=True)
-        config.write_text("[exec]\nmax-iters = 3\n\n[exec.myflow]\nmax-iters = 7\n")
+        config.write_text("[exec]\ntimeout = 3\n\n[exec.myflow]\ntimeout = 7\n")
         cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
-        assert cfg.default_loop_limit == 3
+        assert cfg.timeout == pytest.approx(3.0)
 
     def test_numeric_timeout(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
@@ -184,16 +140,23 @@ class TestExecConfigProgramTableOverride:
         home = tmp_path / "home"
         config = home / ".agm" / "config.toml"
         config.parent.mkdir(parents=True)
-        config.write_text("[exec]\nmax-iters = 5\n")
+        config.write_text("[exec]\ntimeout = 5\n")
         merged = load_merged_config(home=home, proj_dir=None, cwd=tmp_path)
-        cfg = exec_config_from_merged(merged, program_table={"max-iters": 10})
-        assert cfg.default_loop_limit == 10
+        cfg = exec_config_from_merged(merged, program_table={"timeout": 10})
+        assert cfg.timeout == pytest.approx(10.0)
 
     def test_program_table_partial_override(self, tmp_path: Path) -> None:
-        merged = {"exec": {"max-iters": 7, "strict-json": False}}
+        merged = {"exec": {"timeout": 7, "strict-json": False}}
         cfg = exec_config_from_merged(merged, program_table={"strict-json": True})
-        assert cfg.default_loop_limit == 7
+        assert cfg.timeout == pytest.approx(7.0)
         assert cfg.strict_json is True
+
+    @pytest.mark.parametrize(("value", "expected"), [(7, 7), (0, None), (True, None)])
+    def test_max_call_depth_accepts_only_a_positive_integer(
+        self, value: object, expected: int | None
+    ) -> None:
+        cfg = exec_config_from_merged({"exec": {"max-call-depth": value}})
+        assert cfg.max_call_depth == expected
 
 
 class TestModuleParameterConfigRoutes:
@@ -296,7 +259,7 @@ class TestModuleParameterConfigRoutes:
         err = capsys.readouterr().err
         assert "unknown-module" in err
         assert "unknown-program" in err
-        assert "max-iters" not in err
+        assert "max-iters" in err
 
 
 class TestPackageEntryConfigRoute:

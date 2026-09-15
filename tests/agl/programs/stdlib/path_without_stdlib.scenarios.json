@@ -1,0 +1,24 @@
+{
+  "scenarios": [
+    {
+      "name": "target_alone",
+      "no_stdlib": true,
+      "positional": ["notes.md"],
+      "params": {},
+      "expect": {
+        "stdout": "notes.md\n"
+      }
+    },
+    {
+      "name": "target_under_each_parent",
+      "no_stdlib": true,
+      "positional": ["notes.md"],
+      "params": {
+        "parents": ["work", "/tmp/archive"]
+      },
+      "expect": {
+        "stdout": "notes.md\nwork/notes.md\n/tmp/archive/notes.md\n"
+      }
+    }
+  ]
+}

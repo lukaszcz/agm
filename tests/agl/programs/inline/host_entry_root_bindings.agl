@@ -27,7 +27,7 @@ var visits = 0
 
 def describe() -> text = "%{label}: %{corner.x},%{corner.y}"
 
-def budget() -> int = config::max-iters
+def strict() -> bool = config::strict-json
 
 def area() -> int =
   case square of
@@ -61,6 +61,6 @@ print(visit())
 print(shadowed())
 print(tally)
 print(corner.y)
-print(budget())
+print(strict())
 let verdict: text = reviewer.ask("Review %{describe()}.")
 print(verdict)

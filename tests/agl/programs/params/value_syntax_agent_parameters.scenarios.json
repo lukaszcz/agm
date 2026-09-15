@@ -1,0 +1,103 @@
+{
+  "scenarios": [
+    {
+      "name": "shorthand",
+      "params": {
+        "worker": "claude/sonnet-medium"
+      },
+      "expect": {
+        "stdout": "claude sonnet medium\nno backup\n"
+      }
+    },
+    {
+      "name": "call_form_constructor",
+      "params": {
+        "worker": "AgentCodex(model = \"o3\", thinking = \"high\")"
+      },
+      "expect": {
+        "stdout": "codex o3 high\nno backup\n"
+      }
+    },
+    {
+      "name": "qualified_call_form_constructor",
+      "params": {
+        "worker": "Agent::AgentPi(provider = \"openai\", model = \"gpt-5\", thinking = \"low\")"
+      },
+      "expect": {
+        "stdout": "pi openai gpt-5 low\nno backup\n"
+      }
+    },
+    {
+      "name": "tagged_json",
+      "params": {
+        "worker": "{\"$case\":\"AgentClaude\",\"model\":\"opus\",\"thinking\":\"custom\"}"
+      },
+      "expect": {
+        "stdout": "claude opus custom\nno backup\n"
+      }
+    },
+    {
+      "name": "verbatim_command_fallback",
+      "params": {
+        "worker": "my-custom-agent --flag value"
+      },
+      "expect": {
+        "stdout": "command my-custom-agent --flag value\nno backup\n"
+      }
+    },
+    {
+      "name": "option_agent_nested_constructor",
+      "params": {
+        "worker": "claude/sonnet-medium",
+        "backup": "Some(AgentCodex(model = \"o3\", thinking = \"high\"))"
+      },
+      "expect": {
+        "stdout": "claude sonnet medium\ncodex o3 high\n"
+      }
+    },
+    {
+      "name": "bad_argument_call_form_is_a_host_error",
+      "params": {
+        "worker": "AgentClaude(model = \"opus\")"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": ["worker"]
+        }
+      }
+    },
+    {
+      "name": "unclosed_call_form_is_a_host_error_not_a_command",
+      "params": {
+        "worker": "AgentClaude(model = \"x\""
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": ["worker"]
+        }
+      }
+    },
+    {
+      "name": "misqualified_call_form_is_a_host_error_not_a_command",
+      "params": {
+        "worker": "Foo::AgentClaude(\"a\", \"b\")"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": ["worker"]
+        }
+      }
+    },
+    {
+      "name": "blank_text_is_a_host_error_not_a_command",
+      "params": {
+        "worker": "   "
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": ["worker"]
+        }
+      }
+    }
+  ]
+}

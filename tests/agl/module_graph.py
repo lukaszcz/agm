@@ -81,7 +81,7 @@ _DEFAULT_CAPABILITIES = HostCapabilities(
     },
 )
 
-_REPO_STDLIB_ROOT = Path(__file__).resolve().parents[2] / "stdlib"
+_REPO_STDLIB_ROOT = Path(__file__).resolve().parents[2] / "packages" / "stdlib"
 
 # The cached std/prelude module's node ids are seeded from a high base so they
 # never collide with an entry's own ids, which every call seeds from 0 (some

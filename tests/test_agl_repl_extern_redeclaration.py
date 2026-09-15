@@ -39,7 +39,7 @@ def _make_session_with_root(root: Path) -> ReplSession:
 
     roots = assemble_roots(
         invocation_root=root,
-        stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+        stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
         lib_root=None,
         configured=[],
         cli=[],

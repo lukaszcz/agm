@@ -22,6 +22,7 @@ Covers (per the AgL DSL contract):
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 from collections.abc import Callable, Mapping
 from decimal import Decimal
@@ -37,6 +38,7 @@ from agm.agl.ir.contracts import (
     DecodeSchema,
     DictDecode,
     EnumDecode,
+    FieldDecode,
     RecordDecode,
     RefDecode,
     ScalarDecode,
@@ -45,12 +47,13 @@ from agm.agl.ir.contracts import (
 )
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, RESERVED_ID, ModuleId
 from agm.agl.parser.parser import parse_program
 from agm.agl.runtime.codec import JsonCodec, ParseResult, TextCodec, extract_json_text
 from agm.agl.runtime.contract import OutputContract, materialize_contract, materialize_ir_contract
 from agm.agl.runtime.request import AgentRequest
 from agm.agl.semantics.exceptions import AglRaise
+from agm.agl.semantics.external_names import ExternalName
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
     ArrayType,
@@ -86,6 +89,7 @@ from agm.agl.syntax.nodes import (
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import build_decode_schema, derive_schema
 from agm.agl.typecheck.env import CheckedModule, OutputContractSpec
+from agm.agl.zones import ParamZone
 from tests._agl_helpers import (
     agl_roots,
     enum_type,
@@ -570,6 +574,55 @@ class TestDeriveSchema:
         assert isinstance(required_b, list)
         assert set(required_b) == {"$case", "x"}
 
+    def test_record_schema_keys_properties_by_json_name(self) -> None:
+        decl_id = next_decl_id()
+        typedef = TypeDef(
+            kind="record",
+            name="Renamed",
+            module_id=ENTRY_ID,
+            fields=(("value", IntType()),),
+            field_external_names=(("value", ExternalName(json_name="val")),),
+            decl_node_id=decl_id,
+        )
+        typ = RecordType(name="Renamed", decl_id=decl_id)
+        schema = derive_schema(typ, type_table_for(typedef))
+        assert schema == {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["val"],
+            "properties": {"val": {"type": "integer"}},
+        }
+
+    def test_enum_schema_uses_member_external_name_as_case_const(self) -> None:
+        enum_id = next_decl_id()
+        member_id = next_decl_id()
+        member = RecordType(
+            name="One", module_id=ENTRY_ID, scope_path=("Choice",), decl_id=member_id
+        )
+        member_def = TypeDef(
+            kind="record",
+            name="One",
+            module_id=ENTRY_ID,
+            scope_path=("Choice",),
+            external_name=ExternalName(json_name="uno"),
+            decl_node_id=member_id,
+        )
+        choice_def = TypeDef(
+            kind="enum", name="Choice", module_id=ENTRY_ID, members=(member,), decl_node_id=enum_id
+        )
+        typ = EnumType(name="Choice", decl_id=enum_id)
+        schema = derive_schema(typ, type_table_for(member_def, choice_def))
+        assert schema == {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["$case"],
+                    "properties": {"$case": {"const": "uno"}},
+                }
+            ]
+        }
+
 
 # ---------------------------------------------------------------------------
 # 1b. Recursive `$defs`/`$ref` schema emission
@@ -938,6 +991,7 @@ class TestRecursiveDecodeDerivation:
         from agm.agl.ir.contracts import (
             DecodePlan,
             EnumDecode,
+            FieldDecode,
             RefDecode,
             ScalarDecode,
             ScalarKind,
@@ -951,24 +1005,48 @@ class TestRecursiveDecodeDerivation:
         tree_body = EnumDecode(
             nominal=NominalId(tree.decl_id),
             display_name="Tree",
+            name="Tree",
             variants=(
                 VariantDecode(
                     name="Leaf",
+                    json_name="Leaf",
                     nominal=NominalId(members["Leaf"].decl_id),
                     display_name="Tree::Leaf",
                     fields=(),
+                    alias=None,
                 ),
                 VariantDecode(
                     name="Node",
+                    json_name="Node",
                     nominal=NominalId(members["Node"].decl_id),
                     display_name="Tree::Node",
                     fields=(
-                        ("value", ScalarDecode(ScalarKind.INT)),
-                        ("left", RefDecode("Tree")),
-                        ("right", RefDecode("Tree")),
+                        FieldDecode(
+                            "value",
+                            "value",
+                            ScalarDecode(ScalarKind.INT),
+                            zone=ParamZone.STANDARD,
+                            alias=None,
+                        ),
+                        FieldDecode(
+                            "left",
+                            "left",
+                            RefDecode("Tree"),
+                            zone=ParamZone.STANDARD,
+                            alias=None,
+                        ),
+                        FieldDecode(
+                            "right",
+                            "right",
+                            RefDecode("Tree"),
+                            zone=ParamZone.STANDARD,
+                            alias=None,
+                        ),
                     ),
+                    alias=None,
                 ),
             ),
+            host_agent=False,
         )
         assert plan == DecodePlan(root=RefDecode("Tree"), defs=(("Tree", tree_body),))
 
@@ -976,6 +1054,7 @@ class TestRecursiveDecodeDerivation:
         from agm.agl.ir.contracts import (
             ArrayDecode,
             DecodePlan,
+            FieldDecode,
             RecordDecode,
             RefDecode,
             ScalarDecode,
@@ -996,16 +1075,31 @@ class TestRecursiveDecodeDerivation:
         category_body = RecordDecode(
             nominal=NominalId(category.decl_id),
             display_name="Category",
+            name="Category",
             fields=(
-                ("name", ScalarDecode(ScalarKind.TEXT)),
-                ("subcategories", ArrayDecode(RefDecode("Category"))),
+                FieldDecode(
+                    "name",
+                    "name",
+                    ScalarDecode(ScalarKind.TEXT),
+                    zone=ParamZone.STANDARD,
+                    alias=None,
+                ),
+                FieldDecode(
+                    "subcategories",
+                    "subcategories",
+                    ArrayDecode(RefDecode("Category")),
+                    zone=ParamZone.STANDARD,
+                    alias=None,
+                ),
             ),
+            alias=None,
         )
         assert plan == DecodePlan(root=RefDecode("Category"), defs=(("Category", category_body),))
 
     def test_non_recursive_wrapper_inlined_recursive_field_in_defs(self) -> None:
         from agm.agl.ir.contracts import (
             EnumDecode,
+            FieldDecode,
             RecordDecode,
             RefDecode,
             ScalarDecode,
@@ -1019,10 +1113,18 @@ class TestRecursiveDecodeDerivation:
         assert plan.root == RecordDecode(
             nominal=NominalId(wrapper.decl_id),
             display_name="Wrapper",
+            name="Wrapper",
             fields=(
-                ("root", RefDecode("Tree")),
-                ("label", ScalarDecode(ScalarKind.TEXT)),
+                FieldDecode("root", "root", RefDecode("Tree"), zone=ParamZone.STANDARD, alias=None),
+                FieldDecode(
+                    "label",
+                    "label",
+                    ScalarDecode(ScalarKind.TEXT),
+                    zone=ParamZone.STANDARD,
+                    alias=None,
+                ),
             ),
+            alias=None,
         )
         assert [key for key, _ in plan.defs] == ["Tree"]
         tree_body = dict(plan.defs)["Tree"]
@@ -1032,6 +1134,7 @@ class TestRecursiveDecodeDerivation:
         from agm.agl.ir.contracts import (
             DecodePlan,
             EnumDecode,
+            FieldDecode,
             RecordDecode,
             RefDecode,
             VariantDecode,
@@ -1048,25 +1151,37 @@ class TestRecursiveDecodeDerivation:
         plan = build_decode_schema(a, table)
         members = table.enum_member_names(b)
         a_body = RecordDecode(
-            nominal=NominalId(a.decl_id), display_name="A", fields=(("b", RefDecode("B")),)
+            nominal=NominalId(a.decl_id),
+            display_name="A",
+            name="A",
+            fields=(FieldDecode("b", "b", RefDecode("B"), zone=ParamZone.STANDARD, alias=None),),
+            alias=None,
         )
         b_body = EnumDecode(
             nominal=NominalId(b.decl_id),
             display_name="B",
+            name="B",
             variants=(
                 VariantDecode(
                     name="Nil",
+                    json_name="Nil",
                     nominal=NominalId(members["Nil"].decl_id),
                     display_name="B::Nil",
                     fields=(),
+                    alias=None,
                 ),
                 VariantDecode(
                     name="Cons",
+                    json_name="Cons",
                     nominal=NominalId(members["Cons"].decl_id),
                     display_name="B::Cons",
-                    fields=(("a", RefDecode("A")),),
+                    fields=(
+                        FieldDecode("a", "a", RefDecode("A"), zone=ParamZone.STANDARD, alias=None),
+                    ),
+                    alias=None,
                 ),
             ),
+            host_agent=False,
         )
         assert plan == DecodePlan(root=RefDecode("A"), defs=(("A", a_body), ("B", b_body)))
 
@@ -1099,7 +1214,13 @@ class TestRecursiveDecodeDerivation:
 
     def test_non_recursive_decode_output_unchanged(self) -> None:
         """Spot-check: non-recursive DecodePlan has empty defs (representation-identical)."""
-        from agm.agl.ir.contracts import DecodePlan, RecordDecode, ScalarDecode, ScalarKind
+        from agm.agl.ir.contracts import (
+            DecodePlan,
+            FieldDecode,
+            RecordDecode,
+            ScalarDecode,
+            ScalarKind,
+        )
         from agm.agl.ir.ids import NominalId
 
         inner, inner_def = record_type("Inner", {"x": IntType()})
@@ -1109,16 +1230,31 @@ class TestRecursiveDecodeDerivation:
             root=RecordDecode(
                 nominal=NominalId(outer.decl_id),
                 display_name="Outer",
+                name="Outer",
                 fields=(
-                    (
+                    FieldDecode(
+                        "inner",
                         "inner",
                         RecordDecode(
                             nominal=NominalId(inner.decl_id),
                             display_name="Inner",
-                            fields=(("x", ScalarDecode(ScalarKind.INT)),),
+                            name="Inner",
+                            fields=(
+                                FieldDecode(
+                                    "x",
+                                    "x",
+                                    ScalarDecode(ScalarKind.INT),
+                                    zone=ParamZone.STANDARD,
+                                    alias=None,
+                                ),
+                            ),
+                            alias=None,
                         ),
+                        zone=ParamZone.STANDARD,
+                        alias=None,
                     ),
                 ),
+                alias=None,
             ),
             defs=(),
         )
@@ -1169,6 +1305,180 @@ class TestRecursiveDecodeDerivation:
         schema, plan = derive_schema_and_decode(tree, table)
         assert schema == derive_schema(tree, table)
         assert plan == build_decode_schema(tree, table)
+
+    def test_record_field_zones_reflect_declared_param_zones(self) -> None:
+        """FieldDecode.zone mirrors each field's own declared arg zone."""
+        point, point_def = record_type(
+            "Point", {"x": IntType(), "y": IntType(), "label": TextType()}
+        )
+        point_def = dataclasses.replace(
+            point_def,
+            field_kinds=(
+                ParamZone.POSITIONAL_ONLY,
+                ParamZone.STANDARD,
+                ParamZone.NAMED_ONLY,
+            ),
+        )
+        plan = build_decode_schema(point, type_table_for(point_def))
+        assert isinstance(plan.root, RecordDecode)
+        zones = {field.name: field.zone for field in plan.root.fields}
+        assert zones == {
+            "x": ParamZone.POSITIONAL_ONLY,
+            "y": ParamZone.STANDARD,
+            "label": ParamZone.NAMED_ONLY,
+        }
+
+    def test_generic_record_field_zones_carry_through_instantiation(self) -> None:
+        """A generic record's declared zones apply identically to every instantiation."""
+        box_id = next_decl_id()
+        box_def = TypeDef(
+            kind="record",
+            name="Box",
+            module_id=ENTRY_ID,
+            type_params=("T",),
+            fields=(("value", TypeVarType("T")),),
+            field_kinds=(ParamZone.NAMED_ONLY,),
+            decl_node_id=box_id,
+        )
+        box_int = RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=box_id)
+        plan = build_decode_schema(box_int, type_table_for(box_def))
+        assert isinstance(plan.root, RecordDecode)
+        assert plan.root.fields[0].zone == ParamZone.NAMED_ONLY
+
+    def test_enum_member_field_zones_are_independent_per_member(self) -> None:
+        """Inline enum member fields carry their own declared zones, one set per member."""
+        shape_id = next_decl_id()
+        circle_id = next_decl_id()
+        rect_id = next_decl_id()
+        circle_def = TypeDef(
+            kind="record",
+            name="Circle",
+            module_id=ENTRY_ID,
+            scope_path=("Shape",),
+            fields=(("radius", IntType()),),
+            field_kinds=(ParamZone.POSITIONAL_ONLY,),
+            decl_node_id=circle_id,
+        )
+        rect_def = TypeDef(
+            kind="record",
+            name="Rect",
+            module_id=ENTRY_ID,
+            scope_path=("Shape",),
+            fields=(("w", IntType()), ("h", IntType())),
+            field_kinds=(ParamZone.STANDARD, ParamZone.NAMED_ONLY),
+            decl_node_id=rect_id,
+        )
+        shape_def = TypeDef(
+            kind="enum",
+            name="Shape",
+            module_id=ENTRY_ID,
+            members=(
+                RecordType(
+                    name="Circle", module_id=ENTRY_ID, scope_path=("Shape",), decl_id=circle_id
+                ),
+                RecordType(name="Rect", module_id=ENTRY_ID, scope_path=("Shape",), decl_id=rect_id),
+            ),
+            decl_node_id=shape_id,
+        )
+        shape = shape_def.handle()
+        table = type_table_for(circle_def, rect_def, shape_def)
+        plan = build_decode_schema(shape, table)
+        assert isinstance(plan.root, EnumDecode)
+        variants = {variant.name: variant for variant in plan.root.variants}
+        assert variants["Circle"].fields[0].zone == ParamZone.POSITIONAL_ONLY
+        zones = {f.name: f.zone for f in variants["Rect"].fields}
+        assert zones == {"w": ParamZone.STANDARD, "h": ParamZone.NAMED_ONLY}
+
+    def test_field_alias_is_the_name_spelling_when_it_differs_from_declared(self) -> None:
+        point, point_def = record_type("Point", {"x": IntType(), "y": IntType()})
+        point_def = dataclasses.replace(
+            point_def,
+            field_external_names=(("x", ExternalName(name="abscissa")),),
+        )
+        plan = build_decode_schema(point, type_table_for(point_def))
+        assert isinstance(plan.root, RecordDecode)
+        fields = {field.name: field for field in plan.root.fields}
+        assert fields["x"].alias == "abscissa"
+        assert fields["y"].alias is None
+
+    def test_field_alias_is_none_when_only_json_name_is_given(self) -> None:
+        """``@json-name`` alone changes the JSON spelling only, not the value-syntax alias."""
+        point, point_def = record_type("Point", {"x": IntType()})
+        point_def = dataclasses.replace(
+            point_def,
+            field_external_names=(("x", ExternalName(json_name="X")),),
+        )
+        plan = build_decode_schema(point, type_table_for(point_def))
+        assert isinstance(plan.root, RecordDecode)
+        assert plan.root.fields[0].json_name == "X"
+        assert plan.root.fields[0].alias is None
+
+    def test_record_name_and_alias_reflect_declared_name_and_name_attribute(self) -> None:
+        point, point_def = record_type("Point", {"x": IntType()})
+        point_def = dataclasses.replace(point_def, external_name=ExternalName(name="Pt"))
+        plan = build_decode_schema(point, type_table_for(point_def))
+        assert isinstance(plan.root, RecordDecode)
+        assert plan.root.name == "Point"
+        assert plan.root.alias == "Pt"
+
+    def test_record_alias_is_none_without_a_name_attribute(self) -> None:
+        point, point_def = record_type("Point", {"x": IntType()})
+        plan = build_decode_schema(point, type_table_for(point_def))
+        assert isinstance(plan.root, RecordDecode)
+        assert plan.root.alias is None
+
+    def test_enum_name_is_the_terminal_declared_name(self) -> None:
+        shape, shape_def = enum_type("Shape", {"Circle": {}})
+        plan = build_decode_schema(shape, type_table_for(shape_def))
+        assert isinstance(plan.root, EnumDecode)
+        assert plan.root.name == "Shape"
+
+    def test_variant_alias_is_the_member_name_attribute_when_it_differs(self) -> None:
+        shape_id = next_decl_id()
+        circle_id = next_decl_id()
+        circle_def = TypeDef(
+            kind="record",
+            name="Circle",
+            module_id=ENTRY_ID,
+            scope_path=("Shape",),
+            external_name=ExternalName(name="Round"),
+            decl_node_id=circle_id,
+        )
+        shape_def = TypeDef(
+            kind="enum",
+            name="Shape",
+            module_id=ENTRY_ID,
+            members=(
+                RecordType(
+                    name="Circle", module_id=ENTRY_ID, scope_path=("Shape",), decl_id=circle_id
+                ),
+            ),
+            decl_node_id=shape_id,
+        )
+        shape = shape_def.handle()
+        plan = build_decode_schema(shape, type_table_for(circle_def, shape_def))
+        assert isinstance(plan.root, EnumDecode)
+        assert plan.root.variants[0].alias == "Round"
+
+    def test_variant_alias_is_none_without_a_name_attribute(self) -> None:
+        shape, shape_def = enum_type("Shape", {"Circle": {}})
+        plan = build_decode_schema(shape, type_table_for(shape_def))
+        assert isinstance(plan.root, EnumDecode)
+        assert plan.root.variants[0].alias is None
+
+    def test_host_agent_is_true_only_for_the_standard_agent_enum(self) -> None:
+        agent = EnumType(
+            name="Agent", module_id=RESERVED_ID, decl_id=require_reserved_nominal_id("Agent")
+        )
+        plan = build_decode_schema(agent, type_table_for())
+        assert isinstance(plan.root, EnumDecode)
+        assert plan.root.host_agent is True
+
+    def test_host_agent_is_false_for_a_user_enum_literally_named_agent(self) -> None:
+        agent, agent_def = enum_type("Agent", {"Solo": {}}, module_id=ENTRY_ID)
+        plan = build_decode_schema(agent, type_table_for(agent_def))
+        assert isinstance(plan.root, EnumDecode)
+        assert plan.root.host_agent is False
 
 
 # ---------------------------------------------------------------------------
@@ -2460,15 +2770,15 @@ program def main(issue: Issue) -> unit =
             convert_host_value("e", "val", ExceptionType(name="Boom"), type_table_for())
 
     def test_structured_param_is_strict_no_repair(self) -> None:
-        """host --param values are parsed strictly; typos are NOT repaired.
+        """host --param values read strict JSON or AgL value syntax, no repair.
 
-        A trailing comma (which json-repair would silently fix for chatty agent
-        output) must be rejected for a user-supplied structured param, with an
-        error that makes the JSON requirement clear.
+        A trailing comma (which json-repair would silently fix for chatty
+        agent output) is malformed for both: not strict JSON, and a record
+        type needs a constructor call, not a dict literal.
         """
         from agm.agl.runtime.engine_config import convert_host_value
 
-        with pytest.raises(ValueError, match="JSON parse"):
+        with pytest.raises(ValueError):
             issue_type, issue_def = record_type(
                 "Issue", {"title": TextType(), "severity": IntType()}
             )
@@ -2480,10 +2790,11 @@ program def main(issue: Issue) -> unit =
             )
 
     def test_structured_param_rejects_fenced_json(self) -> None:
-        """a Markdown-fenced --param value is not stripped (strict parsing)."""
+        """A Markdown-fenced --param value reads as neither strict JSON nor
+        AgL value syntax (no repair, no fence stripping)."""
         from agm.agl.runtime.engine_config import convert_host_value
 
-        with pytest.raises(ValueError, match="JSON parse"):
+        with pytest.raises(ValueError):
             convert_host_value(
                 "tags",
                 "```json\n[1, 2]\n```",
@@ -2500,24 +2811,49 @@ program def main(issue: Issue) -> unit =
 _R_DECODE = RecordDecode(
     nominal=NominalId(1),
     display_name="R",
-    fields=(("x", ScalarDecode(kind=ScalarKind.INT)),),
+    name="R",
+    fields=(
+        FieldDecode(
+            "x", "x", ScalarDecode(kind=ScalarKind.INT), zone=ParamZone.STANDARD, alias=None
+        ),
+    ),
+    alias=None,
 )
 _E_DECODE = EnumDecode(
     nominal=NominalId(1),
     display_name="E",
-    variants=(VariantDecode(name="A", nominal=NominalId(999), display_name="A", fields=()),),
+    name="E",
+    variants=(
+        VariantDecode(
+            name="A",
+            json_name="A",
+            nominal=NominalId(999),
+            display_name="A",
+            fields=(),
+            alias=None,
+        ),
+    ),
+    host_agent=False,
 )
 _E_PAYLOAD_DECODE = EnumDecode(
     nominal=NominalId(1),
     display_name="E",
+    name="E",
     variants=(
         VariantDecode(
             name="B",
+            json_name="B",
             nominal=NominalId(999),
             display_name="B",
-            fields=(("x", ScalarDecode(kind=ScalarKind.INT)),),
+            fields=(
+                FieldDecode(
+                    "x", "x", ScalarDecode(kind=ScalarKind.INT), zone=ParamZone.STANDARD, alias=None
+                ),
+            ),
+            alias=None,
         ),
     ),
+    host_agent=False,
 )
 
 

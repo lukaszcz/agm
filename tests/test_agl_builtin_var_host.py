@@ -26,7 +26,7 @@ from agm.config.context import ConfigContext
 from tests._agl_helpers import write_file_program
 from tests.conftest import FakeAgentTransport
 
-_STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
+_STDLIB = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
 
 
 def _exec_args(
@@ -37,7 +37,6 @@ def _exec_args(
         file=str(agl_file),
         argument_tokens=[],
         strict_json=None,
-        max_iters=None,
         no_log=no_log,
         log=log,
         log_file=log_file,

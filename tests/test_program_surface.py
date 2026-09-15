@@ -187,11 +187,11 @@ def test_exec_and_registered_host_surfaces_shadow_different_bare_names() -> None
     )
 
     assert exec_surface.shadowed_bare == frozenset({"log", "max-call-depth"})
-    assert registered_surface.shadowed_bare == frozenset()
+    assert registered_surface.shadowed_bare == frozenset({"log", "max-call-depth"})
     assert "log" not in _entry(exec_surface, log).spellings
-    assert _entry(registered_surface, log).spellings[0] == "log"
+    assert "log" not in _entry(registered_surface, log).spellings
     assert "max-call-depth" not in _entry(exec_surface, call_depth).spellings
-    assert _entry(registered_surface, call_depth).spellings[0] == "max-call-depth"
+    assert "max-call-depth" not in _entry(registered_surface, call_depth).spellings
 
 
 def test_only_negatable_projections_contribute_negation_spellings() -> None:

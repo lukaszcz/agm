@@ -1,0 +1,5 @@
+record Item
+  alpha: int
+  @name("alpha") beta: int
+
+program def main() -> unit = ()

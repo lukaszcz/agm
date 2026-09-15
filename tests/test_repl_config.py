@@ -92,10 +92,10 @@ class TestSaveReplTheme:
         home = tmp_path / "home"
         agm_dir = home / ".agm"
         agm_dir.mkdir(parents=True)
-        (agm_dir / "config.toml").write_text('[exec]\nrunner = "claude -p"\n')
+        (agm_dir / "config.toml").write_text('[exec]\ndefault-agent = "claude -p"\n')
         save_repl_theme("dark", home=home)
         content = (agm_dir / "config.toml").read_text()
-        assert 'runner = "claude -p"' in content
+        assert 'default-agent = "claude -p"' in content
         assert "dark" in content
 
     def test_creates_parent_dir_when_absent(self, tmp_path: Path) -> None:

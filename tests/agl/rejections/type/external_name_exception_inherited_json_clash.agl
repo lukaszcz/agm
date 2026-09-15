@@ -1,0 +1,7 @@
+exception Base extends Exception
+  code: int
+
+exception Derived extends Base
+  @json-name("code") detail: int
+
+program def main() -> unit = ()

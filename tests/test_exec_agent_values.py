@@ -65,41 +65,13 @@ def test_exec_agent_method_command_session_substitutes_its_session_id(
     assert len(argv) == 3
 
 
-def test_exec_runner_default_session_uses_a_session_id_placeholder(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    fake_agent_transport: FakeAgentTransport,
-) -> None:
-    home = tmp_path / "home"
-    config_dir = home / ".agm"
-    config_dir.mkdir(parents=True)
-    (config_dir / "config.toml").write_text('[exec]\nrunner = "command %{SESSION_ID}"\n')
-    program = tmp_path / "program.agl"
-    write_file_program(program, 'let answer: text = ask("hello")\nprint answer\n')
-    monkeypatch.setattr(
-        exec_engine,
-        "current_config_context",
-        lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-    )
-    fake_agent_transport.queue(fake_agent_transport.success("done"))
-
-    result = _invoke(CliRunner(), ["exec", "--no-log", str(program)])
-
-    assert result.exit_code == 0, result.output
-    assert result.output == "done\n"
-    prompt, argv = fake_agent_transport.calls[0]
-    assert prompt == "hello"
-    assert argv[0] == "command"
-    assert len(argv) == 2
-
-
-def test_exec_runner_without_a_session_id_placeholder_fails_free_ask(
+def test_exec_default_agent_command_without_a_session_id_placeholder_fails_free_ask(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = tmp_path / "home"
     config_dir = home / ".agm"
     config_dir.mkdir(parents=True)
-    (config_dir / "config.toml").write_text('[exec]\nrunner = "command"\n')
+    (config_dir / "config.toml").write_text('[exec]\ndefault-agent = "command"\n')
     program = tmp_path / "program.agl"
     write_file_program(program, 'let answer: text = ask("hello")\nprint answer\n')
     monkeypatch.setattr(

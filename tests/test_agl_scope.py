@@ -1459,7 +1459,7 @@ class TestReservedNames:
 
 class TestBuiltinVarPlacement:
     def test_entry_module_declaration_rejected(self) -> None:
-        err = reject_scope("builtin var max-iters: int\n()")
+        err = reject_scope("builtin var strict-json: bool\n()")
         line, message = diag(err)
         assert "std/config" in message
         assert line == 1
@@ -1468,7 +1468,7 @@ class TestBuiltinVarPlacement:
         """The region relaxation lifts only the scope-path clause; the module
         restriction stands, so a scoped ``builtin var`` outside ``std/config``
         is rejected the same way as a root one."""
-        err = reject_scope("scope Region\n  builtin var max-iters: int\nend Region\n\n()")
+        err = reject_scope("scope Region\n  builtin var strict-json: bool\nend Region\n\n()")
         line, message = diag(err)
         assert "std/config" in message
         assert line == 2
@@ -1847,6 +1847,74 @@ class TestBuiltinCallClassification:
         assert isinstance(b_call, Call)
         assert r.builtin_calls[a_call.node_id] == BuiltinKind.PRINT
         assert r.builtin_calls[b_call.node_id] == BuiltinKind.PRINT
+
+
+class TestParseTryParseNonReservedClassification:
+    """``parse``/``try-parse`` are classified only once resolved as a builtin
+    def, never reserved in bare position — so a module's own ``parse`` (e.g.
+    ``std/json``'s) is never hijacked."""
+
+    def test_bare_parse_inside_a_module_declaring_its_own_resolves_locally(self) -> None:
+        r = parse_and_resolve('def parse(value: text) -> text = value\nlet x = parse("hi")\nx')
+        own_def = r.program.body.items[0]
+        assert isinstance(own_def, FuncDef)
+        let_node = r.program.body.items[1]
+        assert isinstance(let_node, LetDecl)
+        call = let_node.value
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, VarRef)
+        ref = r.resolution[call.callee.node_id]
+        assert ref.decl_node_id == own_def.node_id
+        assert not ref.is_builtin
+        assert call.node_id not in r.builtin_calls
+
+    def test_use_std_json_bare_parse_is_ambiguous_with_prelude_not_silently_hijacked(
+        self,
+    ) -> None:
+        """``use std/json::*`` puts json's own ``parse`` in bare scope alongside
+        the prelude's ``std/value::parse``: a real ambiguity naming both, proof
+        that json's declaration is genuinely visible rather than shadowed by a
+        reserved bare-name override (which would resolve silently to
+        ``std/value::parse`` with no ambiguity at all)."""
+        err = reject_scope('import std/json\nuse std/json::*\nlet x = parse("{}")\nx')
+        message = str(err)
+        assert "ambiguous" in message
+        assert "std/json::parse" in message
+        assert "std/value::parse" in message
+
+    def test_qualified_json_parse_is_not_classified_as_value_parse(self) -> None:
+        r = parse_and_resolve('import std/json\nlet x = json::parse("{}")\nx')
+        let_node = next(item for item in r.program.body.items if isinstance(item, LetDecl))
+        call = let_node.value
+        assert isinstance(call, Call)
+        assert call.node_id not in r.builtin_calls
+
+    def test_qualified_value_parse_is_classified_as_parse(self) -> None:
+        r = parse_and_resolve('import std/value\nlet x = value::parse::[int]("1")\nx')
+        let_node = next(item for item in r.program.body.items if isinstance(item, LetDecl))
+        call = let_node.value
+        assert isinstance(call, Call)
+        assert r.builtin_calls[call.node_id] == BuiltinKind.PARSE
+
+    def test_bare_parse_with_no_local_declaration_resolves_to_std_value_parse(self) -> None:
+        r = parse_and_resolve('let x = parse::[int]("1")\nx')
+        let_node = r.program.body.items[0]
+        assert isinstance(let_node, LetDecl)
+        call = let_node.value
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, VarRef)
+        assert r.resolution[call.callee.node_id].is_builtin
+        assert r.builtin_calls[call.node_id] == BuiltinKind.PARSE
+
+    def test_bare_try_parse_with_no_local_declaration_resolves_to_std_value_try_parse(
+        self,
+    ) -> None:
+        r = parse_and_resolve('let x = try-parse::[int]("1")\nx')
+        let_node = r.program.body.items[0]
+        assert isinstance(let_node, LetDecl)
+        call = let_node.value
+        assert isinstance(call, Call)
+        assert r.builtin_calls[call.node_id] == BuiltinKind.TRY_PARSE
 
 
 # ---------------------------------------------------------------------------
@@ -3779,7 +3847,7 @@ class TestImportDeclScope:
 
     Each import here targets ``std/prelude`` — the only always-real module
     available to this file's ``resolve_entry``-backed ``parse_and_resolve``
-    (its search root is the repo's real ``stdlib/`` directory; there is no
+    (its search root is the repo's real ``packages/stdlib/`` directory; there is no
     on-disk ``foo`` module for it to find). Under the old ``resolve_module``
     wrapper, an import naming a nonexistent module never actually resolved to
     a file — the per-module pass has no loader, so a bogus module id like

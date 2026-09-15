@@ -33,7 +33,7 @@ from tests._timeouts import fail_if_slow
 # Helpers
 # ---------------------------------------------------------------------------
 
-_REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+_REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
 
 
 def _roots(*paths: Path) -> RootSet:

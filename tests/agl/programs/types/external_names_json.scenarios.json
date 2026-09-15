@@ -1,0 +1,100 @@
+{
+  "scenarios": [
+    {
+      "name": "referenced_member_json_name",
+      "params": {
+        "x": 3,
+        "y": 4,
+        "sides": 5,
+        "side": 6,
+        "code": 7,
+        "detail": "oops",
+        "shape-json": "{\"$case\": \"triangle-shape\", \"sides\": 9}",
+        "point-param": {
+          "x-coord": 30,
+          "y-name": 31
+        },
+        "shape-param": {
+          "$case": "sq",
+          "side": 32
+        }
+      },
+      "expect": {
+        "stdout": "3\n4\n{\"x-coord\": 3, \"y-name\": 4}\n3\n4\n{\"$case\": \"triangle-shape\", \"sides\": 5}\n{\"$case\": \"sq\", \"side\": 6}\ntriangle: 9\n20\n21\ntext-square: 22\nfalse\nfalse\n30\n31\nparam-square: 32\n{\"val\": 7}\n7\n77\n{\"$case\": \"success\", \"value\": 5}\ngeneric-ok: 88\n7\n{\"message\": \"boom\", \"error-code\": 7, \"detail\": \"oops\"}\n"
+      }
+    },
+    {
+      "name": "inline_member_name_default_json_name",
+      "params": {
+        "x": 10,
+        "y": -2,
+        "sides": 1,
+        "side": 8,
+        "code": 0,
+        "detail": "",
+        "shape-json": "{\"$case\": \"sq\", \"side\": 12}",
+        "point-param": {
+          "x-coord": -5,
+          "y-name": 100
+        },
+        "shape-param": {
+          "$case": "triangle-shape",
+          "sides": 40
+        }
+      },
+      "expect": {
+        "stdout": "10\n-2\n{\"x-coord\": 10, \"y-name\": -2}\n10\n-2\n{\"$case\": \"triangle-shape\", \"sides\": 1}\n{\"$case\": \"sq\", \"side\": 8}\nsquare: 12\n20\n21\ntext-square: 22\nfalse\nfalse\n-5\n100\nparam-triangle: 40\n{\"val\": 0}\n0\n77\n{\"$case\": \"success\", \"value\": 1}\ngeneric-ok: 88\n0\n{\"message\": \"boom\", \"error-code\": 0, \"detail\": \"\"}\n"
+      }
+    },
+    {
+      "name": "unrenamed_member_falls_back_to_declared_tag",
+      "params": {
+        "x": 0,
+        "y": 0,
+        "sides": 2,
+        "side": 3,
+        "code": 42,
+        "detail": "critical",
+        "shape-json": "{\"$case\": \"Circle\", \"radius\": 11}",
+        "point-param": {
+          "x-coord": 7,
+          "y-name": 8
+        },
+        "shape-param": {
+          "$case": "Circle",
+          "radius": 99
+        }
+      },
+      "expect": {
+        "stdout": "0\n0\n{\"x-coord\": 0, \"y-name\": 0}\n0\n0\n{\"$case\": \"triangle-shape\", \"sides\": 2}\n{\"$case\": \"sq\", \"side\": 3}\ncircle: 11\n20\n21\ntext-square: 22\nfalse\nfalse\n7\n8\nparam-circle: 99\n{\"val\": 42}\n42\n77\n{\"$case\": \"success\", \"value\": 2}\ngeneric-ok: 88\n42\n{\"message\": \"boom\", \"error-code\": 42, \"detail\": \"critical\"}\n"
+      }
+    },
+    {
+      "name": "shape_param_rejects_declared_case_tag",
+      "params": {
+        "x": 1,
+        "y": 1,
+        "sides": 1,
+        "side": 1,
+        "code": 1,
+        "detail": "d",
+        "shape-json": "{\"$case\": \"triangle-shape\", \"sides\": 1}",
+        "point-param": {
+          "x-coord": 1,
+          "y-name": 1
+        },
+        "shape-param": {
+          "$case": "Square",
+          "side": 1
+        }
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": [
+            "shape-param"
+          ]
+        }
+      }
+    }
+  ]
+}

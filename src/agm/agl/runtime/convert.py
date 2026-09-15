@@ -232,7 +232,7 @@ def decode_value(
     """
     match schema:
         case RefDecode(key=key):
-            resolved = _resolve_decode_ref(key, defs)
+            resolved = resolve_decode_ref(key, defs)
             return decode_value(resolved, obj, defs)
         case ScalarDecode(kind=kind):
             return _decode_scalar(kind, obj)
@@ -253,10 +253,12 @@ def decode_value(
             if not isinstance(obj, dict):
                 raise ValueError(f"Expected object for record, got {type(obj).__name__}")
             record_fields: dict[str, Value] = {}
-            for fname, fschema in fields:
-                if fname not in obj:
-                    raise ValueError(f"Missing field {fname!r}")
-                record_fields[fname] = decode_value(fschema, obj[fname], defs)
+            for rfield in fields:
+                if rfield.json_name not in obj:
+                    raise ValueError(f"Missing field {rfield.json_name!r}")
+                record_fields[rfield.name] = decode_value(
+                    rfield.schema, obj[rfield.json_name], defs
+                )
             return RecordValue(nominal=nominal, display_name=display_name, fields=record_fields)
         case EnumDecode(display_name=display_name, variants=variants):
             if not isinstance(obj, dict):
@@ -264,17 +266,19 @@ def decode_value(
             case_val = obj.get("$case")
             if not isinstance(case_val, str):
                 raise ValueError("Enum object must have a string '$case' field")
-            variant = next((v for v in variants if v.name == case_val), None)
+            variant = next((v for v in variants if v.json_name == case_val), None)
             if variant is None:
                 raise ValueError(
                     f"Unknown enum variant {case_val!r} for {display_name!r}. "
-                    f"Valid variants: {[v.name for v in variants]}"
+                    f"Valid variants: {[v.json_name for v in variants]}"
                 )
             payload: dict[str, Value] = {}
-            for fname, fschema in variant.fields:
-                if fname not in obj:
-                    raise ValueError(f"Enum variant {case_val!r} is missing field {fname!r}")
-                payload[fname] = decode_value(fschema, obj[fname], defs)
+            for vfield in variant.fields:
+                if vfield.json_name not in obj:
+                    raise ValueError(
+                        f"Enum variant {case_val!r} is missing field {vfield.json_name!r}"
+                    )
+                payload[vfield.name] = decode_value(vfield.schema, obj[vfield.json_name], defs)
             return RecordValue(
                 nominal=variant.nominal,
                 display_name=variant.display_name,
@@ -284,7 +288,7 @@ def decode_value(
             assert_never(unreachable)
 
 
-def _resolve_decode_ref(key: str, defs: Mapping[str, DecodeSchema]) -> DecodeSchema:
+def resolve_decode_ref(key: str, defs: Mapping[str, DecodeSchema]) -> DecodeSchema:
     """Resolve a ``RefDecode`` key to a non-ref body, rejecting malformed cycles."""
     return resolve_schema_ref(
         key,

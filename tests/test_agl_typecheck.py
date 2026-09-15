@@ -1806,6 +1806,23 @@ class TestScopedBuiltinTypes:
 
         assert "Agent" in err.to_diagnostic().message
 
+    def test_builtin_enum_rejects_an_inline_member_with_the_wrong_field_zone(self) -> None:
+        """Field types and names may match the canonical member shape while a
+        declared ``@arg-named`` zone still disagrees with the canonical
+        ``standard`` zone — ``BuiltinMemberContract.field_kinds`` must catch
+        this the same way a field type or name mismatch is caught."""
+        err = reject_type(
+            "builtin enum Agent =\n"
+            "  | AgentCommand(@arg-named command: text)\n"
+            "  | AgentClaude(model: text, thinking: text)\n"
+            "  | AgentCodex(model: text, thinking: text)\n"
+            "  | AgentPi(provider: text, model: text, thinking: text)\n"
+            "()\n",
+            default_stdlib=False,
+        )
+
+        assert "Agent" in err.to_diagnostic().message
+
     def test_builtin_option_rejects_referenced_members_with_canonical_shapes(self) -> None:
         err = reject_type(
             "record None()\n"
@@ -2407,6 +2424,166 @@ class TestBuiltinOptionShape:
         assert binding_type.type_args == (IntType(),)
         assert set(r.type_env.type_table.enum_member_names(binding_type)) == {"None", "Some"}
         assert r.node_types[r.resolved.program.body.items[2].node_id] == TextType()
+
+
+class TestFieldZonesAcrossDeclarationForms:
+    """Source-level coverage of ``TypeTable.field_kinds`` and
+    ``build_decode_schema``'s emitted zones/aliases/names, across every
+    declaration form carrying its own ``@arg-*``/``@name`` attributes: a
+    plain record, a generic record, an inline enum member, a referenced
+    enum member, and a generic enum member. The exception/base-chain case
+    is covered by ``TestExceptionFieldKindParity`` instead — exceptions have
+    no wire/decode schema.
+    """
+
+    def test_plain_record_zones_alias_and_terminal_name(self) -> None:
+        from agm.agl.ir.contracts import RecordDecode
+        from agm.agl.type_schema import build_decode_schema
+
+        r = accept_type(
+            '@name("Pt")\n'
+            "record Point\n"
+            "  @arg-pos x: int\n"
+            '  @arg-named @name("wide") y: int\n'
+            "let p = Point(1, y = 2)\n"
+            "p\n",
+            default_stdlib=False,
+        )
+        decl = r.resolved.program.body.items[1]
+        assert isinstance(decl, LetDecl)
+        point = r.type_env.get_binding_type(decl.pattern.node_id)
+        assert isinstance(point, RecordType)
+        table = r.type_env.type_table
+        assert table.field_kinds(point) == (
+            ("x", ParamZone.POSITIONAL_ONLY),
+            ("y", ParamZone.NAMED_ONLY),
+        )
+        schema = build_decode_schema(point, table).root
+        assert isinstance(schema, RecordDecode)
+        assert schema.name == "Point"
+        assert schema.alias == "Pt"
+        assert [(f.name, f.zone, f.alias) for f in schema.fields] == [
+            ("x", ParamZone.POSITIONAL_ONLY, None),
+            ("y", ParamZone.NAMED_ONLY, "wide"),
+        ]
+
+    def test_generic_record_zones_share_the_template_across_instantiations(self) -> None:
+        from agm.agl.ir.contracts import RecordDecode
+        from agm.agl.type_schema import build_decode_schema
+
+        r = accept_type(
+            "record Box[T]\n"
+            "  @arg-pos first: T\n"
+            "  @arg-named second: T\n"
+            "let b = Box(1, second = 2)\n"
+            "b\n",
+            default_stdlib=False,
+        )
+        decl = r.resolved.program.body.items[1]
+        assert isinstance(decl, LetDecl)
+        box = r.type_env.get_binding_type(decl.pattern.node_id)
+        assert isinstance(box, RecordType)
+        assert box.type_args == (IntType(),)
+        table = r.type_env.type_table
+        assert table.field_kinds(box) == (
+            ("first", ParamZone.POSITIONAL_ONLY),
+            ("second", ParamZone.NAMED_ONLY),
+        )
+        schema = build_decode_schema(box, table).root
+        assert isinstance(schema, RecordDecode)
+        assert [f.zone for f in schema.fields] == [
+            ParamZone.POSITIONAL_ONLY,
+            ParamZone.NAMED_ONLY,
+        ]
+
+    def test_inline_enum_member_zones_alias_and_variant_name(self) -> None:
+        from agm.agl.ir.contracts import EnumDecode
+        from agm.agl.type_schema import build_decode_schema
+
+        r = accept_type(
+            "enum Shape =\n"
+            '  | @name("sq") @arg-pos Square(side: int)\n'
+            "  | @arg-named Circle(radius: int)\n"
+            "let s: Shape = Square(1)\n"
+            "s\n",
+            default_stdlib=False,
+        )
+        decl = r.resolved.program.body.items[1]
+        assert isinstance(decl, LetDecl)
+        shape = r.type_env.get_binding_type(decl.pattern.node_id)
+        assert isinstance(shape, EnumType)
+        table = r.type_env.type_table
+        members = table.enum_member_names(shape)
+        assert table.field_kinds(members["Square"]) == (("side", ParamZone.POSITIONAL_ONLY),)
+        assert table.field_kinds(members["Circle"]) == (("radius", ParamZone.NAMED_ONLY),)
+
+        schema = build_decode_schema(shape, table).root
+        assert isinstance(schema, EnumDecode)
+        assert schema.name == "Shape"
+        variants = {v.name: v for v in schema.variants}
+        assert variants["Square"].alias == "sq"
+        assert variants["Square"].fields[0].zone == ParamZone.POSITIONAL_ONLY
+        assert variants["Circle"].alias is None
+        assert variants["Circle"].fields[0].zone == ParamZone.NAMED_ONLY
+
+    def test_referenced_enum_member_zones_and_alias_come_from_its_own_record(self) -> None:
+        from agm.agl.type_schema import build_decode_schema
+
+        r = accept_type(
+            '@name("sq")\n'
+            "record Square\n"
+            "  @arg-pos side: int\n"
+            "enum Shape =\n"
+            "  | ::Square\n"
+            "let s: Shape = Square(1)\n"
+            "s\n",
+            default_stdlib=False,
+        )
+        decl = r.resolved.program.body.items[2]
+        assert isinstance(decl, LetDecl)
+        shape = r.type_env.get_binding_type(decl.pattern.node_id)
+        assert isinstance(shape, EnumType)
+        table = r.type_env.type_table
+        square = table.enum_member_names(shape)["Square"]
+        assert table.field_kinds(square) == (("side", ParamZone.POSITIONAL_ONLY),)
+
+        schema = build_decode_schema(shape, table).root
+        variant = next(v for v in schema.variants if v.name == "Square")
+        assert variant.alias == "sq"
+        assert variant.fields[0].zone == ParamZone.POSITIONAL_ONLY
+
+    def test_generic_enum_member_zones_share_the_template(self) -> None:
+        r = accept_type(
+            "enum Box[T] =\n  | Empty\n  | @arg-pos Full(value: T)\nlet b: Box[int] = Full(1)\nb\n",
+            default_stdlib=False,
+        )
+        decl = r.resolved.program.body.items[1]
+        assert isinstance(decl, LetDecl)
+        box = r.type_env.get_binding_type(decl.pattern.node_id)
+        assert isinstance(box, EnumType)
+        assert box.type_args == (IntType(),)
+        table = r.type_env.type_table
+        full = table.enum_member_names(box)["Full"]
+        assert table.field_kinds(full) == (("value", ParamZone.POSITIONAL_ONLY),)
+
+    def test_env_prelude_seeding_sources_constructor_kinds_from_the_type_table(self) -> None:
+        """A seeded prelude record's and enum member's constructor kinds are
+        read straight from ``TypeTable.field_kinds`` at ``TypeEnvironment``
+        construction, not recomputed independently."""
+        env = TypeEnvironment()
+        table = env.type_table
+        exec_result = env.get_type("ExecResult")
+        assert isinstance(exec_result, RecordType)
+        assert env.get_constructor_field_kinds_for_type(
+            exec_result, "ExecResult"
+        ) == table.field_kinds(exec_result)
+
+        agent = env.get_type("Agent")
+        assert isinstance(agent, EnumType)
+        member = table.enum_member_names(agent)["AgentCommand"]
+        assert env.get_constructor_field_kinds_for_type(
+            member, "AgentCommand"
+        ) == table.field_kinds(member)
 
 
 class TestBlockTyping:
@@ -7137,6 +7314,25 @@ class TestExceptionFieldKindParity:
             'Boom(5, detail = "x", message = "m")'
         )
 
+    def test_field_kinds_flattens_a_three_level_base_chain_in_order(self) -> None:
+        # TypeTable.field_kinds mirrors exception_fields' base-chain flattening:
+        # the built-in Exception root's own NAMED_ONLY "message" first, then
+        # each level's own fields honoring their own declared zone.
+        r = accept_type(
+            "exception Base extends Exception\n"
+            "  @arg-pos code: int\n"
+            "exception Boom extends Base\n"
+            "  @arg-named detail: text\n"
+            'Boom(5, detail = "x", message = "m")'
+        )
+        constructed = r.node_types[r.resolved.program.body.items[-1].node_id]
+        assert isinstance(constructed, ExceptionType)
+        assert r.type_env.type_table.field_kinds(constructed) == (
+            ("message", ParamZone.NAMED_ONLY),
+            ("code", ParamZone.POSITIONAL_ONLY),
+            ("detail", ParamZone.NAMED_ONLY),
+        )
+
 
 # ---------------------------------------------------------------------------
 # Constructor ref dispatch (VarRef/Call paths)
@@ -8352,9 +8548,13 @@ class TestTypeDeclarations:
         assert "already declared" in str(err).lower() or "duplicate" in str(err).lower()
 
     def test_type_builder_duplicate_type_name_guard_raises(self) -> None:
+        from agm.agl.scope.symbols import AttributeFacts as _AttributeFacts
+
         program = parse_program("record A\n  x: int\nrecord A\n  y: int\nA(x = 1)")
         with pytest.raises(AglTypeError) as exc_info:
-            _TypeBuilder(TypeEnvironment(), param_zones=_standard_zones(program)).collect(program)
+            _TypeBuilder(
+                TypeEnvironment(), attributes=_AttributeFacts(param_zones=_standard_zones(program))
+            ).collect(program)
         assert "already declared" in str(exc_info.value).lower()
 
     def test_record_bare_self_field_is_uninhabitable(self) -> None:
@@ -10372,7 +10572,7 @@ def _method_header(
     function = next(item for item in resolved.program.body.items if isinstance(item, FuncDef))
     owner = resolved.method_declarations[(ENTRY_ID, ("Point",), function.name)]
     env = TypeEnvironment()
-    _TypeBuilder(env, param_zones=resolved.attributes.param_zones).collect(resolved.program)
+    _TypeBuilder(env, attributes=resolved.attributes).collect(resolved.program)
     with env.type_scope(owner.scope_path):
         signature, _type, _receiver = resolve_function_header(
             env,

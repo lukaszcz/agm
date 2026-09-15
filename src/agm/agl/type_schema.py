@@ -31,9 +31,12 @@ Derivation rules:
 - ``array[T]`` → ``{"type": "array", "items": <schema for T>}``
 - ``dict[text, V]`` → ``{"type": "object", "additionalProperties": <schema for V>}``
 - ``record``  → object schema with ``additionalProperties: false``, ``required``,
-                and per-field ``properties``.
+                and per-field ``properties``, keyed by each field's effective
+                JSON name (``@json-name`` ?? ``@name`` ?? declared).
 - ``enum``    → ``{"oneOf": [...]}`` — one variant schema per variant, each an
-                object with a ``"$case"`` const property and any payload fields.
+                object with a ``"$case"`` const property (the member's
+                effective JSON tag) and any payload fields, JSON-keyed the
+                same way.
 
 Recursive types: ``derive_schema`` and ``build_decode_schema`` both expand the
 concrete *instantiation graph* reachable from *typ* (nodes are concrete
@@ -64,7 +67,7 @@ from __future__ import annotations
 import json
 import re
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import assert_never
 
@@ -81,6 +84,8 @@ from agm.agl.ir.contracts import (
     EnumDecode,
     EnumEncode,
     ExceptionEncode,
+    FieldDecode,
+    FieldEncode,
     ParamDecoder,
     RecordDecode,
     RecordEncode,
@@ -94,6 +99,7 @@ from agm.agl.ir.contracts import (
     VariantEncode,
 )
 from agm.agl.ir.ids import NominalId
+from agm.agl.semantics.external_names import NO_EXTERNAL_NAME
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
     ArrayType,
@@ -119,6 +125,43 @@ from agm.util.graph import sccs
 # A concrete nominal instantiation — a graph node in the instantiation graph
 # below. Record/enum equality includes type_args; exceptions are non-generic.
 Instantiation = RecordType | EnumType | ExceptionType
+
+
+def _member_tag(member: RecordType, name: str, type_table: TypeTable) -> str:
+    """An enum member's effective JSON ``$case`` tag (``@json-name`` ?? ``@name`` ?? declared)."""
+    return type_table.external_name(member).json(name)
+
+
+def _emit_field_decodes(
+    handle: RecordType,
+    type_table: TypeTable,
+    emit_field: "Callable[[Type], DecodeSchema]",
+) -> tuple[FieldDecode, ...]:
+    """Build one record/member's field decoders via *emit_field*, JSON-keyed, zoned, and aliased."""
+    zones = dict(type_table.field_kinds(handle))
+    externals = type_table.field_external_names(handle)
+    return tuple(
+        FieldDecode(
+            name,
+            json_name,
+            emit_field(ftype),
+            zone=zones[name],
+            alias=externals.get(name, NO_EXTERNAL_NAME).alias(name),
+        )
+        for name, json_name, ftype in type_table.json_fields(handle)
+    )
+
+
+def _emit_field_encodes(
+    handle: RecordType | ExceptionType,
+    type_table: TypeTable,
+    emit_field: "Callable[[Type], EncodeSchema]",
+) -> tuple[FieldEncode, ...]:
+    """Build one record/exception's field encoders via *emit_field*, JSON-keyed."""
+    return tuple(
+        FieldEncode(name, json_name, emit_field(ftype))
+        for name, json_name, ftype in type_table.json_fields(handle)
+    )
 
 
 def derive_schema(typ: Type, type_table: TypeTable) -> dict[str, object]:
@@ -260,15 +303,15 @@ def _emit_body(typ: Type, type_table: TypeTable, plan: _SchemaPlan) -> dict[str,
 
 
 def _record_schema(typ: RecordType, type_table: TypeTable, plan: _SchemaPlan) -> dict[str, object]:
-    """Derive the JSON Schema for a record type."""
-    fields = type_table.record_fields(typ)
+    """Derive the JSON Schema for a record type, keyed by its effective JSON field names."""
     properties: dict[str, object] = {
-        field_name: _emit(field_type, type_table, plan) for field_name, field_type in fields.items()
+        json_name: _emit(field_type, type_table, plan)
+        for _name, json_name, field_type in type_table.json_fields(typ)
     }
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": list(fields.keys()),
+        "required": list(properties.keys()),
         "properties": properties,
     }
 
@@ -276,20 +319,20 @@ def _record_schema(typ: RecordType, type_table: TypeTable, plan: _SchemaPlan) ->
 def _enum_schema(typ: EnumType, type_table: TypeTable, plan: _SchemaPlan) -> dict[str, object]:
     """Derive the JSON Schema for an enum type.
 
-    Each variant becomes a ``oneOf`` alternative.  The ``"$case"`` property
-    is a ``const`` string that identifies the selected variant; payload fields
-    follow alongside it.
+    Each variant becomes a ``oneOf`` alternative.  The ``"$case"`` property is
+    a ``const`` string that identifies the selected variant — the member's
+    effective JSON tag; payload fields follow, keyed by their effective JSON
+    names.
     """
     variant_schemas: list[object] = []
     for variant_name, member in type_table.enum_member_names(typ).items():
-        variant_fields = type_table.record_fields(member)
         required: list[str] = ["$case"]
         properties: dict[str, object] = {
-            "$case": {"const": variant_name},
+            "$case": {"const": _member_tag(member, variant_name, type_table)},
         }
-        for field_name, field_type in variant_fields.items():
-            properties[field_name] = _emit(field_type, type_table, plan)
-            required.append(field_name)
+        for _field_name, json_name, field_type in type_table.json_fields(member):
+            properties[json_name] = _emit(field_type, type_table, plan)
+            required.append(json_name)
         variant_schemas.append(
             {
                 "type": "object",
@@ -603,14 +646,14 @@ def _emit_decode_body(
     if isinstance(typ, DictType):
         return DictDecode(_emit_decode(typ.value, type_table, plan, memo))
     if isinstance(typ, RecordType):
-        fields = type_table.record_fields(typ)
         return RecordDecode(
             nominal=NominalId(typ.decl_id),
             display_name="::".join((*typ.scope_path, typ.name)),
-            fields=tuple(
-                (fname, _emit_decode(ftype, type_table, plan, memo))
-                for fname, ftype in fields.items()
+            fields=_emit_field_decodes(
+                typ, type_table, lambda ftype: _emit_decode(ftype, type_table, plan, memo)
             ),
+            name=typ.name,
+            alias=type_table.external_name(typ).alias(typ.name),
         )
     if isinstance(typ, EnumType):
         members = type_table.enum_member_names(typ)
@@ -620,16 +663,20 @@ def _emit_decode_body(
             variants=tuple(
                 VariantDecode(
                     name=vname,
+                    json_name=_member_tag(member, vname, type_table),
                     nominal=NominalId(member.decl_id),
                     display_name="::".join((*member.scope_path, member.name)),
-                    fields=tuple(
-                        (fname, _emit_decode(ftype, type_table, plan, memo))
-                        for fname, ftype in vfields.items()
+                    fields=_emit_field_decodes(
+                        member,
+                        type_table,
+                        lambda ftype: _emit_decode(ftype, type_table, plan, memo),
                     ),
+                    alias=type_table.external_name(member).alias(vname),
                 )
                 for vname, member in members.items()
-                for vfields in (type_table.record_fields(member),)
             ),
+            name=typ.name,
+            host_agent=is_standard_agent_enum(typ),
         )
     # Non-data targets (unit/function/exception/bottom/typevar) are not
     # decodable from JSON and are rejected by the checker before lowering.
@@ -735,19 +782,11 @@ def _build_template_encode_plan(typ: Type, type_table: TypeTable) -> EncodePlan:
         definitions[nominal] = EncodeDefinition(key, len(parameters), ScalarEncode())
         if isinstance(template, RecordType):
             body: EncodeSchema = RecordEncode(
-                nominal,
-                tuple(
-                    (name, emit(field_type, parameters))
-                    for name, field_type in type_table.record_fields(template).items()
-                ),
+                nominal, _emit_field_encodes(template, type_table, lambda ft: emit(ft, parameters))
             )
         elif isinstance(template, ExceptionType):
             body = ExceptionEncode(
-                nominal,
-                tuple(
-                    (name, emit(field_type, parameters))
-                    for name, field_type in type_table.exception_fields(template).items()
-                ),
+                nominal, _emit_field_encodes(template, type_table, lambda ft: emit(ft, parameters))
             )
         else:
             body = EnumEncode(
@@ -755,10 +794,10 @@ def _build_template_encode_plan(typ: Type, type_table: TypeTable) -> EncodePlan:
                 tuple(
                     VariantEncode(
                         name=member_name,
+                        json_name=_member_tag(member, member_name, type_table),
                         nominal=NominalId(member.decl_id),
-                        fields=tuple(
-                            (field_name, emit(field_type, parameters))
-                            for field_name, field_type in type_table.record_fields(member).items()
+                        fields=_emit_field_encodes(
+                            member, type_table, lambda ft: emit(ft, parameters)
                         ),
                     )
                     for member_name, member in type_table.enum_member_names(template).items()
@@ -802,17 +841,15 @@ def _emit_encode_body(
     if isinstance(typ, RecordType):
         return RecordEncode(
             nominal=NominalId(typ.decl_id),
-            fields=tuple(
-                (name, _emit_encode(field_type, type_table, plan, memo))
-                for name, field_type in type_table.record_fields(typ).items()
+            fields=_emit_field_encodes(
+                typ, type_table, lambda ftype: _emit_encode(ftype, type_table, plan, memo)
             ),
         )
     if isinstance(typ, ExceptionType):
         return ExceptionEncode(
             nominal=NominalId(typ.decl_id),
-            fields=tuple(
-                (name, _emit_encode(field_type, type_table, plan, memo))
-                for name, field_type in type_table.exception_fields(typ).items()
+            fields=_emit_field_encodes(
+                typ, type_table, lambda ftype: _emit_encode(ftype, type_table, plan, memo)
             ),
         )
     if isinstance(typ, EnumType):
@@ -821,10 +858,12 @@ def _emit_encode_body(
             variants=tuple(
                 VariantEncode(
                     name=name,
+                    json_name=_member_tag(member, name, type_table),
                     nominal=NominalId(member.decl_id),
-                    fields=tuple(
-                        (field_name, _emit_encode(field_type, type_table, plan, memo))
-                        for field_name, field_type in type_table.record_fields(member).items()
+                    fields=_emit_field_encodes(
+                        member,
+                        type_table,
+                        lambda ftype: _emit_encode(ftype, type_table, plan, memo),
                     ),
                 )
                 for name, member in type_table.enum_member_names(typ).items()
@@ -840,11 +879,13 @@ def build_param_decoder(typ: Type, type_table: TypeTable) -> ParamDecoder:
     Single source of the param-decoder shape, shared by the lowerer (which
     embeds it in each ``IrProgramParam.external_decoder``)
     and the host engine-config decode path
-    (:func:`agm.agl.runtime.engine_config.convert_host_value`).  ``text`` params
-    are taken verbatim; the standard ``Agent`` additionally accepts host agent
-    text syntax; every other type round-trips through the canonical JSON boundary
-    (``derive_schema`` for validation, ``build_decode_schema`` for the
-    typeless decode walk).  *type_table* resolves record/enum shapes.
+    (:func:`agm.agl.runtime.engine_config.convert_host_value`).  A textual raw
+    value is read through the shared host-text dispatch
+    (``runtime.value_decode.host_text_to_json``), which derives ``text``-verbatim
+    and standard-``Agent`` handling from ``decode`` itself; every other type
+    round-trips through the canonical JSON boundary (``derive_schema`` for
+    validation, ``build_decode_schema`` for the typeless decode walk).
+    *type_table* resolves record/enum shapes.
 
     :raises TypeError: if *typ* has no wire schema (unit/exception/…);
         :func:`derive_schema` rejects such types.
@@ -855,8 +896,6 @@ def build_param_decoder(typ: Type, type_table: TypeTable) -> ParamDecoder:
         json_schema=json.dumps(schema, sort_keys=True),
         decode=decode_plan.root,
         defs=decode_plan.defs,
-        text_verbatim=isinstance(typ, TextType),
-        agent_text=is_standard_agent_enum(typ),
     )
 
 

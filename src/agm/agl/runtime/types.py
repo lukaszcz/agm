@@ -93,6 +93,10 @@ class ProgramParamInfo:
     ``cli``          — how the parameter presents itself on a command line:
                         its external name and whatever the ``@opt-*``
                         attributes add to it.
+    ``is_path``      — ``True`` when the annotation spells the builtin ``path``
+                        alias (directly, through non-generic aliases, or as
+                        ``Option[path]``), which its checked ``text`` type
+                        no longer shows.
     """
 
     name: str
@@ -101,6 +105,7 @@ class ProgramParamInfo:
     has_default: bool
     span: "SourceSpan"
     cli: "ProgramOptionSpec"
+    is_path: bool = False
 
 
 @dataclass(frozen=True, slots=True)

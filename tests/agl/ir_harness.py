@@ -36,7 +36,7 @@ from agm.core.process import ProcessCaptureResult
 from tests._agl_helpers import agl_roots, parse_inline_command
 from tests.agl.module_graph import build_module_graph, build_module_graph_from_program
 
-_REPO_STDLIB_ROOT = Path(__file__).resolve().parents[2] / "stdlib"
+_REPO_STDLIB_ROOT = Path(__file__).resolve().parents[2] / "packages" / "stdlib"
 
 
 def _checked_program(

@@ -16,7 +16,7 @@ from agm.agl.runtime.boundary import AglException, AglJson, decode_boundary_valu
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.semantics.values import JsonValue, TextValue
 
-_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
 _TOML_MODULE = ModuleId(("std", "toml"))
 _TOML_PARSE_ERROR = NominalId(9_500_001)
 _TOML_RENDER_ERROR = NominalId(9_500_002)

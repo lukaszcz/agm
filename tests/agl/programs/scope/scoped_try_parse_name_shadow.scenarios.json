@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "valid_input_ok_despite_scoped_shadow_names",
+      "params": {
+        "input": "7"
+      },
+      "expect": {
+        "stdout": "ok 7\nok 7\n"
+      }
+    },
+    {
+      "name": "malformed_input_returns_err_despite_scoped_shadow_names",
+      "params": {
+        "input": "nope"
+      },
+      "expect": {
+        "stdout": "err nope\nerr nope\n"
+      }
+    }
+  ]
+}

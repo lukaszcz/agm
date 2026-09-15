@@ -8,7 +8,7 @@ the [AgL language reference](../agl/reference/index.md).
 
 ```text
 agm exec [--strict-json|--no-strict-json]
-         [--max-iters N] [--max-call-depth N] [--default-agent AGENT]
+         [--max-call-depth N] [--default-agent AGENT]
          [--timeout DURATION|--no-timeout] [--dry-run]
          [--log|--log-file PATH|--no-log] [--no-log-file]
          [--no-stdlib]
@@ -46,7 +46,7 @@ The standard library is the first of:
    whatever version it declares;
 3. the active immutable `<AGM-home>/packages/std/<AGM_VERSION>/` package matching the running
    binary; a selected active package of another version is an error;
-4. AGM's bundled copy (`agm/stdlib` in a wheel, `stdlib/` in a source checkout) when no active
+4. AGM's bundled copy (`agm/stdlib` in a wheel, `packages/stdlib/` in a source checkout) when no active
    package is selected or its store tree is absent, so a wheel runs AgL even when the home has
    no active `std`.
 
@@ -87,20 +87,13 @@ a direct `agm repl` entry is a static error.
 - `--no-strict-json` (default): Recover exactly one JSON value from chatty output (stripping
   fences/prose, repairing trivially malformed JSON), then validate it strictly against the
   schema. `ask`'s `strict-json:` argument overrides either per call.
-- `--max-iters N`: Cap **unbounded** loops (`while … do … done` or `do … until E` with no `[n]`
-  bound and no `for` clause) at `N` > 0 body executions, raising `MaxIterationsExceeded`. `for`
-  and `do[n]` loops are never cut short. Off by default (reads as `0`); this option, config, or a
-  positive source write enables it, `std/config::max-iters := 0` disables it. See
-  [Control flow](../agl/reference/control-flow.md).
 - `--max-call-depth N`: Maximum recursion depth (overrides `[exec] max-call-depth`; default 256).
   Exceeding it raises `RecursionError`.
 - `--default-agent AGENT`: Seed `std/config::default-agent`, the agent of `ask` calls without
-  `agent`, in [host Agent syntax](#host-agent-syntax) or canonical constructor syntax
-  (`AgentClaude("sonnet", "medium")`). Typechecked before execution; overrides qualified
-  program-table/`[exec]` config. An `AgentCommand(...)` command is shell-split and validated
-  like `[exec] runner`; a malformed one (e.g. an unclosed quote) exits 1 with nothing run. With
-  `--no-stdlib` on a program that never loads `std/config` it exits 1, whereas a configured
-  `default-agent` is merely inert.
+  `agent`, in [host Agent syntax](#host-agent-syntax). Decoded before execution, overriding
+  qualified program-table/`[exec]` config; effective whether or not the program loads
+  `std/config` or `--no-stdlib` is given. An `AgentCommand(...)` command is shell-split and
+  validated before execution; a malformed one (e.g. an unclosed quote) exits 1 with nothing run.
 - `--timeout DURATION` / `--no-timeout`: Override the initial shell-exec and agent idle
   timeouts, seeding `std/config::timeout` with `Some(DURATION)`, or remove configured ones,
   seeding `None`.
@@ -142,14 +135,21 @@ A name-addressable parameter's type selects its flag form; every value-taking fl
 | Type | Flag |
 |---|---|
 | `bool` | `--x` / `--no-x`, no value |
-| `Option[T]` | `--x VALUE` (`Some`) / `--no-x` (`None`); `VALUE` verbatim for `text`, else one strict JSON value of `T` |
+| `Option[T]` | `--x VALUE` (`Some`) / `--no-x` (`None`); `VALUE` verbatim for `text`, [host Agent syntax](#host-agent-syntax) for `Agent`, else strict JSON or [value syntax](../agl/reference/host-environment.md#value-syntax) for `T` |
 | `text` | `--x VALUE`, verbatim |
-| `Agent` | `--x VALUE`, in [host Agent syntax](#host-agent-syntax) or canonical tagged JSON |
-| other | `--x VALUE`, one strict JSON value validated against the type |
+| `Agent` | `--x VALUE`, in [host Agent syntax](#host-agent-syntax) |
+| `json` | `--x VALUE`, strict JSON or a value-syntax literal restricted to JSON-shaped data (no constructor calls) |
+| other | `--x VALUE`, strict JSON or [value syntax](../agl/reference/host-environment.md#value-syntax) validated against the type |
+
+A `path` parameter — `path`, `Option[path]`, or an alias of either — takes its value as the
+matching `text` form does, with `PATH` as its default value placeholder. Shell completion offers
+filesystem paths for its value (`--x <TAB>`, `-x <TAB>`, `--x=<TAB>`) and for its positional slot,
+under `agm exec FILE` and a registered package command alike.
 
 A positional slot has no `--no-x`, so `Option[T]` gets no special treatment there: `text` is
-verbatim, `Agent` uses host syntax, and every other type, `Option[T]` included, is one strict
-JSON value of the declared type (`'{"$case": "Some", "value": "hi"}'` for `Option[text]`).
+verbatim, `Agent` uses host syntax, and every other type, `Option[T]` included, is strict JSON or
+value syntax of the declared type (`'{"$case": "Some", "value": "hi"}'` or `'Some("hi")'` for
+`Option[text]`).
 
 An omitted argument resolves as `CLI > @opt-env variable > qualified program table (see
 [Configuration](#configuration)) > signature default > required error`; errors are reported
@@ -162,7 +162,7 @@ Also reported before any agent runs: a parameter supplied twice (two flags, or p
 
 **Reserved names.** Program arguments and engine settings share one flag and config namespace,
 so a name-addressable parameter named after an engine setting (`default-agent`, `strict-json`,
-`max-iters`, `timeout`, `log`, `log-file`) is a static error even if never supplied, also
+`timeout`, `log`, `log-file`) is a static error even if never supplied, also
 reported by `agm check`.
 A projected flag that collides with a reserved flag has no static check, only a host one: selecting that
 program for execution fails, while `--help` and shell completion silently fall back to
@@ -171,14 +171,14 @@ program for execution fails, while `--help` and shell completion silently fall b
 - its own options: `--help`/`-h`, `--program`/`-p`, `--command`/`-c`, `--module-path`/`-I`,
   `--max-call-depth`, `--no-stdlib`, `--dry-run`;
 - every engine-setting flag in both polarities: `--default-agent`,
-  `--strict-json`/`--no-strict-json`, `--max-iters`, `--timeout`/`--no-timeout`,
+  `--strict-json`/`--no-strict-json`, `--timeout`/`--no-timeout`,
   `--log`/`--no-log`, `--log-file`/`--no-log-file` (so `no-log: text` collides);
 - other parameters' projected flags (`cache: bool`'s `--no-cache` vs `no-cache: bool`).
 
-A [registered package command](pkg.md#registered-commands) reserves only `--dry-run` and
-`-h`/`--help`. Because of the help fallback, `agm exec FILE --nope -h` prints `agm exec`'s help
-(exit 0) for a colliding program, but is a usage error (exit 1) when the program's own parser
-exists to reject `--nope`.
+A [registered package command](pkg.md#registered-commands) reserves `--dry-run`, `-h`/`--help`,
+and its run-time options: the engine-setting flags and `--max-call-depth`. Because of the help
+fallback, `agm exec FILE --nope -h` prints `agm exec`'s help (exit 0) for a colliding program, but
+is a usage error (exit 1) when the program's own parser exists to reject `--nope`.
 
 **Tokens.**
 
@@ -248,7 +248,8 @@ For module parameter precedence and configuration routes, see
 
 ### Host Agent syntax
 
-Every CLI argument or TOML string of the standard `Agent` type accepts:
+Every CLI argument or TOML string of the standard `Agent` type accepts (a config value may
+instead be a native TOML table, read directly as the tagged JSON object below):
 
 - `claude/MODEL-EFFORT` → `AgentClaude(MODEL, EFFORT)`
 - `codex/MODEL-EFFORT` → `AgentCodex(MODEL, EFFORT)`
@@ -256,10 +257,16 @@ Every CLI argument or TOML string of the standard `Agent` type accepts:
 - any other `PROVIDER/MODEL-EFFORT` → `AgentPi(PROVIDER, MODEL, EFFORT)`
 
 The last hyphen separates the model from an opaque, non-empty effort suffix of any vocabulary.
-Exact lowercase `claude/` and `codex/` prefixes win over the generic Pi form. Other text is a
-verbatim `AgentCommand` (`--default-agent 'worker --flag'`). Agent-typed program parameters also
-accept canonical tagged JSON; `--default-agent` and the `default-agent` config key also accept
-AgL constructor syntax, for compatibility.
+Exact lowercase `claude/` and `codex/` prefixes win over the generic Pi form. Failing shorthand, an
+Agent-typed program parameter, `Agent`-typed flag, `--default-agent`, or the `default-agent` config
+key is read, in order: as a JSON object; then as an
+[AgL value syntax](../agl/reference/host-environment.md#value-syntax) `Agent` member constructor
+call (`AgentCodex(model = "o3", thinking = "high")`, bare or qualified `Agent::AgentPi(...)`); text
+naming no member this way, with no `(` following it, is a verbatim `AgentCommand`
+(`--default-agent 'worker --flag'`). Text that does open a member call but fails to read or bind —
+an unclosed `AgentClaude(model = "x"`, an unknown field, a qualifier naming anything but `Agent` —
+is a host error, not a verbatim command. Whitespace-only text is always a host error, never a
+verbatim empty command.
 
 ### Agents
 
@@ -293,7 +300,7 @@ which pipes the prompt on stdin. AgL text literals interpolate `%{…}` themselv
 
 A continuing `AgentCommand` session requires an unescaped `%{SESSION_ID}` in its command. AGM
 substitutes a generated id into the argv (not the child environment); the command must use it to
-create or resume its transcript. Free `ask` (including an `[exec] runner` default),
+create or resume its transcript. Free `ask` with an `AgentCommand` default agent,
 `Session::open(AgentCommand(...))`, and `AgentCommand(...).ask(...)` with corrective retries open
 continuing sessions; a single-attempt `AgentCommand(...).ask(...)` sends one prompt and needs no
 placeholder. Opening a session from a command without it raises `SessionError`. See
@@ -307,20 +314,12 @@ placeholder. Opening a session from a command without it raises `SessionError`. 
 ```toml
 [exec]
 default-agent = "claude/sonnet-medium" # native shorthand or custom command
-# runner = "custom-agent --session %{SESSION_ID}" # command must create/resume this id
 strict-json = false         # lenient JSON recovery is the default
-max-iters = 5               # opt into a safety-valve cap for unbounded loops
 timeout = "30m"             # initial shell-exec and agent idle timeout
 log = false                 # trace logging off by default; set true to enable
 # log-file = "trace.jsonl" # explicit trace path (omit for auto timestamped path)
 
 ```
-
-`runner` (`[exec]`-only) is a bare host command like `[loop] runner`, not AgL syntax. It seeds
-`default-agent` as `AgentCommand(runner)` when no `--default-agent` or configured
-`default-agent` is given, and must handle [session ids](#session-runners); prefer a native
-`AgentClaude`, `AgentCodex`, or `AgentPi`. It is shell-split and validated when configuration is
-read, before module loading; a malformed command exits 1 with nothing run.
 
 Qualified tables address a declaration by module suffix and scope path. A loose entry file's
 module component is its `.agl` stem; a file run from a package (development checkout, installed
@@ -343,6 +342,13 @@ setting (typically a misspelling) is reported on stderr and ignored; one naming 
 positional-only parameter is reported with a distinct message (supply it positionally). Either
 way the program runs on its declared defaults.
 
+A TOML value is already host-native, unlike a CLI token or `@opt-env` variable, which are always
+text: a native TOML string for any parameter type other than `json` or `Option[json]` is read the
+same way a CLI token is (verbatim for `text`, else strict JSON or value syntax); a native TOML
+string for a `json`- or `Option[json]`-typed parameter is instead the parameter's own JSON
+*string* value, never re-read as JSON source or value syntax, and a native TOML table or array
+crosses as the matching JSON object or array directly.
+
 #### Source-level engine settings (`std/config`)
 
 A program sets its **engine settings**, mutable bindings backed by the live engine and readable
@@ -355,7 +361,6 @@ program def main(spec: text) -> unit =
   std/config::log := true             # enable trace logging for this program
   std/config::log-file := Some("trace.jsonl")  # explicit trace path
   std/config::strict-json := true     # require bare JSON from agents
-  std/config::max-iters := 10         # host safety valve cap for unbounded loops
   std/config::default-agent := AgentClaude("sonnet", "medium")
   std/config::timeout := Some("30s")  # shell-exec idle timeout
 
@@ -366,17 +371,16 @@ program def main(spec: text) -> unit =
 A qualified target (`std/config::KEY := …`) always works; after `import std/config::*`, so does
 bare `KEY := …`. `Option[text]` settings (`log-file`, `timeout`) take `Some("…")` or `None`.
 
-Precedence for `default-agent`, `log`, `strict-json`, `max-iters`, `log-file`, and `timeout` is
-`source write > CLI > qualified program table > [exec].X > engine default`, with `[exec] runner`
-as an extra `default-agent` fallback just below `[exec] default-agent`. CLI and config supply the
+Precedence for `default-agent`, `log`, `strict-json`, `log-file`, and `timeout` is
+`source write > CLI > qualified program table > [exec].X > engine default`. CLI and config supply the
 **initial** value; a source write overrides it from that program point on: after `--no-log`,
-`std/config::log := true` enables tracing from there, and `std/config::max-iters := 10`
-overrides `[exec] max-iters = 5`.
+`std/config::log := true` enables tracing from there, and `std/config::strict-json := true`
+overrides `[exec] strict-json = false`.
 
 Writes take effect **positionally**, like `var` mutation. `log`/`log-file` writes reconfigure
 the trace destination for subsequent calls; `log-file := Some(path)` enables logging, and a later
-`log := false` disables it without clearing the path. `strict-json`, `max-iters`, and `timeout`
-writes affect subsequent agent-output parsing, unbounded loops, and `exec` calls.
+`log := false` disables it without clearing the path. `strict-json` and `timeout`
+writes affect subsequent agent-output parsing and `exec` calls.
 
 A CLI, program-table, or `[exec]` timeout seeds both the shell-exec and agent idle timeouts; a
 source `timeout` write changes only the **shell-exec** timeout; agent idle timeout cannot change
@@ -494,7 +498,7 @@ $ echo $?
 
 ```text
 agm repl [--strict-json|--no-strict-json]
-         [--max-iters N] [--max-call-depth N] [--default-agent AGENT] [--confirm-agents]
+         [--max-call-depth N] [--default-agent AGENT]
          [--quiet] [--dry-run] [--no-stdlib] [--log|--log-file PATH|--no-log] [--plain]
 ```
 
@@ -517,11 +521,10 @@ Both front ends share session and evaluation behavior:
 Plain is used automatically when stdin or stdout is not a terminal, or `TERM=dumb`; `--plain`
 forces it on a terminal. No flag forces the console onto a non-terminal.
 
-The REPL reuses `[exec]` settings for `default-agent`, max-iters, call depth, JSON strictness,
+The REPL reuses `[exec]` settings for `default-agent`, call depth, JSON strictness,
 and timeout. As in `agm exec`, each typed `Agent` value selects its own backend command,
 `--default-agent` and `[exec] default-agent` accept [host Agent syntax](#host-agent-syntax), and
-`--default-agent` with `--no-stdlib` fails if the session never loads `std/config` (during
-session initialization, before the prompt), while `[exec] default-agent` is inert.
+both are effective whether or not the session loads `std/config` or `--no-stdlib` is given.
 
 Free `ask` lazily opens one default conversation, snapshotting `default-agent` at first use;
 later free calls reuse it even if the setting changes. Explicit `Session::open` sessions stay
@@ -587,25 +590,14 @@ Meta-commands start with `:`, which never collides with AgL syntax:
 | `:type EXPR` | Type-check `EXPR` against the session and print its type (no eval) |
 | `:bindings` / `:env` | List current bindings as `name : Type = value` |
 | `:set echo on\|off` | Toggle result echoing |
-| `:agent confirm\|auto` | Switch the agent-call mode (or report it with no argument) |
 | `:load FILE` | Load a saved transcript by its original entries, or an ordinary `.agl` file one item per entry |
 | `:save FILE` | Write the accumulated session source and entry boundaries to a transcript |
 | `:theme [dark\|light\|auto]` | Show or switch the syntax-highlighting theme; saves to `~/.agm/config.toml` |
 
-### Agent-call confirmation
-
-- **auto** (default): agent calls fire immediately, as in `agm exec`.
-- **confirm** (`--confirm-agents` or `:agent confirm`): before every live agent prompt,
-  including `Session::ask` and each parse-retry follow-up, show the agent and rendered prompt
-  (truncated; `[v]iew` prints it in full) and ask `[Y]es / [n]o / [a]lways`. `yes` runs the call,
-  `no` aborts the entry and rolls back its bindings, `always` switches the session to auto.
-- `exec` shell calls are never gated.
-
 ### Options
 
-- `--strict-json` / `--no-strict-json`, `--max-iters N`, `--max-call-depth N`,
+- `--strict-json` / `--no-strict-json`, `--max-call-depth N`,
   `--default-agent AGENT`: As for `agm exec`.
-- `--confirm-agents`: Start in [confirm mode](#agent-call-confirmation).
 - `--quiet`: Do not echo entry results.
 - `--no-stdlib`: Disable the automatic prelude for every loaded program (entries and library
   modules); explicit imports still work. `:reset` keeps this choice.
@@ -628,7 +620,7 @@ Meta-commands start with `:`, which never collides with AgL syntax:
   unapplied generic such as `Option` shows its generic definition. A REPL convenience only; names
   that are also values (a record constructor, a binding) evaluate normally.
 - **Engine settings**: import `std/config` and write a qualified target
-  (`std/config::max-iters := 3`). The write takes effect positionally, so subsequent entries see
+  (`std/config::strict-json := true`). The write takes effect positionally, so subsequent entries see
   it even if a later expression in the same entry fails; `log`/`log-file` writes reconfigure the
   trace destination. The initial `[exec] timeout` is also the idle timeout for CLI and Pi RPC
   agent sessions; a source `timeout` write changes only shell `exec`. `:reset` restores the
@@ -640,19 +632,18 @@ Per-entry errors are reported inline and never exit; the REPL fails only before 
 The exception is `std/process::exit(code)`, which ends the REPL with its `0..255` status after
 finalizing the entry's trace.
 
-`--default-agent`/`[exec] default-agent` is validated before the loop: a blank or non-string
-value fails there. A recognized direct Agent constructor is spliced into `std/config` before the
-console starts, so wrong arguments or non-constant fields are resolved, type-checked, and
-constant-checked before the banner, with errors naming the flag or config key. Other text is
-custom command text, not an AgL parse error. An `AgentCommand(...)` whose command does not
-shell-split fails only when the first entry constructs the interpreter (session initialization
-constructs none); construction validates the winning value before any statement runs, so even
-an entry with no agent dispatch reports it inline without exiting.
+`--default-agent`/`[exec] default-agent` is decoded before the loop, before the session is even
+built: a blank value, or text that opens a constructor call but fails to read or bind, exits with
+an error naming the flag or config key. Other text is custom command text, not an AgL parse error.
+An `AgentCommand(...)` whose command does not shell-split fails only when the first entry
+constructs the interpreter (session initialization constructs none); construction validates the
+winning value before any statement runs, so even an entry with no agent dispatch reports it inline
+without exiting.
 
 | Code | Meaning |
 |------|---------|
 | `0` | The session ended normally (`:quit`/`:exit` or Ctrl-D) |
-| `1` | Pre-loop setup failure: a blank/non-string or invalid canonical constructor in `[exec] default-agent` or `--default-agent`, or an unwritable `--log-file` — reported before the prompt appears |
+| `1` | Pre-loop setup failure: a blank or invalid `[exec] default-agent` or `--default-agent`, or an unwritable `--log-file` — reported before the prompt appears |
 
 ### Examples
 
@@ -666,9 +657,6 @@ text
 agl> :bindings
 greeting : text = hello
 agl> :quit
-
-# Confirm each agent call before dispatching it.
-agm repl --confirm-agents
 
 # Explore types only — no agent or exec calls fire, nothing is persisted.
 agm repl --dry-run

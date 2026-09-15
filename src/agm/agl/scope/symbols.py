@@ -29,6 +29,7 @@ from typing import TypeAlias as TypingTypeAlias
 from agm.agl.attributes import ProgramCommandSpec, ProgramOptionSpec
 from agm.agl.diagnostics import AglError
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.semantics.external_names import ExternalName
 from agm.agl.semantics.types import EnumType, RecordType, TypeVarType
 from agm.agl.syntax.nodes import (
     EnumDef,
@@ -122,6 +123,18 @@ class BuiltinKind(enum.Enum):
     ``SHALLOW_COPY``
         ``shallow-copy(value)`` — one-level copy; yields the same type as its
         argument.
+    ``PARSE``
+        ``std/value::parse[T](value)`` — same conversion as ``value as T``,
+        raising ``ValueParseError`` on failure instead of ``CastError``.
+    ``TRY_PARSE``
+        ``std/value::try-parse[T](value)`` — ``parse`` wrapped in a
+        ``Result[T, ValueParseError]``.
+
+    ``PARSE``/``TRY_PARSE`` are classified only via
+    :data:`NON_RESERVED_BUILTIN_CALL_NAMES` (see :func:`builtin_call_kind`):
+    unlike every other member here, their bare spelling is an ordinary,
+    shadowable name, so a standard-library module (``std/json``, ``std/toml``)
+    may declare its own ``parse``/``try-parse`` without collision.
     """
 
     PRINT = "PRINT"
@@ -133,6 +146,8 @@ class BuiltinKind(enum.Enum):
     SHALLOW_COPY = "SHALLOW_COPY"
     RESOURCE = "RESOURCE"
     RESOURCE_DIR = "RESOURCE_DIR"
+    PARSE = "PARSE"
+    TRY_PARSE = "TRY_PARSE"
 
 
 class BuiltinStaticKind(enum.Enum):
@@ -156,6 +171,30 @@ BUILTIN_CALL_NAMES: dict[str, BuiltinKind] = {
     "resource": BuiltinKind.RESOURCE,
     "resource-dir": BuiltinKind.RESOURCE_DIR,
 }
+
+# Built-in call names classified only once their reference is already known to
+# be a ``builtin def`` (see ``BuiltinKind.PARSE``'s docstring) — NOT part of
+# ``_RESERVED_NAMES`` in ``scope/resolver.py``, so a plain function of the
+# same bare name (``std/json::parse``, a user's own ``parse``) resolves
+# normally instead of being hijacked. Use :func:`builtin_call_kind` to look up
+# either map once a name's ``builtin def`` status is already established.
+NON_RESERVED_BUILTIN_CALL_NAMES: dict[str, BuiltinKind] = {
+    "parse": BuiltinKind.PARSE,
+    "try-parse": BuiltinKind.TRY_PARSE,
+}
+
+
+def builtin_call_kind(name: str) -> BuiltinKind | None:
+    """Return *name*'s ``BuiltinKind``, reserved or not, or ``None``.
+
+    For a caller that already knows its reference is a ``builtin def`` (a
+    resolved binding, or a declaration being validated) and only needs the
+    kind that spelling denotes — never for deciding whether a bare name is
+    reserved, which stays ``BUILTIN_CALL_NAMES``-only (see
+    ``scope/resolver.py::_RESERVED_NAMES``).
+    """
+    return BUILTIN_CALL_NAMES.get(name, NON_RESERVED_BUILTIN_CALL_NAMES.get(name))
+
 
 # Built-in statics are registered by their owning nominal's declaration path,
 # so similarly named user types and enum variants remain ordinary
@@ -192,6 +231,7 @@ def is_builtin_type_static_owner(owner_module_id: ModuleId, owner_path: ScopePat
 
 BUILTIN_CALL_DISPLAY_NAMES: dict[BuiltinKind | BuiltinStaticKind, str] = {
     **{kind: name for name, kind in BUILTIN_CALL_NAMES.items()},
+    **{kind: name for name, kind in NON_RESERVED_BUILTIN_CALL_NAMES.items()},
     BuiltinStaticKind.SESSION_OPEN: "Session::open",
     BuiltinStaticKind.SESSION_DEFAULT: "Session::default",
 }
@@ -697,6 +737,10 @@ class AttributeFacts:
     ``docs``
         The ``@doc`` text of every declaration carrying one, parameters and
         fields included, keyed by that declaration's node id.
+    ``external_names``
+        The ``@name``/``@json-name`` spellings of every field, enum member,
+        and record declaration carrying one, keyed by that declaration's node
+        id. Typecheck stores them on the type table.
     """
 
     param_zones: dict[int, ParamZone] = field(default_factory=dict)
@@ -705,6 +749,7 @@ class AttributeFacts:
     params: dict[int, ProgramOptionSpec] = field(default_factory=dict)
     command_registrations: dict[int, ProgramCommandSpec] = field(default_factory=dict)
     docs: dict[int, str] = field(default_factory=dict)
+    external_names: dict[int, ExternalName] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

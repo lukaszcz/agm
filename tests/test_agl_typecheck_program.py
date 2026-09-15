@@ -4095,6 +4095,70 @@ def test_only_recognized_host_methods_are_admitted_before_lowering(tmp_path: Pat
         _check_program(tmp_path, {"entry": "builtin def print(value: text) -> text\n()"})
 
 
+def test_builtin_def_result_type_argument_mismatch_is_rejected(tmp_path: Path) -> None:
+    """A scoped ``builtin def try-parse`` declaring the wrong ``Result`` type
+    arguments is rejected: matching the canonical ``Result[T, ValueParseError]``
+    shape by name and scope path alone (ignoring what is inside the brackets)
+    would let a call site's static type disagree with what the host actually
+    raises/returns at runtime."""
+    with pytest.raises(AglTypeError, match="invalid signature"):
+        _check_program(
+            tmp_path,
+            {
+                "entry": (
+                    "scope s\n"
+                    "  builtin def try-parse[T](value: text) -> Result[int, CastError]\n"
+                    "end s\n"
+                    "\n"
+                    's::try-parse::[bool]("true")'
+                )
+            },
+        )
+
+
+def test_builtin_def_result_type_ordinary_exception_is_rejected(tmp_path: Path) -> None:
+    """A scoped ``builtin def try-parse`` cannot satisfy its ``ValueParseError``
+    slot with an ordinary, same-named, same-scoped ``exception``: matching by
+    name and scope path alone would let a call site's static type disagree
+    with the real standard-library exception the host actually raises."""
+    with pytest.raises(AglTypeError, match="invalid signature"):
+        _check_program(
+            tmp_path,
+            {
+                "entry": (
+                    "scope s\n"
+                    "  exception ValueParseError extends Exception()\n"
+                    "  builtin def try-parse[T](value: text) -> Result[T, ValueParseError]\n"
+                    "end s\n"
+                    "\n"
+                    's::try-parse::[bool]("true")'
+                )
+            },
+        )
+
+
+def test_builtin_def_result_type_scoped_builtin_exception_is_accepted(tmp_path: Path) -> None:
+    """A scoped ``builtin exception ValueParseError`` matching the canonical
+    shape still satisfies a scoped ``builtin def try-parse``'s result type."""
+    _check_program(
+        tmp_path,
+        {
+            "entry": (
+                "scope s\n"
+                "  builtin\n"
+                "  exception ValueParseError extends Exception\n"
+                "    source-type: text\n"
+                "    target-type: text\n"
+                "    raw: text\n"
+                "  builtin def try-parse[T](value: text) -> Result[T, ValueParseError]\n"
+                "end s\n"
+                "\n"
+                's::try-parse::[bool]("true")'
+            )
+        },
+    )
+
+
 def test_mutually_recursive_method_headers_are_available_before_body_checking(
     tmp_path: Path,
 ) -> None:

@@ -30,8 +30,7 @@ Flag notes:
       true`` in config also enables logging; CLI flags override config.
     - ``--default-agent AGENT`` seeds ``std/config::default-agent`` from host Agent
       syntax or a canonical constructor, taking precedence over the qualified program
-      table/``[exec] default-agent``, which in turn takes precedence over the
-      bare host command in ``[exec] runner``.
+      table/``[exec] default-agent``.
     - A sole entry-module ``program def`` runs after initializers; when several
       are declared, ``-p``/``--program`` selects one by declaration path. A file
       must declare at least one program; inline ``-c`` statements are wrapped in
@@ -43,7 +42,7 @@ Flag notes:
       disables the automatic import throughout the loaded program. Ordinary imports are
       qualified by default; tails and ``use`` declarations make names bare.
     - A program reads and writes the engine settings (``strict-json``,
-      ``max-iters``, ``default-agent``, ``timeout``, ``log``, ``log-file``) through the
+      ``default-agent``, ``timeout``, ``log``, ``log-file``) through the
       ``std/config`` module; a ``std/config::KEY := VALUE`` write takes effect
       from its program point onward and overrides the CLI flag, which overrides
       the config-file layer.  ``--max-call-depth`` remains a host/runtime
@@ -73,7 +72,7 @@ from agm.agl.runtime.types import ProgramDeclInfo
 from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES
 from agm.agl.syntax.nodes import FuncDef, static_items
 from agm.cli_support.args import ExecArgs
-from agm.cli_support.engine_seeds import build_host_engine_seeds, check_max_iters
+from agm.cli_support.engine_seeds import build_host_engine_seeds
 from agm.cli_support.exec_roots import effective_exec_roots_or_none
 from agm.cli_support.exec_target import (
     ExecTargetError,
@@ -504,12 +503,6 @@ def run(
         config.max_call_depth,
     )
 
-    # Resolve loop limit (max-iters valve): CLI > config. ``None`` leaves the
-    # valve off. A source ``std/config::max-iters := VALUE`` write is applied
-    # at runtime from its program point, overriding this initial value.
-    check_max_iters(args.max_iters)
-    resolved_loop_limit = _first(args.max_iters, config.default_loop_limit)
-
     # Resolve timeout: CLI > [exec] config. A source ``std/config::timeout :=
     # VALUE`` write is applied at runtime from its program point.
     # ``--timeout VALUE`` overrides the config; ``--no-timeout`` clears it (None).
@@ -540,15 +533,13 @@ def run(
     # Seed only settings explicitly controlled by CLI/config. Runtime fallbacks
     # are not seeds: passing them here would suppress a declared
     # ``builtin var`` initializer.  The shared decoder preserves explicit
-    # ``None`` values for Option settings such as --no-timeout.  An AgL agent
-    # literal (``--default-agent``/``[exec] default-agent``) becomes an override
-    # spliced into the program's own compilation below rather than a seed
-    # value; a bad literal exits 1 here, before the module graph is loaded.
+    # ``None`` values for Option settings such as --no-timeout.  A host Agent
+    # value (``--default-agent``/``[exec] default-agent``) decodes through
+    # the same shared path as every other key; a bad value exits 1 here,
+    # before the module graph is loaded.
     cli_values: dict[str, object | None] = {}
     if args.strict_json is not None:
         cli_values["strict-json"] = args.strict_json
-    if args.max_iters is not None:
-        cli_values["max-iters"] = args.max_iters
     if args.timeout is not None:
         cli_values["timeout"] = args.timeout
     elif args.no_timeout:
@@ -561,6 +552,8 @@ def run(
         cli_values["log-file"] = args.log_file
     elif args.no_log_file:
         cli_values["log-file"] = None
+    if args.default_agent is not None:
+        cli_values["default-agent"] = args.default_agent
 
     process_environment = dict(os.environ)
     engine_seeds = build_host_engine_seeds(
@@ -568,28 +561,24 @@ def run(
         primary_table=engine_program_table,
         fallback_table=toml_dict(merged_config.get("exec")),
         cli_values=cli_values,
-        default_agent=args.default_agent,
     )
 
-    # Load + scope the graph ONCE, against the module roots assembled above,
-    # splicing any engine-setting overrides in as part of that same pass.  A
+    # Load + scope the graph ONCE, against the module roots assembled above. A
     # source ``std/config::KEY := VALUE`` write takes effect at its program
     # point and overrides the CLI flag, which overrides the config-file layer.
     prepared = (
         cached_pipeline.prepared
-        if cached_pipeline is not None and not engine_seeds.overrides
+        if cached_pipeline is not None
         else PipelineDriver.prepare_parsed_entry(
             parsed,
             roots=exec_roots.roots,
             default_stdlib=not args.no_stdlib,
-            setting_overrides=engine_seeds.overrides,
         )
     )
 
     # ``prepare_parsed_entry`` was already called above; the same ``PreparedProgram``
     # is reused for discovery and the run, so the source is loaded and scoped only once.
     runtime = PipelineDriver(
-        default_loop_limit=resolved_loop_limit,
         default_strict_json=resolved_strict_json,
         agent_dispatcher=factory,
         session_host=session_host,
@@ -718,7 +707,7 @@ def run(
             compiled=discovery.compiled,
             executable=executable,
             host_settings_policy=policy,
-            builtin_host_settings=engine_seeds.values,
+            builtin_host_settings=engine_seeds,
             process_environment=process_environment,
             program_symbol=program_symbol,
             arguments=arguments_bound,

@@ -1,0 +1,117 @@
+{
+  "scenarios": [
+    {
+      "name": "declared_name_spellings",
+      "params": {"target": "point", "value": "Point(x = 1, y = 2)"},
+      "expect": {"stdout": "point: 1,2\nas?: true\n"}
+    },
+    {
+      "name": "record_and_field_alias_spellings",
+      "params": {"target": "point", "value": "pt(x = 3, why = 4)"},
+      "expect": {"stdout": "point: 3,4\nas?: true\n"}
+    },
+    {
+      "name": "positional_field",
+      "params": {"target": "point", "value": "Point(1, y = 6)"},
+      "expect": {"stdout": "point: 1,6\nas?: true\n"}
+    },
+    {
+      "name": "json_name_rejected_in_value_syntax",
+      "params": {"target": "point", "value": "Point(px = 1, y = 2)"},
+      "expect": {"stdout": "cast error: text -> Point\nas?: false\n"}
+    },
+    {
+      "name": "strict_json_uses_json_name_and_name_default",
+      "params": {"target": "point", "value": "{\"px\": 1, \"why\": 2}"},
+      "expect": {"stdout": "point: 1,2\nas?: true\n"}
+    },
+    {
+      "name": "unknown_field_is_a_cast_error",
+      "params": {"target": "point", "value": "Point(x = 1, y = 2, z = 3)"},
+      "expect": {"stdout": "cast error: text -> Point\nas?: false\n"}
+    },
+    {
+      "name": "null_outside_json_is_a_cast_error",
+      "params": {"target": "point", "value": "Point(x = null, y = 2)"},
+      "expect": {"stdout": "cast error: text -> Point\nas?: false\n"}
+    },
+    {
+      "name": "malformed_value_syntax_is_a_cast_error",
+      "params": {"target": "point", "value": "Point(x = 1"},
+      "expect": {"stdout": "cast error: text -> Point\nas?: false\n"}
+    },
+    {
+      "name": "qualified_enum_member",
+      "params": {"target": "shape", "value": "Shape::Circle(radius = 9)"},
+      "expect": {"stdout": "circle 9\nas?: false\n"}
+    },
+    {
+      "name": "enum_member_alias_spelling",
+      "params": {"target": "shape", "value": "sq(2)"},
+      "expect": {"stdout": "square 2\nas?: false\n"}
+    },
+    {
+      "name": "array_value_syntax",
+      "params": {"target": "array", "value": "[1, 2, 3,]"},
+      "expect": {"stdout": "[1, 2, 3]\nas?: false\n"}
+    },
+    {
+      "name": "array_strict_json",
+      "params": {"target": "array", "value": "[1, 2, 3]"},
+      "expect": {"stdout": "[1, 2, 3]\nas?: false\n"}
+    },
+    {
+      "name": "dict_value_syntax_bare_keys",
+      "params": {"target": "dict", "value": "{a: 1, b: 2}"},
+      "expect": {"stdout": "{\"a\": 1, \"b\": 2}\nas?: false\n"}
+    },
+    {
+      "name": "option_some_value_syntax",
+      "params": {"target": "option", "value": "Some(7)"},
+      "expect": {"stdout": "some 7\nas?: false\n"}
+    },
+    {
+      "name": "option_none_value_syntax",
+      "params": {"target": "option", "value": "None"},
+      "expect": {"stdout": "none\nas?: false\n"}
+    },
+    {
+      "name": "decimal_widens_from_int_literal",
+      "params": {"target": "decimal", "value": "3"},
+      "expect": {"stdout": "3\nas?: false\n"}
+    },
+    {
+      "name": "decimal_negative_number",
+      "params": {"target": "decimal", "value": "-3.5"},
+      "expect": {"stdout": "-3.5\nas?: false\n"}
+    },
+    {
+      "name": "agent_shorthand_spelling",
+      "params": {"target": "agent", "value": "claude/sonnet-high"},
+      "expect": {"stdout": "claude sonnet high\nas?: false\n"}
+    },
+    {
+      "name": "agent_command_fallback_is_rejected",
+      "params": {"target": "agent", "value": "worker --flag"},
+      "expect": {"stdout": "cast error: text -> Agent\nas?: false\n"}
+    },
+    {
+      "name": "agent_tagged_json_object",
+      "params": {
+        "target": "agent",
+        "value": "{\"$case\": \"AgentClaude\", \"model\": \"sonnet\", \"thinking\": \"high\"}"
+      },
+      "expect": {"stdout": "claude sonnet high\nas?: false\n"}
+    },
+    {
+      "name": "agent_member_constructor_call",
+      "params": {"target": "agent", "value": "AgentClaude(model = \"sonnet\", thinking = \"high\")"},
+      "expect": {"stdout": "claude sonnet high\nas?: false\n"}
+    },
+    {
+      "name": "int_scalar_value_syntax",
+      "params": {"target": "int", "value": "42"},
+      "expect": {"stdout": "42\nas?: false\n"}
+    }
+  ]
+}

@@ -88,9 +88,10 @@ parameter is addressed by `--name`. `@arg-pos` opens a positional slot;
 Each parameter resolves as CLI token > `@opt-env` variable > qualified config
 table > declared default. A required parameter with no external value is a
 host invocation error, reported before anything executes. Parameter types
-must be JSON-wire-serializable: `text` crosses verbatim, every other type is
-parsed strictly from JSON; `unit` and function types are rejected. A
-name-addressable parameter cannot spell an
+must be JSON-wire-serializable: `text` crosses verbatim, every other type
+reads its external text as strict JSON or an [AgL value syntax
+literal](host-environment.md#value-syntax); `unit` and function types are
+rejected. A name-addressable parameter cannot spell an
 [engine setting](#engine-settings) name, since both share one flag and config
 namespace. Full resolution and help rules:
 [Host environment](host-environment.md#program-arguments).
@@ -202,7 +203,7 @@ return `void`, and are commonly followed by another expression.
 
 The standard-library module `std/config` exposes the program's engine
 settings — the knobs that control the default agent, trace logging,
-JSON strictness, the loop safety valve, and the shell-exec timeout. Each is a
+JSON strictness, and the shell-exec timeout. Each is a
 **mutable binding**; import the module and assign it through a qualified target
 to change a setting:
 
@@ -210,11 +211,11 @@ to change a setting:
 import std/config
 
 program def main() -> unit =
-  std/config::max-iters := 10
+  std/config::strict-json := true
   std/config::timeout := Some("30s")
   std/config::default-agent := AgentClaude("sonnet", "medium")
-  let budget = std/config::max-iters      # settings are readable
-  print budget
+  let strict = std/config::strict-json    # settings are readable
+  print strict
 ```
 
 The settings and their types are:
@@ -224,14 +225,13 @@ The settings and their types are:
 | `log` | `bool` | Enable/disable trace logging. |
 | `log-file` | `Option[path]` | Path to the trace log file. |
 | `strict-json` | `bool` | Parse agent JSON output strictly. |
-| `max-iters` | `int` | Safety-valve cap for unbounded loops. |
 | `default-agent` | `Agent` | Default value for `ask` calls. |
 | `timeout` | `Option[text]` | Shell-exec timeout. |
 
 A write takes effect **positionally**, exactly like any `var` mutation: it
 governs the statements that follow it, in program order. An assignment target
 names an imported setting the same way a read does ([Modules](modules.md)): a
-qualified target always works, and a bare `max-iters := …` works after
+qualified target always works, and a bare `strict-json := …` works after
 `import std/config::*` or an equivalent `use`, so the name is in scope
 unqualified.
 The optional settings (`log-file`, `timeout`) are set with `Some("…")` or

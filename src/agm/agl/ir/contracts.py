@@ -6,9 +6,10 @@ WITHOUT any checker ``Type``.  It defines the cast/conversion descriptors
 (``ConversionRecipe`` and the ``DecodeSchema`` union).
 
 Dependency rule: ``agm.agl.ir`` imports
-only stdlib + ``ir.ids`` / ``ir.operations`` + ``modules.ids``.  It imports
-nothing from ``typecheck``, ``eval``, or ``runtime``, and stores no callables —
-every descriptor is immutable, runtime-neutral data.
+only stdlib + ``ir.ids`` / ``ir.operations`` + ``modules.ids`` + ``zones``
+(the parameter-zone enum, a dependency-free shared leaf).  It imports nothing
+from ``typecheck``, ``eval``, or ``runtime``, and stores no callables — every
+descriptor is immutable, runtime-neutral data.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from dataclasses import dataclass
 from typing import TypeVar
 
 from agm.agl.ir.ids import NominalId
+from agm.agl.zones import ParamZone
 
 __all__ = [
     "ArrayDecode",
@@ -39,6 +41,8 @@ __all__ = [
     "ExceptionEncode",
     "ExceptionFieldEncode",
     "EnumDecode",
+    "FieldDecode",
+    "FieldEncode",
     "ParamDecoder",
     "RecordDecode",
     "RecordEncode",
@@ -94,31 +98,72 @@ class DictDecode:
 
 
 @dataclass(frozen=True, slots=True)
+class FieldDecode:
+    """One record field's declared name, JSON key, decoder, zone, and value-syntax alias.
+
+    ``zone`` is the field's parameter zone (positional-only/standard/named-
+    only), for a value-syntax reader binding constructor arguments with the
+    shared zone binder. ``alias`` is the field's ``@name`` spelling when it
+    differs from ``name`` (an additional legal value-syntax spelling), or
+    ``None`` when the field carries no alias.
+    """
+
+    name: str
+    json_name: str
+    schema: "DecodeSchema"
+    zone: ParamZone
+    alias: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class RecordDecode:
-    """Decode a JSON object into a record with the given fields (in order)."""
+    """Decode a JSON object into a record with the given fields (in order).
+
+    ``name`` is the record's terminal declared name (the handle's own
+    ``name``, unqualified — unlike ``display_name``). ``alias`` is the
+    record's own ``@name`` spelling when it differs from ``name``, or
+    ``None`` when the record carries no alias.
+    """
 
     nominal: NominalId
     display_name: str
-    fields: "tuple[tuple[str, DecodeSchema], ...]"
+    fields: tuple[FieldDecode, ...]
+    name: str
+    alias: str | None
 
 
 @dataclass(frozen=True, slots=True)
 class VariantDecode:
-    """One enum member's terminal tag, record identity, display name, and field decoders."""
+    """One enum member's terminal name, JSON ``$case`` tag, identity, display name, and fields.
+
+    ``alias`` is the member's own ``@name`` spelling when it differs from
+    ``name``, or ``None`` when the member carries no alias.
+    """
 
     name: str
+    json_name: str
     nominal: NominalId
     display_name: str
-    fields: "tuple[tuple[str, DecodeSchema], ...]"
+    fields: tuple[FieldDecode, ...]
+    alias: str | None
 
 
 @dataclass(frozen=True, slots=True)
 class EnumDecode:
-    """Decode a JSON object (with a ``$case`` discriminator) into an enum."""
+    """Decode a JSON object (with a ``$case`` discriminator) into an enum.
+
+    ``name`` is the enum's terminal declared name (unqualified, unlike
+    ``display_name``). ``host_agent`` is ``True`` exactly for the standard
+    library's ``Agent`` enum (see
+    ``semantics.types.is_standard_agent_enum``); an enum has no ``@name``
+    alias of its own — only its members and their fields do.
+    """
 
     nominal: NominalId
     display_name: str
     variants: tuple[VariantDecode, ...]
+    name: str
+    host_agent: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,11 +237,20 @@ class DictEncode:
 
 
 @dataclass(frozen=True, slots=True)
+class FieldEncode:
+    """One record or exception field's declared name, JSON key, and encoder."""
+
+    name: str
+    json_name: str
+    schema: "EncodeSchema"
+
+
+@dataclass(frozen=True, slots=True)
 class RecordEncode:
     """Encode a record as its statically ordered field object."""
 
     nominal: NominalId
-    fields: "tuple[tuple[str, EncodeSchema], ...]"
+    fields: tuple[FieldEncode, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,16 +258,17 @@ class ExceptionEncode:
     """Encode an exception as its statically ordered field object."""
 
     nominal: NominalId
-    fields: "tuple[tuple[str, EncodeSchema], ...]"
+    fields: tuple[FieldEncode, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class VariantEncode:
-    """One enum member's terminal tag, identity, and ordered field encoders."""
+    """One enum member's terminal name, JSON ``$case`` tag, identity, and ordered field encoders."""
 
     name: str
+    json_name: str
     nominal: NominalId
-    fields: "tuple[tuple[str, EncodeSchema], ...]"
+    fields: tuple[FieldEncode, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,22 +353,31 @@ def forwarded_encode_key(definition: "EncodeDefinition") -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class ExceptionFieldEncode:
-    """Static encode provenance for one reportable exception field."""
+    """Static reporting provenance for one exception field, JSON-keyed.
+
+    ``plan`` is ``None`` for a field with no JSON form (``unit``, ``agent``,
+    function, ...); ``json_name`` is always its effective JSON name, so every
+    field — JSON-convertible or not — is covered and uniquely keyed.
+    """
 
     field_name: str
-    plan: EncodePlan
+    json_name: str
+    plan: EncodePlan | None
 
 
 @dataclass(frozen=True, slots=True)
 class ParamDecoder:
-    """Typeless decoder for one host-supplied entry parameter."""
+    """Typeless decoder for one host-supplied entry parameter.
+
+    Whether a raw value is taken verbatim (``text``) or read through the
+    Agent host-text conventions is derived from ``decode`` itself at decode
+    time (see ``runtime.value_decode.host_text_to_json``), not stored here.
+    """
 
     target_type_label: str
     json_schema: str
     decode: DecodeSchema
     defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
-    text_verbatim: bool = False
-    agent_text: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +401,7 @@ class ConversionFailureMode(enum.Enum):
     """What a failed fallible conversion does at runtime."""
 
     RAISE_CAST_ERROR = "raise_cast_error"  # `as`
+    RAISE_VALUE_PARSE_ERROR = "raise_value_parse_error"  # `std/value::parse`
     RETURN_BOOL = "return_bool"  # `as?`
 
 

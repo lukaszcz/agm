@@ -1,0 +1,5 @@
+enum Shape
+  | @json-name("s") Square(side: int)
+  | @json-name("s") Circle(radius: int)
+
+program def main() -> unit = ()

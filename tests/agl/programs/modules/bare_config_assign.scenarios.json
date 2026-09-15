@@ -9,7 +9,7 @@
         "budget": 6
       },
       "expect": {
-        "stdout": "6\n12\ntrue\n4\n",
+        "stdout": "false\ntrue\nOption::Some(value = \"12s\")\nOption::Some(value = \"12s\")\n",
         "calls": {}
       }
     },
@@ -22,7 +22,7 @@
         "budget": 4
       },
       "expect": {
-        "stdout": "4\n8\nfalse\n4\n",
+        "stdout": "true\nfalse\nOption::Some(value = \"8s\")\nOption::Some(value = \"8s\")\n",
         "calls": {}
       }
     }

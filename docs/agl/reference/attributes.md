@@ -56,6 +56,8 @@ static errors.
 | `@opt-env("VAR")` | variable name | `program def` parameter or `@param` binding | Environment fallback when no CLI token supplies the value. |
 | `@opt-metavar("…")` | placeholder | `program def` parameter or `@param` binding | Value placeholder in usage and help. |
 | `@opt-hidden` | none | `program def` parameter or `@param` binding | Omits the flag from help and completion; the parameter still binds. |
+| `@name("…")` | AgL identifier | field, enum member, or record declaration | Alternative external name; default JSON name. |
+| `@json-name("…")` | non-empty text, not `"$case"` | same | Overrides the JSON name only. |
 | `@command("…")` | command path | `program def` | Registers the program as that package command. |
 | `@description("…")` | prose | `program def` | The registered command's one-line description. |
 | `@help("…")` | prose | `program def` | Further prose the registered command's help shows. |
@@ -83,6 +85,50 @@ parameter's `@doc` as that parameter's help ([Host environment](host-environment
 
 Names the Python companion function of an `extern def` when it differs from
 the declared AgL name ([Python FFI](ffi.md#declarations-and-companions)).
+
+## `@name` and `@json-name`
+
+Placement: a field of a record, exception, or enum member; an inline enum
+member; or a record declaration (a record's own `@name`/`@json-name` doubles
+as its `$case` tag wherever it is an enum member). Not legal on an enum or
+exception declaration, a parameter, a binding, a function, or a `type` alias.
+
+`@name("…")` takes an AgL identifier that is not a hard keyword and not a
+raw-tail name (`exec$`, `ask$`, …); a soft keyword is fine. It is the
+declaration's alternative external name, and the default JSON name when no
+`@json-name` is given.
+
+`@json-name("…")` takes any non-empty text except `"$case"` (reserved for
+the enum-member discriminator). It overrides the JSON name only, leaving the
+declared name and any `@name` untouched everywhere else.
+
+Effective JSON name: `@json-name` if present, else `@name`, else the
+declared name. This is the object key a record or exception field encodes
+and decodes under, and the `$case` tag a record uses wherever it inhabits an
+enum, wherever a value crosses JSON: agent structured output, `as`/`as?`
+casts, and program parameters. Rendering (`print`, string interpolation, …)
+always uses the declared name.
+
+Two sibling fields or enum members whose effective JSON names collide, or
+whose declared/`@name` spellings collide, are static errors, checked across
+a record's own fields, an exception's inherited field chain, and an enum's
+members (inline and referenced alike).
+
+A record's or enum member's `@name` alias is also a valid constructor spelling
+in [host value syntax](host-environment.md#value-syntax): `Square` or `sq`
+both match the `Square` member below, and a field's `@name` alias binds it in
+a constructor call the same way it would bind a declared name.
+
+```agl
+enum Shape
+  | @name("sq") Square(side: int)
+  | Rect(@json-name("w") width: int, @json-name("h") height: int)
+  | Circle
+
+record Job
+  @name("file") @json-name("file_path") file-path: path
+  shape: Shape
+```
 
 ## Command attributes
 

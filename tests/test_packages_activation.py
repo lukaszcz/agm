@@ -1020,7 +1020,7 @@ def test_effective_exec_roots_falls_back_when_active_std_tree_is_missing(
         proj_dir=None,
     ).roots
 
-    assert roots.stdlib_roots == {Path(__file__).resolve().parents[1] / "stdlib"}
+    assert roots.stdlib_roots == {Path(__file__).resolve().parents[1] / "packages" / "stdlib"}
     assert roots.packages == ()
 
 

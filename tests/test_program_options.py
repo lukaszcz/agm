@@ -11,7 +11,7 @@ import pytest
 from agm.agl.attributes import ProgramOptionSpec
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.runtime.arguments import decode_param_value
+from agm.agl.runtime.arguments import OptionSome, decode_param_value
 from agm.agl.runtime.option import none_value, some_value
 from agm.agl.runtime.types import ParamBindingInfo, ProgramDeclInfo, ProgramParamInfo
 from agm.agl.semantics.type_table import create_seeded_type_table
@@ -22,6 +22,7 @@ from agm.agl.semantics.types import (
     BoolType,
     EnumType,
     IntType,
+    JsonType,
     TextType,
     Type,
 )
@@ -75,6 +76,7 @@ def _param(
     metavar: str | None = None,
     hidden: bool = False,
     doc: str | None = None,
+    is_path: bool = False,
 ) -> ProgramParamInfo:
     return ProgramParamInfo(
         name=name,
@@ -90,6 +92,7 @@ def _param(
             hidden=hidden,
             doc=doc,
         ),
+        is_path=is_path,
     )
 
 
@@ -104,6 +107,27 @@ def _program(*params: ProgramParamInfo, doc: str | None = None) -> ProgramDeclIn
         is_entry=True,
         doc=doc,
     )
+
+
+def _registered_command_flags() -> set[str]:
+    """Return every option spelling a registered command declares."""
+    import typer.main
+
+    from agm import cli
+    from agm.cli_dispatch import RegisteredProgramCommand, registered_run_options
+    from agm.packages.activation import CommandRegistration
+
+    command = RegisteredProgramCommand(
+        "tools run",
+        CommandRegistration("tools", "tools/run::main"),
+        registered_run_options(click.Context(typer.main.get_command(cli.app))),
+    )
+    return {
+        flag
+        for param in command.params
+        if isinstance(param, click.Option)
+        for flag in (*param.opts, *param.secondary_opts)
+    }
 
 
 def _command(*params: ProgramParamInfo, doc: str | None = None) -> ProgramCommand:
@@ -196,22 +220,29 @@ class TestProjectOption:
         assert projected.takes_value is True
         assert projected.value_form is ValueForm.AGENT
 
-    def test_every_other_type_projects_a_json_value_with_no_negative(self) -> None:
+    def test_every_other_type_projects_a_value_form_with_no_negative(self) -> None:
         for typ in (IntType(), ArrayType(elem=TextType())):
             projected = project_option("count", typ)
             assert projected.negative_flags == ()
             assert projected.takes_value is True
-            assert projected.value_form is ValueForm.JSON
+            assert projected.value_form is ValueForm.VALUE
 
-    def test_user_enum_named_agent_still_projects_as_json(self) -> None:
+    def test_json_type_projects_the_json_value_form(self) -> None:
+        projected = project_option("payload", JsonType())
+
+        assert projected.negative_flags == ()
+        assert projected.takes_value is True
+        assert projected.value_form is ValueForm.JSON
+
+    def test_user_enum_named_agent_still_projects_as_value(self) -> None:
         user_agent = EnumType(name="Agent", module_id=ENTRY_ID, decl_id=next_decl_id())
 
-        assert project_option("worker", user_agent).value_form is ValueForm.JSON
+        assert project_option("worker", user_agent).value_form is ValueForm.VALUE
 
     def test_flag_spelling_preserves_the_name_verbatim(self) -> None:
         assert project_option("my-flag", TextType()).flags == ("--my-flag",)
 
-    def test_entry_module_enum_named_option_projects_as_json_not_option(self) -> None:
+    def test_entry_module_enum_named_option_projects_as_value_not_option(self) -> None:
         """A user-declared ``enum Option[T]`` in the entry module shares the
         name but not the identity with the standard ``Option`` — it must not
         be misprojected as the ``Option`` shape (see ``is_standard_option_enum``)."""
@@ -221,7 +252,7 @@ class TestProjectOption:
 
         projected = project_option("thing", user_option)
 
-        assert projected.value_form is ValueForm.JSON
+        assert projected.value_form is ValueForm.VALUE
         assert projected.negative_flags == ()
         assert projected.takes_value is True
 
@@ -241,11 +272,6 @@ class TestEngineKeyFlags:
         flags = engine_key_flags()
         assert "--timeout" in flags
         assert "--no-timeout" in flags
-
-    def test_scalar_engine_key_contributes_only_its_positive_flag(self) -> None:
-        flags = engine_key_flags()
-        assert "--max-iters" in flags
-        assert "--no-max-iters" not in flags
 
     def test_agent_engine_key_contributes_only_its_positive_flag(self) -> None:
         flags = engine_key_flags()
@@ -278,20 +304,10 @@ class TestEngineKeyFlags:
 
     def test_every_flag_a_registered_command_declares_is_reserved(self) -> None:
         """Derived from the registered command's own declarations, as for ``agm exec``."""
-        from agm.cli_dispatch import RegisteredProgramCommand
-        from agm.packages.activation import CommandRegistration
+        assert _registered_command_flags() <= REGISTERED_RESERVED_FLAGS
 
-        command = RegisteredProgramCommand(
-            "tools run", CommandRegistration("tools", "tools/run::main")
-        )
-        declared = {
-            flag
-            for param in command.params
-            if isinstance(param, click.Option)
-            for flag in (*param.opts, *param.secondary_opts)
-        }
-
-        assert declared <= REGISTERED_RESERVED_FLAGS
+    def test_a_registered_command_declares_every_run_time_exec_flag(self) -> None:
+        assert engine_key_flags() | {"--max-call-depth"} <= _registered_command_flags()
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +428,15 @@ class TestBuildProgramCommand:
         )
 
         assert isinstance(result, ProgramCommand)
+
+    @pytest.mark.parametrize("flag", ["max-call-depth", "log-file", "no-timeout"])
+    def test_run_time_exec_flags_are_reserved_on_a_registered_command(self, flag: str) -> None:
+        result = build_program_command(
+            _program(_param("value", TextType(), external=flag)), REGISTERED_RESERVED_FLAGS
+        )
+
+        assert isinstance(result, ReservedFlagError)
+        assert result.flag == f"--{flag}"
 
     def test_exec_leaves_the_agent_flag_to_the_program(self) -> None:
         result = build_program_command(
@@ -625,69 +650,56 @@ class TestParseJson:
 
 
 class TestParseOption:
-    def test_positive_text_option_wraps_the_value_verbatim(self) -> None:
+    def test_positive_text_option_boxes_the_value_verbatim(self) -> None:
         args = _command(_param("region", _option_type(TextType()))).parse(["--region", "eu"])
-        assert args.named == {"region": {"$case": "Some", "value": "eu"}}
+        assert args.named == {"region": OptionSome("eu")}
 
     def test_negative_option_flag_is_none(self) -> None:
         args = _command(_param("region", _option_type(TextType()))).parse(["--no-region"])
         assert args.named == {"region": {"$case": "None"}}
 
-    def test_positive_int_option_json_parses_the_value(self) -> None:
+    def test_positive_int_option_boxes_the_raw_token(self) -> None:
+        """A CLI token is boxed, not parsed: decoding is deferred to ``decode_param_value``."""
         args = _command(_param("count", _option_type(IntType()))).parse(["--count", "5"])
-        assert args.named == {"count": {"$case": "Some", "value": 5}}
+        assert args.named == {"count": OptionSome("5")}
 
-    def test_positive_bool_option_json_parses_the_value(self) -> None:
+    def test_positive_bool_option_boxes_the_raw_token(self) -> None:
         args = _command(_param("flag", _option_type(BoolType()))).parse(["--flag", "true"])
-        assert args.named == {"flag": {"$case": "Some", "value": True}}
+        assert args.named == {"flag": OptionSome("true")}
 
     @pytest.mark.parametrize(
-        ("token", "expected"),
+        "token",
         [
-            (
-                "claude/sonnet-custom",
-                {
-                    "$case": "AgentClaude",
-                    "model": "sonnet",
-                    "thinking": "custom",
-                },
-            ),
-            (
-                '{"$case":"AgentCommand","command":"worker --flag"}',
-                {"$case": "AgentCommand", "command": "worker --flag"},
-            ),
+            "claude/sonnet-custom",
+            '{"$case":"AgentCommand","command":"worker --flag"}',
         ],
     )
-    def test_positive_agent_option_accepts_host_syntax_and_tagged_json(
-        self, token: str, expected: dict[str, object]
-    ) -> None:
+    def test_positive_agent_option_boxes_the_raw_token(self, token: str) -> None:
         args = _command(_param("worker", _option_type(BUILTIN_PRELUDE_TYPES["Agent"]))).parse(
             ["--worker", token]
         )
 
-        assert args.named == {"worker": {"$case": "Some", "value": expected}}
+        assert args.named == {"worker": OptionSome(token)}
 
-    def test_positive_nested_option_json_parses_the_whole_inner_shape(self) -> None:
+    def test_positive_nested_option_boxes_the_raw_token(self) -> None:
+        token = '{"$case": "Some", "value": 7}'
         args = _command(_param("nested", _option_type(_option_type(IntType())))).parse(
-            ["--nested", '{"$case": "Some", "value": 7}']
+            ["--nested", token]
         )
-        assert args.named == {"nested": {"$case": "Some", "value": {"$case": "Some", "value": 7}}}
+        assert args.named == {"nested": OptionSome(token)}
 
-    def test_malformed_option_value_raises_immediately(self) -> None:
-        with pytest.raises(ValueError, match="not valid JSON"):
-            _command(_param("count", _option_type(IntType()))).parse(["--count", "not-json"])
-
-    def test_malformed_option_value_error_names_the_flag(self) -> None:
-        with pytest.raises(ValueError, match=r"--count"):
-            _command(_param("count", _option_type(IntType()))).parse(["--count", "not-json"])
+    def test_malformed_option_value_is_not_rejected_at_parse_time(self) -> None:
+        """Decoding (and any diagnostic) is deferred to ``decode_param_value``."""
+        args = _command(_param("count", _option_type(IntType()))).parse(["--count", "not-json"])
+        assert args.named == {"count": OptionSome("not-json")}
 
     def test_text_option_empty_inline_value_is_a_verbatim_empty_string(self) -> None:
         args = _command(_param("region", _option_type(TextType()))).parse(["--region="])
-        assert args.named == {"region": {"$case": "Some", "value": ""}}
+        assert args.named == {"region": OptionSome("")}
 
-    def test_json_option_empty_inline_value_raises(self) -> None:
-        with pytest.raises(ValueError, match="not valid JSON"):
-            _command(_param("count", _option_type(IntType()))).parse(["--count="])
+    def test_json_option_empty_inline_value_is_boxed(self) -> None:
+        args = _command(_param("count", _option_type(IntType()))).parse(["--count="])
+        assert args.named == {"count": OptionSome("")}
 
     def test_a_repeated_positive_flag_is_rejected(self) -> None:
         with pytest.raises(ValueError, match=r"'--region' specified more than once"):
@@ -831,7 +843,7 @@ class TestParseEnvironment:
     ) -> None:
         monkeypatch.setenv("REGION", "eu")
         args = _command(_param("region", _option_type(TextType()), env="REGION")).parse([])
-        assert args.named == {"region": {"$case": "Some", "value": "eu"}}
+        assert args.named == {"region": OptionSome("eu")}
 
     def test_an_unset_variable_supplies_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GREET_WHO", raising=False)
@@ -896,19 +908,35 @@ _DECODE_SEAM_CASES: tuple[tuple[str, Type, tuple[str, ...], Value], ...] = (
 
 
 class TestNativeRawValue:
-    def test_config_agent_option_accepts_host_syntax(self) -> None:
+    def test_config_agent_option_boxes_a_host_syntax_string(self) -> None:
+        """A native string value is boxed, not resolved: decoding is deferred."""
         projected = project_option("worker", _option_type(BUILTIN_PRELUDE_TYPES["Agent"]))
 
-        assert native_raw_value(projected, "codex/o3-high") == {
-            "$case": "Some",
-            "value": {"$case": "AgentCodex", "model": "o3", "thinking": "high"},
-        }
+        assert native_raw_value(projected, "codex/o3-high") == OptionSome("codex/o3-high")
 
     def test_config_agent_option_keeps_a_native_tagged_object(self) -> None:
         projected = project_option("worker", _option_type(BUILTIN_PRELUDE_TYPES["Agent"]))
         tagged = {"$case": "AgentCommand", "command": "worker"}
 
-        assert native_raw_value(projected, tagged) == {"$case": "Some", "value": tagged}
+        assert native_raw_value(projected, tagged) == OptionSome(tagged)
+
+    def test_config_json_typed_option_encodes_a_native_string_as_json_data(self) -> None:
+        """A native string for a ``json``-typed ``Option[T]`` slot stays JSON data."""
+        projected = project_option("payload", _option_type(JsonType()))
+
+        assert native_raw_value(projected, "hello") == OptionSome('"hello"')
+
+    def test_config_json_typed_value_encodes_a_native_string_as_json_data(self) -> None:
+        """A native string for a top-level ``json``-typed slot stays JSON data."""
+        projected = project_option("payload", JsonType())
+
+        assert native_raw_value(projected, "hello") == '"hello"'
+
+    def test_config_non_json_typed_value_is_host_text(self) -> None:
+        """A native string for any other slot is host text, decoded like a CLI token."""
+        projected = project_option("count", IntType())
+
+        assert native_raw_value(projected, "Point(x = 1)") == "Point(x = 1)"
 
 
 class TestDecodeSeam:
@@ -1137,10 +1165,15 @@ class TestDefaultMetavar:
 
         assert "--tag TEXT" in help_text
 
-    def test_a_json_form_parameter_announces_its_token_as_json(self) -> None:
+    def test_a_value_form_parameter_announces_its_token_as_value(self) -> None:
         help_text = _command(_param("count", IntType())).render_help("prog")
 
-        assert "--count JSON" in help_text
+        assert "--count VALUE" in help_text
+
+    def test_a_json_typed_parameter_announces_its_token_as_json(self) -> None:
+        help_text = _command(_param("payload", JsonType())).render_help("prog")
+
+        assert "--payload JSON" in help_text
 
     def test_an_option_parameter_follows_its_inner_type(self) -> None:
         help_text = _command(
@@ -1148,12 +1181,87 @@ class TestDefaultMetavar:
         ).render_help("prog")
 
         assert "--tag TEXT" in help_text
-        assert "--count JSON" in help_text
+        assert "--count VALUE" in help_text
+
+    def test_an_option_of_json_follows_its_inner_json_type(self) -> None:
+        help_text = _command(_param("payload", _option_type(JsonType()))).render_help("prog")
+
+        assert "--payload JSON" in help_text
 
     def test_an_explicit_metavar_replaces_the_default(self) -> None:
         help_text = _command(_param("count", IntType(), metavar="N")).render_help("prog")
 
         assert "--count N" in help_text
+
+    def test_a_path_parameter_announces_a_path(self) -> None:
+        help_text = _command(
+            _param("out", TextType(), is_path=True),
+            _param("journal", _option_type(TextType()), is_path=True),
+            _param("dest", TextType(), is_path=True, metavar="DIR"),
+        ).render_help("prog")
+
+        assert "--out PATH" in help_text
+        assert "--journal PATH" in help_text
+        assert "--dest DIR" in help_text
+
+
+class TestCompletionQueries:
+    """What a completer needs to know about a partially typed program invocation."""
+
+    def _command(self) -> ProgramCommand:
+        return _command(
+            _param("source", TextType(), ParamZone.POSITIONAL_ONLY, is_path=True),
+            _param("count", IntType(), ParamZone.STANDARD, has_default=True),
+            _param("out", TextType(), short="o", has_default=True, is_path=True),
+            _param("tag", _option_type(TextType()), has_default=True),
+            _param("verbose", BoolType(), short="v", has_default=True),
+        )
+
+    @pytest.mark.parametrize(
+        ("tokens", "expected"),
+        [
+            ([], "source"),
+            (["a.txt"], "count"),
+            (["--out", "x", "a.txt"], "count"),
+            (["-o", "x"], "source"),
+            (["-vo", "x"], "source"),
+            (["-ox", "a.txt"], "count"),
+            (["--out=x", "--verbose", "a.txt"], "count"),
+            (["--no-tag", "a.txt"], "count"),
+            (["--", "--out"], "count"),
+            (["a.txt", "3"], None),
+            (["--out"], None),
+            (["-vo"], None),
+        ],
+    )
+    def test_the_next_positional_slot_skips_option_values(
+        self, tokens: list[str], expected: str | None
+    ) -> None:
+        slot = self._command().next_positional(tokens, "b.txt")
+
+        assert (None if slot is None else slot.name) == expected
+
+    @pytest.mark.parametrize(
+        ("tokens", "expected"),
+        [(["--log-file", "trace.jsonl", "--dry-run"], "source"), (["--log-file"], None)],
+    )
+    def test_host_options_and_their_values_fill_no_slot(
+        self, tokens: list[str], expected: str | None
+    ) -> None:
+        slot = self._command().next_positional(
+            tokens, "b.txt", host_options={"--log-file": True, "--dry-run": False}
+        )
+
+        assert (None if slot is None else slot.name) == expected
+
+    def test_value_options_list_every_spelling_that_takes_a_value(self) -> None:
+        options = self._command().value_options()
+
+        assert [(param.name, spellings) for param, spellings in options] == [
+            ("count", ("--count",)),
+            ("out", ("--out", "-o")),
+            ("tag", ("--tag",)),
+        ]
 
 
 class TestOptionSpellings:
@@ -1247,9 +1355,7 @@ class TestModuleParameterOptions:
         region = _module_param(program.module, "region", _option_type(TextType()))
         command = _command_with_module_params(program, region)
 
-        assert command.parse(["--region", "eu"]).params == {
-            region.key: {"$case": "Some", "value": "eu"}
-        }
+        assert command.parse(["--region", "eu"]).params == {region.key: OptionSome("eu")}
         assert command.parse(["--no-region"]).params == {region.key: {"$case": "None"}}
         assert command.parse([]).params == {}
         with pytest.raises(ValueError):

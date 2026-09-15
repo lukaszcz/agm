@@ -326,10 +326,7 @@ python-type: text    # the raising Python exception's class name; empty for
 ### `MaxIterationsExceeded`
 
 A **bounded** loop (`[n]`, with `n ≥ 1`) exhausted its bound before an exit
-condition triggered ([Control flow](control-flow.md)). An unbounded loop (no
-`[n]`) raises this only when the host `max-iters` safety valve is active and its
-cap is reached (see [Control flow](control-flow.md)); with the valve off, an
-unbounded loop never raises it.
+condition triggered ([Control flow](control-flow.md)).
 
 ```text
 limit: int                  # the bound in effect
@@ -373,9 +370,8 @@ operation: text    # the operator, e.g. "/"
 
 ### `TypeError`
 
-Raised by an engine-setting write the host cannot accept — a negative
-`max-iters`, or a `timeout` whose text is not a duration ([Host
-environment](host-environment.md#engine-settings)).
+Raised by an engine-setting write the host cannot accept — a `timeout` whose
+text is not a duration ([Host environment](host-environment.md#engine-settings)).
 
 ```text
 (base fields only)
@@ -435,6 +431,21 @@ raw: text           # text representation of the value that failed to convert
 `CastError` is raised by `as` casts that are fallible (see
 [Types](types.md#casts-and-convertibility)). The `as?` form never raises —
 it reports whether the cast would succeed as a `bool`.
+
+### `ValueParseError`
+
+`std/value::parse` received text that is neither strict JSON nor an AgL
+value-syntax literal, or that does not conform to the target type.
+
+```text
+source-type: text   # always "text"
+target-type: text   # name of the target type, e.g. "int"
+raw: text           # the input text that failed to parse
+```
+
+`std/value::try-parse` never raises: it returns `Result::Err` with a
+`ValueParseError` instead. `ValueParseError` is a distinct exception from
+`CastError` — a `catch CastError` clause does not catch it.
 
 ### `JsonParseError`
 
@@ -526,8 +537,9 @@ how equality and tracing treat one.
 | Call-depth limit exceeded | `RecursionError` |
 | Explicit `raise MatchError(...)` | `MatchError` |
 | Division by zero | `ArithmeticError` |
-| Engine-setting write the host rejects (negative `max-iters`, unparseable `timeout`) | `TypeError` |
+| Engine-setting write the host rejects (unparseable `timeout`) | `TypeError` |
 | Fallible `as` cast — source does not conform to target type | `CastError` |
+| `std/value::parse` — input is neither strict JSON nor an AgL value-syntax literal, or does not conform to the target type | `ValueParseError` |
 | `std/json` parsing — input is not well-formed JSON | `JsonParseError` |
 | `std/toml` parsing — input is not well-formed TOML | `TomlParseError` |
 | `std/toml` rendering — root is not an object, a value is `null`, an integer is outside signed 64-bit range, or a `decimal` NaN is signaling/payload | `TomlRenderError` |

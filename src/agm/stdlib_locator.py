@@ -1,6 +1,6 @@
 """Locate the standard library shipped with AGM.
 
-Source checkouts keep ``stdlib/`` at the repository root, while built wheels
+Source checkouts keep ``packages/stdlib/`` in the repository, while built wheels
 install the same tree inside the ``agm`` package.  Runtime resolution and the
 managed-package installer share this locator so both contexts select the same
 shipped artifact.
@@ -17,4 +17,4 @@ def shipped_stdlib_root() -> Path:
     bundled_root = package_root / "stdlib"
     if bundled_root.is_dir():
         return bundled_root
-    return package_root.parents[1] / "stdlib"
+    return package_root.parents[1] / "packages" / "stdlib"

@@ -13,9 +13,10 @@ command registration the ``@command`` family describes — live here too, so a
 host reads one without reaching into a pass.
 
 It is a top-level leaf sitting on ``zones``, whose ``ParamZone`` the ``@arg-*``
-attributes name, and on the pure command catalog, whose command-path rule
-``@command`` shares with a package manifest, and on nothing else, so any layer
-may name an attribute without pulling a pass in with it.
+attributes name, on the pure command catalog, whose command-path rule
+``@command`` shares with a package manifest, and on the keyword inventory,
+whose plain-name predicate ``@name``'s argument rule shares, and on nothing
+else, so any layer may name an attribute without pulling a pass in with it.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
+from agm.agl.keywords import is_plain_name
 from agm.agl.zones import ParamZone
 from agm.command_catalog import invalid_command_path
 
@@ -37,7 +39,9 @@ __all__ = [
     "DOC_ATTRIBUTE",
     "EXTERN_NAME_ATTRIBUTE",
     "HELP_ATTRIBUTE",
+    "JSON_NAME_ATTRIBUTE",
     "NAME_ADDRESSED_OPTION_ATTRIBUTES",
+    "NAME_ATTRIBUTE",
     "OPTION_ENV_ATTRIBUTE",
     "OPTION_HIDDEN_ATTRIBUTE",
     "OPTION_METAVAR_ATTRIBUTE",
@@ -52,6 +56,8 @@ __all__ = [
     "AttributeTarget",
     "ProgramCommandSpec",
     "ProgramOptionSpec",
+    "invalid_external_name",
+    "invalid_json_name",
     "invalid_program_command_path",
 ]
 
@@ -207,6 +213,22 @@ _HOST_PARAMETER_TARGETS: frozenset[AttributeTarget] = frozenset(
     {AttributeTarget.PROGRAM_PARAMETER, AttributeTarget.PARAM_BINDING}
 )
 
+#: A field, an inline enum member, or a record declaration: the declarations
+#: ``@name``/``@json-name`` may sit on.
+_EXTERNAL_NAME_TARGETS: frozenset[AttributeTarget] = frozenset(
+    {AttributeTarget.FIELD, AttributeTarget.ENUM_MEMBER, AttributeTarget.RECORD}
+)
+
+#: The attributes naming a field, enum member, or record's external spellings.
+#: ``@name`` is an alternative value-syntax spelling and the JSON default;
+#: ``@json-name`` overrides the JSON spelling only.
+NAME_ATTRIBUTE = "name"
+JSON_NAME_ATTRIBUTE = "json-name"
+
+#: The tag reserved for an enum member's JSON discriminator; no declaration
+#: may claim it as its own effective JSON name.
+_RESERVED_JSON_NAME = "$case"
+
 
 @dataclass(frozen=True, slots=True)
 class ProgramOptionSpec:
@@ -254,6 +276,31 @@ def invalid_program_command_path(path: str) -> str | None:
     """
 
     return invalid_command_path(path)
+
+
+def invalid_external_name(text: str) -> str | None:
+    """Describe why *text* cannot be a '@name' argument, or ``None``.
+
+    A '@name' is an alternative value-syntax spelling, so it has to be a
+    plain identifier: not a hard keyword, and not a raw-tail name — soft
+    keywords are legal.
+    """
+
+    return None if is_plain_name(text) else "must be a plain identifier"
+
+
+def invalid_json_name(text: str) -> str | None:
+    """Describe why *text* cannot be a '@json-name' argument, or ``None``.
+
+    A '@json-name' may be arbitrary non-empty text, except the reserved
+    enum-discriminator tag.
+    """
+
+    if not text:
+        return "must not be empty"
+    if text == _RESERVED_JSON_NAME:
+        return f"cannot be {_RESERVED_JSON_NAME!r}, the reserved enum discriminator tag"
+    return None
 
 
 def _program_spec(name: str) -> AttributeSpec:
@@ -321,6 +368,16 @@ _SPECS: tuple[AttributeSpec, ...] = (
     AttributeSpec(
         name=DOC_ATTRIBUTE,
         targets=_EVERY_TARGET,
+        arguments=AttributeArguments.ONE_TEXT,
+    ),
+    AttributeSpec(
+        name=NAME_ATTRIBUTE,
+        targets=_EXTERNAL_NAME_TARGETS,
+        arguments=AttributeArguments.ONE_TEXT,
+    ),
+    AttributeSpec(
+        name=JSON_NAME_ATTRIBUTE,
+        targets=_EXTERNAL_NAME_TARGETS,
         arguments=AttributeArguments.ONE_TEXT,
     ),
 )

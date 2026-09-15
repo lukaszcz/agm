@@ -1,0 +1,4 @@
+builtin type location = text
+
+program def main() -> unit =
+  ()

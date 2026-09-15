@@ -720,7 +720,7 @@ def test_deep_accepts_declared_scoped_module_builtin_key() -> None:
 
 
 def test_deep_validates_module_qualified_engine_keys() -> None:
-    key = (STD_CONFIG_ID, (), "max-iters")
+    key = (STD_CONFIG_ID, (), "strict-json")
     modules = {
         MOD_A: ExecutableModule(
             module_id=MOD_A,
@@ -742,7 +742,7 @@ def test_deep_validates_module_qualified_engine_keys() -> None:
 
 def test_deep_accepts_legacy_string_key_builtin_default() -> None:
     program = _make_program()
-    program.builtin_setting_defaults["max-iters"] = _int(1)
+    program.builtin_setting_defaults["strict-json"] = IrConstBool(location=LOC, value=True)
 
     validate_ir(program)
 
@@ -758,7 +758,7 @@ def test_deep_rejects_undeclared_module_builtin_default_key() -> None:
 def test_deep_accepts_known_builtin_keys() -> None:
     program = _make_program(
         initializers=(
-            IrBuiltinLoad(location=LOC, key="max-iters"),
+            IrBuiltinLoad(location=LOC, key="strict-json"),
             IrBuiltinStore(
                 location=LOC,
                 key="log",

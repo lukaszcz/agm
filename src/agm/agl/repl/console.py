@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import bisect
 import re
+import sys
 from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING
 
@@ -61,7 +62,6 @@ if TYPE_CHECKING:
 
     from lark.lexer import Token
 
-    from agm.agl.repl.agentmode import AgentMode
     from agm.agl.repl.session import ReplSession
 
 
@@ -306,18 +306,19 @@ def _styled_spans(
     constructors = constructor_names | local_constructors
     next_sig = _next_significant_types(tokens)
 
+    next_starts = _next_source_starts(tokens)
+
     spans: list[tuple[int, int, str]] = [
         (start, end, "class:agl.comment") for start, end in lex_comment_spans(text)
     ]
     for index, token in enumerate(tokens):
         start = token.start_pos
         end = token.end_pos
-        if start is None or end is None or end <= start:
+        if start is None or end is None:
             continue
-        if token.type == "STRING_FRAGMENT":
-            end = _trim_string_fragment_end(tokens, index, end)
-            if end <= start:
-                continue
+        end = min(end, next_starts[index])
+        if end <= start:
+            continue
         style = forced.get(index)
         if style is None:
             style = _style_class_for(
@@ -362,21 +363,23 @@ def _open_string_start(text: str) -> int | None:
     return None
 
 
-def _trim_string_fragment_end(tokens: "list[Token]", index: int, end: int) -> int:
-    """Return the display end for a string fragment token.
+def _next_source_starts(tokens: "list[Token]") -> list[int]:
+    """For each token, the start of the next token with source width (``sys.maxsize`` if none).
 
-    The lexer keeps the following interpolation opener in a preceding
-    ``STRING_FRAGMENT`` span so diagnostics can point at the source transition
-    cleanly, then emits ``INTERP_START`` for the same source characters.  Prompt
-    highlighting must partition the source text instead: the structural
-    interpolation token owns the opener, and the literal fragment owns only the
-    preceding string text.
+    Token spans may overlap: a ``STRING_FRAGMENT`` keeps the following
+    interpolation opener for diagnostics, and an environment hole's synthetic
+    ``std/env::getenv("NAME")`` tokens share the characters of ``NAME``.  Prompt
+    highlighting must partition the source instead, so a token yields its
+    characters to the next one starting inside it.
     """
-    next_token = tokens[index + 1]
-    next_start = next_token.start_pos
-    if next_token.type == "INTERP_START" and next_start is not None and next_start < end:
-        return next_start
-    return end
+    result: list[int] = [sys.maxsize] * len(tokens)
+    nxt = sys.maxsize
+    for index in range(len(tokens) - 1, -1, -1):
+        result[index] = nxt
+        start, end = tokens[index].start_pos, tokens[index].end_pos
+        if start is not None and end is not None and end > start:
+            nxt = start
+    return result
 
 
 def _next_significant_types(tokens: "list[Token]") -> list[str | None]:
@@ -692,7 +695,6 @@ def run_console(
     *,
     echo: bool = True,
     check_only: bool = False,
-    agent_mode: "AgentMode | None" = None,
     history_path: "Path | None" = None,
     theme: str = "auto",
     on_theme_save: "Callable[[str], None] | None" = None,
@@ -725,7 +727,6 @@ def run_console(
         writer=print,
         echo=echo,
         check_only=check_only,
-        agent_mode=agent_mode,
         theme=theme,
         on_theme_change=on_theme_change,
     )

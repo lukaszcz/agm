@@ -190,7 +190,7 @@ def test_cached_node_ids_stay_disjoint_from_a_compilation_entry(tmp_path: Path) 
 def test_prelude_injection_is_cached_separately(tmp_path: Path, library_parses: list[str]) -> None:
     """A module loaded with and without the prelude is two distinct results."""
     path = _write_module(tmp_path, "lib/a", _LIB_SOURCE)
-    stdlib_source = Path(__file__).resolve().parents[1] / "stdlib"
+    stdlib_source = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
     roots = RootSet(
         roots=frozenset({tmp_path, stdlib_source}),
         stdlib_roots=frozenset({tmp_path, stdlib_source}),

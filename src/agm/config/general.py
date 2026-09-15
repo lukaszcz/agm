@@ -475,7 +475,7 @@ def loop_config_from_merged(
     """Build :class:`LoopConfig` from an already-merged config dict.
 
     Split out from :func:`load_loop_config` so a caller that already holds a
-    merged config (e.g. ``agm exec`` resolving its default runner) can derive
+    merged config (e.g. the shared default agent runner) can derive
     the ``[loop]`` section without re-reading and re-merging the files.
     """
     selected_loop_table = _select_command_table(
@@ -665,13 +665,9 @@ class ExecConfig:
     timeout: float | None
     log: bool
     log_file: str | None
-    # Raw TOML value: only exec/repl may normalize it as a host Agent value.
+    # Raw TOML value (a string or a native table): exec/repl decode it as a
+    # host Agent value through the shared host-value decoder.
     default_agent: object | None = None
-    # Bare host agent command (e.g. "claude"), the pre-Agent-value spelling of
-    # a default agent. Lower precedence than default_agent; decoded into an
-    # AgentCommand value rather than parsed as AgL source (see engine_seeds.py).
-    runner: str | None = None
-    default_loop_limit: int | None = None
     # Optional recursion call-depth override (None = use the canonical default).
     max_call_depth: int | None = None
 
@@ -711,8 +707,7 @@ def exec_config_from_merged(
 
     When *program_table* is supplied, each engine key present in that already
     resolved qualified program table overrides the global ``[exec]`` value.
-    Engine keys use kebab-case names: ``strict-json``, ``max-iters``,
-    ``log-file``.
+    Engine keys use kebab-case names: ``strict-json``, ``log-file``.
     """
     exec_table = _select_command_table(
         toml_dict(merged.get("exec")),
@@ -730,30 +725,25 @@ def exec_config_from_merged(
                 effective[key] = program_table[key]
 
     resolved_strict_json = _optional_bool(effective, "strict-json")
-    resolved_loop_limit = _optional_positive_int(effective, "max-iters")
     resolved_max_call_depth = _optional_positive_int(exec_table, "max-call-depth")
 
     resolved_timeout = _optional_timeout(effective, "timeout")
 
     resolved_log = _optional_bool(effective, "log")
     resolved_log_file = _optional_str(effective, "log-file")
-    # Keep every explicitly supplied Agent value raw so exec/repl can normalize
-    # strings and diagnose empty or non-string values at their AgL host boundary;
-    # other commands stay free of AgL imports.
+    # Keep every explicitly supplied Agent value raw (a string or a native
+    # TOML table) so exec/repl can decode it through the shared host-value
+    # decoder at their AgL host boundary; other commands stay free of AgL
+    # imports.
     resolved_default_agent = effective.get("default-agent")
-    # A bare host agent command, not an engine key: read straight from the
-    # command's own [exec] table (never overridden per-program).
-    resolved_runner = _optional_str(exec_table, "runner")
 
     return ExecConfig(
         strict_json=resolved_strict_json,
-        default_loop_limit=resolved_loop_limit,
         max_call_depth=resolved_max_call_depth,
         timeout=resolved_timeout,
         log=resolved_log,
         log_file=resolved_log_file,
         default_agent=resolved_default_agent,
-        runner=resolved_runner,
     )
 
 

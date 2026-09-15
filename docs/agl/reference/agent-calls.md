@@ -433,12 +433,15 @@ rules:
 2. The response must not include Markdown fences, prose, or other text
    (this is what the format instructions request; lenient parsing forgives
    violations, strict parsing does not).
-3. Records are JSON objects with exactly the declared fields.
+3. Records are JSON objects with exactly the fields, each keyed by its
+   effective JSON name (declared name unless overridden by
+   [`@name`/`@json-name`](attributes.md#name-and-json-name)).
 4. Enums are JSON objects with a reserved **`"$case"`** tag naming the
-   terminal member name, plus that member record's fields. `"$case"` is
-   reserved; since AgL field names are ordinary identifiers, user fields can
-   never collide with it. A record-typed slot for the same value is a plain
-   object with no `"$case"` tag.
+   member's effective JSON tag, plus that member record's fields, each keyed
+   by its effective JSON name. `"$case"` is reserved; `@json-name` rejects
+   `"$case"` as a field's JSON name, so a user field can never collide with
+   it. A record-typed slot for the same value is a plain object with no
+   `"$case"` tag.
 5. Unknown fields are rejected.
 6. Missing required fields are rejected.
 
@@ -477,8 +480,8 @@ mechanically from the target type:
 | `json` | `{}` (any JSON value) |
 | `array[T]` | `{"type": "array", "items": <T>}` |
 | `dict[text, V]` | `{"type": "object", "additionalProperties": <V>}` |
-| record | object schema: `additionalProperties: false`, all fields `required`, per-field `properties` |
-| enum | `oneOf` of per-member-record schemas, each with a `"$case"` `const` plus record fields, `additionalProperties: false` |
+| record | object schema: `additionalProperties: false`, all fields `required`, per-field `properties` keyed by effective JSON name |
+| enum | `oneOf` of per-member-record schemas, each with a `"$case"` `const` holding the member's effective JSON tag plus record fields keyed by effective JSON name, `additionalProperties: false` |
 
 A target type's schema uses standard JSON Schema `$defs`/`$ref` for any
 record/enum it would otherwise repeat. A reachable type gets one entry under a

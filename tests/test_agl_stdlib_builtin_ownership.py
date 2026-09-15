@@ -55,7 +55,6 @@ _MODULES: dict[str, str] = {
         "builtin var log: bool = false\n"
         "builtin var log-file: Option[text] = None\n"
         "builtin var strict-json: bool = false\n"
-        "builtin var max-iters: int = 0\n"
         "builtin var timeout: Option[text] = None\n"
     ),
     "io.agl": ("builtin def print[T](value: T) -> unit\nbuiltin def render[T](value: T) -> text\n"),

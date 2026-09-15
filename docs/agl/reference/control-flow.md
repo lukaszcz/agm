@@ -289,18 +289,6 @@ A `return` inside a loop unwinds past the loop and returns from the nearest
 enclosing `def` or `fn`. It is not a `break`: the loop does not produce its
 usual `unit` result, and enclosing loops are abandoned as well.
 
-### The host `max-iters` safety valve
-
-A `[n]` bound is the loop's own termination machinery. Loops with a `for`
-clause have a finite entry-time iteration bound. Both are **self-bounded** and are
-never cut short by the host. The host's `max-iters` setting
-(`--max-iters` / `[exec] max-iters` / a `std/config::max-iters` write) is a
-**safety valve** that applies **only to unbounded loops** — those with no `[n]` bound
-and no `for` clause (a bare `while … do … done` or `do … until E`). It
-caps such loops at `max-iters` body executions, raising
-`MaxIterationsExceeded`. The valve is off by default, represented by a readable
-`max-iters` value of `0`; a source write of zero also disables an active host limit.
-
 The `until` keyword (and `done`) may start its own line aligned with `do`,
 courtesy of the continuation-marker rule
 ([Lexical structure](lexical-structure.md)).

@@ -38,6 +38,7 @@ Layout:
 | `rendering/` | Console/value rendering: nesting, escaping, exception rendering |
 | `templates/` | Template interpolation |
 | `types/` | Records, enums, `json`, `array`, `dict` |
+| `values/` | `std/value::parse`/`try-parse`: explicit and contextual type arguments, `ValueParseError` |
 
 ## `<name>.scenarios.json`
 

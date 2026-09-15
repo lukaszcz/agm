@@ -16,7 +16,7 @@ from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.semantics.values import JsonValue, RecordValue, TextValue
 from tests._agl_helpers import option_nominal_descriptors
 
-_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
 _JSON_MODULE = ModuleId(("std", "json"))
 _JSON_PARSE_ERROR = NominalId(9_400_001)
 _KEY_ERROR = NominalId(9_400_002)

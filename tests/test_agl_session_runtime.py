@@ -401,14 +401,6 @@ def test_default_session_snapshots_agent_and_closed_use_is_catchable() -> None:
     assert host.prompts["s1"] == ["one"]
 
 
-class _AskCancelledHost(_Host):
-    """A host whose every ``ask`` is declined by the user."""
-
-    def ask(self, handle: str, prompt: str) -> str:
-        del handle, prompt
-        raise AgentCancelled("worker", "declined")
-
-
 class _AskInterruptedHost(_Host):
     """A host whose every ``ask`` is interrupted."""
 
@@ -495,11 +487,6 @@ def test_session_ask_host_failure_is_catchable_as_a_session_error() -> None:
             raise SessionHostError("unavailable", "ask")
 
     assert _run(_ask_program("fail", catching="SessionError"), HostFailure()).ok
-
-
-def test_session_ask_cancellation_reaches_the_caller() -> None:
-    with pytest.raises(AgentCancelled):
-        _run(_ask_program("cancel"), _AskCancelledHost())
 
 
 def test_session_ask_interrupt_becomes_an_interrupted_cancellation() -> None:
@@ -696,10 +683,6 @@ class _FailingCloseHost(_Host):
         raise RuntimeError("cleanup failed")
 
 
-class _CancelledFailingCloseHost(_FailingCloseHost, _AskCancelledHost):
-    """Declines every ``ask``, then fails cleanup."""
-
-
 class _InterruptedFailingCloseHost(_FailingCloseHost, _AskInterruptedHost):
     """Interrupts every ``ask``, then fails cleanup."""
 
@@ -715,19 +698,10 @@ def test_session_cleanup_failure_preserves_a_program_error() -> None:
     assert program_failure.error.type_name == "RangeError"
 
 
-@pytest.mark.parametrize(
-    ("host", "prompt", "reason"),
-    [
-        pytest.param(_CancelledFailingCloseHost, "cancel", "declined", id="declined"),
-        pytest.param(_InterruptedFailingCloseHost, "interrupt", "interrupted", id="interrupted"),
-    ],
-)
-def test_session_cleanup_failure_preserves_a_cancellation(
-    host: type[_Host], prompt: str, reason: str
-) -> None:
+def test_session_cleanup_failure_preserves_a_cancellation() -> None:
     with pytest.raises(AgentCancelled) as cancelled:
-        _run(_ask_program(prompt), host())
-    assert cancelled.value.reason == reason
+        _run(_ask_program("interrupt"), _InterruptedFailingCloseHost())
+    assert cancelled.value.reason == "interrupted"
     assert any("cleanup failed" in note for note in cancelled.value.__notes__)
 
 

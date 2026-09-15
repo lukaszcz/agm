@@ -20,6 +20,7 @@ from agm.agl.semantics.values import (
     RecordValue,
     TextValue,
 )
+from agm.agl.zones import ParamZone
 from tests._agl_helpers import run_inline_command
 from tests.agl.ir_harness import (
     agent_caps,
@@ -717,6 +718,7 @@ def test_enum_bad_case_raises_agent_parse_error() -> None:
     from agm.agl.ir.contracts import (
         ContractRequest,
         EnumDecode,
+        FieldDecode,
         ScalarDecode,
         ScalarKind,
         VariantDecode,
@@ -728,13 +730,32 @@ def test_enum_bad_case_raises_agent_parse_error() -> None:
     decode = EnumDecode(
         nominal=nominal,
         display_name="Status",
+        name="Status",
+        host_agent=False,
         variants=(
-            VariantDecode(name="Ok", nominal=NominalId(999), display_name="Ok", fields=()),
+            VariantDecode(
+                name="Ok",
+                json_name="Ok",
+                nominal=NominalId(999),
+                display_name="Ok",
+                fields=(),
+                alias=None,
+            ),
             VariantDecode(
                 name="Err",
+                json_name="Err",
                 nominal=NominalId(999),
                 display_name="Err",
-                fields=(("msg", ScalarDecode(ScalarKind.TEXT)),),
+                fields=(
+                    FieldDecode(
+                        "msg",
+                        "msg",
+                        ScalarDecode(ScalarKind.TEXT),
+                        zone=ParamZone.STANDARD,
+                        alias=None,
+                    ),
+                ),
+                alias=None,
             ),
         ),
     )
@@ -1077,6 +1098,7 @@ def test_parse_agent_output_required_field_error() -> None:
     """parse_agent_output: missing required field on record → missing_field error."""
     from agm.agl.ir.contracts import (
         ContractRequest,
+        FieldDecode,
         RecordDecode,
         ScalarDecode,
         ScalarKind,
@@ -1096,7 +1118,24 @@ def test_parse_agent_output_required_field_error() -> None:
     decode = RecordDecode(
         nominal=nom,
         display_name="Point",
-        fields=(("x", ScalarDecode(ScalarKind.INT)), ("y", ScalarDecode(ScalarKind.INT))),
+        name="Point",
+        fields=(
+            FieldDecode(
+                "x",
+                "x",
+                ScalarDecode(ScalarKind.INT),
+                zone=ParamZone.STANDARD,
+                alias=None,
+            ),
+            FieldDecode(
+                "y",
+                "y",
+                ScalarDecode(ScalarKind.INT),
+                zone=ParamZone.STANDARD,
+                alias=None,
+            ),
+        ),
+        alias=None,
     )
     contract = ContractRequest(
         codec_name="json",
@@ -1117,7 +1156,13 @@ def test_parse_agent_output_required_field_error() -> None:
 
 def test_parse_agent_output_additional_properties_error() -> None:
     """parse_agent_output: extra field on record → unknown_field error."""
-    from agm.agl.ir.contracts import ContractRequest, RecordDecode, ScalarDecode, ScalarKind
+    from agm.agl.ir.contracts import (
+        ContractRequest,
+        FieldDecode,
+        RecordDecode,
+        ScalarDecode,
+        ScalarKind,
+    )
     from agm.agl.ir.ids import NominalId
     from agm.agl.runtime.codec import _parse_contract_output
 
@@ -1133,7 +1178,17 @@ def test_parse_agent_output_additional_properties_error() -> None:
     decode = RecordDecode(
         nominal=nom,
         display_name="Point",
-        fields=(("x", ScalarDecode(ScalarKind.INT)),),
+        name="Point",
+        fields=(
+            FieldDecode(
+                "x",
+                "x",
+                ScalarDecode(ScalarKind.INT),
+                zone=ParamZone.STANDARD,
+                alias=None,
+            ),
+        ),
+        alias=None,
     )
     contract = ContractRequest(
         codec_name="json",
@@ -1218,9 +1273,25 @@ def test_enum_instance_not_dict_bad_case() -> None:
     decode = EnumDecode(
         nominal=nominal,
         display_name="Flag",
+        name="Flag",
+        host_agent=False,
         variants=(
-            VariantDecode(name="On", nominal=NominalId(999), display_name="On", fields=()),
-            VariantDecode(name="Off", nominal=NominalId(999), display_name="Off", fields=()),
+            VariantDecode(
+                name="On",
+                json_name="On",
+                nominal=NominalId(999),
+                display_name="On",
+                fields=(),
+                alias=None,
+            ),
+            VariantDecode(
+                name="Off",
+                json_name="Off",
+                nominal=NominalId(999),
+                display_name="Off",
+                fields=(),
+                alias=None,
+            ),
         ),
     )
     schema = _json.dumps(
@@ -1270,9 +1341,25 @@ def test_enum_no_case_tag_bad_case() -> None:
     decode = EnumDecode(
         nominal=nominal,
         display_name="Flag",
+        name="Flag",
+        host_agent=False,
         variants=(
-            VariantDecode(name="On", nominal=NominalId(999), display_name="On", fields=()),
-            VariantDecode(name="Off", nominal=NominalId(999), display_name="Off", fields=()),
+            VariantDecode(
+                name="On",
+                json_name="On",
+                nominal=NominalId(999),
+                display_name="On",
+                fields=(),
+                alias=None,
+            ),
+            VariantDecode(
+                name="Off",
+                json_name="Off",
+                nominal=NominalId(999),
+                display_name="Off",
+                fields=(),
+                alias=None,
+            ),
         ),
     )
     schema = _json.dumps(
@@ -1358,7 +1445,18 @@ def test_find_enum_decode_at_path_through_array() -> None:
     enum_dec = EnumDecode(
         nominal=nominal,
         display_name="Status",
-        variants=(VariantDecode(name="Ok", nominal=NominalId(999), display_name="Ok", fields=()),),
+        name="Status",
+        host_agent=False,
+        variants=(
+            VariantDecode(
+                name="Ok",
+                json_name="Ok",
+                nominal=NominalId(999),
+                display_name="Ok",
+                fields=(),
+                alias=None,
+            ),
+        ),
     )
     array_dec = ArrayDecode(elem=enum_dec)
     contract = ContractRequest(
@@ -1392,7 +1490,18 @@ def test_find_enum_decode_at_path_through_dict() -> None:
     enum_dec = EnumDecode(
         nominal=nominal,
         display_name="Status",
-        variants=(VariantDecode(name="Ok", nominal=NominalId(999), display_name="Ok", fields=()),),
+        name="Status",
+        host_agent=False,
+        variants=(
+            VariantDecode(
+                name="Ok",
+                json_name="Ok",
+                nominal=NominalId(999),
+                display_name="Ok",
+                fields=(),
+                alias=None,
+            ),
+        ),
     )
     dict_dec = DictDecode(value=enum_dec)
     contract = ContractRequest(
@@ -1414,6 +1523,7 @@ def test_find_enum_decode_at_path_through_record() -> None:
     from agm.agl.ir.contracts import (
         ContractRequest,
         EnumDecode,
+        FieldDecode,
         RecordDecode,
         ScalarDecode,
         ScalarKind,
@@ -1426,13 +1536,35 @@ def test_find_enum_decode_at_path_through_record() -> None:
     enum_dec = EnumDecode(
         nominal=nominal,
         display_name="Status",
-        variants=(VariantDecode(name="Ok", nominal=NominalId(999), display_name="Ok", fields=()),),
+        name="Status",
+        host_agent=False,
+        variants=(
+            VariantDecode(
+                name="Ok",
+                json_name="Ok",
+                nominal=NominalId(999),
+                display_name="Ok",
+                fields=(),
+                alias=None,
+            ),
+        ),
     )
     rec_nominal = NominalId(2)
     rec_dec = RecordDecode(
         nominal=rec_nominal,
         display_name="Wrapper",
-        fields=(("status", enum_dec), ("n", ScalarDecode(ScalarKind.INT))),
+        name="Wrapper",
+        fields=(
+            FieldDecode("status", "status", enum_dec, zone=ParamZone.STANDARD, alias=None),
+            FieldDecode(
+                "n",
+                "n",
+                ScalarDecode(ScalarKind.INT),
+                zone=ParamZone.STANDARD,
+                alias=None,
+            ),
+        ),
+        alias=None,
     )
     contract = ContractRequest(
         codec_name="json",
@@ -1471,7 +1603,18 @@ def test_find_enum_decode_at_path_enum_at_top_navigated_into() -> None:
     enum_dec = EnumDecode(
         nominal=nominal,
         display_name="Status",
-        variants=(VariantDecode(name="Ok", nominal=NominalId(999), display_name="Ok", fields=()),),
+        name="Status",
+        host_agent=False,
+        variants=(
+            VariantDecode(
+                name="Ok",
+                json_name="Ok",
+                nominal=NominalId(999),
+                display_name="Ok",
+                fields=(),
+                alias=None,
+            ),
+        ),
     )
     contract = ContractRequest(
         codec_name="json",
@@ -1516,6 +1659,7 @@ def test_find_enum_decode_at_path_end_at_scalar() -> None:
     """_find_enum_decode_at_path: path ends at scalar → None (not EnumDecode)."""
     from agm.agl.ir.contracts import (
         ContractRequest,
+        FieldDecode,
         RecordDecode,
         ScalarDecode,
         ScalarKind,
@@ -1527,7 +1671,17 @@ def test_find_enum_decode_at_path_end_at_scalar() -> None:
     rec_dec = RecordDecode(
         nominal=nom,
         display_name="Point",
-        fields=(("x", ScalarDecode(ScalarKind.INT)),),
+        name="Point",
+        fields=(
+            FieldDecode(
+                "x",
+                "x",
+                ScalarDecode(ScalarKind.INT),
+                zone=ParamZone.STANDARD,
+                alias=None,
+            ),
+        ),
+        alias=None,
     )
     contract = ContractRequest(
         codec_name="json",
@@ -1549,6 +1703,7 @@ def test_enum_known_case_with_additional_props_error() -> None:
     from agm.agl.ir.contracts import (
         ContractRequest,
         EnumDecode,
+        FieldDecode,
         ScalarDecode,
         ScalarKind,
         VariantDecode,
@@ -1559,13 +1714,32 @@ def test_enum_known_case_with_additional_props_error() -> None:
     decode = EnumDecode(
         nominal=nominal,
         display_name="Status",
+        name="Status",
+        host_agent=False,
         variants=(
-            VariantDecode(name="Ok", nominal=NominalId(999), display_name="Ok", fields=()),
+            VariantDecode(
+                name="Ok",
+                json_name="Ok",
+                nominal=NominalId(999),
+                display_name="Ok",
+                fields=(),
+                alias=None,
+            ),
             VariantDecode(
                 name="Err",
+                json_name="Err",
                 nominal=NominalId(999),
                 display_name="Err",
-                fields=(("msg", ScalarDecode(ScalarKind.TEXT)),),
+                fields=(
+                    FieldDecode(
+                        "msg",
+                        "msg",
+                        ScalarDecode(ScalarKind.TEXT),
+                        zone=ParamZone.STANDARD,
+                        alias=None,
+                    ),
+                ),
+                alias=None,
             ),
         ),
     )
@@ -1689,6 +1863,7 @@ def test_validate_contract_request_recursive_decode_defs() -> None:
     from agm.agl.ir.contracts import (
         ContractRequest,
         EnumDecode,
+        FieldDecode,
         RefDecode,
         ScalarDecode,
         ScalarKind,
@@ -1713,19 +1888,33 @@ def test_validate_contract_request_recursive_decode_defs() -> None:
     tree_body = EnumDecode(
         nominal=tree_nominal,
         display_name="Tree",
+        name="Tree",
         variants=(
-            VariantDecode("Leaf", NominalId(11), "Tree::Leaf", ()),
+            VariantDecode("Leaf", "Leaf", NominalId(11), "Tree::Leaf", (), None),
             VariantDecode(
+                "Node",
                 "Node",
                 NominalId(12),
                 "Tree::Node",
                 (
-                    ("value", ScalarDecode(ScalarKind.INT)),
-                    ("left", RefDecode("Tree")),
-                    ("right", RefDecode("Tree")),
+                    FieldDecode(
+                        "value",
+                        "value",
+                        ScalarDecode(ScalarKind.INT),
+                        zone=ParamZone.STANDARD,
+                        alias=None,
+                    ),
+                    FieldDecode(
+                        "left", "left", RefDecode("Tree"), zone=ParamZone.STANDARD, alias=None
+                    ),
+                    FieldDecode(
+                        "right", "right", RefDecode("Tree"), zone=ParamZone.STANDARD, alias=None
+                    ),
                 ),
+                None,
             ),
         ),
+        host_agent=False,
     )
     cid = ContractId(0)
     req = ContractRequest(
@@ -2210,6 +2399,7 @@ def test_enum_required_field_loop_partial_coverage() -> None:
     from agm.agl.ir.contracts import (
         ContractRequest,
         EnumDecode,
+        FieldDecode,
         ScalarDecode,
         ScalarKind,
         VariantDecode,
@@ -2220,14 +2410,25 @@ def test_enum_required_field_loop_partial_coverage() -> None:
     decode = EnumDecode(
         nominal=nominal,
         display_name="Pair",
+        name="Pair",
         variants=(
             VariantDecode(
                 name="Both",
+                json_name="Both",
                 nominal=NominalId(999),
                 display_name="Both",
-                fields=(("a", ScalarDecode(ScalarKind.INT)), ("b", ScalarDecode(ScalarKind.INT))),
+                fields=(
+                    FieldDecode(
+                        "a", "a", ScalarDecode(ScalarKind.INT), zone=ParamZone.STANDARD, alias=None
+                    ),
+                    FieldDecode(
+                        "b", "b", ScalarDecode(ScalarKind.INT), zone=ParamZone.STANDARD, alias=None
+                    ),
+                ),
+                alias=None,
             ),
         ),
+        host_agent=False,
     )
     # Schema requiring both 'a' and 'b'.
     schema = _json.dumps(
@@ -2339,6 +2540,7 @@ def test_classify_enum_sub_error_type_only_fallback() -> None:
     from agm.agl.ir.contracts import (
         ContractRequest,
         EnumDecode,
+        FieldDecode,
         ScalarDecode,
         ScalarKind,
         VariantDecode,
@@ -2349,13 +2551,32 @@ def test_classify_enum_sub_error_type_only_fallback() -> None:
     decode = EnumDecode(
         nominal=nominal,
         display_name="Status",
+        name="Status",
+        host_agent=False,
         variants=(
-            VariantDecode(name="Ok", nominal=NominalId(999), display_name="Ok", fields=()),
+            VariantDecode(
+                name="Ok",
+                json_name="Ok",
+                nominal=NominalId(999),
+                display_name="Ok",
+                fields=(),
+                alias=None,
+            ),
             VariantDecode(
                 name="Err",
+                json_name="Err",
                 nominal=NominalId(999),
                 display_name="Err",
-                fields=(("msg", ScalarDecode(ScalarKind.TEXT)),),
+                fields=(
+                    FieldDecode(
+                        "msg",
+                        "msg",
+                        ScalarDecode(ScalarKind.TEXT),
+                        zone=ParamZone.STANDARD,
+                        alias=None,
+                    ),
+                ),
+                alias=None,
             ),
         ),
     )
@@ -2406,8 +2627,17 @@ def test_classify_enum_failure_nullary_case_all_fields_present() -> None:
     decode = EnumDecode(
         nominal=nominal,
         display_name="Status",
+        name="Status",
+        host_agent=False,
         variants=(
-            VariantDecode(name="Err", nominal=NominalId(999), display_name="Err", fields=()),
+            VariantDecode(
+                name="Err",
+                json_name="Err",
+                nominal=NominalId(999),
+                display_name="Err",
+                fields=(),
+                alias=None,
+            ),
         ),
     )
     # instance has only "$case" → no missing or extra fields in the nullary "Err" variant.
@@ -2428,7 +2658,13 @@ def test_classify_enum_failure_known_case_all_payload_present() -> None:
 
     from jsonschema import ValidationError as JsError
 
-    from agm.agl.ir.contracts import EnumDecode, ScalarDecode, ScalarKind, VariantDecode
+    from agm.agl.ir.contracts import (
+        EnumDecode,
+        FieldDecode,
+        ScalarDecode,
+        ScalarKind,
+        VariantDecode,
+    )
     from agm.agl.ir.ids import NominalId
     from agm.agl.runtime.codec import _classify_enum_failure
 
@@ -2436,13 +2672,32 @@ def test_classify_enum_failure_known_case_all_payload_present() -> None:
     decode = EnumDecode(
         nominal=nominal,
         display_name="Status",
+        name="Status",
+        host_agent=False,
         variants=(
-            VariantDecode(name="Ok", nominal=NominalId(999), display_name="Ok", fields=()),
+            VariantDecode(
+                name="Ok",
+                json_name="Ok",
+                nominal=NominalId(999),
+                display_name="Ok",
+                fields=(),
+                alias=None,
+            ),
             VariantDecode(
                 name="Err",
+                json_name="Err",
                 nominal=NominalId(999),
                 display_name="Err",
-                fields=(("msg", ScalarDecode(ScalarKind.TEXT)),),
+                fields=(
+                    FieldDecode(
+                        "msg",
+                        "msg",
+                        ScalarDecode(ScalarKind.TEXT),
+                        zone=ParamZone.STANDARD,
+                        alias=None,
+                    ),
+                ),
+                alias=None,
             ),
         ),
     )
@@ -2455,6 +2710,67 @@ def test_classify_enum_failure_known_case_all_payload_present() -> None:
 
     ve = _classify_enum_failure(main_error, "$", decode)
     assert ve.category == "bad_case"
+
+
+def test_enum_declared_case_tag_rejected_when_renamed() -> None:
+    """Enum ask: agent returns the declared ``$case`` name, not the ``@json-name`` tag.
+
+    The variant is renamed, so the declared name is unknown; the diagnostic
+    lists the renamed JSON tag as the valid variant.
+    """
+    source = """\
+enum Status
+  | Ok
+  | @json-name("ERR") Err(msg: text)
+
+let checker = AgentCommand("checker")
+let status: Status = ask("Check.", agent = checker)
+status
+"""
+    ir_exc = evaluate_ir_raises_with_agents(
+        source,
+        scripts={"checker": ['{"$case": "Err"}']},  # declared name, not the renamed tag "ERR"
+    )
+    assert ir_exc.display_name == "AgentParseError"
+
+    errors_val = ir_exc.fields.get("validation-errors")
+    assert isinstance(errors_val, JsonValue)
+    assert isinstance(errors_val.raw, list)
+    first_err = errors_val.raw[0]
+    assert isinstance(first_err, dict)
+    msg = first_err.get("message", "")
+    assert "ERR" in msg
+
+
+def test_enum_missing_renamed_field_reports_json_key() -> None:
+    """Enum ask: known ``$case`` but the response omits a ``@json-name``-renamed field.
+
+    The diagnostic reports the missing field by its JSON name, not its
+    declared name.
+    """
+    source = """\
+enum Status
+  | Ok
+  | Err(@json-name("msg-text") msg: text)
+
+let checker = AgentCommand("checker")
+let status: Status = ask("Check.", agent = checker)
+status
+"""
+    ir_exc = evaluate_ir_raises_with_agents(
+        source,
+        scripts={"checker": ['{"$case": "Err"}']},  # missing the renamed field "msg-text"
+    )
+    assert ir_exc.display_name == "AgentParseError"
+
+    errors_val = ir_exc.fields.get("validation-errors")
+    assert isinstance(errors_val, JsonValue)
+    assert isinstance(errors_val.raw, list)
+    first_err = errors_val.raw[0]
+    assert isinstance(first_err, dict)
+    msg = first_err.get("message", "")
+    assert "msg-text" in msg
+    assert first_err.get("field") == "msg-text"
 
 
 # ---------------------------------------------------------------------------

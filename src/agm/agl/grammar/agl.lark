@@ -140,6 +140,7 @@ _sep: _NEWLINE | SEMICOLON
             | builtin_record_def
             | builtin_enum_def
             | builtin_exception_def
+            | builtin_type_alias
             | builtin_func_def
             | extern_func_def
             | import_decl
@@ -244,7 +245,9 @@ exception_body: _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT -> exc
               | field_list                                                -> exception_inline_body
 
 // type_alias: "type" name type_params? = type_expr
-type_alias: attributes? "type" decl_head type_params? EQ type_expr
+type_alias: attributes? _type_alias_tail
+
+_type_alias_tail: "type" decl_head type_params? EQ type_expr
 
 type_params: type_lsqb type_param_list RSQB
 type_param_list: name (COMMA name)*
@@ -292,6 +295,7 @@ builtin_var_def: attributes? "builtin" _NEWLINE? VAR name type_ann (EQ expr)?
 builtin_record_def: attributes? "builtin" _NEWLINE? _record_def_tail
 builtin_enum_def: attributes? "builtin" _NEWLINE? _enum_def_tail
 builtin_exception_def: attributes? "builtin" _NEWLINE? _exception_def_tail
+builtin_type_alias: attributes? "builtin" _NEWLINE? _type_alias_tail
 
 // param_list: comma-separated parameter entries.
 param_list: param_def (COMMA param_def)* COMMA?

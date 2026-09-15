@@ -18,7 +18,7 @@ Effects are dispatched by contract identity through `eval/effects.py`, the seam 
 
 - **Agents.** An explicit-agent `ask` decodes its `Agent` record to a host spec and opens an ephemeral session spanning the parse-retry loop; a free `ask` uses the snapshotted default session; session nodes drive persistent handles. Output is shaped by the contract's format and decode descriptors; a unit contract dispatches once and discards the response.
 - **Shell.** `exec` returns a structured result or parses stdout per its contract. Environment, working directory, and idle timeout come from operands or standard-library bindings; spawn failures and timeouts raise `ExecError`.
-- **Conversions.** Casts execute pre-resolved recipes and parse strictly; agent and `exec` output keep the configurable strict/lenient codec.
+- **Conversions.** Casts and `std/value::parse`/`try-parse` execute pre-resolved recipes and parse strictly (strict JSON or AgL value syntax, never lenient recovery), raising `CastError` or `ValueParseError` per their failure mode, with `try-parse` composed from an ordinary `try`/`catch`; agent and `exec` output keep the configurable strict/lenient codec.
 - **Resources** evaluate to their embedded absolute paths. Host-minted values (built-in exceptions, `ExecResult`, `AgentRequest`, `Option` members) take identity from the per-program builtin nominal table so they render and match like source-constructed values.
 - **Externs** delegate to the FFI registry ([ffi.md](ffi.md)).
 

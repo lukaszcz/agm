@@ -259,7 +259,6 @@ class ExecArgs:
     program: str | None = None
     module_paths: list[str] = field(default_factory=list)
     no_stdlib: bool = False
-    max_iters: int | None = None
     # Optional recursion call-depth override (None = no override).
     max_call_depth: int | None = None
     timeout: str | None = None
@@ -274,12 +273,10 @@ class ExecArgs:
 @dataclass(slots=True)
 class ReplArgs:
     strict_json: bool | None
-    confirm_agents: bool
     quiet: bool
     no_log: bool
     log_file: str | None
     log: bool = False
-    max_iters: int | None = None
     # Optional recursion call-depth override (None = no override).
     max_call_depth: int | None = None
     no_stdlib: bool = False

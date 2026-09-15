@@ -12,7 +12,7 @@ The primary purpose of architecture docs in docs/arch/agl/**/*.md is to provide 
 
 The AgL reference documentation is in `docs/agl/reference/`. This reference is written from the language user perspective (audience is expert programmers familiar with CS / PL concepts).
 
-Per `docs/agl/AGENTS.md`, standard-library detail (modules, module content, exact signatures, type definitions) does NOT belong in the reference: the `stdlib/src/*.agl` sources are the standard library's reference. The language reference names a library type or function only where the language's own semantics depend on it, as with the builtin exceptions.
+Per `docs/agl/AGENTS.md`, standard-library detail (modules, module content, exact signatures, type definitions) does NOT belong in the reference: the `packages/stdlib/src/*.agl` sources are the standard library's reference. The language reference names a library type or function only where the language's own semantics depend on it, as with the builtin exceptions.
 
 **IMPORTANT**: The documentation MUST NOT reference the implementation in any way - ONLY describe the AgL language.
 
@@ -23,3 +23,7 @@ The documentation MUST NOT include historical statements about abandoned or supe
 ## Testing
 
 Whenever you add a new language feature, create end-to-end test program examples under `tests/agl/programs/` exercising this feature thoroughly (in combination with other language features). Follow TDD - add end-to-end test program examples as the FIRST step before any other implementation work.
+
+## Architecture constraints
+
+- NEVER re-run AgL pipeline stages on the same source. Reuse earlier results, and compile host-generated code with the program, not in a second pipeline.

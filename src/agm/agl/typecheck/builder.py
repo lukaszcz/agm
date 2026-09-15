@@ -24,11 +24,17 @@ Phase 2 (the loop in ``collect``)
     An
     exception's ``TypeDef`` stores its OWN fields plus a resolved ``base``
     key (see ``semantics.type_table.TypeDef``); no ordering is required since
-    the base need not be built yet to resolve the key.  A small post-pass
-    (``_finalize_exceptions``) runs once every exception's own body is
-    resolved to check own-vs-inherited field duplication, using
-    ``TypeTable.exception_fields`` to read the (by-then fully buildable)
-    flattened base chain.
+    the base need not be built yet to resolve the key.  A record's, generic
+    record's, and enum member's own-field external-name collisions are
+    checked as each is built.  Two small post-passes run once every
+    declaration's own body is resolved: ``_finalize_exceptions`` checks
+    own-vs-own and own-vs-inherited field duplication and external-name
+    collisions together (an exception's own fields are checked here, not at
+    build time, so a root exception and a derived one share one check), using
+    ``TypeTable.exception_fields``/``field_external_names`` to read the
+    (by-then fully buildable) flattened base chain; ``_finalize_enums`` checks
+    enum-member external-name collisions, since a referenced member may be
+    declared later in this module or in another one.
 
 Recursive nominal types (records, enums, exceptions, including mutual and
 generic recursion) are legal. Because handles make forward references
@@ -46,17 +52,20 @@ to anchor a cycle — by the existing alias-cycle check in
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Container, Iterator, Mapping, Sequence
 from dataclasses import replace
 from typing import cast
 
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.scope.symbols import AttributeFacts
+from agm.agl.semantics.external_names import NO_EXTERNAL_NAME, ExternalName
 from agm.agl.semantics.type_table import (
     TypeDef,
     source_enum_member_decl_id,
     source_nominal_decl_id,
 )
 from agm.agl.semantics.types import (
+    BUILTIN_ALIAS_TARGETS,
     BUILTIN_EXCEPTION_NAMES,
     BUILTIN_PRELUDE_TYPE_NAMES,
     EnumType,
@@ -137,6 +146,51 @@ def _bare_name(name: str) -> str:
     return name.rsplit("::", maxsplit=1)[-1]
 
 
+def _check_external_name_siblings(
+    entries: Sequence[tuple[str, SourceSpan, ExternalName]],
+    *,
+    owner: str,
+    noun: str,
+    seed: Sequence[tuple[str, ExternalName]] = (),
+) -> None:
+    """Reject external-name collisions among sibling fields or enum members.
+
+    Two siblings collide when their effective JSON names coincide, or one's
+    ``@name`` coincides with another's declared name or ``@name`` (a
+    ``@name`` equal to its own declaration's name is not a collision — see
+    ``ExternalName.value_names``). *seed* pre-populates spellings already
+    accepted elsewhere (an exception's inherited base-chain fields) that
+    *entries* must not collide with; *seed* is trusted to be pairwise
+    collision-free already (checked when its own owner was finalized) and is
+    not re-validated here.
+    """
+    seen_json: dict[str, str] = {}
+    seen_alias: dict[str, str] = {}
+    for name, external in seed:
+        seen_json[external.json(name)] = name
+        for alias in external.value_names(name):
+            seen_alias[alias] = name
+    for name, span, external in entries:
+        json_name = external.json(name)
+        prior_json = seen_json.get(json_name)
+        if prior_json is not None and prior_json != name:
+            raise AglTypeError(
+                f"{noun.capitalize()} '{name}' of '{owner}' has the same JSON name "
+                f"'{json_name}' as {noun} '{prior_json}'.",
+                span=span,
+            )
+        seen_json[json_name] = name
+        for alias in external.value_names(name):
+            prior_alias = seen_alias.get(alias)
+            if prior_alias is not None and prior_alias != name:
+                raise AglTypeError(
+                    f"{noun.capitalize()} '{name}' of '{owner}' has the alternative name "
+                    f"'{alias}' clashing with {noun} '{prior_alias}'.",
+                    span=span,
+                )
+            seen_alias[alias] = name
+
+
 def _member_identity(enum: EnumDef, member: VariantDef, module_id: ModuleId) -> int:
     """Return an inline member's source declaration identity."""
     return source_enum_member_decl_id(
@@ -175,12 +229,13 @@ class _TypeBuilder:
         env: TypeEnvironment,
         module_id: ModuleId = ENTRY_ID,
         *,
-        param_zones: Mapping[int, ParamZone],
+        attributes: AttributeFacts,
     ) -> None:
         self._env = env
         self._module_id = module_id
-        # Scope's resolved zone for every field of the module being built.
-        self._param_zones = param_zones
+        # Scope's recognized declaration attribute facts for the module being
+        # built: parameter/field zones and field/member/record external names.
+        self._attributes = attributes
         # Track user-declared names → declaration span (excludes built-ins).
         self._declared: dict[str, SourceSpan] = {}
         # Index of record/enum/exception definitions, for phase-2 body
@@ -188,6 +243,7 @@ class _TypeBuilder:
         self._record_defs: dict[str, RecordDef] = {}
         self._enum_defs: dict[str, EnumDef] = {}
         self._exception_defs: dict[str, ExceptionDef] = {}
+        self._builtin_alias_defs: dict[str, TypeAlias] = {}
         # Source-built definitions retained independently of the shared table.
         # A source declaration can supersede a seeded fallback at the same
         # name path, so contract validation must inspect this exact object.
@@ -210,9 +266,12 @@ class _TypeBuilder:
         Phase 1 registers every declaration's name and handle
         (:meth:`collect_shells_only`); phase 2 resolves each declaration's
         body, in source order, with no dependency ordering (see the module
-        docstring); a final post-pass (:meth:`_finalize_exceptions`)
-        validates own-vs-inherited exception field duplication, which needs
-        every exception's flattened field set to be buildable.
+        docstring); two final post-passes validate what needs every
+        declaration's own body already resolved: :meth:`_finalize_exceptions`
+        checks own-vs-inherited exception field duplication and external-name
+        collisions over each exception's flattened field set, and
+        :meth:`_finalize_enums` checks external-name collisions across each
+        enum's members (inline and referenced alike).
 
         Inhabitation is checked once, whole-program, ahead of every module's
         body resolution (:func:`~agm.agl.semantics.analyses.compute_uninhabited`
@@ -236,6 +295,7 @@ class _TypeBuilder:
                     self._validate_alias(item)
 
         self._finalize_exceptions()
+        self._finalize_enums()
         self.validate_builtin_contracts()
 
     def collect_shells_only(self, program: Program) -> None:
@@ -299,9 +359,16 @@ class _TypeBuilder:
                 )
                 self._exception_defs[item.name] = item
             else:
-                self._register_name(item.name, item.span)
+                self._register_name(
+                    item.name,
+                    item.span,
+                    is_builtin=item.is_builtin,
+                    expected_contracts=BUILTIN_ALIAS_TARGETS,
+                )
                 self._env.unregister_name(item.name)
                 self._env.register_alias(item.name, item.type_expr, type_params=item.type_params)
+                if item.is_builtin:
+                    self._builtin_alias_defs[item.name] = item
 
     def reconcile_inline_member_arities(self) -> None:
         """Finalize inline-member shells before any dependent body resolves.
@@ -469,6 +536,17 @@ class _TypeBuilder:
                 expected_contracts,
                 base_type=base_type,
             )
+        for alias in self._builtin_alias_defs.values():
+            path = tuple(segment.name for segment in alias.scope_path)
+            if not alias.type_params:
+                with self._env.type_scope(path):
+                    target = self._env.resolve_type_expr(alias.type_expr, span=alias.span)
+                if target == BUILTIN_ALIAS_TARGETS[_bare_name(alias.name)]:
+                    continue
+            raise AglTypeError(
+                f"Builtin type '{alias.name}' has an invalid definition.",
+                span=alias.span,
+            )
 
     def _register_name(
         self,
@@ -476,7 +554,7 @@ class _TypeBuilder:
         span: SourceSpan,
         *,
         is_builtin: bool = False,
-        expected_contracts: Mapping[str, BuiltinTypeContract] | None = None,
+        expected_contracts: Container[str] | None = None,
     ) -> None:
         # `name` carries its scope path joined with "::" (see
         # `_static_type_items`) when the declaration is scoped, so the check
@@ -507,6 +585,20 @@ class _TypeBuilder:
             )
         self._declared[name] = span
 
+    def _field_zones(self, fields: tuple[Param, ...]) -> tuple[tuple[str, ParamZone], ...]:
+        """Each field's own declared ``@arg-*`` zone, in declaration order.
+
+        Computed once and fed to both a ``TypeDef``'s ``field_kinds`` and the
+        constructor-kind registration, so the two never disagree about a
+        field's zone. Used by records, generic records, and enum members; an
+        exception's own fields honor their declared zone the same way, but
+        (unlike a record's) are never registered into the constructor-kind
+        table — inheriting the base's kinds through the ``extends`` chain is
+        ``TypeTable.field_kinds``'s job instead (walked on demand from
+        ``TypeDef.base``, no build-ordering step needed).
+        """
+        return tuple((fd.name, self._attributes.param_zones[fd.node_id]) for fd in fields)
+
     def _build_record(self, stmt: RecordDef) -> None:
         if stmt.type_params:
             self._build_generic_record(stmt)
@@ -521,9 +613,11 @@ class _TypeBuilder:
                 )
             seen_fields[fd.name] = fd.span
             fields[fd.name] = self._resolve_field_type(fd)
+        self._check_field_external_names(stmt.fields, owner=stmt.name)
         module_id = self._module_id
         scope_path = tuple(segment.name for segment in stmt.scope_path)
         bare_name = _bare_name(stmt.name)
+        field_kind_pairs = self._field_zones(stmt.fields)
         typedef = TypeDef(
             kind="record",
             name=bare_name,
@@ -531,18 +625,20 @@ class _TypeBuilder:
             scope_path=scope_path,
             fields=tuple(fields.items()),
             mutable_fields=_mutable_field_names(stmt.fields),
+            field_kinds=tuple(zone for _fname, zone in field_kind_pairs),
             is_builtin=stmt.is_builtin,
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
+            external_name=self._attributes.external_names.get(stmt.node_id, NO_EXTERNAL_NAME),
+            field_external_names=self._field_external_names(stmt.fields),
         )
         self._resolved_defs[stmt.name] = typedef
         self._env.type_table.register(typedef)
         # Register field kinds for this record constructor, under the same
         # owning identity as the TypeDef just above (its declaring module,
         # like every other declaration — including a builtin one).
-        field_kinds = tuple((fd.name, self._param_zones[fd.node_id]) for fd in stmt.fields)
         self._env.register_constructor_field_kinds(
             bare_name,
-            field_kinds,
+            field_kind_pairs,
             scope_path=scope_path,
             module_id=module_id,
             decl_id=typedef.decl_node_id,
@@ -557,7 +653,6 @@ class _TypeBuilder:
         for member_def in member_defs:
             self._env.type_table.register(member_def)
         self._env.type_table.register(typedef)
-        self._register_enum_constructor_field_kinds(stmt)
 
     def _build_enum_members(
         self, stmt: EnumDef, *, type_vars: frozenset[str]
@@ -611,12 +706,14 @@ class _TypeBuilder:
                     )
                 seen_fields[fd.name] = fd.span
                 fields[fd.name] = self._resolve_field_type(fd, type_vars=type_vars)
+            self._check_field_external_names(vd.fields, owner=f"{stmt.name}.{vd.name}")
             captured_params = tuple(
                 param
                 for param in stmt.type_params
                 if any(param in free_type_vars(field_type) for field_type in fields.values())
             )
             decl_id = _member_identity(stmt, vd, module_id)
+            field_kind_pairs = self._field_zones(vd.fields)
             member_def = TypeDef(
                 kind="record",
                 name=vd.name,
@@ -625,10 +722,20 @@ class _TypeBuilder:
                 type_params=captured_params,
                 fields=tuple(fields.items()),
                 mutable_fields=_mutable_field_names(vd.fields),
+                field_kinds=tuple(zone for _fname, zone in field_kind_pairs),
                 decl_node_id=decl_id,
                 is_inline_enum_member=True,
+                external_name=self._attributes.external_names.get(vd.node_id, NO_EXTERNAL_NAME),
+                field_external_names=self._field_external_names(vd.fields),
             )
             member_defs.append(member_def)
+            self._env.register_constructor_field_kinds(
+                vd.name,
+                field_kind_pairs,
+                scope_path=member_scope_path,
+                module_id=module_id,
+                decl_id=decl_id,
+            )
             self._replace_inline_member_handle(stmt, vd, captured_params)
             members.append(
                 RecordType(
@@ -669,22 +776,6 @@ class _TypeBuilder:
             tuple(member_defs),
         )
 
-    def _register_enum_constructor_field_kinds(self, stmt: EnumDef) -> None:
-        """Keep the current enum-constructor surface keyed by its member names."""
-        module_id = self._module_id
-        scope_path = tuple(segment.name for segment in stmt.scope_path)
-        bare_name = _bare_name(stmt.name)
-        for member in stmt.members:
-            if not isinstance(member, VariantDef):
-                continue
-            self._env.register_constructor_field_kinds(
-                member.name,
-                tuple((fd.name, self._param_zones[fd.node_id]) for fd in member.fields),
-                scope_path=(*scope_path, bare_name),
-                module_id=module_id,
-                decl_id=_member_identity(stmt, member, module_id),
-            )
-
     def _build_exception(self, stmt: ExceptionDef) -> None:
         """Resolve and register an exception's own ``TypeDef`` (no ordering).
 
@@ -719,16 +810,12 @@ class _TypeBuilder:
                 )
             seen_fields[fd.name] = fd.span
             fields[fd.name] = self._resolve_field_type(fd)
+        # Own-field external-name collisions are checked once every exception
+        # is registered, together with the inherited base chain (see
+        # `_finalize_exceptions`), not here.
         module_id = self._module_id
         scope_path = tuple(segment.name for segment in stmt.scope_path)
         bare_name = _bare_name(stmt.name)
-        # Own field kinds honor each field's declared ``@arg-*`` attribute —
-        # exactly like a record's fields — in declaration order, parallel to
-        # ``fields`` above.  Stored as ``ParamZone.value`` strings (see
-        # ``TypeDef.field_kinds``: ``semantics`` may not import ``syntax``).
-        # Inheriting the base's kinds through the extends chain is
-        # ``TypeTable.exception_field_kinds``'s job (walked on demand from
-        # ``TypeDef.base``, no build-ordering step needed).
         typedef = TypeDef(
             kind="exception",
             name=bare_name,
@@ -737,15 +824,16 @@ class _TypeBuilder:
             fields=tuple(fields.items()),
             abstract=stmt.base is None,
             base=None if base_type is None else base_type.decl_id,
-            field_kinds=tuple(self._param_zones[fd.node_id].value for fd in stmt.fields),
+            field_kinds=tuple(zone for _fname, zone in self._field_zones(stmt.fields)),
             is_builtin=stmt.is_builtin,
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
+            field_external_names=self._field_external_names(stmt.fields),
         )
         self._resolved_defs[stmt.name] = typedef
         self._env.type_table.register(typedef)
 
     def _finalize_exceptions(self) -> None:
-        """Post-pass: reject own-vs-inherited field name collisions.
+        """Post-pass: reject own-field, own-vs-inherited, and external-name collisions.
 
         Deferred until every exception's own ``TypeDef`` (and therefore its
         base's, however deep the ``extends`` chain) is registered — there is
@@ -756,28 +844,86 @@ class _TypeBuilder:
         re-checks this module at all, and
         :meth:`~agm.agl.semantics.type_table.TypeTable.exception_fields` never
         hits its internal cycle guard here.
+
+        Each exception's own-field external-name check happens exactly once,
+        here — never in :meth:`_build_exception` — so a root exception (no
+        base) and a derived one are checked the same way, the derived one
+        additionally seeded with its inherited base-chain names.
         """
         for item in self._exception_defs.values():
-            if item.base is None:
-                continue
-            module_id = self._module_id
-            scope_path = tuple(segment.name for segment in item.scope_path)
-            typedef = self._env.type_table.get(module_id, _bare_name(item.name), scope_path)
-            assert typedef is not None, "compiler bug: exception is not registered"
-            assert typedef.base is not None
-            base_typedef = self._env.type_table.get_by_id(typedef.base)
-            assert base_typedef is not None, (
-                f"compiler bug: exception base {typedef.base!r} has no registered TypeDef"
-            )
-            base_handle = base_typedef.handle()
-            assert isinstance(base_handle, ExceptionType)
-            base_fields = self._env.type_table.exception_fields(base_handle)
-            for fd in item.fields:
-                if fd.name in base_fields:
-                    raise AglTypeError(
-                        f"Duplicate field '{fd.name}' in exception '{item.name}'.",
-                        span=fd.span,
-                    )
+            seed: tuple[tuple[str, ExternalName], ...] = ()
+            if item.base is not None:
+                module_id = self._module_id
+                scope_path = tuple(segment.name for segment in item.scope_path)
+                typedef = self._env.type_table.get(module_id, _bare_name(item.name), scope_path)
+                assert typedef is not None, "compiler bug: exception is not registered"
+                assert typedef.base is not None
+                base_typedef = self._env.type_table.get_by_id(typedef.base)
+                assert base_typedef is not None, (
+                    f"compiler bug: exception base {typedef.base!r} has no registered TypeDef"
+                )
+                base_handle = base_typedef.handle()
+                assert isinstance(base_handle, ExceptionType)
+                base_fields = self._env.type_table.exception_fields(base_handle)
+                for fd in item.fields:
+                    if fd.name in base_fields:
+                        raise AglTypeError(
+                            f"Duplicate field '{fd.name}' in exception '{item.name}'.",
+                            span=fd.span,
+                        )
+                base_external_names = self._env.type_table.field_external_names(base_handle)
+                seed = tuple(
+                    (name, base_external_names.get(name, NO_EXTERNAL_NAME)) for name in base_fields
+                )
+            self._check_field_external_names(item.fields, owner=item.name, seed=seed)
+
+    def _finalize_enums(self) -> None:
+        """Post-pass: reject enum member external-name collisions.
+
+        Deferred until every possibly cross-module referenced member
+        record's own ``TypeDef`` is registered — same reason as
+        :meth:`_finalize_exceptions`: no build-ordering step in
+        :meth:`_build_enum`/:meth:`_build_generic_enum` provides this earlier,
+        and a referenced member may be declared later in this module or in
+        another one.
+        """
+        for stmt in self._enum_defs.values():
+            typedef = self._resolved_defs[stmt.name]
+            entries: list[tuple[str, SourceSpan, ExternalName]] = []
+            for member, record_member in zip(stmt.members, typedef.members, strict=True):
+                member_def = self._env.type_table.get_by_id(record_member.decl_id)
+                assert member_def is not None, "compiler bug: enum member is not registered"
+                entries.append((member_def.name, member.span, member_def.external_name))
+            _check_external_name_siblings(entries, owner=stmt.name, noun="member")
+
+    def _field_external_names(
+        self, fields: Sequence[Param]
+    ) -> tuple[tuple[str, ExternalName], ...]:
+        """Return the OWN ``@name``/``@json-name`` pairs of *fields*, in declaration order."""
+        return tuple(
+            (fd.name, self._attributes.external_names[fd.node_id])
+            for fd in fields
+            if fd.node_id in self._attributes.external_names
+        )
+
+    def _check_field_external_names(
+        self,
+        fields: Sequence[Param],
+        *,
+        owner: str,
+        seed: Sequence[tuple[str, ExternalName]] = (),
+    ) -> None:
+        """Reject external-name collisions among *fields* of one record/member/exception.
+
+        *seed* pre-populates spellings already accepted elsewhere (an
+        exception's inherited base-chain fields) — see
+        :func:`_check_external_name_siblings`.
+        """
+        entries = tuple(
+            (fd.name, fd.span, self._attributes.external_names.get(fd.node_id, NO_EXTERNAL_NAME))
+            for fd in fields
+        )
+        _check_external_name_siblings(entries, owner=owner, noun="field", seed=seed)
 
     def _validate_builtin_shape(
         self,
@@ -842,6 +988,7 @@ class _TypeBuilder:
                 )
             seen_fields[fd.name] = fd.span
             fields[fd.name] = self._resolve_field_type(fd, type_vars=type_vars)
+        self._check_field_external_names(stmt.fields, owner=stmt.name)
         gdef = self._env.get_generic_type(stmt.name)
         assert gdef is not None, f"compiler bug: generic record {stmt.name!r} not pre-registered"
         template = gdef.template
@@ -849,6 +996,7 @@ class _TypeBuilder:
         module_id = self._module_id
         scope_path = tuple(segment.name for segment in stmt.scope_path)
         bare_name = _bare_name(stmt.name)
+        field_kind_pairs = self._field_zones(stmt.fields)
         typedef = TypeDef(
             kind="record",
             name=bare_name,
@@ -857,11 +1005,14 @@ class _TypeBuilder:
             type_params=type_params,
             fields=tuple(fields.items()),
             mutable_fields=_mutable_field_names(stmt.fields),
+            field_kinds=tuple(zone for _fname, zone in field_kind_pairs),
             is_builtin=stmt.is_builtin,
             # Same identity as the handle template registered in phase 1
             # (:meth:`_register_record_or_enum_handle`), so the TypeDef and
             # every instantiated handle agree on which declaration they name.
             decl_node_id=template.decl_id,
+            external_name=self._attributes.external_names.get(stmt.node_id, NO_EXTERNAL_NAME),
+            field_external_names=self._field_external_names(stmt.fields),
         )
         self._resolved_defs[stmt.name] = typedef
         self._env.type_table.register(typedef)
@@ -877,12 +1028,9 @@ class _TypeBuilder:
         self._env.register_constructor_signature(sig)
         # Register field kinds for the generic record constructor, under the
         # same owning identity as the TypeDef just above.
-        generic_record_field_kinds = tuple(
-            (fd.name, self._param_zones[fd.node_id]) for fd in stmt.fields
-        )
         self._env.register_constructor_field_kinds(
             bare_name,
-            generic_record_field_kinds,
+            field_kind_pairs,
             scope_path=scope_path,
             module_id=module_id,
             decl_id=template.decl_id,
@@ -919,7 +1067,6 @@ class _TypeBuilder:
                     ),
                 )
             )
-        self._register_enum_constructor_field_kinds(stmt)
 
     def _validate_alias(self, stmt: TypeAlias) -> None:
         """Validate that the alias target resolves without cycles.
